@@ -52,6 +52,8 @@ struct expr_template {
     // With safety off, a fold error's runtime result must equal this expression's fold (`{0} +%
     // {1}` for `{0} + {1}`); empty skips the check because the unchecked result is undefined
     std::string unchecked_equivalent{};
+    // False for an operation whose fold error has no runtime panic: the runtime result is defined
+    bool fold_errors_panic{true};
 };
 
 using case_operands = std::vector<u128>;

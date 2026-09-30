@@ -548,7 +548,8 @@ template <ast::IndexableID ID>
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL ||
                                   builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT ||
                                   builtin_id == token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                                  builtin_id == token_type_t::BUILTIN_FLOAT_FROM_INT};
+                                  builtin_id == token_type_t::BUILTIN_FLOAT_FROM_INT ||
+                                  builtin_id == token_type_t::BUILTIN_FLOAT_CAST};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -759,6 +760,14 @@ template <ast::IndexableID ID>
                 error::TYPE_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
+        if (is_float(target.get_kind()) && is_float(src.get_kind()) &&
+            float_bits(src.get_kind()) > float_bits(target.get_kind())) {
+            return make_sema_err(fmt::format("`@as` cannot narrow '{}' to '{}'; use `@floatCast`",
+                                             ctx_.type_display_name(src),
+                                             ctx_.type_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
         if (is_float(target.get_kind()) && is_integer(src.get_kind()) &&
             !is_implicit_widenable(src, target)) {
             return make_sema_err(
@@ -885,6 +894,11 @@ template <ast::IndexableID ID>
         const auto& arg{call.arguments[0]};
         auto&       src{*get_resolved_call_arg_type(arg)};
         if (src.is_poison()) { break; }
+        if (call_arg_denotes_type(arg)) {
+            return make_sema_err("`@backingInt` expects a value to convert, but was given a type",
+                                 error::TYPE_USED_AS_VALUE,
+                                 get_call_arg_location(arg));
+        }
         const auto backing{ctx_.backing_int_type(src, target_ptr_bits())};
         if (!backing) {
             return make_sema_err(fmt::format("`@backingInt` operand must be an enum, a packed "
@@ -970,6 +984,38 @@ template <ast::IndexableID ID>
                             ctx_.type_display_name(src)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
+        }
+        return_type = &target;
+        break;
+    }
+    case token_type_t::BUILTIN_FLOAT_CAST: {
+        const auto args_res{extract_cast_args("@floatCast")};
+        if (!args_res) { return make_sema_err(args_res.error()); }
+        if (!args_res->target || args_res->target->is_poison()) { break; }
+        auto& target{*args_res->target};
+        if (!is_float(target.get_kind())) {
+            return make_sema_err(fmt::format("`@floatCast` target must be a float type; found '{}'",
+                                             ctx_.type_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 args_res->target_loc);
+        }
+        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        if (src.is_poison()) { break; }
+        const auto src_kind{src.get_kind()};
+        if (is_integer(src_kind)) {
+            return make_sema_err(
+                fmt::format("`@floatCast` operand must be a float; found '{}'; use "
+                            "`@floatFromInt` instead",
+                            ctx_.type_display_name(src)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(*args_res->operand));
+        }
+        if (!is_float(src_kind) && src_kind != type_kind::CONSTEXPR_FLOAT &&
+            src_kind != type_kind::CONSTEXPR_INT) {
+            return make_sema_err(fmt::format("`@floatCast` operand must be a float; found '{}'",
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(*args_res->operand));
         }
         return_type = &target;
         break;
@@ -1917,7 +1963,15 @@ template <ast::IndexableID ID>
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[ptr_idx]));
         }
-        auto& t{has_t_arg ? *get_resolved_call_arg_type(call.arguments[0]) : ptr_data->underlying};
+        if (has_t_arg && !call_arg_denotes_type(call.arguments[0]) &&
+            get_resolved_call_arg_type(call.arguments[0])->get_kind() != type_kind::TYPE) {
+            return make_sema_err(
+                fmt::format("'{}' expects a type as its first argument", builtin_name),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        auto& t{has_t_arg ? denoted_type(*get_resolved_call_arg_type(call.arguments[0]))
+                          : ptr_data->underlying};
 
         const bool needs_mut_ptr{builtin_id != token_type_t::BUILTIN_ATOMIC_LOAD};
         if (needs_mut_ptr && ptr_type.is_constant()) {
@@ -1955,7 +2009,15 @@ template <ast::IndexableID ID>
         // Every non-`ptr`/order/op operand (`val`, `expected`, `new`) must agree with `T`.
         const auto check_matches_t = [&](usize            arg_idx,
                                          std::string_view name) -> stdx::option<diagnostic> {
-            auto&      arg_type{*get_resolved_call_arg_type(call.arguments[arg_idx])};
+            auto& arg_type{*get_resolved_call_arg_type(call.arguments[arg_idx])};
+            if (call_arg_denotes_type(call.arguments[arg_idx])) {
+                return diagnostic{fmt::format("'{}' expects '{}' to be a value, but was given a "
+                                              "type",
+                                              builtin_name,
+                                              name),
+                                  error::TYPE_USED_AS_VALUE,
+                                  get_call_arg_location(call.arguments[arg_idx])};
+            }
             const bool ok{
                 is_same_unqualified(arg_type, t) ||
                 (arg_type.get_kind() == type_kind::CONSTEXPR_INT && is_integer(t.get_kind())) ||
@@ -2105,7 +2167,24 @@ template <ast::IndexableID ID>
             }
         }
         if (builtin_id == token_type_t::BUILTIN_C_VA_ARG) {
-            return_type = &denoted_type(*get_resolved_call_arg_type(call.arguments[1]));
+            auto&      read_type{denoted_type(*get_resolved_call_arg_type(call.arguments[1]))};
+            const auto read_kind{read_type.get_kind()};
+            const bool generic_placeholder{read_kind == type_kind::TYPE &&
+                                           !call_arg_denotes_type(call.arguments[1])};
+            const bool readable{call_arg_denotes_type(call.arguments[1]) &&
+                                (is_numeric(read_kind) || read_kind == type_kind::BOOL ||
+                                 read_kind == type_kind::POINTER || read_kind == type_kind::ENUM ||
+                                 read_kind == type_kind::STRUCT || read_kind == type_kind::UNION ||
+                                 read_kind == type_kind::ARRAY || read_kind == type_kind::SLICE)};
+            if (!read_type.is_poison() && !generic_placeholder && !readable) {
+                return make_sema_err(
+                    fmt::format("'{}' expects the type of the argument to read; found '{}'",
+                                builtin_name,
+                                ctx_.type_display_name(read_type)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[1]));
+            }
+            return_type = &read_type;
         } else {
             ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
             return_type = &builtin.return_type;
@@ -3778,7 +3857,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
         } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF ||
                    call.function->get_token_type() == token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT) {
+                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT ||
+                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_CAST) {
             // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
@@ -3807,6 +3887,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             const bool as_literal{tok == token_type_t::BUILTIN_AS &&
                                   is_numeric_literal(call.arguments[1])};
             if (args_result == resolve_result::OK && as_literal) {
+                // The literal is the cast target's, not the surrounding context's
+                stdx::option<type&> literal_hint;
+                ast::node_id        literal{*call.arguments[1].as_opt<ast::expr_handle>()};
+                if (const auto negated{resolving_.ast.get_as_opt<ast::unary_expr>(literal)}) {
+                    literal = negated->rhs;
+                }
+                if (resolving_.ast[literal].is<ast::float_literal_expr>() &&
+                    call_arg_denotes_type(call.arguments[0])) {
+                    auto& target{denoted_type(*get_resolved_call_arg_type(call.arguments[0]))};
+                    if (is_float(target.get_kind())) { literal_hint.emplace(target); }
+                }
+                const auto             outer_hint{implicit_type_stack_.peek()};
+                const structural_guard g{implicit_type_stack_,
+                                         literal_hint ? &*literal_hint
+                                         : outer_hint ? &*outer_hint
+                                                      : nullptr};
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             } else if (args_result == resolve_result::OK) {
@@ -5841,6 +5937,18 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     // A shift's RHS is a bit count, not a peer value of the LHS being shifted
     const auto op{id.get_token_type()};
 
+    for (const auto& [operand, operand_type] :
+         {std::pair{binary.lhs, lhs_type}, std::pair{binary.rhs, &rhs_type}}) {
+        if (operand_type->get_kind() != type_kind::UNDEFINED) { continue; }
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("operator '{}' has no value to read in 'undefined'",
+                        syntax::get_operator_opt(op).value_or(std::string_view{"?"})),
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(operand)));
+    }
+
     // Types only exist at compile time and only compare for identity against other types
     const auto lhs_nature{operand_nature(binary.lhs)};
     const auto rhs_nature{lhs_nature == operand_nature_t::UNKNOWN ? operand_nature_t::UNKNOWN
@@ -6625,6 +6733,15 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
         }
     }
 
+    for (const auto& bound : {range.lhs, range.rhs}) {
+        if (bound && operand_nature(*bound) == operand_nature_t::TYPE) {
+            return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                       id,
+                                                       "A range bound must be a value, not a type",
+                                                       error::TYPE_USED_AS_VALUE,
+                                                       resolving_.ast.location_of(*bound)));
+        }
+    }
     const auto is_integral_bound{[](const type& t) {
         return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
     }};
@@ -12363,6 +12480,9 @@ auto type_resolver::probe_fold(ast::expr_handle expr) const -> stdx::option<gir:
 auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_nature_t {
     const auto t{resolving_.get_sema_type_opt(expr)};
     if (!t || t->is_poison()) { return operand_nature_t::UNKNOWN; }
+    if (ast::node_id{expr}.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
+        return operand_nature_t::TYPE;
+    }
     // A template placeholder or unfolded `[n]T` is `type`-kinded until instantiated
     if (t->get_kind() == type_kind::TYPE && !t->get_data().is<types::meta_type>()) {
         return operand_nature_t::UNKNOWN;

@@ -4404,6 +4404,31 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
+    case syntax::token_type_t::BUILTIN_FLOAT_CAST: {
+        const auto op_h{cast_operand(call)};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        auto       target{builtin_result_type(id, call)};
+        if (!operand || !target) { return stdx::none; }
+        const auto         format{sema::float_format_of(*target)};
+        stdx::option<f128> f;
+        if (const auto as_float{operand->as_opt<f128>()}) {
+            f.emplace(*as_float);
+        } else if (const auto as_int{operand->int_as_float_opt()}) {
+            f.emplace(*as_int);
+        }
+        if (!format || !f) { return stdx::none; }
+        // Rounded once into the target; only a finite value can be out of range
+        if (!sema::constexpr_float_fits(*f, *target)) {
+            ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                *f,
+                                                ctx_.type_display_name(*target)),
+                                    sema::error::LITERAL_OUT_OF_RANGE,
+                                    module_->ast.location_of(*op_h));
+            return const_value::make_poison();
+        }
+        return const_value{f->round_to(*format), target};
+    }
     case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
     case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT: {
         const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
@@ -4666,6 +4691,26 @@ auto const_eval::eval_call_args(const ast::call_expr& call)
     return args;
 }
 
+namespace {
+
+// A number or bool passed where a parameter takes an array, slice, struct, union, or function
+[[nodiscard]] auto binds_number_to_non_number(const sema::type& arg, const sema::type& param)
+    -> bool {
+    const auto arg_kind{arg.get_kind()};
+    const bool scalar{sema::is_numeric(arg_kind) || sema::is_constexpr_numeric(arg_kind) ||
+                      arg_kind == sema::type_kind::BOOL};
+    switch (param.get_kind()) {
+    case sema::type_kind::ARRAY:
+    case sema::type_kind::SLICE:
+    case sema::type_kind::STRUCT:
+    case sema::type_kind::UNION:
+    case sema::type_kind::FUNCTION: return scalar;
+    default:                        return false;
+    }
+}
+
+} // namespace
+
 auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    const ast::function_expr&         fn_expr,
                                    std::vector<const_value>&         args,
@@ -4707,6 +4752,22 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
         }
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
+            // A folded call never reaches the type checker, so a number can't stand in for an
+            // aggregate or a sequence here
+            const auto param_type{module_->get_sema_type_opt(param.name)};
+            const auto arg_type{args[arg_idx].get_type()};
+            if (param_type && arg_type && binds_number_to_non_number(*arg_type, *param_type)) {
+                const auto at{call_id.is_valid() ? module_->ast.location_of(call_id)
+                                                 : module_->ast.location_of(param.name)};
+                ctx_.diags.emplace_back(
+                    fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
+                                arg_idx + 1 - (has_self ? 1 : 0),
+                                ctx_.type_display_name(*arg_type),
+                                ctx_.type_display_name(*param_type)),
+                    sema::error::TYPE_MISMATCH,
+                    at);
+                return const_value::make_poison();
+            }
             frame.bindings.emplace(ident.name, args[arg_idx++]);
         } else {
             ++arg_idx;

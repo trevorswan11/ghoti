@@ -70,7 +70,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
                 std::pair{2UZ, 29UZ}});
     }
 
-    SECTION("Float narrowing suggests @as") {
+    SECTION("Float narrowing suggests @floatCast") {
         helpers::test_checker_fail(
             R"(
             const f := fn(x: f64): void {
@@ -79,7 +79,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
         )",
             sema::diagnostic{
                 "Type mismatch in store: cannot assign 'f64' to 'f32' (narrowing conversion from "
-                "'f64' to 'f32' may lose precision; use @as for an explicit conversion)",
+                "'f64' to 'f32' may lose precision; use @floatCast for an explicit conversion)",
                 sema::error::TYPE_MISMATCH,
                 std::pair{2UZ, 29UZ}});
     }

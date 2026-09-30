@@ -244,6 +244,22 @@ auto float_int_conversions() -> std::vector<diff::expr_template> {
     return templates;
 }
 
+// A finite overflow is a fold error but rounds to an infinity when it runs, so nothing panics
+auto float_casts() -> std::vector<diff::expr_template> {
+    std::vector<diff::expr_template> templates;
+    for (const auto& from : diff::host_float_types()) {
+        for (const auto& to : diff::host_float_types()) {
+            templates.push_back({
+                .text              = fmt::format("@floatCast({}, {{0}})", to.name),
+                .operands          = {from},
+                .result            = to,
+                .fold_errors_panic = false,
+            });
+        }
+    }
+    return templates;
+}
+
 } // namespace
 
 // Operands of different types are converted to their peer type before they meet
@@ -335,6 +351,8 @@ TEST_CASE("Float and integer conversions fold like they run") {
     expect_agreement(float_int_conversions());
 }
 
+TEST_CASE("Float casts fold like they run") { expect_agreement(float_casts()); }
+
 // Only the host runs code, but every tier-1 target must fold the same operations
 TEST_CASE("Every operation folds on the other tier-1 targets") {
     const auto uses_f80 = [](const diff::expr_template& tmpl) {
@@ -352,6 +370,7 @@ TEST_CASE("Every operation folds on the other tier-1 targets") {
         if (get_env("GHOTI_DIFF_FULL")) {
             families.emplace_back(int_casts());
             families.emplace_back(float_int_conversions());
+            families.emplace_back(float_casts());
         }
         for (auto templates : families) {
             if (!has_f80) { std::erase_if(templates, uses_f80); }
@@ -386,6 +405,7 @@ TEST_CASE("Semantics fuzz", "[.fuzz-semantics]") {
         {"mixed-type peers", mixed_type_peers()},
         {"fused multiply-add", fused_multiply_add(), false},
         {"float and integer conversions", float_int_conversions()},
+        {"float casts", float_casts()},
     };
 
     // `GHOTI_DIFF_FUZZ_SEED` replays one failing seed through every family once

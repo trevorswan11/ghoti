@@ -833,7 +833,8 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
         }
         reports[t].fold_errors = errors.size();
         // Spread the sampled error cases over the whole set
-        const auto count{std::min(opts.panic_samples, errors.size())};
+        const auto count{
+            templates[t].fold_errors_panic ? std::min(opts.panic_samples, errors.size()) : 0UZ};
         for (usize s{0}; s < count; ++s) {
             samples.emplace_back<error_sample>({t, errors[s * errors.size() / count]});
         }

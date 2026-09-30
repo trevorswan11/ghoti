@@ -562,6 +562,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Pointers and slices meet at the least mutable (`^mut T` with `^T` is `^T`), `nullptr` takes the pointer's type, and arrays of different lengths meet as a slice of their element
     - No type is invented: `i32` with `u32`, or `i64` with `f64`, is a `NO_PEER_TYPE` error naming both types and the cast to write
     - Compile-time folding converts operands the same way, so a folded mixed-type expression equals the one computed at runtime
+- Fixed `f(fn(x: i32): i32 { ... })[i]`: a function literal passed to a call whose result is indexed crashed the compiler
+- A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
+- A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
+- A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- `@floatCast(T, x)` converts between float types, narrowing or widening, rounding to nearest (#349)
+    - A compile-time finite value that overflows `T` is a compile error; at runtime an overflow rounds to an infinity, with no safety check
+    - **Breaking:** `@as` no longer narrows a float (`@as(f32, some_f64)`); use `@floatCast`. Widening and literal coercion (`@as(f32, 0.1)`) are unchanged
 - `@TypeOf(a, b, ...)` takes any number of operands and returns their peer type, in type positions, `if constexpr` conditions, and generic signatures (`fn(a: auto, b: auto): @TypeOf(a, b)`)
 - Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
 - Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)

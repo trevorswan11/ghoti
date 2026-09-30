@@ -175,4 +175,120 @@ TEST_CASE("A type declaration has no storage, however large the type") {
     CHECK(llvm_mod->getNamedGlobal("E") == nullptr);
 }
 
+TEST_CASE("A type is not a range bound, an asm input, or a converted operand") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            var a := [5uz]mut u8{ 1, 2, 3, 4, 5 };
+            @memmove(a[1..5], a[u8..4]);
+            return 0;
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const f := fn(fd: i64): i64 {
+            var ret: i64 = 0i64;
+            asm {
+                template: "syscall",
+                outputs: ("={rax}" = ret),
+                inputs: ("{rax}" = 1i64, "{rdi}" = fd, "{rsi}" = type),
+            };
+            return ret;
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        const Color := enum : i32 { red, green = 5, blue };
+        pub const main := fn(): i32 { return @backingInt(Color); };
+    )");
+}
+
+TEST_CASE("Atomic builtins reject a value for `T` and a type for an operand") {
+    helpers::expect_compile_error(R"(
+        pub const f := fn(p: ^mut i32): i32 {
+            return @atomicRmw(1, p, builtin.AtomicRmwOp.add, i32, builtin.MemoryOrder.seq_cst);
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const f := fn(p: ^mut i32): i32 {
+            return @atomicRmw(i32, p, builtin.AtomicRmwOp.add, i32, builtin.MemoryOrder.seq_cst);
+        };
+    )");
+}
+
+TEST_CASE("@cVaArg reads a concrete value type") {
+    helpers::expect_compile_error(R"(
+        const f := fn(ap: ^mut opaque, ...): void {
+            const val: i32 = @cVaArg(ap, impl i32);
+            _ = val;
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        const f := fn(ap: ^mut opaque, ...): void {
+            const val: i32 = @cVaArg(ap, 3);
+            _ = val;
+        };
+    )");
+}
+
+TEST_CASE("A binary operator can't read `undefined`") {
+    helpers::expect_compile_error(R"(
+        constexpr N := 2;
+        pub const main := fn(): i32 {
+            match (N) {
+                2 => @assert(undefined == 3),
+                _ => {},
+            }
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("A module-level initializer must match its array annotation") {
+    helpers::expect_compile_error(R"(
+        const P: [0]u8 = "ABC";
+        pub const main := fn(): i32 { return 0; };
+    )");
+    helpers::expect_compile_error(R"(
+        const P: [3]u8 = "ABC";
+        pub const main := fn(): i32 { return @as(i32, P[0]); };
+    )");
+    helpers::expect_compile_error(R"(
+        const P: [3]i64 = [3]i32{ 1, 2, 3 };
+        pub const main := fn(): i32 { return 0; };
+    )");
+    helpers::expect_compile_error(R"(
+        const table: [4]i32 = fn(arr: [4]i32, i: usize): i32 { return arr[i]; };
+    )");
+    CHECK(helpers::compile_and_run(R"(
+        const P: [3:0]u8 = "ABC";
+        pub const main := fn(): i32 { return @as(i32, P[0]); };
+    )") == 65);
+}
+
+TEST_CASE("A function literal in an indexed call's arguments gets its scope") {
+    helpers::expect_compile_error(R"(
+        const map := fn(func: fn(x: i32): i32): void {};
+        pub const main := fn(): i32 {
+            map(fn(x: i32): i32 { return x; })[0];
+            return 0;
+        };
+    )");
+    CHECK(helpers::compile_and_run(R"(
+        const map := fn(func: fn(x: i32): i32): [2]i32 { return .{ func(1), func(2) }; };
+        pub const main := fn(): i32 {
+            const offset: i32 = 10;
+            return map(fn(x: i32): i32 { return x + offset; })[1];
+        };
+    )") == 12);
+}
+
+TEST_CASE("A folded call checks a number passed for an array parameter") {
+    helpers::expect_compile_error(R"(
+        const chain := fn(a: auto, b: @TypeOf("s")): @TypeOf(b) { return b; };
+        const call_chain := chain(1, 2);
+    )");
+    helpers::expect_compile_error(R"(
+        const first := fn(b: [1:0]u8): i32 { return 0; };
+        const result := first(2);
+    )");
+}
+
 } // namespace ghoti::tests

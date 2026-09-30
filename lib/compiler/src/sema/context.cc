@@ -211,6 +211,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FROM_BACKING_INT, params(t_type, t_auto), t_auto);
     inject_function(bis::INT_FROM_FLOAT, params(t_type, t_auto), t_auto);
     inject_function(bis::FLOAT_FROM_INT, params(t_type, t_auto), t_auto);
+    inject_function(bis::FLOAT_CAST, params(t_type, t_auto), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);

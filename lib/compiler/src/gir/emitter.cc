@@ -1017,6 +1017,16 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
     if (decl.value) {
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+            const auto literal_type{active_mod().get_sema_type_opt(*decl.value)};
+            if (decl.explicit_type && literal_type && !sema_type->is_poison() &&
+                !sema_type->get_data().is<sema::types::function>() &&
+                !sema::is_fat_callable(*sema_type)) {
+                ctx_.diags.emplace_back(
+                    ctx_.store_mismatch_message(*literal_type, *sema_type, target_ptr_bits_),
+                    sema::error::TYPE_MISMATCH,
+                    active_ast().location_of(*decl.value));
+                return;
+            }
             if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
                 // Generic templates will be emitted via monomorphized instantiations
                 if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
@@ -1102,6 +1112,17 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
             // A folded struct/array/union aggregate or dyn fat pointer cannot round-trip through
             // the scalar `value` variant
+            const auto init_type{active_mod().get_sema_type_opt(*decl.value)};
+            if (decl.explicit_type && init_type &&
+                sema_type->get_kind() == sema::type_kind::ARRAY &&
+                init_type->get_kind() == sema::type_kind::ARRAY &&
+                !sema::is_assignable(*init_type, *sema_type)) {
+                ctx_.diags.emplace_back(
+                    ctx_.store_mismatch_message(*init_type, *sema_type, target_ptr_bits_),
+                    sema::error::TYPE_MISMATCH,
+                    active_ast().location_of(*decl.value));
+                return;
+            }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
                 cv->is<const_dyn_fat_ptr>()) {
                 const_init.emplace(std::move(*cv));
@@ -3461,7 +3482,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_PTR_CAST:
         case syntax::token_type_t::BUILTIN_ALIGN_CAST:
         case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
-        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT: {
+        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
+        case syntax::token_type_t::BUILTIN_FLOAT_CAST:     {
             const bool is_one_arg{call.arguments.size() == 1};
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
@@ -3487,7 +3509,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
                     if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT ||
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_CAST) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }

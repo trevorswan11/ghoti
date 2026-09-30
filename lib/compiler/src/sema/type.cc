@@ -414,8 +414,8 @@ auto cast_rejection_reason(const type&                        from,
     if (is_float(from_kind) && is_float(to_kind)) {
         if (float_bits(from_kind) > float_bits(to_kind)) {
             return fmt::format(
-                "narrowing conversion from '{}' to '{}' may lose precision; use @as for an "
-                "explicit conversion",
+                "narrowing conversion from '{}' to '{}' may lose precision; use @floatCast for "
+                "an explicit conversion",
                 from.to_string(names),
                 to.to_string(names));
         }

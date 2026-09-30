@@ -24,7 +24,7 @@ os.makedirs(CASES, exist_ok=True)
 EXPECTED = {0, 14}
 CRASH = re.compile(
     r"Assertion failed|\): [A-Za-z]:.*\.(?:cc|hh):\d+:\d+|unreachable reached|LLVM ERROR|"
-    r"Broken module|Stack dump|libc\+\+abi|panic:|Instruction does not dominate|"
+    r"Broken module|Stack dump|libc\+\+abi|(?<!@)panic:|Instruction does not dominate|"
     r"Referring to an instruction in another function|must have .* type \("
 )
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -87,7 +87,7 @@ def run_many(cases, cmd="build-obj", jobs=8, extra=()):
 
 def report(groups):
     for sig, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-        print("#### {len(items)} x {sig}")
+        print(f"#### {len(items)} x {sig}")
         for n, c in items[:4]:
             print("   ", os.path.join(CASES, n + ".gh"), c)
 
