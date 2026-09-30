@@ -168,6 +168,8 @@ class llvm_lowering {
                                    usize                   loc_idx) -> void;
 
     auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
+    // `@sqrt`, `@sin`, ... on a runtime float
+    auto emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value*;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
         -> void;
     // A zero divisor, and `MIN / -1` when signed, panic under runtime safety

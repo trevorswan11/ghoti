@@ -566,6 +566,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
 - A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
 - A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- `@sqrt`, `@sin`, `@cos`, `@tan`, `@exp`, `@exp2`, `@log`, `@log2`, `@log10`, `@floor`, and `@ceil` are back (#352)
+    - Folded at compile time with correct rounding in every float type, including exact reduction of huge trigonometric arguments; an untyped result is computed again in the type it lands in rather than rounded twice
+    - At runtime `@sqrt`/`@floor`/`@ceil` use LLVM's intrinsics and the rest call the target's math routines directly (never `llvm.sin` and friends, which LLVM folds with the host's libm)
 - `@floatCast(T, x)` converts between float types, narrowing or widening, rounding to nearest (#349)
     - A compile-time finite value that overflows `T` is a compile error; at runtime an overflow rounds to an infinity, with no safety check
     - **Breaking:** `@as` no longer narrows a float (`@as(f32, some_f64)`); use `@floatCast`. Widening and literal coercion (`@as(f32, 0.1)`) are unchanged

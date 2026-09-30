@@ -144,6 +144,11 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@popCount" }</h3>
 	<pre><code class="language-ghoti">{ `@popCount(expression: auto): uN` }</code></pre>
 	<p>Computes the number of set bits in the expression's binary representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
+	<h3>{ "@sqrt, @sin, @cos, @tan, @exp, @exp2, @log, @log2, @log10, @floor, @ceil" }</h3>
+	<pre><code class="language-ghoti">{ `@sin(x: T): T` }</code></pre>
+	<p>Square root, the trigonometric functions (in radians), <code>e^x</code>, <code>2^x</code>, the natural, base-2, and base-10 logarithms, and rounding down or up to a whole number. <code>x</code> is a float of any type and the result has the same type; an integer is rejected, so convert it with <code>{ "@floatFromInt" }</code> first. An untyped constant takes the float type its context asks for, or stays an untyped float.</p>
+	<p>At compile time every result is <strong>correctly rounded</strong>: the exact mathematical value rounded once to the nearest value of the result type, whatever the argument's size (<code>{ "@sin" }(1e300)</code> reduces the argument exactly). An untyped result that later lands in a narrower type is computed again in that type rather than rounded twice. Special values follow IEEE 754: <code>{ "@log" }(0.0)</code> is negative infinity, <code>{ "@sqrt" }(-1.0)</code> is NaN, and a finite <code>{ "@exp" }</code> result past the type's range is a compile error.</p>
+	<p>At runtime <code>{ "@sqrt" }</code>, <code>{ "@floor" }</code>, and <code>{ "@ceil" }</code> use the target's instructions where it has them. The others call the target's math routines from compiler_rt (<code>sinf</code>, <code>sin</code>, ...; <code>f16</code> goes through the <code>f32</code> routine), so their accuracy is whatever those routines provide.</p>
 	<h3>{ "@abs" }</h3>
 	<pre><code class="language-ghoti">{ `@abs(expression: auto): @TypeOf(expression)` }</code></pre>
 	<p>Computes the absolute value of the passed expression. For a signed integer, <code>{ "@abs" }(MIN)</code> has no result: it is a compile error when folded and a panic under runtime safety.</p>

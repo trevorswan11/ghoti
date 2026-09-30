@@ -10,6 +10,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir::semantics {
@@ -142,6 +143,10 @@ enum class float_op : u8 {
 };
 
 [[nodiscard]] auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op>;
+
+// `@sqrt`, `@sin`, ... `@ceil`
+[[nodiscard]] auto math_function_of(syntax::token_type_t token) noexcept
+    -> stdx::option<math_function>;
 
 // IEEE 754 in `format`, rounded once. Floats never fault: `x / 0` is an infinity or NaN, and
 // `@min`/`@max` are minimumNumber/maximumNumber (a NaN operand loses, and -0 < +0).

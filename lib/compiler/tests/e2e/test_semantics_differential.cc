@@ -260,6 +260,33 @@ auto float_casts() -> std::vector<diff::expr_template> {
     return templates;
 }
 
+// Correctly rounded when folded; a runtime mismatch, once compiler_rt has the routines, is a bug
+// in them. `@exp` past the range is a fold error but an infinity at runtime.
+auto math_functions() -> std::vector<diff::expr_template> {
+    std::vector<diff::expr_template> templates;
+    for (const auto& type : diff::host_float_types()) {
+        for (const std::string_view name : {"@sqrt",
+                                            "@sin",
+                                            "@cos",
+                                            "@tan",
+                                            "@exp",
+                                            "@exp2",
+                                            "@log",
+                                            "@log2",
+                                            "@log10",
+                                            "@floor",
+                                            "@ceil"}) {
+            templates.push_back({
+                .text              = fmt::format("{}({{0}})", name),
+                .operands          = {type},
+                .result            = type,
+                .fold_errors_panic = false,
+            });
+        }
+    }
+    return templates;
+}
+
 } // namespace
 
 // Operands of different types are converted to their peer type before they meet
@@ -353,6 +380,8 @@ TEST_CASE("Float and integer conversions fold like they run") {
 
 TEST_CASE("Float casts fold like they run") { expect_agreement(float_casts()); }
 
+TEST_CASE("Math builtins fold like they run") { expect_agreement(math_functions()); }
+
 // Only the host runs code, but every tier-1 target must fold the same operations
 TEST_CASE("Every operation folds on the other tier-1 targets") {
     const auto uses_f80 = [](const diff::expr_template& tmpl) {
@@ -371,6 +400,7 @@ TEST_CASE("Every operation folds on the other tier-1 targets") {
             families.emplace_back(int_casts());
             families.emplace_back(float_int_conversions());
             families.emplace_back(float_casts());
+            families.emplace_back(math_functions());
         }
         for (auto templates : families) {
             if (!has_f80) { std::erase_if(templates, uses_f80); }
@@ -406,6 +436,7 @@ TEST_CASE("Semantics fuzz", "[.fuzz-semantics]") {
         {"fused multiply-add", fused_multiply_add(), false},
         {"float and integer conversions", float_int_conversions()},
         {"float casts", float_casts()},
+        {"math builtins", math_functions()},
     };
 
     // `GHOTI_DIFF_FUZZ_SEED` replays one failing seed through every family once

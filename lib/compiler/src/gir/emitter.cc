@@ -771,7 +771,7 @@ auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept 
 auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
     -> value {
     check_constexpr_float_fits(v, target, at);
-    if (v.is<f128>()) { return value{v.data, target}; }
+    if (v.is<f128>()) { return value{v.data, target, v.origin}; }
     if (const auto as_unsigned{v.as_opt<u128>()}) {
         return value{f128::from_uint(*as_unsigned), target};
     }
@@ -943,7 +943,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             return coerce_constexpr_int(val, concrete, *expr_id);
         }
         check_constexpr_float_fits(val, concrete, *expr_id);
-        return value{val.data, concrete};
+        return value{val.data, concrete, val.origin};
     }
 
     // A compile-time known integer that provably fits dest_type coerces implicitly
@@ -1140,7 +1140,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         v = value{*as_float};
                     }
                     check_constexpr_float_fits(v, *sema_type, *decl.value);
-                    if (v.is<f128>()) { v = value{v.data, *sema_type}; }
+                    if (v.is<f128>()) { v = value{v.data, *sema_type, v.origin}; }
                 }
                 init_val.emplace(v);
             }
@@ -2117,7 +2117,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                             active_ast().location_of(*decl.value));
                     }
                     if (decl.explicit_type && scalar.is<f128>()) {
-                        scalar = value{scalar.data, *sema_type};
+                        scalar = value{scalar.data, *sema_type, scalar.origin};
                     }
 
                     bound = scalar;
@@ -3997,6 +3997,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                                           stdx::none,
                                                           stdx::none,
                                                           checked)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_SQRT:
+        case syntax::token_type_t::BUILTIN_SIN:
+        case syntax::token_type_t::BUILTIN_COS:
+        case syntax::token_type_t::BUILTIN_TAN:
+        case syntax::token_type_t::BUILTIN_EXP:
+        case syntax::token_type_t::BUILTIN_EXP2:
+        case syntax::token_type_t::BUILTIN_LOG:
+        case syntax::token_type_t::BUILTIN_LOG2:
+        case syntax::token_type_t::BUILTIN_LOG10:
+        case syntax::token_type_t::BUILTIN_FLOOR:
+        case syntax::token_type_t::BUILTIN_CEIL:  {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()};
+            if (!expr_h) { break; }
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(
+                    name, {emit_coerced_expr(*expr_h, ret_type)}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};

@@ -21,6 +21,7 @@
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {
@@ -189,13 +190,20 @@ struct value {
 
     data_t                    data{void_val{}};
     stdx::option<sema::type&> type{stdx::none};
+    // Set on an untyped `@sin(...)`-style result until it takes a concrete float type
+    stdx::option<math_origin> origin{stdx::none};
 
     constexpr value() noexcept = default;
     // A float payload is rounded into its type's format
-    constexpr value(data_t val, stdx::option<sema::type&> t = stdx::none)
-        : data{std::move(val)}, type{t} {
+    constexpr value(data_t                    val,
+                    stdx::option<sema::type&> t        = stdx::none,
+                    stdx::option<math_origin> computed = stdx::none)
+        : data{std::move(val)}, type{t}, origin{computed} {
         if !consteval {
-            if (auto f{data.as_opt<f128>()}; f && type) { *f = sema::fit_float(*f, *type); }
+            if (auto f{data.as_opt<f128>()}; f && type) {
+                *f = sema::fit_float(*f, *type, origin);
+                if (sema::is_float(type->get_kind())) { origin.reset(); }
+            }
         }
     }
 

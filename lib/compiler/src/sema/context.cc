@@ -252,6 +252,17 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::CTZ, params(t_auto), t_usize);
     inject_function(bis::POPCOUNT, params(t_auto), t_usize);
     inject_function(bis::ABS, params(t_auto), t_auto);
+    inject_function(bis::SQRT, params(t_auto), t_auto);
+    inject_function(bis::SIN, params(t_auto), t_auto);
+    inject_function(bis::COS, params(t_auto), t_auto);
+    inject_function(bis::TAN, params(t_auto), t_auto);
+    inject_function(bis::EXP, params(t_auto), t_auto);
+    inject_function(bis::EXP2, params(t_auto), t_auto);
+    inject_function(bis::LOG, params(t_auto), t_auto);
+    inject_function(bis::LOG2, params(t_auto), t_auto);
+    inject_function(bis::LOG10, params(t_auto), t_auto);
+    inject_function(bis::FLOOR, params(t_auto), t_auto);
+    inject_function(bis::CEIL, params(t_auto), t_auto);
 
     inject_function(bis::MIN, params(t_auto, t_auto), t_auto);
     inject_function(bis::MAX, params(t_auto, t_auto), t_auto);

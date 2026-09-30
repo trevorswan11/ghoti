@@ -70,6 +70,17 @@ constexpr builtin_t CLZ{"@clz", token_type_t::BUILTIN_CLZ};
 constexpr builtin_t CTZ{"@ctz", token_type_t::BUILTIN_CTZ};
 constexpr builtin_t POPCOUNT{"@popCount", token_type_t::BUILTIN_POPCOUNT};
 constexpr builtin_t ABS{"@abs", token_type_t::BUILTIN_ABS};
+constexpr builtin_t SQRT{"@sqrt", token_type_t::BUILTIN_SQRT};
+constexpr builtin_t SIN{"@sin", token_type_t::BUILTIN_SIN};
+constexpr builtin_t COS{"@cos", token_type_t::BUILTIN_COS};
+constexpr builtin_t TAN{"@tan", token_type_t::BUILTIN_TAN};
+constexpr builtin_t EXP{"@exp", token_type_t::BUILTIN_EXP};
+constexpr builtin_t EXP2{"@exp2", token_type_t::BUILTIN_EXP2};
+constexpr builtin_t LOG{"@log", token_type_t::BUILTIN_LOG};
+constexpr builtin_t LOG2{"@log2", token_type_t::BUILTIN_LOG2};
+constexpr builtin_t LOG10{"@log10", token_type_t::BUILTIN_LOG10};
+constexpr builtin_t FLOOR{"@floor", token_type_t::BUILTIN_FLOOR};
+constexpr builtin_t CEIL{"@ceil", token_type_t::BUILTIN_CEIL};
 
 constexpr builtin_t MIN{"@min", token_type_t::BUILTIN_MIN};
 constexpr builtin_t MAX{"@max", token_type_t::BUILTIN_MAX};
@@ -194,6 +205,17 @@ constexpr std::array ALL_BUILTINS{
     builtins::CTZ,
     builtins::POPCOUNT,
     builtins::ABS,
+    builtins::SQRT,
+    builtins::SIN,
+    builtins::COS,
+    builtins::TAN,
+    builtins::EXP,
+    builtins::EXP2,
+    builtins::LOG,
+    builtins::LOG2,
+    builtins::LOG10,
+    builtins::FLOOR,
+    builtins::CEIL,
     builtins::MIN,
     builtins::MAX,
     builtins::DIV_TRUNC,

@@ -65,6 +65,7 @@ auto const_value::to_gir_value() const noexcept -> value {
         [this](const const_closure&) -> value { return value{void_val{}, type_}; },
         [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
         [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
+        [this](const f128& f) -> value { return value{f, type_, origin_}; },
         [this](const auto& v) -> value { return value{v, type_}; });
 }
 

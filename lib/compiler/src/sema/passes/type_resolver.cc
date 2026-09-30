@@ -48,6 +48,7 @@
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/gir/semantics.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
@@ -1807,6 +1808,57 @@ template <ast::IndexableID ID>
             }
         }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
+        break;
+    }
+    case token_type_t::BUILTIN_SQRT:
+    case token_type_t::BUILTIN_SIN:
+    case token_type_t::BUILTIN_COS:
+    case token_type_t::BUILTIN_TAN:
+    case token_type_t::BUILTIN_EXP:
+    case token_type_t::BUILTIN_EXP2:
+    case token_type_t::BUILTIN_LOG:
+    case token_type_t::BUILTIN_LOG2:
+    case token_type_t::BUILTIN_LOG10:
+    case token_type_t::BUILTIN_FLOOR:
+    case token_type_t::BUILTIN_CEIL:  {
+        const auto& arg{call.arguments[0]};
+        auto&       operand{*get_resolved_call_arg_type(arg)};
+        if (operand.is_poison()) { break; }
+        const auto name{*syntax::get_builtin_opt(builtin_id)};
+        if (call_arg_denotes_type(arg)) {
+            return make_sema_err(
+                fmt::format("'{}' expects a float value, but was given a type", name),
+                error::TYPE_USED_AS_VALUE,
+                get_call_arg_location(arg));
+        }
+        const auto kind{operand.get_kind()};
+        if (is_integer(kind)) {
+            return make_sema_err(
+                fmt::format("'{}' operand must be a float; found '{}'; convert it with "
+                            "`@floatFromInt`",
+                            name,
+                            ctx_.type_display_name(operand)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(arg));
+        }
+        if (is_float(kind)) {
+            return_type = ctx_.pool.with_const(operand, false);
+            break;
+        }
+        if (!is_constexpr_numeric(kind)) {
+            return make_sema_err(fmt::format("'{}' operand must be a float; found '{}'",
+                                             name,
+                                             ctx_.type_display_name(operand)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(arg));
+        }
+        // An untyped constant takes the float type its context asks for, and is computed there
+        const auto expected{implicit_type_stack_.peek()};
+        if (expected && is_float(expected->get_kind())) {
+            return_type = ctx_.pool.with_const(*expected, false);
+        } else {
+            return_type = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+        }
         break;
     }
     // These return @TypeOf(expression) which is trivial
@@ -3858,7 +3910,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF ||
                    call.function->get_token_type() == token_type_t::BUILTIN_INT_FROM_FLOAT ||
                    call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT ||
-                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_CAST) {
+                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_CAST ||
+                   gir::semantics::math_function_of(call.function->get_token_type())) {
             // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);

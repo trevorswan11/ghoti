@@ -161,9 +161,13 @@ auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
     }
 }
 
-auto fit_float(f128 value, const type& t) -> f128 {
+auto fit_float(f128 value, const type& t, stdx::option<math_origin> origin) -> f128 {
     const auto format{float_format_of(t)};
-    return format ? value.round_to(*format) : value;
+    if (!format) { return value; }
+    if (origin && is_float(t.get_kind())) {
+        return evaluate(origin->function, origin->input, *format);
+    }
+    return value.round_to(*format);
 }
 
 auto constexpr_float_fits(f128 value, const type& target) -> bool {

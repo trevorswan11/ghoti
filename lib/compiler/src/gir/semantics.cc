@@ -469,6 +469,24 @@ auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op> 
     }
 }
 
+auto math_function_of(syntax::token_type_t token) noexcept -> stdx::option<math_function> {
+    using tt = syntax::token_type_t;
+    switch (token) {
+    case tt::BUILTIN_SQRT:  return math_function::SQRT;
+    case tt::BUILTIN_SIN:   return math_function::SIN;
+    case tt::BUILTIN_COS:   return math_function::COS;
+    case tt::BUILTIN_TAN:   return math_function::TAN;
+    case tt::BUILTIN_EXP:   return math_function::EXP;
+    case tt::BUILTIN_EXP2:  return math_function::EXP2;
+    case tt::BUILTIN_LOG:   return math_function::LOG;
+    case tt::BUILTIN_LOG2:  return math_function::LOG2;
+    case tt::BUILTIN_LOG10: return math_function::LOG10;
+    case tt::BUILTIN_FLOOR: return math_function::FLOOR;
+    case tt::BUILTIN_CEIL:  return math_function::CEIL;
+    default:                return stdx::none;
+    }
+}
+
 auto float_from_int(int_domain from, u128 value, float_format format) -> f128 {
     if (from.is_signed) { return f128::from_int(signed_value(value, from), format); }
     return f128::from_uint(unsigned_value(value, from), format);

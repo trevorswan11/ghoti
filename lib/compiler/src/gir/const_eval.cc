@@ -3942,6 +3942,54 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;
     }
+    case syntax::token_type_t::BUILTIN_SQRT:
+    case syntax::token_type_t::BUILTIN_SIN:
+    case syntax::token_type_t::BUILTIN_COS:
+    case syntax::token_type_t::BUILTIN_TAN:
+    case syntax::token_type_t::BUILTIN_EXP:
+    case syntax::token_type_t::BUILTIN_EXP2:
+    case syntax::token_type_t::BUILTIN_LOG:
+    case syntax::token_type_t::BUILTIN_LOG2:
+    case syntax::token_type_t::BUILTIN_LOG10:
+    case syntax::token_type_t::BUILTIN_FLOOR:
+    case syntax::token_type_t::BUILTIN_CEIL:  {
+        const auto function{*semantics::math_function_of(builtin_type)};
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (!expr_h) { return stdx::none; }
+        const auto arg{try_eval(*expr_h)};
+        if (!arg) { return stdx::none; }
+        stdx::option<f128> input;
+        if (const auto as_float{arg->as_opt<f128>()}) {
+            input.emplace(*as_float);
+        } else if (const auto as_int{arg->int_as_float_opt()}) {
+            input.emplace(*as_int);
+        }
+        if (!input) { return stdx::none; }
+
+        // The call's own type decides the format: an untyped operand in a typed context is
+        // computed straight into that type
+        auto       result_type{id.is_valid() ? module_->get_sema_type_opt(id) : arg->get_type()};
+        const bool concrete{result_type && sema::is_float(result_type->get_kind())};
+        const auto format{concrete ? sema::float_format_of(*result_type) : stdx::none};
+        const auto result{evaluate_traced(function, *input, format.value_or(float_format::QUAD))};
+        if (result.overflowed) {
+            ctx_.diags.emplace_back(
+                fmt::format("'{}' of {} is out of range for type '{}'",
+                            *syntax::get_builtin_opt(builtin_type),
+                            *input,
+                            result_type ? ctx_.type_display_name(*result_type) : "f128"),
+                sema::error::LITERAL_OUT_OF_RANGE,
+                module_->ast.location_of(*expr_h));
+            return const_value::make_poison();
+        }
+        const_value folded{result.value, result_type};
+        // sqrt, floor and ceil survive a second rounding; the others don't
+        const bool exact_enough{function == math_function::SQRT ||
+                                function == math_function::FLOOR ||
+                                function == math_function::CEIL};
+        if (!concrete && !exact_enough) { folded.set_origin({function, *input}); }
+        return folded;
+    }
     case syntax::token_type_t::BUILTIN_CLZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};

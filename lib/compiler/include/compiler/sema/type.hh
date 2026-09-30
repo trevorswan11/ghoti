@@ -27,6 +27,7 @@
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -642,8 +643,10 @@ static_assert(stdx::TriviallyDestructible<type>);
 // The format a compile-time float of type `t` is held in; `constexpr_float` keeps full `f128`
 [[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;
 
-// `value` rounded into `t`'s format, unchanged when `t` is not a float type
-[[nodiscard]] auto fit_float(f128 value, const type& t) -> f128;
+// `value` rounded into `t`'s format, unchanged when `t` is not a float type. A math result that
+// is still untyped is recomputed in a concrete `t` rather than rounded a second time.
+[[nodiscard]] auto
+fit_float(f128 value, const type& t, stdx::option<math_origin> origin = stdx::none) -> f128;
 
 // Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
 // already infinite or NaN, or a target that is not a concrete float, always fits

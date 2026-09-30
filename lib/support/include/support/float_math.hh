@@ -36,6 +36,17 @@ struct math_result {
     bool overflowed{false};
 };
 
+// Where an untyped result came from, so rounding it into a narrower format later can recompute
+// it there instead of rounding twice
+struct math_origin {
+    math_function function;
+    f128          input;
+
+    [[nodiscard]] auto operator==(const math_origin& other) const noexcept -> bool {
+        return function == other.function && input.bits() == other.input.bits();
+    }
+};
+
 // `function(x)` correctly rounded into `format`: the infinitely precise result, rounded once to
 // nearest with ties to even. Special values follow IEEE 754.
 [[nodiscard]] auto evaluate_traced(math_function function, f128 x, float_format format)
