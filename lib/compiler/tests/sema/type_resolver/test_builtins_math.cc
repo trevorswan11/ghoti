@@ -25,16 +25,15 @@ TEST_CASE("Well-formed integer / float builtins resolve") {
     )");
 }
 
-TEST_CASE("@min / @max reject operands of differing type") {
+TEST_CASE("@min / @max reject operands with no peer type") {
     helpers::test_resolver_fail(
         R"(
-const foo := fn(a: i32, b: i64): i32 {
+const foo := fn(a: i32, b: u64): i32 {
     return @min(a, b);
 };
 )",
-        sema::diagnostic{"'@min' expects two operands of the same numeric type; found 'i32' and "
-                         "'i64'",
-                         sema::error::OPERATOR_TYPE_MISMATCH,
+        sema::diagnostic{"'@min': no peer type for 'i32' and 'u64'; convert one with `@intCast`",
+                         sema::error::NO_PEER_TYPE,
                          std::pair{2UZ, 16UZ}});
 }
 
@@ -45,8 +44,7 @@ const foo := fn(a: f64, b: f64): f64 {
     return @divTrunc(a, b);
 };
 )",
-        sema::diagnostic{"'@divTrunc' expects two operands of the same integer type; found 'f64' "
-                         "and 'f64'",
+        sema::diagnostic{"'@divTrunc' expects two integer operands; found 'f64' and 'f64'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
                          std::pair{2UZ, 21UZ}});
 }

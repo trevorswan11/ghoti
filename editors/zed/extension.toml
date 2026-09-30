@@ -12,4 +12,4 @@ language = "Ghoti"
 
 [grammars.ghoti]
 repository = "https://github.com/trevorswan11/tree-sitter-ghoti"
-commit = "81c30f8ae7e761dc04fdb8e7219fa9d304752025"
+commit = "280ceb8105e38f7eb2288953be6abf7840ed02e2"

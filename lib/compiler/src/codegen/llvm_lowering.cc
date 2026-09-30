@@ -1831,8 +1831,12 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
         return dummy;
     }
 
-    auto*      slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
-    const auto wanted{
+    // Every slot lives in the entry block: one placed where a loop body declares it would take
+    // fresh stack on each iteration
+    auto&             entry{builder_.GetInsertBlock()->getParent()->getEntryBlock()};
+    llvm::IRBuilder<> entry_builder{&entry, entry.getFirstInsertionPt()};
+    auto*             slot{entry_builder.CreateAlloca(elem_ty, nullptr, "slot")};
+    const auto        wanted{
         std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
     if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }
     if (inst.result) { set_local(*inst.result, slot); }

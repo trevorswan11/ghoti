@@ -4,6 +4,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <random>
@@ -579,6 +580,18 @@ struct error_sample {
     classified_case sample;
 };
 
+// One case's exit code. A freshly linked executable can be briefly locked by a scanner, so a
+// spawn that never started gets a second try
+[[nodiscard]] auto
+run_error_case(const std::filesystem::path& exe, std::string_view mode, const std::string& which) {
+    const auto spawn{[&] {
+        return spawn_child(mock_argv{exe.string(), std::string{mode}, which})
+            .transform(helpers::portable_exit_code);
+    }};
+    const auto first{spawn()};
+    return first ? first : spawn();
+}
+
 // Every sampled fold error in one executable, run once per case: under safety it must panic, and
 // with safety off it must produce the template's unchecked equivalent
 auto check_errors(const std::vector<expr_template>& templates,
@@ -646,8 +659,7 @@ auto check_errors(const std::vector<expr_template>& templates,
         const auto  which{std::to_string(s)};
 
         ++rep.panics_checked;
-        const auto panicked{spawn_child(mock_argv{exe.path.string(), std::string{"0"}, which})
-                                .transform(helpers::portable_exit_code)};
+        const auto panicked{run_error_case(exe.path, "0", which)};
         if (panicked != panic_exit_code) {
             rep.mismatches.emplace_back<mismatch>({fmt::format(
                 "{} [{}]: folding reports \"{}\" but runtime with safety on exited {} instead of "
@@ -658,14 +670,14 @@ auto check_errors(const std::vector<expr_template>& templates,
                 panicked ? static_cast<i64>(*panicked) : -1)});
         }
         if (tmpl.unchecked_equivalent.empty()) { continue; }
-        const auto unchecked{spawn_child(mock_argv{exe.path.string(), std::string{"1"}, which})
-                                 .transform(helpers::portable_exit_code)};
+        const auto unchecked{run_error_case(exe.path, "1", which)};
         if (unchecked != 0U) {
-            rep.mismatches.emplace_back<mismatch>(
-                {fmt::format("{} [{}]: with safety off the result isn't the unchecked `{}`",
-                             tmpl.text,
-                             describe_operands(tmpl, sample.operands),
-                             tmpl.unchecked_equivalent)});
+            rep.mismatches.emplace_back<mismatch>({fmt::format(
+                "{} [{}]: with safety off the result isn't the unchecked `{}` (exited {})",
+                tmpl.text,
+                describe_operands(tmpl, sample.operands),
+                tmpl.unchecked_equivalent,
+                unchecked ? static_cast<i64>(*unchecked) : -1)});
         }
     }
 }

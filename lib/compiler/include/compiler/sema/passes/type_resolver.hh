@@ -578,6 +578,14 @@ class type_resolver {
     // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
     auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;
 
+    // One value a construct may yield: an `if` or `match` arm, or what a `break` carries
+    struct result_value {
+        gsl::not_null<type*> type;
+        ast::node_id         at;
+    };
+    [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;
+    [[nodiscard]] auto peer_view(type& t) -> type&;
+
     // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
     auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
 
@@ -716,6 +724,10 @@ class type_resolver {
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
     bool in_expr_branch_{false};
+    // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
+    // Their arms need no common type.
+    ankerl::unordered_dense::set<usize> unused_value_nodes_;
+    bool                                arm_of_unused_{false};
     // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
     struct enclosing_arm {
         stdx::option<ast::expr_handle>       condition{}; // an `if` arm

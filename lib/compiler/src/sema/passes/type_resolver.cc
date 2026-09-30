@@ -54,6 +54,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -563,6 +564,12 @@ template <ast::IndexableID ID>
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
+    } else if (builtin_id == token_type_t::BUILTIN_TYPE_OF) {
+        if (call.arguments.empty()) {
+            return make_sema_err("'@TypeOf' expects at least 1 argument, found 0",
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
     } else if (call.arguments.size() != params.size()) {
         return make_sema_err(fmt::format("Builtin expects {} arguments, found {}",
                                          params.size(),
@@ -1062,15 +1069,32 @@ template <ast::IndexableID ID>
     // @TypeOf returns a type as per documentation, but it's not the literal `type` type
     case token_type_t::BUILTIN_TYPE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::TYPE);
-        auto&       instance_type{*get_resolved_call_arg_type(call.arguments[0])};
-        const auto& instance_data{instance_type.get_data()};
-        if (instance_data.is<types::deferred_call>() || instance_data.is<types::deferred_array>()) {
+        // Several operands name the type they would meet at
+        std::vector<peer_operand> operands;
+        bool                      any_deferred{false};
+        for (const auto& argument : call.arguments) {
+            auto&       operand_type{peer_view(*get_resolved_call_arg_type(argument))};
+            const auto& operand_data{operand_type.get_data()};
+            any_deferred = any_deferred || operand_data.is<types::deferred_call>() ||
+                           operand_data.is<types::deferred_array>();
+            operands.emplace_back(&operand_type);
+        }
+        // An operand whose type isn't known yet defers the whole call until it is
+        if (any_deferred) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
             return_type->resolve_if<types::deferred_call>(call);
-        } else {
-            return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, instance_type}];
-            return_type->resolve_if<types::meta_type>(instance_type);
+            break;
         }
+        const auto peer{peer_type(ctx_, operands)};
+        if (!peer) {
+            return make_sema_err(
+                fmt::format("'@TypeOf': {}", peer_error_message(ctx_, operands, peer.error())),
+                error::NO_PEER_TYPE,
+                get_call_arg_location(call.arguments[peer.error().second]));
+        }
+        auto& instance_type{**peer};
+        return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, instance_type}];
+        return_type->resolve_if<types::meta_type>(instance_type);
         break;
     }
     // @This returns a type as per docs, but it's really a structural type with full determinism
@@ -1765,23 +1789,35 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_DIV_FLOOR:
     case token_type_t::BUILTIN_REM:
     case token_type_t::BUILTIN_MOD:       {
-        auto&      lhs_type{constexpr_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
-        auto&      rhs_type{constexpr_numeric_view(*get_resolved_call_arg_type(call.arguments[1]))};
+        auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
+        auto&      rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
         const bool floats_ok{builtin_id == token_type_t::BUILTIN_MIN ||
                              builtin_id == token_type_t::BUILTIN_MAX};
         const auto accepts{
             [&](type_kind k) -> bool { return floats_ok ? is_numeric(k) : is_integer(k); }};
-        if (!accepts(lhs_type.get_kind()) || !is_same_unqualified(lhs_type, rhs_type)) {
+        // The operands meet at their peer type, which is also the result
+        const std::array operands{peer_operand{&lhs_type}, peer_operand{&rhs_type}};
+        const bool both_numeric{is_numeric(lhs_type.get_kind()) && is_numeric(rhs_type.get_kind())};
+        const auto peer{peer_type(ctx_, operands)};
+        if (both_numeric && !peer) {
+            return make_sema_err(fmt::format("'{}': {}",
+                                             *syntax::get_builtin_opt(builtin_id),
+                                             peer_error_message(ctx_, operands, peer.error())),
+                                 error::NO_PEER_TYPE,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        auto& operand_type{constexpr_numeric_view(peer ? **peer : lhs_type)};
+        if (!both_numeric || !accepts(operand_type.get_kind())) {
             return make_sema_err(
-                fmt::format("'{}' expects two operands of the same {} type; found '{}' and '{}'",
+                fmt::format("'{}' expects two {} operands; found '{}' and '{}'",
                             *syntax::get_builtin_opt(builtin_id),
                             floats_ok ? "numeric" : "integer",
-                            ctx_.type_display_name(lhs_type),
-                            ctx_.type_display_name(rhs_type)),
+                            ctx_.type_display_name(constexpr_numeric_view(lhs_type)),
+                            ctx_.type_display_name(constexpr_numeric_view(rhs_type))),
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
-        return_type = ctx_.pool.with_const(lhs_type, false);
+        return_type = ctx_.pool.with_const(operand_type, false);
         break;
     }
     case token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
@@ -1791,7 +1827,25 @@ template <ast::IndexableID ID>
         auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
         auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
-        if (!is_integer(lhs_type.get_kind()) || !is_same_unqualified(lhs_type, rhs_type)) {
+        // A shift's count is not a peer of the value shifted; the others meet at their peer type
+        const bool       is_shift{builtin_id == token_type_t::BUILTIN_SHL_WITH_OVERFLOW};
+        const std::array operands{peer_operand{&lhs_type}, peer_operand{&rhs_type}};
+        const auto       peer{is_shift ? stdx::result<gsl::not_null<type*>, peer_error>{&lhs_type}
+                                       : peer_type(ctx_, operands)};
+        const auto       is_int_operand{[](const type& t) {
+            return is_integer(t.get_kind()) || is_constexpr_int(t.get_kind());
+        }};
+        const bool       integers{is_int_operand(lhs_type) && is_int_operand(rhs_type)};
+        if (integers && !peer) {
+            return make_sema_err(fmt::format("'{}': {}",
+                                             *syntax::get_builtin_opt(builtin_id),
+                                             peer_error_message(ctx_, operands, peer.error())),
+                                 error::NO_PEER_TYPE,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        const bool count_mismatch{is_shift && !is_same_unqualified(lhs_type, rhs_type) &&
+                                  !is_constexpr_int(rhs_type.get_kind())};
+        if (!integers || count_mismatch) {
             return make_sema_err(
                 fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
                             "'{}'",
@@ -1807,13 +1861,17 @@ template <ast::IndexableID ID>
         const type* out_underlying{out_ref   ? &out_ref->underlying
                                    : out_ptr ? &out_ptr->underlying
                                              : nullptr};
-        if (!out_underlying || out_type.is_constant() ||
-            !is_same_unqualified(*out_underlying, lhs_type)) {
+        // Untyped operands take the result slot's type
+        const bool untyped{is_constexpr_int((*peer)->get_kind())};
+        const bool slot_matches{out_underlying &&
+                                (untyped ? is_integer(out_underlying->get_kind())
+                                         : is_same_unqualified(*out_underlying, **peer))};
+        if (!slot_matches || out_type.is_constant()) {
             return make_sema_err(
                 fmt::format("'{}' expects its third argument to be a '&mut {}' result reference; "
                             "found '{}'",
                             *syntax::get_builtin_opt(builtin_id),
-                            ctx_.type_display_name(lhs_type),
+                            ctx_.type_display_name(constexpr_numeric_view(**peer)),
                             ctx_.type_display_name(out_type)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[2]));
@@ -5329,6 +5387,8 @@ auto type_resolver::in_dead_arm() -> bool {
 
 auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void {
     const mutating_context_guard branch_g{in_expr_branch_, true};
+    const mutating_context_guard unused_g{arm_of_unused_,
+                                          unused_value_nodes_.contains(id.get_index())};
     // `if constexpr { } else { }` has no condition and keeps both arms live
     const bool track_arms{if_expr.condition.has_value()};
     {
@@ -5340,7 +5400,20 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         TRY_RESOLVE(if_expr.consequence);
     }
 
-    auto* branch_type{last_type_.take()};
+    // What an arm yields: its expression's value, or nothing at all when it jumps away
+    const auto arm_value{[&](ast::stmt_handle arm, type& resolved) -> stdx::option<result_value> {
+        if (const auto expr{resolving_.ast.get_as_opt<ast::expr_stmt>(arm)}) {
+            if (const auto expr_type{resolving_.get_sema_type_opt(expr->expression)}) {
+                return result_value{expr_type.get(), *expr->expression};
+            }
+            return stdx::none;
+        }
+        if (resolved.get_kind() == type_kind::NORETURN) { return result_value{&resolved, *arm}; }
+        return stdx::none;
+    }};
+
+    auto*      branch_type{last_type_.take()};
+    const auto cons_value{arm_value(if_expr.consequence, *branch_type)};
     if (if_expr.alternate) {
         stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
         if (track_arms) {
@@ -5348,18 +5421,11 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
                           enclosing_arm{.condition = if_expr.condition, .consequence = false});
         }
         TRY_RESOLVE(*if_expr.alternate);
-        if (const auto cons_expr{resolving_.ast.get_as_opt<ast::expr_stmt>(if_expr.consequence)}) {
-            if (const auto alt_expr{
-                    resolving_.ast.get_as_opt<ast::expr_stmt>(*if_expr.alternate)}) {
-                if (const auto cons_type{resolving_.get_sema_type_opt(cons_expr->expression)}) {
-                    if (const auto alt_type{resolving_.get_sema_type_opt(alt_expr->expression)}) {
-                        if (!cons_type->is_poison() && !alt_type->is_poison() &&
-                            cons_type->get_kind() != type_kind::VOID_) {
-                            branch_type = cons_type.get();
-                        }
-                    }
-                }
-            }
+        const auto alt_value{arm_value(*if_expr.alternate, *last_type_)};
+        if (cons_value && alt_value && !cons_value->type->is_poison() &&
+            !alt_value->type->is_poison() && cons_value->type->get_kind() != type_kind::VOID_) {
+            const std::array arms{*cons_value, *alt_value};
+            branch_type = &result_peer(id, arms);
         }
     }
     resolving_.set_sema_type(id, *branch_type);
@@ -5798,21 +5864,28 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
     const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR};
 
-    // Peer typing for `constexpr_int` / `constexpr_float` operands
-    if (!is_shift_op) {
-        const auto lk{lhs_type->get_kind()};
-        const auto rk{rhs_type.get_kind()};
-        if (is_constexpr_numeric(lk) && is_numeric(rk) && !is_constexpr_numeric(rk)) {
-            resolving_.set_sema_type(binary.lhs, rhs_type);
-            lhs_type = &rhs_type;
-        } else if (is_constexpr_numeric(rk) && is_numeric(lk) && !is_constexpr_numeric(lk)) {
-            resolving_.set_sema_type(binary.rhs, *lhs_type);
-        } else if (is_constexpr_numeric(lk) && is_constexpr_numeric(rk) && lk != rk) {
-            auto& promoted{ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT)};
-            resolving_.set_sema_type(binary.lhs, promoted);
-            resolving_.set_sema_type(binary.rhs, promoted);
-            lhs_type = &promoted;
+    // Two numbers meet at their peer type; an untyped constant takes it on
+    const bool peers_operands{!is_shift_op && op != syntax::token_type_t::PLUS_PLUS &&
+                              op != syntax::token_type_t::BOOLEAN_AND &&
+                              op != syntax::token_type_t::BOOLEAN_OR};
+    if (peers_operands && is_numeric(lhs_type->get_kind()) && is_numeric(rhs_type.get_kind())) {
+        const std::array operands{peer_operand{lhs_type}, peer_operand{&rhs_type}};
+        const auto       peer{peer_type(ctx_, operands)};
+        if (!peer) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 peer_error_message(ctx_, operands, peer.error()),
+                                 error::NO_PEER_TYPE,
+                                 resolving_.ast.location_of(id)));
         }
+        if (is_constexpr_numeric(lhs_type->get_kind())) {
+            resolving_.set_sema_type(binary.lhs, **peer);
+        }
+        if (is_constexpr_numeric(rhs_type.get_kind())) {
+            resolving_.set_sema_type(binary.rhs, **peer);
+        }
+        lhs_type = peer->get();
     }
 
     switch (id.get_token_type()) {
@@ -6837,7 +6910,13 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
         }
 
         // The last type inherits the result type to help propagation of poison
-        auto& result_type{constexpr_numeric_view(*label_data.get_yield_types()[0])};
+        // Every value the label is broken with meets at one type
+        std::vector<result_value> yields;
+        for (const auto yielded : label_data.get_yield_types()) {
+            yields.emplace_back(yielded, id);
+        }
+        auto& result_type{constexpr_numeric_view(yields.size() > 1 ? result_peer(id, yields)
+                                                                   : *yields.front().type)};
         ASSERT(result_type.is_resolved(), "The label's inner type should've been resolved");
         label_type.resolve_if<type::data_t>(result_type.get_data());
         resolving_.set_sema_type(*label.name, result_type);
@@ -7310,6 +7389,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     }
 
     stdx::option<type&>            first_type;
+    std::vector<result_value>      arm_values;
     stdx::option<ast::expr_handle> type_arm;
     bool                           value_arm{false};
     bool                           matcher_is_const{false};
@@ -7614,6 +7694,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         }
         {
             const mutating_context_guard branch_g{in_expr_branch_, true};
+            const mutating_context_guard unused_g{arm_of_unused_,
+                                                  unused_value_nodes_.contains(id.get_index())};
             const scope_guard            arm_g{
                 enclosing_arms_,
                 enclosing_arm{.match   = match,
@@ -7630,6 +7712,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     if (inner_type->get_kind() != type_kind::NORETURN && !first_type) {
                         first_type = *inner_type;
                     }
+                    arm_values.emplace_back(inner_type.get(), *expr_stmt_node->expression);
                     if (decl_value_denotes_type(expr_stmt_node->expression)) {
                         if (!type_arm) { type_arm.emplace(expr_stmt_node->expression); }
                     } else if (inner_type->get_kind() != type_kind::NORETURN) {
@@ -7668,8 +7751,42 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     }
 
     if (!first_type) { first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_)); }
-    resolving_.set_sema_type(id, *first_type);
-    last_type_.emplace(*first_type);
+    auto& result_type{arm_values.size() > 1 ? result_peer(id, arm_values) : *first_type};
+    resolving_.set_sema_type(id, result_type);
+    last_type_.emplace(result_type);
+}
+
+// The type the values of an `if`, a `match`, or a labeled block meet at. A `void` value among
+// them means the construct is a statement, where the first value's type stands.
+auto type_resolver::result_peer(ast::node_id id, gsl::span<const result_value> values) -> type& {
+    std::vector<peer_operand> operands;
+    stdx::option<type&>       first;
+    for (const auto& value : values) {
+        const auto kind{value.type->get_kind()};
+        if (kind != type_kind::NORETURN && !first) { first.emplace(*value.type); }
+        operands.emplace_back(&peer_view(*value.type));
+    }
+    if (!first) { return *values.front().type; }
+    // Only values can peer; types and scope handles keep the first arm's type
+    const bool all_values{std::ranges::all_of(operands, [](const peer_operand& value) {
+        const auto kind{value.type->get_kind()};
+        const bool takes_no_part{kind == type_kind::NORETURN || kind == type_kind::UNDEFINED ||
+                                 kind == type_kind::POISON};
+        return takes_no_part || (kind != type_kind::TYPE && is_value_type(kind));
+    })};
+    if (!all_values) { return *first; }
+
+    const auto peer{peer_type(ctx_, operands)};
+    if (peer) { return **peer; }
+    // Arms nothing reads need no common type; the construct is a statement
+    if (unused_value_nodes_.contains(id.get_index())) {
+        return ctx_.get_builtin_resolved_type(type_kind::VOID_);
+    }
+    return ctx_.poison_node(resolving_,
+                            id,
+                            peer_error_message(ctx_, operands, peer.error()),
+                            error::NO_PEER_TYPE,
+                            resolving_.ast.location_of(values[peer.error().second].at));
 }
 
 namespace {
@@ -10617,6 +10734,10 @@ auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     // An `if`/`match` branch statement yields the branch's value; its call result is not
     // discarded, so skip the unused-result check while resolving one.
     const bool is_branch_value{in_expr_branch_};
+    if (!is_branch_value || arm_of_unused_) {
+        unused_value_nodes_.insert(ast::node_id{expr.expression}.get_index());
+    }
+    const mutating_context_guard operand_g{arm_of_unused_, false};
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());
     if (!is_branch_value) { check_unused_result(id, expr); }
@@ -12616,6 +12737,21 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
     }
     resolving_.set_sema_type(id, final_type);
     last_type_.emplace(final_type);
+}
+
+// An array whose length folds late is sized before it meets its peers, behind a pointer too
+auto type_resolver::peer_view(type& t) -> type& {
+    auto&      sized{concrete_array_type(t)};
+    const auto mutability{sized.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE};
+    if (const auto ptr{sized.get_data().as_opt<types::pointer>()}) {
+        auto& pointee{concrete_array_type(ptr->underlying)};
+        return &pointee == &ptr->underlying ? sized : ctx_.get_pointer(mutability, pointee);
+    }
+    if (const auto ref{sized.get_data().as_opt<types::reference>()}) {
+        auto& referent{concrete_array_type(ref->underlying)};
+        return &referent == &ref->underlying ? sized : ctx_.get_reference(mutability, referent);
+    }
+    return sized;
 }
 
 auto type_resolver::concrete_array_type(type& maybe_deferred) -> type& {

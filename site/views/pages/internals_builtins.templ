@@ -77,8 +77,8 @@ templ InternalsBuiltinsPage() {
 		<li>anything else &rarr; <code>{ "@sizeOf" }(T) * 8</code></li>
 	</ul>
 	<h3>{ "@TypeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@TypeOf(expression: auto): type` }</code></pre>
-	<p>Returns the type of the provided expression.</p>
+	<pre><code class="language-ghoti">{ `@TypeOf(expressions: auto...): type` }</code></pre>
+	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> {"for"} <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
 	<h3>{ "@this" }</h3>
 	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
 	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>
@@ -151,7 +151,7 @@ templ InternalsBuiltinsPage() {
 @max(a: T, b: T): T` }
 		</code>
 	</pre>
-	<p>Smallest / largest of two operands of the same integer or floating-point type. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
+	<p>Smallest / largest of two integer or floating-point operands, which are converted to their <a href="/doc/syntax/types">peer type</a> <code>T</code> first. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
 	<h3>{ "@divTrunc / @divFloor / @rem / @mod" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -161,10 +161,10 @@ templ InternalsBuiltinsPage() {
 @mod(a: T, b: T): T       // modulo; sign follows the divisor` }
 		</code>
 	</pre>
-	<p>Integer-only. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety.</p>
+	<p>Integer-only; the operands are converted to their peer type <code>T</code> first. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
-	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
+	<p>Integer-only. The operands are converted to their peer type <code>T</code>, which is what <code>result</code> must point at; a shift's count keeps its own type. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
 	<h2>Atomics</h2>
 	<p>
 		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums that must be referenced through the <code>{ "builtin" }</code> module; e.g. <code>{ "builtin::MemoryOrder.seq_cst" }</code>, <code>{ "builtin::AtomicRmwOp.add" }</code> &mdash; and given as a compile-time constant; a runtime value is a compile error.

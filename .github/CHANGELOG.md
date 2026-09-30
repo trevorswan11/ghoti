@@ -555,6 +555,17 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a type declaration emitted a zeroed global the size of the type, so declaring a huge type (`struct { data: [100000000000]u8 }`) ran the compiler out of memory writing the object file
 - Fixed: more malformed programs crashed the compiler instead of reporting an error, including a type whose layout depends on its own `@sizeOf`/`@alignOf`, assigning to an array's `.len`, indexing a block, `@cfg` inside an `if` used as an operand, and passing a type (or the `type` keyword) where a value is expected, including to a generic `[]T` parameter
 - Fixed: some operations on 128-bit and odd-width integers (`+|`, `-|`, `-%`, `~`) could not be folded, or folded to a different value than the one computed at runtime
+- Values of different types now meet at their *peer type*: the one operand type every other widens into
+    - Mixed-width arithmetic, bitwise operators, and comparisons convert both sides first: `an_i8 + an_i64` is an `i64`, `a_u32 < an_i64` compares as `i64`, and `an_i32 * an_f64` is an `f64`
+    - The arms of an `if` or `match` and the values a label is broken with meet the same way, replacing "the first arm decides"; an arm that leaves (`return`, `break`, a `noreturn` call) takes no part
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@rem`, `@mod`, and the `*WithOverflow` builtins convert their operands to the peer type (`@shlWithOverflow`'s count keeps its own)
+    - Pointers and slices meet at the least mutable (`^mut T` with `^T` is `^T`), `nullptr` takes the pointer's type, and arrays of different lengths meet as a slice of their element
+    - No type is invented: `i32` with `u32`, or `i64` with `f64`, is a `NO_PEER_TYPE` error naming both types and the cast to write
+    - Compile-time folding converts operands the same way, so a folded mixed-type expression equals the one computed at runtime
+- `@TypeOf(a, b, ...)` takes any number of operands and returns their peer type, in type positions, `if constexpr` conditions, and generic signatures (`fn(a: auto, b: auto): @TypeOf(a, b)`)
+- Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
+- Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)
+- Fixed: `if (c) value else return e` stored a `void` into the result instead of skipping the arm
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

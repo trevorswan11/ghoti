@@ -38,9 +38,10 @@ TEST_CASE("Operator type checking") {
                 const x := a + b;
             };
         )",
-            sema::diagnostic{"Operator '+' cannot be applied to types 'i32' and 'f32'",
-                             sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 31UZ}});
+            sema::diagnostic{"no peer type for 'i32' and 'f32'; convert the integer with "
+                             "`@floatFromInt`",
+                             sema::error::NO_PEER_TYPE,
+                             std::pair{2UZ, 27UZ}});
     }
 
     SECTION("Comparing two differently-typed integer variables still fails") {
@@ -50,10 +51,9 @@ TEST_CASE("Operator type checking") {
                 _ = a < b;
             };
         )",
-            sema::diagnostic{"Relational operator cannot be applied to non-numeric or incompatible "
-                             "types 'i32' and 'usize'",
-                             sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 24UZ}});
+            sema::diagnostic{"no peer type for 'i32' and 'usize'; convert one with `@intCast`",
+                             sema::error::NO_PEER_TYPE,
+                             std::pair{2UZ, 20UZ}});
     }
 
     SECTION("Logical negation on non-boolean fails") {
@@ -160,7 +160,7 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
     SECTION("type checker") {
         check_attributed(R"(
             pub const g := fn(x: auto): i32 {
-                const y: u16 = 2;
+                const y: bool = true;
                 return @intCast(x % y);
             };
         )",

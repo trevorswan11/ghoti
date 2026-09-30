@@ -40,6 +40,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -206,6 +207,46 @@ template <typename T>
         if (t && sema::is_float(t->get_kind())) { return t; }
     }
     return lhs.get_type() ? lhs.get_type() : rhs.get_type();
+}
+
+// The peer type two concrete numbers of different types meet at; a shift keeps its left type
+[[nodiscard]] auto numeric_operand_peer(sema::context&       ctx,
+                                        const const_value&   lhs,
+                                        const const_value&   rhs,
+                                        syntax::token_type_t op) -> stdx::option<sema::type&> {
+    switch (op) {
+    case syntax::token_type_t::SHL:
+    case syntax::token_type_t::SHR:
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::SHL_PIPE:    return stdx::none;
+    default:                                break;
+    }
+    const auto lhs_type{lhs.get_type()};
+    const auto rhs_type{rhs.get_type()};
+    const auto is_concrete_number{[](const sema::type& t) {
+        return sema::is_integer(t.get_kind()) || sema::is_float(t.get_kind());
+    }};
+    if (!lhs_type || !rhs_type || !is_concrete_number(*lhs_type) ||
+        !is_concrete_number(*rhs_type) || sema::is_same_unqualified(*lhs_type, *rhs_type)) {
+        return stdx::none;
+    }
+    const std::array operands{sema::peer_operand{lhs_type.get()},
+                              sema::peer_operand{rhs_type.get()}};
+    const auto       peer{sema::peer_type(ctx, operands)};
+    if (!peer) { return stdx::none; }
+    return **peer;
+}
+
+// `v` as a value of its peer type; every such conversion is exact
+[[nodiscard]] auto as_peer(const const_value& v, sema::type& peer) -> const_value {
+    if (const auto format{sema::float_format_of(peer)}; format && !v.is<f128>()) {
+        if (const auto converted{v.int_as_float_opt(*format)}) {
+            return const_value{*converted, peer};
+        }
+    }
+    auto retyped{v};
+    retyped.set_type(peer);
+    return retyped;
 }
 
 // The plain base op a wrapping token folds through
@@ -2847,6 +2888,11 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     ast::node_id         id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
 
+    // Operands of different concrete number types are converted to their peer type first
+    if (const auto peer{numeric_operand_peer(ctx_, lhs, rhs, op_type)}) {
+        return fold_binary_values(op_type, as_peer(lhs, *peer), as_peer(rhs, *peer), id);
+    }
+
     // A wrapping or saturating operator on a concrete integer type has its own shared meaning
     if ((wrapping_base_op(op_type) || saturating_base_op(op_type)) && is_integer_arm(lhs) &&
         is_integer_arm(rhs)) {
@@ -3583,6 +3629,26 @@ auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call
     return module_->get_sema_type_opt(call.function);
 }
 
+auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_expr& ident)
+    -> stdx::option<sema::type&> {
+    if (call_stack_.empty()) { return stdx::none; }
+    const auto table_idx{module_->get_symbol_table_opt(use)};
+    if (!table_idx) { return stdx::none; }
+    const auto sym{ctx_.registry.get(*table_idx).get_opt(ident.name)};
+    const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+    const auto decl{node ? module_->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    if (!decl || !decl->explicit_type) { return stdx::none; }
+
+    const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl->explicit_type)};
+    const bool plain{decl->explicit_type->get_modifier().get_raw() ==
+                     ast::type_modifier::modifier::VALUE};
+    if (!named || !plain) { return stdx::none; }
+    const auto annotated{lookup_local_binding(named->name)};
+    const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>() : stdx::none};
+    if (!bound || !*bound) { return stdx::none; }
+    return **bound;
+}
+
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
                               syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
@@ -3703,12 +3769,51 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto& arg{call.arguments.front()};
-        if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            const auto target_type{module_->get_sema_type_opt(*expr_h)};
+        // A local of the call being evaluated has this call's type, which the shared body's
+        // own typing can't know
+        const auto type_of_operand{
+            [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
+                const auto expr_h{arg.as_opt<ast::expr_handle>()};
+                if (!expr_h) { return stdx::none; }
+                if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(*expr_h)}) {
+                    for (const auto& frame : call_stack_ | std::views::reverse) {
+                        const auto it{frame.bindings.find(ident->name)};
+                        if (it == frame.bindings.end()) { continue; }
+                        // An `undefined` initializer says nothing about the local's type
+                        const auto bound{it->second.get_type()};
+                        if (bound && bound->get_kind() != sema::type_kind::UNDEFINED) {
+                            return bound;
+                        }
+                        break;
+                    }
+                    if (const auto annotated{call_local_annotation(*expr_h, *ident)}) {
+                        return annotated;
+                    }
+                }
+                return module_->get_sema_type_opt(*expr_h);
+            }};
+        if (call.arguments.size() == 1) {
+            const auto target_type{type_of_operand(call.arguments.front())};
             if (target_type) { return const_value{target_type}; }
+            return stdx::none;
         }
-        return stdx::none;
+        // Several operands name the type they would meet at
+        std::vector<sema::peer_operand> operands;
+        for (const auto& arg : call.arguments) {
+            const auto operand_type{type_of_operand(arg)};
+            if (!operand_type) { return stdx::none; }
+            operands.emplace_back(&force_deferred_type(*operand_type));
+        }
+        const auto peer{sema::peer_type(ctx_, operands)};
+        if (!peer) {
+            ctx_.diags.emplace_back(
+                fmt::format("'@TypeOf': {}",
+                            sema::peer_error_message(ctx_, operands, peer.error())),
+                sema::error::NO_PEER_TYPE,
+                module_->ast.location_of(call.function));
+            return const_value::make_poison();
+        }
+        return const_value{stdx::option<sema::type&>{**peer}};
     }
     case syntax::token_type_t::BUILTIN_IMPLEMENTS: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
@@ -3897,9 +4002,14 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto a_h{call.arguments[0].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[1].as_opt<ast::expr_handle>()};
         if (!a_h || !b_h) { return stdx::none; }
-        const auto a{try_eval(*a_h)};
-        const auto b{try_eval(*b_h)};
+        auto a{try_eval(*a_h)};
+        auto b{try_eval(*b_h)};
         if (!a || !b) { return stdx::none; }
+        // Operands of different concrete number types meet at their peer type
+        if (const auto peer{numeric_operand_peer(ctx_, *a, *b, builtin_type)}) {
+            a = as_peer(*a, *peer);
+            b = as_peer(*b, *peer);
+        }
         if (is_integer_arm(*a) && is_integer_arm(*b)) {
             const auto type{module_->get_sema_type_opt(id)};
             const auto width{type ? integer_target_width(*type, target_pointer_bits())
@@ -4517,6 +4627,17 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
                                                  decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     auto                                   value{try_eval(*decl.value)};
     if (value && decl.explicit_type) {
+        // Inside a call, an annotation naming a type parameter means this call's argument; the
+        // shared body's typing only knows the parameter
+        const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl.explicit_type)};
+        const bool plain{decl.explicit_type->get_modifier().get_raw() ==
+                         ast::type_modifier::modifier::VALUE};
+        if (!call_stack_.empty() && named && plain) {
+            const auto annotated{lookup_local_binding(named->name)};
+            const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>()
+                                       : stdx::none};
+            if (bound && *bound) { return with_declared_type(std::move(*value), **bound); }
+        }
         if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
             return with_declared_type(std::move(*value), *declared);
         }

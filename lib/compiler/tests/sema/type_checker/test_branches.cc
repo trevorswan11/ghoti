@@ -68,8 +68,8 @@ TEST_CASE("Branch and control flow type checking") {
                 return y;
             };
         )",
-            sema::diagnostic{"Type mismatch in store: cannot assign 'bool' to 'constexpr_int'",
-                             sema::error::TYPE_MISMATCH,
+            sema::diagnostic{"no peer type for 'constexpr_int' and 'bool'",
+                             sema::error::NO_PEER_TYPE,
                              std::pair{4UZ, 25UZ}});
     }
 }

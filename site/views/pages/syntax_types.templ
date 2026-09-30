@@ -172,6 +172,17 @@ a.b;   // Syntactic sugar
 				<li>The wrapping operators <code>+% -% *% &lt;&lt;%</code> (binary), their compound forms <code>+%= -%= *%= &lt;&lt;%=</code>, and prefix <code>-%</code> always wrap silently. They never trap, even with <code>--runtime-safety</code> on. Otherwise they behave exactly like the plain operator. See the <a href="/doc/internals/builtins">builtins</a> page for <code>{ "@addWithOverflow" }</code> and friends, the overflow-flag form of the same operation</li>
 				<li>The saturating operators <code>+| -| *| &lt;&lt;|</code> and their compound forms <code>+|= -|= *|= &lt;&lt;|=</code> clamp the exact result to the operand type's range instead of wrapping, e.g. <code>250u8 +| 10</code> is <code>255</code> and <code>-100i8 *| 2</code> is <code>-128</code>. They never trap, and <code>&lt;&lt;|</code> saturates for any shift amount, including one at or past the bit width. Between two untyped integer constants there is no range to clamp to, so they fold like the plain operator</li>
 				<li>A value implicitly widens to a same-signed integer of greater or equal width; narrowing needs an explicit <code>{ "@as" }</code></li>
+				<li>
+					Where values of different types meet, they are converted to their <em>peer type</em>: the one operand type every other widens into. This applies to the two sides of an arithmetic, bitwise, or comparison operator, the arms of an <code>if</code> or <code>match</code>, the values a label is broken with, and the operands of <code>{ "@min" }</code>, <code>{ "@max" }</code>, and the division and overflow builtins
+					<ul>
+						<li><code>i8</code> with <code>i64</code> is <code>i64</code>, <code>u32</code> with <code>i64</code> is <code>i64</code>, and <code>i32</code> with <code>f64</code> is <code>f64</code> (every <code>i32</code> is exact in an <code>f64</code>)</li>
+						<li>No type is invented: <code>i32</code> with <code>u32</code>, or <code>i64</code> with <code>f64</code>, has no peer and is a compile error asking for a cast</li>
+						<li>An untyped constant takes the concrete operand's type, and must fit it</li>
+						<li><code>^mut T</code> with <code>^T</code> is <code>^T</code>, <code>nullptr</code> takes the pointer's type, and arrays of different lengths meet as a slice of their element</li>
+						<li>An arm that leaves (<code>return</code>, <code>break</code>, a <code>noreturn</code> call) takes no part, and a shift keeps its left operand's type</li>
+						<li><code>{ "@TypeOf(a, b, ...)" }</code> names the peer type without evaluating anything</li>
+					</ul>
+				</li>
 				<li>Only the C-ABI widths (<code>i8/16/32/64</code>, <code>u8/16/32/64</code>) may cross an <code>extern</code> boundary</li>
 			</ul>
 		</li>

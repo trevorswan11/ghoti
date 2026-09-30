@@ -246,6 +246,65 @@ auto float_int_conversions() -> std::vector<diff::expr_template> {
 
 } // namespace
 
+// Operands of different types are converted to their peer type before they meet
+auto mixed_type_peers() -> std::vector<diff::expr_template> {
+    struct peer_pair {
+        diff::scalar_type narrow;
+        diff::scalar_type peer;
+    };
+    const std::vector<peer_pair> pairs{
+        {diff::int_type("i8"), diff::int_type("i64")},
+        {diff::int_type("u8"), diff::int_type("i16")},
+        {diff::int_type("u32"), diff::int_type("i64")},
+        {diff::int_type("i16"), diff::int_type("i33")},
+        {diff::int_type("u8"), diff::int_type("usize")},
+        {diff::int_type("i64"), diff::int_type("i128")},
+        {diff::int_type("u64"), diff::int_type("i128")},
+        {diff::int_type("i32"), diff::float_type("f64")},
+        {diff::int_type("u8"), diff::float_type("f32")},
+        {diff::float_type("f32"), diff::float_type("f64")},
+    };
+
+    std::vector<diff::expr_template> templates;
+    for (const auto& [narrow, peer] : pairs) {
+        const bool is_int{peer.kind != diff::scalar_kind::FLOAT};
+        for (const std::string_view op : {"+", "-", "*"}) {
+            // Both operand orders convert the narrow side
+            for (const bool narrow_first : {true, false}) {
+                templates.push_back({
+                    .text = fmt::format("{{0}} {} {{1}}", op),
+                    .operands =
+                        narrow_first ? std::vector{narrow, peer} : std::vector{peer, narrow},
+                    .result               = peer,
+                    .unchecked_equivalent = is_int ? fmt::format("{{0}} {}% {{1}}", op) : "",
+                });
+            }
+        }
+        for (const std::string_view op : {"==", "<", ">="}) {
+            templates.push_back({
+                .text     = fmt::format("{{0}} {} {{1}}", op),
+                .operands = {narrow, peer},
+                .result   = diff::bool_type(),
+            });
+        }
+        for (const std::string_view builtin : {"@min", "@max"}) {
+            templates.push_back({
+                .text     = fmt::format("{}({{0}}, {{1}})", builtin),
+                .operands = {peer, narrow},
+                .result   = peer,
+            });
+        }
+        if (is_int) {
+            templates.push_back({
+                .text     = "{0} & {1}",
+                .operands = {narrow, peer},
+                .result   = peer,
+            });
+        }
+    }
+    return templates;
+}
+
 TEST_CASE("Checked integer arithmetic folds like it runs") {
     expect_agreement(checked_arithmetic());
 }
@@ -265,6 +324,8 @@ TEST_CASE("Integer builtins fold like they run") { expect_agreement(int_builtins
 TEST_CASE("Integer casts fold like they run") { expect_agreement(int_casts()); }
 
 TEST_CASE("Float arithmetic folds like it runs") { expect_agreement(float_arithmetic()); }
+
+TEST_CASE("Mixed-type operations fold like they run") { expect_agreement(mixed_type_peers()); }
 
 TEST_CASE("Fused multiply-add folds with a single rounding") {
     expect_agreement(fused_multiply_add(), {.run = false});
@@ -322,6 +383,7 @@ TEST_CASE("Semantics fuzz", "[.fuzz-semantics]") {
         {"integer builtins", int_builtins()},
         {"integer casts", int_casts()},
         {"float arithmetic", float_arithmetic()},
+        {"mixed-type peers", mixed_type_peers()},
         {"fused multiply-add", fused_multiply_add(), false},
         {"float and integer conversions", float_int_conversions()},
     };

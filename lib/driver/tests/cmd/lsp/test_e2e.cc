@@ -1422,4 +1422,86 @@ TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp hover shows the peer type of a mixed-type binding") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_peer_hover.gh"};
+    constexpr std::string_view text{R"(var small: i8 = 1;
+var wide: i64 = 2;
+pub const main := fn(): i32 {
+    const sum := small + wide;
+    const pick := if (small < wide) small else wide;
+    return 0;
+};
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    CHECK(hover_at(2, 3, 11).contains("i64"));
+    CHECK(hover_at(3, 4, 11).contains("i64"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 } // namespace ghoti::tests
