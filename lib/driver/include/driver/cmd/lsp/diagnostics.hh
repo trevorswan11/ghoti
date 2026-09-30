@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 
@@ -13,9 +15,11 @@ namespace ghoti::lsp {
 
 // Diagnostics only carry a start point today, so end is a same-line one-character placeholder
 // TODO: change diags to carry more data
-[[nodiscard]] auto range_of(stdx::option<source_location> loc) -> nlohmann::json;
+// `text` is the source the location is in, for the client's column units
+[[nodiscard]] auto range_of(stdx::option<source_location> loc, std::string_view text)
+    -> nlohmann::json;
 
 // A real [start, end) range, for callers that have one
-[[nodiscard]] auto range_of(source_span span) -> nlohmann::json;
+[[nodiscard]] auto range_of(source_span span, std::string_view text) -> nlohmann::json;
 
 } // namespace ghoti::lsp

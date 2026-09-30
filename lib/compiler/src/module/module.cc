@@ -25,6 +25,7 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/syntax/parser.hh"
 #include "support/diagnostic.hh"
+#include "support/path_utils.hh"
 #include "support/source_file.hh"
 #include "support/style.hh"
 
@@ -40,7 +41,7 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     if (!module) { return format_diagnostic(os, diag, stdx::none, tty); }
 
     // Without location, there's no way to point to an error
-    format_diagnostic(os, diag, module->path.string(), tty);
+    format_diagnostic(os, diag, path_utils::display(module->path), tty);
     if (!diag.location) { return os; }
 
     // Diagnostic error messages can include the location

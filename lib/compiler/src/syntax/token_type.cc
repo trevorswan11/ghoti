@@ -76,7 +76,7 @@ auto describe(token_type_t tt) -> std::string {
     case token_type_t::REAL:               return "a float literal";
     case token_type_t::STRING:
     case token_type_t::MULTILINE_STRING:   return "a string literal";
-    case token_type_t::U8:                 return "a character literal";
+    case token_type_t::CHAR:               return "a character literal";
     case token_type_t::INT_TYPE:           return "an integer type";
     case token_type_t::ILLEGAL:            return "an invalid token";
     case token_type_t::UNDERSCORE:         return "'_'";

@@ -566,6 +566,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
 - A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
 - A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- Unicode escapes: `\u{H...}` encodes a scalar value as UTF-8, and `\xHH` is one raw byte, in strings, character literals, and raw identifiers (#325); a malformed escape is reported at the escape
+- **Breaking:** a character literal is its code point, an untyped integer constant that defaults to `u21` (`var c := 'a';` is a `u21`); it still coerces to `u8` wherever one is expected, and `'é'`, `'😀'`, and `'\u{1F600}'` work. A literal with more than one code point is an error
+- Raw identifiers must be valid UTF-8, match byte for byte after decoding escapes (no normalization), and stay raw when formatted (#326)
+- Diagnostics place the caret by display width, so it lines up after emoji, CJK text, and combining marks; a diagnostic's file path prints as UTF-8 on Windows instead of through the code page
+- `ghoti lsp` speaks UTF-16 positions by default and UTF-8 when the client offers it (`positionEncoding`), so hover, go-to-definition, references, rename, diagnostics, and edits land correctly on lines with non-ASCII text
+- `ghoti fmt` measures line width in display columns
 - `@sqrt`, `@sin`, `@cos`, `@tan`, `@exp`, `@exp2`, `@log`, `@log2`, `@log10`, `@floor`, and `@ceil` are back (#352)
     - Folded at compile time with correct rounding in every float type, including exact reduction of huge trigonometric arguments; an untyped result is computed again in the type it lands in rather than rounded twice
     - At runtime `@sqrt`/`@floor`/`@ceil` use LLVM's intrinsics and the rest call the target's math routines directly (never `llvm.sin` and friends, which LLVM folds with the host's libm)

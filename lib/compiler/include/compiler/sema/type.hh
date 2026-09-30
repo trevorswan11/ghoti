@@ -119,6 +119,9 @@ class type;
     return kind == type_kind::CONSTEXPR_FLOAT;
 }
 
+// The width a character literal's untyped constant defaults to
+constexpr u16 CHAR_CONSTANT_BITS{21};
+
 [[nodiscard]] constexpr auto is_constexpr_numeric(type_kind kind) noexcept -> bool {
     return is_constexpr_int(kind) || is_constexpr_float(kind);
 }
@@ -421,7 +424,7 @@ class key_t {
         // named fields so width/signedness survive even on an unresolved pooled twin.
         if constexpr (sizeof...(Markers) == 2 &&
                       (std::integral<std::remove_cvref_t<Markers>> && ...)) {
-            if (kind == type_kind::INT) {
+            if (kind == type_kind::INT || kind == type_kind::CONSTEXPR_INT) {
                 const u64 packed[]{static_cast<u64>(markers)...};
                 int_bits_   = static_cast<u16>(packed[0]);
                 int_signed_ = packed[1] != 0;
@@ -437,7 +440,7 @@ class key_t {
     auto set_kind(type_kind kind) noexcept -> void {
         kind_ = kind;
         // Repurposing a copied `INT` key to another kind must drop its width identity.
-        if (kind != type_kind::INT) {
+        if (kind != type_kind::INT && kind != type_kind::CONSTEXPR_INT) {
             int_bits_   = 0;
             int_signed_ = false;
         }

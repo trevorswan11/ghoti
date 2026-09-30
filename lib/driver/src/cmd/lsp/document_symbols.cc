@@ -44,8 +44,8 @@ auto document_symbols(const mod::module& module) -> nlohmann::json {
         out.push_back({
             {"name", std::string{name_ident->name}},
             {"kind", std::to_underlying(symbol_kind_of(module, *decl))},
-            {"range", range_of(full_span)},
-            {"selectionRange", range_of(name_span)},
+            {"range", range_of(full_span, module.source)},
+            {"selectionRange", range_of(name_span, module.source)},
         });
     }
     return out;

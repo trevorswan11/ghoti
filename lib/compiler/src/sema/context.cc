@@ -370,6 +370,24 @@ auto context::inject_prelude() -> void {
     inject_builtin_module(*this, *prelude_index);
 }
 
+auto context::get_char_constant() -> type& {
+    auto& type{*pool[{type_kind::CONSTEXPR_INT, types::mut::CONSTANT, CHAR_CONSTANT_BITS, false}]};
+    if (!type.is_resolved()) { type.resolve<types::builtin_type>(); }
+    return type;
+}
+
+auto context::default_concrete(type& t) -> type& {
+    switch (t.get_kind()) {
+    case type_kind::CONSTEXPR_INT:
+        if (t.get_key().get_int_bits() == CHAR_CONSTANT_BITS) {
+            return get_int(CHAR_CONSTANT_BITS, false);
+        }
+        return get_int(32, true);
+    case type_kind::CONSTEXPR_FLOAT: return get_builtin_resolved_type(type_kind::F64);
+    default:                         return t;
+    }
+}
+
 auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     auto& type{*pool[{kind, types::mut::CONSTANT}]};
     ASSERT(type.is_resolved(), "Builtin type was not already resolved");

@@ -95,6 +95,11 @@ auto uri_to_path(std::string_view uri) -> stdx::option<std::filesystem::path> {
     return std::filesystem::path{string_utils::to_u8string(decoded)};
 }
 
+auto display(const std::filesystem::path& path) -> std::string {
+    const auto utf8{path.u8string()};
+    return {utf8.begin(), utf8.end()};
+}
+
 auto path_to_uri(const std::filesystem::path& path) -> std::string {
     PROFILE_FUNCTION();
     const auto utf8{string_utils::to_utf8(path.generic_u8string())};

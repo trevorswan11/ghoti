@@ -2473,13 +2473,7 @@ auto type_resolver::resolve_call_args(gsl::span<const ast::call_expr::argument> 
     return any_poison ? resolve_result::POISONED : resolve_result::OK;
 }
 
-auto type_resolver::constexpr_numeric_view(type& t) -> type& {
-    switch (t.get_kind()) {
-    case type_kind::CONSTEXPR_INT:   return ctx_.get_int(32, true);
-    case type_kind::CONSTEXPR_FLOAT: return ctx_.get_builtin_resolved_type(type_kind::F64);
-    default:                         return t;
-    }
-}
+auto type_resolver::constexpr_numeric_view(type& t) -> type& { return ctx_.default_concrete(t); }
 
 auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& arg)
     -> gsl::not_null<type*> {
@@ -8676,7 +8670,8 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
         resolved = &ctx_.get_int(expr.width, expr.is_signed);
     } else {
         // An unsuffixed integer literal is `constexpr_int` and coerces freely
-        resolved = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_INT);
+        resolved = expr.is_char ? &ctx_.get_char_constant()
+                                : &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_INT);
         const auto implicit_type{implicit_type_stack_.peek()};
         if (implicit_type && implicit_type->get_kind() == type_kind::CONSTEXPR_FLOAT) {
             // Folding must see a float value, not an integer that merely coerces

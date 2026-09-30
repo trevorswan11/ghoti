@@ -14,6 +14,7 @@
 #include "compiler/ast/dumper.hh"
 #include "compiler/ast/formatter.hh"
 #include "compiler/syntax/parser.hh"
+#include "driver/cmd/lsp/text_edit.hh"
 
 namespace ghoti::lsp {
 
@@ -36,7 +37,7 @@ namespace {
 
     return {
         {"start", {{"line", 0}, {"character", 0}}},
-        {"end", {{"line", line}, {"character", character}}},
+        {"end", client_position(text, {line, character})},
     };
 }
 

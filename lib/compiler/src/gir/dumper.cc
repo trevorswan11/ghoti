@@ -16,6 +16,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/keywords.hh"
 
 namespace ghoti::gir {
 
@@ -203,7 +204,8 @@ auto dumper::dump(const function& fn) -> void {
             }
         }
 
-        fmt::println(out_, "fn {}({}) -> {}", fn.get_name(), params_str, return_str);
+        fmt::println(
+            out_, "fn {}({}) -> {}", syntax::ascii_spelling(fn.get_name()), params_str, return_str);
     }
 
     for (const auto& seg : fn.get_segments()) { dump(*seg); }

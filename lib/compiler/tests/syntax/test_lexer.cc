@@ -360,24 +360,24 @@ TEST_CASE("Lexing character literals") {
                "var'asd'",
                {
                    {token_type_t::IF, "if"},
-                   {token_type_t::U8, "'e'"},
+                   {token_type_t::CHAR, "'e'"},
                    {token_type_t::ELSE, "else"},
                    {token_type_t::ILLEGAL, "'\\'"},
                    {token_type_t::RETURN, "return"},
-                   {token_type_t::U8, "'\\r'"},
+                   {token_type_t::CHAR, "'\\r'"},
                    {token_type_t::BREAK, "break"},
-                   {token_type_t::U8, "'\\n'"},
+                   {token_type_t::CHAR, "'\\n'"},
                    {token_type_t::CONTINUE, "continue"},
-                   {token_type_t::U8, "'\\0'"},
+                   {token_type_t::CHAR, "'\\0'"},
                    {token_type_t::FOR, "for"},
-                   {token_type_t::U8, "'\\''"},
+                   {token_type_t::CHAR, "'\\''"},
                    {token_type_t::WHILE, "while"},
-                   {token_type_t::U8, "'\\\\'"},
+                   {token_type_t::CHAR, "'\\\\'"},
                    {token_type_t::CONSTANT, "const"},
-                   {token_type_t::ILLEGAL, "'"},
-                   {token_type_t::ILLEGAL, "'"},
+                   // The parser checks for exactly one code point
+                   {token_type_t::CHAR, "''"},
                    {token_type_t::VAR, "var"},
-                   {token_type_t::ILLEGAL, "'asd'"},
+                   {token_type_t::CHAR, "'asd'"},
                });
 }
 

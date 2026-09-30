@@ -128,14 +128,20 @@ TEST_CASE("Illegal tokens report a specific diagnostic instead of a generic pref
                                                  syntax::error::INVALID_NUMBER_LITERAL,
                                                  std::pair{0UZ, 0UZ}});
 
-    helpers::test_parser_fail("'';",
+    helpers::test_parser_fail(
+        "'';",
+        syntax::diagnostic{"Character literal must contain exactly one code point; found 0",
+                           syntax::error::INVALID_CHARACTER_LITERAL,
+                           std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail("'\n",
                               syntax::diagnostic{"Invalid or unterminated character literal",
                                                  syntax::error::INVALID_CHARACTER_LITERAL,
                                                  std::pair{0UZ, 0UZ}});
+    // A bad escape is reported at the escape, not the literal
     helpers::test_parser_fail(R"("bad \q escape";)",
-                              syntax::diagnostic{"Invalid escape sequence in string literal",
+                              syntax::diagnostic{"Unknown escape sequence '\\q'",
                                                  syntax::error::UNKNOWN_CHARACTER_ESCAPE,
-                                                 std::pair{0UZ, 0UZ}});
+                                                 std::pair{0UZ, 5UZ}});
 
     helpers::test_parser_fail("0b102;",
                               syntax::diagnostic{"Invalid numeric literal",

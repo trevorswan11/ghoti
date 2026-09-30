@@ -78,6 +78,10 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 // True when `name` cannot be written as a bare identifier and must use the raw form `@"name"
 [[nodiscard]] auto identifier_needs_raw(std::string_view name) noexcept -> bool;
 
+// `name` spelled in ASCII: itself when it already is, otherwise a raw identifier whose
+// non-ASCII code points are `\u{...}` escapes. Dumps stay stable whatever the source holds.
+[[nodiscard]] auto ascii_spelling(std::string_view name) -> std::string;
+
 // Single source of truth for every reserved word
 constexpr std::array ALL_KEYWORDS{
     keywords::FN,

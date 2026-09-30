@@ -28,7 +28,7 @@ enum class token_type_t : u8 {
 
     REAL,
     STRING,
-    U8,
+    CHAR,
 
     ASSIGN,
     WALRUS,

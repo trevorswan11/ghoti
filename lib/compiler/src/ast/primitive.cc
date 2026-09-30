@@ -161,26 +161,50 @@ auto int_literal_expr::parse(syntax::parser& parser)
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
 
-    // A byte literal `'x'` is a width-8 unsigned integer.
-    if (start_token.type == syntax::token_type_t::U8) {
-        u8 value{static_cast<u8>(slice[1])};
-        if (slice[1] == '\\') {
-            const auto decoded{syntax::decode_escape(slice[2])};
-            if (!decoded) {
-                return make_syntax_err("Invalid escape sequence in character literal",
-                                       syntax::error::UNKNOWN_CHARACTER_ESCAPE,
-                                       start_token);
+    // A character literal `'x'` is the untyped code point of its one character or escape
+    if (start_token.type == syntax::token_type_t::CHAR) {
+        const auto inner{slice.substr(1, slice.size() - 2)};
+        u32        value{0};
+        usize      count{0};
+        for (usize i{0}; i < inner.size(); ++count) {
+            if (inner[i] == '\\') {
+                const auto scan{syntax::scan_escape(inner.substr(i))};
+                if (!scan.error.empty()) {
+                    return make_syntax_err(scan.error,
+                                           syntax::error::UNKNOWN_CHARACTER_ESCAPE,
+                                           start_token.line,
+                                           start_token.column + 1 + i);
+                }
+                if (count == 0) { value = scan.value; }
+                i += scan.length;
+                continue;
             }
-            value = static_cast<u8>(*decoded);
+            const auto decoded{syntax::decode_code_point(inner.substr(i))};
+            if (!decoded) {
+                return make_syntax_err("Character literal is not valid UTF-8",
+                                       syntax::error::INVALID_UTF8,
+                                       start_token.line,
+                                       start_token.column + 1 + i);
+            }
+            if (count == 0) { value = decoded->value; }
+            i += decoded->length;
+        }
+        if (count != 1) {
+            return make_syntax_err(
+                fmt::format("Character literal must contain exactly one code point; found {}",
+                            count),
+                syntax::error::INVALID_CHARACTER_LITERAL,
+                start_token);
         }
         return parser.add_expr<int_literal_expr>(start_token,
                                                  int_literal_expr{
                                                      .value     = value,
-                                                     .width     = 8,
+                                                     .width     = 0,
                                                      .is_signed = false,
                                                      .is_size   = false,
                                                      .base      = syntax::numeric_base::DECIMAL,
                                                      .spelling  = slice,
+                                                     .is_char   = true,
                                                  });
     }
 

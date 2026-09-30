@@ -132,6 +132,7 @@ auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json
 
     for (const auto& [path, entries] : workspace_index_) {
         const auto uri{path_utils::path_to_uri(path)};
+        const auto text{text_of(path).value_or(std::string{})};
         for (const auto& entry : entries) {
             if (!query.empty() && !string_utils::contains_ci(entry.name, query)) { continue; }
             out.push_back({
@@ -141,7 +142,7 @@ auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json
                     "location",
                     {
                         {"uri", uri},
-                        {"range", range_of(entry.range)},
+                        {"range", range_of(entry.range, text)},
                     },
                 },
             });

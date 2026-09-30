@@ -152,4 +152,38 @@ templ InternalsLiteralsPage() {
 		</tbody>
 	</table>
 	<p>Conformance to the bases digit set is enforced during tokenization.</p>
+	<h2>Text Literals</h2>
+	<h3>Escape Sequences</h3>
+	<p>String literals, character literals, and raw identifiers understand the same escapes. Multiline <code>{ `\\` }</code> strings take their text verbatim.</p>
+	<table>
+		<thead>
+			<tr>
+				<th>Escape</th>
+				<th>Meaning</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td><code>{ `\n \r \t \0` }</code></td>
+				<td>newline, carriage return, tab, and the zero byte</td>
+			</tr>
+			<tr>
+				<td><code>{ `\\ \' \"` }</code></td>
+				<td>a backslash or a quote</td>
+			</tr>
+			<tr>
+				<td><code>{ `\xHH` }</code></td>
+				<td>one byte, given as exactly two hex digits. In a string it may make the bytes invalid UTF-8, which is allowed: a string is bytes.</td>
+			</tr>
+			<tr>
+				<td><code>{ `\u{H...}` }</code></td>
+				<td>a Unicode scalar value, given as one to six hex digits, encoded as UTF-8. Surrogates and values past <code>U+10FFFF</code> are rejected.</td>
+			</tr>
+		</tbody>
+	</table>
+	<p>A string's <code>.len</code> counts its encoded bytes: <code>{ `"\u{1F600}".len` }</code> is <code>4</code>. A malformed escape is reported at the escape itself.</p>
+	<h3>Character Literals</h3>
+	<p>A character literal is the code point of exactly one character or escape: <code>{ `'a'` }</code>, <code>{ `'é'` }</code>, <code>{ `'😀'` }</code>, <code>{ `'\u{1F600}'` }</code>, <code>{ `'\n'` }</code>. It is an untyped integer constant, so it takes whatever integer type holds it (<code>{ `const b: u8 = 'a';` }</code>, <code>{ `s[i] == 'x'` }</code>), and on its own it is a <code>u21</code>, the smallest type that holds every code point: <code>{ `var c := 'a';` }</code> is a <code>u21</code>. <code>{ `'\xFF'` }</code> is the value 255. A literal with more than one code point, like <code>{ `'ab'` }</code> or a family emoji joined from five, is an error.</p>
+	<h3>Raw Identifiers</h3>
+	<p><code>{ `@"..."` }</code> names anything, including keywords and any Unicode text: <code>{ `const @"😀" := 1;` }</code>. Escapes decode first, so <code>{ `@"\u{1F600}"` }</code> is the same name. Names compare byte for byte, with no Unicode normalization: a precomposed <code>é</code> and an <code>e</code> followed by a combining accent are different names. A raw identifier must be valid UTF-8 and not empty.</p>
 }

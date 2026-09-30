@@ -8,6 +8,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "driver/cmd/lsp/text_edit.hh"
 #include "support/diagnostic.hh"
 
 namespace ghoti::lsp {
@@ -19,10 +20,10 @@ namespace {
     return level.transform([](diagnostic_level l) { return static_cast<i32>(l); });
 }
 
-auto push_diagnostic(nlohmann::json& out, const auto& d) -> void {
+auto push_diagnostic(nlohmann::json& out, const auto& d, std::string_view text) -> void {
     const auto     formattable{d.to_formattable()};
     nlohmann::json entry{
-        {"range", range_of(formattable.location)},
+        {"range", range_of(formattable.location, text)},
         {"message", formattable.message.value_or(std::string{formattable.error_name})},
         {"source", "ghoti"},
         {"code", std::string{formattable.error_name}},
@@ -31,9 +32,10 @@ auto push_diagnostic(nlohmann::json& out, const auto& d) -> void {
     out.push_back(std::move(entry));
 }
 
-auto push_diagnostic(nlohmann::json& out, const diagnostic_snapshot& d) -> void {
+auto push_diagnostic(nlohmann::json& out, const diagnostic_snapshot& d, std::string_view text)
+    -> void {
     out.push_back({
-        {"range", range_of(d.location)},
+        {"range", range_of(d.location, text)},
         {"message", d.message},
         {"source", "ghoti"},
         {"code", d.error_name},
@@ -47,12 +49,13 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     // module.parse_diagnostics is a permanent record of syntax errors found at parse time
-    for (const auto& d : module.parse_diagnostics) { push_diagnostic(out, d); }
+    const std::string_view text{module.source};
+    for (const auto& d : module.parse_diagnostics) { push_diagnostic(out, d, text); }
     if (const auto sema_diags{module.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *sema_diags) { push_diagnostic(out, d); }
+        for (const auto& d : *sema_diags) { push_diagnostic(out, d, text); }
     }
     for (const auto& warning : module.warnings) {
-        push_diagnostic(out, warning);
+        push_diagnostic(out, warning, text);
         // LSP DiagnosticTag 2 = Deprecated, which clients render as a strikethrough
         if (warning.get_error() == sema::error::DEPRECATED_USE) { out.back()["tags"] = {2}; }
     }
@@ -60,42 +63,18 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
     return out;
 }
 
-auto range_of(stdx::option<source_location> loc) -> nlohmann::json {
+auto range_of(stdx::option<source_location> loc, std::string_view text) -> nlohmann::json {
     const auto start{loc.value_or(source_location{0, 0})};
     return {
-        {
-            "start",
-            {
-                {"line", start.line},
-                {"character", start.column},
-            },
-        },
-        {
-            "end",
-            {
-                {"line", start.line},
-                {"character", start.column + 1},
-            },
-        },
+        {"start", client_position(text, start)},
+        {"end", client_position(text, {start.line, start.column + 1})},
     };
 }
 
-auto range_of(source_span span) -> nlohmann::json {
+auto range_of(source_span span, std::string_view text) -> nlohmann::json {
     return {
-        {
-            "start",
-            {
-                {"line", span.start.line},
-                {"character", span.start.column},
-            },
-        },
-        {
-            "end",
-            {
-                {"line", span.end.line},
-                {"character", span.end.column},
-            },
-        },
+        {"start", client_position(text, span.start)},
+        {"end", client_position(text, span.end)},
     };
 }
 

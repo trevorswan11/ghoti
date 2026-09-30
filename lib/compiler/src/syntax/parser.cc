@@ -32,6 +32,33 @@ namespace ghoti::syntax {
 
 namespace {
 
+// The first malformed escape in a literal, reported at the escape rather than the literal
+[[nodiscard]] auto malformed_escape(const token_t& token, usize opener_len)
+    -> stdx::option<diagnostic> {
+    const auto slice{token.slice};
+    usize      line{token.line};
+    usize      column{token.column};
+    for (usize i{0}; i < slice.size();) {
+        if (i >= opener_len && slice[i] == '\\') {
+            const auto scan{scan_escape(slice.substr(i))};
+            if (!scan.error.empty()) {
+                return diagnostic{scan.error, error::UNKNOWN_CHARACTER_ESCAPE, line, column};
+            }
+            i += scan.length;
+            column += scan.length;
+            continue;
+        }
+        if (slice[i] == '\n') {
+            ++line;
+            column = 0;
+        } else {
+            ++column;
+        }
+        ++i;
+    }
+    return stdx::none;
+}
+
 // The slice's shape reliably tells which lexer failure produced an ILLEGAL token.
 [[nodiscard]] auto describe_illegal_token(const token_t& token) -> stdx::option<diagnostic> {
     if (token.type != token_type_t::ILLEGAL || token.slice.empty()) { return stdx::none; }
@@ -45,6 +72,7 @@ namespace {
             if (!is_valid_utf8(slice)) {
                 return diagnostic{"String literal is not valid UTF-8", error::INVALID_UTF8, token};
             }
+            if (auto escape{malformed_escape(token, 1)}) { return escape; }
             return diagnostic{"Invalid escape sequence in string literal",
                               error::UNKNOWN_CHARACTER_ESCAPE,
                               token};
@@ -60,6 +88,10 @@ namespace {
         }
         if (!slice.starts_with("@\"")) { break; }
         if (closed_by_quote(2)) {
+            if (!is_valid_utf8(slice)) {
+                return diagnostic{"Raw identifier is not valid UTF-8", error::INVALID_UTF8, token};
+            }
+            if (auto escape{malformed_escape(token, 2)}) { return escape; }
             return diagnostic{"Invalid escape sequence in raw identifier",
                               error::UNKNOWN_CHARACTER_ESCAPE,
                               token};
@@ -424,7 +456,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     stdx::fixed::enum_map<token_type_t, parser::prefix_fn> fns;
 
     fns[token_type_t::IDENT]            = ast::parse_identifier_reference;
-    fns[token_type_t::U8]               = ast::int_literal_expr::parse;
+    fns[token_type_t::CHAR]             = ast::int_literal_expr::parse;
     fns[token_type_t::REAL]             = ast::float_literal_expr::parse;
     fns[token_type_t::BANG]             = ast::unary_expr::parse;
     fns[token_type_t::NOT]              = ast::unary_expr::parse;

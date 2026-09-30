@@ -93,9 +93,10 @@ TEST_CASE("Resolving well-formed builtin-type matching") {
     SECTION("Bytes") {
         std::ostringstream arms;
         for (usize i{0}; i < 256; ++i) { fmt::print(arms, "{} => 0,", i); }
-        const auto input{fmt::format("_ = match('0') {{ {} }};", arms.view())};
+        const auto input{fmt::format("_ = match(@as(u8, '0')) {{ {} }};", arms.view())};
         helpers::resolve_and_check(input);
         helpers::resolve_and_check("_ = match ('0') { 0 => {}, _ => {} };");
+        helpers::resolve_and_check("_ = match (@as(u8, '0')) { 0 => {}, _ => {} };");
     }
 }
 
@@ -283,7 +284,7 @@ TEST_CASE("Illegal match arms with primitives") {
             };
         };
 
-        helpers::test_resolver_fail("match ('0') { 3 => 5 };", expected_diag("u8", 256));
+        helpers::test_resolver_fail("match (1u8) { 3 => 5 };", expected_diag("u8", 256));
         helpers::test_resolver_fail("match (false) { 3 => 5 };", expected_diag("bool", 2));
     }
 }
