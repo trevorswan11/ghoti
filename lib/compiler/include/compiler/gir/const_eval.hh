@@ -92,6 +92,10 @@ class const_eval {
 
     // Folds two integers exactly: a concrete signed type rejects overflow unless `wrapping`, and
     // unsigned results (and shifts) wrap to the type's width as they do at runtime
+    // `@abs`, `@clz`, `@ctz`, and `@popCount` of a concrete integer, or none for anything else
+    [[nodiscard]] auto fold_int_builtin_unary(ast::node_id         id,
+                                              syntax::token_type_t builtin,
+                                              const const_value& arg) -> stdx::option<const_value>;
     [[nodiscard]] auto fold_integer_binary(syntax::token_type_t op_type,
                                            const const_value&   lhs,
                                            const const_value&   rhs,

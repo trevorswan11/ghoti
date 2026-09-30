@@ -13,6 +13,12 @@
 
 namespace ghoti::codegen {
 
+// How the compiler builtins archive is located and built when `builtins` isn't given
+struct compiler_rt_options {
+    // The root `compiler_rt.gh`; `GHOTI_COMPILER_RT` default, then `lib/compiler_rt`
+    stdx::option<std::filesystem::path> root{};
+};
+
 struct extra_linker_options {
     gsl::span<std::filesystem::path> objects{};
     gsl::span<std::filesystem::path> library_paths{};
@@ -21,6 +27,8 @@ struct extra_linker_options {
     bool needs_windows_argv_apis{false};
     // Compiler builtins archive, linked after every other input so it only fills in what's missing
     stdx::option<std::filesystem::path> builtins{};
+    // Builds `builtins` from ghoti sources when the object calls a runtime libcall; unset skips it
+    stdx::option<compiler_rt_options> compiler_rt{};
 };
 
 // True when an import-lib directory for the Windows Win32 APIs (kernel32 / shell32) is configured

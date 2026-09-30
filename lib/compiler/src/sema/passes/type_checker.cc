@@ -21,6 +21,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -177,7 +178,14 @@ auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&
         }
         return t;
     }};
-    if (val.type) { return concrete(*val.type); }
+    if (val.type) {
+        // An untyped float the emitter coerced into an integer slot is still a float, which no
+        // integer destination accepts
+        if (val.data.is<f128>() && is_integer(val.type->get_kind())) {
+            return ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+        }
+        return concrete(*val.type);
+    }
     if (const auto lid{val.data.as_opt<gir::local_id>()}) {
         if (auto it{locals_.find(*lid)}; it != locals_.end()) { return concrete(*it->second.type); }
     }
@@ -200,34 +208,8 @@ auto type_checker::check_function(gir::function& fn) -> void {
                         local_info{.type = &param->type, .is_alloca = false, .is_const = false});
     }
 
-    const auto&       segments{fn.get_segments()};
-    std::vector<bool> reachable(segments.size(), false);
-    if (!segments.empty()) {
-        std::vector<gir::segment_id> worklist;
-        reachable[0] = true;
-        worklist.emplace_back(segments[0]->get_id());
-
-        while (!worklist.empty()) {
-            const auto curr_id{worklist.back()};
-            worklist.pop_back();
-
-            const auto curr_seg_opt{fn.get_segment_opt(curr_id)};
-            if (!curr_seg_opt) { continue; }
-
-            for (const auto* inst : (*curr_seg_opt)->get_instructions()) {
-                for (const auto successor :
-                     {inst->target_segment, inst->true_segment, inst->false_segment}) {
-                    if (!successor) { continue; }
-                    const auto target_idx{std::to_underlying(*successor)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*successor);
-                    }
-                }
-            }
-        }
-    }
-
+    const auto& segments{fn.get_segments()};
+    const auto  reachable{fn.reachable_segments()};
     for (const auto& seg : segments) {
         const auto idx{std::to_underlying(seg->get_id())};
         if (idx < reachable.size() && !reachable[idx]) { continue; }

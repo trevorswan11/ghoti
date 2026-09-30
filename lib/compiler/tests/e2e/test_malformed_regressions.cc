@@ -1,0 +1,178 @@
+#include <catch2/catch_test_macros.hpp>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+
+#include "compiler/sema/error.hh"
+#include "helpers/codegen.hh"
+#include "helpers/sema.hh"
+#include "support/test.hh"
+
+// Inputs the mutation fuzzer turned into compiler crashes; each must now be a clean diagnostic
+namespace ghoti::tests {
+
+TEST_CASE("An attribute argument with a builtin arity error is reported, not a crash") {
+    helpers::expect_compile_error(R"(
+        const misaligned := fn(T: type): i32 {
+            @[align(if (@sizeOf() > 4) 64 else 32)]
+            var buf: [4]u8 = undefined;
+            _ = buf;
+            return 0;
+        };
+        pub const main := fn(): i32 { return misaligned(i32); };
+    )");
+}
+
+TEST_CASE("@hasField rejects a non-type owner and a non-string name") {
+    helpers::expect_compile_error(R"(
+        const Point := struct { x: i32, y: i32 };
+        pub const main := fn(): i32 { return @intFromBool(@hasField(Point, Point)); };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 { return @intFromBool(@hasField("x", "z")); };
+    )");
+}
+
+TEST_CASE("An untyped float can't be returned from an integer function") {
+    helpers::expect_compile_error("pub const main := fn(): i32 { return 1.5; };");
+}
+
+TEST_CASE("Unary operators reject a type operand") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const x := -i64;
+            _ = x;
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("A pack parameter named as a return type is an error, not a crash") {
+    helpers::expect_compile_error(R"(
+        const g := fn(rest...): rest {};
+        const f := fn(void...): void { g(rest...); };
+        const use := fn(): void { f(1, 2, 3); };
+    )");
+}
+
+TEST_CASE("Cast builtins reject an undefined operand") {
+    helpers::expect_compile_error(R"(
+        const f := fn(x: i32): u32 {
+            var a: u32 = @bitCast(x);
+            a = @bitCast(undefined);
+            return a;
+        };
+    )");
+}
+
+TEST_CASE("Code after a match whose arms all return is dead, not miscompiled") {
+    CHECK(helpers::compile_and_run(R"(
+        const pick := fn(n: i32): i32 {
+            const v := match (n) {
+                _ => { return 99; },
+            };
+            return v + 1;
+        };
+        pub const main := fn(): i32 { return pick(5); };
+    )") == 99);
+}
+
+TEST_CASE("A field can't have type noreturn") {
+    helpers::expect_compile_error(R"(
+        const S := struct {
+            a: i32,
+            @cfg(ptr_bits == 7) { linux_only: i32 }
+            else                { fallback: noreturn }
+            z: i32,
+        };
+        var s: S = undefined;
+    )");
+    helpers::expect_compile_error("var x: [2]noreturn = undefined;");
+}
+
+TEST_CASE("A constexpr loop over a condition-less if constexpr is checked without crashing") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            constexpr var n := 0;
+            loop constexpr {
+                if constexpr fn(): i32 (n == 5) { break; }
+                n = n + 1;
+            }
+            return n;
+        };
+    )");
+}
+
+TEST_CASE("Match arms yielding a type beside arms yielding values are an error") {
+    helpers::expect_compile_error(R"(
+        const P := struct { a: i32 };
+        const f := fn(n: i32): P {
+            return match (n) {
+                0 => P,
+                _ => P{ .a = 1 },
+            };
+        };
+    )");
+}
+
+TEST_CASE("A type whose layout depends on its own size or alignment is an error") {
+    CHECK(helpers::raised(R"(
+        const S := struct { pub d: [N]u64, pub x: u8, };
+        const N: [@alignOf(S)]u8 = undefined;
+    )",
+                          sema::error::CONSTEXPR_EVALUATION_FAILED));
+}
+
+TEST_CASE("An array's `.len` and `.ptr` can't be assigned") {
+    CHECK(helpers::raised(
+        "pub const main := fn(): i32 { var a: [4]u8 = undefined; a.len = 3; return 0; };",
+        sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const size: [4]u8 = undefined;
+        pub const main := fn(): i32 { if (size.len = 32) { return 1; } return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A block can't be indexed like a value") {
+    helpers::expect_compile_error(R"(
+        pub const main := fn(): i32 {
+            const n: usize = 3;
+            if (n != 3) { return -1; }[1];
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("@cfg inside an if nested in an operand is expanded") {
+    helpers::expect_compile_error(R"(
+        pub const f := fn(): i32 {
+            const b := 1 >= if (true) {
+                @cfg(ptr_bits >= 8) { @compileError("reached in if"); }
+            };
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("The `type` keyword and a type argument for a generic `[]T` slot are not values") {
+    helpers::expect_compile_error(
+        "pub const main := fn(): i32 { const s: [:0]u8 = type; return 0; };");
+    helpers::expect_compile_error(R"(
+        pub constexpr f := fn(T: type, a: []T): usize { return a.len; };
+        pub const main := fn(): i32 { return @intCast(i32, f(u8, noreturn)); };
+    )");
+}
+
+TEST_CASE("A type declaration has no storage, however large the type") {
+    llvm::LLVMContext context;
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Big := struct { data: [100000100000]mut u8 };
+        const E := enum { a, b };
+        pub const size := fn(): usize { return @sizeOf(Big); };
+    )")};
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK(llvm_mod->getNamedGlobal("Big") == nullptr);
+    CHECK(llvm_mod->getNamedGlobal("E") == nullptr);
+}
+
+} // namespace ghoti::tests

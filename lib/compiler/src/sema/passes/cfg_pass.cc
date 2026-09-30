@@ -633,6 +633,21 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
     if (const auto expr_st{module_.ast.get_as_opt<ast::expr_stmt>(id)}) {
         recurse_into_expr(expr_st->expression);
     }
+    if (const auto ret{module_.ast.get_as_opt<ast::return_stmt>(id)}; ret && ret->expression) {
+        recurse_into_expr(*ret->expression);
+    }
+    if (const auto brk{module_.ast.get_as_opt<ast::break_stmt>(id)}; brk && brk->expression) {
+        recurse_into_expr(*brk->expression);
+    }
+    if (const auto discard{module_.ast.get_as_opt<ast::discard_stmt>(id)}) {
+        recurse_into_expr(discard->discarded);
+    }
+    if (const auto defer{module_.ast.get_as_opt<ast::defer_stmt>(id)}) {
+        recurse_into_bodies(defer->deferred);
+    }
+    if (const auto errdefer{module_.ast.get_as_opt<ast::errdefer_stmt>(id)}) {
+        recurse_into_bodies(errdefer->deferred);
+    }
     if (const auto test{module_.ast.get_as_opt<ast::test_stmt>(id)}) {
         rewrite_items(
             module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{test->block}).statements);
@@ -656,18 +671,56 @@ auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
 
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
     PROFILE_FUNCTION();
+    // Any operand can hold a block-bodied `if`, `match`, loop, or function literal
     module_.ast[expr].visit(
+        [&](const ast::binary_expr& bin) {
+            recurse_into_expr(bin.lhs);
+            recurse_into_expr(bin.rhs);
+        },
+        [&](const ast::assignment_expr& assign) {
+            recurse_into_expr(assign.lhs);
+            recurse_into_expr(assign.rhs);
+        },
+        [&](const ast::unary_expr& un) { recurse_into_expr(un.rhs); },
+        [&](const ast::reference_expr& ref) { recurse_into_expr(ref.rhs); },
+        [&](const ast::dereference_expr& deref) { recurse_into_expr(deref.rhs); },
+        [&](const ast::address_of_expr& adr) { recurse_into_expr(adr.rhs); },
+        [&](const ast::unwrap_expr& unwrap) { recurse_into_expr(unwrap.operand); },
+        [&](const ast::dot_expr& dot) { recurse_into_expr(dot.object); },
+        [&](const ast::index_expr& idx) {
+            recurse_into_expr(idx.array);
+            recurse_into_expr(idx.index);
+        },
+        [&](const ast::range_expr& range) {
+            if (range.lhs) { recurse_into_expr(*range.lhs); }
+            if (range.rhs) { recurse_into_expr(*range.rhs); }
+        },
+        [&](const ast::call_expr& call) {
+            recurse_into_expr(call.function);
+            for (const auto& arg : call.arguments) {
+                if (const auto value{arg.as_opt<ast::expr_handle>()}) { recurse_into_expr(*value); }
+            }
+        },
+        [&](const ast::array_expr& array) {
+            for (const auto item : array.items) { recurse_into_expr(item); }
+        },
+        [&](const ast::initializer_expr& init) {
+            for (const auto& entry : init.initializers) { recurse_into_expr(entry.value); }
+        },
         [&](const ast::function_expr& fn) {
             if (!fn.is_type_expr) { recurse_into_block(fn.body); }
         },
         [&](const ast::if_expr& branch) {
+            if (branch.condition) { recurse_into_expr(*branch.condition); }
             recurse_into_bodies(branch.consequence);
             if (branch.alternate) { recurse_into_bodies(*branch.alternate); }
         },
         [&](const ast::match_expr& match) {
+            recurse_into_expr(match.matcher);
             for (const auto& arm : match.arms) { recurse_into_bodies(arm.dispatch); }
         },
         [&](const ast::while_loop_expr& loop) {
+            recurse_into_expr(loop.condition);
             recurse_into_block(loop.block);
             if (loop.non_break) { recurse_into_bodies(*loop.non_break); }
         },

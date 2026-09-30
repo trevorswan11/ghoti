@@ -162,7 +162,7 @@ template <stdx::ScopedEnum E> class diagnostic {
                            message_.value_or(""),
                            loc_ ? fmt::format("{}:{}", loc_->line, loc_->column) : "",
                            magic_enum::enum_integer(error_),
-                           level_ ? static_cast<int>(*level_) : -1,
+                           level_ ? static_cast<i32>(*level_) : -1,
                            message_.has_value());
     }
 

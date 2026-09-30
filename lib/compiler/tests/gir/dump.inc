@@ -1,7 +1,5 @@
 R"(type Real = f64
 const MAX_SIZE: usize = 100
-const Point: struct = struct
-const Color: enum : i32 = enum : i32
 fn compute_point(p: struct) -> i32
   seg 0:
     %0 = alloca i32

@@ -135,6 +135,10 @@ class llvm_lowering {
     // Emits a freestanding ELF `_start` (Linux, no crt/libc)
     auto emit_freestanding_start(llvm::Function* main_fn) -> void;
 
+    // Windows starts x86 threads with the x87 precision control at 53 bits, which rounds every
+    // `f80` operation like `f64`
+    auto emit_x87_precision_init() -> void;
+
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
     // target, or `none` when no synthesized stack probe is needed
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
@@ -166,6 +170,11 @@ class llvm_lowering {
     auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
         -> void;
+    // A zero divisor, and `MIN / -1` when signed, panic under runtime safety
+    auto emit_division_guards(const gir::instruction& inst,
+                              llvm::Value*            lhs,
+                              llvm::Value*            rhs,
+                              bool                    is_signed) -> void;
     auto emit_checked_arith(const gir::instruction& inst,
                             llvm::Value*            lhs,
                             llvm::Value*            rhs,

@@ -13,6 +13,7 @@
 #include <gsl/util>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -35,6 +36,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
+#include "compiler/runtime/compiler_rt.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
 #include "compiler/sema/passes/type_checker.hh"
@@ -130,6 +132,32 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string> merged{linker_opts.libraries.begin(), linker_opts.libraries.end()};
     for (auto& lib : gir_module.get_required_libraries()) { merged.emplace_back(std::move(lib)); }
     return merged;
+}
+
+// A DLL exports only what is marked `dllexport`, so mark what an ELF or Mach-O shared library
+// would export: every defined, externally linked symbol that isn't `@[visibility(.hidden)]`
+auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
+    const auto mark{[](llvm::GlobalValue& value) {
+        if (value.isDeclaration() || value.hasLocalLinkage() || !value.hasDefaultVisibility()) {
+            return;
+        }
+        // LLVM's own bookkeeping arrays (`llvm.used`, ...) aren't symbols
+        if (value.hasAppendingLinkage() || value.getName().starts_with("llvm.")) { return; }
+        value.setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    }};
+    for (auto& fn : llvm_mod) { mark(fn); }
+    for (auto& global : llvm_mod.globals()) { mark(global); }
+}
+
+// Builds the compiler builtins archive when the object calls into it and none was given
+[[nodiscard]] auto add_compiler_rt(codegen::extra_linker_options& linker_opts,
+                                   const codegen::target_options& target_opts,
+                                   const std::filesystem::path&   object)
+    -> stdx::result<void, codegen::diagnostic> {
+    if (linker_opts.builtins || !linker_opts.compiler_rt) { return {}; }
+    linker_opts.builtins =
+        TRY(runtime::resolve_compiler_rt(target_opts, object, *linker_opts.compiler_rt));
+    return {};
 }
 
 [[nodiscard]] auto check_freestanding_entry(const llvm::Triple& triple, std::string_view artifact)
@@ -612,11 +640,13 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     auto       target_machine{TRY(codegen::create_target_machine(target_opts))};
     const auto opts{with_target_machine(opt_options, target_opts, *target_machine)};
     auto       llvm_mod{TRY(lower_artifact(gir_module, context, opts, build_artifact::LIBRARY))};
+    if (target_machine->getTargetTriple().isOSBinFormatCOFF()) { mark_dll_exports(*llvm_mod); }
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
     auto libraries{merged_libraries(linker_opts, gir_module)};
     auto effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
+    TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_dynamic_library(
         temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
@@ -640,6 +670,7 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
     effective_linker_opts.libraries = libraries;
     effective_linker_opts.needs_windows_argv_apis =
         llvm_mod->getFunction("GetCommandLineW") != nullptr;
+    TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 

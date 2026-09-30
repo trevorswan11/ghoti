@@ -59,6 +59,8 @@
             templ
             prettier
             rustToolchain
+            # tools/fuzz (standard library only)
+            python3
           ]
           ++ (with llvmPackages_21; [
             clang-tools

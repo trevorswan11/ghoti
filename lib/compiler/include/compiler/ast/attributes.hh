@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/span>
 #include <stdx/enum.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -36,6 +37,7 @@ enum class attribute_kind : u8 {
     NAKED,
     ALIGN,
     DEPRECATED,
+    VISIBILITY,
 };
 
 // Mirrors `builtin.BranchHint`
@@ -63,6 +65,19 @@ enum class inline_mode : u8 {
 [[nodiscard]] auto inline_mode_from_name(std::string_view name) noexcept
     -> stdx::option<inline_mode>;
 
+// Mirrors `builtin.Visibility`: how far outside its own linked image a symbol is seen
+enum class symbol_visibility : u8 {
+    DEFAULT,
+    HIDDEN,
+    PROTECTED,
+};
+
+[[nodiscard]] auto symbol_visibility_name(symbol_visibility visibility) noexcept
+    -> std::string_view;
+
+[[nodiscard]] auto symbol_visibility_from_name(std::string_view name) noexcept
+    -> stdx::option<symbol_visibility>;
+
 // What an attribute may annotate. `FN_DECL` is a declaration whose type is callable.
 enum class attribute_target : u8 {
     DECL    = 1 << 0,
@@ -79,11 +94,20 @@ struct attribute_spec {
     u8               min_args;
     u8               max_args;
     attribute_target targets;
+    std::string_view signature; // For tooling, e.g. `visibility(builtin.Visibility)`
+    std::string_view doc;
 };
 
 [[nodiscard]] auto attribute_spec_of(std::string_view name) noexcept
     -> stdx::option<const attribute_spec&>;
+
+// Assumes the kind is a valid enumeration
 [[nodiscard]] auto attribute_spec_of(attribute_kind kind) noexcept -> const attribute_spec&;
+[[nodiscard]] auto all_attribute_specs() noexcept -> gsl::span<const attribute_spec>;
+
+// The variant names an enum-valued attribute accepts, empty for any other attribute
+[[nodiscard]] auto attribute_enum_variants(attribute_kind kind) noexcept
+    -> gsl::span<const std::string_view>;
 
 // Applies to a function definition, so on a declaration initialized by a function literal it
 // reaches through to that literal (and sees the literal's parameters)

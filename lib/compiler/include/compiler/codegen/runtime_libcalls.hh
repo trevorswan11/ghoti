@@ -1,0 +1,21 @@
+#pragma once
+
+#include <string_view>
+
+namespace llvm { class Triple; } // namespace llvm
+
+namespace ghoti::codegen {
+
+// True when LLVM may emit a call to `symbol` on its own for the target. `symbol` is the
+// source-level name.
+[[nodiscard]] auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> bool;
+
+// True when an undefined `symbol` in an object is something compiler_rt exists to provide
+[[nodiscard]] auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol)
+    -> bool;
+
+// Drops the global symbol prefix an object file adds to source-level names
+[[nodiscard]] auto strip_global_prefix(const llvm::Triple& triple, std::string_view symbol)
+    -> std::string_view;
+
+} // namespace ghoti::codegen

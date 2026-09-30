@@ -52,6 +52,7 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
@@ -63,8 +64,26 @@ namespace ghoti::codegen {
 
 namespace {
 
+// Local symbols are invisible to the linker, and LLVM requires them to keep default visibility
+auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibility> visibility)
+    -> void {
+    if (!visibility || value.hasLocalLinkage()) { return; }
+    switch (*visibility) {
+    case ast::symbol_visibility::DEFAULT:
+        value.setVisibility(llvm::GlobalValue::DefaultVisibility);
+        break;
+    case ast::symbol_visibility::HIDDEN:
+        value.setVisibility(llvm::GlobalValue::HiddenVisibility);
+        break;
+    case ast::symbol_visibility::PROTECTED:
+        value.setVisibility(llvm::GlobalValue::ProtectedVisibility);
+        break;
+    }
+}
+
 auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
     -> void {
+    apply_visibility(llvm_fn, attributes.visibility);
     if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
     if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
@@ -366,6 +385,7 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
+    emit_x87_precision_init();
 
     // Nothing reads args unless user main takes the `[][:0]u8` parameter.
     const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
@@ -386,6 +406,14 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
     }
 
     return main_fn;
+}
+
+auto llvm_lowering::emit_x87_precision_init() -> void {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows() || !triple.isX86()) { return; }
+    auto* asm_ty{llvm::FunctionType::get(types_.get_void_ty(), false)};
+    // `fninit` restores the full 64-bit significand other targets start with
+    builder_.CreateCall(llvm::InlineAsm::get(asm_ty, "fninit", "~{fpsr},~{fpcr},~{dirflag}", true));
 }
 
 auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
@@ -859,6 +887,7 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
 
     auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
     builder_.SetInsertPoint(entry_bb);
+    emit_x87_precision_init();
 
     // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
     auto* runner_fn{llvm_module_->getFunction("test_runner")};
@@ -1048,6 +1077,22 @@ auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
     builder_.SetInsertPoint(ok_bb);
 }
 
+auto llvm_lowering::emit_division_guards(const gir::instruction& inst,
+                                         llvm::Value*            lhs,
+                                         llvm::Value*            rhs,
+                                         bool                    is_signed) -> void {
+    auto*      int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    const auto width{int_ty->getBitWidth()};
+    auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
+    emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
+    if (!is_signed) { return; }
+    auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
+    auto* neg_one{llvm::ConstantInt::getSigned(int_ty, -1)};
+    auto* edge{builder_.CreateAnd(builder_.CreateICmpEQ(lhs, int_min),
+                                  builder_.CreateICmpEQ(rhs, neg_one))};
+    emit_arith_guard(edge, "signed division overflow", inst);
+}
+
 auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
                                        llvm::Value*            lhs,
                                        llvm::Value*            rhs,
@@ -1055,7 +1100,7 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     PROFILE_FUNCTION();
     auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
     if (!int_ty) { return nullptr; }
-    const unsigned width{int_ty->getBitWidth()};
+    const auto width{int_ty->getBitWidth()};
 
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
@@ -1082,18 +1127,9 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
         return builder_.CreateExtractValue(pair, {0U});
     }
     case gir::instruction_kind::DIV:
-    case gir::instruction_kind::MOD: {
-        auto* zero{llvm::ConstantInt::get(int_ty, 0)};
-        emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
-        if (is_signed) {
-            auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
-            auto* neg_one{llvm::ConstantInt::getSigned(int_ty, -1)};
-            auto* edge{builder_.CreateAnd(builder_.CreateICmpEQ(lhs, int_min),
-                                          builder_.CreateICmpEQ(rhs, neg_one))};
-            emit_arith_guard(edge, "signed division overflow", inst);
-        }
+    case gir::instruction_kind::MOD:
+        emit_division_guards(inst, lhs, rhs, is_signed);
         return nullptr;
-    }
     case gir::instruction_kind::SHL:
     case gir::instruction_kind::SHR: {
         auto* limit{llvm::ConstantInt::get(rhs->getType(), width)};
@@ -1110,9 +1146,9 @@ auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
                                             bool                    is_signed) -> void {
     // Truncation fits iff MIN - 1 < val < MAX + 1. The upper bound is a power of two (exact or
     // infinite); the lower one rounds down, which admits no extra float. NaN fails both checks.
-    const unsigned width{int_ty->getIntegerBitWidth()};
-    const auto&    semantics{val->getType()->getFltSemantics()};
-    const auto     to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
+    const auto  width{int_ty->getIntegerBitWidth()};
+    const auto& semantics{val->getType()->getFltSemantics()};
+    const auto  to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
         llvm::APFloat f{semantics};
         DISCARD(f.convertFromAPInt(bound, true, mode));
         return llvm::ConstantFP::get(val->getType(), f);
@@ -1151,11 +1187,11 @@ auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
     }
     case gir::instruction_kind::SHL: {
         // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
-        const unsigned width{int_ty->getBitWidth()};
-        auto*          zero{llvm::ConstantInt::get(int_ty, 0)};
-        auto*          in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
-        auto*          amount{builder_.CreateSelect(in_range, rhs, zero)};
-        auto*          shifted{builder_.CreateBinaryIntrinsic(
+        const auto width{int_ty->getBitWidth()};
+        auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
+        auto*      in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
+        auto*      amount{builder_.CreateSelect(in_range, rhs, zero)};
+        auto*      shifted{builder_.CreateBinaryIntrinsic(
             is_signed ? llvm::Intrinsic::sshl_sat : llvm::Intrinsic::ushl_sat, lhs, amount)};
 
         llvm::Value* limit{llvm::ConstantInt::get(int_ty, llvm::APInt::getMaxValue(width))};
@@ -1399,6 +1435,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         const auto natural{llvm_module_->getDataLayout().getPrefTypeAlign(g_type)};
         gvar->setAlignment(std::max(natural, llvm::Align{wanted_alignment}));
     }
+    apply_visibility(*gvar, g.visibility);
     globals_[g.name] = gvar;
 
     llvm::Constant* init{nullptr};
@@ -1566,10 +1603,16 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_skipped_flag());
     }
 
-    // Lower each segment
+    // Lower each segment; dead code after a diverging expression was never type checked
+    const auto reachable{fn.reachable_segments()};
     for (const auto* seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
         builder_.SetInsertPoint(bb);
+        if (const auto idx{std::to_underlying(seg->get_id())};
+            idx < reachable.size() && !reachable[idx]) {
+            builder_.CreateUnreachable();
+            continue;
+        }
 
         for (const auto* inst : seg->get_instructions()) { lower_instruction(*inst); }
         if (!bb->getTerminator()) {
@@ -1595,7 +1638,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         for (auto& bb : *llvm_fn) {
             if (auto* ret{llvm::dyn_cast<llvm::ReturnInst>(bb.getTerminator())}) {
                 if (auto* rv{ret->getReturnValue()}; rv && rv->getType()->isIntegerTy(1)) {
-                    rets.push_back(ret);
+                    rets.emplace_back(ret);
                 }
             }
         }
@@ -2080,7 +2123,16 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     case gir::instruction_kind::AND: return builder_.CreateAnd(lhs, rhs, "andtmp");
     case gir::instruction_kind::OR:  return builder_.CreateOr(lhs, rhs, "ortmp");
     case gir::instruction_kind::XOR: return builder_.CreateXor(lhs, rhs, "xortmp");
-    case gir::instruction_kind::SHL: return builder_.CreateShl(lhs, rhs, "shltmp");
+    case gir::instruction_kind::SHL: {
+        // Unchecked (`<<%`, or safety off): shifting every bit out leaves 0, not poison
+        auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+        auto* in_range{builder_.CreateICmpULT(
+            rhs, llvm::ConstantInt::get(rhs->getType(), int_ty->getBitWidth()))};
+        auto* amount{
+            builder_.CreateSelect(in_range, rhs, llvm::ConstantInt::get(rhs->getType(), 0))};
+        return builder_.CreateSelect(
+            in_range, builder_.CreateShl(lhs, amount, "shltmp"), llvm::ConstantInt::get(int_ty, 0));
+    }
     case gir::instruction_kind::SHR:
         return is_sgn ? builder_.CreateAShr(lhs, rhs, "shrtmp")
                       : builder_.CreateLShr(lhs, rhs, "shrtmp");
@@ -2163,7 +2215,8 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     if (is_flt) {
         switch (inst.kind) {
         case gir::instruction_kind::EQ: return builder_.CreateFCmpOEQ(lhs, rhs, "cmptmp");
-        case gir::instruction_kind::NE: return builder_.CreateFCmpONE(lhs, rhs, "cmptmp");
+        case gir::instruction_kind::NE:
+            return builder_.CreateFCmpUNE(lhs, rhs, "cmptmp"); // NaN != anything
         case gir::instruction_kind::LT: return builder_.CreateFCmpOLT(lhs, rhs, "cmptmp");
         case gir::instruction_kind::LE: return builder_.CreateFCmpOLE(lhs, rhs, "cmptmp");
         case gir::instruction_kind::GT: return builder_.CreateFCmpOGT(lhs, rhs, "cmptmp");
@@ -2752,6 +2805,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                     return builder_.CreateCall(fn, {val});
                 }
                 if (val->getType()->isIntegerTy()) {
+                    if (inst.is_checked) {
+                        const auto width{val->getType()->getIntegerBitWidth()};
+                        auto*      int_min{llvm::ConstantInt::get(
+                            val->getType(), llvm::APInt::getSignedMinValue(width))};
+                        emit_arith_guard(builder_.CreateICmpEQ(val, int_min),
+                                         "signed absolute value overflow",
+                                         inst);
+                    }
                     auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                         llvm_module_.get(), llvm::Intrinsic::abs, {val->getType()})};
                     return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
@@ -2792,10 +2853,21 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             const bool is_max{*builtin_tok == syntax::token_type_t::BUILTIN_MAX};
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (a->getType()->isFloatingPointTy()) {
-                auto  id{is_max ? llvm::Intrinsic::maxnum : llvm::Intrinsic::minnum};
-                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
-                    llvm_module_.get(), id, {a->getType()})};
-                return builder_.CreateCall(fn, {a, b});
+                // IEEE minimumNumber/maximumNumber, spelled out so every float type lowers on
+                // every target: a NaN loses, and equal zeros are ordered by sign (-0 < +0)
+                auto* a_nan{builder_.CreateFCmpUNO(a, a)};
+                auto* b_nan{builder_.CreateFCmpUNO(b, b)};
+                auto* a_wins{is_max ? builder_.CreateFCmpOGT(a, b) : builder_.CreateFCmpOLT(a, b)};
+                auto* equal{builder_.CreateFCmpOEQ(a, b)};
+                auto* bits_ty{builder_.getIntNTy(
+                    static_cast<u32>(a->getType()->getPrimitiveSizeInBits().getFixedValue()))};
+                auto* a_negative{builder_.CreateICmpSLT(builder_.CreateBitCast(a, bits_ty),
+                                                        llvm::ConstantInt::get(bits_ty, 0))};
+                auto* zero_pick{builder_.CreateSelect(
+                    is_max ? builder_.CreateNot(a_negative) : a_negative, a, b)};
+                auto* ordered{
+                    builder_.CreateSelect(a_wins, a, builder_.CreateSelect(equal, zero_pick, b))};
+                return builder_.CreateSelect(a_nan, b, builder_.CreateSelect(b_nan, a, ordered));
             }
             auto  id{is_max ? (is_signed ? llvm::Intrinsic::smax : llvm::Intrinsic::umax)
                             : (is_signed ? llvm::Intrinsic::smin : llvm::Intrinsic::umin)};
@@ -2811,6 +2883,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
             const bool is_rem{*builtin_tok == syntax::token_type_t::BUILTIN_REM};
             if (is_rem) {
                 return is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b);
@@ -2825,6 +2898,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
             const bool is_mod{*builtin_tok == syntax::token_type_t::BUILTIN_MOD};
             if (!is_signed) {
                 return is_mod ? builder_.CreateURem(a, b) : builder_.CreateUDiv(a, b);

@@ -296,7 +296,7 @@ enum class numeric_base : u8 {
     HEXADECIMAL = 16,
 };
 
-[[nodiscard]] auto base_idx(numeric_base base) noexcept -> int;
+[[nodiscard]] auto base_idx(numeric_base base) noexcept -> i32;
 [[nodiscard]] auto digit_in_base(char c, numeric_base base) noexcept -> bool;
 
 namespace token_type {

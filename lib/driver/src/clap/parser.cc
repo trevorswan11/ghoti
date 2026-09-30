@@ -151,6 +151,7 @@ auto parser::setup_build_exe_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("build-exe", "Build an executable binary from source")};
     sub->add_option("input_file", build_exe_opts_.input, "Input source file (.gh)")->required();
     cmd::build::setup_flags(sub, build_exe_opts_, "Output executable binary");
+    cmd::build::add_compiler_rt_option(sub, build_exe_opts_);
     return sub;
 }
 
@@ -161,6 +162,7 @@ auto parser::setup_build_lib_subcmd() -> gsl::not_null<CLI::App*> {
         ->default_val(build_lib_opts_.dynamic);
     cmd::build::setup_flags(
         sub, build_lib_opts_, "Output library path (.a / .lib / .so / .dylib / .dll)");
+    cmd::build::add_compiler_rt_option(sub, build_lib_opts_);
     return sub;
 }
 
@@ -177,6 +179,7 @@ auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option("-l,--library", run_opts_.libraries, "Link against library name");
     cmd::build::add_mode_option(sub, run_opts_);
     cmd::build::add_deprecated_option(sub, run_opts_);
+    cmd::build::add_compiler_rt_option(sub, run_opts_);
     return sub;
 }
 
@@ -201,6 +204,7 @@ auto parser::setup_test_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("test", "Run tests in ghoti source tree")};
     sub->add_option("input_file", test_opts_.input, "Root source file (.gh)")->required();
     cmd::build::setup_flags(sub, test_opts_, "Output test binary path");
+    cmd::build::add_compiler_rt_option(sub, test_opts_);
     sub->add_option(
         "test_args", test_opts_.forwarded_args, "Arguments forwarded to the test executable");
     return sub;

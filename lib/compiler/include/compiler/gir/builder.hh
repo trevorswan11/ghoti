@@ -87,8 +87,8 @@ class builder {
                            sema::type&        return_type,
                            stdx::option<u8>   atomic_op         = stdx::none,
                            stdx::option<u8>   atomic_order      = stdx::none,
-                           stdx::option<u8>   atomic_fail_order = stdx::none)
-        -> stdx::option<local_id>;
+                           stdx::option<u8>   atomic_fail_order = stdx::none,
+                           bool               checked           = false) -> stdx::option<local_id>;
     auto emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
     auto emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)

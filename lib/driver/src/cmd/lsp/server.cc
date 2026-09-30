@@ -17,6 +17,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
@@ -112,6 +113,21 @@ auto doc_comment_for(const mod::module_manager& manager,
         }
     }
     return stdx::none;
+}
+
+// An attribute's signature and summary when `target` is on its name inside an `@[...]` list
+auto attribute_hover(const mod::module& entry, source_location target)
+    -> stdx::option<nlohmann::json> {
+    const auto context{lsp::attribute_context_at(std::string_view{entry.source}, target)};
+    if (!context || context->in_args_of || context->after_dot) { return stdx::none; }
+    const auto spec{ast::attribute_spec_of(context->word)};
+    if (!spec) { return stdx::none; }
+
+    nlohmann::json hover;
+    hover["contents"]["kind"] = "markdown";
+    hover["contents"]["value"] =
+        fmt::format("```ghoti\n@[{}]\n```\n\n---\n\n{}", spec->signature, spec->doc);
+    return hover;
 }
 
 // `**Deprecated**: <message>` when `id` refers to a `@[deprecated]` declaration
@@ -343,7 +359,11 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     if (!result) { return write_null_id(message); }
 
     const auto& entry_module{**result};
-    const auto  id{lsp::identifier_at(entry_module, target)};
+    if (auto attribute{attribute_hover(entry_module, target)}) {
+        return lsp::write_message(std::cout,
+                                  make_response(message.at("id"), std::move(*attribute)));
+    }
+    const auto id{lsp::identifier_at(entry_module, target)};
     if (!id) { return write_null_id(message); }
 
     const auto type{entry_module.get_sema_type_opt(*id)};

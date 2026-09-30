@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -16,6 +17,7 @@
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
+#include "driver/cmd/build/run.hh"
 #include "driver/cmd/build/test.hh"
 #include "driver/cmd/repl/shell.hh"
 #include "support/subprocess.hh"
@@ -242,6 +244,35 @@ TEST_CASE("build-exe subcommand parser") {
         CHECK(opts.output_path == "bin/myprog");
         CHECK(opts.opt_opts.level == codegen::opt_level::O0);
     }
+}
+
+TEST_CASE("--no-compiler-rt is accepted by every linking subcommand") {
+    const auto compiler_rt_of{[](std::vector<std::string> argv) -> bool {
+        mock_argv    args{std::move(argv)};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        if (const auto* exe{dynamic_cast<cmd::build_exe*>(cmd.get())}) {
+            return exe->get_opts().compiler_rt;
+        }
+        if (const auto* lib{dynamic_cast<cmd::build_lib*>(cmd.get())}) {
+            return lib->get_opts().compiler_rt;
+        }
+        if (const auto* run{dynamic_cast<cmd::run_cmd*>(cmd.get())}) {
+            return run->get_opts().compiler_rt;
+        }
+        return UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts().compiler_rt;
+    }};
+
+    for (const std::string sub : {"build-exe", "build-lib", "run", "test"}) {
+        CHECK(compiler_rt_of({"ghoti", sub, "main.gh"}));
+        CHECK_FALSE(compiler_rt_of({"ghoti", sub, "--no-compiler-rt", "main.gh"}));
+    }
+
+    // An object file is never linked, so the flag means nothing there
+    mock_argv          args{"ghoti", "build-obj", "--no-compiler-rt", "main.gh"};
+    std::ostringstream error_ss;
+    clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+    CHECK_FALSE(parser.parse());
 }
 
 TEST_CASE("build-lib subcommand parser") {

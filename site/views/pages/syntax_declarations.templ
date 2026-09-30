@@ -103,6 +103,29 @@ export var b := 1;       // Allowed
 extern constexpr a: i32; // Illegal, inherently contradictory` }
 		</code>
 	</pre>
+	<h2>Attributes</h2>
+	<ul>
+		<li>An <code>{ "@[...]" }</code> list before a declaration, function literal, or field adjusts how it is compiled</li>
+		<li><code>discardable</code>: callers may ignore the function's result</li>
+		<li><code>inline(.always | .never | .hint | .default)</code>: how calls to the function are inlined</li>
+		<li><code>naked</code>: no prologue or epilogue; the body must be inline assembly</li>
+		<li><code>align(n)</code>: minimum alignment of the storage or code, in bytes</li>
+		<li><code>deprecated</code> or <code>deprecated("why")</code>: uses warn, or fail under <code>--deprecated=error</code></li>
+		<li>
+			<code>visibility(.default | .hidden | .protected)</code>: who outside the linked image sees the symbol
+			<ul>
+				<li>Only meaningful on a <code>pub</code>, <code>export</code>, <code>extern</code>, or <code>weak</code> declaration</li>
+				<li><code>.hidden</code> keeps a symbol out of a shared library's exports while other objects in the same link still see it</li>
+				<li><code>.protected</code> exports the symbol but never lets another library override it; it exists only for ELF targets</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `@[visibility(.hidden)] export weak const __addtf3 := fn(a: f128, b: f128): f128 { ... };
+@[inline(.always), align(16)] const fast := fn(x: i32): i32 { return x; };` }
+		</code>
+	</pre>
 	<h2>Testing Statements</h2>
 	<ul>
 		<li>The <code>test</code> keyword is used to declare top-level unit test blocks that are compiled into test runner executables.</li>

@@ -28,7 +28,6 @@
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
 #include "driver/clap/error.hh"
-#include "driver/cmd/build/compiler_rt.hh"
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
@@ -69,6 +68,14 @@ namespace {
 }
 
 } // namespace
+
+auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_flag("--no-compiler-rt",
+                   opts.no_compiler_rt,
+                   "Don't build or link the compiler builtins from lib/compiler_rt")
+        ->default_val(opts.no_compiler_rt);
+}
 
 auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void {
     subcmd
@@ -167,6 +174,7 @@ auto options::process_raw(const raw_options&   raw,
         .libraries         = raw.libraries,
         .forwarded_args    = raw.forwarded_args,
         .dynamic           = raw.dynamic,
+        .compiler_rt       = !raw.no_compiler_rt,
         .mode              = *mode,
         .runtime_safety    = mode_has_runtime_safety(*mode),
         .deprecated_policy = parse_deprecation_policy(raw.deprecated),
@@ -233,12 +241,13 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
 }
 
 auto compilation::linker_options() const -> codegen::extra_linker_options {
-    return {
+    codegen::extra_linker_options linker_opts{
         .objects       = opts_.extra_objects,
         .library_paths = opts_.library_paths,
         .libraries     = opts_.libraries,
-        .builtins      = resolve_compiler_rt(opts_.target_opts),
     };
+    if (opts_.compiler_rt) { linker_opts.compiler_rt.emplace(); }
+    return linker_opts;
 }
 
 auto compilation::validate_input_path() -> stdx::result<void, clap::error> {

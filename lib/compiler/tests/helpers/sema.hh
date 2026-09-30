@@ -195,6 +195,8 @@ auto resolve_and_check(std::string_view input, const std::vector<mock_file>& imp
 
 // Resolves the input for a specific target triple (used to exercise target-gated types).
 auto resolve_for_target(std::string_view input, std::string_view target_triple) -> ctx_idx_pair;
+// `type_check` for a specific target triple: resolution, then GIR emission and checking
+auto type_check_for_target(std::string_view input, std::string_view target_triple) -> ctx_idx_pair;
 
 // Runs the entire Analyzer on the provided input without checking semantic validity (no errors)
 template <std::same_as<mock_file>... Mocks>

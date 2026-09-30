@@ -133,17 +133,17 @@ templ InternalsBuiltinsPage() {
 	<pre><code class="language-ghoti">{ `@mulAdd(T: type, a: T, b: T, c: T): T` }</code></pre>
 	<p>Fused multiply-add, similar to (a * b) + c, except only rounds once, and is thus more accurate. T must be a floating point type.</p>
 	<h3>{ "@clz" }</h3>
-	<pre><code class="language-ghoti">{ `@clz(expression: auto): usize` }</code></pre>
-	<p>Count the number of leading zeros in the expression's bit representation.</p>
+	<pre><code class="language-ghoti">{ `@clz(expression: auto): uN` }</code></pre>
+	<p>Count the number of leading zeros in the expression's bit representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
 	<h3>{ "@ctz" }</h3>
-	<pre><code class="language-ghoti">{ `@ctz(expression: auto): usize` }</code></pre>
-	<p>Count the number of trailing zeros in the expression's bit representation.</p>
+	<pre><code class="language-ghoti">{ `@ctz(expression: auto): uN` }</code></pre>
+	<p>Count the number of trailing zeros in the expression's bit representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
 	<h3>{ "@popCount" }</h3>
-	<pre><code class="language-ghoti">{ `@popCount(expression: auto): usize` }</code></pre>
-	<p>Computes the number of set bits in the expression's binary representation.</p>
+	<pre><code class="language-ghoti">{ `@popCount(expression: auto): uN` }</code></pre>
+	<p>Computes the number of set bits in the expression's binary representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
 	<h3>{ "@abs" }</h3>
 	<pre><code class="language-ghoti">{ `@abs(expression: auto): @TypeOf(expression)` }</code></pre>
-	<p>Computes the absolute value of the passed expression.</p>
+	<p>Computes the absolute value of the passed expression. For a signed integer, <code>{ "@abs" }(MIN)</code> has no result: it is a compile error when folded and a panic under runtime safety.</p>
 	<h3>{ "@min / @max" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -151,7 +151,7 @@ templ InternalsBuiltinsPage() {
 @max(a: T, b: T): T` }
 		</code>
 	</pre>
-	<p>Smallest / largest of two operands of the same integer or floating-point type.</p>
+	<p>Smallest / largest of two operands of the same integer or floating-point type. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
 	<h3>{ "@divTrunc / @divFloor / @rem / @mod" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -161,7 +161,7 @@ templ InternalsBuiltinsPage() {
 @mod(a: T, b: T): T       // modulo; sign follows the divisor` }
 		</code>
 	</pre>
-	<p>Integer-only. A zero divisor in a compile-time constant expression is an error.</p>
+	<p>Integer-only. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
 	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>

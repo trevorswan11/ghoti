@@ -534,6 +534,27 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
 - Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
 - Fixed: a compile-time-false `@assert` in an `if` or `match` arm that a folded condition rules out was an error, e.g. `if (N > 4) { @assert(N > 4); }` with `N = 2`, including inside generic instantiations
+- `@[visibility(.default)]`, `@[visibility(.hidden)]`, and `@[visibility(.protected)]` set a symbol's visibility, backed by the new `builtin.Visibility` enum
+    - Allowed on `pub`, `export`, `extern`, and `weak` declarations; `.protected` only on ELF targets
+    - `@typeInfo(f).function.visibility` reflects it
+- Fixed: several malformed programs crashed the compiler instead of reporting an error, including `@hasField` with a non-type or non-string argument, `return 1.5` from an integer function, `-i64`, `@bitCast(undefined)`, a `noreturn` field or variable, a pack parameter used as a return type, and a match mixing type and value arms
+- Fixed: code after a `match` or `if` whose arms all return is treated as dead instead of miscompiling
+- Compile-time evaluation and runtime code now share one definition of every integer and float operation, and a differential test checks that each folded result is bit-identical to the one computed at runtime
+    - **Breaking:** float division by zero folds to an infinity or NaN like it runs, instead of being a compile error
+    - **Breaking:** `@divTrunc`, `@divFloor`, `@rem`, and `@mod` panic on division by zero and on `MIN / -1` under runtime safety, and signed `@abs(MIN)` panics; each was already a compile error when folded
+    - `x <<% n` with `n` at or past the bit width is `0` both folded and at runtime
+    - Float `@min` / `@max` are IEEE `minimumNumber` / `maximumNumber`: a NaN operand loses and `-0 < +0`, folded and at runtime
+    - Float `%` folds exactly, with the sign of the dividend, like it runs
+    - `f80` operands with an encoding x87 rejects (unnormals, pseudo-infinities, pseudo-NaNs) fold to NaN like they run
+- Fixed: a float `!=` with a NaN operand was `false` at runtime (it folded to `true`); `x != x` now detects NaN everywhere
+- Fixed: `@floatFromInt` of an integer wider than 113 bits could round twice when folded
+- Fixed: a float `@as` never folded, so `const x: u8 = @intFromFloat(u8, @as(f32, 3.5));` was rejected at module scope
+- **Breaking:** `@floatFromInt` of a typed integer past the target's range folds to an infinity, like it runs, instead of being a compile error; an out-of-range untyped literal is still rejected
+- Fixed: on Windows, `f80` arithmetic and conversions rounded to `f64` precision, because the x87 unit starts in 53-bit mode there; executables and test binaries now switch it to full 64-bit precision at startup
+- Fixed: a `@as`, `@bitCast`, `@intCast`, or `@truncate` operand took its type from the surrounding expression, so `@bitCast(f32, @as(u32, 5)) >= x` treated `5` as a float and was rejected
+- Fixed: a type declaration emitted a zeroed global the size of the type, so declaring a huge type (`struct { data: [100000000000]u8 }`) ran the compiler out of memory writing the object file
+- Fixed: more malformed programs crashed the compiler instead of reporting an error, including a type whose layout depends on its own `@sizeOf`/`@alignOf`, assigning to an array's `.len`, indexing a block, `@cfg` inside an `if` used as an operand, and passing a type (or the `type` keyword) where a value is expected, including to a generic `[]T` parameter
+- Fixed: some operations on 128-bit and odd-width integers (`+|`, `-|`, `-%`, `~`) could not be folded, or folded to a different value than the one computed at runtime
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -544,8 +565,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`
-- Releases ship a `lib/compiler_rt` directory, and every link now takes an optional compiler builtins archive as its last input; nothing is built into it yet
+- Releases ship a `lib/compiler_rt` directory of ghoti sources for the routines LLVM calls on its own (`__addtf3`, `__divti3`, `fmodf`, ...)
+    - A link whose object needs one builds `lib/compiler_rt` for the target (at most once per process) and links it last; `GHOTI_COMPILER_RT=<file>` points at another root
+    - `--no-compiler-rt` on `build-exe`, `build-lib`, `run`, and `test` skips it
+    - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
+    - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
+- Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
+- LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
     - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
+- Building from source: editing any header or `.inc` now always rebuilds the objects that include it
+    - Zig 0.16 drops a cached object's headers from the library's cache manifest, so edits to them were silently ignored; the header stamp now comes from stdx, whose `zig build verify-deps` checks it against a fixture
+    - `zig build -Dinstall-tests-only=true` now installs the test binaries instead of doing nothing
+    - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM unless `-Dprune-protected=true` (`-Dprune-dry-run=true` to preview)
+        - Paths compare case-insensitively only on Windows and macOS, and either separator is accepted on every host

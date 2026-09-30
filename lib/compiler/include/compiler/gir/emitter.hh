@@ -185,6 +185,13 @@ class emitter {
         return resolved ? resolved->alignment : stdx::none;
     }
 
+    // The `@[visibility(...)]` of a declaration's own symbol
+    [[nodiscard]] static auto decl_visibility(const mod::module& owner, ast::node_id decl)
+        -> stdx::option<ast::symbol_visibility> {
+        const auto resolved{owner.attributes_of(decl)};
+        return resolved ? resolved->visibility : stdx::none;
+    }
+
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants

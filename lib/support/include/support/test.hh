@@ -41,7 +41,7 @@ unwrap(U&& u, E&& expected_value, std::string_view expr, std::string_view file, 
 }
 
 template <Unwrappable U>
-auto unwrap_err(U&& u, std::string_view expr, std::string_view file, int line) -> decltype(auto) {
+auto unwrap_err(U&& u, std::string_view expr, std::string_view file, i32 line) -> decltype(auto) {
     if (u) { fmt::println("unwrap_err called on engaged value ({}): {}:{}", expr, file, line); }
     using T = std::remove_cvref_t<U>;
     if constexpr (stdx::Option<T>) {

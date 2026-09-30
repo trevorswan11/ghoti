@@ -105,4 +105,15 @@ TEST_CASE("integer literals past i128 max keep their unsigned value") {
     )") == 0);
 }
 
+TEST_CASE("a negated suffixed literal can be its type's minimum") {
+    CHECK(helpers::compile_and_run(R"(
+        const min8: i8 = -128i8;
+        pub const main := fn(): i32 {
+            const min16 := -32768i16;
+            if (min8 != -128 or min16 != -32768) { return 1; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

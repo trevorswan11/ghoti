@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/span>
 #include <lld/Common/CommonLinkerContext.h>
 #include <lld/Common/Driver.h>
@@ -33,6 +34,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/module/stdlib.hh"
 #include "support/env.hh"
@@ -205,7 +207,7 @@ auto add_darwin_args(std::vector<std::string>&   args,
     static const auto sdk{[] -> stdx::option<sdk_path> {
         auto        vfs{llvm::vfs::getRealFileSystem()};
         std::string path, include_version, lib_version;
-        int         major{0};
+        i32         major{0};
         if (!llvm::getWindowsSDKDir(*vfs,
                                     stdx::none,
                                     stdx::none,
@@ -357,8 +359,46 @@ auto add_elf_args(std::vector<std::string>&   args,
     }
 }
 
-[[nodiscard]] auto run_link(const llvm::Triple& triple, gsl::span<std::string> arg_strings)
-    -> stdx::result<void, diagnostic> {
+// Names the compiler builtins among lld's undefined symbols, which lib/compiler_rt should provide
+[[nodiscard]] auto missing_builtins_hint(const llvm::Triple& triple,
+                                         std::string_view    error_output,
+                                         bool                linked_builtins) -> std::string {
+    constexpr std::string_view marker{"undefined symbol: "};
+    std::vector<std::string>   missing;
+    for (usize pos{error_output.find(marker)}; pos != std::string_view::npos;
+         pos = error_output.find(marker, pos + marker.size())) {
+        auto       rest{error_output.substr(pos + marker.size())};
+        const auto end{rest.find_first_of(" \r\n")};
+        auto       symbol{strip_global_prefix(triple, rest.substr(0, end))};
+        if (is_compiler_rt_symbol(triple, symbol) && !std::ranges::contains(missing, symbol)) {
+            missing.emplace_back(symbol);
+        }
+    }
+    if (missing.empty()) { return {}; }
+    const auto names{fmt::format("{}",
+                                 fmt::join(missing | std::views::transform([](const auto& name) {
+                                               return fmt::format("`{}`", name);
+                                           }),
+                                           ", "))};
+    const bool one{missing.size() == 1};
+    if (!linked_builtins) {
+        return fmt::format("hint: {} {} compiler {}, and no builtins archive was linked (lib/"
+                           "compiler_rt wasn't found, or --no-compiler-rt was given)",
+                           names,
+                           one ? "is a" : "are",
+                           one ? "builtin" : "builtins");
+    }
+    return fmt::format("hint: {} {} compiler {}; lib/compiler_rt doesn't provide {} for '{}' yet",
+                       names,
+                       one ? "is a" : "are",
+                       one ? "builtin" : "builtins",
+                       one ? "it" : "them",
+                       triple.str());
+}
+
+[[nodiscard]] auto run_link(const llvm::Triple&    triple,
+                            gsl::span<std::string> arg_strings,
+                            bool linked_builtins) -> stdx::result<void, diagnostic> {
     std::string              error_output;
     llvm::raw_string_ostream error_stream{error_output};
     llvm::raw_null_ostream   null_stream;
@@ -387,24 +427,27 @@ auto add_elf_args(std::vector<std::string>&   args,
     }
 
     if (!success) {
-        std::string extra_hint;
+        std::string message{
+            fmt::format("Linking failed for target '{}':\n{}", triple.str(), error_output)};
+        const auto add_hint{[&](std::string_view hint) {
+            if (!message.ends_with('\n')) { message += '\n'; }
+            message += hint;
+        }};
         if (triple.isOSWindows() &&
             (error_output.contains("kernel32") || error_output.contains("shell32"))) {
-            if (!error_output.empty() && !error_output.ends_with('\n')) { extra_hint += '\n'; }
-            extra_hint +=
-                "hint: install the Windows SDK, build from a Developer Command Prompt (so `LIB` "
-                "is set), or set GHOTI_WIN_SYSROOT_LIB / pass -L pointing to a directory that "
-                "contains kernel32.lib";
+            add_hint("hint: install the Windows SDK, build from a Developer Command Prompt (so "
+                     "`LIB` is set), or set GHOTI_WIN_SYSROOT_LIB / pass -L pointing to a "
+                     "directory that contains kernel32.lib");
+        }
+        if (const auto builtins_hint{missing_builtins_hint(triple, error_output, linked_builtins)};
+            !builtins_hint.empty()) {
+            add_hint(builtins_hint);
         }
         if (triple.isOSDarwin() && !resolve_darwin_sdk()) {
-            if (!error_output.empty() && !error_output.ends_with('\n')) { extra_hint += '\n'; }
-            extra_hint += "hint: no macOS SDK was found; set SDKROOT to one, or keep the "
-                          "`lib/darwin` directory that ships next to ghoti";
+            add_hint("hint: no macOS SDK was found; set SDKROOT to one, or keep the "
+                     "`lib/darwin` directory that ships next to ghoti");
         }
-        return make_codegen_err(
-            fmt::format(
-                "Linking failed for target '{}':\n{}{}", triple.str(), error_output, extra_hint),
-            error::LINKING_FAILED);
+        return make_codegen_err(std::move(message), error::LINKING_FAILED);
     }
     return {};
 }
@@ -430,7 +473,7 @@ auto add_elf_args(std::vector<std::string>&   args,
     } else {
         add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
     }
-    TRY(run_link(triple, args));
+    TRY(run_link(triple, args, linker_opts.builtins.has_value()));
 
     // Ensure the output carries executable permissions on POSIX systems
     std::error_code ec;

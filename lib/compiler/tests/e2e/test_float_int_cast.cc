@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -83,6 +84,44 @@ TEST_CASE("@intFromFloat accepts values at the edges of the integer range") {
             return @as(i32, a) + @as(i32, b) + @as(i32, c) + 1;
         };
     )") == 0);
+}
+
+TEST_CASE("A cast's operand is typed by the cast, not by the expression around it") {
+    CHECK(helpers::compile_and_run(R"(
+        var one: f32 = 1.0f32;
+        const ge: bool = @bitCast(f32, @as(u32, 5)) >= @bitCast(f32, @as(u32, 5));
+        pub const main := fn(): i32 {
+            if (!ge) { return 1; }
+            if (one < @bitCast(f32, @as(u32, 0x3f800000))) { return 2; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("Float/int conversions fold exactly like they run") {
+    CHECK(helpers::compile_and_run(R"(
+        const trunc: u8 = @intFromFloat(u8, @as(f32, 3.5));
+        const negative_half: u8 = @intFromFloat(u8, @as(f32, -0.5));
+        const floor_min: i8 = @intFromFloat(i8, @as(f32, -128.9));
+        const overflow: f16 = @floatFromInt(f16, @as(u32, 70000));
+        const once: u64 = @bitCast(u64, @floatFromInt(f64, @as(u128, 0xffffffffffffffffffffffffffffffff)));
+        pub const main := fn(): i32 {
+            if (trunc != 3 or negative_half != 0 or floor_min != -128) { return 1; }
+            // Past f16's range is an infinity, as the conversion instruction gives
+            if (overflow != @bitCast(f16, @as(u16, 0x7c00))) { return 2; }
+            // One rounding straight to f64, not through f128 first
+            if (once != 0x47f0000000000000) { return 3; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("@intCast rejects a negative value for u128 and a u128 past a signed range") {
+    helpers::expect_compile_error("const a: u128 = @intCast(u128, @bitCast(i8, @as(u8, 128)));");
+    helpers::expect_compile_error(
+        "const b: i8 = @intCast(i8, @as(u128, 0xfffffffffffffffffffffffffffffffe));");
+    helpers::expect_compile_error(
+        "const c: i128 = @intCast(i128, @as(u128, 0x80000000000000000000000000000000));");
 }
 
 } // namespace ghoti::tests

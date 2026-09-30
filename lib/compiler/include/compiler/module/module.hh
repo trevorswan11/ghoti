@@ -194,7 +194,7 @@ struct module {
     auto absorb_sema_diagnostics(sema::diagnostics&& list) -> void {
         if (list.empty()) { return; }
         if (auto existing{diagnostics.as_opt<sema::diagnostics>()}) {
-            for (const auto& d : list) { existing->push_back(d); }
+            for (const auto& d : list) { existing->emplace_back(d); }
             existing->remove_duplicates();
             if (is_ok()) { state = module_state::POISONED_TYPE_RESOLVED; }
             return;
