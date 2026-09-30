@@ -23,6 +23,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/sema/type.hh"
+#include "support/float_math.hh"
 
 namespace ghoti::codegen {
 

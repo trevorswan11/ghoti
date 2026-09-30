@@ -32,7 +32,7 @@ struct peer_error {
 //   - numbers give the operand type every other widens into; none is invented (`i32` with `u32`
 //     has no peer), and untyped constants adopt the concrete peer
 //   - pointers, references, and slices give the least mutable, keeping `volatile`
-//   - arrays of different lengths, and pointers to them, give a slice of their element
+//   - arrays of different lengths, and refs to them, give a slice of their element
 [[nodiscard]] auto peer_type(context& ctx, gsl::span<const peer_operand> operands)
     -> stdx::result<gsl::not_null<type*>, peer_error>;
 

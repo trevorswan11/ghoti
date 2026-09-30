@@ -1940,7 +1940,7 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
                      result_slot,
                      result_type,
                      scope_depth,
-                     is_constexpr] = loop_stack_[idx - 1];
+                     is_constexpr]{loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
             if (is_constexpr) {
                 if (brk.expression) {

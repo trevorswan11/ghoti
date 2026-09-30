@@ -42,11 +42,10 @@ TEST_CASE("Removed and malformed literal suffixes are rejected") {
 }
 
 TEST_CASE("Character escape errors") {
-    helpers::test_parser_fail("'\\f';",
-                              syntax::diagnostic{"Unknown escape sequence '\\f'",
-                                                 syntax::error::UNKNOWN_CHARACTER_ESCAPE,
-                                                 0,
-                                                 1});
+    helpers::test_parser_fail(
+        "'\\f';",
+        syntax::diagnostic{
+            "Unknown escape sequence '\\f'", syntax::error::UNKNOWN_CHARACTER_ESCAPE, 0, 1});
 }
 
 TEST_CASE("Floating point overflow") {

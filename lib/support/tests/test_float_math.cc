@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_message.hpp>
@@ -16,7 +17,6 @@
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
-#include "support/test.hh"
 
 namespace ghoti::tests {
 

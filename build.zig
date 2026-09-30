@@ -547,7 +547,7 @@ fn addArtifacts(b: *std.Build, config: struct {
 
 const counted_extensions = [_][]const u8{
     ".cc", ".hh",    ".inc",  ".zig", ".gh",
-    ".go", ".templ", ".html", ".css",
+    ".go", ".templ", ".html", ".css", ".py",
 };
 
 fn addTooling(b: *std.Build, config: struct {
@@ -612,6 +612,7 @@ fn addTooling(b: *std.Build, config: struct {
     try stdx.utils.collectFilesInto(b, "ghoti", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "examples", .{ .allowed_extensions = &counted_extensions }, &counted_files);
+    try stdx.utils.collectFilesInto(b, "tools", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     _ = LOCCounter.init(b, .{
         .counted_files = counted_files.wrapped.items,
         .file_buf_size = 1000 * 1024,

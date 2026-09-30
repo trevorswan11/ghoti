@@ -1,7 +1,6 @@
 #include "compiler/syntax/token.hh"
 
 #include <array>
-#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -10,6 +9,7 @@
 #include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/syntax/token_type.hh"
 
@@ -46,11 +46,20 @@ auto decode_escapes(std::string_view inner) -> std::string {
 auto scan_escape(std::string_view text) -> escape_scan {
     ASSERT(!text.empty() && text.front() == '\\');
     const auto failed{[](usize length, std::string error) {
-        return escape_scan{.length = length, .bytes = {}, .value = 0, .error = std::move(error)};
+        return escape_scan{
+            .length = length,
+            .bytes  = {},
+            .value  = 0,
+            .error  = std::move(error),
+        };
     }};
     const auto decoded{[](usize length, std::string bytes, u32 value) {
         return escape_scan{
-            .length = length, .bytes = std::move(bytes), .value = value, .error = {}};
+            .length = length,
+            .bytes  = std::move(bytes),
+            .value  = value,
+            .error  = {},
+        };
     }};
     if (text.size() < 2) { return failed(1, "Incomplete escape sequence"); }
     const auto code{text[1]};

@@ -10,6 +10,7 @@
 #include <stdx/fixed/hash_table.hh>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
+#include <stdx/types.hh>
 
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"

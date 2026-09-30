@@ -7,7 +7,7 @@
 namespace ghoti {
 
 // Terminal columns a code point takes: 0 for combining marks, joiners, and variation selectors,
-// 2 for East Asian wide characters and emoji, 1 otherwise
+// 2 for wide characters and emoji, 1 otherwise
 [[nodiscard]] auto code_point_width(u32 code_point) noexcept -> usize;
 
 // Terminal columns `text` takes. A zero-width-joiner sequence (a family emoji) and a regional

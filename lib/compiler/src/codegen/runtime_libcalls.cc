@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -14,6 +15,9 @@
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/hash.hh>
 #include <stdx/types.hh>
+
+#include "support/float128.hh"
+#include "support/float_math.hh"
 
 namespace ghoti::codegen {
 
@@ -96,7 +100,7 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
     const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
     if (const auto* name{info.getLibcallName(variants[index])}) { return name; }
 
-    constexpr std::array<std::string_view, 4> suffixes{"f", "", "l", "f128"};
+    constexpr std::array suffixes{"f", "", "l", "f128"};
     return fmt::format("{}{}", math_function_name(function), suffixes[index]);
 }
 

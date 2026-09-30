@@ -374,7 +374,6 @@ TEST_CASE("Lexing character literals") {
                    {token_type_t::WHILE, "while"},
                    {token_type_t::CHAR, "'\\\\'"},
                    {token_type_t::CONSTANT, "const"},
-                   // The parser checks for exactly one code point
                    {token_type_t::CHAR, "''"},
                    {token_type_t::VAR, "var"},
                    {token_type_t::CHAR, "'asd'"},

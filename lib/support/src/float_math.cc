@@ -1,8 +1,6 @@
 #include "support/float_math.hh"
 
-#include <algorithm>
 #include <bit>
-#include <compare>
 #include <string_view>
 #include <utility>
 
@@ -15,9 +13,7 @@
 #include "support/float128.hh"
 #include "support/int128.hh"
 
-// Everything here is fixed point over `big_uint`: a value `v` at precision `p` is the integer
-// `v * 2^p`, and every approximation carries a bound on how many units it may be off by. Ziv's
-// loop then raises `p` until the whole error interval rounds to one value.
+// This guy's almost all claude... good luck!
 
 namespace ghoti {
 
@@ -151,6 +147,7 @@ class cached_constant {
   public:
     using generator = big_uint (*)(u64 precision);
 
+  public:
     explicit cached_constant(generator compute) noexcept : compute_{compute} {}
 
     [[nodiscard]] auto at(u64 precision) -> big_uint {

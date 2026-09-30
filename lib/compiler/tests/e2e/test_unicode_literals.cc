@@ -5,8 +5,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <stdx/types.hh>
 
-#include "compiler/sema/error.hh"
+#include "catch2/catch_message.hpp"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/keywords.hh"
 #include "helpers/ast.hh"

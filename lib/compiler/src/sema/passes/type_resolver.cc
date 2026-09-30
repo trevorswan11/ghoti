@@ -67,6 +67,7 @@
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
+#include "support/scope_guard.hh"
 
 namespace ghoti::sema {
 

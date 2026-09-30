@@ -195,9 +195,9 @@ struct value {
 
     constexpr value() noexcept = default;
     // A float payload is rounded into its type's format
-    constexpr value(data_t                    val,
-                    stdx::option<sema::type&> t        = stdx::none,
-                    stdx::option<math_origin> computed = stdx::none)
+    constexpr explicit value(data_t                    val,
+                             stdx::option<sema::type&> t        = stdx::none,
+                             stdx::option<math_origin> computed = stdx::none)
         : data{std::move(val)}, type{t}, origin{computed} {
         if !consteval {
             if (auto f{data.as_opt<f128>()}; f && type) {

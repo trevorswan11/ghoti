@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -118,14 +120,12 @@ TEST_CASE("runtime math calls the target's routines, never LLVM's foldable intri
     )")};
     auto       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
     const auto ir{helpers::ir_text(*llvm_mod)};
-    CHECK(ir.find("@sinf(") != std::string::npos);
-    CHECK(ir.find("llvm.sqrt.f64") != std::string::npos);
-    // f16 goes through the f32 routine
-    CHECK(ir.find("@log10f(") != std::string::npos);
-    // Never `expl`, which is `double` or x87 on some platforms
-    CHECK(ir.find("@expf128(") != std::string::npos);
-    CHECK(ir.find("llvm.sin") == std::string::npos);
-    CHECK(ir.find("nobuiltin") != std::string::npos);
+    CHECK(ir.contains("@sinf("));
+    CHECK(ir.contains("llvm.sqrt.f64"));
+    CHECK(ir.contains("@log10f("));  // f16 goes through the f32 routine
+    CHECK(ir.contains("@expf128(")); // Never `expl`, which is `double` or x87 on some platforms
+    CHECK_FALSE(ir.contains("llvm.sin"));
+    CHECK(ir.contains("nobuiltin"));
 }
 
 TEST_CASE("runtime math matches compile-time math") {

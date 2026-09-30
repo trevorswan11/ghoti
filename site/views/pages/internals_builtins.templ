@@ -81,7 +81,7 @@ templ InternalsBuiltinsPage() {
 	</ul>
 	<h3>{ "@TypeOf" }</h3>
 	<pre><code class="language-ghoti">{ `@TypeOf(expressions: auto...): type` }</code></pre>
-	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> {"for"} <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
+	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> { "for" } <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
 	<h3>{ "@this" }</h3>
 	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
 	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>

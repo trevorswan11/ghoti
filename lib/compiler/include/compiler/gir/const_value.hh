@@ -17,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema

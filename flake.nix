@@ -59,8 +59,7 @@
             templ
             prettier
             rustToolchain
-            # tools/fuzz (standard library only)
-            python3
+            (python3.withPackages (ps: [ ps.mpmath ]))
           ]
           ++ (with llvmPackages_21; [
             clang-tools

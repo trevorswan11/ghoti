@@ -249,7 +249,7 @@ auto float_casts() -> std::vector<diff::expr_template> {
     std::vector<diff::expr_template> templates;
     for (const auto& from : diff::host_float_types()) {
         for (const auto& to : diff::host_float_types()) {
-            templates.push_back({
+            templates.emplace_back<diff::expr_template>({
                 .text              = fmt::format("@floatCast({}, {{0}})", to.name),
                 .operands          = {from},
                 .result            = to,

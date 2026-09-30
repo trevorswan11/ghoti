@@ -2,12 +2,14 @@
 
 #include <stdx/variant.hh>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/sema/error.hh"
 #include "driver/cmd/lsp/text_edit.hh"
 #include "support/diagnostic.hh"
 

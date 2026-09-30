@@ -49,6 +49,7 @@
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -221,6 +222,7 @@ template <typename T>
     case syntax::token_type_t::SHL_PIPE:    return stdx::none;
     default:                                break;
     }
+
     const auto lhs_type{lhs.get_type()};
     const auto rhs_type{rhs.get_type()};
     const auto is_concrete_number{[](const sema::type& t) {
