@@ -181,11 +181,7 @@ auto exported_symbols(const std::filesystem::path&   library,
         for (const auto& symbol : elf->getDynamicSymbolIterators()) {
             auto flags{symbol.getFlags()};
             auto name{symbol.getName()};
-            if (!flags || !name) {
-                llvm::consumeError(flags.takeError());
-                llvm::consumeError(name.takeError());
-                continue;
-            }
+            if (!flags || !name) { continue; }
             if ((*flags & llvm::object::SymbolRef::SF_Undefined) == 0) { add(*name); }
         }
     } else {

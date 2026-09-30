@@ -250,7 +250,7 @@ auto int_compare_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_
 
 auto describe(int_fault fault, int_domain domain, std::string_view type_name) -> std::string {
     switch (fault) {
-    case int_fault::OVERFLOW:
+    case int_fault::OVERFLOW_:
         return fmt::format(
             "Signed integer overflow in compile-time constant expression: the result "
             "does not fit '{}'",
@@ -297,7 +297,7 @@ auto fold_int(int_op op, int_domain domain, u128 lhs, u128 rhs) -> int_result<u1
             exact && signed_fits(*exact, domain.bits)) {
             return bits_of(*exact, domain);
         }
-        return stdx::err{int_fault::OVERFLOW};
+        return stdx::err{int_fault::OVERFLOW_};
     case int_op::WRAP_ADD:
     case int_op::WRAP_SUB:
     case int_op::WRAP_MUL: return wrapped(op, domain, l, r);
@@ -333,11 +333,11 @@ auto fold_int(int_op op, int_domain domain, u128 lhs, u128 rhs) -> int_result<u1
         }
         if (domain.is_signed && signed_value(l, domain) == signed_min(domain.bits) &&
             signed_value(r, domain) == -1) {
-            return stdx::err{int_fault::OVERFLOW};
+            return stdx::err{int_fault::OVERFLOW_};
         }
         return divide(op, domain, l, r);
     }
-    return stdx::err{int_fault::OVERFLOW};
+    return stdx::err{int_fault::OVERFLOW_};
 }
 
 auto is_shift(int_op op) noexcept -> bool {
@@ -372,7 +372,7 @@ auto fold_int_unary(int_unary_op op, int_domain domain, u128 value) -> int_resul
     switch (op) {
     case int_unary_op::NEG:
         if (domain.is_signed && signed_value(v, domain) == signed_min(domain.bits)) {
-            return stdx::err{int_fault::OVERFLOW};
+            return stdx::err{int_fault::OVERFLOW_};
         }
         return to_domain(u128{0} - v, domain);
     case int_unary_op::WRAP_NEG: return to_domain(u128{0} - v, domain);
@@ -380,7 +380,7 @@ auto fold_int_unary(int_unary_op op, int_domain domain, u128 value) -> int_resul
     case int_unary_op::ABS:
         if (!domain.is_signed || signed_value(v, domain) >= 0) { return v; }
         if (signed_value(v, domain) == signed_min(domain.bits)) {
-            return stdx::err{int_fault::OVERFLOW};
+            return stdx::err{int_fault::OVERFLOW_};
         }
         return to_domain(u128{0} - v, domain);
     case int_unary_op::CLZ:

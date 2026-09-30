@@ -79,7 +79,7 @@ enum class int_compare_op : u8 {
 
 // Why an operation has no result for these operands. Folding reports it; runtime safety panics.
 enum class int_fault : u8 {
-    OVERFLOW,
+    OVERFLOW_,
     DIVISION_BY_ZERO,
     MODULO_BY_ZERO,
     NEGATIVE_SHIFT,

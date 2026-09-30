@@ -168,16 +168,10 @@ auto compiler_rt_imports(const std::filesystem::path&   object,
     std::vector<std::string> imports;
     for (const auto& symbol : binary->getBinary()->symbols()) {
         auto flags{symbol.getFlags()};
-        if (!flags) {
-            llvm::consumeError(flags.takeError());
-            continue;
-        }
+        if (!flags) { continue; }
         if ((*flags & llvm::object::SymbolRef::SF_Undefined) == 0) { continue; }
         auto name{symbol.getName()};
-        if (!name) {
-            llvm::consumeError(name.takeError());
-            continue;
-        }
+        if (!name) { continue; }
         const auto source_name{codegen::strip_global_prefix(triple, name->str())};
         if (codegen::is_compiler_rt_symbol(triple, source_name)) {
             imports.emplace_back(source_name);
