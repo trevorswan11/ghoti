@@ -283,6 +283,7 @@ auto symbol_collector::visit(ast::node_id, const ast::if_expr& if_expr) -> void 
 auto symbol_collector::visit(ast::node_id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
+    collect(index.array);
     collect(index.index);
 }
 

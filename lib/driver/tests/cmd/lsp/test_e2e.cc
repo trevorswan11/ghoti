@@ -4,11 +4,13 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/rpc.hh"
@@ -1420,6 +1422,155 @@ TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
     CHECK(shutdown_resp.at("result").is_null());
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp hover shows the peer type of a mixed-type binding") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_peer_hover.gh"};
+    constexpr std::string_view text{R"(var small: i8 = 1;
+var wide: i64 = 2;
+pub const main := fn(): i32 {
+    const sum := small + wide;
+    const pick := if (small < wide) small else wide;
+    return 0;
+};
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    CHECK(hover_at(2, 3, 11).contains("i64"));
+    CHECK(hover_at(3, 4, 11).contains("i64"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+namespace {
+
+// Renames the emoji identifier from its second use and returns the edits' start columns
+auto rename_emoji_columns(const nlohmann::json& client_capabilities) -> std::vector<i64> {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    REQUIRE(proc.is_running());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", client_capabilities}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto encoding{
+        init_resp.at("result").at("capabilities").at("positionEncoding").get<std::string>()};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///C:/ghoti_e2e_unicode/main.gh"};
+    const std::string          text{"const @\"\xF0\x9F\x98\x80\" := 1;\n"
+                                    "pub const x := @\"\xF0\x9F\x98\x80\" + @\"\xF0\x9F\x98\x80\";\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    DISCARD(UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)));
+
+    // The second use starts at byte 25, which is UTF-16 unit 23
+    const i64 second_use{encoding == "utf-8" ? 26 : 24};
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/rename"},
+                        {"params",
+                         {{"textDocument", {{"uri", uri}}},
+                          {"position", {{"line", 1}, {"character", second_use}}},
+                          {"newName", "smile"}}}});
+    const auto       rename_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    std::vector<i64> columns;
+    for (const auto& [file, edits] : rename_resp.at("result").at("changes").items()) {
+        for (const auto& edit : edits) {
+            columns.emplace_back(edit.at("range").at("start").at("character").get<i64>());
+        }
+    }
+    std::ranges::sort(columns);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    DISCARD(UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+    return columns;
+}
+
+} // namespace
+
+TEST_CASE("ghoti lsp counts UTF-16 units by default and bytes when the client offers UTF-8") {
+    CHECK(rename_emoji_columns(nlohmann::json::object()) == std::vector<i64>{6, 15, 23});
+    const nlohmann::json utf8{
+        {"general", {{"positionEncodings", nlohmann::json::array({"utf-8", "utf-16"})}}}};
+    CHECK(rename_emoji_columns(utf8) == std::vector<i64>{6, 15, 25});
 }
 
 } // namespace ghoti::tests

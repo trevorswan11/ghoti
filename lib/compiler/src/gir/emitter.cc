@@ -1,6 +1,7 @@
 #include "compiler/gir/emitter.hh"
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <limits>
 #include <ranges>
@@ -43,6 +44,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
@@ -769,7 +771,7 @@ auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept 
 auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
     -> value {
     check_constexpr_float_fits(v, target, at);
-    if (v.is<f128>()) { return value{v.data, target}; }
+    if (v.is<f128>()) { return value{v.data, target, v.origin}; }
     if (const auto as_unsigned{v.as_opt<u128>()}) {
         return value{f128::from_uint(*as_unsigned), target};
     }
@@ -941,7 +943,7 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             return coerce_constexpr_int(val, concrete, *expr_id);
         }
         check_constexpr_float_fits(val, concrete, *expr_id);
-        return value{val.data, concrete};
+        return value{val.data, concrete, val.origin};
     }
 
     // A compile-time known integer that provably fits dest_type coerces implicitly
@@ -1015,6 +1017,16 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
 
     if (decl.value) {
         if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(*decl.value)}) {
+            const auto literal_type{active_mod().get_sema_type_opt(*decl.value)};
+            if (decl.explicit_type && literal_type && !sema_type->is_poison() &&
+                !sema_type->get_data().is<sema::types::function>() &&
+                !sema::is_fat_callable(*sema_type)) {
+                ctx_.diags.emplace_back(
+                    ctx_.store_mismatch_message(*literal_type, *sema_type, target_ptr_bits_),
+                    sema::error::TYPE_MISMATCH,
+                    active_ast().location_of(*decl.value));
+                return;
+            }
             if (const auto fn_data{sema_type->get_data().as_opt<sema::types::function>()}) {
                 // Generic templates will be emitted via monomorphized instantiations
                 if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
@@ -1100,6 +1112,17 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
             // A folded struct/array/union aggregate or dyn fat pointer cannot round-trip through
             // the scalar `value` variant
+            const auto init_type{active_mod().get_sema_type_opt(*decl.value)};
+            if (decl.explicit_type && init_type &&
+                sema_type->get_kind() == sema::type_kind::ARRAY &&
+                init_type->get_kind() == sema::type_kind::ARRAY &&
+                !sema::is_assignable(*init_type, *sema_type)) {
+                ctx_.diags.emplace_back(
+                    ctx_.store_mismatch_message(*init_type, *sema_type, target_ptr_bits_),
+                    sema::error::TYPE_MISMATCH,
+                    active_ast().location_of(*decl.value));
+                return;
+            }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
                 cv->is<const_dyn_fat_ptr>()) {
                 const_init.emplace(std::move(*cv));
@@ -1117,7 +1140,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         v = value{*as_float};
                     }
                     check_constexpr_float_fits(v, *sema_type, *decl.value);
-                    if (v.is<f128>()) { v = value{v.data, *sema_type}; }
+                    if (v.is<f128>()) { v = value{v.data, *sema_type, v.origin}; }
                 }
                 init_val.emplace(v);
             }
@@ -1810,6 +1833,18 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
         });
 }
 
+auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt, sema::type& peer) -> value {
+    const auto expr_st{active_ast().get_as_opt<ast::expr_stmt>(stmt)};
+    if (!expr_st) { return emit_stmt_as_value(stmt); }
+    const auto own_type{active_mod().get_sema_type_opt(expr_st->expression)};
+    // A diverging or valueless arm has nothing to convert
+    if (!own_type || !sema::is_value_type(own_type->get_kind()) ||
+        !sema::is_value_type(peer.get_kind())) {
+        return emit_stmt_as_value(stmt);
+    }
+    return emit_coerced_expr(expr_st->expression, peer);
+}
+
 auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
     PROFILE_FUNCTION();
     if (scope_idx >= scopes_.size()) { return; }
@@ -1899,12 +1934,18 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot, scope_depth, is_constexpr] =
-            loop_stack_[idx - 1];
+        const auto& [label,
+                     break_target,
+                     continue_target,
+                     result_slot,
+                     result_type,
+                     scope_depth,
+                     is_constexpr]{loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
             if (is_constexpr) {
                 if (brk.expression) {
-                    const auto val{emit_expression(*brk.expression)};
+                    const auto val{result_type ? emit_coerced_expr(*brk.expression, *result_type)
+                                               : emit_expression(*brk.expression)};
                     if (result_slot) { builder_.emit_store(*result_slot, val); }
                     constexpr_loop_break_value_.emplace(val);
                 }
@@ -1913,7 +1954,9 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
                 return;
             }
             if (brk.expression && result_slot) {
-                builder_.emit_store(*result_slot, emit_expression(*brk.expression));
+                builder_.emit_store(*result_slot,
+                                    result_type ? emit_coerced_expr(*brk.expression, *result_type)
+                                                : emit_expression(*brk.expression));
             }
             emit_defers_up_to(scope_depth);
             builder_.emit_goto(break_target);
@@ -1933,8 +1976,13 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
     }
 
     for (usize idx{loop_stack_.size()}; idx > 0; --idx) {
-        const auto& [label, break_target, continue_target, result_slot, scope_depth, is_constexpr]{
-            loop_stack_[idx - 1]};
+        const auto& [label,
+                     break_target,
+                     continue_target,
+                     result_slot,
+                     result_type,
+                     scope_depth,
+                     is_constexpr]{loop_stack_[idx - 1]};
         if (!target_label || label == *target_label) {
             if (is_constexpr) {
                 emit_defers_up_to(scope_depth);
@@ -2069,7 +2117,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                             active_ast().location_of(*decl.value));
                     }
                     if (decl.explicit_type && scalar.is<f128>()) {
-                        scalar = value{scalar.data, *sema_type};
+                        scalar = value{scalar.data, *sema_type, scalar.origin};
                     }
 
                     bound = scalar;
@@ -2528,6 +2576,24 @@ auto emitter::emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id
                                 bool_type);
 }
 
+auto emitter::numeric_operand_peer(ast::expr_handle lhs, ast::expr_handle rhs)
+    -> stdx::option<sema::type&> {
+    const auto lhs_type{active_mod().get_sema_type_opt(lhs)};
+    const auto rhs_type{active_mod().get_sema_type_opt(rhs)};
+    const auto is_concrete_number{[](const sema::type& t) {
+        return sema::is_integer(t.get_kind()) || sema::is_float(t.get_kind());
+    }};
+    if (!lhs_type || !rhs_type || !is_concrete_number(*lhs_type) ||
+        !is_concrete_number(*rhs_type) || sema::is_same_unqualified(*lhs_type, *rhs_type)) {
+        return stdx::none;
+    }
+    const std::array operands{sema::peer_operand{lhs_type.get()},
+                              sema::peer_operand{rhs_type.get()}};
+    const auto       peer{sema::peer_type(ctx_, operands)};
+    if (!peer) { return stdx::none; }
+    return **peer;
+}
+
 auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
@@ -2590,8 +2656,12 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
         }
     }
 
-    auto lhs{emit_expression(binary.lhs)};
-    auto rhs{emit_expression(binary.rhs)};
+    // Two concrete numbers of different types are converted to their peer type first
+    const auto operand_peer{numeric_operand_peer(binary.lhs, binary.rhs)};
+    const bool is_shift{*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR};
+    const bool to_peer{operand_peer && !is_shift};
+    auto lhs{to_peer ? emit_coerced_expr(binary.lhs, *operand_peer) : emit_expression(binary.lhs)};
+    auto rhs{to_peer ? emit_coerced_expr(binary.rhs, *operand_peer) : emit_expression(binary.rhs)};
     // Float arithmetic converts a constant operand of another type to the result's float type;
     // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
     if (sema::is_float(sema_type->get_kind())) {
@@ -3412,7 +3482,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_PTR_CAST:
         case syntax::token_type_t::BUILTIN_ALIGN_CAST:
         case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
-        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT: {
+        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
+        case syntax::token_type_t::BUILTIN_FLOAT_CAST:     {
             const bool is_one_arg{call.arguments.size() == 1};
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
@@ -3438,7 +3509,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
                     if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT ||
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_CAST) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }
@@ -3894,11 +3966,16 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_MOD:       {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
 
+            // Two operands meet at their peer type, which is the result's
+            const bool peers_operands{
+                call.arguments.size() == 2 &&
+                (sema::is_integer(ret_type.get_kind()) || sema::is_float(ret_type.get_kind()))};
             std::vector<value> args;
             args.reserve(call.arguments.size());
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(emit_expression(*expr_h));
+                    args.emplace_back(peers_operands ? emit_coerced_expr(*expr_h, ret_type)
+                                                     : emit_expression(*expr_h));
                 }
             }
             // Division by zero, `MIN / -1`, and `@abs(MIN)` panic like the operators they mirror
@@ -3920,6 +3997,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                                                           stdx::none,
                                                           stdx::none,
                                                           checked)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_SQRT:
+        case syntax::token_type_t::BUILTIN_SIN:
+        case syntax::token_type_t::BUILTIN_COS:
+        case syntax::token_type_t::BUILTIN_TAN:
+        case syntax::token_type_t::BUILTIN_EXP:
+        case syntax::token_type_t::BUILTIN_EXP2:
+        case syntax::token_type_t::BUILTIN_LOG:
+        case syntax::token_type_t::BUILTIN_LOG2:
+        case syntax::token_type_t::BUILTIN_LOG10:
+        case syntax::token_type_t::BUILTIN_FLOOR:
+        case syntax::token_type_t::BUILTIN_CEIL:  {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()};
+            if (!expr_h) { break; }
+            const auto name{*syntax::get_builtin_opt(fn_token)};
+            if (const auto res{builder_.emit_builtin_call(
+                    name, {emit_coerced_expr(*expr_h, ret_type)}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
@@ -3950,11 +4048,27 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
         case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
             // args: a, b, and a `&mut T` / `^mut T` result slot passed as its raw address.
+            // Both operands are converted to the result slot's type, except a shift's count
+            const auto                slot_h{*call.arguments[2].as_opt<ast::expr_handle>()};
+            const auto                slot_type{active_mod().get_sema_type_opt(slot_h)};
+            stdx::option<sema::type&> operand_type;
+            if (slot_type) {
+                if (const auto ref{slot_type->get_data().as_opt<sema::types::reference>()}) {
+                    operand_type.emplace(ref->underlying);
+                } else if (const auto ptr{slot_type->get_data().as_opt<sema::types::pointer>()}) {
+                    operand_type.emplace(ptr->underlying);
+                }
+            }
+            const bool is_shift{fn_token == syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW};
+            const auto operand{[&](usize index, bool to_slot_type) {
+                const auto expr_h{*call.arguments[index].as_opt<ast::expr_handle>()};
+                return to_slot_type && operand_type ? emit_coerced_expr(expr_h, *operand_type)
+                                                    : emit_expression(expr_h);
+            }};
             std::vector<value> args;
-            args.emplace_back(emit_expression(*call.arguments[0].as_opt<ast::expr_handle>()));
-            args.emplace_back(emit_expression(*call.arguments[1].as_opt<ast::expr_handle>()));
-            args.emplace_back(
-                emit_expression_id_raw(*call.arguments[2].as_opt<ast::expr_handle>()));
+            args.emplace_back(operand(0, true));
+            args.emplace_back(operand(1, !is_shift));
+            args.emplace_back(emit_expression_id_raw(slot_h));
             const auto name{*syntax::get_builtin_opt(fn_token)};
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
@@ -4554,7 +4668,10 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     if (if_expr.alternate &&
         if_expr.consequence->get_kind() == ast::node_kind::EXPRESSION_STATEMENT) {
         const auto& expr_st{active_ast().get_as<ast::expr_stmt>(*if_expr.consequence)};
-        if (const auto expr_type = active_mod().get_sema_type_opt(expr_st.expression)) {
+        const bool  peer_resolved{(*if_expr.alternate)->get_kind() ==
+                                 ast::node_kind::EXPRESSION_STATEMENT};
+        if (const auto expr_type = active_mod().get_sema_type_opt(expr_st.expression);
+            expr_type && !peer_resolved) {
             if (expr_type->get_kind() != sema::type_kind::VOID_) { sema_type = expr_type; }
         }
     }
@@ -4638,9 +4755,15 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
 
     // Consequence branch
     builder_.set_segment(consequence_seg);
+    // An arm that diverges (`else return e`) has terminated its segment and yields nothing
+    const auto store_arm{[&](ast::stmt_handle arm) {
+        const auto arm_val{retype_if_undefined(emit_stmt_as_value(arm, *sema_type), *sema_type)};
+        if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
+            builder_.emit_store(*res_slot, arm_val);
+        }
+    }};
     if (yields_value) {
-        builder_.emit_store(
-            *res_slot, retype_if_undefined(emit_stmt_as_value(if_expr.consequence), *sema_type));
+        store_arm(if_expr.consequence);
     } else {
         emit_stmt(if_expr.consequence);
     }
@@ -4652,8 +4775,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     if (alternate_seg_ptr) {
         builder_.set_segment(*alternate_seg_ptr);
         if (yields_value) {
-            builder_.emit_store(
-                *res_slot, retype_if_undefined(emit_stmt_as_value(*if_expr.alternate), *sema_type));
+            store_arm(*if_expr.alternate);
         } else {
             emit_stmt(*if_expr.alternate);
         }
@@ -4778,6 +4900,7 @@ auto emitter::emit_while(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = continue_target,
                                        .result_slot     = res_slot,
+                                       .result_type     = sema_type,
                                        .scope_depth     = scopes_.size(),
                                    }};
 
@@ -4809,7 +4932,8 @@ auto emitter::emit_while(ast::node_id                   id,
         builder_.set_segment(*non_break_seg);
         if (yields_value) {
             if (res_slot) {
-                builder_.emit_store(*res_slot, emit_stmt_as_value(*while_loop.non_break));
+                builder_.emit_store(*res_slot,
+                                    emit_stmt_as_value(*while_loop.non_break, *sema_type));
             }
         } else {
             emit_stmt(*while_loop.non_break);
@@ -4879,6 +5003,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = cond_seg.get_id(),
                                        .result_slot     = res_slot,
+                                       .result_type     = sema_type,
                                        .scope_depth     = scopes_.size(),
                                    }};
 
@@ -4950,6 +5075,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
                                        .break_target    = exit_seg.get_id(),
                                        .continue_target = body_seg.get_id(),
                                        .result_slot     = res_slot,
+                                       .result_type     = sema_type,
                                        .scope_depth     = scopes_.size(),
                                    }};
 
@@ -5175,6 +5301,7 @@ auto emitter::emit_for(ast::node_id                   id,
                                            .break_target    = exit_seg.get_id(),
                                            .continue_target = step_seg.get_id(),
                                            .result_slot     = res_slot,
+                                           .result_type     = sema_type,
                                            .scope_depth     = scopes_.size(),
                                        }};
 
@@ -5324,7 +5451,7 @@ auto emitter::emit_for(ast::node_id                   id,
         builder_.set_segment(*non_break_seg);
         if (yields_value) {
             if (res_slot) {
-                builder_.emit_store(*res_slot, emit_stmt_as_value(*for_loop.non_break));
+                builder_.emit_store(*res_slot, emit_stmt_as_value(*for_loop.non_break, *sema_type));
             }
         } else {
             emit_stmt(*for_loop.non_break);
@@ -5383,6 +5510,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                                                    .break_target    = exit_seg.get_id(),
                                                    .continue_target = exit_seg.get_id(),
                                                    .result_slot     = res_slot,
+                                                   .result_type     = sema_type,
                                                    .scope_depth     = scopes_.size(),
                                                }};
 
@@ -5425,6 +5553,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                                                .break_target    = exit_seg.get_id(),
                                                .continue_target = exit_seg.get_id(),
                                                .result_slot     = res_slot,
+                                               .result_type     = sema_type,
                                                .scope_depth     = scopes_.size(),
                                            }};
 
@@ -6741,7 +6870,7 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 
             if (yields_value && res_slot) {
                 const auto arm_val{
-                    retype_if_undefined(emit_stmt_as_value(arm.dispatch), *sema_type)};
+                    retype_if_undefined(emit_stmt_as_value(arm.dispatch, *sema_type), *sema_type)};
                 // A block body that diverges (`|e| { return e; }`, `_ => { return N; }`) already
                 // terminated the segment; storing its `void` result would outlive the terminator.
                 if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {

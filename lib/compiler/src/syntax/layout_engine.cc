@@ -10,6 +10,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/syntax/doc.hh"
+#include "support/unicode.hh"
 
 namespace ghoti::syntax {
 
@@ -46,7 +47,7 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             [&](docs::text t) {
                 flush_indent();
                 fmt::print(os, "{}", t.text);
-                current_width += static_cast<u32>(t.text.size());
+                current_width += static_cast<u32>(display_width(t.text));
             },
             [&](const docs::concat& c) {
                 // Push in reverse order to process children seq
@@ -99,7 +100,7 @@ auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool 
 
     return doc_manager_[doc].visit(
         [&](docs::text t) {
-            width_left -= static_cast<i64>(t.text.size());
+            width_left -= static_cast<i64>(display_width(t.text));
             return width_left >= 0;
         },
         [&](const docs::concat& c) {

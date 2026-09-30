@@ -100,7 +100,7 @@ auto lexer::advance() noexcept -> token_t {
     } else if (current_byte_ == '"') {
         return read_string();
     } else if (current_byte_ == '\'') {
-        return read_byte_literal();
+        return read_char_literal();
     } else {
         token.slice = stdx::string::substr(input_, pos_, 1);
         token.type  = token_type_t::ILLEGAL;
@@ -417,8 +417,9 @@ auto lexer::read_number() noexcept -> token_t {
 }
 
 auto lexer::read_escape() noexcept -> bool {
-    read_character();
-    return !at_end() && decode_escape(current_byte_).has_value();
+    const auto scan{scan_escape(input_.substr(pos_))};
+    for (usize i{1}; i < scan.length; ++i) { read_character(); }
+    return scan.error.empty();
 }
 
 auto lexer::read_string() noexcept -> token_t {
@@ -488,8 +489,9 @@ auto lexer::read_raw_identifier() noexcept -> token_t {
     }
 
     // The slice keeps the whole `@"..."` lexeme for the parser to intern and interpret
-    return {token_type_t::IDENT,
-            stdx::string::substr(input_, start, pos_ - start),
+    const auto lexeme{stdx::string::substr(input_, start, pos_ - start)};
+    return {is_valid_utf8(lexeme) ? token_type_t::IDENT : token_type_t::ILLEGAL,
+            lexeme,
             start_line,
             start_col};
 }
@@ -559,30 +561,23 @@ auto lexer::read_multiline_string() noexcept -> token_t {
     };
 }
 
-// Reads a byte literal returning an illegal token for malformed literals.
+// Reads a character literal, returning an illegal token for an unterminated one.
 //
 // Assumes that the surrounding single quotes have not been consumed.
-auto lexer::read_byte_literal() noexcept -> token_t {
+auto lexer::read_char_literal() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
     read_character();
 
-    // Consume one logical character
-    // An unknown escape still lexes; the parser reports it as UNKNOWN_CHARACTER_ESCAPE
-    if (current_byte_ == '\\') {
-        read_escape();
+    // Everything up to the closing quote; the parser checks it holds exactly one code point, and
+    // reports a malformed escape at the escape itself
+    while (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r' && !at_end()) {
+        if (current_byte_ == '\\') { DISCARD(read_escape()); }
         read_character();
-    } else if (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r') {
-        read_character();
-    } else {
-        return {token_type_t::ILLEGAL,
-                stdx::string::substr(input_, start, pos_ - start),
-                start_line,
-                start_col};
     }
 
-    // The next character MUST be closing ', otherwise illegally consume like a comment
+    // No closing quote on the line: illegally consume like a comment
     if (current_byte_ != '\'') {
         auto illegal_end{pos_};
         while (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r' &&
@@ -605,8 +600,10 @@ auto lexer::read_byte_literal() noexcept -> token_t {
     }
     read_character();
 
-    return {
-        token_type_t::U8, stdx::string::substr(input_, start, pos_ - start), start_line, start_col};
+    return {token_type_t::CHAR,
+            stdx::string::substr(input_, start, pos_ - start),
+            start_line,
+            start_col};
 }
 
 // Reads a comment from the token, assuming the '//' operator has been consumed

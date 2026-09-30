@@ -54,4 +54,33 @@ TEST_CASE("apply_content_changes falls back to a full replace when a change has 
     CHECK(lsp::apply_content_changes(std::move(text), changes) == "brand new content");
 }
 
+TEST_CASE("positions convert between bytes and the negotiated encoding") {
+    // "😀" is four bytes and two UTF-16 units; "é" is two bytes and one unit
+    constexpr std::string_view text{"a\xF0\x9F\x98\x80"
+                                    "b\n\xC3\xA9x\n"};
+    lsp::set_position_encoding(lsp::position_encoding::UTF16);
+    CHECK(lsp::client_position(text, {0, 5}).at("character") == 3);
+    CHECK(lsp::client_position(text, {1, 2}).at("character") == 1);
+    CHECK(lsp::source_position(text, {{"line", 0}, {"character", 3}}).column == 5);
+    CHECK(lsp::source_position(text, {{"line", 1}, {"character", 1}}).column == 2);
+    // A column past the line's end stays past it
+    CHECK(lsp::client_position(text, {0, 7}).at("character") == 5);
+
+    lsp::set_position_encoding(lsp::position_encoding::UTF8);
+    CHECK(lsp::client_position(text, {0, 5}).at("character") == 5);
+    CHECK(lsp::source_position(text, {{"line", 0}, {"character", 5}}).column == 5);
+    lsp::set_position_encoding(lsp::position_encoding::UTF16);
+}
+
+TEST_CASE("apply_content_changes reads UTF-16 ranges on a line with an emoji") {
+    lsp::set_position_encoding(lsp::position_encoding::UTF16);
+    std::string          text{"const @\"\xF0\x9F\x98\x80\" := 5;\n"};
+    const nlohmann::json changes{
+        {{"range",
+          {{"start", {{"line", 0}, {"character", 15}}}, {"end", {{"line", 0}, {"character", 16}}}}},
+         {"text", "42"}}};
+    CHECK(lsp::apply_content_changes(std::move(text), changes) ==
+          "const @\"\xF0\x9F\x98\x80\" := 42;\n");
+}
+
 } // namespace ghoti::tests

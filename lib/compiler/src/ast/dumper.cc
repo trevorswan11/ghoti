@@ -20,6 +20,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/indent.hh"
@@ -370,7 +371,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
 
 auto dumper::visit(node_id id, const identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
-    fmt::print(out_, "IdentifierExpression: {}", ident);
+    fmt::print(out_, "IdentifierExpression: {}", syntax::ascii_spelling(ident.name));
     if (syntax::get_builtin_opt(id.get_token_type())) {
         fmt::print(out_, " (builtin)");
     } else if (syntax::token_type::is_primitive(id.get_token_type())) {
@@ -1164,7 +1165,7 @@ auto dumper::visit(node_id, const test_stmt& test) -> void {
 auto dumper::visit(explicit_type_id id, const identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
     fmt::print(out_, "{}", indent_.current_branch());
-    fmt::print(out_, "IdentifierExpression: {}", ident);
+    fmt::print(out_, "IdentifierExpression: {}", syntax::ascii_spelling(ident.name));
     if (syntax::get_builtin_opt(id.get_token_type())) {
         fmt::print(out_, " (builtin)");
     } else if (syntax::token_type::is_primitive(id.get_token_type())) {

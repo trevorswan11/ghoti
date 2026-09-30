@@ -161,9 +161,13 @@ auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
     }
 }
 
-auto fit_float(f128 value, const type& t) -> f128 {
+auto fit_float(f128 value, const type& t, stdx::option<math_origin> origin) -> f128 {
     const auto format{float_format_of(t)};
-    return format ? value.round_to(*format) : value;
+    if (!format) { return value; }
+    if (origin && is_float(t.get_kind())) {
+        return evaluate(origin->function, origin->input, *format);
+    }
+    return value.round_to(*format);
 }
 
 auto constexpr_float_fits(f128 value, const type& target) -> bool {
@@ -414,8 +418,8 @@ auto cast_rejection_reason(const type&                        from,
     if (is_float(from_kind) && is_float(to_kind)) {
         if (float_bits(from_kind) > float_bits(to_kind)) {
             return fmt::format(
-                "narrowing conversion from '{}' to '{}' may lose precision; use @as for an "
-                "explicit conversion",
+                "narrowing conversion from '{}' to '{}' may lose precision; use @floatCast for "
+                "an explicit conversion",
                 from.to_string(names),
                 to.to_string(names));
         }

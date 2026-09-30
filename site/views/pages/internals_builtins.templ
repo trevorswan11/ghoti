@@ -21,13 +21,16 @@ templ InternalsBuiltinsPage() {
 	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
 	<h3>{ "@as" }</h3>
 	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
-	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> { "for" } <code>bool</code>, <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> { "for" } enums, and <code>{ "@intFromFloat" }</code> / <code>{ "@floatFromInt" }</code> { "for" } float &harr; integer conversions that could lose information. An integer whose every value the float represents exactly (e.g. <code>i32</code> to <code>f64</code>) still converts with <code>{ "@as" }</code>, or implicitly.</p>
+	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> { "for" } <code>bool</code>, <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> { "for" } enums, and <code>{ "@intFromFloat" }</code> / <code>{ "@floatFromInt" }</code> { "for" } float &harr; integer conversions that could lose information, and <code>{ "@floatCast" }</code> to narrow a float. An integer whose every value the float represents exactly (e.g. <code>i32</code> to <code>f64</code>) still converts with <code>{ "@as" }</code>, or implicitly.</p>
 	<h3>{ "@intFromFloat" }</h3>
 	<pre><code class="language-ghoti">{ `@intFromFloat(T: type, expression: auto): T` }</code></pre>
 	<p>Converts a float to the integer type <code>T</code>, truncating toward zero. <code>T</code> can be omitted when inferable from context. A compile-time-known operand that doesn't fit <code>T</code> is a compile error; at runtime, under runtime safety, an out-of-range or NaN operand panics.</p>
 	<h3>{ "@floatFromInt" }</h3>
 	<pre><code class="language-ghoti">{ `@floatFromInt(T: type, expression: auto): T` }</code></pre>
 	<p>Converts an integer to the float type <code>T</code>, rounding to the nearest representable value when it isn't exact (e.g. <code>16777217</code> becomes <code>16777216.0</code> as an <code>f32</code>). <code>T</code> can be omitted when inferable from context.</p>
+	<h3>{ "@floatCast" }</h3>
+	<pre><code class="language-ghoti">{ `@floatCast(T: type, expression: auto): T` }</code></pre>
+	<p>Converts a float to the float type <code>T</code>, whether that narrows, widens, or keeps the type, rounding to the nearest representable value. <code>T</code> can be omitted when inferable from context. A compile-time-known finite operand that overflows <code>T</code> is a compile error; at runtime the conversion follows IEEE 754 and an overflow rounds to infinity, with no runtime safety check. An integer operand is rejected; use <code>{ "@floatFromInt" }</code>.</p>
 	<h3>{ "@backingInt" }</h3>
 	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
 	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>
@@ -77,8 +80,8 @@ templ InternalsBuiltinsPage() {
 		<li>anything else &rarr; <code>{ "@sizeOf" }(T) * 8</code></li>
 	</ul>
 	<h3>{ "@TypeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@TypeOf(expression: auto): type` }</code></pre>
-	<p>Returns the type of the provided expression.</p>
+	<pre><code class="language-ghoti">{ `@TypeOf(expressions: auto...): type` }</code></pre>
+	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> { "for" } <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
 	<h3>{ "@this" }</h3>
 	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
 	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>
@@ -141,6 +144,11 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@popCount" }</h3>
 	<pre><code class="language-ghoti">{ `@popCount(expression: auto): uN` }</code></pre>
 	<p>Computes the number of set bits in the expression's binary representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
+	<h3>{ "@sqrt, @sin, @cos, @tan, @exp, @exp2, @log, @log2, @log10, @floor, @ceil" }</h3>
+	<pre><code class="language-ghoti">{ `@sin(x: T): T` }</code></pre>
+	<p>Square root, the trigonometric functions (in radians), <code>e^x</code>, <code>2^x</code>, the natural, base-2, and base-10 logarithms, and rounding down or up to a whole number. <code>x</code> is a float of any type and the result has the same type; an integer is rejected, so convert it with <code>{ "@floatFromInt" }</code> first. An untyped constant takes the float type its context asks for, or stays an untyped float.</p>
+	<p>At compile time every result is <strong>correctly rounded</strong>: the exact mathematical value rounded once to the nearest value of the result type, whatever the argument's size (<code>{ "@sin" }(1e300)</code> reduces the argument exactly). An untyped result that later lands in a narrower type is computed again in that type rather than rounded twice. Special values follow IEEE 754: <code>{ "@log" }(0.0)</code> is negative infinity, <code>{ "@sqrt" }(-1.0)</code> is NaN, and a finite <code>{ "@exp" }</code> result past the type's range is a compile error.</p>
+	<p>At runtime <code>{ "@sqrt" }</code>, <code>{ "@floor" }</code>, and <code>{ "@ceil" }</code> use the target's instructions where it has them. The others call the target's math routines from compiler_rt (<code>sinf</code>, <code>sin</code>, ...; <code>f16</code> goes through the <code>f32</code> routine), so their accuracy is whatever those routines provide.</p>
 	<h3>{ "@abs" }</h3>
 	<pre><code class="language-ghoti">{ `@abs(expression: auto): @TypeOf(expression)` }</code></pre>
 	<p>Computes the absolute value of the passed expression. For a signed integer, <code>{ "@abs" }(MIN)</code> has no result: it is a compile error when folded and a panic under runtime safety.</p>
@@ -151,7 +159,7 @@ templ InternalsBuiltinsPage() {
 @max(a: T, b: T): T` }
 		</code>
 	</pre>
-	<p>Smallest / largest of two operands of the same integer or floating-point type. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
+	<p>Smallest / largest of two integer or floating-point operands, which are converted to their <a href="/doc/syntax/types">peer type</a> <code>T</code> first. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
 	<h3>{ "@divTrunc / @divFloor / @rem / @mod" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -161,10 +169,10 @@ templ InternalsBuiltinsPage() {
 @mod(a: T, b: T): T       // modulo; sign follows the divisor` }
 		</code>
 	</pre>
-	<p>Integer-only. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety.</p>
+	<p>Integer-only; the operands are converted to their peer type <code>T</code> first. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
-	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
+	<p>Integer-only. The operands are converted to their peer type <code>T</code>, which is what <code>result</code> must point at; a shift's count keeps its own type. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
 	<h2>Atomics</h2>
 	<p>
 		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums that must be referenced through the <code>{ "builtin" }</code> module; e.g. <code>{ "builtin::MemoryOrder.seq_cst" }</code>, <code>{ "builtin::AtomicRmwOp.add" }</code> &mdash; and given as a compile-time constant; a runtime value is a compile error.

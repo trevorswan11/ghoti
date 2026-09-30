@@ -40,6 +40,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -48,6 +49,7 @@
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -206,6 +208,47 @@ template <typename T>
         if (t && sema::is_float(t->get_kind())) { return t; }
     }
     return lhs.get_type() ? lhs.get_type() : rhs.get_type();
+}
+
+// The peer type two concrete numbers of different types meet at; a shift keeps its left type
+[[nodiscard]] auto numeric_operand_peer(sema::context&       ctx,
+                                        const const_value&   lhs,
+                                        const const_value&   rhs,
+                                        syntax::token_type_t op) -> stdx::option<sema::type&> {
+    switch (op) {
+    case syntax::token_type_t::SHL:
+    case syntax::token_type_t::SHR:
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::SHL_PIPE:    return stdx::none;
+    default:                                break;
+    }
+
+    const auto lhs_type{lhs.get_type()};
+    const auto rhs_type{rhs.get_type()};
+    const auto is_concrete_number{[](const sema::type& t) {
+        return sema::is_integer(t.get_kind()) || sema::is_float(t.get_kind());
+    }};
+    if (!lhs_type || !rhs_type || !is_concrete_number(*lhs_type) ||
+        !is_concrete_number(*rhs_type) || sema::is_same_unqualified(*lhs_type, *rhs_type)) {
+        return stdx::none;
+    }
+    const std::array operands{sema::peer_operand{lhs_type.get()},
+                              sema::peer_operand{rhs_type.get()}};
+    const auto       peer{sema::peer_type(ctx, operands)};
+    if (!peer) { return stdx::none; }
+    return **peer;
+}
+
+// `v` as a value of its peer type; every such conversion is exact
+[[nodiscard]] auto as_peer(const const_value& v, sema::type& peer) -> const_value {
+    if (const auto format{sema::float_format_of(peer)}; format && !v.is<f128>()) {
+        if (const auto converted{v.int_as_float_opt(*format)}) {
+            return const_value{*converted, peer};
+        }
+    }
+    auto retyped{v};
+    retyped.set_type(peer);
+    return retyped;
 }
 
 // The plain base op a wrapping token folds through
@@ -2847,6 +2890,11 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     ast::node_id         id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
 
+    // Operands of different concrete number types are converted to their peer type first
+    if (const auto peer{numeric_operand_peer(ctx_, lhs, rhs, op_type)}) {
+        return fold_binary_values(op_type, as_peer(lhs, *peer), as_peer(rhs, *peer), id);
+    }
+
     // A wrapping or saturating operator on a concrete integer type has its own shared meaning
     if ((wrapping_base_op(op_type) || saturating_base_op(op_type)) && is_integer_arm(lhs) &&
         is_integer_arm(rhs)) {
@@ -3583,6 +3631,26 @@ auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call
     return module_->get_sema_type_opt(call.function);
 }
 
+auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_expr& ident)
+    -> stdx::option<sema::type&> {
+    if (call_stack_.empty()) { return stdx::none; }
+    const auto table_idx{module_->get_symbol_table_opt(use)};
+    if (!table_idx) { return stdx::none; }
+    const auto sym{ctx_.registry.get(*table_idx).get_opt(ident.name)};
+    const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+    const auto decl{node ? module_->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    if (!decl || !decl->explicit_type) { return stdx::none; }
+
+    const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl->explicit_type)};
+    const bool plain{decl->explicit_type->get_modifier().get_raw() ==
+                     ast::type_modifier::modifier::VALUE};
+    if (!named || !plain) { return stdx::none; }
+    const auto annotated{lookup_local_binding(named->name)};
+    const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>() : stdx::none};
+    if (!bound || !*bound) { return stdx::none; }
+    return **bound;
+}
+
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
                               syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
@@ -3703,12 +3771,51 @@ auto const_eval::eval_builtin(ast::node_id          id,
     }
     case syntax::token_type_t::BUILTIN_TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto& arg{call.arguments.front()};
-        if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            const auto target_type{module_->get_sema_type_opt(*expr_h)};
+        // A local of the call being evaluated has this call's type, which the shared body's
+        // own typing can't know
+        const auto type_of_operand{
+            [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
+                const auto expr_h{arg.as_opt<ast::expr_handle>()};
+                if (!expr_h) { return stdx::none; }
+                if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(*expr_h)}) {
+                    for (const auto& frame : call_stack_ | std::views::reverse) {
+                        const auto it{frame.bindings.find(ident->name)};
+                        if (it == frame.bindings.end()) { continue; }
+                        // An `undefined` initializer says nothing about the local's type
+                        const auto bound{it->second.get_type()};
+                        if (bound && bound->get_kind() != sema::type_kind::UNDEFINED) {
+                            return bound;
+                        }
+                        break;
+                    }
+                    if (const auto annotated{call_local_annotation(*expr_h, *ident)}) {
+                        return annotated;
+                    }
+                }
+                return module_->get_sema_type_opt(*expr_h);
+            }};
+        if (call.arguments.size() == 1) {
+            const auto target_type{type_of_operand(call.arguments.front())};
             if (target_type) { return const_value{target_type}; }
+            return stdx::none;
         }
-        return stdx::none;
+        // Several operands name the type they would meet at
+        std::vector<sema::peer_operand> operands;
+        for (const auto& arg : call.arguments) {
+            const auto operand_type{type_of_operand(arg)};
+            if (!operand_type) { return stdx::none; }
+            operands.emplace_back(&force_deferred_type(*operand_type));
+        }
+        const auto peer{sema::peer_type(ctx_, operands)};
+        if (!peer) {
+            ctx_.diags.emplace_back(
+                fmt::format("'@TypeOf': {}",
+                            sema::peer_error_message(ctx_, operands, peer.error())),
+                sema::error::NO_PEER_TYPE,
+                module_->ast.location_of(call.function));
+            return const_value::make_poison();
+        }
+        return const_value{stdx::option<sema::type&>{**peer}};
     }
     case syntax::token_type_t::BUILTIN_IMPLEMENTS: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
@@ -3837,6 +3944,54 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;
     }
+    case syntax::token_type_t::BUILTIN_SQRT:
+    case syntax::token_type_t::BUILTIN_SIN:
+    case syntax::token_type_t::BUILTIN_COS:
+    case syntax::token_type_t::BUILTIN_TAN:
+    case syntax::token_type_t::BUILTIN_EXP:
+    case syntax::token_type_t::BUILTIN_EXP2:
+    case syntax::token_type_t::BUILTIN_LOG:
+    case syntax::token_type_t::BUILTIN_LOG2:
+    case syntax::token_type_t::BUILTIN_LOG10:
+    case syntax::token_type_t::BUILTIN_FLOOR:
+    case syntax::token_type_t::BUILTIN_CEIL:  {
+        const auto function{*semantics::math_function_of(builtin_type)};
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (!expr_h) { return stdx::none; }
+        const auto arg{try_eval(*expr_h)};
+        if (!arg) { return stdx::none; }
+        stdx::option<f128> input;
+        if (const auto as_float{arg->as_opt<f128>()}) {
+            input.emplace(*as_float);
+        } else if (const auto as_int{arg->int_as_float_opt()}) {
+            input.emplace(*as_int);
+        }
+        if (!input) { return stdx::none; }
+
+        // The call's own type decides the format: an untyped operand in a typed context is
+        // computed straight into that type
+        auto       result_type{id.is_valid() ? module_->get_sema_type_opt(id) : arg->get_type()};
+        const bool concrete{result_type && sema::is_float(result_type->get_kind())};
+        const auto format{concrete ? sema::float_format_of(*result_type) : stdx::none};
+        const auto result{evaluate_traced(function, *input, format.value_or(float_format::QUAD))};
+        if (result.overflowed) {
+            ctx_.diags.emplace_back(
+                fmt::format("'{}' of {} is out of range for type '{}'",
+                            *syntax::get_builtin_opt(builtin_type),
+                            *input,
+                            result_type ? ctx_.type_display_name(*result_type) : "f128"),
+                sema::error::LITERAL_OUT_OF_RANGE,
+                module_->ast.location_of(*expr_h));
+            return const_value::make_poison();
+        }
+        const_value folded{result.value, result_type};
+        // sqrt, floor and ceil survive a second rounding; the others don't
+        const bool exact_enough{function == math_function::SQRT ||
+                                function == math_function::FLOOR ||
+                                function == math_function::CEIL};
+        if (!concrete && !exact_enough) { folded.set_origin({function, *input}); }
+        return folded;
+    }
     case syntax::token_type_t::BUILTIN_CLZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
@@ -3897,9 +4052,14 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto a_h{call.arguments[0].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[1].as_opt<ast::expr_handle>()};
         if (!a_h || !b_h) { return stdx::none; }
-        const auto a{try_eval(*a_h)};
-        const auto b{try_eval(*b_h)};
+        auto a{try_eval(*a_h)};
+        auto b{try_eval(*b_h)};
         if (!a || !b) { return stdx::none; }
+        // Operands of different concrete number types meet at their peer type
+        if (const auto peer{numeric_operand_peer(ctx_, *a, *b, builtin_type)}) {
+            a = as_peer(*a, *peer);
+            b = as_peer(*b, *peer);
+        }
         if (is_integer_arm(*a) && is_integer_arm(*b)) {
             const auto type{module_->get_sema_type_opt(id)};
             const auto width{type ? integer_target_width(*type, target_pointer_bits())
@@ -4294,6 +4454,31 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
+    case syntax::token_type_t::BUILTIN_FLOAT_CAST: {
+        const auto op_h{cast_operand(call)};
+        if (!op_h) { return stdx::none; }
+        const auto operand{try_eval(*op_h)};
+        auto       target{builtin_result_type(id, call)};
+        if (!operand || !target) { return stdx::none; }
+        const auto         format{sema::float_format_of(*target)};
+        stdx::option<f128> f;
+        if (const auto as_float{operand->as_opt<f128>()}) {
+            f.emplace(*as_float);
+        } else if (const auto as_int{operand->int_as_float_opt()}) {
+            f.emplace(*as_int);
+        }
+        if (!format || !f) { return stdx::none; }
+        // Rounded once into the target; only a finite value can be out of range
+        if (!sema::constexpr_float_fits(*f, *target)) {
+            ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                *f,
+                                                ctx_.type_display_name(*target)),
+                                    sema::error::LITERAL_OUT_OF_RANGE,
+                                    module_->ast.location_of(*op_h));
+            return const_value::make_poison();
+        }
+        return const_value{f->round_to(*format), target};
+    }
     case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
     case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT: {
         const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
@@ -4517,6 +4702,17 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
                                                  decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     auto                                   value{try_eval(*decl.value)};
     if (value && decl.explicit_type) {
+        // Inside a call, an annotation naming a type parameter means this call's argument; the
+        // shared body's typing only knows the parameter
+        const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl.explicit_type)};
+        const bool plain{decl.explicit_type->get_modifier().get_raw() ==
+                         ast::type_modifier::modifier::VALUE};
+        if (!call_stack_.empty() && named && plain) {
+            const auto annotated{lookup_local_binding(named->name)};
+            const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>()
+                                       : stdx::none};
+            if (bound && *bound) { return with_declared_type(std::move(*value), **bound); }
+        }
         if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
             return with_declared_type(std::move(*value), *declared);
         }
@@ -4544,6 +4740,26 @@ auto const_eval::eval_call_args(const ast::call_expr& call)
     }
     return args;
 }
+
+namespace {
+
+// A number or bool passed where a parameter takes an array, slice, struct, union, or function
+[[nodiscard]] auto binds_number_to_non_number(const sema::type& arg, const sema::type& param)
+    -> bool {
+    const auto arg_kind{arg.get_kind()};
+    const bool scalar{sema::is_numeric(arg_kind) || sema::is_constexpr_numeric(arg_kind) ||
+                      arg_kind == sema::type_kind::BOOL};
+    switch (param.get_kind()) {
+    case sema::type_kind::ARRAY:
+    case sema::type_kind::SLICE:
+    case sema::type_kind::STRUCT:
+    case sema::type_kind::UNION:
+    case sema::type_kind::FUNCTION: return scalar;
+    default:                        return false;
+    }
+}
+
+} // namespace
 
 auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
                                    const ast::function_expr&         fn_expr,
@@ -4586,6 +4802,22 @@ auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
         }
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
+            // A folded call never reaches the type checker, so a number can't stand in for an
+            // aggregate or a sequence here
+            const auto param_type{module_->get_sema_type_opt(param.name)};
+            const auto arg_type{args[arg_idx].get_type()};
+            if (param_type && arg_type && binds_number_to_non_number(*arg_type, *param_type)) {
+                const auto at{call_id.is_valid() ? module_->ast.location_of(call_id)
+                                                 : module_->ast.location_of(param.name)};
+                ctx_.diags.emplace_back(
+                    fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
+                                arg_idx + 1 - (has_self ? 1 : 0),
+                                ctx_.type_display_name(*arg_type),
+                                ctx_.type_display_name(*param_type)),
+                    sema::error::TYPE_MISMATCH,
+                    at);
+                return const_value::make_poison();
+            }
             frame.bindings.emplace(ident.name, args[arg_idx++]);
         } else {
             ++arg_idx;

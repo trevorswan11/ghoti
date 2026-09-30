@@ -163,6 +163,12 @@ struct context {
     // Gets the already-resolved poison type from the pool
     [[nodiscard]] auto get_poison() -> type&;
 
+    // A character literal's untyped constant: `constexpr_int`, but `u21` once it needs a type
+    [[nodiscard]] auto get_char_constant() -> type&;
+    // The concrete type an untyped `t` takes when nothing asks for one: `i32`, `u21` for a
+    // character constant, or `f64`; any other type is itself
+    [[nodiscard]] auto default_concrete(type& t) -> type&;
+
     // Pools and resolves the arbitrary-width integer type `iN` / `uN`
     [[nodiscard]] auto get_int(u16                              bits,
                                bool                             is_signed,

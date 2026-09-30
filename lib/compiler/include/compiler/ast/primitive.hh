@@ -32,6 +32,8 @@ struct int_literal_expr {
     bool                 is_size{false};
     syntax::numeric_base base{syntax::numeric_base::DECIMAL};
     std::string_view     spelling;
+    // A character literal: an untyped code point that defaults to `u21`
+    bool is_char{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

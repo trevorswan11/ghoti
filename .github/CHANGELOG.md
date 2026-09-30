@@ -555,6 +555,33 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a type declaration emitted a zeroed global the size of the type, so declaring a huge type (`struct { data: [100000000000]u8 }`) ran the compiler out of memory writing the object file
 - Fixed: more malformed programs crashed the compiler instead of reporting an error, including a type whose layout depends on its own `@sizeOf`/`@alignOf`, assigning to an array's `.len`, indexing a block, `@cfg` inside an `if` used as an operand, and passing a type (or the `type` keyword) where a value is expected, including to a generic `[]T` parameter
 - Fixed: some operations on 128-bit and odd-width integers (`+|`, `-|`, `-%`, `~`) could not be folded, or folded to a different value than the one computed at runtime
+- Values of different types now meet at their *peer type*: the one operand type every other widens into
+    - Mixed-width arithmetic, bitwise operators, and comparisons convert both sides first: `an_i8 + an_i64` is an `i64`, `a_u32 < an_i64` compares as `i64`, and `an_i32 * an_f64` is an `f64`
+    - The arms of an `if` or `match` and the values a label is broken with meet the same way, replacing "the first arm decides"; an arm that leaves (`return`, `break`, a `noreturn` call) takes no part
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@rem`, `@mod`, and the `*WithOverflow` builtins convert their operands to the peer type (`@shlWithOverflow`'s count keeps its own)
+    - Pointers and slices meet at the least mutable (`^mut T` with `^T` is `^T`), `nullptr` takes the pointer's type, and arrays of different lengths meet as a slice of their element
+    - No type is invented: `i32` with `u32`, or `i64` with `f64`, is a `NO_PEER_TYPE` error naming both types and the cast to write
+    - Compile-time folding converts operands the same way, so a folded mixed-type expression equals the one computed at runtime
+- Fixed `f(fn(x: i32): i32 { ... })[i]`: a function literal passed to a call whose result is indexed crashed the compiler
+- A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
+- A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
+- A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- Unicode escapes: `\u{H...}` encodes a scalar value as UTF-8, and `\xHH` is one raw byte, in strings, character literals, and raw identifiers (#325); a malformed escape is reported at the escape
+- **Breaking:** a character literal is its code point, an untyped integer constant that defaults to `u21` (`var c := 'a';` is a `u21`); it still coerces to `u8` wherever one is expected, and `'é'`, `'😀'`, and `'\u{1F600}'` work. A literal with more than one code point is an error
+- Raw identifiers must be valid UTF-8, match byte for byte after decoding escapes (no normalization), and stay raw when formatted (#326)
+- Diagnostics place the caret by display width, so it lines up after emoji, CJK text, and combining marks; a diagnostic's file path prints as UTF-8 on Windows instead of through the code page
+- `ghoti lsp` speaks UTF-16 positions by default and UTF-8 when the client offers it (`positionEncoding`), so hover, go-to-definition, references, rename, diagnostics, and edits land correctly on lines with non-ASCII text
+- `ghoti fmt` measures line width in display columns
+- `@sqrt`, `@sin`, `@cos`, `@tan`, `@exp`, `@exp2`, `@log`, `@log2`, `@log10`, `@floor`, and `@ceil` are back (#352)
+    - Folded at compile time with correct rounding in every float type, including exact reduction of huge trigonometric arguments; an untyped result is computed again in the type it lands in rather than rounded twice
+    - At runtime `@sqrt`/`@floor`/`@ceil` use LLVM's intrinsics and the rest call the target's math routines directly (never `llvm.sin` and friends, which LLVM folds with the host's libm)
+- `@floatCast(T, x)` converts between float types, narrowing or widening, rounding to nearest (#349)
+    - A compile-time finite value that overflows `T` is a compile error; at runtime an overflow rounds to an infinity, with no safety check
+    - **Breaking:** `@as` no longer narrows a float (`@as(f32, some_f64)`); use `@floatCast`. Widening and literal coercion (`@as(f32, 0.1)`) are unchanged
+- `@TypeOf(a, b, ...)` takes any number of operands and returns their peer type, in type positions, `if constexpr` conditions, and generic signatures (`fn(a: auto, b: auto): @TypeOf(a, b)`)
+- Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
+- Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)
+- Fixed: `if (c) value else return e` stored a `void` into the result instead of skipping the arm
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

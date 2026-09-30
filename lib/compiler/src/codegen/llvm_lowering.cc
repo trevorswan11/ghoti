@@ -1,4 +1,5 @@
 #include "compiler/codegen/llvm_lowering.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 
 #include <algorithm>
 #include <array>
@@ -52,12 +53,14 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/gir/semantics.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::codegen {
@@ -1831,8 +1834,12 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
         return dummy;
     }
 
-    auto*      slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
-    const auto wanted{
+    // Every slot lives in the entry block: one placed where a loop body declares it would take
+    // fresh stack on each iteration
+    auto&             entry{builder_.GetInsertBlock()->getParent()->getEntryBlock()};
+    llvm::IRBuilder<> entry_builder{&entry, entry.getFirstInsertionPt()};
+    auto*             slot{entry_builder.CreateAlloca(elem_ty, nullptr, "slot")};
+    const auto        wanted{
         std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
     if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }
     if (inst.result) { set_local(*inst.result, slot); }
@@ -2548,6 +2555,42 @@ auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::
     return res;
 }
 
+auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value* {
+    auto* type{operand->getType()};
+    // Exact operations: LLVM's intrinsics, and its folding of them, give the one right answer
+    const auto exact{[&]() -> stdx::option<llvm::Intrinsic::ID> {
+        switch (function) {
+        case math_function::SQRT:  return llvm::Intrinsic::sqrt;
+        case math_function::FLOOR: return llvm::Intrinsic::floor;
+        case math_function::CEIL:  return llvm::Intrinsic::ceil;
+        default:                   return stdx::none;
+        }
+    }()};
+    if (exact) {
+        auto* fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), *exact, {type})};
+        return builder_.CreateCall(fn, {operand});
+    }
+
+    // `f16` has no routine of its own; it goes through `f32` like LLVM's own libcalls do
+    if (type->isHalfTy()) {
+        auto* widened{builder_.CreateFPExt(operand, builder_.getFloatTy(), "math.ext")};
+        return builder_.CreateFPTrunc(emit_math_call(function, widened), type, "math.trunc");
+    }
+
+    // A direct, `nobuiltin` call rather than `llvm.sin` and friends: LLVM folds those with the
+    // host's libm, which would replace a correctly rounded constant with a host-dependent one
+    const auto format{type->isFloatTy()      ? float_format::SINGLE
+                      : type->isDoubleTy()   ? float_format::DOUBLE
+                      : type->isX86_FP80Ty() ? float_format::X87
+                                             : float_format::QUAD};
+    const auto name{math_libcall_name(llvm_module_->getTargetTriple(), function, format)};
+    auto*      fn_type{llvm::FunctionType::get(type, {type}, false)};
+    auto       callee{llvm_module_->getOrInsertFunction(name, fn_type)};
+    auto*      call{builder_.CreateCall(callee, {operand})};
+    call->addFnAttr(llvm::Attribute::NoBuiltin);
+    return call;
+}
+
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     stdx::option<syntax::token_type_t> builtin_tok;
@@ -2794,6 +2837,23 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 return builder_.CreateAdd(mul, c, "add");
             }
             return nullptr;
+        }
+
+        case syntax::token_type_t::BUILTIN_SQRT:
+        case syntax::token_type_t::BUILTIN_SIN:
+        case syntax::token_type_t::BUILTIN_COS:
+        case syntax::token_type_t::BUILTIN_TAN:
+        case syntax::token_type_t::BUILTIN_EXP:
+        case syntax::token_type_t::BUILTIN_EXP2:
+        case syntax::token_type_t::BUILTIN_LOG:
+        case syntax::token_type_t::BUILTIN_LOG2:
+        case syntax::token_type_t::BUILTIN_LOG10:
+        case syntax::token_type_t::BUILTIN_FLOOR:
+        case syntax::token_type_t::BUILTIN_CEIL:  {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            auto* operand{lower_value(inst.operands[0])};
+            if (!operand || !operand->getType()->isFloatingPointTy()) { return nullptr; }
+            return emit_math_call(*gir::semantics::math_function_of(*builtin_tok), operand);
         }
 
         case syntax::token_type_t::BUILTIN_ABS: {

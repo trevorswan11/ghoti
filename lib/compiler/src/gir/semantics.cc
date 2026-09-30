@@ -13,6 +13,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir::semantics {
@@ -466,6 +467,24 @@ auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op> 
     case tt::BUILTIN_MIN: return float_op::MIN;
     case tt::BUILTIN_MAX: return float_op::MAX;
     default:              return stdx::none;
+    }
+}
+
+auto math_function_of(syntax::token_type_t token) noexcept -> stdx::option<math_function> {
+    using enum syntax::token_type_t;
+    switch (token) {
+    case BUILTIN_SQRT:  return math_function::SQRT;
+    case BUILTIN_SIN:   return math_function::SIN;
+    case BUILTIN_COS:   return math_function::COS;
+    case BUILTIN_TAN:   return math_function::TAN;
+    case BUILTIN_EXP:   return math_function::EXP;
+    case BUILTIN_EXP2:  return math_function::EXP2;
+    case BUILTIN_LOG:   return math_function::LOG;
+    case BUILTIN_LOG2:  return math_function::LOG2;
+    case BUILTIN_LOG10: return math_function::LOG10;
+    case BUILTIN_FLOOR: return math_function::FLOOR;
+    case BUILTIN_CEIL:  return math_function::CEIL;
+    default:            return stdx::none;
     }
 }
 

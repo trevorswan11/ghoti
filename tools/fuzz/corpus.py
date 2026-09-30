@@ -45,7 +45,7 @@ def mutate(src, rng):
     toks = tokens(src)
     if len(toks) < 4:
         return src
-    kind = rng.randrange(7)
+    kind = rng.randrange(8)
     i = rng.randrange(len(toks))
     if kind == 0:  # truncate
         return "".join(toks[:i])
@@ -125,9 +125,24 @@ def mutate(src, rng):
             "import",
             "extern",
             "export",
+            '@"😀"',
+            '@"caf\\u{E9}"',
+            '"你好\\u{1F600}"',
+            '"\\xFF"',
+            "'é'",
+            "'😀'",
+            "'\\u{10FFFF}'",
+            "'ab'",
+            '"\\u{D800}"',
         ]
         toks[i] = " " + rng.choice(pool) + " "
         return "".join(toks)
+    if kind == 7:  # rename an identifier to a non-ASCII raw identifier everywhere
+        names = sorted({t for t in toks if t.isidentifier() and t.isascii()})
+        if names:
+            name = rng.choice(names)
+            raw = rng.choice(['@"😀"', '@"内部"', '@"e\\u{301}"', '@"👨‍👩‍👧"'])
+            return "".join(raw if t == name else t for t in toks)
     if kind == 5:  # delete a span
         j = min(len(toks), i + rng.randrange(1, 12))
         return "".join(toks[:i] + toks[j:])

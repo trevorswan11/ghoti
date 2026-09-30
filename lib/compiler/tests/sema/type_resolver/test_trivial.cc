@@ -27,7 +27,7 @@ TEST_CASE("Builtin type resolution") {
     check_bi_type("1u32", "u32");
     check_bi_type("1u64", "u64");
     check_bi_type("1UZ", "usize");
-    check_bi_type("'1'", "u8");
+    check_bi_type("'1'", "constexpr_int"); // a character is an untyped code point
     check_bi_type("true", "bool");
     check_bi_type("{}", "void");
     check_bi_type("undefined", "undefined");

@@ -297,6 +297,20 @@ class type_resolver {
     };
     using attribute_refs = std::vector<gsl::not_null<const ast::attribute*>>;
 
+    // One value a construct may yield: an `if` or `match` arm, or what a `break` carries
+    struct result_value {
+        gsl::not_null<type*> type;
+        ast::node_id         at;
+    };
+
+    // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
+    struct enclosing_arm {
+        stdx::option<ast::expr_handle>       condition{}; // an `if` arm
+        bool                                 consequence{false};
+        stdx::option<const ast::match_expr&> match{}; // a `match` arm
+        usize                                arm_idx{0};
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -366,10 +380,11 @@ class type_resolver {
     auto               resolve_decl_attributes(ast::node_id          id,
                                                const ast::decl_stmt& decl,
                                                const type::data_t&   type_data) -> void;
-    // A literal's own list plus the function-only attributes of the declaration it initializes
-    // A generic `is_template` folds only the attributes whose arguments ignore its parameters
     // Whether an enclosing `if` condition or `match` matcher folds to rule out the current arm
     [[nodiscard]] auto in_dead_arm() -> bool;
+
+    // A literal's own list plus the function-only attributes of the declaration it initializes.
+    // A generic `is_template` folds only the attributes whose arguments ignore its parameters
     auto               resolve_fn_literal_attributes(ast::node_id              id,
                                                      const ast::function_expr& fn,
                                                      bool                      is_template = false) -> void;
@@ -578,6 +593,9 @@ class type_resolver {
     // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
     auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;
 
+    [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;
+    [[nodiscard]] auto peer_view(type& t) -> type&;
+
     // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
     auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
 
@@ -705,10 +723,10 @@ class type_resolver {
     std::vector<usize> resolving_aggregate_nodes_;
     // Stack of enclosing block statements and statement indices currently being resolved
     std::vector<active_block_frame> active_blocks_;
-
-    bool in_mutating_context_{false};
     // Member identifiers that resolved to an array's read-only `.len`/`.ptr`
     ankerl::unordered_dense::set<usize> structural_members_;
+
+    bool in_mutating_context_{false};
     // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
     bool dyn_unsized_ok_{false};
     bool for_generic_instantiation_{false};
@@ -716,13 +734,11 @@ class type_resolver {
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
     bool in_expr_branch_{false};
-    // The runtime `if` / `match` arms enclosing the node being resolved, innermost last
-    struct enclosing_arm {
-        stdx::option<ast::expr_handle>       condition{}; // an `if` arm
-        bool                                 consequence{false};
-        stdx::option<const ast::match_expr&> match{}; // a `match` arm
-        usize                                arm_idx{0};
-    };
+    bool arm_of_unused_{false};
+    // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
+    // Their arms need no common type.
+    ankerl::unordered_dense::set<usize> unused_value_nodes_;
+
     std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};

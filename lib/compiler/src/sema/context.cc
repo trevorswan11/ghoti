@@ -211,6 +211,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::FROM_BACKING_INT, params(t_type, t_auto), t_auto);
     inject_function(bis::INT_FROM_FLOAT, params(t_type, t_auto), t_auto);
     inject_function(bis::FLOAT_FROM_INT, params(t_type, t_auto), t_auto);
+    inject_function(bis::FLOAT_CAST, params(t_type, t_auto), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
@@ -251,6 +252,17 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::CTZ, params(t_auto), t_usize);
     inject_function(bis::POPCOUNT, params(t_auto), t_usize);
     inject_function(bis::ABS, params(t_auto), t_auto);
+    inject_function(bis::SQRT, params(t_auto), t_auto);
+    inject_function(bis::SIN, params(t_auto), t_auto);
+    inject_function(bis::COS, params(t_auto), t_auto);
+    inject_function(bis::TAN, params(t_auto), t_auto);
+    inject_function(bis::EXP, params(t_auto), t_auto);
+    inject_function(bis::EXP2, params(t_auto), t_auto);
+    inject_function(bis::LOG, params(t_auto), t_auto);
+    inject_function(bis::LOG2, params(t_auto), t_auto);
+    inject_function(bis::LOG10, params(t_auto), t_auto);
+    inject_function(bis::FLOOR, params(t_auto), t_auto);
+    inject_function(bis::CEIL, params(t_auto), t_auto);
 
     inject_function(bis::MIN, params(t_auto, t_auto), t_auto);
     inject_function(bis::MAX, params(t_auto, t_auto), t_auto);
@@ -356,6 +368,24 @@ auto context::inject_prelude() -> void {
     inject_types(registry.get(*prelude_index), pool);
     inject_functions(registry.get(*prelude_index), pool);
     inject_builtin_module(*this, *prelude_index);
+}
+
+auto context::get_char_constant() -> type& {
+    auto& type{*pool[{type_kind::CONSTEXPR_INT, types::mut::CONSTANT, CHAR_CONSTANT_BITS, false}]};
+    if (!type.is_resolved()) { type.resolve<types::builtin_type>(); }
+    return type;
+}
+
+auto context::default_concrete(type& t) -> type& {
+    switch (t.get_kind()) {
+    case type_kind::CONSTEXPR_INT:
+        if (t.get_key().get_int_bits() == CHAR_CONSTANT_BITS) {
+            return get_int(CHAR_CONSTANT_BITS, false);
+        }
+        return get_int(32, true);
+    case type_kind::CONSTEXPR_FLOAT: return get_builtin_resolved_type(type_kind::F64);
+    default:                         return t;
+    }
 }
 
 auto context::get_builtin_resolved_type(type_kind kind) -> type& {

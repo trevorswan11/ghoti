@@ -74,8 +74,10 @@ class emitter {
         segment_id                     break_target{0};
         segment_id                     continue_target{0};
         stdx::option<local_id>         result_slot{};
-        usize                          scope_depth{0};
-        bool                           is_constexpr{false};
+        // What a value broken with is converted to before it is stored
+        stdx::option<sema::type&> result_type{};
+        usize                     scope_depth{0};
+        bool                      is_constexpr{false};
     };
 
     struct iterable_info {
@@ -212,6 +214,8 @@ class emitter {
     auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
     auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
     [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    // The statement's value converted to the type its construct's values meet at
+    [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt, sema::type& peer) -> value;
     [[nodiscard]] auto retype_if_undefined(value v, sema::type& result_type) -> value;
 
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
@@ -389,6 +393,9 @@ class emitter {
     auto emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
+    // The type two concrete numeric operands of different types are converted to before they meet
+    [[nodiscard]] auto numeric_operand_peer(ast::expr_handle lhs, ast::expr_handle rhs)
+        -> stdx::option<sema::type&>;
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
     auto try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs) -> stdx::option<local_id>;
     auto emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id;

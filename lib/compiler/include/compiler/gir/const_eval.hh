@@ -130,6 +130,11 @@ class const_eval {
     // As above, and also through pointer, reference, slice, and function signature types
     [[nodiscard]] auto force_deferred_type(sema::type& maybe_deferred) -> sema::type&;
 
+    // The type a local of the call being evaluated was annotated with, when the annotation names
+    // one of the call's type parameters (`var a: T`); the shared body's typing only knows `T`
+    [[nodiscard]] auto call_local_annotation(ast::node_id use, const ast::identifier_expr& ident)
+        -> stdx::option<sema::type&>;
+
     // Forces a `fn(...): type` deferred-call type to the type it produces
     [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
 

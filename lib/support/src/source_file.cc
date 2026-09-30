@@ -1,5 +1,6 @@
 #include "support/source_file.hh"
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include <stdx/types.hh>
 
 #include "support/diagnostic.hh"
+#include "support/unicode.hh"
 
 namespace ghoti {
 
@@ -58,16 +60,22 @@ auto source_file::get_diagnostic_strings_at(const source_location& loc) const
     // Allow 1 past the end to accommodate missing semicolons
     if (true_col > substr.size() + 1) { return {substr, stdx::none}; }
 
-    // The caret gets put one after the column size since the location in 0-indexed
+    // The caret sits under the column's character, measured in display columns: a combining
+    // mark takes none and a wide character or emoji two. Tabs are copied so they line up.
+    const auto  prefix{substr.substr(0, std::min(true_col, substr.size()))};
     std::string caret_line;
-    caret_line.reserve(true_col + 1);
-    for (usize i{0}; i < true_col; ++i) {
-        if (i < substr.size() && substr[i] == '\t') {
-            caret_line += '\t';
-        } else {
-            caret_line += ' ';
-        }
+    usize       run_start{0};
+    const auto  pad_run{[&](usize end) {
+        caret_line.append(display_width(prefix.substr(run_start, end - run_start)), ' ');
+    }};
+    for (usize i{0}; i < prefix.size(); ++i) {
+        if (prefix[i] != '\t') { continue; }
+        pad_run(i);
+        caret_line += '\t';
+        run_start = i + 1;
     }
+    pad_run(prefix.size());
+    caret_line.append(true_col - prefix.size(), ' ');
     caret_line += '^';
 
     return {substr, std::move(caret_line)};

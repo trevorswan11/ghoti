@@ -21,16 +21,20 @@ namespace ghoti::codegen {
 auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::INT:             return llvm::IntegerType::get(context_, sema::int_width(type));
+    case sema::type_kind::INT:   return llvm::IntegerType::get(context_, sema::int_width(type));
     case sema::type_kind::ISIZE:
-    case sema::type_kind::USIZE:           return get_usize_ty();
-    case sema::type_kind::BOOL:            return get_int1_ty();
-    case sema::type_kind::F16:             return llvm::Type::getHalfTy(context_);
-    case sema::type_kind::F32:             return get_float_ty();
-    case sema::type_kind::F64:             return get_double_ty();
-    case sema::type_kind::F80:             return llvm::Type::getX86_FP80Ty(context_);
-    case sema::type_kind::F128:            return llvm::Type::getFP128Ty(context_);
-    case sema::type_kind::CONSTEXPR_INT:   return get_int32_ty();
+    case sema::type_kind::USIZE: return get_usize_ty();
+    case sema::type_kind::BOOL:  return get_int1_ty();
+    case sema::type_kind::F16:   return llvm::Type::getHalfTy(context_);
+    case sema::type_kind::F32:   return get_float_ty();
+    case sema::type_kind::F64:   return get_double_ty();
+    case sema::type_kind::F80:   return llvm::Type::getX86_FP80Ty(context_);
+    case sema::type_kind::F128:  return llvm::Type::getFP128Ty(context_);
+    case sema::type_kind::CONSTEXPR_INT:
+        if (type.get_key().get_int_bits() == sema::CHAR_CONSTANT_BITS) {
+            return llvm::IntegerType::get(context_, sema::CHAR_CONSTANT_BITS);
+        }
+        return get_int32_ty();
     case sema::type_kind::CONSTEXPR_FLOAT: return get_double_ty();
     case sema::type_kind::VOID_:
     case sema::type_kind::NORETURN:        return get_void_ty();

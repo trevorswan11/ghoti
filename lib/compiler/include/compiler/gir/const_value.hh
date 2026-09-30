@@ -17,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
 #include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
@@ -190,6 +191,12 @@ class const_value {
         type_ = t;
         if !consteval { fit_float_payload(); }
     }
+    // Marks an untyped math result so a later concrete float type recomputes it
+    auto set_origin(math_origin origin) -> void {
+        origin_.emplace(origin);
+        fit_float_payload();
+    }
+    MAKE_GETTER(origin, stdx::option<math_origin>);
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
 
@@ -198,12 +205,16 @@ class const_value {
 
   private:
     auto fit_float_payload() -> void {
-        if (auto f{data_.as_opt<f128>()}; f && type_) { *f = sema::fit_float(*f, *type_); }
+        if (auto f{data_.as_opt<f128>()}; f && type_) {
+            *f = sema::fit_float(*f, *type_, origin_);
+            if (sema::is_float(type_->get_kind())) { origin_.reset(); }
+        }
     }
 
   private:
     data_t                    data_{poison_val{}};
     stdx::option<sema::type&> type_;
+    stdx::option<math_origin> origin_;
 };
 
 // A number as its declared type rather than its untyped initializer's: an integer bound to a float

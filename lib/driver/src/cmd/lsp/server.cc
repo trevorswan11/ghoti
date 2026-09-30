@@ -76,8 +76,23 @@ auto make_notification(std::string_view method, nlohmann::json params) -> nlohma
     };
 }
 
-auto position_from(const nlohmann::json& position) -> source_location {
-    return {position.at("line").get<usize>(), position.at("character").get<usize>()};
+// The text a location in another file is measured against
+auto text_at(lsp::document_store& store, const std::filesystem::path& path) -> std::string {
+    return store.text_of(path).value_or(std::string{});
+}
+
+// UTF-8 when the client offers it, since compiler locations already count bytes
+auto negotiate_position_encoding(const nlohmann::json& params) -> lsp::position_encoding {
+    // Assigned, since brace-initializing a json wraps it in an array
+    const nlohmann::json offered = params.value("capabilities", nlohmann::json::object())
+                                       .value("general", nlohmann::json::object())
+                                       .value("positionEncodings", nlohmann::json::array());
+    for (const auto& encoding : offered) {
+        if (encoding.is_string() && encoding.get<std::string>() == "utf-8") {
+            return lsp::position_encoding::UTF8;
+        }
+    }
+    return lsp::position_encoding::UTF16;
 }
 
 auto write_null_id(const nlohmann::json& message) -> void {
@@ -279,7 +294,10 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         }
     }
 
+    const auto encoding{negotiate_position_encoding(params)};
+    lsp::set_position_encoding(encoding);
     const nlohmann::json capabilities{
+        {"positionEncoding", lsp::position_encoding_name(encoding)},
         {"textDocumentSync", std::to_underlying(lsp::document_sync_kind::INCREMENTAL)},
         {"hoverProvider", true},
         {"definitionProvider", true},
@@ -353,10 +371,10 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
+    auto result{store.analyze(*path)};
     publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
+    const auto target{lsp::source_position((*result)->source, params.at("position"))};
 
     const auto& entry_module{**result};
     if (auto attribute{attribute_hover(entry_module, target)}) {
@@ -396,21 +414,22 @@ auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
+    auto result{store.analyze(*path)};
     publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
+    const auto target{lsp::source_position((*result)->source, params.at("position"))};
 
     const auto& entry_module{**result};
     const auto  def_loc{lsp::definition_location_at(entry_module, target)};
     if (!def_loc) { return write_null_id(message); }
 
-    lsp::write_message(std::cout,
-                       make_response(message.at("id"),
-                                     {
-                                         {"uri", path_utils::path_to_uri(def_loc->path)},
-                                         {"range", lsp::range_of(def_loc->span)},
-                                     }));
+    lsp::write_message(
+        std::cout,
+        make_response(message.at("id"),
+                      {
+                          {"uri", path_utils::path_to_uri(def_loc->path)},
+                          {"range", lsp::range_of(def_loc->span, text_at(store, def_loc->path))},
+                      }));
 }
 
 auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
@@ -441,10 +460,10 @@ auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
+    auto result{store.analyze(*path)};
     publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
+    const auto target{lsp::source_position((*result)->source, params.at("position"))};
 
     lsp::write_message(std::cout,
                        make_response(message.at("id"), lsp::completion_items(**result, target)));
@@ -466,10 +485,10 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
+    auto result{store.analyze(*path)};
     publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
+    const auto target{lsp::source_position((*result)->source, params.at("position"))};
 
     const auto& entry_module{**result};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
@@ -480,13 +499,14 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
 
     auto locations = nlohmann::json::array();
     if (include_declaration) {
-        locations.push_back({{"uri", path_utils::path_to_uri(definition->path)},
-                             {"range", lsp::range_of(definition->span)}});
+        locations.push_back(
+            {{"uri", path_utils::path_to_uri(definition->path)},
+             {"range", lsp::range_of(definition->span, text_at(store, definition->path))}});
     }
     for (const auto& ref : lsp::find_references(store.manager(), *definition)) {
         locations.push_back({
             {"uri", path_utils::path_to_uri(ref.path)},
-            {"range", lsp::range_of(ref.span)},
+            {"range", lsp::range_of(ref.span, text_at(store, ref.path))},
         });
     }
 
@@ -499,10 +519,10 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
+    auto result{store.analyze(*path)};
     publish_pending_diagnostics(store);
     if (!result) { return write_null_id(message); }
+    const auto target{lsp::source_position((*result)->source, params.at("position"))};
 
     const auto& entry_module{**result};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
@@ -516,7 +536,7 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
         auto& edits = edits_by_uri[path_utils::path_to_uri(loc.path)];
         if (!edits.is_array()) { edits = nlohmann::json::array(); }
         edits.push_back({
-            {"range", lsp::range_of(loc.span)},
+            {"range", lsp::range_of(loc.span, text_at(store, loc.path))},
             {"newText", new_name},
         });
     };
