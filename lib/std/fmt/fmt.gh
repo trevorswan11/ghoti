@@ -36,9 +36,7 @@ pub const Format := interface {
 pub const Case := enum : u1 { lower, upper };
 
 pub const format := fn(w: &mut impl Writer, comptime fmt: []u8, args...): std.Result(void, Error) {
-    comptime {
-        spec.validate(fmt, args.len);
-    }
+    comptime spec.validate(fmt, args.len);
 
     let mut dyn_w: &mut dyn Writer = w;
     comptime let mut cursor: usize = 0;

@@ -8428,6 +8428,14 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
     last_type_.emplace(new_type);
 }
 
+auto type_resolver::visit(ast::node_id id, const ast::comptime_expr& cx) -> void {
+    PROFILE_FUNCTION();
+    // The operand is compile-time evaluation; the emitter folds it per instantiation
+    const comptime_evaluation_scope cx_scope{ctx_, true};
+    TRY_RESOLVE(*cx.rhs);
+    resolving_.set_sema_type(id, *last_type_);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(deref.rhs);
@@ -10037,6 +10045,7 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
             [&](const ast::unary_expr& data) { self(self, *data.rhs, loop_depth); },
             [&](const ast::reference_expr& data) { self(self, *data.rhs, loop_depth); },
             [&](const ast::dereference_expr& data) { self(self, *data.rhs, loop_depth); },
+            [&](const ast::comptime_expr& data) { self(self, *data.rhs, loop_depth); },
             [&](const ast::address_of_expr& data) { self(self, *data.rhs, loop_depth); },
             [&](const ast::call_expr& data) {
                 self(self, *data.function, loop_depth);
@@ -10245,6 +10254,9 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
                 self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
             },
             [&](const ast::dereference_expr& data) {
+                self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
+            },
+            [&](const ast::comptime_expr& data) {
                 self(self, *data.rhs, loop_depth, runtime_control_flow_depth);
             },
             [&](const ast::address_of_expr& data) {

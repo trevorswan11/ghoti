@@ -135,6 +135,7 @@ class formatter {
     auto visit(node_id, const reference_expr&) -> syntax::doc_id;
     auto visit(node_id, const address_of_expr&) -> syntax::doc_id;
     auto visit(node_id, const dereference_expr&) -> syntax::doc_id;
+    auto visit(node_id, const comptime_expr&) -> syntax::doc_id;
     auto visit(node_id, const unary_expr&) -> syntax::doc_id;
     auto visit(node_id, const unwrap_expr&) -> syntax::doc_id;
     auto visit(node_id, const implicit_access_expr&) -> syntax::doc_id;

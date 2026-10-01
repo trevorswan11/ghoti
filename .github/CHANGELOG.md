@@ -597,6 +597,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** every other `constexpr` is spelled `comptime`: parameters (`fn(comptime n: usize)`), `impl(comptime N: usize)`, `if`/`match`/`for`/`while`/`loop comptime`, `do ... while comptime`, and `comptime { ... }` / `comptime name: { ... }` blocks
 - **Breaking:** `constexpr_int` and `constexpr_float` are renamed `comptime_int` and `comptime_float` (and the matching `builtin.TypeInfo` variants); diagnostic codes named `CONSTEXPR_*` are renamed `COMPTIME_*`
 - Every function declared with `const` infers its compile-time parameters: a parameter its body reads at compile time (`if comptime (a < b)`, `const s := @sizeOf(@TypeOf(x))`) is compile-time at each call, as only `constexpr`-declared functions did before
+- `comptime <expr>` evaluates one expression at compile time (`let table := comptime build(64);`, `comptime validate(fmt);`); it binds like a prefix operator, so `comptime f(x) + y` folds only `f(x)`, and writing it where evaluation is already compile-time is an error
+- Fixed: a `void` function whose body runs off its end couldn't be called at compile time (`comptime { check(); }`)
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

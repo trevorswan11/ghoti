@@ -2425,6 +2425,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::index_expr& data) -> value { return emit_index(id, data); },
         [&](const ast::address_of_expr& data) -> value { return emit_address_of(id, data); },
         [&](const ast::dereference_expr& data) -> value { return emit_dereference(id, data); },
+        [&](const ast::comptime_expr& data) -> value { return emit_comptime(id, data); },
         [&](const ast::reference_expr& data) -> value { return emit_reference(id, data); },
         [&](const ast::implicit_access_expr& data) -> value {
             return emit_implicit_access(id, data);
@@ -7836,6 +7837,26 @@ auto emitter::emit_address_of(ast::node_id id, const ast::address_of_expr& addr)
     auto&      res_type{*sema_type};
     const auto ptr{builder_.emit_address_of(target, res_type)};
     return value{ptr, sema_type};
+}
+
+auto emitter::emit_comptime(ast::node_id id, const ast::comptime_expr& cx) -> value {
+    PROFILE_FUNCTION();
+    const auto                                    sema_type{active_mod().get_sema_type_opt(id)};
+    const gir::const_eval::comptime_context_guard g{const_eval_, true};
+    const sema::comptime_evaluation_scope         cx_scope{ctx_, true};
+    const auto                                    diags_before{ctx_.diags.size()};
+    const auto                                    cv{const_eval_.try_eval(*cx.rhs)};
+    if (!cv) {
+        if (ctx_.diags.size() == diags_before) {
+            ctx_.diags.emplace_back(
+                "The operand of 'comptime' could not be evaluated at compile time",
+                sema::error::COMPTIME_EVALUATION_FAILED,
+                active_ast().location_of(*cx.rhs));
+        }
+        return value{undefined_val{}, sema_type};
+    }
+    if (!yields_runtime_value(sema_type)) { return value{void_val{}, sema_type}; }
+    return materialize_const(*cv);
 }
 
 auto emitter::emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value {

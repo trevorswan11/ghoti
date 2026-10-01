@@ -684,6 +684,7 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
         [&](const ast::unary_expr& un) { recurse_into_expr(un.rhs); },
         [&](const ast::reference_expr& ref) { recurse_into_expr(ref.rhs); },
         [&](const ast::dereference_expr& deref) { recurse_into_expr(deref.rhs); },
+        [&](const ast::comptime_expr& cx) { recurse_into_expr(cx.rhs); },
         [&](const ast::address_of_expr& adr) { recurse_into_expr(adr.rhs); },
         [&](const ast::unwrap_expr& unwrap) { recurse_into_expr(unwrap.operand); },
         [&](const ast::dot_expr& dot) { recurse_into_expr(dot.object); },

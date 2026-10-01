@@ -1284,6 +1284,11 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::struct_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
         [&](const ast::enum_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
         [&](const ast::union_expr&) { return const_value{module_->get_sema_type_opt(id)}; },
+        [&](const ast::comptime_expr& data) -> stdx::option<const_value> {
+            const comptime_context_guard          g{*this, true};
+            const sema::comptime_evaluation_scope scope{ctx_, true};
+            return try_eval(data.rhs);
+        },
         [&](const ast::dereference_expr& data) -> stdx::option<const_value> {
             if (const auto ref{module_->ast.get_as_opt<ast::reference_expr>(data.rhs)}) {
                 return try_eval(ref->rhs);
@@ -4818,6 +4823,11 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
     stdx::option<const_value>    fn_result;
     if (current_signal_.kind == eval_signal_kind::RETURN) {
         fn_result = std::move(current_signal_.value);
+    } else if (fn_expr.explicit_return_type.is_valid() &&
+               fn_expr.explicit_return_type.get_token_type() == syntax::token_type_t::VOID_TYPE &&
+               !current_signal_.kind) {
+        // A `void` body that runs off its end returns normally
+        fn_result.emplace(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
     } else {
         fn_result = block_res;
     }

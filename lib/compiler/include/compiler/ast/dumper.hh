@@ -65,6 +65,7 @@ class dumper {
     auto visit(node_id, const reference_expr&) -> void;
     auto visit(node_id, const address_of_expr&) -> void;
     auto visit(node_id, const dereference_expr&) -> void;
+    auto visit(node_id, const comptime_expr&) -> void;
     auto visit(node_id, const unary_expr&) -> void;
     auto visit(node_id, const unwrap_expr&) -> void;
     auto visit(node_id, const implicit_access_expr&) -> void;

@@ -403,6 +403,8 @@ DECLARE_PREFIX_EXPRESSION(unary_expr)
 DECLARE_PREFIX_EXPRESSION(reference_expr)
 DECLARE_PREFIX_EXPRESSION(dereference_expr)
 DECLARE_PREFIX_EXPRESSION(address_of_expr)
+// `comptime <expr>`: `rhs` is evaluated at compile time
+DECLARE_PREFIX_EXPRESSION(comptime_expr)
 
 struct implicit_access_expr {
     identifier_handle member;

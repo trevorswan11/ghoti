@@ -1459,7 +1459,14 @@ auto parse_comptime_expr(syntax::parser& parser) -> stdx::result<expr_handle, sy
             start_token, stdx::option<identifier_handle>{}, raw_stmt);
     }
 
-    if (parser.peek_token_is(syntax::token_type_t::IDENT)) {
+    // `comptime name: { ... }` is a labeled block; any other `comptime name` starts an expression
+    const bool labeled{[&] {
+        if (!parser.peek_token_is(syntax::token_type_t::IDENT)) { return false; }
+        const syntax::parser::transaction tx{parser};
+        parser.advance();
+        return parser.peek_token_is(syntax::token_type_t::COLON);
+    }()};
+    if (labeled) {
         parser.advance();
         const identifier_handle ident{TRY(identifier_expr::parse(parser))};
         TRY(parser.expect_peek(syntax::token_type_t::COLON));
@@ -1478,9 +1485,29 @@ auto parse_comptime_expr(syntax::parser& parser) -> stdx::result<expr_handle, sy
             start_token, stdx::option<identifier_handle>{ident}, body);
     }
 
-    return make_syntax_err("Expected '{', a label name, or 'let mut' after 'comptime'",
-                           syntax::error::UNEXPECTED_TOKEN,
-                           parser.get_peek_token());
+    return comptime_expr::parse(parser);
+}
+
+auto comptime_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+    if (parser.peek_token_is(syntax::token_type_t::END) ||
+        parser.peek_token_is(syntax::token_type_t::SEMICOLON)) {
+        return make_syntax_err("Expected an expression after 'comptime'",
+                               syntax::error::PREFIX_MISSING_OPERAND,
+                               start_token);
+    }
+    if (parser.in_compile_time_position()) {
+        return make_syntax_err(
+            "Redundant 'comptime': this expression is already evaluated at compile time",
+            syntax::error::REDUNDANT_COMPTIME,
+            start_token);
+    }
+    parser.advance();
+
+    const syntax::parser::compile_time_scope cx_scope{parser, true};
+    const auto operand{TRY(parser.parse_expression(syntax::bind_precedence::PREFIX))};
+    return parser.add_expr<comptime_expr>(start_token, operand);
 }
 
 auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)

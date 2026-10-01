@@ -417,6 +417,7 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
 
 MAKE_PREFIX_COLLECTOR(reference_expr)
 MAKE_PREFIX_COLLECTOR(address_of_expr)
+MAKE_PREFIX_COLLECTOR(comptime_expr)
 MAKE_PREFIX_COLLECTOR(dereference_expr)
 MAKE_PREFIX_COLLECTOR(unary_expr)
 

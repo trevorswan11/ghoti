@@ -1191,6 +1191,10 @@ auto formatter::visit(node_id id, const dereference_expr& node) -> syntax::doc_i
         {doc_manager_.text(operator_spelling(id.get_token_type())), format(node.rhs)});
 }
 
+auto formatter::visit(node_id, const comptime_expr& node) -> syntax::doc_id {
+    return doc_manager_.concat({doc_manager_.text("comptime "), format(node.rhs)});
+}
+
 auto formatter::visit(node_id id, const unary_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(
         {doc_manager_.text(operator_spelling(id.get_token_type())), format(node.rhs)});

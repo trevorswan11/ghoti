@@ -621,6 +621,7 @@ auto dumper::visit(node_id, const match_expr& match) -> void {
 
 MAKE_PREFIX_DUMP(reference_expr, ReferenceExpression)
 MAKE_PREFIX_DUMP(address_of_expr, AddressOfExpression)
+MAKE_PREFIX_DUMP(comptime_expr, ComptimeExpression)
 MAKE_PREFIX_DUMP(dereference_expr, DereferenceExpression)
 MAKE_PREFIX_DUMP(unary_expr, UnaryExpression)
 

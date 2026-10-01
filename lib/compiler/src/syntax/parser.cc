@@ -334,19 +334,19 @@ auto parser::parse_statement(semicolon_behavior behavior)
         }
     } else if (current_token_is(token_type_t::COMPTIME)) {
         if (peek_token_is(token_type_t::LBRACE)) { return ast::block_stmt::parse(*this, true); }
-        if (peek_token_is(token_type_t::IDENT)) {
-            checkpoint cp{*this};
+        if (peek_token_is(token_type_t::LET)) { return ast::decl_stmt::parse(*this); }
+        // `comptime x := ...` / `comptime x: T` is a declaration missing its `let mut`
+        const bool missing_let{[&] {
+            if (!peek_token_is(token_type_t::IDENT)) { return false; }
+            const transaction tx{*this};
             advance();
-            if (peek_token_is(token_type_t::COLON)) {
-                advance();
-                if (peek_token_is(token_type_t::LBRACE)) {
-                    rollback(cp);
-                    return ast::expr_stmt::parse(*this, behavior);
-                }
-            }
-            rollback(cp);
-        }
-        return ast::decl_stmt::parse(*this);
+            if (peek_token_is(token_type_t::WALRUS)) { return true; }
+            if (!peek_token_is(token_type_t::COLON)) { return false; }
+            advance();
+            return !peek_token_is(token_type_t::LBRACE);
+        }()};
+        if (missing_let) { return ast::decl_stmt::parse(*this); }
+        return ast::expr_stmt::parse(*this, behavior);
     } else if (current_token_.is_decl_token()) {
         return ast::decl_stmt::parse(*this);
     }

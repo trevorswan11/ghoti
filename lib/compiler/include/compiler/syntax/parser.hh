@@ -102,19 +102,25 @@ class parser {
     class compile_time_scope {
       public:
         compile_time_scope(parser& p, bool enabled) noexcept : parser_{p} {
-            if (enabled && !p.comptime_param_frames_.empty()) {
+            if (!enabled) { return; }
+            if (p.comptime_param_frames_.empty()) {
+                outside_functions_ = true;
+                ++p.compile_time_depth_outside_functions_;
+            } else {
                 frame_ = p.comptime_param_frames_.size() - 1;
                 ++p.comptime_param_frames_[*frame_].compile_time_depth;
             }
         }
         ~compile_time_scope() {
             if (frame_) { --parser_.comptime_param_frames_[*frame_].compile_time_depth; }
+            if (outside_functions_) { --parser_.compile_time_depth_outside_functions_; }
         }
         MAKE_PINNED(compile_time_scope);
 
       private:
         parser&        parser_;
         stdx::opt_size frame_;
+        bool           outside_functions_{false};
     };
 
   public:
@@ -269,6 +275,15 @@ class parser {
     }
 
     [[nodiscard]] auto in_test_block() const noexcept -> bool { return test_block_depth_; }
+
+    // Whether the current position is already evaluated at compile time: a compile-time header,
+    // block or `const` initializer, or anywhere outside a function or test body
+    [[nodiscard]] auto in_compile_time_position() const noexcept -> bool {
+        if (comptime_param_frames_.empty()) {
+            return compile_time_depth_outside_functions_ > 0 || !in_test_block();
+        }
+        return comptime_param_frames_.back().compile_time_depth > 0;
+    }
     [[nodiscard]] auto enter_test_block() noexcept -> counter<u32>::guard {
         return counter<u32>::guard{test_block_depth_};
     }
@@ -330,6 +345,7 @@ class parser {
     std::vector<pending_doc> pending_module_docs_;
     bool                     module_doc_locked_{false};
     bool                     infer_next_fn_params_{false};
+    u32                      compile_time_depth_outside_functions_{0};
 };
 
 } // namespace ghoti::syntax
