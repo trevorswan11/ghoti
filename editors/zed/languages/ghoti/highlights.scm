@@ -5,6 +5,7 @@
 
 ; Literals
 (string_literal) @string
+(escape_sequence) @string.escape
 (multiline_string_literal) @string
 (char_literal) @string
 (integer_literal) @number
@@ -23,6 +24,10 @@
 ; Functions
 (call_expression function: (identifier) @function)
 (builtin_identifier) @function.builtin
+
+; `@[name(args)]` attribute lists
+(attribute name: (identifier) @attribute)
+"@[" @punctuation.special
 (decl_statement name: (identifier) @function
   value: (function_expression))
 (function_expression) @function
@@ -85,16 +90,16 @@
 ; Labels
 (labeled_statement label: (identifier) @label)
 (labeled_expression label: (identifier) @label)
-(constexpr_expression label: (identifier) @label)
+(comptime_expression label: (identifier) @label)
 (break_statement label: (identifier) @label)
 (continue_statement label: (identifier) @label)
 
 ; Keywords
 [
   "fn"
-  "var"
+  "let"
   "const"
-  "constexpr"
+  "comptime"
   "struct"
   "enum"
   "union"
@@ -118,7 +123,6 @@
   "volatile"
   "mut"
   "move"
-  "naked"
   "packed"
   "test"
   "weak"
