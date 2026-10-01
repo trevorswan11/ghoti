@@ -16,7 +16,7 @@ TEST_CASE("Codegen: valueless extern global lowers as a declaration") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern let mut errno_val: i32;
-        pub const main := fn(args: [][:0]u8): void {};
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -35,7 +35,7 @@ TEST_CASE("Codegen: same extern global from root and imported module does not co
         R"(
             import "libc.gh" as libc;
             extern let mut errno_val: i32;
-            pub const main := fn(args: [][:0]u8): void {};
+            pub const main = fn(args: [][:0]u8): void {};
         )",
         {helpers::mock_file{"libc.gh", "pub extern let mut errno_val: i32;", "libc"}})};
 
@@ -52,7 +52,7 @@ TEST_CASE("Codegen: global with an initializer stays a definition") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const answer: i32 = 42;
-        pub const main := fn(args: [][:0]u8): void {};
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};

@@ -32,7 +32,7 @@ TEST_CASE("test command execution") {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
                 test "simple passing test" {{
-                    let a := 10 + 20;
+                    let a = 10 + 20;
                     @expect(a == 30);
                     @require(a > 0);
                 }}
@@ -52,7 +52,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 3;
                 }};
 
@@ -75,7 +75,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i32, b: i32): i32 {{
+                pub const add = fn(a: i32, b: i32): i32 {{
                     return a + b;
                 }};
             )");
@@ -114,7 +114,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{helper_file.path};
             fmt::print(out, R"(
-                pub const helper_val := 42;
+                pub const helper_val = 42;
 
                 test "imported module test" {{
                     @require(false);
@@ -149,7 +149,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{helper_file.path};
             fmt::print(out, R"(
-                pub const helper_val := 42;
+                pub const helper_val = 42;
 
                 test "imported module test" {{
                     @expect(helper_val == 42);
@@ -186,7 +186,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{helper_file.path};
             fmt::print(out, R"(
-                pub const helper_val := 42;
+                pub const helper_val = 42;
 
                 test "imported module failing test" {{
                     @require(false);
@@ -326,7 +326,7 @@ TEST_CASE("test command execution") {
         {
             std::ofstream out{helper_file.path};
             fmt::print(out, R"(
-                pub const helper_val := 42;
+                pub const helper_val = 42;
             )");
         }
 
@@ -358,7 +358,7 @@ TEST_CASE("test command execution") {
                     @require(false);
                 }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
+                pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = args;
                     _ = tests;
                     return 0;
@@ -383,7 +383,7 @@ TEST_CASE("test command execution") {
                     @expect(true);
                 }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
+                pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = args;
                     _ = tests;
                     return 12;
@@ -406,7 +406,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(tests: []builtin.Test): i32 {{
+                pub const test_runner = fn(tests: []builtin.Test): i32 {{
                     _ = tests;
                     return 0;
                 }};
@@ -426,7 +426,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): void {{
+                pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): void {{
                     _ = args;
                     _ = tests;
                 }};
@@ -446,7 +446,7 @@ TEST_CASE("test command execution") {
             fmt::print(out, R"(
                 test "noop" {{ @expect(true); }}
 
-                pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
+                pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {{
                     _ = tests;
                     if (args.len == 3) {{ return 0; }} // args passed through from runtime
                     if (args.len == 0) {{ return 0; }} // empty fallback on windows due to sysroot

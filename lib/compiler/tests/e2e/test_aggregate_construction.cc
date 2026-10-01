@@ -12,8 +12,8 @@ using helpers::mock_file;
 
 TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Enum(builtin.EnumInfo{
+        pub const main = fn(): i32 {
+            const T = @Enum(builtin.EnumInfo{
                 .tag_type = i32,
                 .fields = [2]builtin.EnumFieldInfo{
                     .{ .name = "a", .value = 10 },
@@ -29,8 +29,8 @@ TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
 
 TEST_CASE("`@Enum` variants are usable with `@tagName`") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Enum(builtin.EnumInfo{
+        pub const main = fn(): i32 {
+            const T = @Enum(builtin.EnumInfo{
                 .tag_type = i32,
                 .fields = [2]builtin.EnumFieldInfo{
                     .{ .name = "a", .value = 10 },
@@ -38,7 +38,7 @@ TEST_CASE("`@Enum` variants are usable with `@tagName`") {
                 },
                 .exhaustive = true,
             });
-            let s := @tagName(T.b);
+            let s = @tagName(T.b);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == 99);
@@ -46,8 +46,8 @@ TEST_CASE("`@Enum` variants are usable with `@tagName`") {
 
 TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "y", .@"type" = i32 },
@@ -64,8 +64,8 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
 
 TEST_CASE("`@Struct` accepts a `^.{...}` slice literal for its `fields` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(.{
+        pub const main = fn(): i32 {
+            const T = @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "y", .@"type" = i32 },
@@ -83,8 +83,8 @@ TEST_CASE("`@Struct` accepts a `^.{...}` slice literal for its `fields` descript
 
 TEST_CASE("`@Struct` applies a field's own `default_value`") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "y", .@"type" = i32, .default_value = @ptrCast(^opaque, ^99) },
@@ -102,8 +102,8 @@ TEST_CASE("`@Struct` applies a field's own `default_value`") {
 TEST_CASE("`@Struct`'s `default_value` accepts `^<module-scope const>`") {
     CHECK(helpers::compile_and_run(R"(
         const DEFAULT_Y: i32 = 99;
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "y", .@"type" = i32, .default_value = @ptrCast(^opaque, ^DEFAULT_Y) },
@@ -120,9 +120,9 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<module-scope const>`") {
 
 TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let local_default: i32 = 99;
-            const T := @Struct(builtin.StructInfo{
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "y",
@@ -142,7 +142,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
 TEST_CASE("`@Struct`'s `default_value` accepts `^<comptime parameter>` inside a generic "
           "`fn(...): type` constructor") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := fn(T: type, comptime default_z: T): type {
+        const Point = fn(T: type, comptime default_z: T): type {
             return @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = T },
@@ -155,7 +155,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<comptime parameter>` inside a 
             });
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let p: Point(i32, 1) = .{ .x = 2, .y = 9 };
             return p.x + p.y + p.z;
         };
@@ -164,9 +164,9 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<comptime parameter>` inside a 
 
 TEST_CASE("`@Struct`'s `default_value` accepts a struct-typed value") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { a: i32, b: i32 };
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        const Point = struct { a: i32, b: i32 };
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                     .{ .name = "pt",
@@ -185,8 +185,8 @@ TEST_CASE("`@Struct`'s `default_value` accepts a struct-typed value") {
 
 TEST_CASE("`@Struct`'s `default_value` accepts an array-typed value") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [1]builtin.StructFieldInfo{
                     .{ .name = "arr",
                        .@"type" = [2]i32,
@@ -204,10 +204,10 @@ TEST_CASE("`@Struct`'s `default_value` accepts an array-typed value") {
 
 TEST_CASE("`@Struct`'s `default_value` recurses through a nested aggregate") {
     CHECK(helpers::compile_and_run(R"(
-        const Inner := struct { n: i32 };
-        const Outer := struct { inner: Inner, tag: i32 };
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        const Inner = struct { n: i32 };
+        const Outer = struct { inner: Inner, tag: i32 };
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [1]builtin.StructFieldInfo{
                     .{ .name = "o",
                        .@"type" = Outer,
@@ -232,8 +232,8 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<cross-module const>`") {
     CHECK(helpers::compile_and_run(
               R"(
             import "defaults.gh" as defaults;
-            pub const main := fn(): i32 {
-                const T := @Struct(builtin.StructInfo{
+            pub const main = fn(): i32 {
+                const T = @Struct(builtin.StructInfo{
                     .fields = [2]builtin.StructFieldInfo{
                         .{ .name = "x", .@"type" = i32 },
                         .{ .name = "y",
@@ -253,8 +253,8 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<cross-module const>`") {
 
 TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Union(builtin.UnionInfo{
+        pub const main = fn(): i32 {
+            const T = @Union(builtin.UnionInfo{
                 .fields = [2]builtin.UnionFieldInfo{
                     .{ .name = "i", .@"type" = i32 },
                     .{ .name = "f", .@"type" = f32 },
@@ -272,8 +272,8 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
 TEST_CASE("`@Struct` widens an unsuffixed float `default_value` to a narrower field's own "
           "type instead of defaulting it to `f64`") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = f32 },
                     .{ .name = "y", .@"type" = f32, .default_value = @ptrCast(^opaque, ^1.0f32) },
@@ -290,8 +290,8 @@ TEST_CASE("`@Struct` widens an unsuffixed float `default_value` to a narrower fi
 
 TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of crashing") {
     CHECK(helpers::raised(R"(
-        pub const main := fn(): i32 {
-            const T := @Struct(builtin.StructInfo{
+        pub const main = fn(): i32 {
+            const T = @Struct(builtin.StructInfo{
                 .fields = [1]builtin.StructFieldInfo{
                     .{ .name = "x", .type_ = i32 },
                 },
@@ -308,8 +308,8 @@ TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of c
 
 TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's type") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const S := @Struct(.{
+        pub const main = fn(): i32 {
+            const S = @Struct(.{
                 .fields = [1]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                 },
@@ -317,7 +317,7 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            const U := @Union(.{
+            const U = @Union(.{
                 .fields = [1]builtin.UnionFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
                 },
@@ -325,7 +325,7 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
                 .is_packed = false,
                 .tagged = false,
             });
-            const E := @Enum(.{
+            const E = @Enum(.{
                 .tag_type = i32,
                 .fields = [1]builtin.EnumFieldInfo{ .{ .name = "a", .value = 5 } },
                 .exhaustive = true,
@@ -340,8 +340,8 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
 
 TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Union(builtin.UnionInfo{
+        pub const main = fn(): i32 {
+            const T = @Union(builtin.UnionInfo{
                 .fields = [2]builtin.UnionFieldInfo{
                     .{ .name = "i", .@"type" = i32 },
                     .{ .name = "f", .@"type" = f32 },

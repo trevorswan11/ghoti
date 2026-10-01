@@ -10,13 +10,13 @@ test "meta programming" {
     @expect(data.countStuff() == 111.34000015258789);
 }
 
-const Data := struct {
+const Data = struct {
     count_donations: f32,
     count_happy_people: u32,
     count_balance: i32,
     bike_flag: bool,
 
-    const countStuff := fn(self): f64 {
+    const countStuff = fn(self): f64 {
         let mut accumulator: f64 = 0;
         for comptime (@typeInfo(@This()).struct.fields) |field| {
             if (std.mem.starts_with(u8, field.name, "count_")) {

@@ -12,36 +12,36 @@ namespace {
 // `*_via_api` wraps  a bogus named-library extern and must be pruned
 constexpr std::string_view PLAT_LINUX{R"(
     extern("ghoti_fake_linux_lib") const FakeLinuxApi: fn(): i32;
-    pub const linux_tag := fn(): i32 { return 7; };
-    pub const linux_via_api := fn(): i32 { return FakeLinuxApi(); };
+    pub const linux_tag = fn(): i32 { return 7; };
+    pub const linux_via_api = fn(): i32 { return FakeLinuxApi(); };
 )"};
 
 constexpr std::string_view PLAT_DARWIN{R"(
     extern("ghoti_fake_darwin_lib") const FakeDarwinApi: fn(): i32;
-    pub const darwin_tag := fn(): i32 { return 7; };
-    pub const darwin_via_api := fn(): i32 { return FakeDarwinApi(); };
+    pub const darwin_tag = fn(): i32 { return 7; };
+    pub const darwin_via_api = fn(): i32 { return FakeDarwinApi(); };
 )"};
 
 constexpr std::string_view PLAT_WINDOWS{R"(
     extern("ghoti_fake_windows_lib") const FakeWindowsApi: fn(): i32;
-    pub const windows_tag := fn(): i32 { return 7; };
-    pub const windows_via_api := fn(): i32 { return FakeWindowsApi(); };
+    pub const windows_tag = fn(): i32 { return 7; };
+    pub const windows_via_api = fn(): i32 { return FakeWindowsApi(); };
 )"};
 
 } // namespace
 
 // Mirrors `lib/std/os/os.gh`: a `@cfg(os)` backend select that flat-re-exports
 constexpr std::string_view OS_BACKEND_DARWIN{R"(
-    pub const Errno := enum : i32 { OK = 0, NOPE = 1, _ };
-    pub const Handle := i32;
-    pub const answer := fn(): i32 { return 7; };
+    pub const Errno = enum : i32 { OK = 0, NOPE = 1, _ };
+    pub const Handle = i32;
+    pub const answer = fn(): i32 { return 7; };
     pub const WHENCE_END: i32 = 2;
 )"};
 
 constexpr std::string_view OS_BACKEND_WINDOWS{R"(
-    pub const Errno := enum : u32 { OK = 0u32, NOPE = 1u32, _ };
-    pub const Handle := ^mut opaque;
-    pub const answer := fn(): i32 { return 7; };
+    pub const Errno = enum : u32 { OK = 0u32, NOPE = 1u32, _ };
+    pub const Handle = ^mut opaque;
+    pub const answer = fn(): i32 { return 7; };
     pub const WHENCE_END: i32 = 2;
 )"};
 
@@ -50,10 +50,10 @@ constexpr std::string_view OS_SELECT{R"(
     else @cfg(os == .windows) import "os_windows.gh" as backend;
     else @compileError("unsupported target OS");
 
-    pub const Handle := backend.Handle;
-    pub const Errno := backend.Errno;
-    pub const answer := backend.answer;
-    pub const WHENCE_END := backend.WHENCE_END;
+    pub const Handle = backend.Handle;
+    pub const Errno = backend.Errno;
+    pub const answer = backend.answer;
+    pub const WHENCE_END = backend.WHENCE_END;
 )"};
 
 constexpr std::string_view OS_STD{R"( pub import "os_select.gh" as os; )"};
@@ -62,10 +62,10 @@ TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const th
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "std.gh" as std;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 const e: std.os.Errno = std.os.Errno.NOPE;
-                let w := @as(i32, std.os.WHENCE_END);
-                let a := std.os.answer();
+                let w = @as(i32, std.os.WHENCE_END);
+                let a = std.os.answer();
                 return if (e == std.os.Errno.NOPE and w == 2) a else 1;
             };
         )",
@@ -86,7 +86,7 @@ TEST_CASE("E2E: importing every platform module still links on the host") {
             import "plat_darwin.gh" as plat_darwin;
             import "plat_windows.gh" as plat_windows;
 
-            const plat_tag := fn(): i32 {
+            const plat_tag = fn(): i32 {
                 if comptime (@targetOs() == .linux) {
                     return plat_linux.linux_tag();
                 } else if comptime (@targetOs() == .macos) {
@@ -96,7 +96,7 @@ TEST_CASE("E2E: importing every platform module still links on the host") {
                 };
             };
 
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return plat_tag();
             };
         )",

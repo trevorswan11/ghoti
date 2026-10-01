@@ -23,8 +23,8 @@ templ SyntaxControlFlowPage() {
 		<code class="language-ghoti">
 			{ `import std;
 
-pub const main := fn(args: [][:0]u8): void {
-    let message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): void {
+    let message = "Hello, world!";
     std::io::println(message);
 };` }
 		</code>
@@ -143,10 +143,10 @@ pub const main := fn(args: [][:0]u8): void {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `let table := comptime build_table(64); // computed while compiling, then stored
-let n := comptime twice(21) + x;        // only twice(21) is folded
+			{ `let table = comptime build_table(64); // computed while compiling, then stored
+let n = comptime twice(21) + x;        // only twice(21) is folded
 comptime validate(fmt);                 // a compile-time check
-const k := comptime 3;                  // Illegal, a const initializer is already compile-time` }
+const k = comptime 3;                  // Illegal, a const initializer is already compile-time` }
 		</code>
 	</pre>
 	<h2>Defer</h2>
@@ -164,7 +164,7 @@ const k := comptime 3;                  // Illegal, a const initializer is alrea
 		<code class="language-ghoti">
 			{ `import std;
 
-const main := fn(): void {
+const main = fn(): void {
     defer std::io::println("World!");
     defer std::io::print("Hello, ");
 };` }

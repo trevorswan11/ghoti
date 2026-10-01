@@ -11,9 +11,9 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Union field, mutable union") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -28,9 +28,9 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Union field, const union") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let u = U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -45,7 +45,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Whole-value (non-union), mutable scrutinee") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
@@ -61,7 +61,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Whole-value (non-union), const scrutinee") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
@@ -78,9 +78,9 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
 TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By mutable reference succeeds") {
         helpers::type_check_and_verify(R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |&mut v| { v = 10; },
                     _ => {},
@@ -92,9 +92,9 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const reference is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |&v| { v = 10; },
                     _ => {},
@@ -108,9 +108,9 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
 
     SECTION("By mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |^mut v| { *v = 10; },
                     _ => {},
@@ -122,9 +122,9 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const pointer is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |^v| { *v = 10; },
                     _ => {},

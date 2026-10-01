@@ -33,8 +33,8 @@ namespace {
 
 TEST_CASE("A closure with no free variables records an empty capture list and stays FUNCTION") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            let add := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let add = fn(x: i32): i32 {
                 return x;
             };
         };
@@ -49,9 +49,9 @@ TEST_CASE("A closure with no free variables records an empty capture list and st
 
 TEST_CASE("A read-only primitive capture is recorded as READ and inferred VALUE") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
+        const outer = fn(): void {
             let mut offset: i32 = 0;
-            let add := fn(x: i32): i32 {
+            let add = fn(x: i32): i32 {
                 return x + offset;
             };
         };
@@ -76,9 +76,9 @@ TEST_CASE("A read-only primitive capture is recorded as READ and inferred VALUE"
 
 TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT_REF") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
+        const outer = fn(): void {
             let mut offset: i32 = 0;
-            let add := fn(x: i32): i32 {
+            let add = fn(x: i32): i32 {
                 offset = x;
                 return offset;
             };
@@ -101,10 +101,10 @@ TEST_CASE("Assigning to a captured variable records MUTATED usage and infers MUT
 
 TEST_CASE("A read before a later mutation still escalates to MUTATED") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
+        const outer = fn(): void {
             let mut offset: i32 = 0;
-            let add := fn(x: i32): i32 {
-                let before := offset;
+            let add = fn(x: i32): i32 {
+                let before = offset;
                 offset = x;
                 return before;
             };
@@ -122,10 +122,10 @@ TEST_CASE("A read before a later mutation still escalates to MUTATED") {
 
 TEST_CASE("Multiple distinct captures are all recorded") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
+        const outer = fn(): void {
             let mut a: i32 = 0;
             let mut b: i32 = 0;
-            let add := fn(x: i32): i32 {
+            let add = fn(x: i32): i32 {
                 a = x;
                 return b;
             };
@@ -145,9 +145,9 @@ TEST_CASE("Multiple distinct captures are all recorded") {
 
 TEST_CASE("A read-only aggregate capture is inferred REF, not VALUE") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
+        const outer = fn(): void {
             let mut arr: [3uz]i32 = [_]i32{1, 2, 3};
-            let add := fn(): i32 {
+            let add = fn(): i32 {
                 return arr[0];
             };
         };
@@ -165,8 +165,8 @@ TEST_CASE("A read-only aggregate capture is inferred REF, not VALUE") {
 
 TEST_CASE("Capturing an enclosing function's own parameter is recorded") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(offset: i32): void {
-            let add := fn(x: i32): i32 {
+        const outer = fn(offset: i32): void {
+            let add = fn(x: i32): i32 {
                 return x + offset;
             };
         };
@@ -184,7 +184,7 @@ TEST_CASE("Capturing an enclosing function's own parameter is recorded") {
 TEST_CASE("A non-move closure literal returned directly cannot escape its defining frame") {
     helpers::test_resolver_fail(
         R"(
-        const make_adder := fn(): auto {
+        const make_adder = fn(): auto {
             let mut n: i32 = 10;
             return fn(): i32 {
                 n = n + 5;
@@ -201,9 +201,9 @@ TEST_CASE("A non-move closure literal returned directly cannot escape its defini
 TEST_CASE("A non-move closure bound to a local first still cannot escape via that local") {
     helpers::test_resolver_fail(
         R"(
-        const make_adder := fn(): auto {
+        const make_adder = fn(): auto {
             let mut n: i32 = 10;
-            let g := fn(): i32 {
+            let g = fn(): i32 {
                 n = n + 5;
                 return n;
             };

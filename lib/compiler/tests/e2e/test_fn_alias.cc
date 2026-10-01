@@ -7,10 +7,10 @@ namespace ghoti::tests {
 
 TEST_CASE("calling a module-scope function alias directly") {
     CHECK(helpers::compile_and_run(R"(
-        const inc := fn(n: i32): i32 { return n + 1; };
-        const bump := inc;
+        const inc = fn(n: i32): i32 { return n + 1; };
+        const bump = inc;
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return bump(41);
         };
     )") == 42);
@@ -18,12 +18,12 @@ TEST_CASE("calling a module-scope function alias directly") {
 
 TEST_CASE("passing a module-scope function alias as a `fn`-pointer argument") {
     CHECK(helpers::compile_and_run(R"(
-        const dbl := fn(n: i32): i32 { return n * 2; };
-        const twice := dbl;
+        const dbl = fn(n: i32): i32 { return n * 2; };
+        const twice = dbl;
 
-        const apply := fn(f: fn(n: i32): i32, x: i32): i32 { return f(x); };
+        const apply = fn(f: fn(n: i32): i32, x: i32): i32 { return f(x); };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return apply(twice, 21);
         };
     )") == 42);
@@ -31,11 +31,11 @@ TEST_CASE("passing a module-scope function alias as a `fn`-pointer argument") {
 
 TEST_CASE("an alias of an alias") {
     CHECK(helpers::compile_and_run(R"(
-        const inc := fn(n: i32): i32 { return n + 1; };
-        const a := inc;
-        const b := a;
+        const inc = fn(n: i32): i32 { return n + 1; };
+        const a = inc;
+        const b = a;
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return b(41);
         };
     )") == 42);
@@ -43,17 +43,17 @@ TEST_CASE("an alias of an alias") {
 
 TEST_CASE("module-scope alias of a static member function") {
     CHECK(helpers::compile_and_run(R"(
-        const Box := struct {
+        const Box = struct {
             n: i32,
-            const of := fn(v: i32): @This() { return .{ .n = v }; };
+            const of = fn(v: i32): @This() { return .{ .n = v }; };
         };
 
-        const make := Box.of;
-        const relay := fn(f: fn(n: i32): Box, x: i32): Box { return f(x); };
+        const make = Box.of;
+        const relay = fn(f: fn(n: i32): Box, x: i32): Box { return f(x); };
 
-        pub const main := fn(): i32 {
-            let a := make(40);        // direct call through the alias
-            let b := relay(make, 2);  // alias passed as a fn-pointer argument
+        pub const main = fn(): i32 {
+            let a = make(40);        // direct call through the alias
+            let b = relay(make, 2);  // alias passed as a fn-pointer argument
             return a.n + b.n;
         };
     )") == 42);
@@ -61,17 +61,17 @@ TEST_CASE("module-scope alias of a static member function") {
 
 TEST_CASE("unbound method reference: `^self` and `&mut self` receivers") {
     CHECK(helpers::compile_and_run(R"(
-        const Box := struct {
+        const Box = struct {
             n: i32,
-            const of := fn(v: i32): @This() { return .{ .n = v }; };
-            const scaled := fn(^self, k: i32): i32 { return self.n * k; };
-            const set := fn(&mut self, v: i32): void { self.n = v; };
+            const of = fn(v: i32): @This() { return .{ .n = v }; };
+            const scaled = fn(^self, k: i32): i32 { return self.n * k; };
+            const set = fn(&mut self, v: i32): void { self.n = v; };
         };
 
-        pub const main := fn(): i32 {
-            let mut b := Box.of(3);
-            let scale := Box.scaled;   // fn(^Box, i32): i32
-            let store := Box.set;      // fn(&mut Box, i32): void
+        pub const main = fn(): i32 {
+            let mut b = Box.of(3);
+            let scale = Box.scaled;   // fn(^Box, i32): i32
+            let store = Box.set;      // fn(&mut Box, i32): void
             store(&mut b, 6);
             return scale(^b, 7);
         };
@@ -80,15 +80,15 @@ TEST_CASE("unbound method reference: `^self` and `&mut self` receivers") {
 
 TEST_CASE("unbound method reference passed as a `fn`-pointer argument") {
     CHECK(helpers::compile_and_run(R"(
-        const Box := struct {
+        const Box = struct {
             n: i32,
-            const get := fn(&self): i32 { return self.n; };
+            const get = fn(&self): i32 { return self.n; };
         };
 
-        const relay := fn(f: fn(r: &Box): i32, r: &Box): i32 { return f(r); };
+        const relay = fn(f: fn(r: &Box): i32, r: &Box): i32 { return f(r); };
 
-        pub const main := fn(): i32 {
-            let b := Box{ .n = 42 };
+        pub const main = fn(): i32 {
+            let b = Box{ .n = 42 };
             return relay(Box.get, &b);
         };
     )") == 42);
@@ -96,12 +96,12 @@ TEST_CASE("unbound method reference passed as a `fn`-pointer argument") {
 
 TEST_CASE("a bodyless `fn(...)` type expression names a callable type") {
     CHECK(helpers::compile_and_run(R"(
-        const BinOp := fn(a: i32, b: i32): i32;
+        const BinOp = fn(a: i32, b: i32): i32;
 
-        const apply := fn(f: BinOp, a: i32, b: i32): i32 { return f(a, b); };
-        const add := fn(a: i32, b: i32): i32 { return a + b; };
+        const apply = fn(f: BinOp, a: i32, b: i32): i32 { return f(a, b); };
+        const add = fn(a: i32, b: i32): i32 { return a + b; };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return apply(add, 40, 2);
         };
     )") == 42);
@@ -109,27 +109,27 @@ TEST_CASE("a bodyless `fn(...)` type expression names a callable type") {
 
 TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field is callable") {
     CHECK(helpers::compile_and_run(R"(
-        const Thunk := fn(ctx: ^u8, k: i32): i32;
+        const Thunk = fn(ctx: ^u8, k: i32): i32;
 
-        const Erased := struct {
+        const Erased = struct {
             ctx: ^u8,
             thunk: Thunk,
-            pub const call := fn(&self, k: i32): i32 { return self.thunk(self.ctx, k); };
+            pub const call = fn(&self, k: i32): i32 { return self.thunk(self.ctx, k); };
         };
 
-        const Box := struct {
+        const Box = struct {
             val: i32,
-            const addThunk := fn(ctx: ^u8, k: i32): i32 {
+            const addThunk = fn(ctx: ^u8, k: i32): i32 {
                 return @ptrCast(^Box, ctx).val + k;
             };
-            pub const erased := fn(^self): Erased {
+            pub const erased = fn(^self): Erased {
                 return Erased{ .ctx = @ptrCast(^u8, self), .thunk = addThunk };
             };
         };
 
-        pub const main := fn(): i32 {
-            let mut b := Box{ .val = 100 };
-            let e := b.erased();
+        pub const main = fn(): i32 {
+            let mut b = Box{ .val = 100 };
+            let e = b.erased();
             return e.call(5);
         };
     )") == 105);
@@ -137,13 +137,13 @@ TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field i
 
 TEST_CASE("a function type carries named parameters") {
     CHECK(helpers::compile_and_run(R"(
-        const BinOp := fn(lhs: i32, rhs: i32): i32;
+        const BinOp = fn(lhs: i32, rhs: i32): i32;
 
-        const add := fn(a: i32, b: i32): i32 { return a + b; };
+        const add = fn(a: i32, b: i32): i32 { return a + b; };
 
-        const apply := fn(op: BinOp, x: i32, y: i32): i32 { return op(x, y); };
+        const apply = fn(op: BinOp, x: i32, y: i32): i32 { return op(x, y); };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return apply(add, 19, 23);
         };
     )") == 42);
@@ -151,14 +151,14 @@ TEST_CASE("a function type carries named parameters") {
 
 TEST_CASE("an extracted method is not callable via a dot expression on an instance") {
     helpers::expect_compile_error(R"(
-        const Box := struct {
+        const Box = struct {
             n: i32,
-            const scaled := fn(^self, k: i32): i32 { return self.n * k; };
+            const scaled = fn(^self, k: i32): i32 { return self.n * k; };
         };
 
-        pub const main := fn(): i32 {
-            let m := Box.scaled;
-            let b := Box{ .n = 6 };
+        pub const main = fn(): i32 {
+            let m = Box.scaled;
+            let b = Box{ .n = 6 };
             return b.m(7);
         };
     )");

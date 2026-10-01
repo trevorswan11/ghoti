@@ -711,7 +711,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
             ctx_.diags.emplace_back(
                 "Control-flow constructs are not allowed as statements at the top level; "
                 "use `@cfg` for conditional declarations, or bind the value with "
-                "`const x := ...`",
+                "`const x = ...`",
                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                 collecting_.ast.location_of(id));
             break;
@@ -721,7 +721,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
                 ctx_.diags.emplace_back(
                     "Control-flow constructs are not allowed as statements at the top level; "
                     "use `@cfg` for conditional declarations, or bind the value with "
-                    "`const x := ...`",
+                    "`const x = ...`",
                     error::ILLEGAL_TOP_LEVEL_STATEMENT,
                     collecting_.ast.location_of(id));
             }

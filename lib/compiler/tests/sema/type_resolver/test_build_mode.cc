@@ -61,18 +61,18 @@ TEST_CASE("@optimizeMode() and @runtimeSafety() fold to the build's mode") {
 TEST_CASE("`optimize` and `safety` are @cfg names") {
     constexpr std::string_view source{R"(
         @cfg (optimize == .debug) {
-            let level := 0;
+            let level = 0;
         } else @cfg (optimize == .release_small) {
-            let level := 2;
+            let level = 2;
         } else {
-            let level := 1;
+            let level = 1;
         }
         @cfg (safety) {
-            let checked := true;
+            let checked = true;
         } else {
-            let checked := false;
+            let checked = false;
         }
-        const tag := @cfgValue(safety);
+        const tag = @cfgValue(safety);
     )"};
     check_clean_in_mode(
         fmt::format("{}\ncomptime {{ @assert(level == 0 and checked and tag); }}", source),
@@ -85,7 +85,7 @@ TEST_CASE("`optimize` and `safety` are @cfg names") {
 }
 
 TEST_CASE("A misspelled build mode in @cfg is an error") {
-    const auto ctx{resolve_in_mode("@cfg (optimize == .relase_fast) { let x := 1; }",
+    const auto ctx{resolve_in_mode("@cfg (optimize == .relase_fast) { let x = 1; }",
                                    sema::optimize_mode::DEBUG)};
     CHECK_FALSE(ctx->root_mod.is_ok());
 }
@@ -93,8 +93,8 @@ TEST_CASE("A misspelled build mode in @cfg is an error") {
 TEST_CASE("An attribute argument can depend on the build mode") {
     check_clean_in_mode(R"(
         @[inline(if (@optimizeMode() == .debug) .never else .always)]
-        const f := fn(x: i32): i32 { return x; };
-        pub const main := fn(): i32 { return f(0); };
+        const f = fn(x: i32): i32 { return x; };
+        pub const main = fn(): i32 { return f(0); };
     )",
                         sema::optimize_mode::RELEASE_FAST);
 }

@@ -1,6 +1,6 @@
 import std;
 
-const Point := @Struct(.{
+const Point = @Struct(.{
     .fields = ^.{
         .{ .name = "x", .type = i32 },
         .{ .name = "y", .type = i32 },
@@ -16,7 +16,7 @@ const Point := @Struct(.{
 });
 
 impl Point {
-    pub const sum := fn(self): i32 {
+    pub const sum = fn(self): i32 {
         return self.x + self.y + self.z;
     };
 }

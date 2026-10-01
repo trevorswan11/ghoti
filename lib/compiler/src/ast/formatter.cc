@@ -574,7 +574,7 @@ auto formatter::format_interface(const interface_expr& node) -> syntax::doc_id {
                                                                        : doc_manager_.nil(),
                                                          doc_manager_.text("const "),
                                                          format(m.name)})));
-                parts.emplace_back(doc_manager_.text(" := "));
+                parts.emplace_back(doc_manager_.text(" = "));
                 parts.emplace_back(format(*m.signature));
                 parts.emplace_back(doc_manager_.text(";"));
                 return doc_manager_.concat(std::move(parts));
@@ -1445,16 +1445,14 @@ auto formatter::visit(node_id, const continue_stmt& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
-    const auto walrus{!node.explicit_type && node.value};
     return doc_manager_.concat({
         with_attributes(node.attributes,
                         doc_manager_.concat({decl_prefix(node), format(node.name)})),
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),
-        node.value
-            ? doc_manager_.concat({doc_manager_.text(walrus ? " := " : " = "), format(*node.value)})
-            : doc_manager_.nil(),
+        node.value ? doc_manager_.concat({doc_manager_.text(" = "), format(*node.value)})
+                   : doc_manager_.nil(),
         doc_manager_.text(";"),
     });
 }

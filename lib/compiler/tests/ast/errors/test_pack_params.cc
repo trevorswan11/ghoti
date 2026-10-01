@@ -8,10 +8,10 @@
 namespace ghoti::tests {
 
 TEST_CASE("A parameter pack must be the last parameter") {
-    helpers::test_parser_fail("const f := fn(rest..., x: i32): void {};",
+    helpers::test_parser_fail("const f = fn(rest..., x: i32): void {};",
                               syntax::diagnostic{"A parameter pack must be the last parameter",
                                                  syntax::error::PACK_PARAM_NOT_LAST,
-                                                 std::pair{0UZ, 21UZ}});
+                                                 std::pair{0UZ, 20UZ}});
 }
 
 TEST_CASE("`for comptime` cannot have an else/non-break clause") {

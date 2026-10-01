@@ -1,25 +1,25 @@
 import std;
 
-pub const Result := fn(T: type, E: type): type {
+pub const Result = fn(T: type, E: type): type {
     return union {
         ok: T,
         err: E,
 
-        pub const of := fn(val: T): @This() {
+        pub const of = fn(val: T): @This() {
             return .{ .ok = val };
         };
 
-        pub const fail := fn(e: E): @This() {
+        pub const fail = fn(e: E): @This() {
             return .{ .err = e };
         };
 
         /// The successful result of a `Result(void, E)`
         pub const done: @This() = .{ .ok = {} };
-        pub const map := fn(&self, func: auto): auto {
-            const fn_info := @typeInfo(@TypeOf(func));
+        pub const map = fn(&self, func: auto): auto {
+            const fn_info = @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map requires a function argument");
-            const NewOk := fn_info.function.return_type;
-            const NewRes := Result(NewOk, E);
+            const NewOk = fn_info.function.return_type;
+            const NewRes = Result(NewOk, E);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = func(happy) },
@@ -27,11 +27,11 @@ pub const Result := fn(T: type, E: type): type {
             };
         };
 
-        pub const map_err := fn(&self, func: auto): auto {
-            const fn_info := @typeInfo(@TypeOf(func));
+        pub const map_err = fn(&self, func: auto): auto {
+            const fn_info = @typeInfo(@TypeOf(func));
             @assert(fn_info == .function, "map_err requires a function argument");
-            const NewErr := fn_info.function.return_type;
-            const NewRes := Result(T, NewErr);
+            const NewErr = fn_info.function.return_type;
+            const NewRes = Result(T, NewErr);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = happy },
@@ -62,7 +62,7 @@ test "Result constructors build each variant" {
 
 test "Result.map transforms ok variant" {
     let a: Result(i32, bool) = .{ .ok = 1 };
-    let mapped := a.map(fn(val: i32): []u8 {
+    let mapped = a.map(fn(val: i32): []u8 {
         return "Hello, World!";
     });
 
@@ -74,7 +74,7 @@ test "Result.map transforms ok variant" {
 
 test "Result.map_err transforms error variant" {
     let a: Result(void, i32) = .{ .err = 1 };
-    let mapped := a.map_err(fn(val: i32): bool {
+    let mapped = a.map_err(fn(val: i32): bool {
         return false;
     });
 
@@ -84,7 +84,7 @@ test "Result.map_err transforms error variant" {
     });
 
     let b: Result(void, i32) = .{ .err = 2 };
-    let mapped_u8 := b.map_err(fn(_: i32): u8 {
+    let mapped_u8 = b.map_err(fn(_: i32): u8 {
         return 7;
     });
 
@@ -95,9 +95,9 @@ test "Result.map_err transforms error variant" {
 }
 
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-    const Output := T;
-    const Residual := E;
-    pub const branch := fn(self): builtin.Flow(T, E) {
+    const Output = T;
+    const Residual = E;
+    pub const branch = fn(self): builtin.Flow(T, E) {
         return match (self) {
             .ok => |v| builtin.Flow(T, E){ .continue = v },
             .err => |e| builtin.Flow(T, E){ .break = e },
@@ -106,8 +106,8 @@ impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
 }
 
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-    const From := E;
-    pub const from_residual := fn(r: E): @This() {
+    const From = E;
+    pub const from_residual = fn(r: E): @This() {
         return .{ .err = r };
     };
 }

@@ -6,16 +6,16 @@ namespace ghoti::tests {
 
 TEST_CASE("@backingInt and @fromBackingInt round-trip an enum through its underlying type") {
     CHECK(helpers::compile_and_run(R"(
-        const Level := enum : u8 { low = 3, mid = 7, high = 11 };
+        const Level = enum : u8 { low = 3, mid = 7, high = 11 };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut l: Level = .mid;
             let raw: u8 = @backingInt(l);
             if (raw != 7u8) { return 1; }
             let mut n: u8 = 11;
             let h: Level = @fromBackingInt(n);
             if (h != .high) { return 2; }
-            let explicit := @fromBackingInt(Level, 3u8);
+            let explicit = @fromBackingInt(Level, 3u8);
             if (explicit != .low) { return 3; }
             return @as(i32, @backingInt(h));
         };
@@ -24,11 +24,11 @@ TEST_CASE("@backingInt and @fromBackingInt round-trip an enum through its underl
 
 TEST_CASE("@fromBackingInt accepts any value of a non-exhaustive enum") {
     CHECK(helpers::compile_and_run(R"(
-        const Flags := enum { none, one, two, _ };
+        const Flags = enum { none, one, two, _ };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut n: i32 = 40;
-            let f := @fromBackingInt(Flags, n);
+            let f = @fromBackingInt(Flags, n);
             return @backingInt(f) + 2;
         };
     )") == 42);
@@ -36,11 +36,11 @@ TEST_CASE("@fromBackingInt accepts any value of a non-exhaustive enum") {
 
 TEST_CASE("@backingInt folds for a compile-time enum value") {
     CHECK(helpers::compile_and_run(R"(
-        const Code := enum { ok = 5, fatal = 9 };
+        const Code = enum { ok = 5, fatal = 9 };
         const c: i32 = @backingInt(Code.fatal);
         const k: Code = @fromBackingInt(5);
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             if (k != .ok) { return 1; }
             return c;
         };
@@ -49,9 +49,9 @@ TEST_CASE("@backingInt folds for a compile-time enum value") {
 
 TEST_CASE("@backingInt and @fromBackingInt round-trip a packed struct") {
     CHECK(helpers::compile_and_run(R"(
-        const Flags := packed struct { a: bool, b: u3, c: u4, };
+        const Flags = packed struct { a: bool, b: u3, c: u4, };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut f: Flags = .{ .a = true, .b = 5, .c = 9 };
             let raw: u8 = @backingInt(f);
             if (@as(i32, raw) != 1 + (5 << 1) + (9 << 4)) { return 1; }
@@ -67,9 +67,9 @@ TEST_CASE("@backingInt and @fromBackingInt round-trip a packed struct") {
 
 TEST_CASE("@backingInt and @fromBackingInt round-trip a packed union") {
     CHECK(helpers::compile_and_run(R"(
-        const Word := packed union { whole: u16, low: u8, };
+        const Word = packed union { whole: u16, low: u8, };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut n: u16 = 0x1234;
             let w: Word = @fromBackingInt(n);
             if (@as(i32, w.low) != 0x34) { return 1; }
@@ -82,11 +82,11 @@ TEST_CASE("@backingInt and @fromBackingInt round-trip a packed union") {
 
 TEST_CASE("@backingInt of a tagged union is its active tag") {
     CHECK(helpers::compile_and_run(R"(
-        const Shape := union { circle: f32, square: i32, none: void, };
+        const Shape = union { circle: f32, square: i32, none: void, };
 
-        const tag_of := fn(s: Shape): i32 { return @backingInt(s); };
+        const tag_of = fn(s: Shape): i32 { return @backingInt(s); };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut s: Shape = .{ .square = 4 };
             if (tag_of(s) != 1) { return 1; }
             s = .{ .none = {} };

@@ -143,7 +143,7 @@ class const_eval {
     [[nodiscard]] static auto
     struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size) -> usize;
     [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
-    // The type an unannotated type-alias decl (`const X := T;`) names, read off its own node so a
+    // The type an unannotated type-alias decl (`const X = T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
     [[nodiscard]] static auto
     alias_decl_type(const mod::module& mod, ast::node_id node, const ast::decl_stmt& decl)

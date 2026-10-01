@@ -38,18 +38,18 @@ TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const checked := fn(a: i32, b: i32): i32 { return a + b; };
-        pub const unchecked := fn(a: i32, b: i32): i32 {
+        pub const checked = fn(a: i32, b: i32): i32 { return a + b; };
+        pub const unchecked = fn(a: i32, b: i32): i32 {
             @setRuntimeSafety(false);
             return a + b;
         };
-        pub const inner_only := fn(a: i32, b: i32): i32 {
+        pub const inner_only = fn(a: i32, b: i32): i32 {
             {
                 @setRuntimeSafety(false);
             }
             return a + b;
         };
-        pub const reenabled := fn(a: i32, b: i32): i32 {
+        pub const reenabled = fn(a: i32, b: i32): i32 {
             @setRuntimeSafety(false);
             let mut sum: i32 = 0;
             {
@@ -58,11 +58,11 @@ TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
             }
             return sum;
         };
-        pub const calls_checked := fn(a: i32, b: i32): i32 {
+        pub const calls_checked = fn(a: i32, b: i32): i32 {
             @setRuntimeSafety(false);
             return checked(a, b);
         };
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const main = fn(args: [][:0]u8): i32 {
             return checked(1, 2) + unchecked(1, 2) + inner_only(1, 2) + reenabled(1, 2) +
                    calls_checked(1, 2);
         };
@@ -79,26 +79,26 @@ TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
 
 TEST_CASE("@runtimeSafety() observes the enclosing @setRuntimeSafety") {
     helpers::resolve_and_check(R"(
-        const f := fn(): i32 {
+        const f = fn(): i32 {
             comptime { @assert(@runtimeSafety()); }
             @setRuntimeSafety(false);
             comptime { @assert(!@runtimeSafety()); }
-            const nested := fn(): i32 {
+            const nested = fn(): i32 {
                 comptime { @assert(@runtimeSafety()); }
                 return 0;
             };
             return nested();
         };
-        pub const main := fn(): i32 { return f(); };
+        pub const main = fn(): i32 { return f(); };
     )");
 }
 
 TEST_CASE("@setRuntimeSafety is validated") {
     CHECK(helpers::raised(R"(
-        const f := fn(on: bool): void { @setRuntimeSafety(on); };
+        const f = fn(on: bool): void { @setRuntimeSafety(on); };
     )",
                           sema::error::TYPE_MISMATCH));
-    CHECK(helpers::raised("const x := @setRuntimeSafety(false);", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("const x = @setRuntimeSafety(false);", sema::error::TYPE_MISMATCH));
 }
 
 } // namespace ghoti::tests

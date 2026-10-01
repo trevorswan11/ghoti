@@ -6,16 +6,16 @@ namespace ghoti::tests {
 
 TEST_CASE("E2E: assigning an array to a constant-bounded range copies it in") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const digits2 := fn(v: u8): [2]u8 { return [2]u8{ '0' + v / 10, '0' + v % 10 }; };
+        const digits2 = fn(v: u8): [2]u8 { return [2]u8{ '0' + v / 10, '0' + v % 10 }; };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut buf: [6]mut u8 = .{ 0, 0, 0, 0, 0, 0 };
             let mut index: usize = buf.len;
             index -= 2;
             buf[index..][0..2] = digits2(42);
             index -= 2;
             buf[index..][0..2] = digits2(17);
-            const d := fn(c: u8): i32 { return @as(i32, c - '0'); };
+            const d = fn(c: u8): i32 { return @as(i32, c - '0'); };
             let r: i32 = d(buf[2]) * 1000 + d(buf[3]) * 100 + d(buf[4]) * 10 + d(buf[5]);
             return r - 1742 + @as(i32, buf[0]);
         };
@@ -26,7 +26,7 @@ TEST_CASE("E2E: assigning an array to a constant-bounded range copies it in") {
 
 TEST_CASE("E2E: a known-length slice source is copied with overlap-safe semantics") {
     const auto exit_code{helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: [6]mut u8 = .{ 1, 2, 3, 4, 5, 6 };
             a[0..3] = a[2..5];
             let r: i32 = @as(i32, a[0]) * 100 + @as(i32, a[1]) * 10 + @as(i32, a[2]);
@@ -39,7 +39,7 @@ TEST_CASE("E2E: a known-length slice source is copied with overlap-safe semantic
 
 TEST_CASE("E2E: a range copy accepts `.{...}` sources and `*slice` destinations") {
     const auto exit_code{helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: [4]mut u8 = .{ 1, 2, 3, 4 };
             a[2..] = .{ 7, 8 };
             let b: [2]u8 = .{ 9, 6 };
@@ -55,7 +55,7 @@ TEST_CASE("E2E: a range copy accepts `.{...}` sources and `*slice` destinations"
 
 TEST_CASE("E2E: assigning a slice variable still rebinds it rather than copying") {
     const auto exit_code{helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: [4]mut u8 = .{ 1, 2, 3, 4 };
             let mut b: [4]mut u8 = .{ 5, 6, 7, 8 };
             let mut s: []mut u8 = a[0..2];
@@ -71,15 +71,15 @@ TEST_CASE("E2E: assigning a slice variable still rebinds it rather than copying"
 
 TEST_CASE("E2E: range copies and element writes through a range fold at compile time") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const build := fn(): [4]u8 {
+        const build = fn(): [4]u8 {
             let mut buf: [4]mut u8 = .{ 0, 0, 0, 0 };
             buf[1..3] = [2]u8{ 5, 6 };
             buf[2..][1] = 9;
             return buf;
         };
-        const x := build();
+        const x = build();
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let r: i32 = @as(i32, x[0]) * 1000 + @as(i32, x[1]) * 100 + @as(i32, x[2]) * 10 +
                            @as(i32, x[3]);
             return r - 500;

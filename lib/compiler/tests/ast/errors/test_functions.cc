@@ -28,12 +28,12 @@ TEST_CASE("Function missing return type") {
                                                  28});
 }
 
-TEST_CASE("An inferred-type parameter reports a diagnostic instead of crashing") {
-    helpers::test_parser_fail("fn(x := 1): i32;",
+TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
+    helpers::test_parser_fail("fn(x = 1): i32;",
                               syntax::diagnostic{"Function parameters must be explicitly typed",
                                                  syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
                                                  0,
-                                                 8});
+                                                 7});
 }
 
 TEST_CASE("Function parameter missing type") {

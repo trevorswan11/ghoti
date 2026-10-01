@@ -11,22 +11,22 @@ namespace ghoti::tests {
 
 TEST_CASE("A non-C-ABI integer width is rejected in an extern struct field") {
     helpers::test_resolver_fail(
-        "const S := extern struct { a: u100 };",
+        "const S = extern struct { a: u100 };",
         sema::diagnostic{"extern struct field 'a' has type 'u100', which has no C ABI "
                          "representation; extern signatures accept 8/16/32/64-bit integers, "
                          "usize/isize, bool, f32, f64, f80",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
-                         std::pair{0UZ, 30UZ}});
+                         std::pair{0UZ, 29UZ}});
 }
 
 TEST_CASE("A non-C-ABI integer width is rejected in an extern union field") {
     helpers::test_resolver_fail(
-        "const U := extern union { b: u7 };",
+        "const U = extern union { b: u7 };",
         sema::diagnostic{"extern union field 'b' has type 'u7', which has no C ABI "
                          "representation; extern signatures accept 8/16/32/64-bit integers, "
                          "usize/isize, bool, f32, f64, f80",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
-                         std::pair{0UZ, 29UZ}});
+                         std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("A non-C-ABI parameter width is rejected in an extern fn signature") {
@@ -67,7 +67,7 @@ TEST_CASE("f128 is rejected on an extern global") {
 
 TEST_CASE("C-ABI extern signatures and aggregates are accepted") {
     helpers::resolve_and_check("extern const ok: fn(x: u32, y: usize, z: isize): f64;");
-    helpers::resolve_and_check("const S := extern struct { a: i64, b: bool };");
+    helpers::resolve_and_check("const S = extern struct { a: i64, b: bool };");
 #if GHOTI_ASM_HOST_X86_64
     helpers::resolve_and_check("extern const with_f80: fn(x: f80): void;");
 #endif

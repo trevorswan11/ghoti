@@ -10,7 +10,7 @@ namespace ghoti::tests {
 TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") {
     SECTION("`@ptrCast` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let p: ^opaque = @ptrCast(^opaque, &42);
                 return 0;
             };
@@ -20,7 +20,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 
     SECTION("`@ptrCast` rejects a plain integer operand") {
         CHECK(helpers::raised(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let p: ^opaque = @ptrCast(^opaque, 42);
                 return 0;
             };
@@ -30,7 +30,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 
     SECTION("`@ptrCast` rejects a non-pointer target type") {
         CHECK(helpers::raised(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let mut x: i32 = 5;
                 let v: i32 = @ptrCast(i32, ^x);
                 return 0;
@@ -41,7 +41,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 
     SECTION("`@alignCast` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let p: ^opaque = @alignCast(^opaque, &42);
                 return 0;
             };
@@ -51,7 +51,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 
     SECTION("`@intFromPtr` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let n: usize = @intFromPtr(&42);
                 return 0;
             };
@@ -61,7 +61,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 
     SECTION("`@ptrCast` with a real pointer operand still succeeds") {
         helpers::type_check_and_verify(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let mut x: i32 = 5;
                 let p: ^opaque = @ptrCast(^opaque, ^x);
                 return 0;
@@ -73,7 +73,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
 TEST_CASE("Cast type checking") {
     SECTION("Valid pointer cast succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^mut i32): ^i32 {
+            const f = fn(p: ^mut i32): ^i32 {
                 return @ptrCast(^i32, p);
             };
         )");
@@ -81,7 +81,7 @@ TEST_CASE("Cast type checking") {
 
     SECTION("Valid const pointer cast succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^i32): ^mut i32 {
+            const f = fn(p: ^i32): ^mut i32 {
                 return @constCast(p);
             };
         )");
@@ -90,7 +90,7 @@ TEST_CASE("Cast type checking") {
     SECTION("Casting away const from pointer without constCast fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^i32): ^mut i32 {
+            const f = fn(p: ^i32): ^mut i32 {
                 return @ptrCast(^mut i32, p);
             };
         )",
@@ -101,10 +101,10 @@ TEST_CASE("Cast type checking") {
 
     SECTION("Casting between typed pointer and opaque pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const to_opaque := fn(p: ^i32): ^opaque {
+            const to_opaque = fn(p: ^i32): ^opaque {
                 return @ptrCast(^opaque, p);
             };
-            const from_opaque := fn(p: ^mut opaque): ^mut i32 {
+            const from_opaque = fn(p: ^mut opaque): ^mut i32 {
                 return @ptrCast(^mut i32, p);
             };
         )");
@@ -113,7 +113,7 @@ TEST_CASE("Cast type checking") {
     SECTION("Casting away const via opaque pointer without constCast fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^opaque): ^mut i32 {
+            const f = fn(p: ^opaque): ^mut i32 {
                 return @ptrCast(^mut i32, p);
             };
         )",
@@ -125,7 +125,7 @@ TEST_CASE("Cast type checking") {
 
 TEST_CASE("Implicit numeric widening conversions") {
     helpers::type_check_and_verify(R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             let val_u8: u8 = 'a';
             let val_u32: u32 = val_u8;
             let val_u64: u64 = val_u32;
@@ -143,17 +143,17 @@ TEST_CASE("Implicit numeric widening conversions") {
 
 TEST_CASE("Explicit numeric casting via @as") {
     helpers::type_check_and_verify(R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             let small_u8: u8 = 100;
-            let widen_u32 := @as(u32, small_u8);
-            let widen_u64 := @as(u64, widen_u32);
+            let widen_u32 = @as(u32, small_u8);
+            let widen_u64 = @as(u64, widen_u32);
 
             let s_i32: i32 = -5;
-            let widen_i64 := @as(i64, s_i32);
+            let widen_i64 = @as(i64, s_i32);
 
             let float_val: f64 = 9.99;
-            let int_from_float := @intFromFloat(i32, float_val);
-            let float_from_int := @as(f64, int_from_float);
+            let int_from_float = @intFromFloat(i32, float_val);
+            let float_from_int = @as(f64, int_from_float);
         };
     )");
 }
@@ -161,24 +161,24 @@ TEST_CASE("Explicit numeric casting via @as") {
 TEST_CASE("Explicit narrowing via @as is rejected") {
     helpers::test_checker_fail(
         R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             let big_u64: u64 = 1000;
-            let narrow_u8 := @as(u8, big_u64);
+            let narrow_u8 = @as(u8, big_u64);
         };
     )",
         sema::diagnostic{
             "Cannot cast type 'u64' to 'u8' (narrowing conversion from 'u64' to 'u8' may truncate "
             "high bits; use @intCast for a checked conversion or @truncate to discard high bits)",
             sema::error::TYPE_MISMATCH,
-            std::pair{3UZ, 37UZ}});
+            std::pair{3UZ, 36UZ}});
 }
 
 TEST_CASE("Explicit sign change via @as is rejected") {
     helpers::test_checker_fail(
         R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             let s_i32: i32 = -5;
-            let u_u32 := @as(u32, s_i32);
+            let u_u32 = @as(u32, s_i32);
         };
     )",
         sema::diagnostic{
@@ -187,13 +187,13 @@ TEST_CASE("Explicit sign change via @as is rejected") {
             "may change the represented value; use @intCast for a checked conversion or @bitCast "
             "to reinterpret the bits)",
             sema::error::TYPE_MISMATCH,
-            std::pair{3UZ, 34UZ}});
+            std::pair{3UZ, 33UZ}});
 }
 
 TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
     helpers::test_checker_fail(
         R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             let mut big: u64 = 100;
             let mut small: u8 = big;
         };
@@ -208,17 +208,17 @@ TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
 
 TEST_CASE("Explicit reference construction from value types") {
     helpers::type_check_and_verify(R"(
-        pub const take_ref := fn(r: &i32): i32 {
+        pub const take_ref = fn(r: &i32): i32 {
             return *r;
         };
 
-        pub const take_mut_ref := fn(r: &mut i32): void {
+        pub const take_mut_ref = fn(r: &mut i32): void {
             *r = 42;
         };
 
-        pub const caller := fn(): i32 {
+        pub const caller = fn(): i32 {
             let mut x: i32 = 10;
-            let res1 := take_ref(&x);
+            let res1 = take_ref(&x);
             take_mut_ref(&mut x);
             let mut r_var: &i32 = &x;
             return res1 + *r_var;
@@ -232,11 +232,11 @@ TEST_CASE("Explicit reference construction from value types") {
 TEST_CASE("Implicit reference type construction from value types is rejected") {
     helpers::test_checker_fail(
         R"(
-        pub const take_ref := fn(r: &i32): i32 {
+        pub const take_ref = fn(r: &i32): i32 {
             return *r;
         };
 
-        pub const caller := fn(): i32 {
+        pub const caller = fn(): i32 {
             let mut x: i32 = 10;
             return take_ref(x);
         };
@@ -250,7 +250,7 @@ TEST_CASE("Implicit reference type construction from value types is rejected") {
 TEST_CASE("Implicit reference type construction via declaration is rejected") {
     helpers::test_checker_fail(
         R"(
-        pub const caller := fn(): void {
+        pub const caller = fn(): void {
             let mut x: i32 = 10;
             let mut r_var: &i32 = x;
         };
@@ -262,20 +262,20 @@ TEST_CASE("Implicit reference type construction via declaration is rejected") {
 
 TEST_CASE("Explicit reference construction in struct field initialization") {
     helpers::type_check_and_verify(R"(
-        const RefHolder := struct { r: &i32 };
+        const RefHolder = struct { r: &i32 };
         const val: i32 = 10;
-        const h := RefHolder{ .r = &val };
+        const h = RefHolder{ .r = &val };
     )");
 }
 
 TEST_CASE("Taking a reference to an already-reference-typed value is rejected") {
     helpers::test_checker_fail(
         R"(
-        pub const take_ref := fn(r: &i32): i32 {
+        pub const take_ref = fn(r: &i32): i32 {
             return *r;
         };
 
-        pub const caller := fn(r: &i32): i32 {
+        pub const caller = fn(r: &i32): i32 {
             return take_ref(&r);
         };
     )",
@@ -288,11 +288,11 @@ TEST_CASE("Taking a reference to an already-reference-typed value is rejected") 
 TEST_CASE("Const mismatch in implicit mutable reference produces diagnostic error") {
     helpers::test_checker_fail(
         R"(
-            pub const take_mut_ref := fn(r: &mut i32): void {
+            pub const take_mut_ref = fn(r: &mut i32): void {
                 *r = 42;
             };
 
-            pub const caller := fn(const_ref: &i32): void {
+            pub const caller = fn(const_ref: &i32): void {
                 take_mut_ref(const_ref);
             };
         )",

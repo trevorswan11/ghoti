@@ -43,11 +43,11 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
 
-                pub const main := fn(): i64 {{
+                pub const main = fn(): i64 {{
                     return add(40, 2);
                 }};
             )");
@@ -75,7 +75,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const square := fn(x: i64): i64 {{
+                pub const square = fn(x: i64): i64 {{
                     return x * x;
                 }};
             )");
@@ -106,7 +106,7 @@ TEST_CASE("build_obj command execution") {
 
         {
             std::ofstream out{src_file.path};
-            fmt::print(out, "pub const invalid_syntax := ;;;");
+            fmt::print(out, "pub const invalid_syntax = ;;;");
         }
 
         cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
@@ -124,7 +124,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream helper_out{helper_path.path};
             fmt::print(helper_out, R"(
-                pub const multiply := fn(a: i64, b: i64): i64 {{
+                pub const multiply = fn(a: i64, b: i64): i64 {{
                     return a * b;
                 }};
             )");
@@ -133,7 +133,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(main_out, R"(
                 pub import "ghoti_test_helper.gh" as helper;
 
-                pub const calc := fn(x: i64): i64 {{
+                pub const calc = fn(x: i64): i64 {{
                     return helper.multiply(x, 2);
                 }};
             )");
@@ -155,7 +155,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(out, R"(
                 pub import std;
 
-                pub const ver := fn(): auto {{
+                pub const ver = fn(): auto {{
                     return std.version;
                 }};
             )");
@@ -176,7 +176,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{custom_lib.path};
             fmt::print(lib_out, R"(
-                pub const custom_fn := fn(x: i64): i64 {{
+                pub const custom_fn = fn(x: i64): i64 {{
                     return x + 100;
                 }};
             )");
@@ -185,7 +185,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import mylib;
 
-                pub const run_custom := fn(v: i64): i64 {{
+                pub const run_custom = fn(v: i64): i64 {{
                     return mylib.custom_fn(v);
                 }};
             )");
@@ -212,7 +212,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{broken_lib.path};
             fmt::print(lib_out, R"(
-                pub const custom_fn := fn(x: i64): i64 {{
+                pub const custom_fn = fn(x: i64): i64 {{
                     return x + 100l;
                 }};
             )");
@@ -221,7 +221,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import mylib;
 
-                pub const run_custom := fn(v: i64): i64 {{
+                pub const run_custom = fn(v: i64): i64 {{
                     return mylib.custom_fn(v);
                 }};
             )");
@@ -246,7 +246,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{custom_lib.path};
             fmt::print(lib_out, R"(
-                pub const clamp := fn(val: auto, low: auto, high: auto): auto {{
+                pub const clamp = fn(val: auto, low: auto, high: auto): auto {{
                     if (val < low) {{
                         return low;
                     }}
@@ -261,7 +261,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import math;
 
-                pub const clamp_int := fn(v: i64): i64 {{
+                pub const clamp_int = fn(v: i64): i64 {{
                     return math.clamp(v, 0, 100);
                 }};
             )");
@@ -289,7 +289,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
             )");
@@ -336,11 +336,11 @@ TEST_CASE("build_obj follows an import written as an absolute path") {
     tempfile            obj_file{"test_abs_import_out.o"};
     {
         std::ofstream helper_out{helper.path};
-        fmt::print(helper_out, "pub const seven := fn(): i64 {{ return 7; }};\n");
+        fmt::print(helper_out, "pub const seven = fn(): i64 {{ return 7; }};\n");
         // A generic string keeps Windows separators from being read as escapes
         std::ofstream src_out{src_file.path};
         fmt::print(src_out,
-                   "import \"{}\" as h;\npub const get := fn(): i64 {{ return h.seven(); }};\n",
+                   "import \"{}\" as h;\npub const get = fn(): i64 {{ return h.seven(); }};\n",
                    std::filesystem::absolute(helper.path).generic_string());
     }
 
@@ -356,7 +356,7 @@ TEST_CASE("build_obj reports an assembler error in inline asm instead of exiting
     {
         std::ofstream out{src_file.path};
         fmt::print(out, R"(
-            pub const f := fn(): void {{
+            pub const f = fn(): void {{
                 asm {{ template: "definitely_not_an_instruction", options: (volatile) }};
             }};
         )");
@@ -373,7 +373,7 @@ TEST_CASE("build_obj creates a missing output directory") {
     tempfile            src_file{"test_nested_out_src.gh"};
     {
         std::ofstream out{src_file.path};
-        fmt::print(out, "pub const one := fn(): i32 {{ return 1; }};\n");
+        fmt::print(out, "pub const one = fn(): i32 {{ return 1; }};\n");
     }
 
     const auto     out_dir{std::filesystem::path{tempfile::make_temp_path("ghoti_nested_out")}};

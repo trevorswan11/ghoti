@@ -28,7 +28,7 @@ TEST_CASE("lsp::format generates LSP TextEdit array or nullptr") {
     }
 
     SECTION("code with syntax error returns nullptr") {
-        constexpr std::string_view invalid{"const broken := ;\n"};
+        constexpr std::string_view invalid{"const broken = ;\n"};
         const auto                 edits = lsp::format(invalid);
         CHECK(edits.is_null());
     }

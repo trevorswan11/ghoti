@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("+| and -| clamp unsigned results to the operand range") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: u8 = 250;
             if (@as(i32, a +| 10) != 255) { return 1; }
             if (@as(i32, a +| 5) != 255) { return 2; }
@@ -21,7 +21,7 @@ TEST_CASE("+| and -| clamp unsigned results to the operand range") {
 
 TEST_CASE("+| and -| clamp signed results in both directions") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: i8 = 120;
             if (@as(i32, a +| 100) != 127) { return 1; }
             let mut b: i8 = -120;
@@ -38,7 +38,7 @@ TEST_CASE("+| and -| clamp signed results in both directions") {
 
 TEST_CASE("*| clamps products, including sign-mixed ones") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: u8 = 16;
             if (@as(i32, a *| a) != 255) { return 1; }
             let mut b: u8 = 15;
@@ -55,7 +55,7 @@ TEST_CASE("*| clamps products, including sign-mixed ones") {
 
 TEST_CASE("<<| saturates, even for shift amounts at or past the width") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: u8 = 3;
             if (@as(i32, a <<| 6) != 192) { return 1; }
             if (@as(i32, a <<| 7) != 255) { return 2; }
@@ -77,8 +77,8 @@ TEST_CASE("<<| saturates, even for shift amounts at or past the width") {
 
 TEST_CASE("compound saturating assignment clamps in place") {
     CHECK(helpers::compile_and_run(R"(
-        const Flags := packed struct { lo: u4, hi: u4, };
-        pub const main := fn(): i32 {
+        const Flags = packed struct { lo: u4, hi: u4, };
+        pub const main = fn(): i32 {
             let mut x: u8 = 250;
             x +|= 10;
             if (@as(i32, x) != 255) { return 1; }
@@ -101,7 +101,7 @@ TEST_CASE("compound saturating assignment clamps in place") {
 
 TEST_CASE("saturating operators never trap under --runtime-safety") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             // Each plain form here would panic under the default runtime-safety-on build.
             let mut a: i32 = 2147483647;
             if (a +| 1 != a) { return 1; }
@@ -121,7 +121,7 @@ TEST_CASE("saturating operators fold at compile time") {
         const d: i8 = c *| 2;
         const e: u16 = 1;
         const f: u16 = e <<| 40;
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             if (@as(i32, b) != 255) { return 1; }
             if (@as(i32, d) != -128) { return 2; }
             if (@as(i32, f) != 65535) { return 3; }
@@ -132,8 +132,8 @@ TEST_CASE("saturating operators fold at compile time") {
 
 TEST_CASE("comptime_int saturating operators fold as the plain operator (no range)") {
     CHECK(helpers::compile_and_run(R"(
-        const c := 200 +| 100;
-        pub const main := fn(): i32 { return c / 10; };
+        const c = 200 +| 100;
+        pub const main = fn(): i32 { return c / 10; };
     )") == 30);
 }
 

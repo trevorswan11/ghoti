@@ -23,7 +23,7 @@ TEST_CASE("Fetching absolute file modules") {
     const std::filesystem::path root{"/fake"};
     const std::filesystem::path elsewhere{"/other"};
 #endif
-    loader.add(root / "lib" / "foo.gh", "pub const x := 1;");
+    loader.add(root / "lib" / "foo.gh", "pub const x = 1;");
 
     // An absolute import ignores its importer's directory and dedupes with the relative spelling
     const auto absolute{UNWRAP(manager.try_get_file_module(root / "lib" / "foo.gh", elsewhere))};

@@ -211,7 +211,7 @@ auto selected(std::string_view input, std::string_view name) -> bool {
 
 namespace {
 
-// The value of the top-level `name := ...` when it is a `Data` literal
+// The value of the top-level `name = ...` when it is a `Data` literal
 template <typename Data>
 auto top_level_value(const ast::AST& ast, std::string_view name) -> stdx::option<const Data&> {
     const auto decl{ast.find_top_level_decl(name)};

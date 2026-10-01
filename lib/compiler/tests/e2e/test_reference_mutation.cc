@@ -9,9 +9,9 @@ namespace ghoti::tests {
 
 TEST_CASE("Dereference-assignment through a &mut i32 parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: &mut i32): void {
+            const setit = fn(c: &mut i32): void {
                 *c = 99;
             };
             setit(&mut x);
@@ -22,9 +22,9 @@ TEST_CASE("Dereference-assignment through a &mut i32 parameter") {
 
 TEST_CASE("Dereference-assignment combined with arithmetic through a &mut i32 parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const addone := fn(c: &mut i32): void {
+            const addone = fn(c: &mut i32): void {
                 *c = *c + 1;
             };
             addone(&mut x);
@@ -35,9 +35,9 @@ TEST_CASE("Dereference-assignment combined with arithmetic through a &mut i32 pa
 
 TEST_CASE("Compound dereference-assignment through a &mut i32 parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const addone := fn(c: &mut i32): void {
+            const addone = fn(c: &mut i32): void {
                 *c += 1;
             };
             addone(&mut x);
@@ -48,9 +48,9 @@ TEST_CASE("Compound dereference-assignment through a &mut i32 parameter") {
 
 TEST_CASE("Dereference-assignment through a raw ^mut i32 parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: ^mut i32): void {
+            const setit = fn(c: ^mut i32): void {
                 *c = 99;
             };
             setit(^mut x);
@@ -61,9 +61,9 @@ TEST_CASE("Dereference-assignment through a raw ^mut i32 parameter") {
 
 TEST_CASE("Writing through a &i32 (non-mut) reference is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: &i32): void {
+            const setit = fn(c: &i32): void {
                 *c = 99;
             };
             setit(&x);
@@ -74,9 +74,9 @@ TEST_CASE("Writing through a &i32 (non-mut) reference is rejected") {
 
 TEST_CASE("Indexing through a &[N]i32 reference parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut arr: [3uz]i32 = [_]i32{10, 20, 30};
-            const sum_first_two := fn(a: &[3uz]i32): i32 {
+            const sum_first_two = fn(a: &[3uz]i32): i32 {
                 return a[0] + a[1];
             };
             return sum_first_two(&arr);
@@ -86,9 +86,9 @@ TEST_CASE("Indexing through a &[N]i32 reference parameter") {
 
 TEST_CASE("Mutating an element through a &mut [N]mut i32 reference parameter") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut arr: [3uz]mut i32 = [3uz]mut i32{10, 20, 30};
-            const bump_first := fn(a: &mut [3uz]mut i32): void {
+            const bump_first = fn(a: &mut [3uz]mut i32): void {
                 a[0] = a[0] + 5;
             };
             bump_first(&mut arr);
@@ -99,9 +99,9 @@ TEST_CASE("Mutating an element through a &mut [N]mut i32 reference parameter") {
 
 TEST_CASE("Reading an element through a &[N]mut i32 reference to a mut array") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut arr: [3uz]mut i32 = [3uz]mut i32{10, 20, 30};
-            const sum_first_two := fn(a: &[3uz]mut i32): i32 {
+            const sum_first_two = fn(a: &[3uz]mut i32): i32 {
                 return a[0] + a[1];
             };
             return sum_first_two(&arr);
@@ -111,9 +111,9 @@ TEST_CASE("Reading an element through a &[N]mut i32 reference to a mut array") {
 
 TEST_CASE("Reading a &i32 reference parameter without an explicit deref") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 41;
-            const readit := fn(c: &i32): i32 {
+            const readit = fn(c: &i32): i32 {
                 return c + 1;
             };
             return readit(&x);
@@ -123,9 +123,9 @@ TEST_CASE("Reading a &i32 reference parameter without an explicit deref") {
 
 TEST_CASE("Writing through a &mut i32 reference parameter without an explicit deref") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: &mut i32): void {
+            const setit = fn(c: &mut i32): void {
                 c = 99;
             };
             setit(&mut x);
@@ -136,9 +136,9 @@ TEST_CASE("Writing through a &mut i32 reference parameter without an explicit de
 
 TEST_CASE("Reading and writing a &mut i32 reference without an explicit deref, combined") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const addone := fn(c: &mut i32): void {
+            const addone = fn(c: &mut i32): void {
                 c = c + 1;
             };
             addone(&mut x);
@@ -149,9 +149,9 @@ TEST_CASE("Reading and writing a &mut i32 reference without an explicit deref, c
 
 TEST_CASE("Compound assignment through a &mut i32 reference without an explicit deref") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const addone := fn(c: &mut i32): void {
+            const addone = fn(c: &mut i32): void {
                 c += 1;
             };
             addone(&mut x);
@@ -162,10 +162,10 @@ TEST_CASE("Compound assignment through a &mut i32 reference without an explicit 
 
 TEST_CASE("Reading a struct field through a &Point reference without an explicit deref") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
-            let mut p := Point{ .x = 1, .y = 41 };
-            const get_y := fn(pt: &Point): i32 {
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
+            let mut p = Point{ .x = 1, .y = 41 };
+            const get_y = fn(pt: &Point): i32 {
                 return pt.y;
             };
             return get_y(&p);
@@ -175,7 +175,7 @@ TEST_CASE("Reading a struct field through a &Point reference without an explicit
 
 TEST_CASE("A local reference variable reads with value semantics") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let r: &mut i32 = &mut x;
             r = r + 10;
@@ -186,9 +186,9 @@ TEST_CASE("A local reference variable reads with value semantics") {
 
 TEST_CASE("Passing a plain value where a &mut i32 parameter is expected is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: &mut i32): void {
+            const setit = fn(c: &mut i32): void {
                 c = 99;
             };
             setit(x);
@@ -199,7 +199,7 @@ TEST_CASE("Passing a plain value where a &mut i32 parameter is expected is rejec
 
 TEST_CASE("Declaring a reference-typed variable from a plain value is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut r: &i32 = x;
             return r;
@@ -209,9 +209,9 @@ TEST_CASE("Declaring a reference-typed variable from a plain value is rejected")
 
 TEST_CASE("Taking & of an already-reference-typed value is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const setit := fn(c: &mut i32): void {
+            const setit = fn(c: &mut i32): void {
                 c = 99;
             };
             let r: &mut i32 = &mut x;
@@ -223,9 +223,9 @@ TEST_CASE("Taking & of an already-reference-typed value is rejected") {
 
 TEST_CASE("Passing an existing reference directly aliases the same referent") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            const addone := fn(c: &mut i32): void {
+            const addone = fn(c: &mut i32): void {
                 c = c + 1;
             };
             let r: &mut i32 = &mut x;
@@ -237,7 +237,7 @@ TEST_CASE("Passing an existing reference directly aliases the same referent") {
 
 TEST_CASE("Taking &mut of a const binding is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let c: i32 = 5;
             let p: &mut i32 = &mut c;
             return c;
@@ -247,7 +247,7 @@ TEST_CASE("Taking &mut of a const binding is rejected") {
 
 TEST_CASE("Taking ^mut of a const binding is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let c: i32 = 5;
             let p: ^mut i32 = ^mut c;
             return c;
@@ -257,14 +257,14 @@ TEST_CASE("Taking ^mut of a const binding is rejected") {
 
 TEST_CASE("Calling a `&mut self` method on a const receiver is rejected") {
     helpers::expect_compile_error(R"(
-        const Counter := struct {
+        const Counter = struct {
             n: i32,
-            pub const bump := fn(&mut self): void {
+            pub const bump = fn(&mut self): void {
                 self.n = self.n + 1;
             };
         };
-        pub const main := fn(): i32 {
-            let c := Counter{ .n = 0 };
+        pub const main = fn(): i32 {
+            let c = Counter{ .n = 0 };
             c.bump();
             return c.n;
         };
@@ -273,14 +273,14 @@ TEST_CASE("Calling a `&mut self` method on a const receiver is rejected") {
 
 TEST_CASE("Calling a `&self` method on a const receiver is allowed") {
     CHECK(helpers::compile_and_run(R"(
-        const Counter := struct {
+        const Counter = struct {
             n: i32,
-            pub const get := fn(&self): i32 {
+            pub const get = fn(&self): i32 {
                 return self.n;
             };
         };
-        pub const main := fn(): i32 {
-            let c := Counter{ .n = 7 };
+        pub const main = fn(): i32 {
+            let c = Counter{ .n = 7 };
             return c.get();
         };
     )") == 7);

@@ -582,7 +582,7 @@ namespace {
 }
 
 // A struct or union still being resolved has no fields yet, so neither does anything holding one
-// by value: its layout depends on itself (`const S := struct { d: [@alignOf(S)]u8 };`)
+// by value: its layout depends on itself (`const S = struct { d: [@alignOf(S)]u8 };`)
 [[nodiscard]] auto layout_is_known(const sema::type& type) -> bool {
     const auto fields_known = [](gsl::span<sema::type* const> fields) {
         return std::ranges::all_of(fields,

@@ -10,8 +10,8 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR guards an integer -> exhaustive-enum cast with a panic") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum { red, green, blue };
-        const pick := fn(n: i32): Color { return @fromBackingInt(Color, n); };
+        const Color = enum { red, green, blue };
+        const pick = fn(n: i32): Color { return @fromBackingInt(Color, n); };
     )")};
 
     const auto dump_text{helpers::dump_named_fn(*ctx, "pick")};
@@ -21,8 +21,8 @@ TEST_CASE("GIR guards an integer -> exhaustive-enum cast with a panic") {
 
 TEST_CASE("GIR does not guard a cast to a non-exhaustive enum") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum { red, green, blue, _ };
-        const pick := fn(n: i32): Color { return @fromBackingInt(Color, n); };
+        const Color = enum { red, green, blue, _ };
+        const pick = fn(n: i32): Color { return @fromBackingInt(Color, n); };
     )")};
 
     const auto dump_text{helpers::dump_named_fn(*ctx, "pick")};
@@ -31,8 +31,8 @@ TEST_CASE("GIR does not guard a cast to a non-exhaustive enum") {
 
 TEST_CASE("GIR omits the guard when the value is a known-good constant") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum { red, green, blue };
-        const pick := fn(): Color { return @fromBackingInt(Color, 1); };
+        const Color = enum { red, green, blue };
+        const pick = fn(): Color { return @fromBackingInt(Color, 1); };
     )")};
 
     const auto dump_text{helpers::dump_named_fn(*ctx, "pick")};

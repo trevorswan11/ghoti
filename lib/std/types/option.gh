@@ -1,16 +1,16 @@
-pub const Option := fn(T: type): type {
+pub const Option = fn(T: type): type {
     return union {
         some: T,
         none: void,
 
-        pub const of := fn(val: T): @This() {
+        pub const of = fn(val: T): @This() {
             return .{ .some = val };
         };
 
         pub const empty: @This() = .{ .none = {} };
 
         /// Returns the contained `some` value or a provided default.
-        pub const unwrap_or := fn(&self, default: T): T {
+        pub const unwrap_or = fn(&self, default: T): T {
             return match (self) {
                 .some => |s| s,
                 .none => default,
@@ -27,9 +27,9 @@ test "Option.unwrap_or returns the default when disengaged" {
 }
 
 impl(T: type) builtin.Unwrappable for Option(T) {
-    const Output := T;
-    const Residual := void;
-    pub const branch := fn(self): builtin.Flow(T, void) {
+    const Output = T;
+    const Residual = void;
+    pub const branch = fn(self): builtin.Flow(T, void) {
         return match (self) {
             .some => |v| builtin.Flow(T, void){ .continue = v },
             .none => builtin.Flow(T, void){ .break = {} },
@@ -38,8 +38,8 @@ impl(T: type) builtin.Unwrappable for Option(T) {
 }
 
 impl(T: type) builtin.Rewrappable for Option(T) {
-    const From := void;
-    pub const from_residual := fn(_: void): @This() {
+    const From = void;
+    pub const from_residual = fn(_: void): @This() {
         return .{ .none = {} };
     };
 }

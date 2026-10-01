@@ -3123,7 +3123,7 @@ namespace {
     return stdx::none;
 }
 
-// Records one `context::type_ctor_member_emit` per `const m := fn ...` member of the aggregate
+// Records one `context::type_ctor_member_emit` per `const m = fn ...` member of the aggregate
 // returned by a `fn(...): type` constructor.
 auto register_type_ctor_members(context&         ctx,
                                 mod::module&     fn_mod,
@@ -4100,7 +4100,7 @@ auto type_resolver::untyped_aggregate_literal(ID id, std::string_view kind) -> t
         resolving_,
         id,
         fmt::format("An anonymous {0} type cannot be used in an expression; declare it first "
-                    "(e.g. `const T := {0} {{ ... }};`)",
+                    "(e.g. `const T = {0} {{ ... }};`)",
                     kind),
         error::TYPE_MISMATCH,
         resolving_.ast.location_of(id));
@@ -5208,7 +5208,7 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
     default: UNREACHABLE("Symbol status should only be 1 of 3 states");
     }
 
-    // A reference to a deferred-error declaration (`const X := @compileError("msg")`) reports the
+    // A reference to a deferred-error declaration (`const X = @compileError("msg")`) reports the
     // message here, at the use site, rather than where `X` was declared.
     if (const auto msg{sym.deferred_error()}) {
         return last_type_.emplace(ctx_.poison_node(resolving_,
@@ -5242,7 +5242,7 @@ auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
         return;
     }
 
-    // `const f := other.g`: follow the chain so the call site scopes to `g`'s real owning module,
+    // `const f = other.g`: follow the chain so the call site scopes to `g`'s real owning module,
     // not this alias.
     if (const auto dot{target_mod.ast.get_as_opt<ast::dot_expr>(*decl->value)}) {
         if (const auto outer_ty{target_mod.get_sema_type_opt(dot->object)}) {
@@ -6517,7 +6517,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
-    // An ordinary `Color := enum {...}` names its `enum_t` directly, never wrapped
+    // An ordinary `Color = enum {...}` names its `enum_t` directly, never wrapped
     auto& object_type{denoted_type(*last_type_.take())};
 
     const auto unwrap_ref = [](type& t) -> type& {
@@ -9759,7 +9759,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     }
     sym.set_status(symbol_status::RESOLVING);
 
-    // `const X := @compileError("msg")` is inert until referenced. Record the message on the
+    // `const X = @compileError("msg")` is inert until referenced. Record the message on the
     // symbol and resolve it to `void`; `resolve_symbol` reports `msg` at each use site.
     if (decl.value) {
         if (const auto msg{sole_compile_error_message(resolving_.ast, *decl.value)}) {
@@ -9856,7 +9856,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 return poison_out();
             }
             auto* decl_value_type_p{last_type_.take()};
-            // `const X := MakesAType()`: fold the constructor now, exactly like an annotation
+            // `const X = MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
                 gir::const_eval evaluator{ctx_, resolving_};
@@ -9955,7 +9955,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
-        // `const U := undefined` aliases the literal; there is no runtime value to store
+        // `const U = undefined` aliases the literal; there is no runtime value to store
         const bool binds_undefined{resolved_type.get_kind() == type_kind::UNDEFINED};
         if (binds_undefined && (runtime_binding || decl.has_modifier(ast::decl_modifiers::MUT))) {
             ctx_.poison_symbol(sym,
@@ -11187,7 +11187,7 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
             return discardable_holds(*home, owner, fn_literal->attributes, call_id).value_or(false);
         }
 
-        // Follow a direct `const g := f` / `const g := m.f` re-export to the real declaration.
+        // Follow a direct `const g = f` / `const g = m.f` re-export to the real declaration.
         if (decl->value && (home->ast.get_as_opt<ast::identifier_expr>(*decl->value) ||
                             home->ast.get_as_opt<ast::dot_expr>(*decl->value))) {
             fn_node = *decl->value;

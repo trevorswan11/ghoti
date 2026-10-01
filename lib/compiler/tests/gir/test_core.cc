@@ -196,23 +196,23 @@ TEST_CASE("GIR module container and arena allocation") {
 
 TEST_CASE("Comprehensive program lowering") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
         };
 
-        const max := fn(a: auto, b: auto): auto {
+        const max = fn(a: auto, b: auto): auto {
             if (a > b) {
                 return a;
             }
             return b;
         };
 
-        const transform := fn(p: Point): i32 {
+        const transform = fn(p: Point): i32 {
             let mut res: i32 = 0;
             defer res = res + 100;
 
-            let mx := max(p.x, p.y);
+            let mx = max(p.x, p.y);
             let mut i: i32 = 0;
             while (i < 3) {
                 res += mx;
@@ -223,8 +223,8 @@ TEST_CASE("Comprehensive program lowering") {
         };
 
         test "run_transform" {
-            let p := Point{ .x = 10, .y = 20 };
-            let ans := transform(p);
+            let p = Point{ .x = 10, .y = 20 };
+            let ans = transform(p);
         }
     )")};
 

@@ -11,7 +11,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("Test statement symbol collection") {
-    auto [ctx, idx]{helpers::collect_and_check(R"(test "foo" { let foo := bar; })")};
+    auto [ctx, idx]{helpers::collect_and_check(R"(test "foo" { let foo = bar; })")};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
     const auto& table{UNWRAP(registry.get_opt(idx))};
@@ -25,34 +25,34 @@ TEST_CASE("Test statement symbol collection") {
 
 TEST_CASE("Test shadowing") {
     helpers::test_collector_fail(
-        R"(const a := 2; test "foo" { let a := 3; })",
+        R"(const a = 2; test "foo" { let a = 3; })",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 31UZ}});
+                         std::pair{0UZ, 30UZ}});
 }
 
 TEST_CASE("Illegal test location") {
-    helpers::test_collector_fail("const a := fn(&self): void { test {} };",
+    helpers::test_collector_fail("const a = fn(&self): void { test {} };",
                                  sema::diagnostic{"Tests must be at the topmost level of a file",
                                                   sema::error::ILLEGAL_TEST_LOCATION,
-                                                  std::pair{0UZ, 29UZ}});
+                                                  std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("Test-only builtins are rejected outside a test block") {
     helpers::test_collector_fail(
-        "const a := fn(): void { @expect(true); };",
+        "const a = fn(): void { @expect(true); };",
         sema::diagnostic{"'@expect' may only be used inside a 'test' block",
                          sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                         std::pair{0UZ, 24UZ}});
+                         std::pair{0UZ, 23UZ}});
     helpers::test_collector_fail(
-        "const a := fn(): void { @require(true); };",
+        "const a = fn(): void { @require(true); };",
         sema::diagnostic{"'@require' may only be used inside a 'test' block",
                          sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                         std::pair{0UZ, 24UZ}});
-    helpers::test_collector_fail("const a := fn(): void { @skip(\"x\"); };",
+                         std::pair{0UZ, 23UZ}});
+    helpers::test_collector_fail("const a = fn(): void { @skip(\"x\"); };",
                                  sema::diagnostic{"'@skip' may only be used inside a 'test' block",
                                                   sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                                                  std::pair{0UZ, 24UZ}});
+                                                  std::pair{0UZ, 23UZ}});
 }
 
 TEST_CASE("Test-only builtins collect cleanly inside a test block") {

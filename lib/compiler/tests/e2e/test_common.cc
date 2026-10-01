@@ -6,8 +6,8 @@ namespace ghoti::tests {
 
 TEST_CASE("Pure noop function with loops") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): void {
-            let a := [_]i32{};
+        pub const main = fn(): void {
+            let a = [_]i32{};
             for (a) |_| {}
             while (false) {}
             do {} while (false);
@@ -18,7 +18,7 @@ TEST_CASE("Pure noop function with loops") {
 
 TEST_CASE("compound assignment operators use their own operator, not +") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 20;
             x -= 4;                 // 16
             x *= 3;                 // 48
@@ -36,9 +36,9 @@ TEST_CASE("compound assignment operators use their own operator, not +") {
 
 TEST_CASE("@sizeOf / @bitSizeOf of a function-local type folds") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const Pair := struct { a: i32, b: i32 };
-            const Small := packed struct { x: u3, y: u5 };
+        pub const main = fn(): i32 {
+            const Pair = struct { a: i32, b: i32 };
+            const Small = packed struct { x: u3, y: u5 };
             if (@sizeOf(Pair) != 8) { return 1; }
             if (@sizeOf(Small) != 1 or @bitSizeOf(Small) != 8) { return 2; }
             let mut p: Pair = .{ .a = 3, .b = 4 };
@@ -49,13 +49,13 @@ TEST_CASE("@sizeOf / @bitSizeOf of a function-local type folds") {
 
 TEST_CASE("Forward references and mutual recursion resolve") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 { return pick(is_even(10)); };
-        const pick := fn(b: bool): i32 { if (b) { return 7; } return 0; };
-        const is_even := fn(n: i32): bool {
+        pub const main = fn(): i32 { return pick(is_even(10)); };
+        const pick = fn(b: bool): i32 { if (b) { return 7; } return 0; };
+        const is_even = fn(n: i32): bool {
             if (n == 0) { return true; }
             return is_odd(n - 1);
         };
-        const is_odd := fn(n: i32): bool {
+        const is_odd = fn(n: i32): bool {
             if (n == 0) { return false; }
             return is_even(n - 1);
         };
@@ -64,16 +64,16 @@ TEST_CASE("Forward references and mutual recursion resolve") {
 
 TEST_CASE("deferred @compileError allows unreferenced decls to still compile") {
     CHECK(helpers::compile_and_run(R"(
-        pub const BROKEN := @compileError("port this C macro by hand");
-        pub const main := fn(): i32 { return 42; };
+        pub const BROKEN = @compileError("port this C macro by hand");
+        pub const main = fn(): i32 { return 42; };
     )") == 42);
 }
 
 TEST_CASE("Module-scope `const P = @ptrFromInt(...)` materializes cleanly") {
     const auto exit_code{helpers::compile_and_run(R"(
         const P: ^mut opaque = @ptrFromInt(^mut opaque, 0x1000uz);
-        pub const main := fn(): i32 {
-            let addr := @intFromPtr(P);
+        pub const main = fn(): i32 {
+            let addr = @intFromPtr(P);
             return if (addr == 0x1000uz) 7 else 0;
         };
     )")};

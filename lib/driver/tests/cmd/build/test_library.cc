@@ -36,7 +36,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
             )");
@@ -64,7 +64,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const mul := fn(x: i64, y: i64): i64 {{
+                pub const mul = fn(x: i64, y: i64): i64 {{
                     return x * y;
                 }};
             )");
@@ -93,7 +93,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const mul := fn(x: i64, y: i64): i64 {{
+                pub const mul = fn(x: i64, y: i64): i64 {{
                     return x * y;
                 }};
             )");
@@ -123,7 +123,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 3;
                 }};
             )");
@@ -157,7 +157,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{lib_src.path};
             fmt::print(out, R"(
-                pub const compute := fn(x: i64): i64 {{
+                pub const compute = fn(x: i64): i64 {{
                     return x + 100;
                 }};
             )");
@@ -166,7 +166,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{exe_src.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");

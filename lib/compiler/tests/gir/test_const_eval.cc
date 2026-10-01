@@ -43,18 +43,18 @@ TEST_CASE("Primitive literal constant eval") {
 
 TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := 2 + 3;
-        const sub := 10 - 4;
-        const mul := 10 * 3;
-        const div := 10 / 2;
-        const mod := 10 % 3;
-        const neg := -(-3);
-        const shl := 1 << 4;
-        const shr := 16 >> 2;
-        const band := 10 & 12;
-        const bor := 10 | 5;
-        const bxor := 10 ^ 12;
-        const bnot := ~0;
+        const add = 2 + 3;
+        const sub = 10 - 4;
+        const mul = 10 * 3;
+        const div = 10 / 2;
+        const mod = 10 % 3;
+        const neg = -(-3);
+        const shl = 1 << 4;
+        const shr = 16 >> 2;
+        const band = 10 & 12;
+        const bor = 10 | 5;
+        const bxor = 10 ^ 12;
+        const bnot = ~0;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -81,13 +81,13 @@ TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
 
 TEST_CASE("Boolean logic and comparisons constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const t_and := true and false;
-        const t_or := true or false;
-        const t_not := !true;
-        const t_gt := 5 > 3;
-        const t_lt := 5 < 3;
-        const t_eq := 5 == 5;
-        const t_neq := 5 != 4;
+        const t_and = true and false;
+        const t_or = true or false;
+        const t_not = !true;
+        const t_gt = 5 > 3;
+        const t_lt = 5 < 3;
+        const t_eq = 5 == 5;
+        const t_neq = 5 != 4;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -109,15 +109,15 @@ TEST_CASE("Boolean logic and comparisons constant eval") {
 
 TEST_CASE("Compile-time builtins constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const sz_u8 := @sizeOf(u8);
-        const sz_u32 := @sizeOf(u32);
-        const sz_u64 := @sizeOf(u64);
-        const sz_arr := @sizeOf([4]u8);
-        const al_u32 := @alignOf(u32);
-        const al_u64 := @alignOf(u64);
-        const v_abs := @abs(-42);
-        const v_clz := @clz(1);
-        const v_pop := @popCount(7);
+        const sz_u8 = @sizeOf(u8);
+        const sz_u32 = @sizeOf(u32);
+        const sz_u64 = @sizeOf(u64);
+        const sz_arr = @sizeOf([4]u8);
+        const al_u32 = @alignOf(u32);
+        const al_u64 = @alignOf(u64);
+        const v_abs = @abs(-42);
+        const v_clz = @clz(1);
+        const v_pop = @popCount(7);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -141,16 +141,16 @@ TEST_CASE("Compile-time builtins constant eval") {
 
 TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer width") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const PtrHolder := struct {
+        const PtrHolder = struct {
             p: ^i32,
             n: u8,
         };
 
-        const sz_usize := @sizeOf(usize);
-        const al_usize := @alignOf(usize);
-        const sz_ptr := @sizeOf(^i32);
-        const sz_slice := @sizeOf([]u8);
-        const sz_struct := @sizeOf(PtrHolder);
+        const sz_usize = @sizeOf(usize);
+        const al_usize = @alignOf(usize);
+        const sz_ptr = @sizeOf(^i32);
+        const sz_slice = @sizeOf([]u8);
+        const sz_struct = @sizeOf(PtrHolder);
     )")};
 
     const auto check_u64 = [&](std::string_view name, u64 expected) {
@@ -178,13 +178,13 @@ TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer wid
 
 TEST_CASE("Target builtins constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const os_name := @targetOs();
-        const arch_name := @targetArch();
-        const triple_name := @targetTriple();
-        const abi_name := @targetAbi();
-        const family_name := @targetFamily();
-        const endian_name := @targetEndian();
-        const ptr_bits := @targetPtrBits();
+        const os_name = @targetOs();
+        const arch_name = @targetArch();
+        const triple_name = @targetTriple();
+        const abi_name = @targetAbi();
+        const family_name = @targetFamily();
+        const endian_name = @targetEndian();
+        const ptr_bits = @targetPtrBits();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -221,10 +221,10 @@ TEST_CASE("Target builtins constant eval") {
 
 TEST_CASE("Target enum comparison folds against a bare member") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const here  := @targetOs();
-        const eq    := @targetOs() == here;
-        const ne    := @targetArch() != @targetArch();
-        const probe := fn(o: builtin.Os): void {};
+        const here  = @targetOs();
+        const eq    = @targetOs() == here;
+        const ne    = @targetArch() != @targetArch();
+        const probe = fn(o: builtin.Os): void {};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -241,9 +241,9 @@ TEST_CASE("Target enum comparison folds against a bare member") {
 
 TEST_CASE("MulAdd and TagName constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const v_mul_add := @mulAdd(i32, 2, 3, 4);
-        const Color := enum { RED, GREEN, BLUE };
-        const tag := @tagName(Color.GREEN);
+        const v_mul_add = @mulAdd(i32, 2, 3, 4);
+        const Color = enum { RED, GREEN, BLUE };
+        const tag = @tagName(Color.GREEN);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -260,9 +260,9 @@ TEST_CASE("MulAdd and TagName constant eval") {
 
 TEST_CASE("Const symbol reference propagation constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const N := 4;
-        const M := N * 2;
-        const K := M + N;
+        const N = 4;
+        const M = N * 2;
+        const K = M + N;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -279,7 +279,7 @@ TEST_CASE("Const symbol reference propagation constant eval") {
 
 TEST_CASE("Array dimension resolution constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const N := 4;
+        const N = 4;
         const a: [N * 2]u8 = [8]u8{1, 2, 3, 4, 5, 6, 7, 8};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
@@ -299,19 +299,19 @@ TEST_CASE("Array dimension resolution constant eval") {
 
 TEST_CASE("Const eval function evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := fn(a: i32, b: i32): i32 {
-            let sum := a + b;
+        const add = fn(a: i32, b: i32): i32 {
+            let sum = a + b;
             return sum;
         };
-        const max_val := fn(a: i32, b: i32): i32 {
+        const max_val = fn(a: i32, b: i32): i32 {
             if (a > b) {
                 return a;
             } else {
                 return b;
             }
         };
-        const res_add := add(40, 2);
-        const res_max := max_val(100, 42);
+        const res_add = add(40, 2);
+        const res_max = max_val(100, 42);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -328,18 +328,18 @@ TEST_CASE("Const eval function evaluation") {
 
 TEST_CASE("Const eval variable mutation and loops") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const loop_sum := fn(n: i32): i32 {
-            let mut i := 1;
-            let mut sum := 0;
+        const loop_sum = fn(n: i32): i32 {
+            let mut i = 1;
+            let mut sum = 0;
             while (i <= n) {
                 sum += i;
                 i += 1;
             }
             return sum;
         };
-        const collatz := fn(start: i32): i32 {
-            let mut n := start;
-            let mut steps := 0;
+        const collatz = fn(start: i32): i32 {
+            let mut n = start;
+            let mut steps = 0;
             while (n > 1) {
                 if (n % 2 == 0) {
                     n /= 2;
@@ -350,8 +350,8 @@ TEST_CASE("Const eval variable mutation and loops") {
             }
             return steps;
         };
-        const sum_10 := loop_sum(10);
-        const collatz_6 := collatz(6);
+        const sum_10 = loop_sum(10);
+        const collatz_6 = collatz(6);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -368,22 +368,22 @@ TEST_CASE("Const eval variable mutation and loops") {
 
 TEST_CASE("Const eval for loops over ranges and arrays") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const range_sum := fn(n: i32): i32 {
-            let mut sum := 0;
+        const range_sum = fn(n: i32): i32 {
+            let mut sum = 0;
             for (1..(n + 1)) |i| {
                 sum += i;
             }
             return sum;
         };
-        const arr_sum := fn(): i32 {
-            let mut sum := 0;
+        const arr_sum = fn(): i32 {
+            let mut sum = 0;
             for (0..3, [_]i32{10, 20, 30}) |i, val| {
                 sum += val;
             }
             return sum;
         };
-        const r_sum_10 := range_sum(10);
-        const a_sum := arr_sum();
+        const r_sum_10 = range_sum(10);
+        const a_sum = arr_sum();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -400,9 +400,9 @@ TEST_CASE("Const eval for loops over ranges and arrays") {
 
 TEST_CASE("Array constant eval indexing") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const arr := [_]i32{10, 20, 30, 40};
-        const elem0 := arr[0];
-        const elem2 := arr[2];
+        const arr = [_]i32{10, 20, 30, 40};
+        const elem0 = arr[0];
+        const elem2 = arr[2];
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -419,10 +419,10 @@ TEST_CASE("Array constant eval indexing") {
 
 TEST_CASE("Struct member constant eval access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
-        const pt := Point{ .x = 15, .y = 25 };
-        const px := pt.x;
-        const py := pt.y;
+        const Point = struct { x: i32, y: i32 };
+        const pt = Point{ .x = 15, .y = 25 };
+        const px = pt.x;
+        const py = pt.y;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -439,10 +439,10 @@ TEST_CASE("Struct member constant eval access") {
 
 TEST_CASE("Union constant eval active and inactive member access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Payload := union { int_val: i32, float_val: f64 };
-        const u := Payload{ .int_val = 42 };
-        const active_val := u.int_val;
-        const inactive_val := u.float_val;
+        const Payload = union { int_val: i32, float_val: f64 };
+        const u = Payload{ .int_val = 42 };
+        const active_val = u.int_val;
+        const inactive_val = u.float_val;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -460,26 +460,26 @@ TEST_CASE("Union constant eval active and inactive member access") {
 
 TEST_CASE("Match constant eval expression evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const classify := fn(x: i32): i32 {
+        const classify = fn(x: i32): i32 {
             return match (x) {
                 0 => 100,
                 1 => 200,
                 _ => 300,
             };
         };
-        const Color := enum { RED, GREEN, BLUE };
-        const color_code := fn(c: Color): i32 {
+        const Color = enum { RED, GREEN, BLUE };
+        const color_code = fn(c: Color): i32 {
             return match (c) {
                 .RED => 10,
                 .GREEN => 20,
                 .BLUE => 30,
             };
         };
-        const c0 := classify(0);
-        const c1 := classify(1);
-        const c99 := classify(99);
-        const code_red := color_code(Color.RED);
-        const code_blue := color_code(.BLUE);
+        const c0 = classify(0);
+        const c1 = classify(1);
+        const c99 = classify(99);
+        const code_red = color_code(Color.RED);
+        const code_blue = color_code(.BLUE);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -511,15 +511,15 @@ TEST_CASE("Match constant eval expression evaluation") {
 
 TEST_CASE("Resolve deferred call returning type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const choose_type := fn(is_64: bool): type {
+        const choose_type = fn(is_64: bool): type {
             if (is_64) {
                 return i64;
             } else {
                 return i32;
             }
         };
-        const TypeA := choose_type(true);
-        const TypeB := choose_type(false);
+        const TypeA = choose_type(true);
+        const TypeB = choose_type(false);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -540,7 +540,7 @@ TEST_CASE("Resolve deferred call returning type") {
 }
 
 TEST_CASE("Division by zero failure handling in constant eval") {
-    auto [ctx, idx]{helpers::resolve_and_check("const bad := 10 / 0;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const bad = 10 / 0;")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
     const auto [sym, _, decl, type]{
@@ -552,14 +552,14 @@ TEST_CASE("Division by zero failure handling in constant eval") {
 
 TEST_CASE("Builtin const eval @This") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Node := struct {
+        const Node = struct {
             val: i32,
 
-            const Self := @This();
-            pub const bar := fn(s: &Self): i32 { return 0; };
+            const Self = @This();
+            pub const bar = fn(s: &Self): i32 { return 0; };
         };
-        const sz := @sizeOf(Node);
-        const al := @alignOf(Node);
+        const sz = @sizeOf(Node);
+        const al = @alignOf(Node);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -577,7 +577,7 @@ TEST_CASE("Builtin const eval @This") {
 TEST_CASE("Volatile variables refuse constant folding in const eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const v: volatile i32 = 42;
-        const read_v := v;
+        const read_v = v;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -589,11 +589,11 @@ TEST_CASE("Volatile variables refuse constant folding in const eval") {
 
 TEST_CASE("Const eval string concatenation and comparison folding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const greeting := "Hello, " + "world!";
-        const is_same := "ghoti" == "ghoti";
-        const is_diff := "ghoti" != "c";
-        const is_less := "apple" < "banana";
-        const char_idx := "ghoti"[1];
+        const greeting = "Hello, " + "world!";
+        const is_same = "ghoti" == "ghoti";
+        const is_diff = "ghoti" != "c";
+        const is_less = "apple" < "banana";
+        const char_idx = "ghoti"[1];
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -625,13 +625,13 @@ TEST_CASE("Const eval string concatenation and comparison folding") {
 
 TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const count_loop := fn(n: i32): i32 {
+        const count_loop = fn(n: i32): i32 {
             @setEvalRecursionLimit(10);
-            let mut i := 0;
+            let mut i = 0;
             while (i < n) { i += 1; }
             return i;
         };
-        const res := count_loop(5);
+        const res = count_loop(5);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -643,8 +643,8 @@ TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
 
 TEST_CASE("Const eval folds @export to void and the resolver names the entry point") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const custom_entry := fn(): void {};
-        const setup := @export(custom_entry, .{ .name = "main" });
+        const custom_entry = fn(): void {};
+        const setup = @export(custom_entry, .{ .name = "main" });
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -656,13 +656,13 @@ TEST_CASE("Const eval folds @export to void and the resolver names the entry poi
 
 TEST_CASE("Const eval folds method call on struct instance") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
-            pub const sum := fn(self): i32 { return self.x + self.y; };
+            pub const sum = fn(self): i32 { return self.x + self.y; };
         };
-        const pt := Point{ .x = 10, .y = 32 };
-        const res := pt.sum();
+        const pt = Point{ .x = 10, .y = 32 };
+        const res = pt.sum();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -674,12 +674,12 @@ TEST_CASE("Const eval folds method call on struct instance") {
 
 TEST_CASE("Const eval folds impl method call") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Rect := struct { w: i32, h: i32 };
+        const Rect = struct { w: i32, h: i32 };
         impl Rect {
-            pub const area := fn(self): i32 { return self.w * self.h; };
+            pub const area = fn(self): i32 { return self.w * self.h; };
         }
-        const r := Rect{ .w = 6, .h = 7 };
-        const a := r.area();
+        const r = Rect{ .w = 6, .h = 7 };
+        const a = r.area();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -691,10 +691,10 @@ TEST_CASE("Const eval folds impl method call") {
 
 TEST_CASE("unlabeled comptime block in statement position executes at compile time") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             comptime {
-                let a := 40;
-                let b := 2;
+                let a = 40;
+                let b = 2;
                 @assert(a + b == 42);
             }
             return 0;
@@ -709,10 +709,10 @@ TEST_CASE("unlabeled comptime block in statement position executes at compile ti
 
 TEST_CASE("Const eval rejects reached unreachable code") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const bad := fn(): i32 {
+        const bad = fn(): i32 {
             unreachable;
         };
-        const call_bad := bad();
+        const call_bad = bad();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -729,14 +729,14 @@ TEST_CASE("Const eval rejects reached unreachable code") {
 TEST_CASE("Const eval unreachable in conditional branches") {
     SECTION("Dead branch with unreachable does not error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const pick := fn(x: i32): i32 {
+            const pick = fn(x: i32): i32 {
                 if (x == 0) {
                     return 42;
                 } else {
                     unreachable;
                 }
             };
-            const a := pick(0);
+            const a = pick(0);
         )")};
         gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -752,14 +752,14 @@ TEST_CASE("Const eval unreachable in conditional branches") {
 
     SECTION("Taken branch with unreachable errors") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const pick := fn(x: i32): i32 {
+            const pick = fn(x: i32): i32 {
                 if (x == 0) {
                     return 42;
                 } else {
                     unreachable;
                 }
             };
-            const b := pick(1);
+            const b = pick(1);
         )")};
         gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -777,14 +777,14 @@ TEST_CASE("Const eval unreachable in conditional branches") {
 TEST_CASE("Const eval unreachable in match expression") {
     SECTION("Unreached catch-all arm does not error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const dispatch := fn(tag: i32): i32 {
+            const dispatch = fn(tag: i32): i32 {
                 return match (tag) {
                     0 => 10,
                     1 => 20,
                     _ => unreachable,
                 };
             };
-            const res := dispatch(0);
+            const res = dispatch(0);
         )")};
         gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -800,13 +800,13 @@ TEST_CASE("Const eval unreachable in match expression") {
 
     SECTION("Reached unreachable arm errors") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const dispatch := fn(tag: i32): i32 {
+            const dispatch = fn(tag: i32): i32 {
                 return match (tag) {
                     0 => 10,
                     _ => unreachable,
                 };
             };
-            const res := dispatch(99);
+            const res = dispatch(99);
         )")};
         gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -823,14 +823,14 @@ TEST_CASE("Const eval unreachable in match expression") {
 
 TEST_CASE("`for comptime` iterating over `[]u8` parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const parse_usize := fn(comptime digits: []u8): usize {
+        const parse_usize = fn(comptime digits: []u8): usize {
             comptime let mut n: usize = 0;
             for comptime (digits) |c| {
                 n = n * 10 + @intCast(usize, c - '0');
             }
             return n;
         };
-        const res := parse_usize("12345");
+        const res = parse_usize("12345");
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -843,8 +843,8 @@ TEST_CASE("`for comptime` iterating over `[]u8` parameter") {
 
 TEST_CASE("`loop` infinite loop expression in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const find_val := fn(): i32 {
-            comptime let mut i := 0;
+        const find_val = fn(): i32 {
+            comptime let mut i = 0;
             loop {
                 i = i + 1;
                 if (i < 5) { continue; }
@@ -852,7 +852,7 @@ TEST_CASE("`loop` infinite loop expression in `const_eval`") {
             }
             return i;
         };
-        const res := find_val();
+        const res = find_val();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -865,15 +865,15 @@ TEST_CASE("`loop` infinite loop expression in `const_eval`") {
 
 TEST_CASE("`defer` in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_defer := fn(): i32 {
-            comptime let mut x := 1;
+        const test_defer = fn(): i32 {
+            comptime let mut x = 1;
             {
                 defer x = x + 10;
                 x = x + 1;
             }
             return x;
         };
-        const res := test_defer();
+        const res = test_defer();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -886,8 +886,8 @@ TEST_CASE("`defer` in `const_eval`") {
 
 TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_order := fn(): i32 {
-            comptime let mut x := 0;
+        const test_order = fn(): i32 {
+            comptime let mut x = 0;
             {
                 defer x = x * 10 + 1;
                 defer x = x * 10 + 2;
@@ -896,7 +896,7 @@ TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
             }
             return x;
         };
-        const res := test_order();
+        const res = test_order();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -909,11 +909,11 @@ TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
 
 TEST_CASE("`errdefer` in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            const Output := T;
-            const Residual := E;
-            pub const branch := fn(self): builtin.Flow(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
                     .err => |e| builtin.Flow(T, E){ .@"break" = e },
@@ -921,23 +921,23 @@ TEST_CASE("`errdefer` in `const_eval`") {
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            const From := E;
-            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
+            const From = E;
+            pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
         }
 
-        const R := Result(i32, i32);
-        const fail := fn(): R { return R{ .err = 42 }; };
-        const succeed := fn(): R { return R{ .ok = 100 }; };
+        const R = Result(i32, i32);
+        const fail = fn(): R { return R{ .err = 42 }; };
+        const succeed = fn(): R { return R{ .ok = 100 }; };
 
         comptime let mut err_log: i32 = 0;
-        const test_err := fn(): R {
+        const test_err = fn(): R {
             errdefer |e| err_log = e;
-            let v := fail()?;
+            let v = fail()?;
             return R{ .ok = v };
         };
 
-        const _dummy := test_err();
-        const final_log := err_log;
+        const _dummy = test_err();
+        const final_log = err_log;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -954,11 +954,11 @@ TEST_CASE("`errdefer` in `const_eval`") {
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            const Output := T;
-            const Residual := E;
-            pub const branch := fn(self): builtin.Flow(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
                     .err => |e| builtin.Flow(T, E){ .@"break" = e },
@@ -966,31 +966,31 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            const From := E;
-            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
+            const From = E;
+            pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
         }
 
-        const R := Result(i32, i32);
-        const fail := fn(): R { return R{ .err = 77 }; };
+        const R = Result(i32, i32);
+        const fail = fn(): R { return R{ .err = 77 }; };
 
         comptime let mut ref_log: i32 = 0;
-        const test_ref := fn(): R {
+        const test_ref = fn(): R {
             errdefer |&e| ref_log = e;
-            let v := fail()?;
+            let v = fail()?;
             return R{ .ok = v };
         };
 
         comptime let mut ptr_log: i32 = 0;
-        const test_ptr := fn(): R {
+        const test_ptr = fn(): R {
             errdefer |^p| ptr_log = *p;
-            let v := fail()?;
+            let v = fail()?;
             return R{ .ok = v };
         };
 
-        const _r := test_ref();
-        const _p := test_ptr();
-        const final_ref := ref_log;
-        const final_ptr := ptr_log;
+        const _r = test_ref();
+        const _p = test_ptr();
+        const final_ref = ref_log;
+        const final_ptr = ptr_log;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 

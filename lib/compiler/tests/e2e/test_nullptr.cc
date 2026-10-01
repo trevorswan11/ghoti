@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("nullptr initializes a raw pointer and compares equal to itself") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut p: ^i32 = nullptr;
             return if (p == nullptr) 1 else 0;
         };
@@ -18,7 +18,7 @@ TEST_CASE("nullptr initializes a raw pointer and compares equal to itself") {
 
 TEST_CASE("nullptr compares not-equal to a pointer to a real value") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             return if (p != nullptr) 1 else 0;
@@ -28,7 +28,7 @@ TEST_CASE("nullptr compares not-equal to a pointer to a real value") {
 
 TEST_CASE("nullptr can be reassigned into an existing pointer variable") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             p = nullptr;
@@ -39,7 +39,7 @@ TEST_CASE("nullptr can be reassigned into an existing pointer variable") {
 
 TEST_CASE("nullptr is rejected when used to initialize a reference") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut r: &i32 = nullptr;
             return *r;
         };
@@ -48,10 +48,10 @@ TEST_CASE("nullptr is rejected when used to initialize a reference") {
 
 TEST_CASE("nullptr is rejected when passed where a reference parameter is expected") {
     helpers::expect_compile_error(R"(
-        const takes_ref := fn(r: &i32): i32 {
+        const takes_ref = fn(r: &i32): i32 {
             return *r;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return takes_ref(nullptr);
         };
     )");

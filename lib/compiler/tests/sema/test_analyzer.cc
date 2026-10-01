@@ -24,8 +24,8 @@ namespace {
 constexpr std::string_view main_gh{R"(
 import std;
 
-pub const main := fn(args: [][:0]u8): i32 {
-    let message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): i32 {
+    let message = "Hello, world!";
     std.io.println(message);
     return 0;
 };
@@ -36,7 +36,7 @@ pub import "io.gh" as io;
 )"};
 
 constexpr std::string_view io_gh{R"(
-pub const println := fn(str: []u8): void {};
+pub const println = fn(str: []u8): void {};
 )"};
 
 // The table index should point to the table where the module was first declared

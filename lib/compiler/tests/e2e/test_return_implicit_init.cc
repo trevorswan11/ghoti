@@ -6,14 +6,14 @@ namespace ghoti::tests {
 
 TEST_CASE("`return .{...}` infers the struct type from the return type") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
+        const Point = struct { x: i32, y: i32 };
 
-        const make := fn(): Point {
+        const make = fn(): Point {
             return .{ .x = 40, .y = 2 };
         };
 
-        pub const main := fn(): i32 {
-            let p := make();
+        pub const main = fn(): i32 {
+            let p = make();
             return p.x + p.y;
         };
     )") == 42);
@@ -21,14 +21,14 @@ TEST_CASE("`return .{...}` infers the struct type from the return type") {
 
 TEST_CASE("`return .{...}` works in both arms of an `if` expression") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
+        const Point = struct { x: i32, y: i32 };
 
-        const pick := fn(hi: bool): Point {
+        const pick = fn(hi: bool): Point {
             return if (hi) .{ .x = 30, .y = 12 }; else .{ .x = 1, .y = 1 };
         };
 
-        pub const main := fn(): i32 {
-            let p := pick(true);
+        pub const main = fn(): i32 {
+            let p = pick(true);
             return p.x + p.y;
         };
     )") == 42);
@@ -36,18 +36,18 @@ TEST_CASE("`return .{...}` works in both arms of an `if` expression") {
 
 TEST_CASE("`return .{...}` works in a `match` arm value") {
     CHECK(helpers::compile_and_run(R"(
-        const Tag := enum { a, b };
-        const Point := struct { x: i32, y: i32 };
+        const Tag = enum { a, b };
+        const Point = struct { x: i32, y: i32 };
 
-        const from_tag := fn(t: Tag): Point {
+        const from_tag = fn(t: Tag): Point {
             return match (t) {
                 .a => .{ .x = 40, .y = 2 },
                 .b => .{ .x = 0, .y = 0 },
             };
         };
 
-        pub const main := fn(): i32 {
-            let p := from_tag(.a);
+        pub const main = fn(): i32 {
+            let p = from_tag(.a);
             return p.x + p.y;
         };
     )") == 42);
@@ -55,13 +55,13 @@ TEST_CASE("`return .{...}` works in a `match` arm value") {
 
 TEST_CASE("`return` with a bare `.variant` picks up an enum return type") {
     CHECK(helpers::compile_and_run(R"(
-        const Tag := enum { a, b, c };
+        const Tag = enum { a, b, c };
 
-        const third := fn(): Tag {
+        const third = fn(): Tag {
             return .c;
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return match (third()) {
                 .a => 1,
                 .b => 2,
@@ -73,9 +73,9 @@ TEST_CASE("`return` with a bare `.variant` picks up an enum return type") {
 
 TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
+        const Point = struct { x: i32, y: i32 };
 
-        const build := fn(): Point {
+        const build = fn(): Point {
             let mut i: i32 = 0;
             return outer: loop {
                 i += 1;
@@ -83,8 +83,8 @@ TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
             };
         };
 
-        pub const main := fn(): i32 {
-            let p := build();
+        pub const main = fn(): i32 {
+            let p = build();
             return p.x + p.y;
         };
     )") == 42);
@@ -92,20 +92,20 @@ TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
 
 TEST_CASE("`return .{...}` for a method returning `@This()`") {
     CHECK(helpers::compile_and_run(R"(
-        const Counter := struct {
+        const Counter = struct {
             value: i32,
 
-            const zero := fn(): @This() {
+            const zero = fn(): @This() {
                 return .{ .value = 0 };
             };
 
-            const bumped := fn(^self, by: i32): @This() {
+            const bumped = fn(^self, by: i32): @This() {
                 return .{ .value = self.value + by };
             };
         };
 
-        pub const main := fn(): i32 {
-            let c := Counter.zero().bumped(42);
+        pub const main = fn(): i32 {
+            let c = Counter.zero().bumped(42);
             return c.value;
         };
     )") == 42);

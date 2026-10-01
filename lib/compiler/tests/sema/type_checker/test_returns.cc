@@ -10,7 +10,7 @@ namespace ghoti::tests {
 TEST_CASE("Return statement type checking") {
     SECTION("Valid return in typed function succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return 42;
             };
         )");
@@ -18,7 +18,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Valid empty return in void function succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 return;
             };
         )");
@@ -26,7 +26,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Implicit widening return succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(x: u8): u32 {
+            const f = fn(x: u8): u32 {
                 return x;
             };
         )");
@@ -34,7 +34,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Returning slice len succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(s: []u8): usize {
+            const f = fn(s: []u8): usize {
                 return s.len;
             };
         )");
@@ -43,7 +43,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Returning value from void function fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 return 42;
             };
         )",
@@ -55,7 +55,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Returning wrong type from typed function fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return true;
             };
         )",
@@ -70,7 +70,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Conflicting return types in auto function runtime branches fails in Pass 4") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(c: bool): auto {
+            const f = fn(c: bool): auto {
                 if (c) {
                     return 1;
                 } else {
@@ -88,7 +88,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Comptime multi-type if branches succeed") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): auto {
+            const f = fn(): auto {
                 if comptime (true) {
                     return 42;
                 } else {
@@ -100,7 +100,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Unreachable expression in function body succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(x: i32): i32 {
+            const f = fn(x: i32): i32 {
                 if (x > 0) {
                     return x;
                 }
@@ -111,7 +111,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Unreachable assigned to typed variable succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 let x: i32 = unreachable;
                 return x;
             };
@@ -120,7 +120,7 @@ TEST_CASE("Return statement type checking") {
 
     SECTION("Function missing return on code path fails") {
         helpers::test_checker_fail(
-            "const f := fn(): i32 {};",
+            "const f = fn(): i32 {};",
             sema::diagnostic{
                 "Function expecting return type 'i32' does not return a value on all code paths",
                 sema::error::RETURN_TYPE_MISMATCH});
@@ -129,7 +129,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Function if-branch missing return on code path fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(cond: bool): i32 {
+            const f = fn(cond: bool): i32 {
                 if (cond) {
                     return 1;
                 }

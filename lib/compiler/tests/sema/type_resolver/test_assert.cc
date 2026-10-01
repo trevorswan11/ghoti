@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("@assert / @verify accept a runtime bool condition and an optional message") {
     helpers::resolve_and_check(R"(
-const use := fn(x: i32): void {
+const use = fn(x: i32): void {
     @assert(x == 0);
     @assert(x == 0, "x should be zero");
     @verify(x > -1);
@@ -19,24 +19,24 @@ const use := fn(x: i32): void {
 }
 
 TEST_CASE("a comptime-known-false @assert is a compile error") {
-    CHECK(helpers::raised("const use := fn(): void { @assert(1 == 2); };",
+    CHECK(helpers::raised("const use = fn(): void { @assert(1 == 2); };",
                           sema::error::STATIC_ASSERTION_FAILED));
 }
 
 TEST_CASE("a comptime-known-false @verify is a compile error") {
-    CHECK(helpers::raised("const use := fn(): void { @verify(false, \"nope\"); };",
+    CHECK(helpers::raised("const use = fn(): void { @verify(false, \"nope\"); };",
                           sema::error::STATIC_ASSERTION_FAILED));
 }
 
 TEST_CASE("a comptime-known-true @assert / @verify raises nothing") {
     CHECK(helpers::resolver_error_codes(
-              "const use := fn(): void { @assert(1 == 1); @verify(2 > 1); };")
+              "const use = fn(): void { @assert(1 == 1); @verify(2 > 1); };")
               .empty());
 }
 
 TEST_CASE("@assert / @verify accept a bool or pointer condition") {
     helpers::resolve_and_check(R"(
-const use := fn(p: ^i32): void {
+const use = fn(p: ^i32): void {
     @assert(p);
     @assert(p, "must be non-null");
     @verify(p);
@@ -46,9 +46,9 @@ const use := fn(p: ^i32): void {
 }
 
 TEST_CASE("@assert / @verify reject a non-bool, non-pointer condition") {
-    CHECK(helpers::raised("const use := fn(x: f64): void { @assert(x); };",
+    CHECK(helpers::raised("const use = fn(x: f64): void { @assert(x); };",
                           sema::error::TYPE_MISMATCH));
-    CHECK(helpers::raised("const use := fn(n: i32): void { @verify(n); };",
+    CHECK(helpers::raised("const use = fn(n: i32): void { @verify(n); };",
                           sema::error::TYPE_MISMATCH));
 }
 
@@ -74,18 +74,18 @@ TEST_CASE("@expect / @require still reject a non-bool, non-pointer condition") {
 }
 
 TEST_CASE("@assert / @verify reject the wrong argument count") {
-    CHECK(helpers::raised("const use := fn(): void { @assert(); };", sema::error::ARITY_MISMATCH));
-    CHECK(helpers::raised("const use := fn(x: i32): void { @verify(x > 0, \"a\", \"b\"); };",
+    CHECK(helpers::raised("const use = fn(): void { @assert(); };", sema::error::ARITY_MISMATCH));
+    CHECK(helpers::raised("const use = fn(x: i32): void { @verify(x > 0, \"a\", \"b\"); };",
                           sema::error::ARITY_MISMATCH));
 }
 
 TEST_CASE("A failing @assert in an arm a folded condition rules out is not an error") {
     helpers::resolve_and_check(R"(
-        const N := 2;
+        const N = 2;
         comptime {
             if (N > 4) { @assert(N > 4); } else { @assert(N <= 4); }
         }
-        const f := fn(comptime M: usize): usize {
+        const f = fn(comptime M: usize): usize {
             comptime {
                 if (M > 4) { @assert(M > 4); } else { @assert(M <= 4); }
             }
@@ -95,10 +95,10 @@ TEST_CASE("A failing @assert in an arm a folded condition rules out is not an er
             }
             return M;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             if (N > 4) { @assert(N > 4); }
-            let a := f(2);
-            let b := f(8);
+            let a = f(2);
+            let b = f(8);
             return 0;
         };
     )");
@@ -106,19 +106,19 @@ TEST_CASE("A failing @assert in an arm a folded condition rules out is not an er
 
 TEST_CASE("A failing @assert in the live arm is still an error") {
     CHECK(helpers::raised(R"(
-        const f := fn(comptime M: usize): usize {
+        const f = fn(comptime M: usize): usize {
             if (M > 4) { @assert(M < 4); }
             return M;
         };
-        pub const main := fn(): i32 {
-            let b := f(8);
+        pub const main = fn(): i32 {
+            let b = f(8);
             return 0;
         };
     )",
                           sema::error::STATIC_ASSERTION_FAILED));
     CHECK(helpers::raised(R"(
-        const N := 2;
-        pub const main := fn(): i32 {
+        const N = 2;
+        pub const main = fn(): i32 {
             match (N) {
                 2 => @assert(N == 3),
                 _ => {},

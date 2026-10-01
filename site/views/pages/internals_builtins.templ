@@ -179,8 +179,8 @@ templ InternalsBuiltinsPage() {
 	</p>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub const MemoryOrder := enum { relaxed, acquire, release, acq_rel, seq_cst };
-pub const AtomicRmwOp := enum {
+			{ `pub const MemoryOrder = enum { relaxed, acquire, release, acq_rel, seq_cst };
+pub const AtomicRmwOp = enum {
     xchg, add, sub, band, nand, bor, bxor, max, min, umax, umin,
 };` }
 		</code>
@@ -233,7 +233,7 @@ pub const AtomicRmwOp := enum {
 	<p>Defines <code>function</code>, a function declared with <code>const</code>, under the symbol <code>options.name</code>. <code>options.linkage</code> is <code>.strong</code> (the default) or <code>.weak</code>, which lets another definition of the symbol replace this one at link time, and <code>options.visibility</code> is <code>.default</code>, <code>.hidden</code>, or <code>.protected</code> (ELF only), as for the <code>{ `@[visibility(...)]` }</code> attribute.</p>
 	<pre>
 		<code class="language-ghoti">
-			{ `const add := fn(a: f128, b: f128): f128 { ... };
+			{ `const add = fn(a: f128, b: f128): f128 { ... };
 @export(add, .{ .name = "__addtf3", .linkage = .weak, .visibility = .hidden });
 @cfg(arch == .arm) { @export(add, .{ .name = "__aeabi_addtf3", .linkage = .weak, .visibility = .hidden }); }` }
 		</code>
@@ -242,7 +242,7 @@ pub const AtomicRmwOp := enum {
 	<p><code>{ "@export" }</code> also takes a function passed to a <code>comptime</code> parameter, so one helper can fix the options for a whole library:</p>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub const symbol := fn(comptime f: auto, comptime name: [:0]u8): void {
+			{ `pub const symbol = fn(comptime f: auto, comptime name: [:0]u8): void {
     @export(f, .{ .name = name, .linkage = .weak, .visibility = .hidden });
 };
 symbol(addtf3, "__addtf3");` }

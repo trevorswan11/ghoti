@@ -7,9 +7,9 @@ namespace ghoti::tests {
 
 TEST_CASE("`@field` reads a struct's own field by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
-            let p := Point{ .x = 7, .y = 8 };
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
+            let p = Point{ .x = 7, .y = 8 };
             return @field(p, "x") + @field(p, "y");
         };
     )") == 15);
@@ -17,9 +17,9 @@ TEST_CASE("`@field` reads a struct's own field by a compile-time name") {
 
 TEST_CASE("`@field` reads a union's own field by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { a: i32, b: i32 };
-        pub const main := fn(): i32 {
-            let u := U{ .a = 42 };
+        const U = union { a: i32, b: i32 };
+        pub const main = fn(): i32 {
+            let u = U{ .a = 42 };
             return @field(u, "a");
         };
     )") == 42);
@@ -27,11 +27,11 @@ TEST_CASE("`@field` reads a union's own field by a compile-time name") {
 
 TEST_CASE("`@field` reads through a pointer and a reference") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        const via_ptr := fn(p: ^Point): i32 { return @field(p, "x"); };
-        const via_ref := fn(p: &Point): i32 { return @field(p, "y"); };
-        pub const main := fn(): i32 {
-            let mut p := Point{ .x = 3, .y = 4 };
+        const Point = struct { x: i32, y: i32 };
+        const via_ptr = fn(p: ^Point): i32 { return @field(p, "x"); };
+        const via_ref = fn(p: &Point): i32 { return @field(p, "y"); };
+        pub const main = fn(): i32 {
+            let mut p = Point{ .x = 3, .y = 4 };
             return via_ptr(^p) + via_ref(&p);
         };
     )") == 7);
@@ -40,10 +40,10 @@ TEST_CASE("`@field` reads through a pointer and a reference") {
 TEST_CASE(
     "`@field`'s name argument may be any compile-time-foldable expression, not just a literal") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        const field_name := fn(): []u8 { return "y"; };
-        pub const main := fn(): i32 {
-            let p := Point{ .x = 1, .y = 99 };
+        const Point = struct { x: i32, y: i32 };
+        const field_name = fn(): []u8 { return "y"; };
+        pub const main = fn(): i32 {
+            let p = Point{ .x = 1, .y = 99 };
             return @field(p, field_name());
         };
     )") == 99);
@@ -51,9 +51,9 @@ TEST_CASE(
 
 TEST_CASE("`@field` is lvalue-capable: writing through it mutates the original") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
-            let mut p := Point{ .x = 1, .y = 2 };
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
+            let mut p = Point{ .x = 1, .y = 2 };
             @field(p, "x") = 10;
             return p.x;
         };
@@ -62,9 +62,9 @@ TEST_CASE("`@field` is lvalue-capable: writing through it mutates the original")
 
 TEST_CASE("`@field` rejects an unknown field name") {
     helpers::expect_compile_error(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
-            let p := Point{ .x = 1, .y = 2 };
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
+            let p = Point{ .x = 1, .y = 2 };
             return @field(p, "z");
         };
     )");
@@ -72,11 +72,11 @@ TEST_CASE("`@field` rejects an unknown field name") {
 
 TEST_CASE("`@field` on a type reads a static `const` member by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             const ORIGIN_X: i32 = 7;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return @field(Point, "ORIGIN_X");
         };
     )") == 7);
@@ -84,11 +84,11 @@ TEST_CASE("`@field` on a type reads a static `const` member by a compile-time na
 
 TEST_CASE("`@field` on a type reads and writes a static `var` member by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             let mut counter: i32 = 100;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             @field(Point, "counter") = 50;
             return @field(Point, "counter") + Point.counter;
         };
@@ -97,8 +97,8 @@ TEST_CASE("`@field` on a type reads and writes a static `var` member by a compil
 
 TEST_CASE("`@field` on a type rejects an instance-only data field") {
     helpers::expect_compile_error(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
             return @field(Point, "x");
         };
     )");
@@ -106,12 +106,12 @@ TEST_CASE("`@field` on a type rejects an instance-only data field") {
 
 TEST_CASE("`@field` on a type rejects a method (bound access is not supported)") {
     helpers::expect_compile_error(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
-            const make := fn(): i32 { return 5; };
+            const make = fn(): i32 { return 5; };
         };
-        pub const main := fn(): i32 {
-            let f := @field(Point, "make");
+        pub const main = fn(): i32 {
+            let f = @field(Point, "make");
             return 0;
         };
     )");

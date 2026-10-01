@@ -15,7 +15,7 @@ namespace ghoti::tests {
 TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const sys_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
+        pub const sys_write = fn(fd: i64, buf: ^u8, len: usize): i64 {
             let mut ret: i64 = 0i64;
             asm {
                 template: "syscall",
@@ -39,7 +39,7 @@ TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
 TEST_CASE("codegen: noreturn inline asm marks the call and emits unreachable") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const halt := fn(code: i64): void {
+        pub const halt = fn(code: i64): void {
             asm {
                 template: "syscall",
                 inputs: ("{rax}" = 60i64, "{rdi}" = code),
@@ -59,7 +59,7 @@ TEST_CASE("codegen: noreturn inline asm marks the call and emits unreachable") {
 TEST_CASE("codegen: rdtsc via result slot returns the scalar") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const timestamp := fn(): u32 {
+        pub const timestamp = fn(): u32 {
             return asm u32 {
                 template: "rdtsc",
                 outputs: ("={eax}" = _),

@@ -7,7 +7,7 @@ namespace ghoti::tests {
 TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through @intFromPtr") {
     CHECK(helpers::compile_and_run(R"(
         const P: ^mut opaque = @ptrFromInt(^mut opaque, 0xDEADBEEFuz);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return if (@intFromPtr(P) == 0xDEADBEEFuz) 7 else 1;
         };
     )") == 7);
@@ -16,7 +16,7 @@ TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through 
 TEST_CASE("E2E: module-scope comptime ptr sentinel compares equal to the same runtime pointer") {
     CHECK(helpers::compile_and_run(R"(
         const IHV: ^mut opaque = @ptrFromInt(^mut opaque, 0xFFFFFFFFFFFFFFFFuz);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut h: ^mut opaque = @ptrFromInt(^mut opaque, 0xFFFFFFFFFFFFFFFFuz);
             return if (h == IHV) 7 else 1;
         };
@@ -26,7 +26,7 @@ TEST_CASE("E2E: module-scope comptime ptr sentinel compares equal to the same ru
 TEST_CASE("E2E: module-scope @ptrFromInt with a negative literal folds to an all-ones pointer") {
     CHECK(helpers::compile_and_run(R"(
         const IHV: ^mut opaque = @ptrFromInt(^mut opaque, -1);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return if (@intFromPtr(IHV) == @as(usize, -1)) 7 else 1;
         };
     )") == 7);
@@ -35,7 +35,7 @@ TEST_CASE("E2E: module-scope @ptrFromInt with a negative literal folds to an all
 TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @as(usize, -1);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return if (MAX == 0xFFFFFFFFFFFFFFFFuz) 7 else 1;
         };
     )") == 7);
@@ -44,7 +44,7 @@ TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones"
 TEST_CASE("E2E: module-scope comptime usize maximum via @bitCast folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @bitCast(usize, -1i64);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return if (MAX == 0xFFFFFFFFFFFFFFFFuz) 7 else 1;
         };
     )") == 7);
@@ -54,7 +54,7 @@ TEST_CASE("E2E: module-scope narrow unsigned const from @as(-1) wraps to its max
     CHECK(helpers::compile_and_run(R"(
         const A: u8  = @as(u8, -1);
         const B: u16 = @as(u16, -1);
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             if (A != 255u8) { return 1; };
             if (B != 65535u16) { return 2; };
             return 7;
@@ -64,7 +64,7 @@ TEST_CASE("E2E: module-scope narrow unsigned const from @as(-1) wraps to its max
 
 TEST_CASE("E2E: local narrow unsigned @as / @bitCast of a negative literal wraps to its maximum") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let a: u8  = @as(u8, -1);
             let b: u16 = @as(u16, -1);
             let c: u32 = @as(u32, -1);
@@ -82,7 +82,7 @@ TEST_CASE("E2E: a folded @ptrFromInt module const serves as a compile-time array
     CHECK(helpers::compile_and_run(R"(
         const N: usize = @as(usize, 4);
         const BUF_LEN: usize = @intFromPtr(@ptrFromInt(^mut opaque, N + 1uz));
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut buf: [BUF_LEN]mut i32 = undefined;
             buf[4] = 7;   // valid only if BUF_LEN >= 5
             return buf[4];

@@ -17,9 +17,9 @@ templ SyntaxDeclarationsPage() {
 			</ul>
 		</li>
 		<li>
-			The walrus operator <code>:=</code> can be used to declare a value who's type is inferred based on the assigned value
+			Leaving out the type annotation (<code>const x = value;</code>) infers the type from the assigned value
 			<ul>
-				<li>The walrus operator can only be used with value-initialized declarations</li>
+				<li>An unannotated declaration must be initialized with a value</li>
 			</ul>
 		</li>
 		<li>
@@ -31,10 +31,10 @@ templ SyntaxDeclarationsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := 2;           // Type deduced to be i32
-let b := "str";         // Type deduced to be a constant size array of bytes (non-null terminated)
-let c: u8 = 's';        // Explicitly typed, so value must agree
-let d :=;               // Illegal, walrus needs a value!
+			{ `const a = 2;          // Type deduced to be i32
+let b = "str";        // Type deduced to be a constant size array of bytes (non-null terminated)
+let c: u8 = 's';      // Explicitly typed, so value must agree
+let d;                // Illegal, an unannotated declaration needs a value!
 let mut e: []u8 = undefined; // Allowed, e is uninitialized and future assignments must be a slice of bytes` }
 		</code>
 	</pre>
@@ -78,17 +78,17 @@ let nested: T = undefined;   // Wrap(Wrap(Wrap(u8)))` }
 	<h2>Runtime Values</h2>
 	<ul>
 		<li><code>let</code> declares a value that cannot be reassigned, and <code>let mut</code> one that can</li>
-		<li>Neither has to be compile-time known, though a <code>let</code> whose value is still folds where a compile-time value is needed (<code>let n := 4; let a: [n]u8 = ...;</code>); a <code>let mut</code> never does</li>
+		<li>Neither has to be compile-time known, though a <code>let</code> whose value is still folds where a compile-time value is needed (<code>let n = 4; let a: [n]u8 = ...;</code>); a <code>let mut</code> never does</li>
 		<li>A mutable reference cannot be taken from a <code>const</code> or a <code>let</code></li>
 		<li>A closure that captures runtime state is declared with <code>let</code></li>
 		<li>Reading a <code>let mut</code> that has not been assigned since <code>= undefined</code> is illegal behavior</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := 1;       // Compile-time constant
-let b := read();    // Runtime value, fixed once set
-let mut c := b;     // Runtime value that can change
-let d := &mut b;    // Illegal, cannot take mutable reference of an immutable value` }
+			{ `const a = 1;       // Compile-time constant
+let b = read();    // Runtime value, fixed once set
+let mut c = b;     // Runtime value that can change
+let d = &mut b;    // Illegal, cannot take mutable reference of an immutable value` }
 		</code>
 	</pre>
 	<h2>Compile-time Parameters</h2>
@@ -104,10 +104,10 @@ let d := &mut b;    // Illegal, cannot take mutable reference of an immutable va
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const min := fn(a: i32, b: i32): i32 {
+			{ `const min = fn(a: i32, b: i32): i32 {
     return if comptime (a < b) a else b; // a and b are inferred to be compile-time
 };
-const three := min(3, 9);` }
+const three = min(3, 9);` }
 		</code>
 	</pre>
 	<h2>Modifiers</h2>
@@ -131,11 +131,11 @@ const three := min(3, 9);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub let mut c := 2;                     // Allowed, symbol can be imported
+			{ `pub let mut c = 2;                     // Allowed, symbol can be imported
 extern let errno: i32;                   // Allowed, externs must be explicitly typed without values
 extern const puts: fn(s: ^u8): i32;      // Allowed, an extern function
-export("counter") let mut counter := 1;  // Allowed
-export const x := 1;                     // Illegal, a const has no symbol to export` }
+export("counter") let mut counter = 1;  // Allowed
+export const x = 1;                     // Illegal, a const has no symbol to export` }
 		</code>
 	</pre>
 	<h2>Attributes</h2>
@@ -157,8 +157,8 @@ export const x := 1;                     // Illegal, a const has no symbol to ex
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `@[visibility(.hidden)] export weak const __addtf3 := fn(a: f128, b: f128): f128 { ... };
-@[inline(.always), align(16)] const fast := fn(x: i32): i32 { return x; };` }
+			{ `@[visibility(.hidden)] export weak const __addtf3 = fn(a: f128, b: f128): f128 { ... };
+@[inline(.always), align(16)] const fast = fn(x: i32): i32 { return x; };` }
 		</code>
 	</pre>
 	<h2>Testing Statements</h2>
@@ -174,12 +174,12 @@ export const x := 1;                     // Illegal, a const has no symbol to ex
 	<pre>
 		<code class="language-ghoti">
 			{ `test "addition logic" {
-    let x := 1 + 1;
+    let x = 1 + 1;
     _ = x;
 }
 
 test {
-    let y := 2 + 2;
+    let y = 2 + 2;
     _ = y;
 }` }
 		</code>
@@ -207,23 +207,23 @@ a = (b = 6);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const MyBool := bool;               // Private to this file
-pub const MyPublicBool := bool;     // Publicly accessible via namespacing when imported
-const BytePtr := ^mut u8;           // Pointer, reference, array, and slice types work as values
-const Callback := fn(status: i32): void;
-const AnyWriter := &dyn Writer;
-const IntList := List(i32);         // As does the result of a type constructor` }
+			{ `const MyBool = bool;               // Private to this file
+pub const MyPublicBool = bool;     // Publicly accessible via namespacing when imported
+const BytePtr = ^mut u8;           // Pointer, reference, array, and slice types work as values
+const Callback = fn(status: i32): void;
+const AnyWriter = &dyn Writer;
+const IntList = List(i32);         // As does the result of a type constructor` }
 		</code>
 	</pre>
 	<ul>
 		<li>Note that this is an <em>alias</em>, so there is no difference between using the aliased type and handwriting the entire raw type</li>
-		<li>Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes: <code>const T := ^i32;</code> is a type, while <code>const p := ^x;</code> is a pointer to the variable <code>x</code></li>
+		<li>Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes: <code>const T = ^i32;</code> is a type, while <code>const p = ^x;</code> is a pointer to the variable <code>x</code></li>
 		<li>A type alias cannot be stored in a <code>let</code> or <code>let mut</code>, and naming a type where a value is expected is an error:</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const P := ^i32;
-let Q := ^i32;                      // Illegal: a type only exists at compile time
+			{ `const P = ^i32;
+let Q = ^i32;                      // Illegal: a type only exists at compile time
 const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' value` }
 		</code>
 	</pre>
@@ -232,7 +232,7 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 			The most common use cases for this are for saving keystrokes for long types and for passing complex types to functions at the call site
 			<ul>
 				<li>Since function calls prioritize expressions over types, an attempt to pass <code>&amp;mut P</code> will always be parsed as a mutable reference to an object P</li>
-				<li>Declaring the type with <code>const T := &amp;mut P;</code> allows you to then pass the identifier to the function</li>
+				<li>Declaring the type with <code>const T = &amp;mut P;</code> allows you to then pass the identifier to the function</li>
 				<li>This is more explicit than having to go to the function definition to see what is being expected at the call site</li>
 			</ul>
 		</li>
@@ -245,9 +245,9 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const S := &struct { ... };        // Illegal
-const S := ^union { ... };         // Illegal
-const S := enum { ... };           // Legal` }
+			{ `const S = &struct { ... };        // Illegal
+const S = ^union { ... };         // Illegal
+const S = enum { ... };           // Legal` }
 		</code>
 	</pre>
 }

@@ -293,7 +293,7 @@ auto test_checker_fail(std::string_view failing, Ds&&... expected_diagnostics) {
 // Runs all of sema and expects a compile error along the way without checking its contents
 auto expect_compile_error(std::string_view source) -> ctx_idx_pair;
 
-// Finds a `const <name> := fn(...) {...};` declared directly in `outer`'s body block, returning
+// Finds a `const <name> = fn(...) {...};` declared directly in `outer`'s body block, returning
 // its own node id
 [[nodiscard]] auto find_nested_fn(const mod::module&        module,
                                   const ast::function_expr& outer,
@@ -317,15 +317,15 @@ struct cfg_outcome {
 [[nodiscard]] auto run_cfg(std::string_view input) -> cfg_outcome;
 [[nodiscard]] auto selected(std::string_view input, std::string_view name) -> bool;
 
-// The post-cfg-pass field names of the first `const <name> := struct { ... }` root.
+// The post-cfg-pass field names of the first `const <name> = struct { ... }` root.
 [[nodiscard]] auto struct_fields(std::string_view input, std::string_view name)
     -> std::vector<std::string>;
 
-// The post-cfg-pass variant names of the first `const <name> := enum { ... }` root.
+// The post-cfg-pass variant names of the first `const <name> = enum { ... }` root.
 [[nodiscard]] auto enum_variants(std::string_view input, std::string_view name)
     -> std::vector<std::string>;
 
-// The post-cfg-pass member names of the first `const <name> := struct { ... }` root.
+// The post-cfg-pass member names of the first `const <name> = struct { ... }` root.
 [[nodiscard]] auto struct_members(std::string_view input, std::string_view name)
     -> std::vector<std::string>;
 

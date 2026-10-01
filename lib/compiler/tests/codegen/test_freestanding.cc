@@ -54,7 +54,7 @@ namespace {
 TEST_CASE("objects reference no C runtime, even after the optimizer forms mem* calls") {
     // At -O2 both loops become `memset`/`memcpy` calls, which ghoti must define itself
     constexpr std::string_view source{R"(
-        pub const fill := fn(buf: []mut u8, src: []u8): usize {
+        pub const fill = fn(buf: []mut u8, src: []u8): usize {
             let mut i: usize = 0;
             while (i < buf.len) : (i += 1) { buf[i] = 0; }
             i = 0;

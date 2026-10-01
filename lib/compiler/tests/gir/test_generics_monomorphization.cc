@@ -14,11 +14,11 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR single monomorphized instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const identity := fn(x: auto): auto {
+        const identity = fn(x: auto): auto {
             return x;
         };
 
-        const test_fn := fn(): i32 {
+        const test_fn = fn(): i32 {
             return identity(42);
         };
     )")};
@@ -47,11 +47,11 @@ TEST_CASE("GIR single monomorphized instantiation") {
 
 TEST_CASE("GIR comptime parameter monomorphizes per value") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const shifted := fn(comptime by: i32, x: i32): i32 {
+        const shifted = fn(comptime by: i32, x: i32): i32 {
             return x + by;
         };
 
-        const test_fn := fn(): i32 {
+        const test_fn = fn(): i32 {
             return shifted(10, 1) + shifted(100, 2) + shifted(10, 3);
         };
     )")};
@@ -73,9 +73,9 @@ TEST_CASE("GIR comptime parameter monomorphizes per value") {
 
 TEST_CASE("GIR comptime parameter sizes a type per instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const room := fn(comptime n: usize): usize { return @sizeOf([n]i32); };
+        const room = fn(comptime n: usize): usize { return @sizeOf([n]i32); };
 
-        const test_fn := fn(): usize {
+        const test_fn = fn(): usize {
             return room(2uz) + room(5uz);
         };
     )")};
@@ -94,10 +94,10 @@ TEST_CASE("GIR comptime parameter sizes a type per instantiation") {
 
 TEST_CASE("GIR comptime struct value dedups regardless of field order") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const P := struct { x: i32, y: i32 };
-        const dot := fn(comptime p: P): i32 { return p.x + p.y; };
+        const P = struct { x: i32, y: i32 };
+        const dot = fn(comptime p: P): i32 { return p.x + p.y; };
 
-        const test_fn := fn(): i32 {
+        const test_fn = fn(): i32 {
             return dot(P{ .x = 1, .y = 2 }) + dot(P{ .y = 2, .x = 1 }) + dot(P{ .x = 9, .y = 9 });
         };
     )")};
@@ -114,13 +114,13 @@ TEST_CASE("GIR comptime struct value dedups regardless of field order") {
 
 TEST_CASE("GIR multiple instantiations with diverse types") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := fn(a: auto, b: auto): auto {
+        const add = fn(a: auto, b: auto): auto {
             return a + b;
         };
 
-        const test_multi := fn(x: i32, y: i32, u: f64, v: f64): void {
-            let r1 := add(x, y);
-            let r2 := add(u, v);
+        const test_multi = fn(x: i32, y: i32, u: f64, v: f64): void {
+            let r1 = add(x, y);
+            let r2 = add(u, v);
         };
     )")};
 
@@ -155,14 +155,14 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
 
 TEST_CASE("Functions taking function pointer types do not trigger monomorphization") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): void {
+        pub const main = fn(): void {
             a(b);
             a(c);
         };
 
-        const a := fn(func: ^fn(): void): void {};
-        const b := fn(): void {};
-        const c := fn(): void {};
+        const a = fn(func: ^fn(): void): void {};
+        const b = fn(): void {};
+        const c = fn(): void {};
     )")};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};

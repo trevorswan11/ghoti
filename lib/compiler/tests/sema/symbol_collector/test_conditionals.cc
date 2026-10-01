@@ -26,8 +26,8 @@ auto test_conditional_scope(helpers::sema_test_context& ctx, usize idx) {
 } // namespace
 
 TEST_CASE("If expression collection") {
-    auto [ctx, idx]{helpers::collect_and_check(
-        "const a := if (b) { let foo := bar; } else { let foo := bar; };")};
+    auto [ctx, idx]{
+        helpers::collect_and_check("const a = if (b) { let foo = bar; } else { let foo = bar; };")};
 
     auto& analyzer{ctx->analyzer};
     CHECK(analyzer.get_registry().size() == 3);
@@ -39,12 +39,12 @@ TEST_CASE("If expression collection") {
     test_conditional_scope(*ctx, 2);
 }
 
-TEST_CASE("Flat if collection") { helpers::collect_and_check("const a := if (b > 4) c; else d;"); }
+TEST_CASE("Flat if collection") { helpers::collect_and_check("const a = if (b > 4) c; else d;"); }
 
 TEST_CASE("Match expression collection") {
     auto [ctx, idx]{helpers::collect_and_check(
-        "const a := match (b) { c => |d| { let foo := bar; }, _ => { let foo := bar; }, "
-        "e => |_| { let foo := bar; } };")};
+        "const a = match (b) { c => |d| { let foo = bar; }, _ => { let foo = bar; }, "
+        "e => |_| { let foo = bar; } };")};
 
     auto& registry{ctx->analyzer.get_registry()};
     CHECK(registry.size() == 7);
@@ -61,7 +61,7 @@ TEST_CASE("Match expression collection") {
 }
 
 TEST_CASE("Flat match collection") {
-    helpers::collect_and_check("const a := match (b) { c => |d| d, e => |_| f, g => h, _ => i };");
+    helpers::collect_and_check("const a = match (b) { c => |d| d, e => |_| f, g => h, _ => i };");
 }
 
 namespace {
@@ -75,28 +75,27 @@ namespace {
 } // namespace
 
 TEST_CASE("If expression inner shadowing") {
-    helpers::test_collector_fail("const a := if (b) { let mut a: i32 = undefined; };",
-                                 expected_diag(28));
+    helpers::test_collector_fail("const a = if (b) { let mut a: i32 = undefined; };",
+                                 expected_diag(27));
     helpers::test_collector_fail(
-        "const a := if (b) { let mut c: i32 = undefined; } else { let mut a: i32 = undefined; };",
-        expected_diag(65));
+        "const a = if (b) { let mut c: i32 = undefined; } else { let mut a: i32 = undefined; };",
+        expected_diag(64));
 }
 
 TEST_CASE("Match shadowing assignee") {
-    helpers::test_collector_fail("const a := match (c) { b => |a| b, };", expected_diag(29));
-    helpers::test_collector_fail("const a := match (c) { b => { let mut a: i32 = undefined; } };",
-                                 expected_diag(38));
+    helpers::test_collector_fail("const a = match (c) { b => |a| b, };", expected_diag(28));
+    helpers::test_collector_fail("const a = match (c) { b => { let mut a: i32 = undefined; } };",
+                                 expected_diag(37));
     helpers::test_collector_fail(
-        "const a := match (b) { c => d, _ => { let mut a: i32 = undefined; } };",
-        expected_diag(46));
+        "const a = match (b) { c => d, _ => { let mut a: i32 = undefined; } };", expected_diag(45));
 }
 
 TEST_CASE("Match dispatch shadowing") {
     helpers::test_collector_fail(
-        "const a := match (c) { b => |c| { let mut c: i32 = undefined; } };",
-        sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:30",
+        "const a = match (c) { b => |c| { let mut c: i32 = undefined; } };",
+        sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:29",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 42UZ}});
+                         std::pair{0UZ, 41UZ}});
 }
 
 namespace {
@@ -114,9 +113,9 @@ namespace {
 } // namespace
 
 TEST_CASE("Control-flow constructs are rejected as bare top-level statements") {
-    CHECK(first_collect_error("if (true) { let a := 1; };") ==
+    CHECK(first_collect_error("if (true) { let a = 1; };") ==
           sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
-    CHECK(first_collect_error("if comptime (true) { let a := 1; } else { let b := 2; };") ==
+    CHECK(first_collect_error("if comptime (true) { let a = 1; } else { let b = 2; };") ==
           sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
     CHECK(first_collect_error("match (1) { _ => 0 };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
     CHECK(first_collect_error("while (true) { };") == sema::error::ILLEGAL_TOP_LEVEL_STATEMENT);
@@ -127,12 +126,12 @@ TEST_CASE("Control-flow constructs are rejected as bare top-level statements") {
 }
 
 TEST_CASE("Binding control flow with a top-level `const` is still allowed") {
-    CHECK_FALSE(first_collect_error("const a := if (true) 1 else 2;"));
-    CHECK_FALSE(first_collect_error("const a := if comptime (true) 1 else 2;"));
-    CHECK_FALSE(first_collect_error("const a := match (1) { 1 => 10, _ => 20 };"));
-    CHECK_FALSE(first_collect_error("const a := blk: { break :blk 7; };"));
+    CHECK_FALSE(first_collect_error("const a = if (true) 1 else 2;"));
+    CHECK_FALSE(first_collect_error("const a = if comptime (true) 1 else 2;"));
+    CHECK_FALSE(first_collect_error("const a = match (1) { 1 => 10, _ => 20 };"));
+    CHECK_FALSE(first_collect_error("const a = blk: { break :blk 7; };"));
     CHECK_FALSE(
-        first_collect_error("const go := fn(): void {}; @export(go, .{ .name = \"main\" });"));
+        first_collect_error("const go = fn(): void {}; @export(go, .{ .name = \"main\" });"));
 }
 
 } // namespace ghoti::tests

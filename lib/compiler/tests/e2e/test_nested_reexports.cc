@@ -15,28 +15,28 @@ using helpers::mock_file;
 // The deepest module: declares one of every re-exportable thing.
 constexpr std::string_view LEAF{R"(
     pub let mut counter: i32 = 100;
-    pub const bump := fn(): void { counter = counter + 1; };
-    pub const get := fn(): i32 { return counter; };
+    pub const bump = fn(): void { counter = counter + 1; };
+    pub const get = fn(): i32 { return counter; };
 
     pub const PAGE: usize = 4;
 
-    pub const Point := struct {
+    pub const Point = struct {
         pub x: i32,
         pub y: i32,
-        pub const sum := fn(&self): i32 { return self.x + self.y; };
+        pub const sum = fn(&self): i32 { return self.x + self.y; };
     };
 
-    pub const Tag := enum { red, green, blue };
+    pub const Tag = enum { red, green, blue };
 
-    pub const Level := enum { low = 10, mid = 20, high = 30, _ };
-    pub const to_level := fn(v: i32): Level { return @fromBackingInt(Level, v); };
-    pub const Box := fn(T: type): type { return struct { pub val: T }; };
+    pub const Level = enum { low = 10, mid = 20, high = 30, _ };
+    pub const to_level = fn(v: i32): Level { return @fromBackingInt(Level, v); };
+    pub const Box = fn(T: type): type { return struct { pub val: T }; };
 )"};
 
 // Middle module: re-exports the leaf and also aliases one of its symbols.
 constexpr std::string_view MID{R"(
     pub import "leaf.gh" as leaf;
-    pub const Coord := leaf.Point;
+    pub const Coord = leaf.Point;
 )"};
 
 // Top module: re-exports the middle module.
@@ -56,7 +56,7 @@ TEST_CASE("E2E: a re-exported `pub var` has one storage location across the whol
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 top.top_mid.leaf.bump();
                 top.top_mid.leaf.bump();
                 return top.top_mid.leaf.get();
@@ -70,7 +70,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a compile-time array dimensio
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let mut buf: [top.top_mid.leaf.PAGE]mut i32 = undefined;
                 buf[3] = 42;   // valid only if PAGE >= 4
                 return buf[3];
@@ -84,7 +84,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a value operand through the c
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return @intCast(i32, top.top_mid.leaf.PAGE) * 10 + 2;
             };
         )",
@@ -96,7 +96,7 @@ TEST_CASE("E2E: a re-exported `struct` type is constructible with a callable mem
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let p: top.top_mid.leaf.Point = .{ .x = 30, .y = 12 };
                 return p.sum() + p.x - p.x;   // method + direct pub field access
             };
@@ -109,7 +109,7 @@ TEST_CASE("E2E: a `pub using` alias of a re-exported symbol is itself re-exporte
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let c: top.top_mid.Coord = .{ .x = 40, .y = 2 };
                 return c.sum();
             };
@@ -122,7 +122,7 @@ TEST_CASE("E2E: a re-exported `enum` matches by variant through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let t: top.top_mid.leaf.Tag = .green;
                 return match (t) {
                     .red => 1,
@@ -140,7 +140,7 @@ TEST_CASE(
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let lvl: top.top_mid.leaf.Level = top.top_mid.leaf.to_level(20);
                 return match (lvl) {
                     .low => 1,
@@ -158,7 +158,7 @@ TEST_CASE("E2E: a re-exported generic type constructor instantiates through the 
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let b: top.top_mid.leaf.Box(i32) = .{ .val = 42 };
                 return b.val;
             };
@@ -168,8 +168,8 @@ TEST_CASE("E2E: a re-exported generic type constructor instantiates through the 
 }
 
 TEST_CASE("E2E: same-named symbols from two leaves re-exported into one parent stay distinct") {
-    constexpr std::string_view a_leaf{R"( pub const kind := fn(): i32 { return 10; }; )"};
-    constexpr std::string_view b_leaf{R"( pub const kind := fn(): i32 { return 32; }; )"};
+    constexpr std::string_view a_leaf{R"( pub const kind = fn(): i32 { return 10; }; )"};
+    constexpr std::string_view b_leaf{R"( pub const kind = fn(): i32 { return 32; }; )"};
     constexpr std::string_view combined{R"(
         pub import "a_leaf.gh" as a;
         pub import "b_leaf.gh" as b;
@@ -178,7 +178,7 @@ TEST_CASE("E2E: same-named symbols from two leaves re-exported into one parent s
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "combined.gh" as combined;
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return combined.a.kind() + combined.b.kind();
             };
         )",

@@ -18,7 +18,6 @@ namespace {
 
 constexpr auto ALL_OPERATORS{
     string_utils::make_constexpr_map<token_type_t>(operators::ASSIGN,
-                                                   operators::WALRUS,
                                                    operators::PLUS,
                                                    operators::PLUS_PLUS,
                                                    operators::PLUS_ASSIGN,

@@ -1,12 +1,12 @@
 //! Basic wrappers over standard IO streams
 import std;
 
-const Result := std.Result;
-const Error := std.io.Error;
-const File := std.io.File;
+const Result = std.Result;
+const Error = std.io.Error;
+const File = std.io.File;
 
 /// The standard output stream, infallible on POSIX
-pub const stdout := fn(): Result(File, Error) {
+pub const stdout = fn(): Result(File, Error) {
     return match (std.os.stdout()) {
         .ok => |h| .of(.{ .handle = h }),
         .err => |e| .fail(.from_os(e)),
@@ -14,7 +14,7 @@ pub const stdout := fn(): Result(File, Error) {
 };
 
 /// The standard input stream, infallible on POSIX
-pub const stdin := fn(): Result(File, Error) {
+pub const stdin = fn(): Result(File, Error) {
     return match (std.os.stdin()) {
         .ok => |h| .of(.{ .handle = h }),
         .err => |e| .fail(.from_os(e)),
@@ -22,7 +22,7 @@ pub const stdin := fn(): Result(File, Error) {
 };
 
 /// The standard error stream, infallible on POSIX
-pub const stderr := fn(): Result(File, Error) {
+pub const stderr = fn(): Result(File, Error) {
     return match (std.os.stderr()) {
         .ok => |h| .of(.{ .handle = h }),
         .err => |e| .fail(.from_os(e)),
@@ -30,27 +30,27 @@ pub const stderr := fn(): Result(File, Error) {
 };
 
 /// Print the contents of `bytes` to stdout
-pub const print := fn(bytes: []u8): Result(void, Error) {
-    let mut f := stdout()?;
+pub const print = fn(bytes: []u8): Result(void, Error) {
+    let mut f = stdout()?;
     return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stdout, followed by a newline
-pub const println := fn(bytes: []u8): Result(void, Error) {
-    let mut f := stdout()?;
+pub const println = fn(bytes: []u8): Result(void, Error) {
+    let mut f = stdout()?;
     f.write_all(bytes)?;
     return f.write_byte('\n');
 };
 
 /// Print the contents of `bytes` to stderr
-pub const eprint := fn(bytes: []u8): Result(void, Error) {
-    let mut f := stderr()?;
+pub const eprint = fn(bytes: []u8): Result(void, Error) {
+    let mut f = stderr()?;
     return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stderr, followed by a newline
-pub const eprintln := fn(bytes: []u8): Result(void, Error) {
-    let mut f := stderr()?;
+pub const eprintln = fn(bytes: []u8): Result(void, Error) {
+    let mut f = stderr()?;
     f.write_all(bytes)?;
     return f.write_byte('\n');
 };

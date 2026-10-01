@@ -26,26 +26,25 @@ TEST_CASE("offset_of clamps out-of-range lines and columns to the text's end") {
 }
 
 TEST_CASE("apply_content_changes replaces a single range in place") {
-    std::string          text{"pub const x := 5;\n"};
+    std::string          text{"pub const x = 5;\n"};
     const nlohmann::json changes{
         {{"range",
-          {{"start", {{"line", 0}, {"character", 15}}}, {"end", {{"line", 0}, {"character", 16}}}}},
+          {{"start", {{"line", 0}, {"character", 14}}}, {"end", {{"line", 0}, {"character", 15}}}}},
          {"text", "42"}}};
-    CHECK(lsp::apply_content_changes(std::move(text), changes) == "pub const x := 42;\n");
+    CHECK(lsp::apply_content_changes(std::move(text), changes) == "pub const x = 42;\n");
 }
 
 TEST_CASE("apply_content_changes applies multiple ranged edits in order") {
-    std::string          text{"const a := 1;\nconst b := 2;\n"};
+    std::string          text{"const a = 1;\nconst b = 2;\n"};
     const nlohmann::json changes{
         {{"range",
-          {{"start", {{"line", 0}, {"character", 11}}}, {"end", {{"line", 0}, {"character", 12}}}}},
+          {{"start", {{"line", 0}, {"character", 10}}}, {"end", {{"line", 0}, {"character", 11}}}}},
          {"text", "10"}},
         {{"range",
-          {{"start", {{"line", 1}, {"character", 11}}}, {"end", {{"line", 1}, {"character", 12}}}}},
+          {{"start", {{"line", 1}, {"character", 10}}}, {"end", {{"line", 1}, {"character", 11}}}}},
          {"text", "20"}},
     };
-    CHECK(lsp::apply_content_changes(std::move(text), changes) ==
-          "const a := 10;\nconst b := 20;\n");
+    CHECK(lsp::apply_content_changes(std::move(text), changes) == "const a = 10;\nconst b = 20;\n");
 }
 
 TEST_CASE("apply_content_changes falls back to a full replace when a change has no range") {
@@ -74,13 +73,13 @@ TEST_CASE("positions convert between bytes and the negotiated encoding") {
 
 TEST_CASE("apply_content_changes reads UTF-16 ranges on a line with an emoji") {
     lsp::set_position_encoding(lsp::position_encoding::UTF16);
-    std::string          text{"const @\"\xF0\x9F\x98\x80\" := 5;\n"};
+    std::string          text{"const @\"\xF0\x9F\x98\x80\" = 5;\n"};
     const nlohmann::json changes{
         {{"range",
-          {{"start", {{"line", 0}, {"character", 15}}}, {"end", {{"line", 0}, {"character", 16}}}}},
+          {{"start", {{"line", 0}, {"character", 14}}}, {"end", {{"line", 0}, {"character", 15}}}}},
          {"text", "42"}}};
     CHECK(lsp::apply_content_changes(std::move(text), changes) ==
-          "const @\"\xF0\x9F\x98\x80\" := 42;\n");
+          "const @\"\xF0\x9F\x98\x80\" = 42;\n");
 }
 
 } // namespace ghoti::tests

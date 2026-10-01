@@ -4,12 +4,12 @@ templ SyntaxFunctionsPage() {
 	<h1>Functions</h1>
 	<ul>
 		<li>Functions are defined using the standard declaration syntax</li>
-		<li>Function types can be aliased with a <code>const</code> declaration, e.g. <code>const Callback := fn(status: i32): void;</code></li>
+		<li>Function types can be aliased with a <code>const</code> declaration, e.g. <code>const Callback = fn(status: i32): void;</code></li>
 		<li>Function parameters are immutable by default</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const foo := fn(a: i32, b: u32): u64 {
+			{ `const foo = fn(a: i32, b: u32): u64 {
     // ...
 };` }
 		</code>
@@ -48,33 +48,33 @@ templ SyntaxFunctionsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Box := fn(T: type): type { return struct { val: T }; };
+			{ `const Box = fn(T: type): type { return struct { val: T }; };
 
-const rewrap := fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
+const rewrap = fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
     return b;
 };` }
 		</code>
 	</pre>
 	<pre>
 		<code class="language-ghoti">
-			{ `const foo := fn(a: &i32): u64 {
+			{ `const foo = fn(a: &i32): u64 {
     // ...
 };
 
-const bar := fn(b: i32): u64 {
+const bar = fn(b: i32): u64 {
     // ...
 };
 
-const baz := fn(c: &mut i32): u64 {
+const baz = fn(c: &mut i32): u64 {
     // ...
 };
 
-let mut a := 2;
+let mut a = 2;
 _ = foo(&a);        // Allowed, passed by const reference
 _ = bar(a);         // Allowed, passed by value
 _ = baz(&mut a);    // Allowed, passed by mutable reference
 
-const b := 1;
+const b = 1;
 _ = foo(&b);        // Allowed, passed by const reference
 _ = bar(b);         // Allowed, passed by value
 _ = baz(&mut b);    // Illegal, cannot mutate const` }
@@ -120,8 +120,8 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `let mut val := 42;
-const closure := move fn(): i32 { return val; };` }
+			{ `let mut val = 42;
+const closure = move fn(): i32 { return val; };` }
 		</code>
 	</pre>
 	<h2>Generic Functions</h2>
@@ -131,7 +131,7 @@ const closure := move fn(): i32 { return val; };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const identity := fn(val: auto): auto {
+			{ `const identity = fn(val: auto): auto {
     return val;
 };` }
 		</code>
@@ -174,7 +174,7 @@ const closure := move fn(): i32 { return val; };` }
 	<ul>
 		<li>You can also use this to indicate that a function takes a function as an argument</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `const f := fn(g: fn(): i32): i32 { ... };` }</code></pre>
+	<pre><code class="language-ghoti">{ `const f = fn(g: fn(): i32): i32 { ... };` }</code></pre>
 	<h2>Compile-time calls</h2>
 	<ul>
 		<li>

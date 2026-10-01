@@ -25,8 +25,8 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view visible_library{R"(
-@[visibility(.hidden)] export const helper := fn(): i32 { return 1; };
-export const api := fn(): i32 { return helper() + 1; };
+@[visibility(.hidden)] export const helper = fn(): i32 { return 1; };
+export const api = fn(): i32 { return helper() + 1; };
 @[visibility(.hidden)] export let mut hidden_state: i32 = 3;
 export let mut shared_state: i32 = 4;
 )"};
@@ -43,9 +43,9 @@ export let mut shared_state: i32 = 4;
 
 TEST_CASE("visibility lowers onto functions and globals") {
     const auto ir{ir_for(R"(
-        @[visibility(.hidden)] export const hidden_fn := fn(): i32 { return 1; };
-        @[visibility(.protected)] pub const protected_fn := fn(): i32 { return 2; };
-        @[visibility(.default)] export const default_fn := fn(): i32 { return 3; };
+        @[visibility(.hidden)] export const hidden_fn = fn(): i32 { return 1; };
+        @[visibility(.protected)] pub const protected_fn = fn(): i32 { return 2; };
+        @[visibility(.default)] export const default_fn = fn(): i32 { return 3; };
         @[visibility(.hidden)] export let mut hidden_var: i32 = 1;
         @[visibility(.protected)] pub let mut protected_var: i32 = 2;
     )",
@@ -59,9 +59,9 @@ TEST_CASE("visibility lowers onto functions and globals") {
 
 TEST_CASE("visibility combines with weak and extern linkage") {
     const auto ir{ir_for(R"(
-        @[visibility(.hidden)] export weak const fallback := fn(): i32 { return 1; };
+        @[visibility(.hidden)] export weak const fallback = fn(): i32 { return 1; };
         @[visibility(.hidden)] extern("c") const imported: fn(): i32;
-        pub const use := fn(): i32 { return fallback() + imported(); };
+        pub const use = fn(): i32 { return fallback() + imported(); };
     )",
                          "x86_64-unknown-linux-gnu")};
     CHECK(ir.contains("define weak hidden i32 @fallback("));
@@ -70,8 +70,8 @@ TEST_CASE("visibility combines with weak and extern linkage") {
 
 TEST_CASE("@typeInfo of a function declaration reflects its visibility") {
     helpers::resolve_and_check(R"(
-        @[visibility(.hidden)] export const quiet := fn(): i32 { return 1; };
-        export const loud := fn(): i32 { return 2; };
+        @[visibility(.hidden)] export const quiet = fn(): i32 { return 1; };
+        export const loud = fn(): i32 { return 2; };
         comptime {
             @assert(@typeInfo(quiet).function.visibility == .hidden);
             @assert(@typeInfo(loud).function.visibility == .default);
@@ -84,9 +84,9 @@ TEST_CASE("visibility needs a symbol other objects can link to") {
     constexpr std::string_view message{
         "Attribute 'visibility' needs a symbol other objects can link to: a 'pub', 'export', "
         "'extern', or 'weak' declaration"};
-    auto [ctx, idx]{helpers::resolve_for_target(R"(@[visibility(.hidden)] const internal := 1;
-@[visibility(.hidden)] const private_fn := fn(): void {};
-pub const f := fn(): void {
+    auto [ctx, idx]{helpers::resolve_for_target(R"(@[visibility(.hidden)] const internal = 1;
+@[visibility(.hidden)] const private_fn = fn(): void {};
+pub const f = fn(): void {
     @[visibility(.hidden)] let mut local: i32 = 0;
     _ = local;
 };

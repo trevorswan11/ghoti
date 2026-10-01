@@ -78,12 +78,12 @@ TEST_CASE("Code nested too deeply") {
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
                                                  std::pair{0UZ, 512UZ}});
 
-    std::string deep_array_type{"const T := "};
+    std::string deep_array_type{"const T = "};
     for (usize i{0}; i < 600; ++i) { deep_array_type += "[]"; }
     helpers::test_parser_fail(deep_array_type + "u8;",
                               syntax::diagnostic{"Code nested too deeply",
                                                  syntax::error::EXPRESSION_NESTED_TOO_DEEPLY,
-                                                 std::pair{0UZ, 1'032UZ}});
+                                                 std::pair{0UZ, 1'031UZ}});
 }
 
 TEST_CASE(

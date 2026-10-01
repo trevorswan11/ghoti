@@ -1,23 +1,23 @@
-pub const is_nan := fn(val: auto): bool {
+pub const is_nan = fn(val: auto): bool {
     return val != val;
 };
 
 /// Creates floating point type T from an unbiased exponent and raw mantissa.
-pub const reconstruct_float := fn(
+pub const reconstruct_float = fn(
     T: type,
     comptime exponent: comptime_int,
     comptime mantissa: comptime_int,
 ): T {
-    const TBits := @Int(.{
+    const TBits = @Int(.{
         .bits = @bitSizeOf(T),
         .signedness = .unsigned,
     });
-    let biased_exponent := @intCast(TBits, exponent + float_exponent_max(T));
+    let biased_exponent = @intCast(TBits, exponent + float_exponent_max(T));
     return @bitCast(T, (biased_exponent << float_mantissa_bits(T)) | @intCast(TBits, mantissa));
 };
 
 /// Creates a raw "1.0" mantissa for floating point type T
-pub const mantissa_one := fn(T: type): comptime_int {
+pub const mantissa_one = fn(T: type): comptime_int {
     comptime {
         @assert(@typeInfo(T) == .float);
     }
@@ -25,7 +25,7 @@ pub const mantissa_one := fn(T: type): comptime_int {
 };
 
 /// Returns the number of fractional bits in the mantissa of floating point type T.
-pub const float_fractional_bits := fn(T: type): comptime_int {
+pub const float_fractional_bits = fn(T: type): comptime_int {
     comptime {
         @assert(@typeInfo(T) == .float);
     }
@@ -42,7 +42,7 @@ pub const float_fractional_bits := fn(T: type): comptime_int {
 };
 
 /// Returns the number of bits in the mantissa of floating point type T.
-pub const float_mantissa_bits := fn(T: type): comptime_int {
+pub const float_mantissa_bits = fn(T: type): comptime_int {
     comptime {
         @assert(@typeInfo(T) == .float);
     }
@@ -58,7 +58,7 @@ pub const float_mantissa_bits := fn(T: type): comptime_int {
 };
 
 /// Returns the number of bits in the exponent of floating point type T.
-pub const float_exponent_bits := fn(T: type): comptime_int {
+pub const float_exponent_bits = fn(T: type): comptime_int {
     comptime {
         @assert(@typeInfo(T) == .float);
     }
@@ -74,18 +74,18 @@ pub const float_exponent_bits := fn(T: type): comptime_int {
 };
 
 /// Returns the minimum exponent that can represent a normalized value in floating point type T.
-pub const float_exponent_min := fn(T: type): comptime_int {
+pub const float_exponent_min = fn(T: type): comptime_int {
     return -float_exponent_max(T) + 1;
 };
 
 /// Returns the maximum exponent that can represent a normalized value in floating point type T.
-pub const float_exponent_max := fn(T: type): comptime_int {
+pub const float_exponent_max = fn(T: type): comptime_int {
     return (1 << (float_exponent_bits(T) - 1)) - 1;
 };
 
 /// Returns the canonical quiet NaN representation for a floating point `Type`.
-pub const nan := fn(T: type): T {
-    const RuntimeType := match comptime (T) {
+pub const nan = fn(T: type): T {
+    const RuntimeType = match comptime (T) {
         comptime_float => f128, // any float type will do
         _ => T,
     };
@@ -97,25 +97,25 @@ pub const nan := fn(T: type): T {
 };
 
 test "Quiet NaN canonical representation" {
-    let qnan_u16 := 0x7E00u16;
+    let qnan_u16 = 0x7E00u16;
     @expect(qnan_u16 == @bitCast(u16, nan(f16)));
-    let qnan_u32 := 0x7FC00000u32;
+    let qnan_u32 = 0x7FC00000u32;
     @expect(qnan_u32 == @bitCast(u32, nan(f32)));
-    let qnan_u64 := 0x7FF8000000000000u64;
+    let qnan_u64 = 0x7FF8000000000000u64;
     @expect(qnan_u64 == @bitCast(u64, nan(f64)));
 
     @cfg (arch == .x86_64 or arch == .x86) {
-        let qnan_u80 := 0x7FFFC000000000000000u80;
+        let qnan_u80 = 0x7FFFC000000000000000u80;
         @expect(qnan_u80 == @bitCast(u80, nan(f80)));
     }
 
-    let qnan_u128 := 0x7FFF8000000000000000000000000000u128;
+    let qnan_u128 = 0x7FFF8000000000000000000000000000u128;
     @expect(qnan_u128 == @bitCast(u128, nan(f128)));
 }
 
 /// Returns a signalling NaN representation for a floating point `Type`.
-pub const snan := fn(T: type): T {
-    const RuntimeType := match comptime (T) {
+pub const snan = fn(T: type): T {
+    const RuntimeType = match comptime (T) {
         _ => T,
         comptime_float => f128, // any float type will do
     };
@@ -127,18 +127,18 @@ pub const snan := fn(T: type): T {
 };
 
 test "Signalling NaN canonical representation" {
-    let snan_u16 := 0x7D00u16;
+    let snan_u16 = 0x7D00u16;
     @expect(snan_u16 == @bitCast(u16, snan(f16)));
-    let snan_u32 := 0x7FA00000u32;
+    let snan_u32 = 0x7FA00000u32;
     @expect(snan_u32 == @bitCast(u32, snan(f32)));
-    let snan_u64 := 0x7FF4000000000000u64;
+    let snan_u64 = 0x7FF4000000000000u64;
     @expect(snan_u64 == @bitCast(u64, snan(f64)));
 
     @cfg (arch == .x86_64 or arch == .x86) {
-        let snan_u80 := 0x7FFFA000000000000000u80;
+        let snan_u80 = 0x7FFFA000000000000000u80;
         @expect(snan_u80 == @bitCast(u80, snan(f80)));
     }
 
-    let snan_u128 := 0x7FFF4000000000000000000000000000u128;
+    let snan_u128 = 0x7FFF4000000000000000000000000000u128;
     @expect(snan_u128 == @bitCast(u128, snan(f128)));
 }

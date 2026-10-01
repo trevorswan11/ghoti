@@ -20,7 +20,7 @@ using helpers::struct_members;
 
 TEST_CASE("cfg: a selected struct @cfg block splices its fields at the group's position") {
     constexpr std::string_view src{R"(
-        const S := struct {
+        const S = struct {
             a: i32,
             @cfg(ptr_bits >= 8) { b: i32, c: i32 }
             d: i32,
@@ -32,7 +32,7 @@ TEST_CASE("cfg: a selected struct @cfg block splices its fields at the group's p
 
 TEST_CASE("cfg: an unselected struct @cfg block contributes no fields; else wins") {
     constexpr std::string_view src{R"(
-        const S := struct {
+        const S = struct {
             a: i32,
             @cfg(ptr_bits == 7) { linux_only: i32 }
             else                { fallback: i32 }
@@ -44,7 +44,7 @@ TEST_CASE("cfg: an unselected struct @cfg block contributes no fields; else wins
 
 TEST_CASE("cfg: the single-field @cfg form works in a struct body") {
     constexpr std::string_view src{R"(
-        const S := struct {
+        const S = struct {
             a: i32,
             @cfg(ptr_bits >= 8) b: i32,
             c: i32,
@@ -55,8 +55,8 @@ TEST_CASE("cfg: the single-field @cfg form works in a struct body") {
 
 TEST_CASE("cfg: a @cfgValue constant gates struct fields") {
     constexpr std::string_view src{R"(
-        const IS_64 := @cfgValue(ptr_bits == 64);
-        const S := struct {
+        const IS_64 = @cfgValue(ptr_bits == 64);
+        const S = struct {
             common: i32,
             @cfg(IS_64) { wide: i32 }
         };
@@ -69,7 +69,7 @@ TEST_CASE("cfg: a @cfgValue constant gates struct fields") {
 
 TEST_CASE("cfg: block and single forms both work in an enum body") {
     constexpr std::string_view src{R"(
-        const Tag := enum {
+        const Tag = enum {
             A,
             @cfg(ptr_bits >= 8) { B, C }
             @cfg(ptr_bits >= 8) D,
@@ -82,12 +82,12 @@ TEST_CASE("cfg: block and single forms both work in an enum body") {
 
 TEST_CASE("cfg: @cfg gates aggregate members, splicing selected decls at the group position") {
     constexpr std::string_view src{R"(
-        const S := struct {
+        const S = struct {
             a: i32,
-            const always := 1;
-            @cfg(ptr_bits >= 8) { const wide := 2; }
-            else                { const narrow := 3; }
-            @cfg(ptr_bits == 7) const dead := 4;
+            const always = 1;
+            @cfg(ptr_bits >= 8) { const wide = 2; }
+            else                { const narrow = 3; }
+            @cfg(ptr_bits == 7) const dead = 4;
         };
     )"};
     CHECK(run_cfg(src).codes.empty());
@@ -96,10 +96,10 @@ TEST_CASE("cfg: @cfg gates aggregate members, splicing selected decls at the gro
 
 TEST_CASE("cfg: a @cfgValue constant gates aggregate members") {
     constexpr std::string_view src{R"(
-        const KEEP := @cfgValue(ptr_bits == 64);
-        const S := struct {
+        const KEEP = @cfgValue(ptr_bits == 64);
+        const S = struct {
             x: i32,
-            @cfg(KEEP) { const Word := u64; const bits := 64; }
+            @cfg(KEEP) { const Word = u64; const bits = 64; }
         };
     )"};
     CHECK(std::ranges::equal(struct_members(src, "S"), std::array{"Word", "bits"}));
@@ -107,7 +107,7 @@ TEST_CASE("cfg: a @cfgValue constant gates aggregate members") {
 
 TEST_CASE("cfg: a bad predicate inside an aggregate @cfg is reported") {
     constexpr std::string_view src{R"(
-        const S := struct {
+        const S = struct {
             a: i32,
             @cfg(os == .linx) { b: i32 }
         };

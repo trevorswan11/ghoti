@@ -14,7 +14,7 @@ using helpers::mock_file;
 
 TEST_CASE("Plain functions produce byte-identical GIR across multiple emit passes") {
     constexpr std::string_view SOURCE{R"(
-        const compute := fn(x: i32, y: i32): i32 {
+        const compute = fn(x: i32, y: i32): i32 {
             let mut sum: i32 = 0;
             let mut i: i32 = 0;
             while (i < x) {
@@ -28,7 +28,7 @@ TEST_CASE("Plain functions produce byte-identical GIR across multiple emit passe
             return sum;
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return compute(5, 10);
         };
     )"};
@@ -46,15 +46,15 @@ TEST_CASE("Plain functions produce byte-identical GIR across multiple emit passe
 
 TEST_CASE("Generic functions with multiple instantiations produce identical GIR") {
     constexpr std::string_view SOURCE{R"(
-        const add := fn(T: type, a: T, b: T): T {
+        const add = fn(T: type, a: T, b: T): T {
             return a + b;
         };
 
-        const scale := fn(comptime k: i32, x: i32): i32 {
+        const scale = fn(comptime k: i32, x: i32): i32 {
             return x * k;
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let r1: i32 = add(i32, 10, 20);
             let r2: f64 = add(f64, 1.5, 2.5);
             let r3: i32 = scale(3, 7);
@@ -76,16 +76,16 @@ TEST_CASE("Generic functions with multiple instantiations produce identical GIR"
 
 TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
     constexpr std::string_view IFACE_MOD{R"(
-        pub const Greeter := interface {
-            pub const greet := fn(&self): i32;
+        pub const Greeter = interface {
+            pub const greet = fn(&self): i32;
         };
     )"};
 
     constexpr std::string_view MOD_A{R"(
         import "iface.gh" as iface;
-        pub const Human := struct { id: i32 };
+        pub const Human = struct { id: i32 };
         impl iface.Greeter for Human {
-            pub const greet := fn(&self): i32 {
+            pub const greet = fn(&self): i32 {
                 return self.id * 10;
             };
         }
@@ -93,9 +93,9 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
 
     constexpr std::string_view MOD_B{R"(
         import "iface.gh" as iface;
-        pub const Robot := struct { code: i32 };
+        pub const Robot = struct { code: i32 };
         impl iface.Greeter for Robot {
-            pub const greet := fn(&self): i32 {
+            pub const greet = fn(&self): i32 {
                 return self.code * 100;
             };
         }
@@ -106,7 +106,7 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
         import "mod_a.gh" as a;
         import "mod_b.gh" as b;
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let h: a.Human = .{ .id = 3 };
             let r: b.Robot = .{ .code = 4 };
             let g1: i32 = h.greet();
@@ -140,21 +140,21 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
 
 TEST_CASE("`fn(...): type` constructors with const members produce identical GIR") {
     constexpr std::string_view SOURCE{R"(
-        const Pair := fn(T: type): type {
+        const Pair = fn(T: type): type {
             return struct {
                 first: T,
                 second: T,
 
                 pub const DEFAULT_TAG: i32 = 42;
-                pub const swap := fn(&self): @This() {
+                pub const swap = fn(&self): @This() {
                     return .{ .first = self.second, .second = self.first };
                 };
             };
         };
 
-        const P := Pair(i32);
+        const P = Pair(i32);
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let p1: P = .{ .first = 10, .second = 20 };
             let s1: P = p1.swap();
             return if (s1.first == 20 and s1.second == 10 and P.DEFAULT_TAG == 42) 0 else 1;

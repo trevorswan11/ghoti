@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("A non-null pointer is truthy in an if condition") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             return if (p) 1 else 0;
@@ -19,7 +19,7 @@ TEST_CASE("A non-null pointer is truthy in an if condition") {
 
 TEST_CASE("A null pointer is falsy in an if condition") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut p: ^i32 = nullptr;
             return if (p) 1 else 0;
         };
@@ -28,7 +28,7 @@ TEST_CASE("A null pointer is falsy in an if condition") {
 
 TEST_CASE("!ptr is true for a null pointer") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut p: ^i32 = nullptr;
             return if (!p) 1 else 0;
         };
@@ -37,7 +37,7 @@ TEST_CASE("!ptr is true for a null pointer") {
 
 TEST_CASE("!ptr is false for a non-null pointer") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             return if (!p) 1 else 0;
@@ -47,7 +47,7 @@ TEST_CASE("!ptr is false for a non-null pointer") {
 
 TEST_CASE("A pointer condition drives a while loop to completion") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 0;
             let mut p: ^mut i32 = ^mut x;
             let mut count: i32 = 0;
@@ -62,7 +62,7 @@ TEST_CASE("A pointer condition drives a while loop to completion") {
 
 TEST_CASE("A pointer condition drives a do-while loop") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut p: ^i32 = nullptr;
             let mut count: i32 = 0;
             do {
@@ -75,7 +75,7 @@ TEST_CASE("A pointer condition drives a do-while loop") {
 
 TEST_CASE("An opaque pointer is truthy in an if condition") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let p: ^opaque = @ptrCast(^opaque, ^x);
             return if (p) 1 else 0;
@@ -85,12 +85,12 @@ TEST_CASE("An opaque pointer is truthy in an if condition") {
 
 TEST_CASE("A pointer is truthy as an 'and' / 'or' operand") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             let mut n: ^i32 = nullptr;
-            let with_and := if (p and n == nullptr) 1 else 0;
-            let with_or := if (n or p) 1 else 0;
+            let with_and = if (p and n == nullptr) 1 else 0;
+            let with_or = if (n or p) 1 else 0;
             return with_and * 10 + with_or;
         };
     )") == 11);
@@ -98,12 +98,12 @@ TEST_CASE("A pointer is truthy as an 'and' / 'or' operand") {
 
 TEST_CASE("@boolFromInt(ptr) yields true for a non-null pointer and false for null") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
-            let live := @boolFromInt(p);
+            let live = @boolFromInt(p);
             p = nullptr;
-            let dead := @boolFromInt(p);
+            let dead = @boolFromInt(p);
             return if (live and !dead) 1 else 0;
         };
     )") == 1);
@@ -111,9 +111,9 @@ TEST_CASE("@boolFromInt(ptr) yields true for a non-null pointer and false for nu
 
 TEST_CASE("@boolFromInt(int) tests the integer against zero") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let a := @boolFromInt(7);
-            let b := @boolFromInt(0);
+        pub const main = fn(): i32 {
+            let a = @boolFromInt(7);
+            let b = @boolFromInt(0);
             return if (a and !b) 1 else 0;
         };
     )") == 1);
@@ -121,9 +121,9 @@ TEST_CASE("@boolFromInt(int) tests the integer against zero") {
 
 TEST_CASE("@as(bool, ...) is rejected in favor of @boolFromInt") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
-            let b := @as(bool, x);
+            let b = @as(bool, x);
             return if (b) 1 else 0;
         };
     )");
@@ -131,7 +131,7 @@ TEST_CASE("@as(bool, ...) is rejected in favor of @boolFromInt") {
 
 TEST_CASE("Implicitly assigning a pointer to a bool binding is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             let b: bool = p;
@@ -140,7 +140,7 @@ TEST_CASE("Implicitly assigning a pointer to a bool binding is rejected") {
     )");
 
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             let mut b: bool = p;
@@ -151,10 +151,10 @@ TEST_CASE("Implicitly assigning a pointer to a bool binding is rejected") {
 
 TEST_CASE("Passing a pointer where a bool parameter is expected is rejected") {
     helpers::expect_compile_error(R"(
-        const takes_bool := fn(b: bool): i32 {
+        const takes_bool = fn(b: bool): i32 {
             return if (b) 1 else 0;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             let mut p: ^i32 = ^x;
             return takes_bool(p);
@@ -164,11 +164,11 @@ TEST_CASE("Passing a pointer where a bool parameter is expected is rejected") {
 
 TEST_CASE("A null-terminated linked list is walked while the cursor pointer is truthy") {
     CHECK(helpers::compile_and_run(R"(
-        const Node := struct { val: i32, next: ^Node };
-        pub const main := fn(): i32 {
-            let mut n3 := Node{ .val = 3, .next = nullptr };
-            let mut n2 := Node{ .val = 2, .next = ^n3 };
-            let mut n1 := Node{ .val = 1, .next = ^n2 };
+        const Node = struct { val: i32, next: ^Node };
+        pub const main = fn(): i32 {
+            let mut n3 = Node{ .val = 3, .next = nullptr };
+            let mut n2 = Node{ .val = 2, .next = ^n3 };
+            let mut n1 = Node{ .val = 1, .next = ^n2 };
             let mut cur: ^Node = ^n1;
             let mut sum: i32 = 0;
             while (cur) {
@@ -182,7 +182,7 @@ TEST_CASE("A null-terminated linked list is walked while the cursor pointer is t
 
 TEST_CASE("if (ptr) guards a defer-bearing scope") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 0;
             let mut p: ^mut i32 = ^mut x;
             if (p) {
@@ -196,7 +196,7 @@ TEST_CASE("if (ptr) guards a defer-bearing scope") {
 
 TEST_CASE("@assert and @verify coerce non-null pointers to truthy") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 42;
             let p: ^i32 = ^x;
             @assert(p);
@@ -210,14 +210,14 @@ TEST_CASE("@assert and @verify coerce non-null pointers to truthy") {
 
 TEST_CASE("@assert and @verify with non-bool non-pointer integers are rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             @assert(5);
             return 0;
         };
     )");
 
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             @verify(5);
             return 0;
         };
@@ -226,14 +226,14 @@ TEST_CASE("@assert and @verify with non-bool non-pointer integers are rejected")
 
 TEST_CASE("@assert and @verify with comptime nullptr are rejected at compile time") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             @assert(nullptr);
             return 0;
         };
     )");
 
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             @verify(nullptr);
             return 0;
         };

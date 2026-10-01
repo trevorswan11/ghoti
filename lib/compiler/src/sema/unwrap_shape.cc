@@ -27,7 +27,7 @@ namespace {
 
 } // namespace
 
-// Looks up an associated type alias (`const Output := ...`)
+// Looks up an associated type alias (`const Output = ...`)
 // in the impl's body scope. If the impl is parameterized (`from_parameterized`), any
 // sentinel types are remapped to concrete type arguments.
 auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_view name)

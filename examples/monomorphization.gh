@@ -1,10 +1,10 @@
-pub const Array := fn(T: type, comptime n: usize): type {
+pub const Array = fn(T: type, comptime n: usize): type {
     return [n]T;
 };
 
-pub const main := fn(): i32 {
+pub const main = fn(): i32 {
     let mut arr: Array(i32, 4) = .{ 1, 2, 3, 4 };
-    let sum := blk: {
+    let sum = blk: {
         let mut acc: i32 = 0;
         for (arr) |a| {
             acc += a;

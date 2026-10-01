@@ -12,7 +12,7 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
-            const f := fn(): void {
+            const f = fn(): void {
                 const bad: u8 = OVER;
             };
         )",
@@ -25,7 +25,7 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut bad: u8 = OVER;
             };
         )",
@@ -38,7 +38,7 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
         helpers::test_checker_fail(
             R"(
             const NEG: i32 = -5;
-            const f := fn(): void {
+            const f = fn(): void {
                 const bad: u32 = NEG;
             };
         )",
@@ -51,8 +51,8 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
-            const take_u8 := fn(x: u8): void {};
-            const f := fn(): void {
+            const take_u8 = fn(x: u8): void {};
+            const f = fn(): void {
                 take_u8(OVER);
             };
         )",
@@ -64,7 +64,7 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
     SECTION("Runtime variable narrowing fails with TYPE_MISMATCH") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: usize = 200;
                 let mut n: u8 = x;
             };
@@ -80,7 +80,7 @@ TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
     SECTION("Runtime variable sign mismatch fails with TYPE_MISMATCH") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 42;
                 let mut n: u32 = x;
             };
@@ -98,7 +98,7 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("a literal that rounds to infinity in f32") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let bad: f32 = 1e39;
             };
         )",
@@ -110,7 +110,7 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("an integer literal past f16's range") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let bad: f16 = 65520;
             };
         )",
@@ -122,20 +122,20 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("a suffixed literal past its own width") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                let bad := 1e39f32;
+            const f = fn(): void {
+                let bad = 1e39f32;
             };
         )",
             sema::diagnostic{"literal is out of range for type 'f32'",
                              sema::error::LITERAL_OUT_OF_RANGE,
-                             std::pair{2UZ, 27UZ}});
+                             std::pair{2UZ, 26UZ}});
     }
 
     SECTION("a literal argument past a parameter's range") {
         helpers::test_checker_fail(
             R"(
-            const g := fn(x: f16): f16 { return x; };
-            const f := fn(): void {
+            const g = fn(x: f16): f16 { return x; };
+            const f = fn(): void {
                 _ = g(70000.0);
             };
         )",
@@ -147,8 +147,8 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("a named constant past a float binding's range") {
         helpers::test_checker_fail(
             R"(
-            const BIG := 1e300;
-            const f := fn(): void {
+            const BIG = 1e300;
+            const f = fn(): void {
                 const bad: f32 = BIG;
             };
         )",
@@ -160,8 +160,8 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("a folded expression past a float binding's range") {
         helpers::test_checker_fail(
             R"(
-            const BIG := 1e300;
-            const f := fn(): void {
+            const BIG = 1e300;
+            const f = fn(): void {
                 let bad: f16 = BIG * 2.0;
             };
         )",
@@ -173,33 +173,33 @@ TEST_CASE("compile-time floats that round to infinity in their type are rejected
     SECTION("an @as operand past the target's range") {
         helpers::test_checker_fail(
             R"(
-            const BIG := 1e300;
-            const f := fn(): void {
-                let bad := @as(f32, BIG);
+            const BIG = 1e300;
+            const f = fn(): void {
+                let bad = @as(f32, BIG);
             };
         )",
             sema::diagnostic{"float value 1e+300 is out of range for type 'f32'",
                              sema::error::LITERAL_OUT_OF_RANGE,
-                             std::pair{3UZ, 36UZ}});
+                             std::pair{3UZ, 35UZ}});
     }
 
     SECTION("a folded @floatFromInt past the target's range") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                let bad := @floatFromInt(f16, 100000);
+            const f = fn(): void {
+                let bad = @floatFromInt(f16, 100000);
             };
         )",
             sema::diagnostic{"float value 100000 is out of range for type 'f16'",
                              sema::error::LITERAL_OUT_OF_RANGE,
-                             std::pair{2UZ, 46UZ}});
+                             std::pair{2UZ, 45UZ}});
     }
 
     SECTION("an integer constant past a float binding's range") {
         helpers::test_checker_fail(
             R"(
-            const BIG := 340282366920938463463374607431768211455;
-            const f := fn(): void {
+            const BIG = 340282366920938463463374607431768211455;
+            const f = fn(): void {
                 const bad: f16 = BIG;
             };
         )",

@@ -14,7 +14,7 @@ using helpers::run_cfg;
 
 TEST_CASE("cfg: @cfg is evaluated inside an if block") {
     constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
+        pub const f = fn(): i32 {
             if (true) {
                 @cfg(ptr_bits >= 8) { @compileError("reached in if"); }
             }
@@ -28,7 +28,7 @@ TEST_CASE("cfg: @cfg is evaluated inside an if block") {
 
 TEST_CASE("cfg: @cfg is evaluated inside a match arm") {
     constexpr std::string_view src{R"(
-        pub const f := fn(x: i32): i32 {
+        pub const f = fn(x: i32): i32 {
             match (x) {
                 _ => {
                     @cfg(ptr_bits >= 8) { @compileError("reached in match"); }
@@ -42,7 +42,7 @@ TEST_CASE("cfg: @cfg is evaluated inside a match arm") {
 
 TEST_CASE("cfg: @cfg is evaluated inside a loop body") {
     constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
+        pub const f = fn(): i32 {
             while (true) {
                 @cfg(ptr_bits >= 8) { @compileError("reached in loop"); }
             }
@@ -54,9 +54,9 @@ TEST_CASE("cfg: @cfg is evaluated inside a loop body") {
 
 TEST_CASE("cfg: a nested @cfg splices its selected arm and prunes the rest") {
     constexpr std::string_view src{R"(
-        pub const f := fn(): i32 {
+        pub const f = fn(): i32 {
             if (true) {
-                @cfg(ptr_bits >= 8) { let fine := 1; }
+                @cfg(ptr_bits >= 8) { let fine = 1; }
                 else                { @compileError("pruned nested arm"); }
             }
             return 0;

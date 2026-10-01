@@ -13,7 +13,7 @@ TEST_CASE("LLVM lowering for @returnAddress") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const get_caller_addr := fn(): usize {
+        pub const get_caller_addr = fn(): usize {
             return @returnAddress();
         };
     )")};

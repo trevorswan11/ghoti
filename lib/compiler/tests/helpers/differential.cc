@@ -52,12 +52,12 @@ static_assert(max_cases_per_program < panic_exit_code,
 [[nodiscard]] auto panic_prelude() -> std::string {
     return fmt::format(R"(@cfg(os == .windows) {{
     extern("kernel32") const ExitProcess: fn(code: u32): noreturn;
-    const diff_exit := fn(code: u32): noreturn {{ ExitProcess(code); }};
+    const diff_exit = fn(code: u32): noreturn {{ ExitProcess(code); }};
 }} else @cfg(os == .macos) {{
     extern("System", "exit") const sys_exit: fn(code: i32): noreturn;
-    const diff_exit := fn(code: u32): noreturn {{ sys_exit(@bitCast(i32, code)); }};
+    const diff_exit = fn(code: u32): noreturn {{ sys_exit(@bitCast(i32, code)); }};
 }} else @cfg(arch == .x86_64) {{
-    const diff_exit := fn(code: u32): noreturn {{
+    const diff_exit = fn(code: u32): noreturn {{
         _ = asm usize {{
             template: "syscall",
             outputs: ("={{rax}}" = _),
@@ -68,7 +68,7 @@ static_assert(max_cases_per_program < panic_exit_code,
         @trap();
     }};
 }} else @cfg(arch == .aarch64) {{
-    const diff_exit := fn(code: u32): noreturn {{
+    const diff_exit = fn(code: u32): noreturn {{
         _ = asm usize {{
             template: "svc #0",
             outputs: ("={{x0}}" = _),
@@ -79,7 +79,7 @@ static_assert(max_cases_per_program < panic_exit_code,
         @trap();
     }};
 }}
-pub const panic_handler := fn(_: []u8, _: builtin.SourceLocation): noreturn {{ diff_exit({}); }};
+pub const panic_handler = fn(_: []u8, _: builtin.SourceLocation): noreturn {{ diff_exit({}); }};
 )",
                        panic_exit_code);
 }
@@ -442,8 +442,8 @@ auto classify_all(const std::vector<expr_template>&              templates,
     u128 bits{0};
     for (u16 byte{0}; byte * 8 < result_width(result); ++byte) {
         const auto code{
-            helpers::compile_and_run(fmt::format("{}{}pub const main := fn(): i32 {{\n"
-                                                 "    let got := {};\n"
+            helpers::compile_and_run(fmt::format("{}{}pub const main = fn(): i32 {{\n"
+                                                 "    let got = {};\n"
                                                  "    return @intCast(i32, ({} >> {}) & 0xFF);\n"
                                                  "}};\n",
                                                  panic_prelude(),
@@ -485,10 +485,10 @@ auto classify_all(const std::vector<expr_template>&              templates,
 [[nodiscard]] auto run_cases(const expr_template& tmpl, gsl::span<const classified_case> cases)
     -> u32 {
     return helpers::compile_and_run(
-        fmt::format("{}{}{}pub const main := fn(): i32 {{\n"
+        fmt::format("{}{}{}pub const main = fn(): i32 {{\n"
                     "    let mut i: usize = 0;\n"
                     "    while (i < {}) : (i += 1) {{\n"
-                    "        let got := {};\n"
+                    "        let got = {};\n"
                     "        if ({}) {{ return @intCast(i32, i) + 1; }}\n"
                     "    }}\n"
                     "    return 0;\n"
@@ -535,10 +535,10 @@ auto classify_all(const std::vector<expr_template>&              templates,
         const auto prefix{fmt::format("t{}_op", t)};
         source += operand_arrays(tmpl, cases, prefix);
         source += want_array(fmt::format("t{}_want", t), tmpl.text, tmpl, cases);
-        source += fmt::format("const check_{0} := fn(): bool {{\n"
+        source += fmt::format("const check_{0} = fn(): bool {{\n"
                               "    let mut i: usize = 0;\n"
                               "    while (i < {1}) : (i += 1) {{\n"
-                              "        let got := {2};\n"
+                              "        let got = {2};\n"
                               "        if ({3}) {{ return false; }}\n"
                               "    }}\n"
                               "    return true;\n"
@@ -549,8 +549,8 @@ auto classify_all(const std::vector<expr_template>&              templates,
                               differs_condition(tmpl.result, fmt::format("t{}_want[i]", t)));
         main_body += fmt::format("    if (!check_{}()) {{ return {}; }}\n", t, t + 1);
     }
-    const auto run{try_run(fmt::format(
-        "{}pub const main := fn(): i32 {{\n{}    return 0;\n}};\n", source, main_body))};
+    const auto run{try_run(
+        fmt::format("{}pub const main = fn(): i32 {{\n{}    return 0;\n}};\n", source, main_body))};
     if (!run.missing_builtins.empty()) {
         missing = run.missing_builtins;
         return stdx::none;
@@ -566,8 +566,8 @@ auto classify_all(const std::vector<expr_template>&              templates,
     -> std::vector<std::string> {
     const gsl::span one{&sample, 1};
     // The result must be used: instruction selection drops a dead `frem` and its `fmod` call
-    return helpers::missing_builtins(fmt::format("{}pub const main := fn(): i32 {{\n"
-                                                 "    let got := {};\n"
+    return helpers::missing_builtins(fmt::format("{}pub const main = fn(): i32 {{\n"
+                                                 "    let got = {};\n"
                                                  "    return @intCast(i32, {} & 1);\n"
                                                  "}};\n",
                                                  operand_arrays(tmpl, one, "op"),
@@ -601,7 +601,7 @@ auto check_errors(const std::vector<expr_template>& templates,
 
     std::string source{
         panic_prelude() +
-        "const parse_index := fn(text: [:0]u8): usize {\n"
+        "const parse_index = fn(text: [:0]u8): usize {\n"
         "    let mut value: usize = 0;\n"
         "    let mut p: usize = 0;\n"
         "    while (p < text.len) : (p += 1) { value = value * 10 + @as(usize, text[p] - 48); }\n"
@@ -615,14 +615,14 @@ auto check_errors(const std::vector<expr_template>& templates,
         source += operand_arrays(tmpl, one, prefix);
         const auto expr{runtime_expr(tmpl, prefix, "0")};
         source += fmt::format(
-            "const safe_{} := fn(): i32 {{ let got := {}; _ = got; return 0; }};\n", s, expr);
+            "const safe_{} = fn(): i32 {{ let got = {}; _ = got; return 0; }};\n", s, expr);
         dispatch +=
             fmt::format("    if (mode == 0 and which == {0}) {{ return safe_{0}(); }}\n", s);
         if (!tmpl.unchecked_equivalent.empty()) {
             source += want_array(fmt::format("e{}_want", s), tmpl.unchecked_equivalent, tmpl, one);
-            source += fmt::format("const unsafe_{0} := fn(): i32 {{\n"
+            source += fmt::format("const unsafe_{0} = fn(): i32 {{\n"
                                   "    @setRuntimeSafety(false);\n"
-                                  "    let got := {1};\n"
+                                  "    let got = {1};\n"
                                   "    if ({2}) {{ return 1; }}\n"
                                   "    return 0;\n"
                                   "}};\n",
@@ -633,9 +633,9 @@ auto check_errors(const std::vector<expr_template>& templates,
                 fmt::format("    if (mode == 1 and which == {0}) {{ return unsafe_{0}(); }}\n", s);
         }
     }
-    source += fmt::format("pub const main := fn(args: [][:0]u8): i32 {{\n"
-                          "    let mode := parse_index(args[1]);\n"
-                          "    let which := parse_index(args[2]);\n"
+    source += fmt::format("pub const main = fn(args: [][:0]u8): i32 {{\n"
+                          "    let mode = parse_index(args[1]);\n"
+                          "    let which = parse_index(args[2]);\n"
                           "{}"
                           "    return 99;\n"
                           "}};\n",

@@ -20,11 +20,11 @@ namespace syms = sema::symbols;
 TEST_CASE("Labeled for loop resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         let mut arr: []bool = undefined;
-        const a := outer: for (0..5, blk: { break :blk 2..4; }, arr) |i, j, _| {
-            let foo := 39 + j;
+        const a = outer: for (0..5, blk: { break :blk 2..4; }, arr) |i, j, _| {
+            let foo = 39 + j;
             if (foo == 42) { break :outer 27; }
         } else {
-            let foo := 42;
+            let foo = 42;
             if (foo + 1 == 42) { break :outer 26; }
         };
     )")};
@@ -51,17 +51,17 @@ TEST_CASE("Labeled for loop resolution") {
 }
 
 TEST_CASE("Complex label resolution") {
-    helpers::resolve_and_check("const a := do { let foo := 42; } while (blk: { break :blk 42; });");
+    helpers::resolve_and_check("const a = do { let foo = 42; } while (blk: { break :blk 42; });");
     helpers::resolve_and_check(R"(
         let mut i: i32 = undefined;
-        const a := outer: while (blk: { break :blk 42; }) : (i += blk: {
+        const a = outer: while (blk: { break :blk 42; }) : (i += blk: {
             break :blk 42;
         }) {
             break :outer if (i == 42) 3 else blk: {
-                let foo := 42;
+                let foo = 42;
                 break :blk 42;
             };
-        } else { let foo := 42; };
+        } else { let foo = 42; };
     )");
 }
 

@@ -29,7 +29,7 @@ TEST_CASE("Optimizer over non trivial function at all levels") {
     for (const auto level : stdx::enum_range<codegen::opt_level>()) {
         DYNAMIC_SECTION("Level " << magic_enum::enum_name(level)) {
             auto [ctx, idx]{helpers::resolve_and_check(R"(
-                pub const calc := fn(a: i64, b: i64): i64 {
+                pub const calc = fn(a: i64, b: i64): i64 {
                     let mut sum: i64 = a;
                     let mut i: i64 = 0i64;
                     while (i < b) {
@@ -58,7 +58,7 @@ TEST_CASE("Optimizing, folding, and propagating constants") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const fold_me := fn(x: i64): i64 {
+        pub const fold_me = fn(x: i64): i64 {
             let mut a: i64 = x * 0i64;
             let mut b: i64 = a + 42i64;
             return b;
@@ -97,7 +97,7 @@ TEST_CASE("Mem2Reg and Alloca elimination") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const add_vars := fn(a: i64, b: i64): i64 {
+        pub const add_vars = fn(a: i64, b: i64): i64 {
             let mut x: i64 = a;
             let mut y: i64 = b;
             return x + y;
@@ -139,7 +139,7 @@ TEST_CASE("Dead code elimination") {
 
     // Unsigned arithmetic wraps and carries no runtime safety check
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const dead_calc := fn(a: u64): u64 {
+        pub const dead_calc = fn(a: u64): u64 {
             let mut unused: u64 = a * 100u64 + 42u64;
             return a;
         };
@@ -160,11 +160,11 @@ TEST_CASE("Function inlining") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const helper := fn(x: u64): u64 {
+        const helper = fn(x: u64): u64 {
             return x * 2u64;
         };
 
-        pub const caller := fn(a: u64): u64 {
+        pub const caller = fn(a: u64): u64 {
             return helper(a);
         };
     )")};
@@ -203,7 +203,7 @@ TEST_CASE("Optimizer with debug and timing flags") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const test_fn := fn(x: i32): i32 {
+        pub const test_fn = fn(x: i32): i32 {
             return x + 1;
         };
     )")};

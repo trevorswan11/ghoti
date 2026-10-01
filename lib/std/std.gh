@@ -1,10 +1,10 @@
-pub const version := "0.4.0-alpha.2";
+pub const version = "0.4.0-alpha.2";
 
 import "types/result.gh" as result;
 import "types/option.gh" as option;
 
-pub const Result := result.Result;
-pub const Option := option.Option;
+pub const Result = result.Result;
+pub const Option = option.Option;
 
 pub import "os/os.gh" as os;
 pub import "io/io.gh" as io;
@@ -25,14 +25,14 @@ test {
     import "types/option.gh";
 }
 
-pub const panic_handler := fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
     _ = io.eprint(loc.file);
     _ = io.eprint(": ");
     _ = io.eprintln(msg);
     @trap();
 };
 
-pub const assert_handler := fn(msg: []u8, loc: builtin.SourceLocation): void {
+pub const assert_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
     _ = io.eprint(loc.file);
     _ = io.eprint(": ");
     _ = io.eprintln(msg);

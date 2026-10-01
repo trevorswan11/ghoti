@@ -47,7 +47,7 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const likely_then := fn(c: bool): i32 {
+        pub const likely_then = fn(c: bool): i32 {
             if (c) {
                 @branchHint(.likely);
                 return 1;
@@ -55,7 +55,7 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
                 return 2;
             }
         };
-        pub const cold_else := fn(c: bool): i32 {
+        pub const cold_else = fn(c: bool): i32 {
             if (c) {
                 return 1;
             } else {
@@ -63,14 +63,14 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
                 return 2;
             }
         };
-        pub const coin := fn(c: bool): i32 {
+        pub const coin = fn(c: bool): i32 {
             if (c) {
                 @branchHint(.unpredictable);
                 return 1;
             }
             return 2;
         };
-        pub const classify := fn(x: i32): i32 {
+        pub const classify = fn(x: i32): i32 {
             let mut out: i32 = 20;
             match (x) {
                 0 => {
@@ -81,7 +81,7 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
             };
             return out;
         };
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const main = fn(args: [][:0]u8): i32 {
             return likely_then(true) + cold_else(false) + coin(true) + classify(3);
         };
     )")};
@@ -109,12 +109,12 @@ TEST_CASE("Codegen: @branchHint(.cold) opening a function body marks it cold") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const slow := fn(): i32 {
+        pub const slow = fn(): i32 {
             @branchHint(.cold);
             return 3;
         };
-        pub const fast := fn(): i32 { return 4; };
-        pub const main := fn(args: [][:0]u8): i32 { return slow() + fast(); };
+        pub const fast = fn(): i32 { return 4; };
+        pub const main = fn(args: [][:0]u8): i32 { return slow() + fast(); };
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -125,9 +125,9 @@ TEST_CASE("Codegen: @branchHint(.cold) opening a function body marks it cold") {
 TEST_CASE("@branchHint must open a branch, arm, or function body") {
     SECTION("not the first statement") {
         CHECK(helpers::raised(R"(
-            const f := fn(c: bool): i32 {
+            const f = fn(c: bool): i32 {
                 if (c) {
-                    let x := 1;
+                    let x = 1;
                     @branchHint(.likely);
                     return x;
                 }
@@ -138,7 +138,7 @@ TEST_CASE("@branchHint must open a branch, arm, or function body") {
     }
     SECTION("in a plain nested block") {
         CHECK(helpers::raised(R"(
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 {
                     @branchHint(.likely);
                 }
@@ -148,12 +148,12 @@ TEST_CASE("@branchHint must open a branch, arm, or function body") {
                               sema::error::TYPE_MISMATCH));
     }
     SECTION("a function body accepts only .cold") {
-        CHECK(helpers::raised("const f := fn(): i32 { @branchHint(.likely); return 0; };",
+        CHECK(helpers::raised("const f = fn(): i32 { @branchHint(.likely); return 0; };",
                               sema::error::TYPE_MISMATCH));
     }
     SECTION("the hint must be known at compile time") {
         CHECK(helpers::raised(R"(
-            const f := fn(c: bool, h: builtin.BranchHint): i32 {
+            const f = fn(c: bool, h: builtin.BranchHint): i32 {
                 if (c) {
                     @branchHint(h);
                     return 1;

@@ -6,8 +6,8 @@ namespace ghoti::tests {
 
 TEST_CASE("`++` concatenates two byte-string literals") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const combined := "ab" ++ "cde";
+        pub const main = fn(): i32 {
+            const combined = "ab" ++ "cde";
             if (combined[0] != 'a') { return 1; }
             if (combined[1] != 'b') { return 2; }
             if (combined[2] != 'c') { return 3; }
@@ -22,8 +22,8 @@ TEST_CASE("`++` concatenates two comptime integer arrays") {
     CHECK(helpers::compile_and_run(R"(
         const a: [2]i32 = .{1, 2};
         const b: [3]i32 = .{3, 4, 5};
-        pub const main := fn(): i32 {
-            const combined := a ++ b;
+        pub const main = fn(): i32 {
+            const combined = a ++ b;
             return combined[0] + combined[1] + combined[2] + combined[3] + combined[4];
         };
     )") == 15);
@@ -31,8 +31,8 @@ TEST_CASE("`++` concatenates two comptime integer arrays") {
 
 TEST_CASE("`++` chains left to right") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const combined := "a" ++ "b" ++ "c";
+        pub const main = fn(): i32 {
+            const combined = "a" ++ "b" ++ "c";
             if (combined[0] != 'a') { return 1; }
             if (combined[1] != 'b') { return 2; }
             if (combined[2] != 'c') { return 3; }
@@ -44,10 +44,10 @@ TEST_CASE("`++` chains left to right") {
 TEST_CASE("`++` takes its sentinel from the right operand only") {
     CHECK(helpers::compile_and_run(R"(
         const plain: [2]u8 = .{1, 2};
-        pub const main := fn(): i32 {
-            const rhs_has_sentinel := plain ++ "cd";
+        pub const main = fn(): i32 {
+            const rhs_has_sentinel = plain ++ "cd";
             if (@bitSizeOf(@TypeOf(rhs_has_sentinel)) != @bitSizeOf([4:0]u8)) { return 1; }
-            const rhs_has_none := "ab" ++ plain;
+            const rhs_has_none = "ab" ++ plain;
             if (@bitSizeOf(@TypeOf(rhs_has_none)) != @bitSizeOf([4]u8)) { return 2; }
             return 0;
         };
@@ -57,8 +57,8 @@ TEST_CASE("`++` takes its sentinel from the right operand only") {
 TEST_CASE("`++` of a typed array with a sentineled string literal materializes every byte") {
     CHECK(helpers::compile_and_run(R"(
         const plain: [2]u8 = .{1, 2};
-        pub const main := fn(): i32 {
-            const combined := plain ++ "cd";
+        pub const main = fn(): i32 {
+            const combined = plain ++ "cd";
             if (combined[0] != 1) { return 1; }
             if (combined[1] != 2) { return 2; }
             if (combined[2] != 'c') { return 3; }
@@ -71,9 +71,9 @@ TEST_CASE("`++` of a typed array with a sentineled string literal materializes e
 
 TEST_CASE("`++` concatenates two function-local comptime array identifiers") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let a: [2]i32 = .{1, 2};
-            const combined := a ++ a;
+            const combined = a ++ a;
             return combined[0] + combined[1] + combined[2] + combined[3];
         };
     )") == 6);

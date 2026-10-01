@@ -21,22 +21,22 @@ namespace syms = sema::symbols;
 namespace {
 
 constexpr std::string_view other_gh{R"(
-pub const foo := fn(c: u8): []u8 {};
+pub const foo = fn(c: u8): []u8 {};
 
-pub const BarE := enum {
+pub const BarE = enum {
     A,
-    pub const bar := fn(&self, c: u8): []u8 {};
+    pub const bar = fn(&self, c: u8): []u8 {};
 };
 
-pub const BarU := union {
+pub const BarU = union {
     A: i32,
-    pub const bar := fn(&self, c: u8): []u8 {};
+    pub const bar = fn(&self, c: u8): []u8 {};
 };
 
-pub const BarS := struct {
+pub const BarS = struct {
     A: i32,
     pub let mut baz: i32 = 23;
-    pub const bar := fn(&self, c: u8): []u8 {};
+    pub const bar = fn(&self, c: u8): []u8 {};
 };
 )"};
 
@@ -73,17 +73,17 @@ auto test_access_fail(std::string_view input, Ds&&... diagnostics) -> void {
 } // namespace
 
 TEST_CASE("Free function resolved access") {
-    auto [ctx, idx]{setup_access_test("const a := other.foo('a');")};
+    auto [ctx, idx]{setup_access_test("const a = other.foo('a');")};
     check_access_decl(*ctx, idx, "a", u8_slice_type(*ctx));
 }
 
 TEST_CASE("Enum resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
 let mut e1: other.BarE = .A;
-const e2 := other.BarE.A;
-const e3 := e1.bar('a');
+const e2 = other.BarE.A;
+const e3 = e1.bar('a');
 
-const func := other.BarE.bar;
+const func = other.BarE.bar;
 )")};
 
     const auto& enum_type{ctx->get_type(sema::type_kind::ENUM, 3)};
@@ -96,10 +96,10 @@ const func := other.BarE.bar;
 TEST_CASE("Union resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
 let mut ua: other.BarU = .{ .A = 1, };
-const ub := other.BarU{ .A = 1, };
-const uc := ua.bar('a');
+const ub = other.BarU{ .A = 1, };
+const uc = ua.bar('a');
 
-const func := other.BarU.bar;
+const func = other.BarU.bar;
 )")};
 
     const auto& union_type{ctx->get_type(sema::type_kind::UNION, 5)};
@@ -112,12 +112,12 @@ const func := other.BarU.bar;
 TEST_CASE("Struct resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
 let mut s1: other.BarS = .{ .A = 42, };
-const s2 := other.BarS{ .A = 1, };
-const s3 := s1.baz;
-const s4 := s1.bar('a');
+const s2 = other.BarS{ .A = 1, };
+const s3 = s1.baz;
+const s4 = s1.bar('a');
 
-const member := other.BarS.baz;
-const func := other.BarS.bar;
+const member = other.BarS.baz;
+const func = other.BarS.bar;
 )")};
 
     const auto& struct_type{ctx->get_type(sema::type_kind::STRUCT, 7)};
@@ -132,16 +132,16 @@ const func := other.BarS.bar;
 }
 
 TEST_CASE("Indirection in structural type resolution") {
-    helpers::resolve_and_check("const A := struct { a: ^B, }; const B := struct { b: ^A, };");
-    helpers::resolve_and_check("const A := struct { a: ^A, };");
-    helpers::resolve_and_check("const A := struct { a: ^A, const b := fn(c: A): i32 {}; };");
-    helpers::resolve_and_check("const A := struct { a: ^@This(), const b := fn(c: ^A): i32 {}; };");
+    helpers::resolve_and_check("const A = struct { a: ^B, }; const B = struct { b: ^A, };");
+    helpers::resolve_and_check("const A = struct { a: ^A, };");
+    helpers::resolve_and_check("const A = struct { a: ^A, const b = fn(c: A): i32 {}; };");
+    helpers::resolve_and_check("const A = struct { a: ^@This(), const b = fn(c: ^A): i32 {}; };");
     helpers::resolve_and_check(
-        R"(const A := struct {
+        R"(const A = struct {
             a: ^A,
-            const b := fn(&self, c: A): i32 {
-                const dA := A;
-                const uA := A;
+            const b = fn(&self, c: A): i32 {
+                const dA = A;
+                const uA = A;
             };
         };)");
 }
@@ -149,22 +149,22 @@ TEST_CASE("Indirection in structural type resolution") {
 TEST_CASE("An anonymous aggregate type may be followed by a default value") {
     SECTION("struct / union field") {
         helpers::resolve_and_check(
-            "const OpenFlags := struct { access: enum { read, write, read_write } = .read, };");
+            "const OpenFlags = struct { access: enum { read, write, read_write } = .read, };");
         helpers::resolve_and_check(
-            "const Wrap := struct { inner: struct { x: i32 } = .{ .x = 0 }, };");
+            "const Wrap = struct { inner: struct { x: i32 } = .{ .x = 0 }, };");
     }
 
     SECTION("local declaration") {
         helpers::resolve_and_check(
-            "const f := fn(): void { let mut a: enum { lo, hi } = .lo; _ = a; };");
+            "const f = fn(): void { let mut a: enum { lo, hi } = .lo; _ = a; };");
         helpers::resolve_and_check(
-            "const g := fn(): void { let mut a: struct { x: i32 } = .{ .x = 1 }; _ = a; };");
+            "const g = fn(): void { let mut a: struct { x: i32 } = .{ .x = 1 }; _ = a; };");
     }
 }
 
 TEST_CASE("Legal circular module-based access resolution") {
-    constexpr std::string_view a_gh{R"(import "b.gh" as b; const A := struct { field: i32, };)"};
-    constexpr std::string_view b_gh{R"(import "a.gh" as a; const B := struct { field: i32, };)"};
+    constexpr std::string_view a_gh{R"(import "b.gh" as b; const A = struct { field: i32, };)"};
+    constexpr std::string_view b_gh{R"(import "a.gh" as a; const B = struct { field: i32, };)"};
 
     helpers::resolve_and_check(
         R"(import "a.gh" as a;)",
@@ -197,30 +197,30 @@ TEST_CASE("Dot-accessing unknown user-type fields/members") {
     const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {fmt::format("Type '{}' has no field named 'z'", type_name),
                 sema::error::UNDECLARED_IDENTIFIER,
-                std::pair{0UZ, 52UZ}};
+                std::pair{0UZ, 51UZ}};
     };
 
-    test_access_fail("let mut a := other.BarE.z;", expected_diag("BarE"));
-    test_access_fail("let mut a := other.BarU.z;", expected_diag("BarU"));
-    test_access_fail("let mut a := other.BarS.z;", expected_diag("BarS"));
+    test_access_fail("let mut a = other.BarE.z;", expected_diag("BarE"));
+    test_access_fail("let mut a = other.BarU.z;", expected_diag("BarU"));
+    test_access_fail("let mut a = other.BarS.z;", expected_diag("BarS"));
 }
 
 TEST_CASE("Unknown array/slice members name the full type") {
-    helpers::test_resolver_fail("const a: [3]i32 = .{ 1, 2, 3 }; const b := a.nope;",
+    helpers::test_resolver_fail("const a: [3]i32 = .{ 1, 2, 3 }; const b = a.nope;",
                                 sema::diagnostic{"Type '[3]i32' has no field named 'nope'",
                                                  sema::error::UNDECLARED_IDENTIFIER,
-                                                 std::pair{0UZ, 45UZ}});
-    helpers::test_resolver_fail("let mut s: []u8 = undefined; const b := s.nope;",
+                                                 std::pair{0UZ, 44UZ}});
+    helpers::test_resolver_fail("let mut s: []u8 = undefined; const b = s.nope;",
                                 sema::diagnostic{"Type '[]u8' has no field named 'nope'",
                                                  sema::error::UNDECLARED_IDENTIFIER,
-                                                 std::pair{0UZ, 42UZ}});
+                                                 std::pair{0UZ, 41UZ}});
 }
 
 TEST_CASE("Unknown member lookup in module") {
-    test_access_fail("let mut a := other.BarF;",
+    test_access_fail("let mut a = other.BarF;",
                      sema::diagnostic{"Module 'other' has no member named 'BarF'",
                                       sema::error::UNDECLARED_IDENTIFIER,
-                                      std::pair{0UZ, 47UZ}});
+                                      std::pair{0UZ, 46UZ}});
 }
 
 TEST_CASE("Incomplete type used during resolution") {
@@ -237,39 +237,37 @@ TEST_CASE("Incomplete type used during resolution") {
     };
 
     SECTION("Structs") {
-        helpers::test_resolver_fail("const A := struct { a: A, };", expected_diag(23));
-        helpers::test_resolver_fail("const A := struct { a: @This(), };", expected_diag(23));
-        helpers::test_resolver_fail("const A := struct { a: B, }; const B := struct { b: A, };",
-                                    expected_b(52));
+        helpers::test_resolver_fail("const A = struct { a: A, };", expected_diag(22));
+        helpers::test_resolver_fail("const A = struct { a: @This(), };", expected_diag(22));
+        helpers::test_resolver_fail("const A = struct { a: B, }; const B = struct { b: A, };",
+                                    expected_b(50));
     }
 
     SECTION("Unions") {
-        helpers::test_resolver_fail("const A := union { a: A, };", expected_diag(22));
-        helpers::test_resolver_fail("const A := union { a: @This(), };", expected_diag(22));
-        helpers::test_resolver_fail("const A := union { a: B, }; const B := union { b: A, };",
-                                    expected_b(50));
+        helpers::test_resolver_fail("const A = union { a: A, };", expected_diag(21));
+        helpers::test_resolver_fail("const A = union { a: @This(), };", expected_diag(21));
+        helpers::test_resolver_fail("const A = union { a: B, }; const B = union { b: A, };",
+                                    expected_b(48));
     }
 }
 
 TEST_CASE("Forward reference to a later struct field is reported as an ordering error, not a "
           "cyclic dependency") {
     helpers::test_resolver_fail(
-        "const S := struct { a: @TypeOf(b), b: i32, };",
+        "const S = struct { a: @TypeOf(b), b: i32, };",
         sema::diagnostic{"'b' is referenced before its declaration; forward references to "
                          "struct/union fields, function parameters, and enum members are not "
                          "supported; declare 'b' earlier",
                          sema::error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
-                         std::pair{0UZ, 31UZ}});
+                         std::pair{0UZ, 30UZ}});
 }
 
 TEST_CASE("Illegal circular module-based access resolution") {
-    constexpr std::string_view a_gh{
-        R"(import "b.gh" as b; pub const A := struct { field: b.B, };)"};
-    constexpr std::string_view b_gh{
-        R"(import "a.gh" as a; pub const B := struct { field: a.A, };)"};
+    constexpr std::string_view a_gh{R"(import "b.gh" as b; pub const A = struct { field: b.B, };)"};
+    constexpr std::string_view b_gh{R"(import "a.gh" as a; pub const B = struct { field: a.A, };)"};
 
     auto [ctx, idx]{helpers::resolve(
-        R"(import "a.gh" as a; const A := a.A;)",
+        R"(import "a.gh" as a; const A = a.A;)",
         helpers::make_vector<mock_file>(mock_file{.path = "a.gh", .source = a_gh},
                                         mock_file{.path = "b.gh", .source = b_gh}))};
     auto& test_module{*UNWRAP(ctx->manager.try_get_file_module("test.gh"))};
@@ -280,7 +278,7 @@ TEST_CASE("Illegal circular module-based access resolution") {
         b_module,
         sema::diagnostic{"Cross-module cyclic dependency detected while resolving symbol 'B'",
                          sema::error::CYCLIC_DEPENDENCY,
-                         std::pair{0UZ, 53UZ}});
+                         std::pair{0UZ, 52UZ}});
 
     // Each importer along the chain gets its own diagnostic, however far from the cycle.
     helpers::check_errors_against<sema::diagnostics>(
@@ -313,10 +311,10 @@ TEST_CASE("Initializer expression in various resolution contexts") {
                 std::pair{0UZ, 1UZ}});
 
         helpers::test_resolver_fail(
-            "const a := .f;",
+            "const a = .f;",
             sema::diagnostic{"Implicit access expression used outside of a typed context",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{0UZ, 11UZ}});
+                             std::pair{0UZ, 10UZ}});
     }
 
     SECTION("Initializer with incomplete type") {
@@ -332,21 +330,21 @@ TEST_CASE("Initializer expression in various resolution contexts") {
 
     SECTION("Union & enum type restrictions") {
         helpers::test_resolver_fail(
-            "const U := union { A: i32, B: i32, }; const u := U{ .A = 1, .B = 2 };",
+            "const U = union { A: i32, B: i32, }; const u = U{ .A = 1, .B = 2 };",
             sema::diagnostic{"Union initializer lists must list exactly one field; found 2",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{0UZ, 50UZ}});
+                             std::pair{0UZ, 48UZ}});
 
         helpers::test_resolver_fail(
-            "const E := enum { A, }; const e := E{};",
+            "const E = enum { A, }; const e = E{};",
             sema::diagnostic{"Enums cannot be initialized with an initializer expression as they "
                              "lack member variables",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{0UZ, 36UZ}});
+                             std::pair{0UZ, 34UZ}});
     }
 
     SECTION("Struct type restrictions") {
-        constexpr std::string_view input{"const S := struct { a: i32, b: i64 = 3, c: bool,};"};
+        constexpr std::string_view input{"const S = struct { a: i32, b: i64 = 3, c: bool,};"};
         helpers::resolve_and_check(
             fmt::format("{} const a: S = .{{.a = 2, .b = 3, .c = false, }};", input));
 
@@ -354,36 +352,36 @@ TEST_CASE("Initializer expression in various resolution contexts") {
             fmt::format("{} const a: S = .{{.a = 2, .b = 3, .c = false, .c = true, }};", input),
             sema::diagnostic{"Struct initializer contains duplicate field: c",
                              sema::error::DUPLICATE_FIELD,
-                             std::pair{0UZ, 65UZ}});
+                             std::pair{0UZ, 64UZ}});
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{.a = 2, .b = 3, .c = false, .c = true, .a = 34 }};",
                         input),
             sema::diagnostic{"Struct initializer contains duplicate fields: c, a",
                              sema::error::DUPLICATE_FIELD,
-                             std::pair{0UZ, 65UZ}});
+                             std::pair{0UZ, 64UZ}});
 
         helpers::test_resolver_fail(fmt::format("{} const a: S = .{{ .a = 2, }};", input),
                                     sema::diagnostic{"Struct initializer missing required field: c",
                                                      sema::error::MISSING_FIELD,
-                                                     std::pair{0UZ, 65UZ}});
+                                                     std::pair{0UZ, 64UZ}});
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{ .b = 2, }};", input),
             sema::diagnostic{"Struct initializer missing required fields: a, c",
                              sema::error::MISSING_FIELD,
-                             std::pair{0UZ, 65UZ}});
+                             std::pair{0UZ, 64UZ}});
 
         helpers::test_resolver_fail(
             fmt::format("{} const a: S = .{{ .a = 2, .c = true, .d = 2 }};", input),
             sema::diagnostic{"Struct initializer contains unknown field: d",
                              sema::error::UNKNOWN_FIELD,
-                             std::pair{0UZ, 65UZ}});
+                             std::pair{0UZ, 64UZ}});
     }
 
     SECTION("Slice field access") {
         const auto [ctx, idx]{helpers::resolve_and_check(R"(
             const s: []u8 = @sliceFromPtr(^1, 10UZ);
-            const p := s.ptr;
-            const l := s.len;
+            const p = s.ptr;
+            const l = s.len;
         )")};
         check_access_decl(
             *ctx, idx, "p", ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(8, false)));
@@ -393,14 +391,14 @@ TEST_CASE("Initializer expression in various resolution contexts") {
 
 TEST_CASE("Struct field access through dereferenced pointer and reference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
+        const Point = struct { x: i32, y: i32 };
         const pt_ptr: ^Point = undefined;
         const pt_ref: &Point = undefined;
 
-        const px := pt_ptr.x;
-        const px_d := (*pt_ptr).x;
-        const ry := pt_ref.y;
-        const ry_d := (*pt_ref).y;
+        const px = pt_ptr.x;
+        const px_d = (*pt_ptr).x;
+        const ry = pt_ref.y;
+        const ry_d = (*pt_ref).y;
     )")};
 
     const auto [px_sym, _, px_decl, px_type]{
@@ -425,30 +423,30 @@ TEST_CASE("Implicit access as the left operand of a binary expression is rejecte
         return {"Implicit access cannot appear on the left side of a binary expression; it "
                 "requires the other operand to establish type context first",
                 sema::error::TYPE_MISMATCH,
-                std::pair{0UZ, 72UZ}};
+                std::pair{0UZ, 69UZ}};
     };
 
     helpers::test_resolver_fail(
-        "const U := union { a: i32, b: i32 }; const u := U{ .a = 1 }; const r := .a == u;",
+        "const U = union { a: i32, b: i32 }; const u = U{ .a = 1 }; const r = .a == u;",
         expected_diag());
 }
 
 TEST_CASE("Implicit access as the left operand still rejects for enums") {
     helpers::test_resolver_fail(
-        "const Color := enum { RED, GREEN, BLUE }; const c := Color.GREEN; "
-        "const r := .GREEN == c;",
+        "const Color = enum { RED, GREEN, BLUE }; const c = Color.GREEN; "
+        "const r = .GREEN == c;",
         sema::diagnostic{"Implicit access cannot appear on the left side of a binary expression; "
                          "it requires the other operand to establish type context first",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 77UZ}});
+                         std::pair{0UZ, 74UZ}});
 }
 
 TEST_CASE("A type error inside an imported generic body is attributed to the defining module") {
     constexpr std::string_view dep_gh{
-        R"(pub const project := fn(x: auto): i32 { return x + undeclared_only_here; };)"};
+        R"(pub const project = fn(x: auto): i32 { return x + undeclared_only_here; };)"};
 
     auto [ctx, idx]{helpers::resolve(
-        R"(import "dep.gh" as dep; const r := dep.project(5);)",
+        R"(import "dep.gh" as dep; const r = dep.project(5);)",
         helpers::make_vector<mock_file>(mock_file{.path = "dep.gh", .source = dep_gh}))};
 
     auto& dep_module{*UNWRAP(ctx->manager.try_get_file_module("dep.gh"))};
@@ -466,7 +464,7 @@ TEST_CASE("A type error inside an imported generic body is attributed to the def
 
 TEST_CASE("A failed @cfg pass still lets type resolution run without a missing-sema-type crash") {
     SECTION("unknown cfg atom, aggregate bound to a const") {
-        CHECK(helpers::raised("const S := struct { @cfg(debug) a: i32 else b: i32 };",
+        CHECK(helpers::raised("const S = struct { @cfg(debug) a: i32 else b: i32 };",
                               sema::error::CFG_UNKNOWN_ATOM));
     }
 
@@ -481,7 +479,7 @@ TEST_CASE("A failed @cfg pass still lets type resolution run without a missing-s
     }
 
     SECTION("failed cfg statement inside a test block") {
-        CHECK(helpers::raised("test { const S := struct { @cfg(debug) a: i32 else b: i32 }; }",
+        CHECK(helpers::raised("test { const S = struct { @cfg(debug) a: i32 else b: i32 }; }",
                               sema::error::CFG_UNKNOWN_ATOM));
     }
 }

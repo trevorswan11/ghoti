@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("Indexing an array literal rvalue") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return [3]i32{7, 8, 9}[0];
         };
     )") == 7);
@@ -17,7 +17,7 @@ TEST_CASE("Indexing an array literal rvalue") {
 
 TEST_CASE("Dynamic index into an array literal rvalue") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut i: usize = 1;
             return [3]i32{7, 8, 9}[i];
         };
@@ -26,10 +26,10 @@ TEST_CASE("Dynamic index into an array literal rvalue") {
 
 TEST_CASE("Array literal passed as a by-value array argument") {
     CHECK(helpers::compile_and_run(R"(
-        const first := fn(a: [3]i32): i32 {
+        const first = fn(a: [3]i32): i32 {
             return a[0];
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return first([3]i32{7, 8, 9});
         };
     )") == 7);
@@ -37,8 +37,8 @@ TEST_CASE("Array literal passed as a by-value array argument") {
 
 TEST_CASE("For loop by value over a local array") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]i32{1, 2, 3};
             let mut sum: i32 = 0;
             for (arr) |v| {
                 sum = sum + v;
@@ -50,8 +50,8 @@ TEST_CASE("For loop by value over a local array") {
 
 TEST_CASE("Local array variable read back correctly") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]i32{7, 8, 9};
+        pub const main = fn(): i32 {
+            let mut arr = [3]i32{7, 8, 9};
             let mut x: i32 = arr[0];
             return x;
         };
@@ -60,8 +60,8 @@ TEST_CASE("Local array variable read back correctly") {
 
 TEST_CASE("Array decayed to an explicit slice-typed local") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]i32{1, 2, 3};
             let mut sl: []i32 = arr;
             return sl[1];
         };
@@ -70,11 +70,11 @@ TEST_CASE("Array decayed to an explicit slice-typed local") {
 
 TEST_CASE("Array built from runtime (non-constant) values") {
     CHECK(helpers::compile_and_run(R"(
-        const make := fn(a: i32, b: i32, c: i32): i32 {
-            let mut arr := [3]i32{a, b, c};
+        const make = fn(a: i32, b: i32, c: i32): i32 {
+            let mut arr = [3]i32{a, b, c};
             return arr[0];
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return make(7, 8, 9);
         };
     )") == 7);
@@ -82,12 +82,12 @@ TEST_CASE("Array built from runtime (non-constant) values") {
 
 TEST_CASE("Struct literal control case") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        const make := fn(a: i32, b: i32): i32 {
-            let mut p := Point{ .x = a, .y = b };
+        const Point = struct { x: i32, y: i32 };
+        const make = fn(a: i32, b: i32): i32 {
+            let mut p = Point{ .x = a, .y = b };
             return p.x;
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return make(7, 8);
         };
     )") == 7);
@@ -95,9 +95,9 @@ TEST_CASE("Struct literal control case") {
 
 TEST_CASE("Struct field with a sized array type") {
     CHECK(helpers::compile_and_run(R"(
-        const Box := struct { items: [3]i32 };
-        pub const main := fn(): i32 {
-            let mut b := Box{ .items = [3]i32{7, 8, 9} };
+        const Box = struct { items: [3]i32 };
+        pub const main = fn(): i32 {
+            let mut b = Box{ .items = [3]i32{7, 8, 9} };
             return b.items[0];
         };
     )") == 7);
@@ -105,9 +105,9 @@ TEST_CASE("Struct field with a sized array type") {
 
 TEST_CASE("Tagged union scalar field initializer") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { flag: bool, val: i32 };
-        pub const main := fn(): i32 {
-            let mut u := U{ .val = 7 };
+        const U = union { flag: bool, val: i32 };
+        pub const main = fn(): i32 {
+            let mut u = U{ .val = 7 };
             return 0;
         };
     )") == 0);
@@ -115,9 +115,9 @@ TEST_CASE("Tagged union scalar field initializer") {
 
 TEST_CASE("Tagged union field read") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { flag: bool, val: i32 };
-        pub const main := fn(): i32 {
-            let mut u := U{ .val = 42 };
+        const U = union { flag: bool, val: i32 };
+        pub const main = fn(): i32 {
+            let mut u = U{ .val = 42 };
             return u.val;
         };
     )") == 42);
@@ -125,9 +125,9 @@ TEST_CASE("Tagged union field read") {
 
 TEST_CASE("Tagged union bool field") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { flag: bool, val: i32 };
-        pub const main := fn(): i32 {
-            let mut u := U{ .flag = true };
+        const U = union { flag: bool, val: i32 };
+        pub const main = fn(): i32 {
+            let mut u = U{ .flag = true };
             return if (u.flag) 1 else 0;
         };
     )") == 1);
@@ -135,9 +135,9 @@ TEST_CASE("Tagged union bool field") {
 
 TEST_CASE("Tagged union field with an array type") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { items: [3]i32, flag: bool };
-        pub const main := fn(): i32 {
-            let mut u := U{ .items = [3]i32{7, 8, 9} };
+        const U = union { items: [3]i32, flag: bool };
+        pub const main = fn(): i32 {
+            let mut u = U{ .items = [3]i32{7, 8, 9} };
             return u.items[0];
         };
     )") == 7);
@@ -145,11 +145,11 @@ TEST_CASE("Tagged union field with an array type") {
 
 TEST_CASE("Mutable slice parameter mutates the caller's array (var)") {
     CHECK(helpers::compile_and_run(R"(
-        const bump := fn(arr: []mut i32): void {
+        const bump = fn(arr: []mut i32): void {
             arr[0] = arr[0] + 10;
         };
-        pub const main := fn(): i32 {
-            let mut slice := [3]mut i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut slice = [3]mut i32{1, 2, 3};
             bump(slice);
             return slice[0];
         };
@@ -158,11 +158,11 @@ TEST_CASE("Mutable slice parameter mutates the caller's array (var)") {
 
 TEST_CASE("Mutable slice parameter mutates the caller's array (const)") {
     CHECK(helpers::compile_and_run(R"(
-        const bump := fn(arr: []mut i32): void {
+        const bump = fn(arr: []mut i32): void {
             arr[0] = arr[0] + 10;
         };
-        pub const main := fn(): i32 {
-            let slice := [3]mut i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let slice = [3]mut i32{1, 2, 3};
             bump(slice);
             return slice[0];
         };
@@ -171,11 +171,11 @@ TEST_CASE("Mutable slice parameter mutates the caller's array (const)") {
 
 TEST_CASE("mut array decays to a mut slice parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const first := fn(arr: []mut i32): i32 {
+        const first = fn(arr: []mut i32): i32 {
             return arr[0];
         };
-        pub const main := fn(): i32 {
-            let mut slice := [3]mut i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut slice = [3]mut i32{1, 2, 3};
             return first(slice);
         };
     )") == 1);
@@ -183,11 +183,11 @@ TEST_CASE("mut array decays to a mut slice parameter") {
 
 TEST_CASE("mut array implicitly coerces to a const slice parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const read_only := fn(arr: []i32): i32 {
+        const read_only = fn(arr: []i32): i32 {
             return arr[0];
         };
-        pub const main := fn(): i32 {
-            let mut slice := [3]mut i32{5, 6, 7};
+        pub const main = fn(): i32 {
+            let mut slice = [3]mut i32{5, 6, 7};
             return read_only(slice);
         };
     )") == 5);
@@ -195,11 +195,11 @@ TEST_CASE("mut array implicitly coerces to a const slice parameter") {
 
 TEST_CASE("constCast on a const array preserves identity for mutation") {
     CHECK(helpers::compile_and_run(R"(
-        const bump := fn(arr: []mut i32): void {
+        const bump = fn(arr: []mut i32): void {
             arr[0] = arr[0] + 100;
         };
-        pub const main := fn(): i32 {
-            let mut slice := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut slice = [3]i32{1, 2, 3};
             bump(@constCast(slice));
             return slice[0];
         };
@@ -208,8 +208,8 @@ TEST_CASE("constCast on a const array preserves identity for mutation") {
 
 TEST_CASE("Directly writing to a mut array's elements") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]mut i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]mut i32{1, 2, 3};
             arr[0] = 5;
             return arr[0];
         };
@@ -218,7 +218,7 @@ TEST_CASE("Directly writing to a mut array's elements") {
 
 TEST_CASE("mut volatile scalar reads and writes") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut v: mut volatile i32 = 42;
             v = v + 1;
             return v;
@@ -228,11 +228,11 @@ TEST_CASE("mut volatile scalar reads and writes") {
 
 TEST_CASE("Passing a const array where a mut slice is required is rejected") {
     helpers::expect_compile_error(R"(
-        const bump := fn(arr: []mut i32): void {
+        const bump = fn(arr: []mut i32): void {
             arr[0] = arr[0] + 10;
         };
-        pub const main := fn(): i32 {
-            let mut slice := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut slice = [3]i32{1, 2, 3};
             bump(slice);
             return slice[0];
         };
@@ -241,8 +241,8 @@ TEST_CASE("Passing a const array where a mut slice is required is rejected") {
 
 TEST_CASE("Writing to a const array's element is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
-            let arr := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let arr = [3]i32{1, 2, 3};
             arr[0] = 5;
             return arr[0];
         };
@@ -251,8 +251,8 @@ TEST_CASE("Writing to a const array's element is rejected") {
 
 TEST_CASE("Writing to a var array's element without mut is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]i32{1, 2, 3};
             arr[0] = 5;
             return arr[0];
         };
@@ -261,8 +261,8 @@ TEST_CASE("Writing to a var array's element without mut is rejected") {
 
 TEST_CASE("Rebinding a const scalar is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
-            let x := 5;
+        pub const main = fn(): i32 {
+            let x = 5;
             x = 6;
             return x;
         };
@@ -271,10 +271,10 @@ TEST_CASE("Rebinding a const scalar is rejected") {
 
 TEST_CASE("Indexing a slice parameter of a nested function, passed an existing slice") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut arr: [2uz]mut i32 = [2uz]mut i32{7, 8};
             let mut sl: []mut i32 = arr;
-            const readit := fn(s: []mut i32): i32 {
+            const readit = fn(s: []mut i32): i32 {
                 return s[0];
             };
             return readit(sl);
@@ -284,7 +284,7 @@ TEST_CASE("Indexing a slice parameter of a nested function, passed an existing s
 
 TEST_CASE("A `var` slice binding's `.len` field is directly assignable") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: []mut u8 = [_]mut u8{1, 2, 3, 4, 5, 6};
             a.len = 2;
             return @intCast(i32, a.len);
@@ -294,7 +294,7 @@ TEST_CASE("A `var` slice binding's `.len` field is directly assignable") {
 
 TEST_CASE("A `var` slice binding's `.len` field is assignable even with immutable elements") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: []u8 = [_]u8{1, 2, 3, 4, 5, 6};
             a.len = 3;
             return @intCast(i32, a.len);
@@ -304,7 +304,7 @@ TEST_CASE("A `var` slice binding's `.len` field is assignable even with immutabl
 
 TEST_CASE("A `const` slice binding's `.len` field is still rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let a: []mut u8 = [_]mut u8{1, 2, 3, 4, 5, 6};
             a.len = 2;
             return @intCast(i32, a.len);
@@ -314,12 +314,12 @@ TEST_CASE("A `const` slice binding's `.len` field is still rejected") {
 
 TEST_CASE("Const-element arrays copy into mutable-element storage") {
     CHECK(helpers::compile_and_run(R"(
-        const make := fn(): [3]u8 { return [3]u8{4, 5, 6}; };
-        const sum := fn(a: [3]mut u8): i32 {
+        const make = fn(): [3]u8 { return [3]u8{4, 5, 6}; };
+        const sum = fn(a: [3]mut u8): i32 {
             a[0] = 0;
             return @as(i32, a[0]) + @as(i32, a[1]) + @as(i32, a[2]);
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let arr: [3]u8 = .{1, 2, 3};
             let mut m: [3]mut u8 = arr;
             let mut n: [3]mut u8 = [3]u8{1, 2, 3};
@@ -337,7 +337,7 @@ TEST_CASE("Const-element arrays copy into mutable-element storage") {
 
 TEST_CASE("Array copy of pointer and slice elements still aliases their pointees") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: u8 = 1;
             let p: ^mut u8 = ^mut x;
             let arr: [2]^mut u8 = .{p, p};
@@ -354,7 +354,7 @@ TEST_CASE("Array copy of pointer and slice elements still aliases their pointees
 
 TEST_CASE("A reference to an array coerces to a slice through the reference") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let x: [2]u8 = .{1, 2};
             let t: []u8 = &x;
             return @as(i32, t[1]) + @as(i32, @intCast(t.len)) * 10;
@@ -364,7 +364,7 @@ TEST_CASE("A reference to an array coerces to a slice through the reference") {
 
 TEST_CASE("A reference to a nested array coerces to a slice of arrays") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let m: [2][2]u8 = .{.{1, 2}, .{3, 4}};
             let u: [][2]u8 = &m;
             return @as(i32, u[1][0]) + @as(i32, u[1][1]) + @as(i32, @intCast(u.len)) * 10;
@@ -374,11 +374,11 @@ TEST_CASE("A reference to a nested array coerces to a slice of arrays") {
 
 TEST_CASE("A mut reference to an array coerces to a mut slice aliasing the array") {
     CHECK(helpers::compile_and_run(R"(
-        const bump := fn(s: []mut i32): void {
+        const bump = fn(s: []mut i32): void {
             s[0] = s[0] + 10;
         };
-        pub const main := fn(): i32 {
-            let mut arr := [3]mut i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]mut i32{1, 2, 3};
             bump(&mut arr);
             let r: &mut [3]mut i32 = &mut arr;
             let sl: []mut i32 = r;
@@ -390,12 +390,12 @@ TEST_CASE("A mut reference to an array coerces to a mut slice aliasing the array
 
 TEST_CASE("A reference to an array stays an array reference outside a slice context") {
     CHECK(helpers::compile_and_run(R"(
-        const second := fn(a: &[3]i32): i32 {
+        const second = fn(a: &[3]i32): i32 {
             return a[1];
         };
-        pub const main := fn(): i32 {
-            let arr := [3]i32{4, 5, 6};
-            let r := &arr;
+        pub const main = fn(): i32 {
+            let arr = [3]i32{4, 5, 6};
+            let r = &arr;
             let copy: [3]i32 = r;
             return second(r) + copy[2] + @as(i32, @intCast(r.len));
         };
@@ -404,7 +404,7 @@ TEST_CASE("A reference to an array stays an array reference outside a slice cont
 
 TEST_CASE("A pointer to an array does not coerce to a slice") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let x: [2]u8 = .{1, 2};
             let t: []u8 = ^x;
             return @as(i32, t[1]);

@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("arbitrary-width integer declarations and arithmetic") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: u3 = 5;
             a = a + 2;                      // 7, fits u3
             let mut b: i17 = -1000;
@@ -23,7 +23,7 @@ TEST_CASE("arbitrary-width integer declarations and arithmetic") {
 
 TEST_CASE("wide unsigned integer wraps modulo 2^N") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: u3 = 7;
             x = x + 1;                      // wraps to 0
             return @intCast(i32, x);
@@ -33,7 +33,7 @@ TEST_CASE("wide unsigned integer wraps modulo 2^N") {
 
 TEST_CASE("@sizeOf of arbitrary-width integers") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             if (@sizeOf(u1) != 1 or @sizeOf(u3) != 1 or @sizeOf(i8) != 1) { return 1; }
             if (@sizeOf(u9) != 2 or @sizeOf(i17) != 4 or @sizeOf(u32) != 4) { return 2; }
             if (@sizeOf(i40) != 8 or @sizeOf(u64) != 8) { return 3; }
@@ -45,8 +45,8 @@ TEST_CASE("@sizeOf of arbitrary-width integers") {
 
 TEST_CASE("@bitSizeOf reports a type's exact bit width") {
     CHECK(helpers::compile_and_run(R"(
-        const Pair := struct { a: i32, b: i32 };
-        pub const main := fn(): i32 {
+        const Pair = struct { a: i32, b: i32 };
+        pub const main = fn(): i32 {
             if (@bitSizeOf(u1) != 1 or @bitSizeOf(i8) != 8) { return 1; }
             if (@bitSizeOf(u9) != 9 or @bitSizeOf(i17) != 17) { return 2; }
             if (@bitSizeOf(u100) != 100 or @bitSizeOf(i128) != 128) { return 3; }
@@ -63,7 +63,7 @@ TEST_CASE("@bitSizeOf reports a type's exact bit width") {
 
 TEST_CASE("@bitSizeOf differs from @sizeOf for sub-byte and odd widths") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             // u9 occupies 2 ABI bytes but only 9 bits
             if (@sizeOf(u9) != 2 or @bitSizeOf(u9) != 9) { return 1; }
             let mut x: u17 = 3;
@@ -75,9 +75,9 @@ TEST_CASE("@bitSizeOf differs from @sizeOf for sub-byte and odd widths") {
 
 TEST_CASE("arbitrary-width integers widen implicitly to wider same-signedness types") {
     CHECK(helpers::compile_and_run(R"(
-        const take_u16 := fn(x: u16): u16 { return x; };
-        const take_i64 := fn(x: i64): i64 { return x; };
-        pub const main := fn(): i32 {
+        const take_u16 = fn(x: u16): u16 { return x; };
+        const take_i64 = fn(x: i64): i64 { return x; };
+        pub const main = fn(): i32 {
             let a: u3 = 6;
             let w: u16 = a;                        // u3 -> u16
             let s: i17 = -7;

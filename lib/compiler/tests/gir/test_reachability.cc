@@ -13,7 +13,7 @@ namespace {
 
 constexpr std::string_view WIN_MODULE{R"(
     extern("kernel32") const GetLastError: fn(): u32;
-    pub const last_error := fn(): u32 { return GetLastError(); };
+    pub const last_error = fn(): u32 { return GetLastError(); };
 )"};
 
 [[nodiscard]] auto emit(helpers::sema_test_context& ctx) -> gir::module {
@@ -27,7 +27,7 @@ TEST_CASE("GIR reachability: unreferenced imported extern contributes no library
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "win.gh" as win;
-            pub const main := fn(args: [][:0]u8): void {};
+            pub const main = fn(args: [][:0]u8): void {};
         )",
         {helpers::mock_file{"win.gh", WIN_MODULE, "win"}})};
 
@@ -48,8 +48,8 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "win.gh" as win;
-            pub const main := fn(args: [][:0]u8): void {
-                let e := win.last_error();
+            pub const main = fn(args: [][:0]u8): void {
+                let e = win.last_error();
             };
         )",
         {helpers::mock_file{"win.gh", WIN_MODULE, "win"}})};
@@ -68,7 +68,7 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
 TEST_CASE("GIR reachability: an unreferenced root-module extern is pruned too") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
-        pub const main := fn(args: [][:0]u8): void {};
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto gir_mod{emit(*ctx)};
@@ -83,8 +83,8 @@ TEST_CASE("GIR reachability: an unreferenced root-module extern is pruned too") 
 TEST_CASE("GIR reachability: a referenced root-module extern is retained") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
-        pub const main := fn(args: [][:0]u8): void {
-            let e := GetLastError();
+        pub const main = fn(args: [][:0]u8): void {
+            let e = GetLastError();
         };
     )")};
 

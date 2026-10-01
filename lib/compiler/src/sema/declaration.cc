@@ -53,7 +53,7 @@ auto names_of_annotation(const mod::module& owner, ast::explicit_type_id type, u
     return stdx::none;
 }
 
-// `const g := f;` / `const g := mod.f;`
+// `const g = f;` / `const g = mod.f;`
 auto names_of_alias_value(const mod::module& owner, ast::expr_handle value, u32 depth)
     -> stdx::option<names_t> {
     ast::node_id named{value};
@@ -81,7 +81,7 @@ auto names_of(const declaration_ref& declaration, u32 depth) -> stdx::option<nam
         return names_of_literal(owner, *fn);
     }
 
-    // `const Op := dyn Fn(n: i32): i32;`
+    // `const Op = dyn Fn(n: i32): i32;`
     if (const auto type_value{owner.ast.get_as_opt<ast::type_expr>(*decl->value)}) {
         return names_of_annotation(owner, type_value->type, depth);
     }

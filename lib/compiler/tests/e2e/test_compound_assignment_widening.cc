@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("`+=` implicitly widens a narrower float RHS to the LHS's type") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut accumulator: f64 = 0;
             let x: f32 = 12.0;
             accumulator += x;
@@ -18,7 +18,7 @@ TEST_CASE("`+=` implicitly widens a narrower float RHS to the LHS's type") {
 
 TEST_CASE("`+=` implicitly widens a narrower integer RHS to the LHS's type") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut total: i64 = 0;
             let x: i32 = 40;
             total += x;

@@ -12,7 +12,7 @@ namespace ghoti::tests {
 TEST_CASE("Type checker store and assignment validation") {
     SECTION("Valid variable assignment succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 0;
                 x = 42;
             };
@@ -22,7 +22,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Assignment with incompatible type fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 0;
                 x = true;
             };
@@ -36,7 +36,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Store through mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 *p = 42;
             };
         )");
@@ -45,7 +45,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Store through const pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^i32): void {
+            const f = fn(p: ^i32): void {
                 *p = 42;
             };
         )",
@@ -57,7 +57,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Store incompatible type through pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 *p = true;
             };
         )",
@@ -71,7 +71,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: opaque = undefined;
             };
         )",
@@ -82,7 +82,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Indexed store through a mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 p[0] = 42;
             };
         )");
@@ -91,7 +91,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Indexed store through a const pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^i32): void {
+            const f = fn(p: ^i32): void {
                 p[0] = 42;
             };
         )",
@@ -103,7 +103,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Writing an element of a const-element array still fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut a: [4uz]i32 = [4uz]i32{0, 0, 0, 0};
                 a[0] = 42;
             };
@@ -115,8 +115,8 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Copying a const-element array into mutable-element storage succeeds") {
         helpers::type_check_and_verify(R"(
-            const make := fn(): [3]u8 { return [3]u8{1, 2, 3}; };
-            const f := fn(): void {
+            const make = fn(): [3]u8 { return [3]u8{1, 2, 3}; };
+            const f = fn(): void {
                 let arr: [3]u8 = .{1, 2, 3};
                 let mut m: [3]mut u8 = arr;
                 let mut n: [3]mut u8 = [3]u8{1, 2, 3};
@@ -134,7 +134,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Copying a mutable-element array into const-element storage succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut m: [3]mut u8 = .{1, 2, 3};
                 let c: [3]u8 = m;
             };
@@ -143,8 +143,8 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Const-element array argument binds a mutable-element array parameter") {
         helpers::type_check_and_verify(R"(
-            const g := fn(a: [3]mut u8): u8 { return a[0]; };
-            const f := fn(): void {
+            const g = fn(a: [3]mut u8): u8 { return a[0]; };
+            const f = fn(): void {
                 let arr: [3]u8 = .{1, 2, 3};
                 _ = g(arr);
             };
@@ -154,7 +154,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Array copy still rejects gaining pointee mutability through pointer elements") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^u8): void {
+            const f = fn(p: ^u8): void {
                 let arr: [2]^u8 = .{p, p};
                 let mut m: [2]mut ^mut u8 = arr;
             };
@@ -167,7 +167,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Array copy still rejects gaining mutability through slice elements") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(s: []u8): void {
+            const f = fn(s: []u8): void {
                 let arr: [2][]u8 = .{s, s};
                 let mut m: [2][]mut u8 = arr;
             };
@@ -180,7 +180,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Const-element array still does not coerce to a mutable-element slice") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut arr: [3]u8 = .{1, 2, 3};
                 let s: []mut u8 = arr;
             };
@@ -202,7 +202,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
         SECTION("`let` and `let mut` declarations") {
             expect_ref_to_ptr(R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 0;
                 let p: ^mut i32 = &mut x;
             };
@@ -211,7 +211,7 @@ TEST_CASE("Type checker store and assignment validation") {
                               34,
                               true);
             expect_ref_to_ptr(R"(
-            const f := fn(): void {
+            const f = fn(): void {
                 let mut x: i32 = 0;
                 let mut p: ^i32 = &x;
             };
@@ -223,7 +223,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
         SECTION("Assignment, call argument, and struct field initializer") {
             expect_ref_to_ptr(R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 let mut x: i32 = 0;
                 let mut q: ^i32 = p;
                 q = &x;
@@ -233,8 +233,8 @@ TEST_CASE("Type checker store and assignment validation") {
                               20,
                               true);
             expect_ref_to_ptr(R"(
-            const g := fn(q: ^i32): i32 { return *q; };
-            const f := fn(): i32 {
+            const g = fn(q: ^i32): i32 { return *q; };
+            const f = fn(): i32 {
                 let x: i32 = 0;
                 return g(&x);
             };
@@ -243,8 +243,8 @@ TEST_CASE("Type checker store and assignment validation") {
                               25,
                               true);
             expect_ref_to_ptr(R"(
-            const S := struct { p: ^i32 };
-            const f := fn(): void {
+            const S = struct { p: ^i32 };
+            const f = fn(): void {
                 let x: i32 = 0;
                 let s: S = .{ .p = &x };
             };
@@ -256,10 +256,10 @@ TEST_CASE("Type checker store and assignment validation") {
 
         SECTION("A reference-typed value that isn't a `&` expression gets no `^` hint") {
             expect_ref_to_ptr(R"(
-            const f := fn(x: &i32): ^i32 { return x; };
+            const f = fn(x: &i32): ^i32 { return x; };
         )",
                               1,
-                              50,
+                              49,
                               false);
         }
     }

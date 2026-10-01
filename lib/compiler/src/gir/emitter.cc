@@ -563,7 +563,7 @@ auto get_decl_linkage(const ast::decl_stmt& decl) noexcept -> gir::linkage {
     return gir::linkage::INTERNAL;
 }
 
-// A `const X := @compileError("msg")` declaration is a deferred error
+// A `const X = @compileError("msg")` declaration is a deferred error
 auto decl_is_deferred_compile_error(const ast::AST& ast, const ast::decl_stmt& decl) -> bool {
     if (!decl.value) { return false; }
     const ast::node_id value_id{*decl.value};

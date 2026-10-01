@@ -9,16 +9,16 @@ namespace ghoti::tests {
 
 TEST_CASE("Well-formed integer / float builtins resolve") {
     helpers::resolve_and_check(R"(
-        const f := fn(a: i32, b: i32): i32 { return @min(a, b) + @max(a, b); };
-        const g := fn(a: f64, b: f64): f64 { return @min(a, b); };
-        const h := fn(a: i32, b: i32): i32 {
+        const f = fn(a: i32, b: i32): i32 { return @min(a, b) + @max(a, b); };
+        const g = fn(a: f64, b: f64): f64 { return @min(a, b); };
+        const h = fn(a: i32, b: i32): i32 {
             return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
         };
-        const k := fn(a: u32, b: u32): bool {
+        const k = fn(a: u32, b: u32): bool {
             let mut out: u32 = 0u32;
             return @addWithOverflow(a, b, &mut out);
         };
-        const p := fn(a: u32, b: u32): bool {
+        const p = fn(a: u32, b: u32): bool {
             let mut out: u32 = 0u32;
             return @mulWithOverflow(a, b, ^mut out); // a `^mut T` pointer is also accepted
         };
@@ -28,7 +28,7 @@ TEST_CASE("Well-formed integer / float builtins resolve") {
 TEST_CASE("@min / @max reject operands with no peer type") {
     helpers::test_resolver_fail(
         R"(
-const foo := fn(a: i32, b: u64): i32 {
+const foo = fn(a: i32, b: u64): i32 {
     return @min(a, b);
 };
 )",
@@ -40,7 +40,7 @@ const foo := fn(a: i32, b: u64): i32 {
 TEST_CASE("@divTrunc rejects floating-point operands") {
     helpers::test_resolver_fail(
         R"(
-const foo := fn(a: f64, b: f64): f64 {
+const foo = fn(a: f64, b: f64): f64 {
     return @divTrunc(a, b);
 };
 )",
@@ -52,7 +52,7 @@ const foo := fn(a: f64, b: f64): f64 {
 TEST_CASE("@addWithOverflow rejects a by-value result argument") {
     helpers::test_resolver_fail(
         R"(
-const foo := fn(a: i32, b: i32): bool {
+const foo = fn(a: i32, b: i32): bool {
     let mut out: i32 = 0;
     return @addWithOverflow(a, b, out);
 };
@@ -65,16 +65,16 @@ const foo := fn(a: i32, b: i32): bool {
 
 TEST_CASE("Compile-time division / modulo by zero is an error") {
     helpers::test_checker_fail(
-        "const bad := @divTrunc(10, 0);",
+        "const bad = @divTrunc(10, 0);",
         sema::diagnostic{"Division by zero in compile-time constant expression",
                          sema::error::COMPTIME_EVALUATION_FAILED,
-                         std::pair{0UZ, 22UZ}});
+                         std::pair{0UZ, 21UZ}});
 
     helpers::test_checker_fail(
-        "const bad := @mod(10, 0);",
+        "const bad = @mod(10, 0);",
         sema::diagnostic{"Modulo by zero in compile-time constant expression",
                          sema::error::COMPTIME_EVALUATION_FAILED,
-                         std::pair{0UZ, 17UZ}});
+                         std::pair{0UZ, 16UZ}});
 }
 
 } // namespace ghoti::tests

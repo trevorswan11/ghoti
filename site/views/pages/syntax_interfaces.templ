@@ -15,7 +15,7 @@ templ SyntaxInterfacesPage() {
 			<ul>
 				<li><strong>Associated types</strong>: <code>Name: type;</code> (required) or <code>Name: type = Default;</code> (defaulted)</li>
 				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); evaluated at compile time and may not depend on <code>{ "@this()" }</code></li>
-				<li><strong>Required methods</strong>: a bodyless <code>const</code> function declaration with a mandatory <code>self</code> parameter: <code>pub const write := fn(&amp;mut self, b: []u8): usize;</code></li>
+				<li><strong>Required methods</strong>: a bodyless <code>const</code> function declaration with a mandatory <code>self</code> parameter: <code>pub const write = fn(&amp;mut self, b: []u8): usize;</code></li>
 				<li><strong>Default methods</strong>: the same, but with a body; an implementer that omits the name inherits it, one that provides the name overrides it</li>
 			</ul>
 		</li>
@@ -42,21 +42,21 @@ templ SyntaxInterfacesPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Writer := interface {
+			{ `const Writer = interface {
     Error: type;                       // required associated type
     const preferred_chunk: usize = 4096;   // defaulted associated const
 
-    pub const write := fn(&mut self, bytes: []u8): usize;   // requirement
-    const debugName := fn(&self): []u8;                     // sealed requirement
+    pub const write = fn(&mut self, bytes: []u8): usize;   // requirement
+    const debugName = fn(&self): []u8;                     // sealed requirement
 
-    pub const writeAll := fn(&mut self, bytes: []u8): usize {   // default method
+    pub const writeAll = fn(&mut self, bytes: []u8): usize {   // default method
         let mut off: usize = 0;
         while (off < bytes.len) { off = off + self.write(bytes[off..]); }
         return off;
     };
 };
 
-const Marker := interface {};   // zero-member marker interface` }
+const Marker = interface {};   // zero-member marker interface` }
 		</code>
 	</pre>
 	<h2>impl blocks</h2>
@@ -65,7 +65,7 @@ const Marker := interface {};   // zero-member marker interface` }
 		<li>
 			<strong>Trait impl</strong>: <code>{ "impl I for T { ... }" }</code>
 			<ul>
-				<li>Binds each associated type with <code>const Name := ...</code> and overrides associated const defaults with <code>const N := ...</code></li>
+				<li>Binds each associated type with <code>const Name = ...</code> and overrides associated const defaults with <code>const N = ...</code></li>
 				<li>Supplies every required method; omitting a defaulted method inherits the interface's body</li>
 				<li>Inside the block <code>self</code> has type <code>T</code>; bare sibling names resolve against <code>T</code>, the interface's associated items, and the other methods in the block</li>
 				<li>After the impl, both <code>t.method(x)</code> and <code>T.method(&amp;t, x)</code> resolve</li>
@@ -91,24 +91,24 @@ const Marker := interface {};   // zero-member marker interface` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const File := struct { fd: i32 };
+			{ `const File = struct { fd: i32 };
 
 impl Writer for File {
-    const Error := i32;                // bind the associated type
-    const preferred_chunk := 8192;     // override the default
+    const Error = i32;                // bind the associated type
+    const preferred_chunk = 8192;     // override the default
 
-    pub const write := fn(&mut self, bytes: []u8): usize { return bytes.len; };
-    const debugName := fn(&self): []u8 { return "File"; };
+    pub const write = fn(&mut self, bytes: []u8): usize { return bytes.len; };
+    const debugName = fn(&self): []u8 { return "File"; };
     // writeAll omitted -> inherited from the interface default
 }
 
 impl File {                           // inherent: unrelated helpers
-    pub const fromRaw := fn(fd: i32): @this() { return .{ .fd = fd }; };
+    pub const fromRaw = fn(fd: i32): @this() { return .{ .fd = fd }; };
 }
 
-const Box := fn(T: type): type { return struct { val: T }; };
+const Box = fn(T: type): type { return struct { val: T }; };
 impl(T: type) Box(T) {               // one method per Box(...) instantiation
-    pub const get := fn(&self): T { return self.val; };
+    pub const get = fn(&self): T { return self.val; };
 }` }
 		</code>
 	</pre>
@@ -139,12 +139,12 @@ impl(T: type) Box(T) {               // one method per Box(...) instantiation
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const dump := fn(w: &mut impl Writer, msg: []u8): usize {
+			{ `const dump = fn(w: &mut impl Writer, msg: []u8): usize {
     return w.writeAll(msg);
 };
 
-pub const main := fn(): i32 {
-    let mut f := File{ .fd = 1 };
+pub const main = fn(): i32 {
+    let mut f = File{ .fd = 1 };
     return @as(i32, dump(&f, "hi"));
 };` }
 		</code>
@@ -173,13 +173,13 @@ pub const main := fn(): i32 {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const write_all := fn(w: &mut dyn Writer, bytes: []u8): usize {
+			{ `const write_all = fn(w: &mut dyn Writer, bytes: []u8): usize {
     return w.writeAll(bytes);   // vtable dispatch
 };
 
-pub const main := fn(): i32 {
-    let mut f := File{ .fd = 1 };
-    let mut n := write_all(&mut f, "hi");   // &mut File -> &mut dyn Writer
+pub const main = fn(): i32 {
+    let mut f = File{ .fd = 1 };
+    let mut n = write_all(&mut f, "hi");   // &mut File -> &mut dyn Writer
 
     let mut again: ^File = @dynCast(^File, &f);   // unsafe recovery
     return @as(i32, n + again.fd);
@@ -195,7 +195,7 @@ pub const main := fn(): i32 {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const encode := fn(T: type, v: T): []u8 {
+			{ `const encode = fn(T: type, v: T): []u8 {
     if comptime (!@implements(T, Writer)) {
         @compileError("encode requires T: Writer");
     }

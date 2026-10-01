@@ -11,7 +11,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Narrowing integer conversion explains truncation and suggests @intCast or @truncate") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: i64): void {
+            const f = fn(x: i64): void {
                 let mut y: i32 = x;
             };
         )",
@@ -27,7 +27,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
             "@bitCast") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: u32): void {
+            const f = fn(x: u32): void {
                 let mut y: i32 = x;
             };
         )",
@@ -42,7 +42,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Narrowing and sign change explains both and suggests @intCast or @truncate") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: u64): void {
+            const f = fn(x: u64): void {
                 let mut y: i32 = x;
             };
         )",
@@ -57,7 +57,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Signed to unsigned widening explains negative values and suggests @intCast") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: i16): void {
+            const f = fn(x: i16): void {
                 let mut y: u32 = x;
             };
         )",
@@ -73,7 +73,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Float narrowing suggests @floatCast") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: f64): void {
+            const f = fn(x: f64): void {
                 let mut y: f32 = x;
             };
         )",
@@ -87,8 +87,8 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Call argument mismatch includes cast reason") {
         helpers::test_checker_fail(
             R"(
-            const take_i32 := fn(x: i32): void {};
-            const f := fn(x: i64): void {
+            const take_i32 = fn(x: i32): void {};
+            const f = fn(x: i64): void {
                 take_i32(x);
             };
         )",
@@ -103,7 +103,7 @@ TEST_CASE("Cast rejection diagnostics in type checker") {
     SECTION("Return value mismatch includes cast reason") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: i64): i32 {
+            const f = fn(x: i64): i32 {
                 return x;
             };
         )",

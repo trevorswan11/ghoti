@@ -26,10 +26,10 @@ TEST_CASE("Function type restrictions") {
 
 TEST_CASE("An `extern fn` type literal cannot carry a body") {
     helpers::test_parser_fail(
-        "const f := extern fn(): void { };",
+        "const f = extern fn(): void { };",
         syntax::diagnostic{"`extern fn(...)` names a function pointer type and cannot have a body",
                            syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
-                           std::pair{0UZ, 18UZ}});
+                           std::pair{0UZ, 17UZ}});
 }
 
 TEST_CASE("Bodied function type") {

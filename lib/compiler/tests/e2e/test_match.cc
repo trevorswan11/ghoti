@@ -11,9 +11,9 @@ namespace ghoti::tests {
 
 TEST_CASE("Match over a tagged union dispatches to the active field") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { a: i32, b: i32 };
-        pub const main := fn(): i32 {
-            let mut u := U{ .b = 7 };
+        const U = union { a: i32, b: i32 };
+        pub const main = fn(): i32 {
+            let mut u = U{ .b = 7 };
             return match (u) {
                 .a => 1,
                 .b => 2,
@@ -24,9 +24,9 @@ TEST_CASE("Match over a tagged union dispatches to the active field") {
 
 TEST_CASE("A plain match arm capture reads the current field value") {
     CHECK(helpers::compile_and_run(R"(
-        const U := union { a: i32 };
-        pub const main := fn(): i32 {
-            let u := U{ .a = 5 };
+        const U = union { a: i32 };
+        pub const main = fn(): i32 {
+            let u = U{ .a = 5 };
             return match (u) {
                 .a => |v| v + 10,
             };
@@ -37,12 +37,12 @@ TEST_CASE("A plain match arm capture reads the current field value") {
 TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
     SECTION("pointer payload, union built inline") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: ^mut u8, err: u32 };
-            pub const main := fn(): i32 {
+            const U = union { ok: ^mut u8, err: u32 };
+            pub const main = fn(): i32 {
                 let mut x: u8 = 9u8;
                 let p: ^mut u8 = ^mut x;
                 let r: U = .{ .ok = p };
-                let q := match (r) { .ok => |v| v, .err => |_| nullptr };
+                let q = match (r) { .ok => |v| v, .err => |_| nullptr };
                 return if (q == p) 1 else 0;
             };
         )") == 1);
@@ -50,12 +50,12 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 
     SECTION("pointer payload, returned from a function") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: ^mut u8, err: u32 };
-            const mk := fn(p: ^mut u8): U { return .{ .ok = p }; };
-            pub const main := fn(): i32 {
+            const U = union { ok: ^mut u8, err: u32 };
+            const mk = fn(p: ^mut u8): U { return .{ .ok = p }; };
+            pub const main = fn(): i32 {
                 let mut x: u8 = 9u8;
                 let p: ^mut u8 = ^mut x;
-                let q := match (mk(p)) { .ok => |v| v, .err => |_| nullptr };
+                let q = match (mk(p)) { .ok => |v| v, .err => |_| nullptr };
                 return if (q == p) 1 else 0;
             };
         )") == 1);
@@ -63,12 +63,12 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 
     SECTION("opaque-pointer payload written through after capture") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: ^mut opaque, err: u32 };
-            const mk := fn(p: ^mut opaque): U { return .{ .ok = p }; };
-            pub const main := fn(): i32 {
+            const U = union { ok: ^mut opaque, err: u32 };
+            const mk = fn(p: ^mut opaque): U { return .{ .ok = p }; };
+            pub const main = fn(): i32 {
                 let mut cell: i32 = 0;
                 let p: ^mut opaque = @ptrCast(^mut opaque, ^mut cell);
-                let q := match (mk(p)) { .ok => |h| h, .err => |_| nullptr };
+                let q = match (mk(p)) { .ok => |h| h, .err => |_| nullptr };
                 let back: ^mut i32 = @ptrCast(^mut i32, q);
                 *back = 42;
                 return cell;
@@ -80,9 +80,9 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 TEST_CASE("Match arm capture mutates the matched union field in place") {
     SECTION("By mutable reference") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32 };
-            pub const main := fn(): i32 {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |&mut v| { v = v + 10; },
                     _ => {},
@@ -94,9 +94,9 @@ TEST_CASE("Match arm capture mutates the matched union field in place") {
 
     SECTION("By mutable pointer") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32 };
-            pub const main := fn(): i32 {
-                let mut u := U{ .a = 5 };
+            const U = union { a: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |^mut v| { *v = *v + 10; },
                     _ => {},
@@ -109,9 +109,9 @@ TEST_CASE("Match arm capture mutates the matched union field in place") {
 
 TEST_CASE("Match arm capture mutates a struct field matcher (dot_expr) in place") {
     CHECK(helpers::compile_and_run(R"(
-        const Box := struct { val: i32 };
-        pub const main := fn(): i32 {
-            let mut b := Box{ .val = 5 };
+        const Box = struct { val: i32 };
+        pub const main = fn(): i32 {
+            let mut b = Box{ .val = 5 };
             match (b.val) {
                 5 => |&mut v| { v = v + 10; },
                 _ => {},
@@ -123,8 +123,8 @@ TEST_CASE("Match arm capture mutates a struct field matcher (dot_expr) in place"
 
 TEST_CASE("Match arm capture mutates an array element matcher (index_expr) in place") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            let mut arr := [3]i32{1, 2, 3};
+        pub const main = fn(): i32 {
+            let mut arr = [3]i32{1, 2, 3};
             match (arr[1]) {
                 2 => |&mut v| { v = v + 10; },
                 _ => {},
@@ -136,11 +136,11 @@ TEST_CASE("Match arm capture mutates an array element matcher (index_expr) in pl
 
 TEST_CASE("A non-value capture over an rvalue match matcher is rejected") {
     helpers::expect_compile_error(R"(
-        const get_five := fn(): i32 {
+        const get_five = fn(): i32 {
             return 5;
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             match (get_five()) {
                 5 => |&mut v| { v = v + 10; },
                 _ => {},
@@ -152,7 +152,7 @@ TEST_CASE("A non-value capture over an rvalue match matcher is rejected") {
 
 TEST_CASE("A non-value capture over an rvalue for-loop iterable is rejected") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             for (0..10) |&mut v| {
                 v = v + 1;
             };
@@ -163,7 +163,7 @@ TEST_CASE("A non-value capture over an rvalue for-loop iterable is rejected") {
 
 TEST_CASE("Match arm capture mutates a whole-value (non-union) scrutinee by mutable reference") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 5;
             match (x) {
                 5 => |&mut v| { v = v + 10; },
@@ -176,14 +176,14 @@ TEST_CASE("Match arm capture mutates a whole-value (non-union) scrutinee by muta
 
 TEST_CASE("A range match arm dispatches on interval membership") {
     constexpr std::string_view program{R"(
-        const classify := fn(n: i32): i32 {
+        const classify = fn(n: i32): i32 {
             return match (n) {
                 0..10 => 1,
                 10..=20 => |v| v,
                 _ => -1,
             };
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return classify(3) + classify(20) + classify(99);
         };
     )"};
@@ -193,7 +193,7 @@ TEST_CASE("A range match arm dispatches on interval membership") {
 
 TEST_CASE("'match comptime' selects its arm at compile time") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return match comptime (2) {
                 1 => 10,
                 2 => 20,
@@ -205,8 +205,8 @@ TEST_CASE("'match comptime' selects its arm at compile time") {
 
 TEST_CASE("'match comptime' arm binds a capture to the folded scrutinee") {
     CHECK(helpers::compile_and_run(R"(
-        const LEVEL := 2;
-        pub const main := fn(): i32 {
+        const LEVEL = 2;
+        pub const main = fn(): i32 {
             return match comptime (LEVEL) {
                 0 => |v| v,
                 1, 2, 3 => |v| v * 10,
@@ -218,13 +218,13 @@ TEST_CASE("'match comptime' arm binds a capture to the folded scrutinee") {
 
 TEST_CASE("'match comptime' capture works per generic instantiation") {
     constexpr std::string_view program{R"(
-        const scaled := fn(comptime n: i32): i32 {
+        const scaled = fn(comptime n: i32): i32 {
             return match comptime (n) {
                 1, 2 => |v| v * 10,
                 _ => 0,
             };
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return scaled(2) + scaled(9);
         };
     )"};
@@ -233,14 +233,14 @@ TEST_CASE("'match comptime' capture works per generic instantiation") {
 
 TEST_CASE("'match comptime' folds per generic instantiation") {
     constexpr std::string_view program{R"(
-        const tag := fn(T: type): i32 {
+        const tag = fn(T: type): i32 {
             return match comptime (T) {
                 i32 => 4,
                 i64 => 8,
                 _ => 0,
             };
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return tag(i32) + tag(i64);
         };
     )"};
@@ -249,14 +249,14 @@ TEST_CASE("'match comptime' folds per generic instantiation") {
 
 TEST_CASE("A multi-value match arm is taken when any listed pattern matches") {
     constexpr std::string_view program{R"(
-        const kind := fn(n: i32): i32 {
+        const kind = fn(n: i32): i32 {
             return match (n) {
                 0, 2, 4..8 => |v| v + 1,
                 1, 3 => 100,
                 _ => -1,
             };
         };
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return kind(2) + kind(3) + kind(6) + kind(9);
         };
     )"};
@@ -266,20 +266,20 @@ TEST_CASE("A multi-value match arm is taken when any listed pattern matches") {
 
 TEST_CASE("A multi-value match arm accepts a trailing comma after the last pattern") {
     CHECK(helpers::compile_and_run(R"(
-        const kind := fn(n: i32): i32 {
+        const kind = fn(n: i32): i32 {
             return match (n) {
                 0, 2, 4, => 10,
                 1, 3, => 20,
                 _ => 0,
             };
         };
-        pub const main := fn(): i32 { return kind(2) + kind(3) + kind(9); };
+        pub const main = fn(): i32 { return kind(2) + kind(3) + kind(9); };
     )") == 30);
 }
 
 TEST_CASE("A range match arm accepts runtime endpoints") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut x: i32 = 7;
             let mut lo: i32 = 5;
             let mut hi: i32 = 9;
@@ -294,15 +294,15 @@ TEST_CASE("A range match arm accepts runtime endpoints") {
 TEST_CASE("A match arm with a diverging block body does not poison the result type") {
     SECTION("Capturing arm returns, other arm yields a value") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: i32 };
-            const pick := fn(u: U): i32 {
-                let v := match (u) {
+            const U = union { ok: i32, err: i32 };
+            const pick = fn(u: U): i32 {
+                let v = match (u) {
                     .ok  => |h| h + 1,
                     .err => |e| { return e * 100; },
                 };
                 return v;
             };
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return pick(U{ .ok = 7 }) + pick(U{ .err = 2 });
             };
         )") == 208);
@@ -310,14 +310,14 @@ TEST_CASE("A match arm with a diverging block body does not poison the result ty
 
     SECTION("Catch-all arm returns on a runtime scrutinee") {
         CHECK(helpers::compile_and_run(R"(
-            const pick := fn(n: i32): i32 {
-                let v := match (n) {
+            const pick = fn(n: i32): i32 {
+                let v = match (n) {
                     1 => 10,
                     _ => { return 99; },
                 };
                 return v + 1;
             };
-            pub const main := fn(): i32 { return pick(5); };
+            pub const main = fn(): i32 { return pick(5); };
         )") == 99);
     }
 }
@@ -325,11 +325,11 @@ TEST_CASE("A match arm with a diverging block body does not poison the result ty
 TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds nothing") {
     SECTION("Over an i32 union arm, in value position") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: i32 };
-            const f := fn(x: i32): U {
+            const U = union { ok: i32, err: i32 };
+            const f = fn(x: i32): U {
                 return if (x < 0) U{ .err = x }; else U{ .ok = x };
             };
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return match (f(3)) { .ok => |_| 0, .err => |e| e };
             };
         )") == 0);
@@ -337,8 +337,8 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 
     SECTION("Over a void union arm") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: void, err: i32 };
-            pub const main := fn(): i32 {
+            const U = union { ok: void, err: i32 };
+            pub const main = fn(): i32 {
                 return match (U{ .ok = {} }) { .ok => |_| 7, .err => |e| e };
             };
         )") == 7);
@@ -346,8 +346,8 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 
     SECTION("In statement position") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: i32 };
-            pub const main := fn(): i32 {
+            const U = union { ok: i32, err: i32 };
+            pub const main = fn(): i32 {
                 let mut out: i32 = 0;
                 match (U{ .ok = 9 }) {
                     .ok => |_| { out = 5; },
@@ -362,9 +362,9 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 TEST_CASE("A direct `union == .field` comparison checks the active field") {
     SECTION("True when the field is active") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32, b: i32 };
-            pub const main := fn(): i32 {
-                let mut u := U{ .b = 3 };
+            const U = union { a: i32, b: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .b = 3 };
                 if (u == .b) { return 42; }
                 return 0;
             };
@@ -373,9 +373,9 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("False when a different field is active") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32, b: i32 };
-            pub const main := fn(): i32 {
-                let mut u := U{ .b = 3 };
+            const U = union { a: i32, b: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .b = 3 };
                 if (u == .a) { return 42; }
                 return 0;
             };
@@ -384,9 +384,9 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("!= negates the comparison") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { a: i32, b: i32 };
-            pub const main := fn(): i32 {
-                let mut u := U{ .b = 3 };
+            const U = union { a: i32, b: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .b = 3 };
                 if (u != .a) { return 42; }
                 return 0;
             };
@@ -397,19 +397,19 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 TEST_CASE("an `undefined` value arm/branch takes the surrounding result type, not a poison type") {
     SECTION("match arm") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: i32 };
-            pub const main := fn(): i32 {
-                let u := U{ .ok = 40 };
-                let v := match (u) { .ok => |x| x, .err => undefined };
+            const U = union { ok: i32, err: i32 };
+            pub const main = fn(): i32 {
+                let u = U{ .ok = 40 };
+                let v = match (u) { .ok => |x| x, .err => undefined };
                 return v + 2;
             };
         )") == 42);
     }
     SECTION("if branch") {
         CHECK(helpers::compile_and_run(R"(
-            const pick := fn(n: i32): i32 { return n; };
-            pub const main := fn(): i32 {
-                let v := if (true) pick(42) else undefined;
+            const pick = fn(n: i32): i32 { return n; };
+            pub const main = fn(): i32 {
+                let v = if (true) pick(42) else undefined;
                 return v;
             };
         )") == 42);
@@ -424,20 +424,20 @@ TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") 
 
     SECTION("match arm, with capture") {
         ok(R"(
-            const U := union { ok: i32, err: i32 };
-            const positive := fn(n: i32): bool { return n > 0; };
-            pub const main := fn(): i32 {
-                let u := U{ .ok = 5 };
-                let b := match (u) { .ok => |n| positive(n), .err => |_| false };
+            const U = union { ok: i32, err: i32 };
+            const positive = fn(n: i32): bool { return n > 0; };
+            pub const main = fn(): i32 {
+                let u = U{ .ok = 5 };
+                let b = match (u) { .ok => |n| positive(n), .err => |_| false };
                 return if (b) 1 else 0;
             };
         )");
     }
     SECTION("if branch") {
         ok(R"(
-            const positive := fn(n: i32): bool { return n > 0; };
-            pub const main := fn(): i32 {
-                let b := if (true) positive(5) else false;
+            const positive = fn(n: i32): bool { return n > 0; };
+            pub const main = fn(): i32 {
+                let b = if (true) positive(5) else false;
                 return if (b) 1 else 0;
             };
         )");
@@ -446,22 +446,22 @@ TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") 
 
 TEST_CASE("a by-reference param read across sibling match arms and later blocks") {
     CHECK(helpers::compile_and_run(R"(
-        const Whence := enum { start = 0, current = 1, end = 2 };
-        const S := struct { pub buf: []mut u8, pub pos: usize };
-        const seek := fn(s: &mut S, offset: i64, whence: Whence): i64 {
+        const Whence = enum { start = 0, current = 1, end = 2 };
+        const S = struct { pub buf: []mut u8, pub pos: usize };
+        const seek = fn(s: &mut S, offset: i64, whence: Whence): i64 {
             let base: i64 = match (whence) {
                 .start => 0,
                 .current => @intCast(i64, s.pos),
                 .end => @intCast(i64, s.buf.len),
             };
-            let target := base + offset;
+            let target = base + offset;
             if (target < 0 or target > @intCast(i64, s.buf.len)) { return -1; }
             s.pos = @intCast(usize, target);
             return target;
         };
-        pub const main := fn(): i32 {
-            let mut backing := [8uz]mut u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
-            let mut s := S{ .buf = backing[0..8], .pos = 2uz };
+        pub const main = fn(): i32 {
+            let mut backing = [8uz]mut u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+            let mut s = S{ .buf = backing[0..8], .pos = 2uz };
             return @intCast(i32, seek(&mut s, 3i64, Whence.current));
         };
     )") == 5);
@@ -469,8 +469,8 @@ TEST_CASE("a by-reference param read across sibling match arms and later blocks"
 
 TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const PtrUnion := union { ptr: ^i32, val: i32 };
-        pub const main := fn(): i32 {
+        const PtrUnion = union { ptr: ^i32, val: i32 };
+        pub const main = fn(): i32 {
             let mut x: i32 = 7;
             let u: PtrUnion = .{ .ptr = ^x };
             return match (u) {
@@ -485,15 +485,15 @@ TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
 TEST_CASE("Match directly on reference types without dereferencing") {
     SECTION("Match on &union with value capture") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: bool };
-            const check := fn(u: &U): i32 {
+            const U = union { ok: i32, err: bool };
+            const check = fn(u: &U): i32 {
                 return match (u) {
                     .ok => |v| v * 2,
                     .err => |_| -1,
                 };
             };
-            pub const main := fn(): i32 {
-                let u := U{ .ok = 21 };
+            pub const main = fn(): i32 {
+                let u = U{ .ok = 21 };
                 return check(&u);
             };
         )") == 42);
@@ -501,15 +501,15 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &mut union with mutation") {
         CHECK(helpers::compile_and_run(R"(
-            const U := union { ok: i32, err: bool };
-            const mutate := fn(u: &mut U): void {
+            const U = union { ok: i32, err: bool };
+            const mutate = fn(u: &mut U): void {
                 match (u) {
                     .ok => |&mut v| { v += 10; },
                     .err => {},
                 };
             };
-            pub const main := fn(): i32 {
-                let mut u := U{ .ok = 32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .ok = 32 };
                 mutate(&mut u);
                 return match (u) {
                     .ok => |v| v,
@@ -521,17 +521,17 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &self method in struct/union") {
         CHECK(helpers::compile_and_run(R"(
-            const Opt := union { some: i32, none: void };
+            const Opt = union { some: i32, none: void };
             impl Opt {
-                pub const is_some := fn(&self): bool {
+                pub const is_some = fn(&self): bool {
                     return match (self) {
                         .some => true,
                         .none => false,
                     };
                 };
             }
-            pub const main := fn(): i32 {
-                let o := Opt{ .some = 100 };
+            pub const main = fn(): i32 {
+                let o = Opt{ .some = 100 };
                 return if (o.is_some()) 42 else 0;
             };
         )") == 42);
@@ -539,16 +539,16 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &enum") {
         CHECK(helpers::compile_and_run(R"(
-            const Color := enum { red, green, blue };
-            const code := fn(c: &Color): i32 {
+            const Color = enum { red, green, blue };
+            const code = fn(c: &Color): i32 {
                 return match (c) {
                     .red => 1,
                     .green => 2,
                     .blue => 3,
                 };
             };
-            pub const main := fn(): i32 {
-                let c := Color.green;
+            pub const main = fn(): i32 {
+                let c = Color.green;
                 return code(&c);
             };
         )") == 2);
@@ -556,14 +556,14 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &primitive integer") {
         CHECK(helpers::compile_and_run(R"(
-            const classify := fn(n: &i32): i32 {
+            const classify = fn(n: &i32): i32 {
                 return match (n) {
                     0 => 10,
                     1 => 20,
                     _ => 30,
                 };
             };
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 let x: i32 = 1;
                 return classify(&x);
             };
@@ -573,8 +573,8 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
 TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to void") {
     CHECK(helpers::compile_and_run(R"(
-        const R := union { ok: void, err: i32 };
-        pub const main := fn(): i32 {
+        const R = union { ok: void, err: i32 };
+        pub const main = fn(): i32 {
             let r: R = .{ .ok = {} };
             match (r) {
                 .ok => {},
@@ -587,8 +587,8 @@ TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to voi
 
 TEST_CASE("A match with a value arm and a bare `@panic` arm resolves to the value's type") {
     CHECK(helpers::compile_and_run(R"(
-        const R := union { ok: i32, err: i32 };
-        pub const main := fn(): i32 {
+        const R = union { ok: i32, err: i32 };
+        pub const main = fn(): i32 {
             let r: R = .{ .ok = 7 };
             return match (r) {
                 .ok => |v| v,

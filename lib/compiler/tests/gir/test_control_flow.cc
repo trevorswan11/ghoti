@@ -12,7 +12,7 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR if statement and if-else branching") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_if := fn(x: i32): i32 {
+        const test_if = fn(x: i32): i32 {
             let mut res: i32 = 0;
             if (x > 0) {
                 res = 1;
@@ -63,7 +63,7 @@ TEST_CASE("GIR if statement and if-else branching") {
 
 TEST_CASE("GIR if expression yielding value") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const choose := fn(c: bool, a: i32, b: i32): i32 {
+        const choose = fn(c: bool, a: i32, b: i32): i32 {
             return if (c) a else b;
         };
     )")};
@@ -83,7 +83,7 @@ TEST_CASE("GIR if expression yielding value") {
 
 TEST_CASE("GIR comptime if branching") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_comptime_if := fn(): i32 {
+        const test_comptime_if = fn(): i32 {
             if comptime (true) {
                 return 42;
             } else {
@@ -108,7 +108,7 @@ TEST_CASE("GIR comptime if branching") {
 TEST_CASE("GIR comptime if error handling") {
     SECTION("Non-constant condition fails with COMPTIME_EVALUATION_FAILED") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            let test_dyn_comptime_if := fn(param: bool): i32 {
+            let test_dyn_comptime_if = fn(param: bool): i32 {
                 if comptime (param) {
                     return 1;
                 } else {
@@ -128,7 +128,7 @@ TEST_CASE("GIR comptime if error handling") {
 
     SECTION("Non-boolean condition fails with TYPE_MISMATCH") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const test_non_bool_comptime_if := fn(): i32 {
+            const test_non_bool_comptime_if = fn(): i32 {
                 if comptime (123) {
                     return 1;
                 }
@@ -148,7 +148,7 @@ TEST_CASE("GIR comptime if error handling") {
 
 TEST_CASE("GIR while loop with condition, body, and break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const count_up := fn(max: i32): i32 {
+        const count_up = fn(max: i32): i32 {
             let mut i: i32 = 0;
             while (i < max) {
                 i += 1;
@@ -175,7 +175,7 @@ TEST_CASE("GIR while loop with condition, body, and break") {
 
 TEST_CASE("GIR while loop with continuation and else non_break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const while_full := fn(limit: i32): i32 {
+        const while_full = fn(limit: i32): i32 {
             let mut count: i32 = 0;
             let mut i: i32 = 0;
             while (i < limit) : (i += 1) {
@@ -200,7 +200,7 @@ TEST_CASE("GIR while loop with continuation and else non_break") {
 
 TEST_CASE("GIR do-while loop") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_do_while := fn(): i32 {
+        const test_do_while = fn(): i32 {
             let mut x: i32 = 0;
             do {
                 x += 1;
@@ -224,7 +224,7 @@ TEST_CASE("GIR do-while loop") {
 
 TEST_CASE("GIR infinite loop with break and continue") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_infinite := fn(): i32 {
+        const test_infinite = fn(): i32 {
             let mut count: i32 = 0;
             loop {
                 count += 1;
@@ -253,14 +253,14 @@ TEST_CASE("GIR infinite loop with break and continue") {
 
 TEST_CASE("GIR for loop over range iterables") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const sum_range := fn(): i32 {
+        const sum_range = fn(): i32 {
             let mut total: i32 = 0;
             for (0..10) |i| {
                 total += i;
             }
             return total;
         };
-        const sum_inclusive := fn(): i32 {
+        const sum_inclusive = fn(): i32 {
             let mut total: i32 = 0;
             for (1..=5) |j| {
                 total += j;
@@ -289,8 +289,8 @@ TEST_CASE("GIR for loop over range iterables") {
 
 TEST_CASE("Labeled GIR block yielding value via break") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const compute_labeled := fn(x: i32): i32 {
-            let val := blk: {
+        const compute_labeled = fn(x: i32): i32 {
+            let val = blk: {
                 if (x > 0) {
                     break :blk 100;
                 }
@@ -315,7 +315,7 @@ TEST_CASE("Labeled GIR block yielding value via break") {
 
 TEST_CASE("Labeled GIR nested loop break and continue") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const nested_loops := fn(): i32 {
+        const nested_loops = fn(): i32 {
             let mut count: i32 = 0;
             outer: for (0..5) |i| {
                 for (0..5) |j| {
@@ -345,10 +345,10 @@ TEST_CASE("Labeled GIR nested loop break and continue") {
 
 TEST_CASE("Short-circuit GIR boolean and / or expressions") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_and := fn(a: bool, b: bool): bool {
+        const test_and = fn(a: bool, b: bool): bool {
             return a and b;
         };
-        const test_or := fn(a: bool, b: bool): bool {
+        const test_or = fn(a: bool, b: bool): bool {
             return a or b;
         };
     )")};

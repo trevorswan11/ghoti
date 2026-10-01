@@ -228,7 +228,7 @@ class AST {
         return nodes_.ids | std::views::filter([](node_id id) { return id.template is<Data>(); });
     }
 
-    // The top-level declaration `name := ...` (or `name: T = ...`), if any
+    // The top-level declaration `name = ...` (or `name: T = ...`), if any
     [[nodiscard]] auto find_top_level_decl(std::string_view name) const
         -> stdx::option<const decl_stmt&> {
         for (const auto root : nodes_.roots) {

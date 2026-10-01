@@ -16,11 +16,11 @@ namespace ghoti::tests {
 
 namespace {
 
-constexpr std::string_view source{"pub const X := 5;\n"
-                                  "let mut y := 1;\n"
-                                  "const add := fn(a: i32, b: i32): i32 { return a + b; };\n"
-                                  "const Point := struct { x: i32, py: i32 };\n"
-                                  "const Color := enum { RED, GREEN, BLUE };\n"};
+constexpr std::string_view source{"pub const X = 5;\n"
+                                  "let mut y = 1;\n"
+                                  "const add = fn(a: i32, b: i32): i32 { return a + b; };\n"
+                                  "const Point = struct { x: i32, py: i32 };\n"
+                                  "const Color = enum { RED, GREEN, BLUE };\n"};
 
 } // namespace
 
@@ -54,7 +54,7 @@ TEST_CASE("document_symbols outlines every top-level declaration with the right 
 TEST_CASE("document_symbols selectionRange lands on the name; range covers the whole statement") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_document_symbols_range.gh"};
-    CHECK(loader.add(path, "pub const X := 5;\n"));
+    CHECK(loader.add(path, "pub const X = 5;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};

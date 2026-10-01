@@ -36,7 +36,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -66,7 +66,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): i32 {{
+                pub const main = fn(args: [][:0]u8): i32 {{
                     return @intCast(i32, args.len);
                 }};
             )");
@@ -95,7 +95,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 42;
                 }};
             )");
@@ -123,7 +123,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -155,7 +155,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                const main := fn(args: [][:0]u8): void {{
+                const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -176,7 +176,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): bool {{
+                pub const main = fn(): bool {{
                     return true;
                 }};
             )");
@@ -197,9 +197,9 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                const X := 1;
+                const X = 1;
 
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 1 +;
                 }};
             )");
@@ -221,7 +221,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");

@@ -1,11 +1,11 @@
 //! The core File abtraction over raw OS primitives
 import std;
 
-const Result := std.Result;
-const os := std.os;
-const io := std.io;
+const Result = std.Result;
+const os = std.os;
+const io = std.io;
 
-pub const OpenFlags := struct {
+pub const OpenFlags = struct {
     pub access: enum : u8 { read, write, read_write } = .read,
     pub create: bool = false,
     pub truncate: bool = false,
@@ -13,11 +13,11 @@ pub const OpenFlags := struct {
     pub exclusive: bool = false,
 };
 
-pub const File := struct {
+pub const File = struct {
     handle: os.Handle,
 
     /// Opens a file at the provided `path` with the options in `flags`
-    pub const open := fn(path: [:0]u8, flags: OpenFlags): Result(File, io.Error) {
+    pub const open = fn(path: [:0]u8, flags: OpenFlags): Result(File, io.Error) {
         // These cases cause some UB on both windows and POSIX
         if (flags.exclusive and !flags.create) {
             return .fail(.invalid_input);
@@ -66,7 +66,7 @@ pub const File := struct {
     };
 
     /// Closes the file, propagating an ignorable error on failure
-    @[discardable] pub const close := fn(&self): Result(void, io.Error) {
+    @[discardable] pub const close = fn(&self): Result(void, io.Error) {
         return match (os.close(self.handle)) {
             .ok => .done,
             .err => |e| .fail(.from_os(e)),
@@ -75,8 +75,8 @@ pub const File := struct {
 };
 
 impl io.Reader for File {
-    const Error := io.Error;
-    pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error) {
+    const Error = io.Error;
+    pub const read = fn(&mut self, buf: []mut u8): Result(usize, Error) {
         return match (os.read(self.handle, buf)) {
             .ok => |n| .of(n),
             .err => |e| .fail(.from_os(e)),
@@ -85,8 +85,8 @@ impl io.Reader for File {
 }
 
 impl io.Writer for File {
-    const Error := io.Error;
-    pub const write := fn(&mut self, bytes: []u8): Result(usize, Error) {
+    const Error = io.Error;
+    pub const write = fn(&mut self, bytes: []u8): Result(usize, Error) {
         return match (os.write(self.handle, bytes)) {
             .ok => |n| .of(n),
             .err => |e| .fail(.from_os(e)),
@@ -95,8 +95,8 @@ impl io.Writer for File {
 }
 
 impl io.Seeker for File {
-    const Error := io.Error;
-    pub const seek := fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
+    const Error = io.Error;
+    pub const seek = fn(&mut self, offset: i64, whence: io.Whence): Result(i64, Error) {
         return match (os.lseek(self.handle, offset, @backingInt(whence))) {
             .ok => |p| .of(p),
             .err => |e| .fail(.from_os(e)),

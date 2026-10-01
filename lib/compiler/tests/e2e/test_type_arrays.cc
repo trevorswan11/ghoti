@@ -7,7 +7,7 @@ namespace ghoti::tests {
 TEST_CASE("E2E: a local `comptime` array of `type`s is compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
-            const ts := [_]type{ i32, u8 };
+            const ts = [_]type{ i32, u8 };
             @expect(ts.len == 2);
             @expect(ts[0] == i32);
             @expect(ts[1] == u8);
@@ -19,7 +19,7 @@ TEST_CASE("E2E: a local `comptime` array of `type`s is compile-time only") {
 TEST_CASE("E2E: a local `const` array of `type`s is compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
-            const ts := [_]type{ i32, u8, u64 };
+            const ts = [_]type{ i32, u8, u64 };
             @expect(ts.len == 3);
             @expect(ts[2] == u64);
             @expect(ts[0] != ts[1]);
@@ -29,9 +29,9 @@ TEST_CASE("E2E: a local `const` array of `type`s is compile-time only") {
 
 TEST_CASE("E2E: an element of a `type` array names a usable type") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const ts := [_]type{ i32, u8 };
-            const Small := ts[1];
+        pub const main = fn(): i32 {
+            const ts = [_]type{ i32, u8 };
+            const Small = ts[1];
             let x: Small = 40;
             return @intCast(i32, x) + @intCast(i32, @sizeOf(ts[0]));
         };
@@ -40,10 +40,10 @@ TEST_CASE("E2E: an element of a `type` array names a usable type") {
 
 TEST_CASE("E2E: a module-level `type` array folds at every use") {
     CHECK(helpers::compile_and_run_tests(R"(
-        const ts := [_]type{ u8, u16, u32 };
-        const more := [_]type{ i64 };
+        const ts = [_]type{ u8, u16, u32 };
+        const more = [_]type{ i64 };
 
-        const size_at := fn(comptime i: usize): usize { return @sizeOf(ts[i]); };
+        const size_at = fn(comptime i: usize): usize { return @sizeOf(ts[i]); };
 
         test "t" {
             @expect(ts.len == 3);
@@ -55,8 +55,8 @@ TEST_CASE("E2E: a module-level `type` array folds at every use") {
 
 TEST_CASE("E2E: `for comptime` walks a `type` array") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const ts := [_]type{ u8, u16, u32, u64 };
+        pub const main = fn(): i32 {
+            const ts = [_]type{ u8, u16, u32, u64 };
             let mut total: usize = 0;
             for comptime (ts) |T| { total += @sizeOf(T); }
             return @intCast(i32, total);
@@ -67,13 +67,13 @@ TEST_CASE("E2E: `for comptime` walks a `type` array") {
 TEST_CASE("E2E: nested arrays and slices of `type`s are compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
-            const grid := [_][2]type{ .{ i8, i16 }, .{ i32, i64 } };
+            const grid = [_][2]type{ .{ i8, i16 }, .{ i32, i64 } };
             @expect(grid.len == 2);
             @expect(grid[1].len == 2);
             @expect(grid[1][0] == i32);
 
-            const ts := [_]type{ bool, u8, f32 };
-            const tail := ts[1..3];
+            const ts = [_]type{ bool, u8, f32 };
+            const tail = ts[1..3];
             @expect(tail.len == 2);
             @expect(tail[1] == f32);
         }
@@ -82,10 +82,10 @@ TEST_CASE("E2E: nested arrays and slices of `type`s are compile-time only") {
 
 TEST_CASE("E2E: a struct value holding a `type` field is compile-time only") {
     CHECK(helpers::compile_and_run(R"(
-        const Slot := struct { T: type, count: usize };
+        const Slot = struct { T: type, count: usize };
 
-        pub const main := fn(): i32 {
-            const slot := Slot{ .T = u16, .count = 3 };
+        pub const main = fn(): i32 {
+            const slot = Slot{ .T = u16, .count = 3 };
             let x: slot.T = 7;
             return @intCast(i32, @sizeOf(slot.T) * slot.count) + @intCast(i32, x);
         };
@@ -94,8 +94,8 @@ TEST_CASE("E2E: a struct value holding a `type` field is compile-time only") {
 
 TEST_CASE("E2E: a `comptime let mut` array of `type`s can be rewritten at compile time") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            comptime let mut ts := [_]type{ u8, u8 };
+        pub const main = fn(): i32 {
+            comptime let mut ts = [_]type{ u8, u8 };
             ts[1] = u64;
             return @intCast(i32, @sizeOf(ts[0]) + @sizeOf(ts[1]));
         };
@@ -105,14 +105,14 @@ TEST_CASE("E2E: a `comptime let mut` array of `type`s can be rewritten at compil
 TEST_CASE("E2E: a generic signature's placeholder target never emits parameterized impl bodies") {
     // `empty`'s own `Res([]mut T, Oops)` instantiates `Res` over the still-unbound `T`
     CHECK(helpers::compile_and_run(R"(
-        const Res := fn(T: type, E: type): type {
+        const Res = fn(T: type, E: type): type {
             return union { ok: T, err: E };
         };
 
         impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {
-            const Output := T;
-            const Residual := E;
-            pub const branch := fn(self): builtin.Flow(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
                     .err => |e| builtin.Flow(T, E){ .@"break" = e },
@@ -121,25 +121,25 @@ TEST_CASE("E2E: a generic signature's placeholder target never emits parameteriz
         }
 
         impl(T: type, E: type) builtin.Rewrappable for Res(T, E) {
-            const From := E;
-            pub const from_residual := fn(r: E): @This() {
+            const From = E;
+            pub const from_residual = fn(r: E): @This() {
                 return .{ .err = r };
             };
         }
 
-        const Oops := enum { bad };
+        const Oops = enum { bad };
 
-        const empty := fn(T: type): Res([]mut T, Oops) {
+        const empty = fn(T: type): Res([]mut T, Oops) {
             return .{ .err = .bad };
         };
 
-        const pick := fn(): Res(i32, Oops) { return .{ .ok = 2 }; };
-        const add := fn(): Res(i32, Oops) {
-            let v := pick()?;
+        const pick = fn(): Res(i32, Oops) { return .{ .ok = 2 }; };
+        const add = fn(): Res(i32, Oops) {
+            let v = pick()?;
             return .{ .ok = v + 1 };
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let miss: i32 = match (empty(u8)) { .ok => 100, .err => 0 };
             return miss + match (add()) { .ok => |v| v, .err => 50 };
         };

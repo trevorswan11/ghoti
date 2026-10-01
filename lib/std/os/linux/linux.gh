@@ -6,10 +6,10 @@
 import std;
 pub import "errno.gh" as errno;
 
-pub const Handle := i32;
-pub const Errno := errno.Errno;
-pub const mode_t := u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
-pub const EWOULDBLOCK := errno.EWOULDBLOCK;
+pub const Handle = i32;
+pub const Errno = errno.Errno;
+pub const mode_t = u16; /// matches the darwin backend so `io/file.gh`'s mode literals coerce
+pub const EWOULDBLOCK = errno.EWOULDBLOCK;
 
 // <asm-generic/fcntl.h>
 pub const O_RDONLY: i32 = 0o0; /// open for reading only
@@ -59,7 +59,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
 
     // System V AMD64 syscall ABI: nr in rax; args in rdi, rsi, rdx, r10, r8, r9;
     // result in rax; the `syscall` instruction clobbers rcx and r11.
-    const syscall0 := fn(nr: usize): usize {
+    const syscall0 = fn(nr: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: ("={rax}" = _),
@@ -69,7 +69,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall1 := fn(nr: usize, a1: usize): usize {
+    const syscall1 = fn(nr: usize, a1: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: ("={rax}" = _),
@@ -79,7 +79,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall2 := fn(nr: usize, a1: usize, a2: usize): usize {
+    const syscall2 = fn(nr: usize, a1: usize, a2: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: ("={rax}" = _),
@@ -89,7 +89,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall3 := fn(nr: usize, a1: usize, a2: usize, a3: usize): usize {
+    const syscall3 = fn(nr: usize, a1: usize, a2: usize, a3: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: ("={rax}" = _),
@@ -99,7 +99,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall4 := fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize): usize {
+    const syscall4 = fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: ("={rax}" = _),
@@ -109,7 +109,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall5 := fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize): usize {
+    const syscall5 = fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize): usize {
         return asm usize {
             template: "syscall",
             outputs: (
@@ -134,7 +134,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall6 := fn(
+    const syscall6 = fn(
         nr: usize,
         a1: usize,
         a2: usize,
@@ -181,7 +181,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
 
     // AArch64 Linux syscall ABI: nr in x8; args in x0..x5; result in x0.
     // `svc #0` clobbers no general registers beyond x0's result.
-    const syscall0 := fn(nr: usize): usize {
+    const syscall0 = fn(nr: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -191,7 +191,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall1 := fn(nr: usize, a1: usize): usize {
+    const syscall1 = fn(nr: usize, a1: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -201,7 +201,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall2 := fn(nr: usize, a1: usize, a2: usize): usize {
+    const syscall2 = fn(nr: usize, a1: usize, a2: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -211,7 +211,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall3 := fn(nr: usize, a1: usize, a2: usize, a3: usize): usize {
+    const syscall3 = fn(nr: usize, a1: usize, a2: usize, a3: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -221,7 +221,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall4 := fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize): usize {
+    const syscall4 = fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -231,7 +231,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall5 := fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize): usize {
+    const syscall5 = fn(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize): usize {
         return asm usize {
             template: "svc #0",
             outputs: ("={x0}" = _),
@@ -241,7 +241,7 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
         };
     };
 
-    const syscall6 := fn(
+    const syscall6 = fn(
         nr: usize,
         a1: usize,
         a2: usize,
@@ -277,29 +277,29 @@ pub const MAP_ANONYMOUS: usize = 0x20uz; /// the mapping is not backed by any fi
 }
 
 /// A raw return in `-4095..=-1` is `-errno`; every other value is success.
-const failed := fn(ret: usize): bool {
-    let s := @bitCast(isize, ret);
+const failed = fn(ret: usize): bool {
+    let s = @bitCast(isize, ret);
     return s < 0 and s >= -4095;
 };
 
 /// Negate a failed raw return into its `Errno`.
-const to_errno := fn(ret: usize): Errno {
+const to_errno = fn(ret: usize): Errno {
     return @fromBackingInt(@intCast(i32, -@bitCast(isize, ret)));
 };
 
-const R := fn(T: type): type {
+const R = fn(T: type): type {
     return std.Result(T, Errno);
 };
 
 /// One timestamp field of `struct statx` (`struct statx_timestamp`).
-pub const StatxTimestamp := extern struct {
+pub const StatxTimestamp = extern struct {
     pub tv_sec: i64, /// seconds since the Unix epoch
     pub tv_nsec: u32, /// nanoseconds within the second
     __reserved: i32,
 };
 
 /// The arch-independent metadata block filled by the `statx(2)` syscall (Linux 4.11+)
-pub const Statx := extern struct {
+pub const Statx = extern struct {
     pub stx_mask: u32, /// which fields the kernel actually filled (STATX_* bits)
     pub stx_blksize: u32, /// preferred I/O block size
     pub stx_attributes: u64, /// extra attribute flags (STATX_ATTR_*)
@@ -326,51 +326,51 @@ pub const Statx := extern struct {
     __spare3: [12]u64,
 
     /// File size in bytes.
-    pub const size := fn(&self): u64 {
+    pub const size = fn(&self): u64 {
         return self.stx_size;
     };
 
     /// Whether the entry is a directory.
-    pub const is_dir := fn(&self): bool {
+    pub const is_dir = fn(&self): bool {
         return (self.stx_mode & S_IFMT) == S_IFDIR;
     };
 
     /// Last-modification time in nanoseconds since the Unix epoch.
-    pub const modified_time_ns := fn(&self): u64 {
+    pub const modified_time_ns = fn(&self): u64 {
         return @intCast(u64, self.stx_mtime.tv_sec) * 1000000000u64 +
             @intCast(u64, self.stx_mtime.tv_nsec);
     };
 };
 
-pub const Stat := Statx;
+pub const Stat = Statx;
 
-pub const stdin := fn(): R(Handle) {
+pub const stdin = fn(): R(Handle) {
     return .of(0);
 };
 
-pub const stdout := fn(): R(Handle) {
+pub const stdout = fn(): R(Handle) {
     return .of(1);
 };
 
-pub const stderr := fn(): R(Handle) {
+pub const stderr = fn(): R(Handle) {
     return .of(2);
 };
 
 /// Write the contents of `buf` to the file, returning the number of written bytes
-pub const write := fn(h: Handle, buf: []u8): R(usize) {
-    let ret := syscall3(NR_write, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
+pub const write = fn(h: Handle, buf: []u8): R(usize) {
+    let ret = syscall3(NR_write, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
     return if (failed(ret)) .fail(to_errno(ret)) else .of(@as(usize, ret));
 };
 
 /// Read the contents of the file into `buf`, returning the number of read bytes
-pub const read := fn(h: Handle, buf: []mut u8): R(usize) {
-    let ret := syscall3(NR_read, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
+pub const read = fn(h: Handle, buf: []mut u8): R(usize) {
+    let ret = syscall3(NR_read, @intCast(usize, h), @intFromPtr(buf.ptr), buf.len);
     return if (failed(ret)) .fail(to_errno(ret)) else .of(@as(usize, ret));
 };
 
 /// Open the file at the provided path with the desired flags and mode.
-pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
-    let ret := syscall4(
+pub const open = fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
+    let ret = syscall4(
         NR_openat,
         AT_FDCWD,
         @intFromPtr(path.ptr),
@@ -381,8 +381,8 @@ pub const open := fn(path: [:0]u8, flags: i32, mode: mode_t): R(Handle) {
 };
 
 /// Close the file associated with the given handle
-pub const close := fn(h: Handle): R(void) {
-    let ret := syscall1(NR_close, @intCast(usize, h));
+pub const close = fn(h: Handle): R(void) {
+    let ret = syscall1(NR_close, @intCast(usize, h));
     return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
@@ -390,8 +390,8 @@ pub const close := fn(h: Handle): R(void) {
 /// - If `whence` is `SEEK_SET`, the offset is set to `off` bytes.
 /// - If `whence` is `SEEK_CUR`, the offset is set to its current location plus `off` bytes.
 /// - If `whence` is `SEEK_END`, the offset is set to the size of the file plus `off` bytes.
-pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
-    let ret := syscall3(
+pub const lseek = fn(h: Handle, off: i64, whence: i32): R(i64) {
+    let ret = syscall3(
         NR_lseek,
         @intCast(usize, h),
         @bitCast(usize, off),
@@ -403,8 +403,8 @@ pub const lseek := fn(h: Handle, off: i64, whence: i32): R(i64) {
 /// Fill `out` from a `statx` call. `dirfd`/`path`/`flags` select the target:
 /// `stat` passes `AT_FDCWD` + a real path, `fstat` passes the handle + an empty
 /// path + `AT_EMPTY_PATH`.
-const statx_into := fn(dirfd: usize, path: [:0]u8, flags: usize, out: ^mut Statx): R(void) {
-    let ret := syscall5(
+const statx_into = fn(dirfd: usize, path: [:0]u8, flags: usize, out: ^mut Statx): R(void) {
+    let ret = syscall5(
         NR_statx,
         dirfd,
         @intFromPtr(path.ptr),
@@ -416,7 +416,7 @@ const statx_into := fn(dirfd: usize, path: [:0]u8, flags: usize, out: ^mut Statx
 };
 
 /// Metadata for the file or directory at `path` (follows symlinks).
-pub const stat := fn(path: [:0]u8): R(Stat) {
+pub const stat = fn(path: [:0]u8): R(Stat) {
     let mut s: Statx = undefined;
     return match (statx_into(AT_FDCWD, path, 0uz, ^mut s)) {
         .ok => .of(s),
@@ -425,7 +425,7 @@ pub const stat := fn(path: [:0]u8): R(Stat) {
 };
 
 /// Metadata for an already-open file or directory handle.
-pub const fstat := fn(h: Handle): R(Stat) {
+pub const fstat = fn(h: Handle): R(Stat) {
     let mut s: Statx = undefined;
     let empty: [:0]u8 = "";
     return match (statx_into(@intCast(usize, h), empty, AT_EMPTY_PATH, ^mut s)) {
@@ -437,15 +437,15 @@ pub const fstat := fn(h: Handle): R(Stat) {
 /// Create a directory at the provided path.
 /// - Fails with `EEXIST` when the directory already exists
 /// - Fails with `ENOENT` when a parent is missing
-pub const mkdir := fn(path: [:0]u8, mode: mode_t): R(void) {
-    let ret := syscall3(NR_mkdirat, AT_FDCWD, @intFromPtr(path.ptr), @as(usize, mode));
+pub const mkdir = fn(path: [:0]u8, mode: mode_t): R(void) {
+    let ret = syscall3(NR_mkdirat, AT_FDCWD, @intFromPtr(path.ptr), @as(usize, mode));
     return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
 /// Reserve and commit `len` bytes of zero-filled, read-write anonymous memory.
 /// The result is page-aligned; `len` is rounded up to a page by the kernel.
-pub const alloc := fn(len: usize): R(^mut u8) {
-    let ret := syscall6(
+pub const alloc = fn(len: usize): R(^mut u8) {
+    let ret = syscall6(
         NR_mmap,
         0uz,
         len,
@@ -458,8 +458,8 @@ pub const alloc := fn(len: usize): R(^mut u8) {
 };
 
 /// Release a region previously returned by `alloc`. `len` must match the `alloc` call.
-pub const free := fn(ptr: ^mut u8, len: usize): R(void) {
-    let ret := syscall2(NR_munmap, @intFromPtr(ptr), len);
+pub const free = fn(ptr: ^mut u8, len: usize): R(void) {
+    let ret = syscall2(NR_munmap, @intFromPtr(ptr), len);
     return if (failed(ret)) .fail(to_errno(ret)) else .done;
 };
 
@@ -469,22 +469,22 @@ let mut cached_page_size: std.Option(usize) = .{ .none = {} };
 
 /// Query and return the OS page size in bytes without libc.
 /// Queries `/proc/self/auxv` for `AT_PAGESZ` once and caches the result.
-pub const page_size := fn(): usize {
+pub const page_size = fn(): usize {
     if (cached_page_size == .none) {
         let mut size: usize = 0uz;
-        let res := open("/proc/self/auxv", O_RDONLY, 0u16);
+        let res = open("/proc/self/auxv", O_RDONLY, 0u16);
         if (res == .ok) {
-            let h := match (res) { .ok => |fd| fd, .err => -1 };
+            let h = match (res) { .ok => |fd| fd, .err => -1 };
             defer _ = close(h);
 
             let mut entry: [2]u64 = undefined;
-            let entry_bytes := @sliceFromPtr(@ptrCast(^mut u8, ^mut entry), 16uz);
+            let entry_bytes = @sliceFromPtr(@ptrCast(^mut u8, ^mut entry), 16uz);
             loop {
-                let r := read(h, entry_bytes);
+                let r = read(h, entry_bytes);
                 if (r != .ok) {
                     break;
                 };
-                let bytes_read := match (r) { .ok => |n| n, .err => 0uz };
+                let bytes_read = match (r) { .ok => |n| n, .err => 0uz };
                 if (bytes_read < 16uz) {
                     break;
                 };
@@ -508,7 +508,7 @@ pub const page_size := fn(): usize {
 };
 
 test "linux: page_size returns non-zero power of two page size" {
-    let ps := page_size();
+    let ps = page_size();
     @expect(ps > 0uz);
     @expect((ps & (ps - 1uz)) == 0uz);
 }

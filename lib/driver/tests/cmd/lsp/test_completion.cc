@@ -17,10 +17,9 @@
 namespace ghoti::tests {
 
 TEST_CASE("completion_items lists keywords and top-level declarations") {
-    constexpr std::string_view source{
-        "pub const answer := 42;\n"
-        "pub const add := fn(a: i32, b: i32): i32 { return a + b; };\n"
-        "pub const point := struct { x: i32, y: i32 };\n"};
+    constexpr std::string_view source{"pub const answer = 42;\n"
+                                      "pub const add = fn(a: i32, b: i32): i32 { return a + b; };\n"
+                                      "pub const point = struct { x: i32, y: i32 };\n"};
 
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_completion.gh"};
@@ -41,9 +40,9 @@ TEST_CASE("completion_items lists keywords and top-level declarations") {
 }
 
 TEST_CASE("completion_items still surfaces valid top-level declarations around a syntax error") {
-    constexpr std::string_view source{"pub const before := 1;\n"
-                                      "pub const broken := before.;\n"
-                                      "pub const after := 2;\n"};
+    constexpr std::string_view source{"pub const before = 1;\n"
+                                      "pub const broken = before.;\n"
+                                      "pub const after = 2;\n"};
 
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_completion_broken.gh"};
@@ -63,9 +62,9 @@ TEST_CASE("completion_items still surfaces valid top-level declarations around a
 
 TEST_CASE("completion_items surfaces function parameters and preceding locals in scope") {
     constexpr std::string_view source{
-        "pub const unrelated := fn(other_param: i32): i32 { return other_param; };\n"
-        "pub const add := fn(a: i32, b: i32): i32 {\n"
-        "    const sum := a + b;\n"
+        "pub const unrelated = fn(other_param: i32): i32 { return other_param; };\n"
+        "pub const add = fn(a: i32, b: i32): i32 {\n"
+        "    const sum = a + b;\n"
         "    return sum;\n"
         "};\n"};
 
@@ -86,10 +85,10 @@ TEST_CASE("completion_items surfaces function parameters and preceding locals in
 
 TEST_CASE("completion_items offers attribute names inside an attribute list") {
     constexpr std::string_view source{
-        "@[vis] export const f := fn(): i32 { return 1; };\n"
-        "@[visibility(.hid)] export const g := fn(): i32 { return 2; };\n"
-        "@[inline(.)] const h := fn(): i32 { return 3; };\n"
-        "@[deprecated(\"a [b] (c\"), ] const k := 4;\n"};
+        "@[vis] export const f = fn(): i32 { return 1; };\n"
+        "@[visibility(.hid)] export const g = fn(): i32 { return 2; };\n"
+        "@[inline(.)] const h = fn(): i32 { return 3; };\n"
+        "@[deprecated(\"a [b] (c\"), ] const k = 4;\n"};
 
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_completion_attributes.gh"};
@@ -124,7 +123,7 @@ TEST_CASE("completion_items offers attribute names inside an attribute list") {
 }
 
 TEST_CASE("attribute_context_at sees the word under the cursor") {
-    constexpr std::string_view source{"@[visibility(.hidden)] export let f := 1;"};
+    constexpr std::string_view source{"@[visibility(.hidden)] export let f = 1;"};
     const auto                 on_name{UNWRAP(lsp::attribute_context_at(source, {0, 5}))};
     CHECK(on_name.word == "visibility");
     CHECK_FALSE(on_name.in_args_of);

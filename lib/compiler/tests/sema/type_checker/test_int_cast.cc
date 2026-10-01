@@ -10,7 +10,7 @@ namespace ghoti::tests {
 TEST_CASE("@intCast sema type checking") {
     SECTION("Valid integer casts succeed") {
         helpers::type_check_and_verify(R"(
-            const f := fn(x: usize, y: i64, z: u32): i32 {
+            const f = fn(x: usize, y: i64, z: u32): i32 {
                 let mut a: i32 = @intCast(i32, x);
                 let mut b: u8 = @intCast(u8, y);
                 let mut c: i32 = @intCast(i32, z);
@@ -23,7 +23,7 @@ TEST_CASE("@intCast sema type checking") {
     SECTION("Non-integer target type is rejected") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: i32): void {
+            const f = fn(x: i32): void {
                 let mut y: bool = @intCast(bool, x);
             };
         )",
@@ -35,7 +35,7 @@ TEST_CASE("@intCast sema type checking") {
     SECTION("Non-integer operand type is rejected") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(b: bool): void {
+            const f = fn(b: bool): void {
                 let mut y: i32 = @intCast(i32, b);
             };
         )",

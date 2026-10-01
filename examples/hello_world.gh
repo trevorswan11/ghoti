@@ -1,6 +1,6 @@
 import std;
 
-pub const main := fn(args: [][:0]u8): void {
-    let message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): void {
+    let message = "Hello, world!";
     _ = std.io.println(message);
 };

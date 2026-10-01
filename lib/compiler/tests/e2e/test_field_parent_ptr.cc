@@ -6,10 +6,10 @@ namespace ghoti::tests {
 
 TEST_CASE("`@fieldParentPtr` recovers a struct pointer from a first-member field pointer") {
     CHECK(helpers::compile_and_run(R"(
-        const Inner := struct { a: i32, b: i32 };
-        const Outer := struct { inner: Inner, tag: i32 };
+        const Inner = struct { a: i32, b: i32 };
+        const Outer = struct { inner: Inner, tag: i32 };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut o: Outer = undefined;
             o.tag = 100;
             o.inner.a = 40;
@@ -24,10 +24,10 @@ TEST_CASE("`@fieldParentPtr` recovers a struct pointer from a first-member field
 
 TEST_CASE("`@fieldParentPtr` recovers a struct pointer from a non-first-member field pointer") {
     CHECK(helpers::compile_and_run(R"(
-        const Inner := struct { a: i32, b: i32 };
-        const Outer := struct { lead: i64, pad: i32, inner: Inner };
+        const Inner = struct { a: i32, b: i32 };
+        const Outer = struct { lead: i64, pad: i32, inner: Inner };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut o: Outer = undefined;
             o.lead = 7i64;
             o.pad  = 9;

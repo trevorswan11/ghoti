@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("bare literal lower bound coerces to the upper bound's type in a range") {
     CHECK(helpers::compile_and_run(R"(
-        const sum := fn(s: []i32): i32 {
+        const sum = fn(s: []i32): i32 {
             let mut total: i32 = 0;
             for (0..s.len, s) |i, _| {
                 total += s[i];
@@ -14,7 +14,7 @@ TEST_CASE("bare literal lower bound coerces to the upper bound's type in a range
             return total;
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: [4uz]i32 = [4uz]i32{10, 11, 12, 9};
             return sum(a[0..4]);
         };
@@ -23,9 +23,9 @@ TEST_CASE("bare literal lower bound coerces to the upper bound's type in a range
 
 TEST_CASE("bare literal in a comparison coerces to a `usize` operand") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: [5uz]i32 = [5uz]i32{0, 0, 0, 0, 0};
-            let s := a[0..5];
+            let s = a[0..5];
             let mut count: i32 = 0;
             for (0..s.len) |i| {
                 if (i < s.len) { count += 1; }
@@ -38,7 +38,7 @@ TEST_CASE("bare literal in a comparison coerces to a `usize` operand") {
 
 TEST_CASE("bare literal upper bound coerces to the lower bound's type") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let lo: usize = 2uz;
             let mut hits: i32 = 0;
             for (lo..7) |_| { hits += 1; }

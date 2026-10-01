@@ -58,7 +58,7 @@ templ SyntaxTypesPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const func := fn(p: type): void { ... };
+			{ `const func = fn(p: type): void { ... };
 func(&mut P);` }
 		</code>
 	</pre>
@@ -68,8 +68,8 @@ func(&mut P);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const tP := &mut P;
-const func := fn(p: type): void { ... };
+			{ `const tP = &mut P;
+const func = fn(p: type): void { ... };
 func(tP);` }
 		</code>
 	</pre>
@@ -80,8 +80,8 @@ func(tP);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Callback := fn(status: i32, result: ^bool): void;
-const register := fn(cb: Callback): void { ... };` }
+			{ `const Callback = fn(status: i32, result: ^bool): void;
+const register = fn(cb: Callback): void { ... };` }
 		</code>
 	</pre>
 	<h2>Pointers vs. References</h2>
@@ -146,7 +146,7 @@ a.b;   // Syntactic sugar
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand := union {
+			{ `const Hand = union {
     card: bool,
     pen: i32,
     shoe: void,
@@ -238,7 +238,7 @@ a.b;   // Syntactic sugar
 			<ul>
 				<li>This is restricted to values and cannot be used to represent a type, see the <code>type</code> type</li>
 				<li>This is valid for parameters and for the return type</li>
-				<li>It can also be used in declarations, but this behaves the same as the walrus (<code>:=</code>) inference operator</li>
+				<li>It can also be used in declarations, but this behaves the same as leaving the type annotation out</li>
 			</ul>
 		</li>
 		<li>

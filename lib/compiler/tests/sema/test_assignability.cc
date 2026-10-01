@@ -9,7 +9,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("Exact type identity and error recovery") {
-    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const x = 42;")};
 
     auto& i32_t{ctx->get_int_type(32, true)};
     auto& f32_t{ctx->get_type(sema::type_kind::F32)};
@@ -44,7 +44,7 @@ TEST_CASE("Exact type identity and error recovery") {
 }
 
 TEST_CASE("Numeric implicit widening table") {
-    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const x = 42;")};
 
     auto& u8_t{ctx->get_int_type(8, false)};
     auto& u32_t{ctx->get_int_type(32, false)};
@@ -90,7 +90,7 @@ TEST_CASE("Numeric implicit widening table") {
 }
 
 TEST_CASE("Const correctness for values and pointers") {
-    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const x = 42;")};
 
     auto& i32_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(32, true)};
     auto& i32_const{ctx->get_int_type<sema::types::mut::CONSTANT>(32, true)};
@@ -114,7 +114,7 @@ TEST_CASE("Const correctness for values and pointers") {
 }
 
 TEST_CASE("nullptr assignability") {
-    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const x = 42;")};
 
     auto& nullptr_t{ctx->get_type(sema::type_kind::NULLPTR)};
     auto& i32_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(32, true)};
@@ -139,7 +139,7 @@ TEST_CASE("nullptr assignability") {
 }
 
 TEST_CASE("Slice and array coercions") {
-    auto [ctx, idx]{helpers::resolve_and_check("const x := 42;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const x = 42;")};
 
     auto& u8_mut{ctx->get_int_type<sema::types::mut::MUTABLE>(8, false)};
     auto& u8_const{ctx->get_int_type<sema::types::mut::CONSTANT>(8, false)};

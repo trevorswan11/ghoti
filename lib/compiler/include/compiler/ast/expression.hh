@@ -520,7 +520,7 @@ struct interface_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
-// A type with no expression spelling, written where a value is expected (`const D := &dyn I;`)
+// A type with no expression spelling, written where a value is expected (`const D = &dyn I;`)
 struct type_expr {
     explicit_type_id type;
 

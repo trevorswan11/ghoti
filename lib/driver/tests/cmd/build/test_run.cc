@@ -26,7 +26,7 @@ TEST_CASE("run command execution") {
         tempfile            src_file{"run_driver_ok.gh"};
         {
             std::ofstream out{src_file.path};
-            fmt::print(out, "pub const main := fn(): void {{ return; }};");
+            fmt::print(out, "pub const main = fn(): void {{ return; }};");
         }
 
         cmd::run_cmd cmd{{.input_path = src_file}};
@@ -38,7 +38,7 @@ TEST_CASE("run command execution") {
         tempfile            src_file{"run_driver_exit_code.gh"};
         {
             std::ofstream out{src_file.path};
-            fmt::print(out, "pub const main := fn(): i32 {{ return 7; }};");
+            fmt::print(out, "pub const main = fn(): i32 {{ return 7; }};");
         }
 
         cmd::run_cmd cmd{{.input_path = src_file}};
@@ -51,7 +51,7 @@ TEST_CASE("run command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): i32 {{
+                pub const main = fn(args: [][:0]u8): i32 {{
                     if (args.len == 3) {{ return 0; }} // exe + two forwarded
                     if (args.len == 0) {{ return 0; }} // host without an argv sysroot
                     return 4;
@@ -74,7 +74,7 @@ TEST_CASE("run command execution") {
         tempfile            src_file{"run_driver_cleanup.gh"};
         {
             std::ofstream out{src_file.path};
-            fmt::print(out, "pub const main := fn(): void {{ return; }};");
+            fmt::print(out, "pub const main = fn(): void {{ return; }};");
         }
 
         cmd::run_cmd cmd{{.input_path = src_file}};

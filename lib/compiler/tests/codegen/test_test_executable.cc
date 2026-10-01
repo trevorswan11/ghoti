@@ -7,12 +7,12 @@ namespace ghoti::tests {
 TEST_CASE("A test-only source with no pub main compiles and all tests pass") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "always passes" {
-            let x := 1 + 1;
+            let x = 1 + 1;
             _ = x;
         }
 
         test "also always passes" {
-            let y := 2 + 2;
+            let y = 2 + 2;
             _ = y;
         }
     )") == 0);
@@ -58,7 +58,7 @@ TEST_CASE("`defer` is allowed in a test block and runs at block exit") {
 TEST_CASE("Test with @src compiles and executes properly") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "src location check" {
-            let loc := @src();
+            let loc = @src();
             _ = loc;
         }
     )") == 0);
@@ -70,7 +70,7 @@ TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
             @require(false);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             _ = tests;
             return 77;
@@ -88,7 +88,7 @@ TEST_CASE("The overriding `test_runner` receives the test metadata slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 2) {
                 return 42;
@@ -104,10 +104,10 @@ TEST_CASE("The overriding `test_runner` invokes a test function pointer directly
             @expect(1 + 1 == 2);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 1) {
-                let ok := tests[0].func();
+                let ok = tests[0].func();
                 if (ok) {
                     return 0;
                 }
@@ -123,7 +123,7 @@ TEST_CASE("The overriding `test_runner` can walk the argv slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = tests;
             let mut total: usize = 0;
             for (args) |arg| {

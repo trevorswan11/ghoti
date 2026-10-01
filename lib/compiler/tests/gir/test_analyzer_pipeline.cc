@@ -16,11 +16,11 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR array indexing bounds checking") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const get_elem := fn(arr: [5]i32, i: usize): i32 {
+        const get_elem = fn(arr: [5]i32, i: usize): i32 {
             return arr[i];
         };
 
-        const set_elem := fn(arr: [5]i32, i: usize, val: i32): void {
+        const set_elem = fn(arr: [5]i32, i: usize, val: i32): void {
             arr[i] = val;
         };
     )")};
@@ -49,7 +49,7 @@ TEST_CASE("GIR array indexing bounds checking") {
 
 TEST_CASE("GIR @panic lowers to an overridable panic_handler call") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const boom := fn(): void {
+        const boom = fn(): void {
             @panic("kaboom");
         };
     )")};
@@ -75,7 +75,7 @@ TEST_CASE("GIR @panic lowers to an overridable panic_handler call") {
 
 TEST_CASE("GIR a reached `unreachable` routes through panic_handler") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const pick := fn(b: bool): i32 {
+        const pick = fn(b: bool): i32 {
             if (b) { return 1; }
             unreachable;
         };
@@ -95,7 +95,7 @@ TEST_CASE("GIR a reached `unreachable` routes through panic_handler") {
 
 TEST_CASE("GIR array literal stack allocation and initialization") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_array_lit := fn(): i32 {
+        const test_array_lit = fn(): i32 {
             let mut a: [3]i32 = [3]i32{ 10, 20, 30 };
             return a[1];
         };
@@ -156,9 +156,9 @@ TEST_CASE("GIR required libraries are deduplicated") {
 
 TEST_CASE("GIR builtins cast operations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_casts := fn(x: i32, ptr: ^i32): usize {
-            let w := @as(i64, x);
-            let u := @intFromPtr(ptr);
+        const test_casts = fn(x: i32, ptr: ^i32): usize {
+            let w = @as(i64, x);
+            let u = @intFromPtr(ptr);
             return u;
         };
     )")};
@@ -174,7 +174,7 @@ TEST_CASE("GIR builtins cast operations") {
 
 TEST_CASE("GIR emit_gir integration in pipeline") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const compute := fn(a: i32, b: i32): i32 {
+        const compute = fn(a: i32, b: i32): i32 {
             return a * b + 1;
         };
     )")};
@@ -192,9 +192,9 @@ TEST_CASE("GIR emit_gir integration in pipeline") {
 
 TEST_CASE("GIR linkage and visibility attributes") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        export const exp_fn := fn(): void {};
-        pub const pub_fn := fn(): void {};
-        const priv_fn := fn(): void {};
+        export const exp_fn = fn(): void {};
+        pub const pub_fn = fn(): void {};
+        const priv_fn = fn(): void {};
         export let exp_global: i32 = 10;
         pub const pub_global: i32 = 20;
         const priv_global: i32 = 30;
@@ -224,7 +224,7 @@ TEST_CASE("GIR linkage and visibility attributes") {
 
 TEST_CASE("GIR slice indexing and fat pointer operations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const slice_ops := fn(s: []i32, i: usize): i32 {
+        const slice_ops = fn(s: []i32, i: usize): i32 {
             return s[i];
         };
     )")};
@@ -244,10 +244,10 @@ TEST_CASE("GIR slice indexing and fat pointer operations") {
 
 TEST_CASE("GIR indirect call formatting") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const target := fn(x: i32): i32 {
+        const target = fn(x: i32): i32 {
             return x + 1;
         };
-        const call_indirect := fn(): i32 {
+        const call_indirect = fn(): i32 {
             let mut fptr: ^fn(n: i32): i32 = target;
             return fptr(42);
         };

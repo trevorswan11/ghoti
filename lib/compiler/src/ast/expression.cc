@@ -2087,8 +2087,8 @@ auto interface_expr::parse(syntax::parser& parser)
             TRY(parser.expect_peek(tt::IDENT));
             identifier_handle name{TRY(identifier_expr::parse(parser))};
 
-            if (parser.peek_token_is(tt::WALRUS)) {
-                parser.advance(); // current == :=
+            if (parser.peek_token_is(tt::ASSIGN)) {
+                parser.advance(); // current == =
                 TRY(parser.expect_peek(tt::FUNCTION));
                 const auto signature{TRY(function_expr::parse(parser))};
                 if (is_pub) { name->set_token_type(tt::PUBLIC); }
@@ -2113,7 +2113,7 @@ auto interface_expr::parse(syntax::parser& parser)
                 assoc_consts.emplace_back(assoc_const{name, annotation, default_value});
             } else {
                 return make_syntax_err(
-                    "Interface members must be `const name := fn(...)` or `const N: T`",
+                    "Interface members must be `const name = fn(...)` or `const N: T`",
                     syntax::error::ILLEGAL_INTERFACE_MEMBER,
                     parser.get_peek_token());
             }

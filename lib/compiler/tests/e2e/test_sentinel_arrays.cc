@@ -6,8 +6,8 @@ namespace ghoti::tests {
 
 TEST_CASE("A sentineled array of struct elements zero-fills its terminator") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
-        pub const main := fn(): i32 {
+        const Point = struct { x: i32, y: i32 };
+        pub const main = fn(): i32 {
             let mut pts: [2:0]Point = .{
                 .{ .x = 1, .y = 2 },
                 .{ .x = 3, .y = 4 },
@@ -21,7 +21,7 @@ TEST_CASE("A sentineled array of struct elements zero-fills its terminator") {
 
 TEST_CASE("A sentineled array of pointer elements terminates with null") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             let mut a: i32 = 1;
             let mut b: i32 = 2;
             let mut ptrs: [2:0]^i32 = .{ ^a, ^b };
@@ -33,11 +33,11 @@ TEST_CASE("A sentineled array of pointer elements terminates with null") {
 
 TEST_CASE("`++` of struct-typed arrays materializes a zeroed sentinel byte") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := struct { x: i32, y: i32 };
+        const Point = struct { x: i32, y: i32 };
         const a: [1]Point = .{ .{ .x = 1, .y = 2 } };
         const b: [1:0]Point = .{ .{ .x = 3, .y = 4 } };
-        pub const main := fn(): i32 {
-            let mut combined := a ++ b;
+        pub const main = fn(): i32 {
+            let mut combined = a ++ b;
             if (combined[0].x != 1) { return 1; }
             if (combined[1].x != 3) { return 2; }
             if (combined[2].x != 0) { return 3; }

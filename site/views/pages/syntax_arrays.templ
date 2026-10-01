@@ -101,7 +101,7 @@ let mut a: &[]&^mut T; // Analogous slice type` }
 		<li>
 			Indexing an array with a single value returns a value that is of the same type as the array's inner items
 			<ul>
-				<li>This can be used to chain array indexing as: <code>const val := matrix[0uz][1uz];</code></li>
+				<li>This can be used to chain array indexing as: <code>const val = matrix[0uz][1uz];</code></li>
 			</ul>
 		</li>
 		<li>Indexing an array with a range returns a slice that is exactly the size specified by said range</li>
@@ -122,7 +122,7 @@ let mut a: &[]&^mut T; // Analogous slice type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
+			{ `const a = [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
 let mut a: [:0]i32; // Null terminated slice type
 let mut a: [5uz:0]i32; // Null terminated array type` }
 		</code>
@@ -157,7 +157,7 @@ let mut a: [5uz:0]i32; // Null terminated array type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_]i32{1, 2, 3, 4};
+			{ `const a = [_]i32{1, 2, 3, 4};
 for (a) |b| { ... };` }
 		</code>
 	</pre>
@@ -167,10 +167,10 @@ for (a) |b| { ... };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `let mut a := [_]i32{1, 2, 3, 4};
+			{ `let mut a = [_]i32{1, 2, 3, 4};
 for (a) |&mut b| { ... };
 
-const c := [_]i32{1, 2, 3, 4};
+const c = [_]i32{1, 2, 3, 4};
 for (c) |&mut b| { ... }; // Illegal, c is a constant` }
 		</code>
 	</pre>

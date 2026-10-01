@@ -6,8 +6,8 @@ namespace ghoti::tests {
 
 TEST_CASE("a stack frame spanning many guard pages is fully addressable") {
     CHECK(helpers::compile_and_run(R"(
-        const touch := fn(p: ^mut u8, v: u8): void { *p = v; };
-        pub const main := fn(): i32 {
+        const touch = fn(p: ^mut u8, v: u8): void { *p = v; };
+        pub const main = fn(): i32 {
             let mut buf: [200000]u8 = undefined;
             touch(^mut buf[0], 3u8);
             touch(^mut buf[199999], 7u8);
@@ -18,8 +18,8 @@ TEST_CASE("a stack frame spanning many guard pages is fully addressable") {
 
 TEST_CASE("a stack frame just past one guard page is fully addressable") {
     CHECK(helpers::compile_and_run(R"(
-        const touch := fn(p: ^mut u8, v: u8): void { *p = v; };
-        pub const main := fn(): i32 {
+        const touch = fn(p: ^mut u8, v: u8): void { *p = v; };
+        pub const main = fn(): i32 {
             let mut a: [5000]u8 = undefined;
             let mut b: [5000]u8 = undefined;
             touch(^mut a[0], 1u8);
