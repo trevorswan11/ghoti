@@ -32,12 +32,12 @@ template <usize MaxLen = 32> struct lowercase_str {
 };
 
 template <typename Value, usize Size>
-using comptime_map_t =
+using constexpr_map_t =
     stdx::fixed::hash_map<std::string_view, Value, Size, stdx::crc::hash, std::equal_to<>>;
 
 template <typename Value, typename... Entries>
-[[nodiscard]] constexpr auto make_comptime_map(Entries&&... entries) {
-    comptime_map_t<Value, sizeof...(Entries)> map;
+[[nodiscard]] constexpr auto make_constexpr_map(Entries&&... entries) {
+    constexpr_map_t<Value, sizeof...(Entries)> map;
     using std::get;
     (map.emplace(get<0>(entries), get<1>(entries)), ...);
     return map;

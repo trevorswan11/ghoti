@@ -25,7 +25,7 @@ namespace ghoti::ast {
 
 namespace {
 
-constexpr auto CALLCONV_NAMES_TO_VALUES{string_utils::make_comptime_map<calling_convention>(
+constexpr auto CALLCONV_NAMES_TO_VALUES{string_utils::make_constexpr_map<calling_convention>(
     std::pair{"c", calling_convention::C},
     std::pair{"sysv", calling_convention::SYSV},
     std::pair{"win64", calling_convention::WIN64},
