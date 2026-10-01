@@ -540,4 +540,64 @@ TEST_CASE("a struct field is only reachable through an instance") {
                           sema::error::TYPE_USED_AS_VALUE));
 }
 
+TEST_CASE("a type with no namespace has no members to reach through it") {
+    CHECK(helpers::raised(R"(
+        const C = struct { value: i32 };
+        pub const main = fn(): i32 { const c = fn(): C; return c.value; };
+    )",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("const A = [3]i32; pub const main = fn(): usize { return A.len; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+}
+
+TEST_CASE("a closure only modifies a captured `let mut`") {
+    CHECK(helpers::raised(R"(
+        const outer = fn(): void {
+            let offset: i32 = 0;
+            let add = fn(x: i32): void { offset = x; };
+            add(1);
+        };
+    )",
+                          sema::error::ASSIGNMENT_TO_CONST));
+    CHECK(helpers::raised("const f = fn(x: i32): void { let g = fn(): void { x = 1; }; g(); };",
+                          sema::error::ASSIGNMENT_TO_CONST));
+    CHECK(helpers::raised(
+        "const f = fn(): void { for (0..3) |i| { let g = fn(): void { i = 1; }; g(); } };",
+        sema::error::ASSIGNMENT_TO_CONST));
+    // Writing through an immutable slice binding only reads the binding
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut buf: [3]mut u8 = .{ 0, 0, 0 };
+            let s: []mut u8 = buf[0..3];
+            let set = fn(i: usize, v: u8): void { s[i] = v; };
+            set(1, 7);
+            return @intCast(i32, buf[1]);
+        };
+    )") == 7);
+}
+
+TEST_CASE("a range nested inside a `for` iterable or subscript is not a value") {
+    CHECK(helpers::raised(R"(
+        pub const main = fn(): i32 {
+            let mut n: i32 = 2;
+            for (n = -1..n * 3) |i| { n = i; }
+            return n;
+        };
+    )",
+                          sema::error::ILLEGAL_OPEN_RANGE));
+    CHECK(helpers::raised(
+        "pub const main = fn(): void { for (blk: { break :blk 0..1; }) |i| { _ = i; } };",
+        sema::error::ILLEGAL_OPEN_RANGE));
+    CHECK(helpers::raised("pub const f = fn(a: []i32): void { _ = a[blk: { break :blk 0..1; }]; };",
+                          sema::error::ILLEGAL_OPEN_RANGE));
+}
+
+TEST_CASE("a generic function cannot be C-variadic") {
+    CHECK(helpers::raised(R"(
+        const first = fn(a: auto, b: auto, ...): auto { return a; };
+        pub const main = fn(): i32 { return first(1, 2, 3); };
+    )",
+                          sema::error::MALFORMED_PACK_USE));
+}
+
 } // namespace ghoti::tests

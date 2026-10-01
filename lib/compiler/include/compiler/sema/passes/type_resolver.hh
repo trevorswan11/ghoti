@@ -152,6 +152,8 @@ class type_resolver {
     [[nodiscard]] auto declares_generic_params(const ast::function_expr& fn_expr) const -> bool;
     // The type a `comptime let mut` type binding holds at the current point, if `sym` is one
     [[nodiscard]] auto comptime_type_var_value(const symbol& sym) -> stdx::option<type&>;
+    // Whether `sym` is a `let mut` (or `comptime let mut`) local
+    [[nodiscard]] auto is_mutable_local(const symbol& sym) const -> bool;
     // The first runtime local a `const` closure captures, which only a `let` closure may
     [[nodiscard]] auto const_closure_runtime_capture(const ast::decl_stmt& decl) const
         -> stdx::option<std::string_view>;

@@ -20,7 +20,7 @@ namespace syms = sema::symbols;
 TEST_CASE("Labeled for loop resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         let mut arr: []bool = undefined;
-        const a = outer: for (0..5, blk: { break :blk 2..4; }, arr) |i, j, _| {
+        const a = outer: for (0..5, 2..4, arr) |i, j, _| {
             let foo = 39 + j;
             if (foo == 42) { break :outer 27; }
         } else {
@@ -28,7 +28,7 @@ TEST_CASE("Labeled for loop resolution") {
             if (foo + 1 == 42) { break :outer 26; }
         };
     )")};
-    CHECK(ctx->analyzer.get_registry().size() == 53);
+    CHECK(ctx->analyzer.get_registry().size() == 51);
 
     const auto& i32_type{ctx->get_int_type(32, true)};
     const auto [a_sym, a_sym_data, a_type]{ctx->get_type_sym_info<syms::node_t>("a", idx)};
@@ -43,7 +43,7 @@ TEST_CASE("Labeled for loop resolution") {
 
     const auto check_capture = [&](std::string_view name) -> void {
         const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::for_loop_capture>(
-            name, 4, stdx::none, &syms::for_loop_capture::payload)};
+            name, 2, stdx::none, &syms::for_loop_capture::payload)};
         CHECK(type == i32_type);
     };
     check_capture("i");

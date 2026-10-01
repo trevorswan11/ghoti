@@ -112,6 +112,11 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
 
 namespace {
 
+// A range is only legal as the whole subscript or `for` iterable, not nested inside one
+template <typename ID> [[nodiscard]] auto is_range(const ID& id) -> bool {
+    return id.template is<ast::range_expr>();
+}
+
 [[nodiscard]] auto callconv_requires_extern(const source_location& location) -> diagnostic {
     return diagnostic{"`callconv(...)` only applies to a thin `extern fn(...)` type; an erased "
                       "`fn(...)` callable has no C calling convention",
@@ -4287,7 +4292,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
             this_count = current_pack_->element_types.size();
         } else {
             {
-                const mutating_context_guard for_iter_g{in_for_iterable_, true};
+                const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
                 TRY_RESOLVE(driver_id);
             }
             // A bare identifier naming a `comptime` array/slice resolves through a `TYPE`-
@@ -4530,7 +4535,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
         for (const auto& [capture, iterable] :
              std::views::zip(for_expr.captures, for_expr.iterables)) {
             {
-                const mutating_context_guard for_iter_g{in_for_iterable_, true};
+                const mutating_context_guard for_iter_g{in_for_iterable_, is_range(iterable)};
                 TRY_RESOLVE(iterable);
             }
             auto& iterable_type{*last_type_.take()};
@@ -4607,7 +4612,19 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              resolving_.ast.location_of(id)));
     }
 
-    resolve_fn_literal_attributes(id, fn, declares_generic_params(fn));
+    // Each instantiation fixes its arity, which leaves nothing for C-style varargs to carry
+    const bool is_generic{declares_generic_params(fn)};
+    if (is_generic && fn.variadic) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "A generic function cannot take C-style variadic arguments (`...`); "
+                             "use a parameter pack (`rest...`) instead",
+                             error::MALFORMED_PACK_USE,
+                             resolving_.ast.location_of(id)));
+    }
+
+    resolve_fn_literal_attributes(id, fn, is_generic);
 
     if (!target_supports_callconv(fn.conv)) {
         return last_type_.emplace(
@@ -5449,7 +5466,31 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         if (is_self_reference) {
             self_recursive_flags_.back() = true;
         } else {
-            const auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
+            auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
+
+            // A closure writes through a reference to the binding, so it needs storage it may
+            // change; a `move fn` mutates its own copy instead. Writing through an immutable
+            // slice, pointer, or reference only reads the binding itself
+            const auto closure{
+                resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
+            const bool immutable{!is_mutable_local(lookup->symbol)};
+            if (usage == capture_usage::MUTATED && immutable) {
+                const auto kind{get_resolved_symbol_type(lookup->symbol.get_data()).get_kind()};
+                if (kind == type_kind::SLICE || kind == type_kind::POINTER ||
+                    kind == type_kind::REFERENCE) {
+                    usage = capture_usage::READ;
+                }
+            }
+            if (usage == capture_usage::MUTATED && !(closure && closure->is_move) && immutable) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    fmt::format("A closure can only modify a captured 'let mut' binding, and '{}' "
+                                "is not one",
+                                name),
+                    error::ASSIGNMENT_TO_CONST,
+                    resolving_.ast.location_of(id)));
+            }
 
             // Find the innermost open function whose own scope actually contains the declaration
             usize owner_idx{0};
@@ -5713,7 +5754,7 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
     {
         auto&                        usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
         const structural_guard       g{implicit_type_stack_, usize_type};
-        const mutating_context_guard subscript_g{in_subscript_index_, true};
+        const mutating_context_guard subscript_g{in_subscript_index_, is_range(index.index)};
         TRY_RESOLVE(index.index);
     }
     auto& access_type{*last_type_.take()};
@@ -6661,6 +6702,22 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         }
     }
 
+    // A slice, array, pointer, or function type has members only through a value of it
+    if (const auto kind{object_type.get_kind()};
+        (kind == type_kind::SLICE || kind == type_kind::ARRAY || kind == type_kind::POINTER ||
+         kind == type_kind::REFERENCE || kind == type_kind::FUNCTION ||
+         kind == type_kind::CLOSURE) &&
+        operand_nature(dot.object) == operand_nature_t::TYPE) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("Type '{}' has no member named '{}'; its members belong to a value of it",
+                        ctx_.type_display_name(object_type),
+                        resolving_.ast.get_as<ast::identifier_expr>(dot.member).name),
+            error::TYPE_USED_AS_VALUE,
+            resolving_.ast.location_of(dot.member)));
+    }
+
     auto result{
         resolve_structural_access(object_type, dot.member, resolving_.ast.location_of(dot.object))};
     if (!result) {
@@ -6814,7 +6871,10 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
                              resolving_.ast.location_of(id)));
     }
 
-    type* lhs_type{&usize_type};
+    // An endpoint is an ordinary value, never itself a range
+    const mutating_context_guard subscript_g{in_subscript_index_, false};
+    const mutating_context_guard for_iter_g{in_for_iterable_, false};
+    type*                        lhs_type{&usize_type};
     if (range.lhs) {
         TRY_RESOLVE(*range.lhs);
         lhs_type = last_type_.take();
@@ -9644,6 +9704,12 @@ auto type_resolver::visit(ast::node_id id, const ast::continue_stmt& continue_st
 
     resolving_.set_sema_type(id, ctx_.get_builtin_resolved_type(type_kind::VOID_));
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::NORETURN));
+}
+
+auto type_resolver::is_mutable_local(const symbol& sym) const -> bool {
+    const auto node{sym.get_data().as_opt<symbols::node_t>()};
+    const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    return decl && decl->has_modifier(ast::decl_modifiers::MUT);
 }
 
 auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) const

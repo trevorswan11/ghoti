@@ -602,6 +602,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `void` function whose body runs off its end couldn't be called at compile time (`comptime { check(); }`)
 - A `comptime let mut` can hold a type (`comptime let mut T: type = u8; T = Wrap(T);`); each use names the type it holds at that point, including across `for comptime` and `while comptime` iterations, and only a type can be assigned to it
 - Fixed: a function that fills an `undefined` array or struct one element or field at a time (for example in a runtime `while` loop) couldn't be evaluated at compile time; reading an element that was never written is now a compile error
+- Fixed: compiler crashes on four kinds of invalid code, which are now errors:
+    - a closure assigning to a captured binding that isn't a `let mut` (a `let`, a parameter, or a loop capture); writing through a captured slice, pointer, or reference still works
+    - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
+    - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
+    - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
