@@ -136,7 +136,7 @@ TEST_CASE("Function call type checking") {
         helpers::type_check_and_verify(R"(
             const f := fn(ap: ^mut opaque, dest: ^mut opaque, ...): void {
                 @cVaStart(ap);
-                const val: i32 = @cVaArg(ap, i32);
+                let val: i32 = @cVaArg(ap, i32);
                 @cVaCopy(dest, ap);
                 @cVaEnd(ap);
             };
@@ -149,7 +149,7 @@ TEST_CASE("Function call type checking") {
                 return x + 1;
             };
             const f := fn(): i32 {
-                var fptr: ^fn(n: i32): i32 = target;
+                let mut fptr: ^fn(n: i32): i32 = target;
                 return fptr(42);
             };
         )");
@@ -162,7 +162,7 @@ TEST_CASE("Function call type checking") {
                 return x + 1;
             };
             const f := fn(): i32 {
-                var fptr: ^fn(n: i32): i32 = target;
+                let mut fptr: ^fn(n: i32): i32 = target;
                 return fptr();
             };
         )",
@@ -177,7 +177,7 @@ TEST_CASE("Function call type checking") {
                 return s[0];
             };
             const f := fn(): i32 {
-                const arr: [3]i32 = [3]i32{1, 2, 3};
+                let arr: [3]i32 = [3]i32{1, 2, 3};
                 return sum(arr);
             };
         )");
@@ -186,10 +186,10 @@ TEST_CASE("Function call type checking") {
     SECTION("Slice and pointer builtins type check successfully") {
         helpers::type_check_and_verify(R"(
             const f := fn(p: ^i32): void {
-                const p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
-                const arr: [3]i32 = [3]i32{1, 2, 3};
-                const p3: ^i32 = @ptrFromArray(arr);
-                const s: []i32 = @sliceFromPtr(p, 10UZ);
+                let p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
+                let arr: [3]i32 = [3]i32{1, 2, 3};
+                let p3: ^i32 = @ptrFromArray(arr);
+                let s: []i32 = @sliceFromPtr(p, 10UZ);
                 @panic("error");
             };
         )");

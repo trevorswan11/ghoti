@@ -9,20 +9,20 @@ namespace ghoti::tests {
 
 TEST_CASE("a constexpr block folds calls into functions that take a parameter pack") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr max := fn(a: auto, b: auto, c...): auto {
-            var largest := if (a > b) a else b;
-            for constexpr (c) |arg| {
+        pub const max := fn(a: auto, b: auto, c...): auto {
+            let mut largest := if (a > b) a else b;
+            for comptime (c) |arg| {
                 if (arg > largest) largest = arg;
             }
             return largest;
         };
-        pub constexpr count := fn(c...): usize { return c.len; };
-        pub constexpr second := fn(c...): auto { return c[1]; };
-        pub constexpr forward := fn(a: auto, c...): auto { return max(a, a, c...); };
+        pub const count := fn(c...): usize { return c.len; };
+        pub const second := fn(c...): auto { return c[1]; };
+        pub const forward := fn(a: auto, c...): auto { return max(a, a, c...); };
 
         test "max" {
             @expect(max(-4, -123, 45, 78, 90, -23) == 90);
-            constexpr {
+            comptime {
                 @assert(max(1, 2) == 2);
                 @assert(max(-4, -123, 45) == 45);
                 @assert(count() == 0);
@@ -36,67 +36,67 @@ TEST_CASE("a constexpr block folds calls into functions that take a parameter pa
 
 TEST_CASE("a false compile-time assertion over a pack call is reported") {
     helpers::expect_compile_error(R"(
-        pub constexpr count := fn(c...): usize { return c.len; };
-        test "t" { constexpr { @assert(count(1, 2) == 3); } }
+        pub const count := fn(c...): usize { return c.len; };
+        test "t" { comptime { @assert(count(1, 2) == 3); } }
     )");
 }
 
-TEST_CASE("a condition-less `if constexpr` picks its arm from the evaluation context") {
+TEST_CASE("a condition-less `if comptime` picks its arm from the evaluation context") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr where := fn(): i32 { return if constexpr 1 else 2; };
-        pub constexpr tally := fn(): i32 {
-            var n: i32 = 10;
-            if constexpr { n += 5; }
+        pub const where := fn(): i32 { return if comptime 1 else 2; };
+        pub const tally := fn(): i32 {
+            let mut n: i32 = 10;
+            if comptime { n += 5; }
             return n;
         };
-        constexpr AT_COMPILE := where();
+        const AT_COMPILE := where();
 
         test "context" {
-            constexpr {
+            comptime {
                 @assert(where() == 1);
                 @assert(tally() == 15);
             }
-            constexpr in_label: {
+            comptime in_label: {
                 @assert(where() == 1);
             }
             @expect(AT_COMPILE == 1);
-            var at_runtime := where();
+            let mut at_runtime := where();
             @expect(at_runtime == 2);
-            var runtime_tally := tally();
+            let mut runtime_tally := tally();
             @expect(runtime_tally == 10);
         }
     )") == 0);
 }
 
-TEST_CASE("both arms of a condition-less `if constexpr` are type checked") {
+TEST_CASE("both arms of a condition-less `if comptime` are type checked") {
     helpers::expect_compile_error(R"(
-        const f := fn(): i32 { return if constexpr 1 else true; };
+        const f := fn(): i32 { return if comptime 1 else true; };
         pub const main := fn(): i32 { return f(); };
     )");
 }
 
 TEST_CASE("a constexpr function's params read at compile time are implicitly constexpr") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr min_cx := fn(a: i32, b: i32): i32 {
-            return if constexpr (a < b) a else b;
+        pub const min_cx := fn(a: i32, b: i32): i32 {
+            return if comptime (a < b) a else b;
         };
-        pub constexpr pick := fn(a: auto, b: auto): auto {
-            constexpr smaller := if (a < b) a else b;
+        pub const pick := fn(a: auto, b: auto): auto {
+            const smaller := if (a < b) a else b;
             return smaller;
         };
-        pub constexpr size_of := fn(x: auto): usize {
-            constexpr size := @sizeOf(@TypeOf(x));
+        pub const size_of := fn(x: auto): usize {
+            const size := @sizeOf(@TypeOf(x));
             return size;
         };
 
         test "min_cx" {
-            constexpr {
+            comptime {
                 @assert(min_cx(1, 2) == 1);
                 @assert(min_cx(-4, -123) == -123);
                 @assert(pick(9, 3) == 3);
             }
             @expect(min_cx(3, 4) == 3);
-            var runtime: i64 = 5;
+            let mut runtime: i64 = 5;
             @expect(size_of(runtime) == 8);
         }
     )") == 0);
@@ -104,20 +104,22 @@ TEST_CASE("a constexpr function's params read at compile time are implicitly con
 
 TEST_CASE("a runtime argument to an implicitly constexpr parameter says why it is constexpr") {
     CHECK(helpers::raised(R"(
-        pub constexpr min_cx := fn(a: i32, b: i32): i32 {
-            return if constexpr (a < b) a else b;
+        pub const min_cx := fn(a: i32, b: i32): i32 {
+            return if comptime (a < b) a else b;
         };
         const run := fn(x: i32): i32 { return min_cx(x, 4); };
     )",
-                          sema::error::CONSTEXPR_EVALUATION_FAILED));
+                          sema::error::COMPTIME_EVALUATION_FAILED));
 }
 
-TEST_CASE("params of a non-constexpr function are never inferred constexpr") {
+TEST_CASE("params of a `let` closure are never inferred compile-time") {
     helpers::expect_compile_error(R"(
-        const min_rt := fn(a: i32, b: i32): i32 {
-            return if constexpr (a < b) a else b;
+        pub const main := fn(): i32 {
+            let min_rt := fn(a: i32, b: i32): i32 {
+                return if comptime (a < b) a else b;
+            };
+            return min_rt(1, 2);
         };
-        pub const main := fn(): i32 { return min_rt(1, 2); };
     )");
 }
 

@@ -30,16 +30,16 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::F64:   return get_double_ty();
     case sema::type_kind::F80:   return llvm::Type::getX86_FP80Ty(context_);
     case sema::type_kind::F128:  return llvm::Type::getFP128Ty(context_);
-    case sema::type_kind::CONSTEXPR_INT:
+    case sema::type_kind::COMPTIME_INT:
         if (type.get_key().get_int_bits() == sema::CHAR_CONSTANT_BITS) {
             return llvm::IntegerType::get(context_, sema::CHAR_CONSTANT_BITS);
         }
         return get_int32_ty();
-    case sema::type_kind::CONSTEXPR_FLOAT: return get_double_ty();
+    case sema::type_kind::COMPTIME_FLOAT: return get_double_ty();
     case sema::type_kind::VOID_:
-    case sema::type_kind::NORETURN:        return get_void_ty();
+    case sema::type_kind::NORETURN:       return get_void_ty();
     case sema::type_kind::POINTER:
-    case sema::type_kind::REFERENCE:       {
+    case sema::type_kind::REFERENCE:      {
         // `&dyn I` / `^dyn I` is a fat pointer: `{ data: ptr, vtable: ptr }`.
         const auto        p{type.get_data().as_opt<sema::types::pointer>()};
         const auto        r{type.get_data().as_opt<sema::types::reference>()};

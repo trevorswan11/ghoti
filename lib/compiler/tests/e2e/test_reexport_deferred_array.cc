@@ -13,7 +13,7 @@ namespace {
 using helpers::mock_file;
 
 constexpr std::string_view RESULT{R"(
-    pub constexpr Result := fn(T: type, E: type): type {
+    pub const Result := fn(T: type, E: type): type {
         return union { ok: T, err: E };
     };
 )"};
@@ -39,18 +39,18 @@ constexpr std::string_view LEAF{R"(
         pub spare: [2]i64,
     };
 
-    constexpr R := fn(T: type): type { return result.Result(T, Errno); };
+    const R := fn(T: type): type { return result.Result(T, Errno); };
 
     pub const stat := fn(): R(Stat) {
-        var out: Stat = undefined;
-        const rc := raw_stat(^mut out);
+        let mut out: Stat = undefined;
+        let rc := raw_stat(^mut out);
         return if (rc < 0) .{ .err = rc } else .{ .ok = out };
     };
 )"};
 
 constexpr std::string_view MID{R"(
     import "result.gh" as result;
-    pub constexpr Result := result.Result;
+    pub const Result := result.Result;
     pub import "leaf.gh" as leaf;
 )"};
 
@@ -82,7 +82,7 @@ TEST_CASE("E2E: a re-exported extern struct's fixed-array field is usable throug
             import "mid.gh" as mid;
 
             pub const main := fn(): i32 {
-                const s: mid.leaf.Stat = .{
+                let s: mid.leaf.Stat = .{
                     .dev = 1, .mode = 7, .nlink = 0, .ino = 0,
                     .atime = 0, .mtime = 0, .ctime = 0,
                     .blocks = 0, .blksize = 0, .flags = 0,

@@ -79,7 +79,7 @@ TEST_CASE("a helper like Zig's `symbol` exports whatever function it's handed") 
         pub const main := fn(): i32 { return 0; };
     )",
                                                {{"common.gh", R"(
-        pub const symbol := fn(constexpr f: auto, constexpr name: [:0]u8): void {
+        pub const symbol := fn(comptime f: auto, comptime name: [:0]u8): void {
             @export(f, .{ .name = name, .linkage = .weak, .visibility = .hidden });
         };
     )"},
@@ -109,7 +109,7 @@ TEST_CASE("a constexpr function argument from another module calls the right fun
     )",
                                    {{"apply.gh", R"(
         const pick := fn(): i32 { return 1; };
-        pub const call := fn(constexpr f: auto): i32 { return f(); };
+        pub const call := fn(comptime f: auto): i32 { return f(); };
     )"}}) == 42);
 }
 
@@ -165,8 +165,8 @@ TEST_CASE("a keyword is a name right after `.`") {
         const Options := struct { @"weak": bool, @"type": i32 };
         const Mode := enum { strong, @"weak" };
         pub const main := fn(): i32 {
-            const o := Options{ .weak = true, .type = 40 };
-            const m: Mode = .weak;
+            let o := Options{ .weak = true, .type = 40 };
+            let m: Mode = .weak;
             if (!o.weak or m != Mode.weak) { return 1; }
             return o.type + 2;
         };

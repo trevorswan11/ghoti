@@ -17,7 +17,7 @@ TEST_CASE("`@fieldType` returns a struct field's declared type") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            return match constexpr (@typeInfo(@fieldType(Point, "x"))) {
+            return match comptime (@typeInfo(@fieldType(Point, "x"))) {
                 .int => |i| @intCast(i32, i.bits),
                 _ => 0,
             };

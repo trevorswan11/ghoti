@@ -21,16 +21,16 @@ namespace ghoti::tests {
 TEST_CASE("\\u{...} and \\xHH escapes encode what they name") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const smile := "\u{1F600}";
+            let smile := "\u{1F600}";
             if (smile.len != 4 or smile[0] != 0xF0 or smile[3] != 0x80) { return 1; }
-            const accent := "caf\u{E9}";
+            let accent := "caf\u{E9}";
             if (accent.len != 5 or accent[3] != 0xC3 or accent[4] != 0xA9) { return 2; }
             // A byte escape is one raw byte, even one that isn't valid UTF-8 on its own
-            const bytes := "\xFF\x00\x7f";
+            let bytes := "\xFF\x00\x7f";
             if (bytes.len != 3 or bytes[0] != 255 or bytes[1] != 0 or bytes[2] != 127) {
                 return 3;
             }
-            const letters := "\u{41}\u{0042}";
+            let letters := "\u{41}\u{0042}";
             if (letters.len != 2 or letters[1] != 'B') { return 4; }
             return 0;
         };
@@ -40,19 +40,19 @@ TEST_CASE("\\u{...} and \\xHH escapes encode what they name") {
 TEST_CASE("a character literal is its code point, defaulting to u21") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var letter := 'a';
+            let mut letter := 'a';
             if (@TypeOf(letter) != u21 or letter != 97) { return 1; }
-            const byte: u8 = 'b';
+            let byte: u8 = 'b';
             if (byte != 98) { return 2; }
-            const bytes := "xyz";
+            let bytes := "xyz";
             if (bytes[1] != 'y') { return 3; }
             if ('é' != 0xE9 or '😀' != 0x1F600) { return 4; }
             if ('\u{1F600}' != 0x1F600 or '\x7F' != 127 or '\xFF' != 255 or '\n' != 10) {
                 return 5;
             }
-            var wide := '😀';
+            let mut wide := '😀';
             if (@TypeOf(wide) != u21) { return 6; }
-            const as_u32: u32 = '😀';
+            let as_u32: u32 = '😀';
             if (as_u32 != 0x1F600) { return 7; }
             return 0;
         };
@@ -72,7 +72,7 @@ TEST_CASE("a character literal must hold exactly one code point that fits its ty
                            syntax::error::INVALID_CHARACTER_LITERAL,
                            std::pair{0UZ, 11UZ}});
     helpers::expect_compile_error(
-        "pub const main := fn(): i32 { const c: u8 = '\xF0\x9F\x98\x80'; return 0; };");
+        "pub const main := fn(): i32 { let c: u8 = '\xF0\x9F\x98\x80'; return 0; };");
 }
 
 TEST_CASE("a malformed escape is reported at the escape") {
@@ -118,9 +118,9 @@ TEST_CASE("reflection names a raw identifier by its decoded name") {
     CHECK(helpers::compile_and_run(R"(
         const Mood := enum { @"😀", @"caf\u{E9}" };
         pub const main := fn(): i32 {
-            const smile := @tagName(Mood.@"😀");
+            let smile := @tagName(Mood.@"😀");
             if (smile.len != 4 or smile[0] != 0xF0) { return 1; }
-            const cafe := @tagName(Mood.@"café");
+            let cafe := @tagName(Mood.@"café");
             if (cafe.len != 5 or cafe[4] != 0xA9) { return 2; }
             return 0;
         };

@@ -11,7 +11,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@ptrCast` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
             pub const main := fn(): i32 {
-                const p: ^opaque = @ptrCast(^opaque, &42);
+                let p: ^opaque = @ptrCast(^opaque, &42);
                 return 0;
             };
         )",
@@ -21,7 +21,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@ptrCast` rejects a plain integer operand") {
         CHECK(helpers::raised(R"(
             pub const main := fn(): i32 {
-                const p: ^opaque = @ptrCast(^opaque, 42);
+                let p: ^opaque = @ptrCast(^opaque, 42);
                 return 0;
             };
         )",
@@ -31,8 +31,8 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@ptrCast` rejects a non-pointer target type") {
         CHECK(helpers::raised(R"(
             pub const main := fn(): i32 {
-                var x: i32 = 5;
-                const v: i32 = @ptrCast(i32, ^x);
+                let mut x: i32 = 5;
+                let v: i32 = @ptrCast(i32, ^x);
                 return 0;
             };
         )",
@@ -42,7 +42,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@alignCast` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
             pub const main := fn(): i32 {
-                const p: ^opaque = @alignCast(^opaque, &42);
+                let p: ^opaque = @alignCast(^opaque, &42);
                 return 0;
             };
         )",
@@ -52,7 +52,7 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@intFromPtr` rejects a `&`-reference operand") {
         CHECK(helpers::raised(R"(
             pub const main := fn(): i32 {
-                const n: usize = @intFromPtr(&42);
+                let n: usize = @intFromPtr(&42);
                 return 0;
             };
         )",
@@ -62,8 +62,8 @@ TEST_CASE("`@ptrCast`/`@alignCast`/`@intFromPtr` reject a non-pointer operand") 
     SECTION("`@ptrCast` with a real pointer operand still succeeds") {
         helpers::type_check_and_verify(R"(
             pub const main := fn(): i32 {
-                var x: i32 = 5;
-                const p: ^opaque = @ptrCast(^opaque, ^x);
+                let mut x: i32 = 5;
+                let p: ^opaque = @ptrCast(^opaque, ^x);
                 return 0;
             };
         )");
@@ -126,17 +126,17 @@ TEST_CASE("Cast type checking") {
 TEST_CASE("Implicit numeric widening conversions") {
     helpers::type_check_and_verify(R"(
         pub const test_fn := fn(): void {
-            const val_u8: u8 = 'a';
-            const val_u32: u32 = val_u8;
-            const val_u64: u64 = val_u32;
-            const val_usize: usize = val_u8;
+            let val_u8: u8 = 'a';
+            let val_u32: u32 = val_u8;
+            let val_u64: u64 = val_u32;
+            let val_usize: usize = val_u8;
 
-            const val_i32: i32 = 42;
-            const val_i64: i64 = val_i32;
-            const val_isize: isize = val_i32;
+            let val_i32: i32 = 42;
+            let val_i64: i64 = val_i32;
+            let val_isize: isize = val_i32;
 
-            const val_f32: f32 = 3.14f32;
-            const val_f64: f64 = val_f32;
+            let val_f32: f32 = 3.14f32;
+            let val_f64: f64 = val_f32;
         };
     )");
 }
@@ -144,16 +144,16 @@ TEST_CASE("Implicit numeric widening conversions") {
 TEST_CASE("Explicit numeric casting via @as") {
     helpers::type_check_and_verify(R"(
         pub const test_fn := fn(): void {
-            const small_u8: u8 = 100;
-            const widen_u32 := @as(u32, small_u8);
-            const widen_u64 := @as(u64, widen_u32);
+            let small_u8: u8 = 100;
+            let widen_u32 := @as(u32, small_u8);
+            let widen_u64 := @as(u64, widen_u32);
 
-            const s_i32: i32 = -5;
-            const widen_i64 := @as(i64, s_i32);
+            let s_i32: i32 = -5;
+            let widen_i64 := @as(i64, s_i32);
 
-            const float_val: f64 = 9.99;
-            const int_from_float := @intFromFloat(i32, float_val);
-            const float_from_int := @as(f64, int_from_float);
+            let float_val: f64 = 9.99;
+            let int_from_float := @intFromFloat(i32, float_val);
+            let float_from_int := @as(f64, int_from_float);
         };
     )");
 }
@@ -162,23 +162,23 @@ TEST_CASE("Explicit narrowing via @as is rejected") {
     helpers::test_checker_fail(
         R"(
         pub const test_fn := fn(): void {
-            const big_u64: u64 = 1000;
-            const narrow_u8 := @as(u8, big_u64);
+            let big_u64: u64 = 1000;
+            let narrow_u8 := @as(u8, big_u64);
         };
     )",
         sema::diagnostic{
             "Cannot cast type 'u64' to 'u8' (narrowing conversion from 'u64' to 'u8' may truncate "
             "high bits; use @intCast for a checked conversion or @truncate to discard high bits)",
             sema::error::TYPE_MISMATCH,
-            std::pair{3UZ, 39UZ}});
+            std::pair{3UZ, 37UZ}});
 }
 
 TEST_CASE("Explicit sign change via @as is rejected") {
     helpers::test_checker_fail(
         R"(
         pub const test_fn := fn(): void {
-            const s_i32: i32 = -5;
-            const u_u32 := @as(u32, s_i32);
+            let s_i32: i32 = -5;
+            let u_u32 := @as(u32, s_i32);
         };
     )",
         sema::diagnostic{
@@ -187,15 +187,15 @@ TEST_CASE("Explicit sign change via @as is rejected") {
             "may change the represented value; use @intCast for a checked conversion or @bitCast "
             "to reinterpret the bits)",
             sema::error::TYPE_MISMATCH,
-            std::pair{3UZ, 36UZ}});
+            std::pair{3UZ, 34UZ}});
 }
 
 TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
     helpers::test_checker_fail(
         R"(
         pub const test_fn := fn(): void {
-            var big: u64 = 100;
-            var small: u8 = big;
+            let mut big: u64 = 100;
+            let mut small: u8 = big;
         };
     )",
         sema::diagnostic{
@@ -203,7 +203,7 @@ TEST_CASE("Non-widenable implicit integer narrowing fails without @as") {
             "to 'u8' may truncate high bits; use @intCast for a checked conversion or @truncate to "
             "discard high bits)",
             sema::error::TYPE_MISMATCH,
-            std::pair{3UZ, 28UZ}});
+            std::pair{3UZ, 32UZ}});
 }
 
 TEST_CASE("Explicit reference construction from value types") {
@@ -217,10 +217,10 @@ TEST_CASE("Explicit reference construction from value types") {
         };
 
         pub const caller := fn(): i32 {
-            var x: i32 = 10;
-            const res1 := take_ref(&x);
+            let mut x: i32 = 10;
+            let res1 := take_ref(&x);
             take_mut_ref(&mut x);
-            var r_var: &i32 = &x;
+            let mut r_var: &i32 = &x;
             return res1 + *r_var;
         };
 
@@ -237,7 +237,7 @@ TEST_CASE("Implicit reference type construction from value types is rejected") {
         };
 
         pub const caller := fn(): i32 {
-            var x: i32 = 10;
+            let mut x: i32 = 10;
             return take_ref(x);
         };
     )",
@@ -251,13 +251,13 @@ TEST_CASE("Implicit reference type construction via declaration is rejected") {
     helpers::test_checker_fail(
         R"(
         pub const caller := fn(): void {
-            var x: i32 = 10;
-            var r_var: &i32 = x;
+            let mut x: i32 = 10;
+            let mut r_var: &i32 = x;
         };
     )",
         sema::diagnostic{"Type mismatch in store: cannot assign 'i32' to '&i32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{3UZ, 30UZ}});
+                         std::pair{3UZ, 34UZ}});
 }
 
 TEST_CASE("Explicit reference construction in struct field initialization") {

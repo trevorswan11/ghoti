@@ -47,7 +47,7 @@ TEST_CASE("Consuming a call result satisfies the must-use check") {
     SECTION("bound to a const") {
         ok(R"(
             const make := fn(): i32 { return 7; };
-            pub const main := fn(): i32 { const x := make(); return x; };
+            pub const main := fn(): i32 { let x := make(); return x; };
         )");
     }
     SECTION("a void call needs nothing") {
@@ -102,7 +102,7 @@ TEST_CASE("A @[discardable] callee may be dropped with no diagnostic") {
                 @[discardable] pub const close := fn(&self): i32 { return 0; };
             };
             pub const main := fn(): i32 {
-                const s: S = .{};
+                let s: S = .{};
                 s.close();
                 return 0;
             };
@@ -145,7 +145,7 @@ TEST_CASE("@[discardable] on an interface member covers its implementations") {
         auto [ctx, idx]{helpers::resolve(fmt::format(R"({}
             const shut := fn(c: impl Closer): void {{ c.close(); }};
             pub const main := fn(): i32 {{
-                const f: File = .{{ .fd = 1 }};
+                let f: File = .{{ .fd = 1 }};
                 shut(&f);
                 return 0;
             }};
@@ -191,14 +191,14 @@ TEST_CASE("@[discardable(<constexpr bool>)] gates the discard behavior on the co
 
     SECTION("a true condition allows the drop") {
         ok(R"(
-            constexpr ON := true;
+            const ON := true;
             @[discardable(ON)] const log := fn(n: i32): i32 { return n; };
             pub const main := fn(): i32 { log(3); return 0; };
         )");
     }
     SECTION("a false condition keeps the must-use error") {
         CHECK(has_error(R"(
-            constexpr OFF := false;
+            const OFF := false;
             @[discardable(OFF)] const log := fn(n: i32): i32 { return n; };
             pub const main := fn(): i32 { log(3); return 0; };
         )",

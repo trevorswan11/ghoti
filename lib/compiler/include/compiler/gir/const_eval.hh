@@ -107,7 +107,7 @@ class const_eval {
         return match_pattern(pattern, target);
     }
 
-    // Evaluate and assert. Emits CONSTEXPR_EVALUATION_FAILED and returns poison on failure.
+    // Evaluate and assert. Emits COMPTIME_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
 
     // Evaluates an expression as a non-negative integer dimension for array sizing

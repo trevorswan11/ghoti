@@ -18,7 +18,7 @@ TEST_CASE("A method calls a sibling &self method through the `self.m()` sugar") 
             };
         };
         pub const main := fn(): i32 {
-            var f := File{ .handle = 10 };
+            let mut f := File{ .handle = 10 };
             return f.writeAll(5);
         };
     )") == 15);
@@ -38,7 +38,7 @@ TEST_CASE("A `&mut self` method calls a sibling `&mut self` method via `self.m()
             };
         };
         pub const main := fn(): i32 {
-            var c := Counter{ .n = 0 };
+            let mut c := Counter{ .n = 0 };
             c.bump3();
             return c.n;
         };
@@ -60,8 +60,8 @@ TEST_CASE("A method calls a method on a `^T` field via `self.field.m()`") {
             };
         };
         pub const main := fn(): i32 {
-            var i := Inner{ .base = 100 };
-            var o := Outer{ .inner = ^i };
+            let mut i := Inner{ .base = 100 };
+            let mut o := Outer{ .inner = ^i };
             return o.go(7);
         };
     )") == 107);
@@ -82,8 +82,8 @@ TEST_CASE("A method calls a method on a `&T` field via `self.field.m()`") {
             };
         };
         pub const main := fn(): i32 {
-            var i := Inner{ .base = 42 };
-            const o := Outer{ .inner = &i };
+            let mut i := Inner{ .base = 42 };
+            let o := Outer{ .inner = &i };
             return o.go();
         };
     )") == 42);

@@ -278,7 +278,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
                     ctx_.poison_node(resolving_,
                                      id,
                                      "An array-type size must be a compile-time constant",
-                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     error::COMPTIME_EVALUATION_FAILED,
                                      resolving_.ast.location_of(*array.size)));
             }
             last_type_.emplace(ctx_.get_array(
@@ -598,8 +598,8 @@ template <ast::IndexableID ID>
             const auto implicit_type{implicit_type_stack_.peek()};
             if (!implicit_type || !implicit_type->is_resolved() ||
                 implicit_type->get_kind() == type_kind::AUTO ||
-                implicit_type->get_kind() == type_kind::CONSTEXPR_INT ||
-                implicit_type->get_kind() == type_kind::CONSTEXPR_FLOAT) {
+                implicit_type->get_kind() == type_kind::COMPTIME_INT ||
+                implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
                 return make_sema_err(
                     fmt::format(
                         "cannot infer the target type of '{}' here; write '{}(T, x)'", name, name),
@@ -730,7 +730,7 @@ template <ast::IndexableID ID>
         if (src.is_poison()) { break; }
 
         if (target.get_kind() == type_kind::BOOL &&
-            (is_integer(src.get_kind()) || src.get_kind() == type_kind::CONSTEXPR_INT ||
+            (is_integer(src.get_kind()) || src.get_kind() == type_kind::COMPTIME_INT ||
              src.get_kind() == type_kind::POINTER)) {
             return make_sema_err("`@as` cannot convert to `bool`; use `@boolFromInt` instead",
                                  error::TYPE_MISMATCH,
@@ -741,8 +741,7 @@ template <ast::IndexableID ID>
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
-        const bool src_int{is_integer(src.get_kind()) ||
-                           src.get_kind() == type_kind::CONSTEXPR_INT};
+        const bool src_int{is_integer(src.get_kind()) || src.get_kind() == type_kind::COMPTIME_INT};
         if (target.get_kind() == type_kind::ENUM && src_int) {
             return make_sema_err(
                 "`@as` cannot convert an integer to an enum; use `@fromBackingInt` instead",
@@ -756,7 +755,7 @@ template <ast::IndexableID ID>
                 resolving_.ast.location_of(call.function));
         }
         if (is_integer(target.get_kind()) &&
-            (is_float(src.get_kind()) || src.get_kind() == type_kind::CONSTEXPR_FLOAT)) {
+            (is_float(src.get_kind()) || src.get_kind() == type_kind::COMPTIME_FLOAT)) {
             return make_sema_err(
                 "`@as` cannot convert a float to an integer; use `@intFromFloat` instead",
                 error::TYPE_MISMATCH,
@@ -798,7 +797,7 @@ template <ast::IndexableID ID>
         }
         auto& src{*get_resolved_call_arg_type(*args_res->operand)};
         if (src.is_poison()) { break; }
-        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
                 fmt::format("`@intCast` operand must be an integer type; found '{}'",
                             ctx_.type_display_name(src)),
@@ -857,7 +856,7 @@ template <ast::IndexableID ID>
         const auto& arg{call.arguments[0]};
         auto&       src{*get_resolved_call_arg_type(arg)};
         if (src.is_poison()) { break; }
-        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT &&
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT &&
             src.get_kind() != type_kind::POINTER) {
             return make_sema_err(
                 fmt::format("`@boolFromInt` operand must be an integer or pointer; found '{}'",
@@ -928,7 +927,7 @@ template <ast::IndexableID ID>
         }
         auto& src{*get_resolved_call_arg_type(*args_res->operand)};
         if (src.is_poison()) { break; }
-        const bool fits{src.get_kind() == type_kind::CONSTEXPR_INT ||
+        const bool fits{src.get_kind() == type_kind::COMPTIME_INT ||
                         (is_integer(src.get_kind()) && is_assignable(src, *backing))};
         if (!fits) {
             return make_sema_err(fmt::format("`@fromBackingInt` operand must be an integer "
@@ -957,7 +956,7 @@ template <ast::IndexableID ID>
         }
         auto& src{*get_resolved_call_arg_type(*args_res->operand)};
         if (src.is_poison()) { break; }
-        if (!is_float(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_FLOAT) {
+        if (!is_float(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_FLOAT) {
             return make_sema_err(fmt::format("`@intFromFloat` operand must be a float; found '{}'",
                                              ctx_.type_display_name(src)),
                                  error::TYPE_MISMATCH,
@@ -980,7 +979,7 @@ template <ast::IndexableID ID>
         }
         auto& src{*get_resolved_call_arg_type(*args_res->operand)};
         if (src.is_poison()) { break; }
-        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::CONSTEXPR_INT) {
+        if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
                 fmt::format("`@floatFromInt` operand must be an integer; found '{}'",
                             ctx_.type_display_name(src)),
@@ -1012,8 +1011,8 @@ template <ast::IndexableID ID>
                 error::TYPE_MISMATCH,
                 get_call_arg_location(*args_res->operand));
         }
-        if (!is_float(src_kind) && src_kind != type_kind::CONSTEXPR_FLOAT &&
-            src_kind != type_kind::CONSTEXPR_INT) {
+        if (!is_float(src_kind) && src_kind != type_kind::COMPTIME_FLOAT &&
+            src_kind != type_kind::COMPTIME_INT) {
             return make_sema_err(fmt::format("`@floatCast` operand must be a float; found '{}'",
                                              ctx_.type_display_name(src)),
                                  error::TYPE_MISMATCH,
@@ -1454,7 +1453,7 @@ template <ast::IndexableID ID>
         if (!desc) {
             return make_sema_err(
                 fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
-                error::CONSTEXPR_EVALUATION_FAILED,
+                error::COMPTIME_EVALUATION_FAILED,
                 get_call_arg_location(call.arguments[0]));
         }
         const auto field_err{[&](std::string_view field_name) -> stdx::result<void, diagnostic> {
@@ -1462,7 +1461,7 @@ template <ast::IndexableID ID>
                 fmt::format("'{}': descriptor is missing a compile-time-known '{}' field",
                             builtin_name,
                             field_name),
-                error::CONSTEXPR_EVALUATION_FAILED,
+                error::COMPTIME_EVALUATION_FAILED,
                 get_call_arg_location(call.arguments[0]));
         }};
 
@@ -1572,7 +1571,7 @@ template <ast::IndexableID ID>
                 if (!pt || !*pt) {
                     return make_sema_err(
                         "'@Fn': every element of 'params' must be a compile-time-known type",
-                        error::CONSTEXPR_EVALUATION_FAILED,
+                        error::COMPTIME_EVALUATION_FAILED,
                         get_call_arg_location(call.arguments[0]));
                 }
                 param_types[i] = pt->get();
@@ -1606,7 +1605,7 @@ template <ast::IndexableID ID>
         if (!desc) {
             return make_sema_err(
                 fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
-                error::CONSTEXPR_EVALUATION_FAILED,
+                error::COMPTIME_EVALUATION_FAILED,
                 get_call_arg_location(call.arguments[0]));
         }
 
@@ -1735,7 +1734,7 @@ template <ast::IndexableID ID>
 
         if (is_set) {
             auto& val_t{*get_resolved_call_arg_type(call.arguments[1])};
-            if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::CONSTEXPR_INT) {
+            if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::COMPTIME_INT) {
                 return make_sema_err(
                     fmt::format("'@memset' fill value must be a byte-valued integer; found '{}'",
                                 ctx_.type_display_name(val_t)),
@@ -1836,7 +1835,7 @@ template <ast::IndexableID ID>
         if (expected && is_float(expected->get_kind())) {
             return_type = ctx_.pool.with_const(*expected, false);
         } else {
-            return_type = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+            return_type = &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         }
         break;
     }
@@ -2051,8 +2050,8 @@ template <ast::IndexableID ID>
             }
             const bool ok{
                 is_same_unqualified(arg_type, t) ||
-                (arg_type.get_kind() == type_kind::CONSTEXPR_INT && is_integer(t.get_kind())) ||
-                (arg_type.get_kind() == type_kind::CONSTEXPR_FLOAT && is_float(t.get_kind()))};
+                (arg_type.get_kind() == type_kind::COMPTIME_INT && is_integer(t.get_kind())) ||
+                (arg_type.get_kind() == type_kind::COMPTIME_FLOAT && is_float(t.get_kind()))};
             if (ok) { return stdx::none; }
             return diagnostic{fmt::format("'{}' expects '{}' to be '{}'; found '{}'",
                                           builtin_name,
@@ -2239,7 +2238,7 @@ template <ast::IndexableID ID>
             }
             if (!is_const_string) {
                 return make_sema_err("@panic message must be a compile-time-constant string",
-                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     error::COMPTIME_EVALUATION_FAILED,
                                      get_call_arg_location(call.arguments[0]));
             }
         }
@@ -2268,7 +2267,7 @@ template <ast::IndexableID ID>
             }
             if (!is_const_string) {
                 return make_sema_err("@skip message must be a compile-time-constant string",
-                                     error::CONSTEXPR_EVALUATION_FAILED,
+                                     error::COMPTIME_EVALUATION_FAILED,
                                      get_call_arg_location(call.arguments[0]));
             }
         }
@@ -2324,7 +2323,7 @@ template <ast::IndexableID ID>
 
         if (!path_str) {
             return make_sema_err("@embed argument must be a compile-time string",
-                                 error::CONSTEXPR_EVALUATION_FAILED,
+                                 error::COMPTIME_EVALUATION_FAILED,
                                  get_call_arg_location(call.arguments[0]));
         }
 
@@ -2333,7 +2332,7 @@ template <ast::IndexableID ID>
         if (!content_opt) {
             return make_sema_err(
                 fmt::format("failed to read embedded file '{}'", embed_path.string()),
-                error::CONSTEXPR_EVALUATION_FAILED,
+                error::COMPTIME_EVALUATION_FAILED,
                 get_call_arg_location(call.arguments[0]));
         }
 
@@ -2384,7 +2383,7 @@ template <ast::IndexableID ID>
             if (!ok) {
                 return make_sema_err(
                     fmt::format("{} message must be a compile-time-constant string", name),
-                    error::CONSTEXPR_EVALUATION_FAILED,
+                    error::COMPTIME_EVALUATION_FAILED,
                     get_call_arg_location(call.arguments[1]));
             }
         }
@@ -2681,7 +2680,7 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
             return make_sema_err(
-                fmt::format("'@Enum': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+                fmt::format("'@Enum': {}", what), error::COMPTIME_EVALUATION_FAILED, loc);
         }};
 
     const auto tag_v{read_desc_field<sema::type&>(desc, "tag_type")};
@@ -2741,7 +2740,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
             return make_sema_err(
-                fmt::format("'@Struct': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+                fmt::format("'@Struct': {}", what), error::COMPTIME_EVALUATION_FAILED, loc);
         }};
 
     const auto fields_arr{read_desc_field<gir::const_array>(desc, "fields")};
@@ -2785,7 +2784,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
                     fmt::format("'@Struct': field '{}' default value isn't constant-representable "
                                 "(a pointer nested inside an aggregate default isn't supported)",
                                 *name_v),
-                    error::CONSTEXPR_EVALUATION_FAILED,
+                    error::COMPTIME_EVALUATION_FAILED,
                     loc);
             }
 
@@ -2851,7 +2850,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     const auto field_err{
         [&](std::string_view what) -> stdx::result<gsl::not_null<type*>, diagnostic> {
             return make_sema_err(
-                fmt::format("'@Union': {}", what), error::CONSTEXPR_EVALUATION_FAILED, loc);
+                fmt::format("'@Union': {}", what), error::COMPTIME_EVALUATION_FAILED, loc);
         }};
 
     const auto fields_arr{read_desc_field<gir::const_array>(desc, "fields")};
@@ -2959,7 +2958,7 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
         const auto node{sym->get_data().as_opt<symbols::node_t>()};
         if (!node) { return stdx::none; }
         const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
-        if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::VARIABLE)) {
+        if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::MUT)) {
             return stdx::none;
         }
         return known_length(*decl->value);
@@ -2975,7 +2974,7 @@ auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::
     if (!declared || !declared->owner || !declared->decl) { return stdx::none; }
     auto&      owner{const_cast<mod::module&>(*declared->owner)};
     const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
-    if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::VARIABLE) ||
+    if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::MUT) ||
         !owner.ast.get_as_opt<ast::function_expr>(*decl->value)) {
         return stdx::none;
     }
@@ -3003,8 +3002,8 @@ auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gi
     if (!node) { return stdx::none; }
     const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl || !decl->value ||
-        !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-          decl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+        !(decl->has_modifier(ast::decl_modifiers::LET) ||
+          decl->has_modifier(ast::decl_modifiers::COMPTIME))) {
         return stdx::none;
     }
     if (!resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) { return stdx::none; }
@@ -3034,8 +3033,8 @@ auto type_resolver::constexpr_closure_value(ast::expr_handle expr)
         if (!node) { return stdx::none; }
         const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl || !decl->value ||
-            !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-              decl->has_modifier(ast::decl_modifiers::CONSTEXPR)) ||
+            !(decl->has_modifier(ast::decl_modifiers::LET) ||
+              decl->has_modifier(ast::decl_modifiers::COMPTIME)) ||
             !resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) {
             return stdx::none;
         }
@@ -3062,8 +3061,8 @@ auto type_resolver::constexpr_closure_value(ast::expr_handle expr)
         if (!node) { return stdx::none; }
         const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
         if (!decl || !decl->value ||
-            !(decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-              decl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+            !(decl->has_modifier(ast::decl_modifiers::LET) ||
+              decl->has_modifier(ast::decl_modifiers::COMPTIME))) {
             return stdx::none;
         }
         gir::const_eval evaluator{ctx_, resolving_};
@@ -3737,19 +3736,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     }
                     const auto* arg_ty{concrete_arg_types[i]};
                     auto        msg{std::string{arg_ty && arg_ty->get_kind() == type_kind::CLOSURE
-                                                    ? "a constexpr closure argument must capture only "
+                                                    ? "a compile-time closure argument must capture only "
                                                       "compile-time constants"
-                                                    : "argument to a constexpr parameter must be a "
+                                                    : "argument to a comptime parameter must be a "
                                                       "compile-time constant"}};
                     if (!cx_params[i].is_constexpr_written) {
-                        msg += "; the parameter is implicitly constexpr because this constexpr "
+                        msg += "; the parameter is compile-time because this "
                                "function reads it in a compile-time position";
                     }
                     return last_type_.emplace(
                         ctx_.poison_node(resolving_,
                                          id,
                                          msg,
-                                         error::CONSTEXPR_EVALUATION_FAILED,
+                                         error::COMPTIME_EVALUATION_FAILED,
                                          get_call_arg_location(call.arguments[i])));
                 }
                 constexpr_args[cx_i++] = std::move(*folded);
@@ -3800,7 +3799,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         id,
                         fmt::format("Failed to instantiate '{}'",
                                     fn_info_copy.name.value_or("<generic function>")),
-                        error::CONSTEXPR_EVALUATION_FAILED,
+                        error::COMPTIME_EVALUATION_FAILED,
                         resolving_.ast.location_of(call.function)));
                 }
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -4223,7 +4222,7 @@ struct constexpr_for_driver {
 
 } // namespace
 
-// Unrolls a `for constexpr`: resolves the block once per compile-time-known iteration, each under
+// Unrolls a `for comptime`: resolves the block once per compile-time-known iteration, each under
 // its own `constexpr_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
 // replays
 auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_expr)
@@ -4235,8 +4234,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "`for constexpr` needs at least one driving iterable",
-                             error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                             "`for comptime` needs at least one driving iterable",
+                             error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                              resolving_.ast.location_of(id)));
     }
     check_constexpr_loop_jumps(for_expr.block);
@@ -4261,9 +4260,9 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            "`for constexpr` needs at least one driving iterable besides a companion `0..` index "
+            "`for comptime` needs at least one driving iterable besides a companion `0..` index "
             "range",
-            error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+            error::COMPTIME_LOOP_COUNT_NOT_STATIC,
             resolving_.ast.location_of(id)));
     }
 
@@ -4303,9 +4302,9 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for constexpr`'s driving range must have a compile-time-known upper "
+                        "`for comptime`'s driving range must have a compile-time-known upper "
                         "bound",
-                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 drv.elem_type = &slice_data->underlying;
@@ -4323,8 +4322,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for constexpr`'s range bounds must be compile-time constant",
-                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        "`for comptime`'s range bounds must be compile-time constant",
+                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 const bool inclusive{driver_id.get_token_type() ==
@@ -4349,9 +4348,9 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for constexpr`'s iterable must be a parameter pack, a compile-time-"
-                        "known range, or a `constexpr` array/slice value",
-                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        "`for comptime`'s iterable must be a parameter pack, a compile-time-"
+                        "known range, or a compile-time-known array/slice value",
+                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 if (arr) {
@@ -4376,8 +4375,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "Could not determine the element type of this `for constexpr` iterable",
-                        error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                        "Could not determine the element type of this `for comptime` iterable",
+                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
             }
@@ -4387,11 +4386,11 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("`for constexpr`'s driving iterables must all have the same length "
+                fmt::format("`for comptime`'s driving iterables must all have the same length "
                             "({} vs {})",
                             *count,
                             this_count),
-                error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                 resolving_.ast.location_of(driver_id)));
         }
         count.emplace(this_count);
@@ -4404,8 +4403,8 @@ auto type_resolver::resolve_constexpr_for(ast::node_id id, const ast::for_loop_e
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                "`for constexpr`'s companion iterable must be an open-ended index range like `0..`",
-                error::CONSTEXPR_LOOP_COUNT_NOT_STATIC,
+                "`for comptime`'s companion iterable must be an open-ended index range like `0..`",
+                error::COMPTIME_LOOP_COUNT_NOT_STATIC,
                 resolving_.ast.location_of(*for_expr.iterables.back())));
         }
     }
@@ -4752,9 +4751,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         if (param.is_constexpr_written && param_type.get_kind() == type_kind::TYPE &&
             param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
-                "'constexpr' is redundant on a parameter of type 'type'; type values are "
+                "'comptime' is redundant on a parameter of type 'type'; type values are "
                 "always compile-time known",
-                error::REDUNDANT_CONSTEXPR,
+                error::REDUNDANT_COMPTIME,
                 resolving_.ast.location_of(param.name));
         }
         param_types[param_idx++] = &param_type;
@@ -4848,7 +4847,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     // A compile-time-only result never reaches the runtime check for a missing `return`
     const auto ret_kind{return_type.get_kind()};
     if (!is_auto_return && !tracker.has_returns() &&
-        (ret_kind == type_kind::CONSTEXPR_INT || ret_kind == type_kind::CONSTEXPR_FLOAT ||
+        (ret_kind == type_kind::COMPTIME_INT || ret_kind == type_kind::COMPTIME_FLOAT ||
          ret_kind == type_kind::TYPE)) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
@@ -5347,14 +5346,14 @@ template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
 
-    // A pack is usable only as `.len`, `[K]`, `for constexpr`'s iterable, or `expr...`; those
+    // A pack is usable only as `.len`, `[K]`, `for comptime`'s iterable, or `expr...`; those
     // forms intercept before ever reaching here, so a bare mention of the name is out of position.
     if (current_pack_ && name == current_pack_->name) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("'{}' is a parameter pack; use '{}.len', '{}[k]', "
-                                         "'{}...', or a `for constexpr` iterable",
+                                         "'{}...', or a `for comptime` iterable",
                                          name,
                                          name,
                                          name,
@@ -5487,7 +5486,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     if (if_expr.is_evaluation_context_branch()) { return resolve_if_arms(id, if_expr); }
     TRY_RESOLVE(*if_expr.condition);
 
-    // The template pass has no real impl-param values; leave an `if constexpr` unresolved here so
+    // The template pass has no real impl-param values; leave an `if comptime` unresolved here so
     // config-specific dead arms never poison. `resolve_param_impl_bodies` folds it per instance.
     if (if_expr.constexpr_condition && building_param_template_) {
         auto& void_t{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
@@ -5496,8 +5495,8 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     }
 
     if (if_expr.constexpr_condition && !in_constexpr_loop_) {
-        // Install simulated constexpr_frame so condition folding observes preceding `constexpr var`
-        // mutations.
+        // Install simulated constexpr_frame so condition folding observes preceding `comptime let
+        // mut` mutations.
         const constexpr_frame_guard                    sim_guard{ctx_.constexpr_binding_frames,
                                               make_simulated_frame()};
         gir::const_eval                                evaluator{ctx_, resolving_};
@@ -5816,7 +5815,7 @@ namespace {
 
 // True only for concrete integer, or width-less `constexpr_int`
 [[nodiscard]] auto wrapping_operand_ok(const type& t) noexcept -> bool {
-    return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
+    return is_integer(t.get_kind()) || t.get_kind() == type_kind::COMPTIME_INT;
 }
 
 // The element type of an array/slice, or none if `t` is neither (for `++`, `PLUS_PLUS`)
@@ -6104,11 +6103,11 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
     case syntax::token_type_t::PLUS:
         // `n + ptr` offsets the pointer just like `ptr + n`
-        last_type_.emplace((is_integer(lhs_type->get_kind()) ||
-                            lhs_type->get_kind() == type_kind::CONSTEXPR_INT) &&
-                                   rhs_type.get_kind() == type_kind::POINTER
-                               ? rhs_type
-                               : *lhs_type);
+        last_type_.emplace(
+            (is_integer(lhs_type->get_kind()) || lhs_type->get_kind() == type_kind::COMPTIME_INT) &&
+                    rhs_type.get_kind() == type_kind::POINTER
+                ? rhs_type
+                : *lhs_type);
         break;
     default: last_type_.emplace(lhs_type); break;
     }
@@ -6186,8 +6185,8 @@ auto type_resolver::names_constexpr_var(ast::expr_handle expr) -> bool {
     if (!node) { return false; }
     const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl) { return false; }
-    return decl->has_modifier(ast::decl_modifiers::CONSTEXPR) &&
-           decl->has_modifier(ast::decl_modifiers::VARIABLE);
+    return decl->has_modifier(ast::decl_modifiers::COMPTIME) &&
+           decl->has_modifier(ast::decl_modifiers::MUT);
 }
 
 // Looks `name` up among the methods attached to `target` by `impl` blocks. Returns:
@@ -6814,7 +6813,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
         }
     }
     const auto is_integral_bound{[](const type& t) {
-        return is_integer(t.get_kind()) || t.get_kind() == type_kind::CONSTEXPR_INT;
+        return is_integer(t.get_kind()) || t.get_kind() == type_kind::COMPTIME_INT;
     }};
     const auto bound_types_ok{is_integral_bound(*lhs_type) &&
                               (!range.rhs || !resolving_.has_sema_type(*range.rhs) ||
@@ -7357,7 +7356,7 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
             ctx_.poison_node(resolving_,
                              id,
                              "'match' on type has no arm matching the scrutinee and no '_' arm",
-                             error::CONSTEXPR_EVALUATION_FAILED,
+                             error::COMPTIME_EVALUATION_FAILED,
                              resolving_.ast.location_of(id)));
     }
 
@@ -7398,8 +7397,8 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "'match constexpr' requires a compile-time-known scrutinee",
-                             error::CONSTEXPR_EVALUATION_FAILED,
+                             "'match comptime' requires a compile-time-known scrutinee",
+                             error::COMPTIME_EVALUATION_FAILED,
                              resolving_.ast.location_of(match.matcher)));
     }
 
@@ -7418,8 +7417,8 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "'match constexpr' has no arm matching the scrutinee and no '_' arm",
-                             error::CONSTEXPR_EVALUATION_FAILED,
+                             "'match comptime' has no arm matching the scrutinee and no '_' arm",
+                             error::COMPTIME_EVALUATION_FAILED,
                              resolving_.ast.location_of(id)));
     }
 
@@ -7435,7 +7434,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
                                      id,
-                                     "'match constexpr' on a type value cannot bind a capture",
+                                     "'match comptime' on a type value cannot bind a capture",
                                      error::ILLEGAL_MATCH_PATTERN,
                                      resolving_.ast.location_of(*live.capture)));
             }
@@ -7443,7 +7442,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
                     id,
-                    "'match constexpr' captures cannot use a reference or pointer modifier",
+                    "'match comptime' captures cannot use a reference or pointer modifier",
                     error::ILLEGAL_MATCH_PATTERN,
                     resolving_.ast.location_of(*live.capture)));
             }
@@ -7461,7 +7460,7 @@ auto type_resolver::resolve_constexpr_match(ast::node_id           id,
             resolving_.set_sema_type(*live.capture, *cap_type);
             resolve_symbol_info(*live.capture, symbol_kind::VALUE);
 
-            // Give the capture the same `constexpr_frame` binding a `for`/`while constexpr`
+            // Give the capture the same `constexpr_frame` binding a `for`/`while comptime`
             // capture already gets
             const auto& cap_ident{resolving_.ast.get_as<ast::identifier_expr>(*live.capture)};
             if (const auto un{scrutinee->as_opt<gir::const_union>()}) {
@@ -7508,7 +7507,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     if (match.is_constexpr) { return resolve_constexpr_match(id, match, matcher_type); }
 
     // A scrutinee that denotes a compile-time `type` takes the type-match path: only the
-    // selected arm is checked/emitted, `if constexpr`-style.
+    // selected arm is checked/emitted, `if comptime`-style.
     {
         const auto denotes_type{[&](auto&& self, ast::node_id n) -> bool {
             const auto& node{resolving_.ast[n]};
@@ -7536,8 +7535,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 if (const auto nd{sym->get_data().template as_opt<symbols::node_t>()}) {
                     if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*nd)};
                         decl && decl->value &&
-                        (decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-                         decl->has_modifier(ast::decl_modifiers::CONSTEXPR))) {
+                        (decl->has_modifier(ast::decl_modifiers::LET) ||
+                         decl->has_modifier(ast::decl_modifiers::COMPTIME))) {
                         return self(self, **decl->value);
                     }
                 }
@@ -7590,8 +7589,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             if (const auto sym{ctx_.registry.lookup(table_stack_, ident->name)}) {
                 if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
                     if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
-                        matcher_is_const = decl->has_modifier(ast::decl_modifiers::CONSTANT) ||
-                                           decl->has_modifier(ast::decl_modifiers::CONSTEXPR);
+                        matcher_is_const = decl->has_modifier(ast::decl_modifiers::LET) ||
+                                           decl->has_modifier(ast::decl_modifiers::COMPTIME);
                     }
                 }
             }
@@ -7622,11 +7621,11 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             break;
         case type_kind::ISIZE:
         case type_kind::USIZE:
-        case type_kind::CONSTEXPR_INT: break;
-        case type_kind::BOOL:          required_arm_count.emplace(2); break;
+        case type_kind::COMPTIME_INT: break;
+        case type_kind::BOOL:         required_arm_count.emplace(2); break;
         case type_kind::F32:
         case type_kind::F64:
-        case type_kind::CONSTEXPR_FLOAT:
+        case type_kind::COMPTIME_FLOAT:
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
                                  id,
@@ -8301,8 +8300,8 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "Cannot take a reference to a `constexpr var`; it has no storage",
-                             error::CONSTEXPR_VAR_ADDRESS_OF,
+                             "Cannot take a reference to a `comptime let mut`; it has no storage",
+                             error::COMPTIME_MUT_ADDRESS_OF,
                              resolving_.ast.location_of(id)));
     }
 
@@ -8391,8 +8390,8 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "Cannot take the address of a `constexpr var`; it has no storage",
-                             error::CONSTEXPR_VAR_ADDRESS_OF,
+                             "Cannot take the address of a `comptime let mut`; it has no storage",
+                             error::COMPTIME_MUT_ADDRESS_OF,
                              resolving_.ast.location_of(id)));
     }
 
@@ -8488,8 +8487,8 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
         // Unary '+' is an identity that no GIR instruction checks, so validate it here
         auto&      operand_type{*last_type_};
         const auto kind{operand_type.get_kind()};
-        const bool ok{is_numeric(kind) || kind == type_kind::CONSTEXPR_INT ||
-                      kind == type_kind::CONSTEXPR_FLOAT};
+        const bool ok{is_numeric(kind) || kind == type_kind::COMPTIME_INT ||
+                      kind == type_kind::COMPTIME_FLOAT};
         if (!operand_type.is_poison() && !ok) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
@@ -8502,7 +8501,7 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     } else if (id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) {
         // Mirrors plain unary '-': signed integers only with overflow safety
         auto&      operand_type{*last_type_};
-        const bool ok{operand_type.get_kind() == type_kind::CONSTEXPR_INT ||
+        const bool ok{operand_type.get_kind() == type_kind::COMPTIME_INT ||
                       is_signed_integer(operand_type)};
         if (!operand_type.is_poison() && !ok) {
             return last_type_.emplace(ctx_.poison_node(
@@ -8695,11 +8694,11 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
     } else {
         // An unsuffixed integer literal is `constexpr_int` and coerces freely
         resolved = expr.is_char ? &ctx_.get_char_constant()
-                                : &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_INT);
+                                : &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_INT);
         const auto implicit_type{implicit_type_stack_.peek()};
-        if (implicit_type && implicit_type->get_kind() == type_kind::CONSTEXPR_FLOAT) {
+        if (implicit_type && implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
             // Folding must see a float value, not an integer that merely coerces
-            resolved = &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+            resolved = &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         } else if (implicit_type &&
                    (is_integer(implicit_type->get_kind()) || is_float(implicit_type->get_kind()))) {
             // Adopt the concrete context only when the literal's magnitude fits it
@@ -8742,7 +8741,7 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
     }
 
     // An unsuffixed real literal is `constexpr_float` and coerces freely
-    type* resolved{expr.width == 0 ? &ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT)
+    type* resolved{expr.width == 0 ? &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT)
                                    : &ctx_.get_builtin_resolved_type(kind)};
     if (expr.width == 0) {
         if (const auto implicit_type{implicit_type_stack_.peek()};
@@ -9448,7 +9447,7 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
     last_type_.emplace(resolving_.get_sema_type(id));
 }
 
-// Materializes the current compile-time values of mutable `constexpr var` locals
+// Materializes the current compile-time values of mutable `comptime let mut` locals
 // by simulating preceding statements in the active lexical block hierarchy.
 auto type_resolver::make_simulated_frame() -> constexpr_frame {
     constexpr_frame frame;
@@ -9514,6 +9513,26 @@ auto type_resolver::visit(ast::node_id id, const ast::continue_stmt& continue_st
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::NORETURN));
 }
 
+auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) const
+    -> stdx::option<std::string_view> {
+    if (!decl.has_modifier(ast::decl_modifiers::COMPTIME) ||
+        decl.has_modifier(ast::decl_modifiers::MUT) || !decl.value ||
+        !decl.value->is<ast::function_expr>()) {
+        return stdx::none;
+    }
+    for (const auto& capture : resolving_.get_captures(*decl.value)) {
+        const auto captured{ctx_.registry.lookup(table_stack_, capture.name)};
+        if (!captured) { continue; }
+        const auto node{captured->get_data().as_opt<symbols::node_t>()};
+        const auto captured_decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node)
+                                      : stdx::none};
+        if (captured_decl && !captured_decl->has_modifier(ast::decl_modifiers::COMPTIME)) {
+            return capture.name;
+        }
+    }
+    return stdx::none;
+}
+
 // `auto`/`type`/`constexpr`/pack parameters (or `impl` bounds) make a function generic
 auto type_resolver::declares_generic_params(const ast::function_expr& fn_expr) const -> bool {
     if (!fn_expr.impl_bounds.empty()) { return true; }
@@ -9551,8 +9570,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     const auto                       deprecated_scope_restore{gsl::finally([&] {
         if (is_deprecated) { --deprecated_scope_depth_; }
     })};
-    const constexpr_evaluation_scope cx_scope{ctx_,
-                                              decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
+    const constexpr_evaluation_scope cx_scope{ctx_, decl.evaluates_at_compile_time()};
     auto&                            sym{*symbol_opt};
 
     // Ensure malformed symbols don't crash the compiler
@@ -9734,7 +9752,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // A `var` (or explicit `: auto`) binding whose inferred type is `constexpr_*` has no
         // stable place to stay constexpr: materialize it to its runtime peer now
-        const bool wants_concrete{decl.has_modifier(ast::decl_modifiers::VARIABLE) ||
+        const bool wants_concrete{decl.has_modifier(ast::decl_modifiers::MUT) ||
                                   (decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                              syntax::token_type_t::AUTO_TYPE)};
         if (wants_concrete) {
@@ -9766,6 +9784,16 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }
 
         resolve_decl_attributes(id, decl, type_data);
+        if (const auto runtime{const_closure_runtime_capture(decl)}) {
+            ctx_.poison_symbol(sym,
+                               fmt::format("A 'const' function cannot capture the runtime value "
+                                           "'{}'; declare the closure with 'let'",
+                                           *runtime),
+                               error::ILLEGAL_BINDING_KIND,
+                               resolving_.ast.location_of(id));
+            resolving_.set_sema_type(decl.name, ctx_.get_poison());
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
 
         const bool literal_type_anno{decl.explicit_type && decl.explicit_type->get_token_type() ==
                                                                syntax::token_type_t::TYPE_TYPE};
@@ -9781,10 +9809,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
-        if (decl.has_modifier(ast::decl_modifiers::VARIABLE) && (literal_type_anno || binds_type)) {
+        // Only `const` holds what exists solely at compile time; `comptime let mut` stays scalar
+        const bool runtime_binding{!decl.has_modifier(ast::decl_modifiers::COMPTIME)};
+        if ((runtime_binding || decl.has_modifier(ast::decl_modifiers::MUT)) &&
+            (literal_type_anno || binds_type)) {
             ctx_.poison_symbol(sym,
-                               "a 'type' value cannot be stored in a mutable ('var') binding; "
-                               "use 'const' or 'constexpr' instead",
+                               "a 'type' value cannot be stored in a 'let' or 'let mut' binding; "
+                               "use 'const' instead",
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -9793,10 +9824,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // `const U := undefined` aliases the literal; there is no runtime value to store
         const bool binds_undefined{resolved_type.get_kind() == type_kind::UNDEFINED};
-        if (binds_undefined && decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+        if (binds_undefined && (runtime_binding || decl.has_modifier(ast::decl_modifiers::MUT))) {
             ctx_.poison_symbol(sym,
                                "'undefined' only exists at compile time, so it cannot be stored in "
-                               "a mutable ('var') binding; use 'const' to alias it",
+                               "a 'let' or 'let mut' binding; use 'const' to alias it",
                                error::COMPILE_TIME_ONLY_VALUE,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -9809,12 +9840,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()};
         const bool constexpr_value{!binds_type && !aggregate_literal &&
                                    is_constexpr_aggregate(resolved_type)};
-        if (constexpr_value && decl.has_modifier(ast::decl_modifiers::VARIABLE) &&
-            !decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
+        if (constexpr_value && runtime_binding) {
             ctx_.poison_symbol(sym,
                                fmt::format("a value of type '{}' holds 'type's and only exists at "
-                                           "compile time, so it cannot be stored in a mutable "
-                                           "('var') binding; use 'const' or 'constexpr' instead",
+                                           "compile time, so it cannot be stored in a 'let' or "
+                                           "'let mut' binding; use 'const' instead",
                                            ctx_.type_display_name(resolved_type)),
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
@@ -9847,7 +9877,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 return storageless_kind::ALIAS;
             }
             if ((constexpr_value || binds_undefined) &&
-                !decl.has_modifier(ast::decl_modifiers::VARIABLE)) {
+                !decl.has_modifier(ast::decl_modifiers::MUT)) {
                 return storageless_kind::CONSTEXPR_VALUE;
             }
             return stdx::none;
@@ -10100,15 +10130,15 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
                     !local_labels.contains(
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
                 if (labeled_outward) {
-                    ctx_.diags.emplace_back("'break' cannot target a loop outside a constexpr loop",
-                                            error::CONSTEXPR_LOOP_BREAK,
+                    ctx_.diags.emplace_back("'break' cannot target a loop outside a comptime loop",
+                                            error::COMPTIME_LOOP_BREAK,
                                             resolving_.ast.location_of(n));
                 } else if (unlabeled_and_local) {
                     if (runtime_control_flow_depth > 0) {
                         ctx_.diags.emplace_back(
-                            "'break' inside a constexpr loop is only allowed within compile-time "
+                            "'break' inside a comptime loop is only allowed within compile-time "
                             "control flow",
-                            error::CONSTEXPR_LOOP_BREAK,
+                            error::COMPTIME_LOOP_BREAK,
                             resolving_.ast.location_of(n));
                     }
                 }
@@ -10124,15 +10154,15 @@ auto type_resolver::check_constexpr_loop_jumps(ast::stmt_handle body) -> void {
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
                 if (labeled_outward) {
                     ctx_.diags.emplace_back(
-                        "'continue' cannot target a loop outside a constexpr loop",
-                        error::CONSTEXPR_LOOP_CONTINUE,
+                        "'continue' cannot target a loop outside a comptime loop",
+                        error::COMPTIME_LOOP_CONTINUE,
                         resolving_.ast.location_of(n));
                 } else if (unlabeled_and_local) {
                     if (runtime_control_flow_depth > 0) {
                         ctx_.diags.emplace_back(
-                            "'continue' inside a constexpr loop is only allowed within "
-                            "compile-time control flow (such as `if constexpr`)",
-                            error::CONSTEXPR_LOOP_CONTINUE,
+                            "'continue' inside a comptime loop is only allowed within "
+                            "compile-time control flow (such as `if comptime`)",
+                            error::COMPTIME_LOOP_CONTINUE,
                             resolving_.ast.location_of(n));
                     }
                 }
@@ -10524,7 +10554,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
     if (const auto declared{resolving_.get_identifier_declaration(named)};
         declared && declared->owner && declared->decl) {
         const auto found{declared->owner->ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
-        if (found && found->value && !found->has_modifier(ast::decl_modifiers::VARIABLE)) {
+        if (found && found->value && !found->has_modifier(ast::decl_modifiers::MUT)) {
             owner.emplace(*declared->owner);
             fn_node.emplace(*found->value);
             decl.emplace(*found);
@@ -10784,9 +10814,8 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
                                                       return_kind == type_kind::VOID_));
 
     const auto align_item{decl.attributes->find(ast::attribute_kind::ALIGN)};
-    if (align_item && !initializes_fn_literal &&
-        decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
-        ctx_.diags.emplace_back("Attribute 'align' needs storage; a 'constexpr' declaration has "
+    if (align_item && !initializes_fn_literal && decl.has_modifier(ast::decl_modifiers::COMPTIME)) {
+        ctx_.diags.emplace_back("Attribute 'align' needs storage; a 'const' declaration has "
                                 "none",
                                 error::ILLEGAL_ATTRIBUTE,
                                 resolving_.ast.location_of(align_item->name));
@@ -11599,7 +11628,7 @@ auto type_resolver::instantiate_impls_for(
         if (!ctx_.impls.mark_expanded(concrete, *pimpl)) { continue; }
 
         // Method signatures are remapped (pure substitution); method bodies are re-resolved below
-        // against real bindings so `if constexpr` / dependent types behave as everywhere else.
+        // against real bindings so `if comptime` / dependent types behave as everywhere else.
         const auto remap_one{[&](type* t) -> type* {
             type* r{&remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
             for (usize i{0}; i < tmpl.sentinels.size() && i < type_bounds.size(); ++i) {
@@ -11971,7 +12000,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     ctx_.advance_epoch();
 
     // The sentinel/dummy resolution only has to yield the abstract target + a signature per
-    // method; its diags are noise and its `if constexpr` folds are redone per instantiation.
+    // method; its diags are noise and its `if comptime` folds are redone per instantiation.
     const auto                   snap_ifs{resolving_.if_constexpr_results};
     const auto                   snap_matches{resolving_.match_arm_results};
     const auto                   diags_before{ctx_.diags.size()};
@@ -12346,7 +12375,7 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
         is_item |= std::ranges::contains(iface.assoc_const_names, member_name);
 
         const auto decl{cmod.ast.get_as_opt<ast::decl_stmt>(*node)};
-        if (decl && decl->has_modifier(ast::decl_modifiers::VARIABLE)) { is_item = true; }
+        if (decl && decl->has_modifier(ast::decl_modifiers::MUT)) { is_item = true; }
 
         if (!is_item) {
             ctx_.diags.emplace_back(
@@ -12723,7 +12752,7 @@ auto type_resolver::names_a_value(const symbol& sym, usize table_idx) -> bool {
     if (!node) { return false; }
     const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
     if (!decl) { return false; }
-    if (decl->has_modifier(ast::decl_modifiers::VARIABLE)) { return true; }
+    if (decl->has_modifier(ast::decl_modifiers::MUT)) { return true; }
     if (!decl->value) { return false; }
 
     const auto folded{probe_fold(*decl->value)};
@@ -12882,7 +12911,7 @@ auto type_resolver::check_array_dimension(ast::expr_handle dimension, const type
     -> stdx::option<diagnostic> {
     const auto dim_type{resolving_.get_sema_type_opt(dimension)};
     if (dim_type && !is_integer(dim_type->get_kind()) &&
-        dim_type->get_kind() != type_kind::CONSTEXPR_INT && !is_generic_type(*dim_type)) {
+        dim_type->get_kind() != type_kind::COMPTIME_INT && !is_generic_type(*dim_type)) {
         return diagnostic{fmt::format("Array length must be an integer; found '{}'",
                                       ctx_.type_display_name(*dim_type)),
                           error::TYPE_MISMATCH,
@@ -13122,7 +13151,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                         "instantiates itself with ever-new arguments never terminates",
                         fn_info.name.value_or("<generic function>"),
                         context::max_generic_instantiation_depth),
-            error::CONSTEXPR_RECURSION_LIMIT_EXCEEDED,
+            error::COMPTIME_RECURSION_LIMIT_EXCEEDED,
             fn_mod.ast.location_of(fn_info.node_id));
         return stdx::none;
     }
@@ -13131,7 +13160,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     const auto fn_type{fn_info.fn_type};
     const auto fn_table_idx{fn_type->get_symbol_table_idx()};
 
-    // Computed early so a nested `for`/`while constexpr`'s per-iteration typing keys can be scoped
+    // Computed early so a nested `for`/`while comptime`'s per-iteration typing keys can be scoped
     // to this instantiation before its body is resolved
     auto mangled_name =
         fmt::format("{}__{}",
@@ -13535,7 +13564,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     const auto ret_kind{return_type.get_kind()};
     if (!is_auto_return && !tracker.has_returns() &&
-        (ret_kind == type_kind::CONSTEXPR_INT || ret_kind == type_kind::CONSTEXPR_FLOAT ||
+        (ret_kind == type_kind::COMPTIME_INT || ret_kind == type_kind::COMPTIME_FLOAT ||
          ret_kind == type_kind::TYPE)) {
         ctx_.diags.emplace_back(fmt::format("Function returning '{}' never returns a value",
                                             ctx_.type_display_name(return_type)),
@@ -13563,7 +13592,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                 ctx_.diags.emplace_back(
                     fmt::format(
                         "a `fn(...): type` constructor cannot take a plain value parameter; "
-                        "mark '{}' `constexpr` so it is known at instantiation time",
+                        "mark '{}' `comptime` so it is known at instantiation time",
                         pn),
                     error::TYPE_MISMATCH,
                     fn_mod.ast.location_of(param.name));

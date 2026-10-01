@@ -138,11 +138,11 @@ TEST_CASE("Discarded function type parameters") {
             std::pair{0UZ, 11UZ}});
 
     helpers::test_parser_fail(
-        "var f: fn(_: i32): i32;",
+        "let mut f: fn(_: i32): i32;",
         syntax::diagnostic{
             "Function type parameter names cannot be discarded; a parameter name is required",
             syntax::error::FN_TYPE_PARAMETER_DISCARDED,
-            std::pair{0UZ, 10UZ}});
+            std::pair{0UZ, 14UZ}});
 }
 
 } // namespace ghoti::tests

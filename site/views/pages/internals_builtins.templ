@@ -96,7 +96,7 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@implements" }</h3>
 	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, I: type): bool` }</code></pre>
 	<p>
-		A <code>constexpr</code> is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
+		A compile-time is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
 	</p>
 	<h2>Target Information</h2>
 	<h3>{ "@targetOs" }</h3>
@@ -227,7 +227,7 @@ pub const AtomicRmwOp := enum {
 	<p>Explicit alignment modifier specifier applied to struct fields or types.</p>
 	<h3>{ "@setEvalRecursionLimit" }</h3>
 	<pre><code class="language-ghoti">{ `@setEvalRecursionLimit(limit: usize): void` }</code></pre>
-	<p>Sets the maximum recursion depth limit for compile-time (<code>constexpr</code>) expression evaluation.</p>
+	<p>Sets the maximum recursion depth limit for compile-time expression evaluation.</p>
 	<h3>{ "@export" }</h3>
 	<pre><code class="language-ghoti">{ `@export(function: auto, options: builtin.ExportOptions): void` }</code></pre>
 	<p>Defines <code>function</code>, a function declared with <code>const</code>, under the symbol <code>options.name</code>. <code>options.linkage</code> is <code>.strong</code> (the default) or <code>.weak</code>, which lets another definition of the symbol replace this one at link time, and <code>options.visibility</code> is <code>.default</code>, <code>.hidden</code>, or <code>.protected</code> (ELF only), as for the <code>{ `@[visibility(...)]` }</code> attribute.</p>
@@ -239,10 +239,10 @@ pub const AtomicRmwOp := enum {
 		</code>
 	</pre>
 	<p>Export one function as many times as it needs names; each extra export is an alias of the same code. Every symbol name can be exported once, a generic function can't be exported (export a wrapper around one instantiation), and a declaration written <code>{ `export("...")` }</code> already has its symbol, so it can't also use <code>{ "@export" }</code>. An exported function is kept even when nothing in the program calls it, in any module.</p>
-	<p><code>{ "@export" }</code> also takes a function passed to a <code>constexpr</code> parameter, so one helper can fix the options for a whole library:</p>
+	<p><code>{ "@export" }</code> also takes a function passed to a <code>comptime</code> parameter, so one helper can fix the options for a whole library:</p>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub const symbol := fn(constexpr f: auto, constexpr name: [:0]u8): void {
+			{ `pub const symbol := fn(comptime f: auto, comptime name: [:0]u8): void {
     @export(f, .{ .name = name, .linkage = .weak, .visibility = .hidden });
 };
 symbol(addtf3, "__addtf3");` }

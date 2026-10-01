@@ -71,7 +71,7 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
             return 2;
         };
         pub const classify := fn(x: i32): i32 {
-            var out: i32 = 20;
+            let mut out: i32 = 20;
             match (x) {
                 0 => {
                     @branchHint(.unlikely);
@@ -127,7 +127,7 @@ TEST_CASE("@branchHint must open a branch, arm, or function body") {
         CHECK(helpers::raised(R"(
             const f := fn(c: bool): i32 {
                 if (c) {
-                    const x := 1;
+                    let x := 1;
                     @branchHint(.likely);
                     return x;
                 }

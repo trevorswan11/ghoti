@@ -16,7 +16,7 @@ TEST_CASE("codegen: inline asm lowers to an LLVM InlineAsm call") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const sys_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
-            var ret: i64 = 0i64;
+            let mut ret: i64 = 0i64;
             asm {
                 template: "syscall",
                 outputs: ("={rax}" = ret),

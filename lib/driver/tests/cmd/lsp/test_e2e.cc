@@ -96,7 +96,7 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "comptime_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
@@ -255,7 +255,7 @@ TEST_CASE("ghoti lsp hover names a callable's parameters") {
 const Callback := fn(code: i32): bool;
 const Handler := struct { on_event: Callback, raw: fn(value: i32): void };
 const run := fn(cb: fn(n: i32): i32, h: Handler): i32 {
-    const ok := h.on_event(cb(1));
+    let ok := h.on_event(cb(1));
     h.raw(add(2, 3));
     return if (ok) 1 else 0;
 };
@@ -302,8 +302,8 @@ pub const main := fn(): i32 { return 0; };
     // A function literal, an erased `fn`-typed param, a field typed through an alias, and a
     // field typed by an inline `fn(...)` all keep the names their declarations wrote
     CHECK(hover_at(2, 5, 10) == "fn(lhs: i32, rhs: i32): i32");
-    CHECK(hover_at(3, 4, 27) == "fn(n: i32): i32");
-    CHECK(hover_at(4, 4, 18) == "fn(code: i32): bool");
+    CHECK(hover_at(3, 4, 25) == "fn(n: i32): i32");
+    CHECK(hover_at(4, 4, 16) == "fn(code: i32): bool");
     CHECK(hover_at(5, 5, 6) == "fn(value: i32): void");
 
     lsp::write_message(proc.stdin_stream(),
@@ -606,7 +606,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "comptime_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -1450,11 +1450,11 @@ TEST_CASE("ghoti lsp hover shows the peer type of a mixed-type binding") {
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_peer_hover.gh"};
-    constexpr std::string_view text{R"(var small: i8 = 1;
-var wide: i64 = 2;
+    constexpr std::string_view text{R"(let mut small: i8 = 1;
+let mut wide: i64 = 2;
 pub const main := fn(): i32 {
-    const sum := small + wide;
-    const pick := if (small < wide) small else wide;
+    let sum := small + wide;
+    let pick := if (small < wide) small else wide;
     return 0;
 };
 )"};
@@ -1496,8 +1496,8 @@ pub const main := fn(): i32 {
             .get<std::string>();
     };
 
-    CHECK(hover_at(2, 3, 11).contains("i64"));
-    CHECK(hover_at(3, 4, 11).contains("i64"));
+    CHECK(hover_at(2, 3, 9).contains("i64"));
+    CHECK(hover_at(3, 4, 9).contains("i64"));
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});

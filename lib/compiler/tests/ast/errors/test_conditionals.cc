@@ -48,7 +48,7 @@ TEST_CASE("Malformed arm pattern") {
         syntax::diagnostic{"Expected '(', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 
     helpers::test_parser_fail(
-        "match (a) { for (0..3) |i| { var a: i32 = undefined; } => |b| c };",
+        "match (a) { for (0..3) |i| { let mut a: i32 = undefined; } => |b| c };",
         syntax::diagnostic{"Unmatchable expression 'for loop' used as a match arm pattern",
                            syntax::error::ILLEGAL_MATCH_PATTERN,
                            std::pair{0UZ, 12UZ}});

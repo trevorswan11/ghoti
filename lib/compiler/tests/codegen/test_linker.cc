@@ -109,7 +109,7 @@ TEST_CASE("macOS targets link against libSystem from any host") {
     constexpr auto input = R"(
         extern("System", "write") const sys_write: fn(fd: i32, buf: ^u8, count: usize): isize;
         pub const main := fn(): i32 {
-            const msg := "hi";
+            let msg := "hi";
             return @as(i32, sys_write(1, msg.ptr, msg.len));
         };
     )";

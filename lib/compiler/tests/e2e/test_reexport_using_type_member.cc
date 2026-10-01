@@ -27,8 +27,8 @@ constexpr std::string_view PKG_MOD{R"(
 
 constexpr std::string_view AGG_MOD{R"(
     pub const Cfg := struct {
-        pub constexpr LIMIT: i32 = 42;
-        pub constexpr twice := fn(x: i32): i32 { return x * 2; };
+        pub const LIMIT: i32 = 42;
+        pub const twice := fn(x: i32): i32 { return x * 2; };
     };
 )"};
 
@@ -85,10 +85,10 @@ TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` captur
         R"(
             import "pkg.gh" as pkg;
             const x := pkg.en;
-            constexpr Result := fn(T: type, F: type): type { return union { ok: T, err: F }; };
+            const Result := fn(T: type, F: type): type { return union { ok: T, err: F }; };
             const g := fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main := fn(): i32 {
-                const miss := match (g()) {
+                let miss := match (g()) {
                     .ok  => x.E.A,
                     .err => |e| e,
                 };
@@ -122,7 +122,7 @@ TEST_CASE(
             import "enums.gh" as x;
             const R := union { ok: x.Alias, err: i32 };
             pub const main := fn(): i32 {
-                const r: R = .{ .ok = x.Alias.B };
+                let r: R = .{ .ok = x.Alias.B };
                 return match (r) {
                     .ok  => |v| if (v == x.Alias.B) 7 else 3,
                     .err => |e| e,
@@ -138,7 +138,7 @@ TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scr
         R"(
             import "enums.gh" as x;
             pub const main := fn(): i32 {
-                const e: x.Alias = .C;
+                let e: x.Alias = .C;
                 return match (e) {
                     .A => 1,
                     .B => 2,
@@ -174,7 +174,7 @@ TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const S := struct {
-                pub constexpr CONST: i32 = 7;
+                pub const CONST: i32 = 7;
                 pub const get_val := fn(): i32 {
                     const Self := @This();
                     return Self.CONST;
@@ -197,7 +197,7 @@ TEST_CASE("E2E: a cross-module using alias of a union constructs and matches pay
             import "un.gh" as umod;
             const MyU := umod.AliasU;
             pub const main := fn(): i32 {
-                const u: MyU = .{ .a = 7 };
+                let u: MyU = .{ .a = 7 };
                 return match (u) {
                     .a => |val| val,
                     .b => 0,

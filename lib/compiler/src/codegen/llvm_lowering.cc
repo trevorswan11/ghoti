@@ -101,12 +101,12 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 
 // A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
 [[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
-    return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
+    return sema::is_float(k) || k == sema::type_kind::COMPTIME_FLOAT;
 }
 
 // Neither `constexpr_int` nor `constexpr_float` has a concrete width/kind of its own
 [[nodiscard]] auto is_untyped_constexpr(sema::type_kind k) noexcept -> bool {
-    return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
+    return k == sema::type_kind::COMPTIME_INT || k == sema::type_kind::COMPTIME_FLOAT;
 }
 
 [[nodiscard]] auto is_constexpr_only_signature(const sema::types::function& fn_data) noexcept
@@ -146,10 +146,10 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
     if (!inst.operands.empty() && inst.operands[0].type &&
-        inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
+        inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
         // `constexpr_int` alone carries no real signedness
         for (const auto& op : inst.operands | std::views::drop(1)) {
-            if (op.type && op.type->get_kind() != sema::type_kind::CONSTEXPR_INT) {
+            if (op.type && op.type->get_kind() != sema::type_kind::COMPTIME_INT) {
                 return sema::is_signed_integer(*op.type);
             }
         }
@@ -1681,7 +1681,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            (i < std::numeric_limits<i32>::min() ||
                                             i > std::numeric_limits<i32>::max())
                                           ? types_.get_int64_ty()
@@ -1691,7 +1691,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            u > std::numeric_limits<u32>::max()
                                           ? types_.get_int64_ty()
                                           : types_.translate(*val.type))
@@ -1701,7 +1701,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](i128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type
-                         ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                         ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                     (w < static_cast<i128>(std::numeric_limits<i32>::min()) ||
                                      w > static_cast<i128>(std::numeric_limits<i32>::max()))
                                 ? (w < static_cast<i128>(std::numeric_limits<i64>::min()) ||
@@ -1714,7 +1714,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            w > std::numeric_limits<u32>::max()
                                           ? (w > std::numeric_limits<u64>::max()
                                                  ? llvm::Type::getInt128Ty(context_)
@@ -2279,8 +2279,8 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     auto* src_ty{val->getType()};
     switch (inst.kind) {
     case gir::instruction_kind::INT_CAST: {
-        const bool is_sgn{inst.operands[0].type && inst.operands[0].type->get_kind() ==
-                                                       sema::type_kind::CONSTEXPR_INT
+        const bool is_sgn{inst.operands[0].type &&
+                                  inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT
                               ? !constexpr_operand_is_nonnegative(inst.operands[0])
                               : is_signed_type(inst)};
         return builder_.CreateIntCast(val, target_ty, is_sgn);

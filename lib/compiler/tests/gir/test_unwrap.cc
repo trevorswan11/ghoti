@@ -53,7 +53,7 @@ TEST_CASE("GIR `?` branches on the discriminant and emits a divergent return") {
             return if (x > 0) R{ .ok = x }; else R{ .err = 1 };
         };
         const outer := fn(x: i32): R {
-            const v := inner(x)?;
+            let v := inner(x)?;
             return R{ .ok = v + 1 };
         };
     )")};

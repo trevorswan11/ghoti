@@ -89,7 +89,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Constexpr multi-type if branches succeed") {
         helpers::type_check_and_verify(R"(
             const f := fn(): auto {
-                if constexpr (true) {
+                if comptime (true) {
                     return 42;
                 } else {
                     return true;
@@ -112,7 +112,7 @@ TEST_CASE("Return statement type checking") {
     SECTION("Unreachable assigned to typed variable succeeds") {
         helpers::type_check_and_verify(R"(
             const f := fn(): i32 {
-                const x: i32 = unreachable;
+                let x: i32 = unreachable;
                 return x;
             };
         )");

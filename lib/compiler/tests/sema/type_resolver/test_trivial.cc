@@ -21,24 +21,24 @@ TEST_CASE("Builtin type resolution") {
         CHECK(sema::type_kind_display_name(type) == expected_name);
     };
 
-    check_bi_type("1", "constexpr_int"); // unsuffixed: stays constexpr in an un-annotated const
+    check_bi_type("1", "comptime_int"); // unsuffixed: stays constexpr in an un-annotated const
     check_bi_type("1i64", "i64");
     check_bi_type("1z", "isize");
     check_bi_type("1u32", "u32");
     check_bi_type("1u64", "u64");
     check_bi_type("1UZ", "usize");
-    check_bi_type("'1'", "constexpr_int"); // a character is an untyped code point
+    check_bi_type("'1'", "comptime_int"); // a character is an untyped code point
     check_bi_type("true", "bool");
     check_bi_type("{}", "void");
     check_bi_type("undefined", "undefined");
     check_bi_type("unreachable", "noreturn");
     check_bi_type("1.0f32", "f32");
-    check_bi_type("1.0", "constexpr_float");
+    check_bi_type("1.0", "comptime_float");
 }
 
 TEST_CASE("Nested type resolution") {
-    auto [ctx,
-          idx]{helpers::resolve_and_check("var a: ^^i32 = undefined; var b: ^^^i32 = undefined;")};
+    auto [ctx, idx]{
+        helpers::resolve_and_check("let mut a: ^^i32 = undefined; let mut b: ^^^i32 = undefined;")};
 
     const auto& i32_ptr = ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true));
     const auto& i32_ptr_ptr{ctx->get_type(sema::type_kind::POINTER, i32_ptr)};
@@ -51,7 +51,7 @@ TEST_CASE("Nested type resolution") {
 
 TEST_CASE("Type alias resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(
-        "const a := ^bool; var b: a = undefined; var c: &a = undefined;")};
+        "const a := ^bool; let mut b: a = undefined; let mut c: &a = undefined;")};
     const auto& bool_ref =
         ctx->get_type(sema::type_kind::POINTER, ctx->get_type(sema::type_kind::BOOL));
 
@@ -69,21 +69,22 @@ TEST_CASE("`using` can name an ordinary binding") {
 
 TEST_CASE("A `const` alias names a value or a type by what its right-hand side denotes") {
     helpers::resolve_and_check("const BASE := 42; const K := BASE; const x: i32 = K;");
-    helpers::resolve_and_check("const S := struct { x: i32 }; const T := S; var t: T = undefined;");
+    helpers::resolve_and_check(
+        "const S := struct { x: i32 }; const T := S; let mut t: T = undefined;");
     helpers::resolve_and_check("const Byte := u8; const b: Byte = 7;");
 }
 
 TEST_CASE("Unary expression resolution") {
-    helpers::resolve_and_check("var a: ^i32 = undefined; _ = *a;");
+    helpers::resolve_and_check("let mut a: ^i32 = undefined; _ = *a;");
     helpers::resolve_and_check("_ = !1;");
     helpers::resolve_and_check("_ = ~1;");
     helpers::resolve_and_check("_ = -1;");
 
     helpers::test_resolver_fail(
-        "var a: i32 = undefined; _ = *a;",
+        "let mut a: i32 = undefined; _ = *a;",
         sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 28UZ}});
+                         std::pair{0UZ, 32UZ}});
 }
 
 TEST_CASE("Undeclared identifier usage") {
@@ -99,10 +100,11 @@ TEST_CASE("Undeclared identifier usage") {
     helpers::test_resolver_fail("const a := ^b;", expected_diag(12));
 }
 
-TEST_CASE("Value-less extern") { helpers::resolve_and_check("extern var errno: i32;"); }
+TEST_CASE("Value-less extern") { helpers::resolve_and_check("extern let mut errno: i32;"); }
 
 TEST_CASE("Defer & discard statement resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("fn(): void { defer { var a: i32 = undefined; } }")};
+    auto [ctx,
+          idx]{helpers::resolve_and_check("fn(): void { defer { let mut a: i32 = undefined; } }")};
     const auto [sym, _, type]{ctx->get_type_sym_info<syms::node_t>("a", 2)};
     CHECK(type == ctx->get_int_type(32, true));
     helpers::resolve_and_check("_ = 1 + 1;");
@@ -143,7 +145,7 @@ impl builtin.Rewrappable for R {
 }
 const f := fn(): R {
     defer {
-        const r := R{ .ok = 1 };
+        let r := R{ .ok = 1 };
         _ = r?;
     }
     return R{ .ok = 0 };
@@ -181,20 +183,20 @@ TEST_CASE("Call resolution edge cases") {
 }
 
 TEST_CASE("Loop resolution") {
-    helpers::resolve_and_check("const a := loop { const foo := 42; };");
+    helpers::resolve_and_check("const a := loop { let foo := 42; };");
     helpers::test_resolver_fail(
-        "for (23) |_| { var a: i32 = undefined; }",
-        sema::diagnostic{"Iterables may only be arrays or slices; found 'constexpr_int'",
+        "for (23) |_| { let mut a: i32 = undefined; }",
+        sema::diagnostic{"Iterables may only be arrays or slices; found 'comptime_int'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 5UZ}});
 }
 
 TEST_CASE("Duplicate test name") {
     helpers::test_resolver_fail(
-        R"(test "TEST ME" { var a: i32 = undefined; } test "TEST ME" { var a: i32 = undefined; })",
+        R"(test "TEST ME" { let mut a: i32 = undefined; } test "TEST ME" { let mut a: i32 = undefined; })",
         sema::diagnostic{"Duplicate test block named 'TEST ME'; previous declaration here: 1:1",
                          sema::error::DUPLICATE_TEST_NAME,
-                         std::pair{0UZ, 43UZ}});
+                         std::pair{0UZ, 47UZ}});
 }
 
 TEST_CASE("Illegal initializer targets") {
@@ -226,26 +228,26 @@ TEST_CASE("Dereferenced assignment using non-pointer fails") {
     helpers::test_resolver_fail(
         R"(
         pub const test_fn := fn(x: i32): void {
-            const bad := *x;
+            let bad := *x;
         };
     )",
         sema::diagnostic{"Cannot dereference non-pointer expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{2UZ, 25UZ}});
+                         std::pair{2UZ, 23UZ}});
 }
 
 TEST_CASE("Mutable borrow of rvalue is rejected") {
     helpers::test_resolver_fail(
-        "pub const test_fn := fn(): void { const p := &mut 42; };",
+        "pub const test_fn := fn(): void { let p := &mut 42; };",
         sema::diagnostic{"Cannot take a mutable reference to a temporary value",
                          sema::error::ILLEGAL_RVALUE_CAPTURE,
-                         std::pair{0UZ, 45UZ}});
+                         std::pair{0UZ, 43UZ}});
 
     helpers::test_resolver_fail(
-        "pub const test_fn := fn(): void { const p := ^mut 42; };",
+        "pub const test_fn := fn(): void { let p := ^mut 42; };",
         sema::diagnostic{"Cannot take a mutable pointer to a temporary value",
                          sema::error::ILLEGAL_RVALUE_CAPTURE,
-                         std::pair{0UZ, 45UZ}});
+                         std::pair{0UZ, 43UZ}});
 }
 
 TEST_CASE("Method requiring mutable self on rvalue is rejected") {

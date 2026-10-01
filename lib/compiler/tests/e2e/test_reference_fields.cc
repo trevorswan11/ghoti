@@ -11,8 +11,8 @@ TEST_CASE("A struct can store a &i32 field and read through it") {
     CHECK(helpers::compile_and_run(R"(
         const RefHolder := struct { r: &i32 };
         pub const main := fn(): i32 {
-            var x: i32 = 41;
-            const h := RefHolder{ .r = &x };
+            let mut x: i32 = 41;
+            let h := RefHolder{ .r = &x };
             return h.r + 1;
         };
     )") == 42);
@@ -22,8 +22,8 @@ TEST_CASE("A struct &mut i32 field writes through to the referent") {
     CHECK(helpers::compile_and_run(R"(
         const MutHolder := struct { r: &mut i32 };
         pub const main := fn(): i32 {
-            var x: i32 = 5;
-            const h := MutHolder{ .r = &mut x };
+            let mut x: i32 = 5;
+            let h := MutHolder{ .r = &mut x };
             *h.r = 99;
             return x;
         };
@@ -34,8 +34,8 @@ TEST_CASE("A reference struct field aliases the live value after it changes") {
     CHECK(helpers::compile_and_run(R"(
         const RefHolder := struct { r: &mut i32 };
         pub const main := fn(): i32 {
-            var x: i32 = 1;
-            const h := RefHolder{ .r = &mut x };
+            let mut x: i32 = 1;
+            let h := RefHolder{ .r = &mut x };
             x = 41;
             return h.r + 1;
         };
@@ -47,8 +47,8 @@ TEST_CASE("A nested struct reference field reads through two hops") {
         const Inner := struct { r: &i32 };
         const Outer := struct { inner: Inner };
         pub const main := fn(): i32 {
-            var x: i32 = 41;
-            const o := Outer{ .inner = Inner{ .r = &x } };
+            let mut x: i32 = 41;
+            let o := Outer{ .inner = Inner{ .r = &x } };
             return o.inner.r + 1;
         };
     )") == 42);
@@ -61,8 +61,8 @@ TEST_CASE("A struct with a &mut field is passed by value and mutates its referen
             *s.out = *s.out + 1;
         };
         pub const main := fn(): i32 {
-            var x: i32 = 41;
-            const s := Sink{ .out = &mut x };
+            let mut x: i32 = 41;
+            let s := Sink{ .out = &mut x };
             bump(s);
             return x;
         };
@@ -76,8 +76,8 @@ TEST_CASE("A function returns a struct carrying a reference into a caller-owned 
             return Ref{ .r = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = 41;
-            const w := wrap(&x);
+            let mut x: i32 = 41;
+            let w := wrap(&x);
             return w.r + 1;
         };
     )") == 42);

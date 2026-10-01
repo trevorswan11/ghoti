@@ -15,9 +15,9 @@ using keyword_t = typed_identifier;
 namespace keywords {
 
 constexpr keyword_t FN{"fn", token_type_t::FUNCTION};
-constexpr keyword_t VAR{"var", token_type_t::VAR};
+constexpr keyword_t LET{"let", token_type_t::LET};
 constexpr keyword_t CONSTANT{"const", token_type_t::CONSTANT};
-constexpr keyword_t CONSTEXPR{"constexpr", token_type_t::CONSTEXPR};
+constexpr keyword_t COMPTIME{"comptime", token_type_t::COMPTIME};
 constexpr keyword_t STRUCT{"struct", token_type_t::STRUCT};
 constexpr keyword_t ENUM{"enum", token_type_t::ENUM};
 constexpr keyword_t UNION{"union", token_type_t::UNION};
@@ -43,8 +43,8 @@ constexpr keyword_t F32{"f32", token_type_t::F32_TYPE};
 constexpr keyword_t F64{"f64", token_type_t::F64_TYPE};
 constexpr keyword_t F80{"f80", token_type_t::F80_TYPE};
 constexpr keyword_t F128{"f128", token_type_t::F128_TYPE};
-constexpr keyword_t CONSTEXPR_INT{"constexpr_int", token_type_t::CONSTEXPR_INT_TYPE};
-constexpr keyword_t CONSTEXPR_FLOAT{"constexpr_float", token_type_t::CONSTEXPR_FLOAT_TYPE};
+constexpr keyword_t COMPTIME_INT{"comptime_int", token_type_t::COMPTIME_INT_TYPE};
+constexpr keyword_t COMPTIME_FLOAT{"comptime_float", token_type_t::COMPTIME_FLOAT_TYPE};
 constexpr keyword_t BOOL{"bool", token_type_t::BOOL_TYPE};
 constexpr keyword_t VOID{"void", token_type_t::VOID_TYPE};
 constexpr keyword_t TYPE{"type", token_type_t::TYPE_TYPE};
@@ -86,9 +86,9 @@ constexpr keyword_t UNREACHABLE{"unreachable", token_type_t::UNREACHABLE};
 // Single source of truth for every reserved word
 constexpr std::array ALL_KEYWORDS{
     keywords::FN,
-    keywords::VAR,
+    keywords::LET,
     keywords::CONSTANT,
-    keywords::CONSTEXPR,
+    keywords::COMPTIME,
     keywords::STRUCT,
     keywords::ENUM,
     keywords::UNION,
@@ -114,8 +114,8 @@ constexpr std::array ALL_KEYWORDS{
     keywords::F64,
     keywords::F80,
     keywords::F128,
-    keywords::CONSTEXPR_INT,
-    keywords::CONSTEXPR_FLOAT,
+    keywords::COMPTIME_INT,
+    keywords::COMPTIME_FLOAT,
     keywords::BOOL,
     keywords::VOID,
     keywords::TYPE,
@@ -152,8 +152,8 @@ constexpr std::array ALL_PRIMITIVES{
     keywords::F64.type,
     keywords::F80.type,
     keywords::F128.type,
-    keywords::CONSTEXPR_INT.type,
-    keywords::CONSTEXPR_FLOAT.type,
+    keywords::COMPTIME_INT.type,
+    keywords::COMPTIME_FLOAT.type,
     keywords::BOOL.type,
     keywords::VOID.type,
 };

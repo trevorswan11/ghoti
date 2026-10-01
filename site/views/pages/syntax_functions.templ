@@ -69,7 +69,7 @@ const baz := fn(c: &mut i32): u64 {
     // ...
 };
 
-var a := 2;
+let mut a := 2;
 _ = foo(&a);        // Allowed, passed by const reference
 _ = bar(a);         // Allowed, passed by value
 _ = baz(&mut a);    // Allowed, passed by mutable reference
@@ -120,7 +120,7 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var val := 42;
+			{ `let mut val := 42;
 const closure := move fn(): i32 { return val; };` }
 		</code>
 	</pre>
@@ -175,21 +175,22 @@ const closure := move fn(): i32 { return val; };` }
 		<li>You can also use this to indicate that a function takes a function as an argument</li>
 	</ul>
 	<pre><code class="language-ghoti">{ `const f := fn(g: fn(): i32): i32 { ... };` }</code></pre>
-	<h2>Constexpr functions</h2>
+	<h2>Compile-time calls</h2>
 	<ul>
 		<li>
-			Functions declared and assigned to <code>constexpr</code> declarations signal to the compiler that the function may be called at compile time
+			Any function declared with <code>const</code> may be called at compile time, from a <code>const</code> initializer, a <code>comptime</code> block, or a <code>comptime</code> header
 			<ul>
-				<li>'May' meaning that it will be called at compile time at a <code>constexpr</code> context</li>
+				<li>The same function stays callable at runtime</li>
+				<li>A parameter its body reads at compile time is inferred to be <code>comptime</code>, so each call must pass a compile-time value for it</li>
 			</ul>
 		</li>
 		<li>
-			There are restrictions imposed on <code>constexpr</code> functions that do not apply to normal ones
+			A call evaluated at compile time has restrictions that runtime calls do not
 			<ul>
 				<li>IO must not be performed (reading from/writing to disk, via threading, printing to stdout, etc)</li>
 				<li>Heap allocations may not be made</li>
 			</ul>
 		</li>
-		<li>A local function can be declared <code>constexpr</code> only if it captures no values</li>
+		<li>A local function can be declared <code>const</code> only if it captures no runtime values; a capturing closure is declared with <code>let</code></li>
 	</ul>
 }

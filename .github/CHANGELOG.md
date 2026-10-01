@@ -589,10 +589,18 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
 - Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)
 - Fixed: `if (c) value else return e` stored a `void` into the result instead of skipping the arm
+- **Breaking:** declarations are `const` (known at compile time), `let` (an immutable runtime value), or `let mut` (a mutable one), replacing `constexpr`, `const`, and `var`
+    - A compile-time mutable local is `comptime let mut` (was `constexpr var`); `comptime let` is an error, since that is `const`
+    - Types, `undefined` aliases, and values holding `type`s are declared with `const`; a closure that captures runtime state is declared with `let`
+    - `extern`, `export`, `weak`, and `threadlocal` data needs `let` or `let mut`; a function with linkage is declared with `const` (`pub weak const panic_handler := fn ...`, `extern const puts: fn(...)`)
+    - A `let` still folds where a compile-time value is needed (`let n := 4; let a: [n]u8 = ...`); `let mut` never does
+- **Breaking:** every other `constexpr` is spelled `comptime`: parameters (`fn(comptime n: usize)`), `impl(comptime N: usize)`, `if`/`match`/`for`/`while`/`loop comptime`, `do ... while comptime`, and `comptime { ... }` / `comptime name: { ... }` blocks
+- **Breaking:** `constexpr_int` and `constexpr_float` are renamed `comptime_int` and `comptime_float` (and the matching `builtin.TypeInfo` variants); diagnostic codes named `CONSTEXPR_*` are renamed `COMPTIME_*`
+- Every function declared with `const` infers its compile-time parameters: a parameter its body reads at compile time (`if comptime (a < b)`, `const s := @sizeOf(@TypeOf(x))`) is compile-time at each call, as only `constexpr`-declared functions did before
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
-    - Both can be evaluated at compile time: `constexpr { @assert(std.math.max(1, 2) == 2); }`
+    - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling

@@ -151,13 +151,13 @@ auto is_i32(const type& t) noexcept -> bool {
 
 auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
     switch (t.get_kind()) {
-    case type_kind::F16:             return float_format::HALF;
-    case type_kind::F32:             return float_format::SINGLE;
-    case type_kind::F64:             return float_format::DOUBLE;
-    case type_kind::F80:             return float_format::X87;
+    case type_kind::F16:            return float_format::HALF;
+    case type_kind::F32:            return float_format::SINGLE;
+    case type_kind::F64:            return float_format::DOUBLE;
+    case type_kind::F80:            return float_format::X87;
     case type_kind::F128:
-    case type_kind::CONSTEXPR_FLOAT: return float_format::QUAD;
-    default:                         return stdx::none;
+    case type_kind::COMPTIME_FLOAT: return float_format::QUAD;
+    default:                        return stdx::none;
     }
 }
 
@@ -321,13 +321,13 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     const auto to_kind{to.get_kind()};
 
     // An unsuffixed integer literal coerces to any concrete integer or float
-    if (from_kind == type_kind::CONSTEXPR_INT) { return is_numeric(to_kind); }
-    if (from_kind == type_kind::CONSTEXPR_FLOAT) {
-        return is_float(to_kind) || to_kind == type_kind::CONSTEXPR_FLOAT;
+    if (from_kind == type_kind::COMPTIME_INT) { return is_numeric(to_kind); }
+    if (from_kind == type_kind::COMPTIME_FLOAT) {
+        return is_float(to_kind) || to_kind == type_kind::COMPTIME_FLOAT;
     }
     // A concrete numeric also flows into a `constexpr_*` slot
-    if (to_kind == type_kind::CONSTEXPR_INT) { return is_integer(from_kind); }
-    if (to_kind == type_kind::CONSTEXPR_FLOAT) {
+    if (to_kind == type_kind::COMPTIME_INT) { return is_integer(from_kind); }
+    if (to_kind == type_kind::COMPTIME_FLOAT) {
         return is_float(from_kind) || is_integer(from_kind);
     }
 

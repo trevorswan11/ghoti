@@ -9,8 +9,8 @@ TEST_CASE("an in-range integer casts to an exhaustive enum and passes the guard"
         const Color := enum { red, green, blue };
 
         pub const main := fn(): i32 {
-            var n: i32 = 2;
-            const c := @fromBackingInt(Color, n);
+            let mut n: i32 = 2;
+            let c := @fromBackingInt(Color, n);
             return @backingInt(c);
         };
     )") == 2);
@@ -21,8 +21,8 @@ TEST_CASE("a non-exhaustive enum accepts any underlying value without a guard") 
         const Flags := enum { none, one, two, _ };
 
         pub const main := fn(): i32 {
-            var n: i32 = 40;
-            const f := @fromBackingInt(Flags, n);
+            let mut n: i32 = 40;
+            let f := @fromBackingInt(Flags, n);
             return @backingInt(f) + 2;
         };
     )") == 42);
@@ -33,8 +33,8 @@ TEST_CASE("explicit discriminants define the valid set for the guard") {
         const Code := enum { ok, retry, fatal };
 
         pub const main := fn(): i32 {
-            var n: i32 = 1;
-            const c := @fromBackingInt(Code, n);
+            let mut n: i32 = 1;
+            let c := @fromBackingInt(Code, n);
             return @backingInt(c);
         };
     )") == 1);

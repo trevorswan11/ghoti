@@ -59,7 +59,7 @@ TEST_CASE("a binary_expr's span starts at its lhs, not its operator") {
 TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
     ghoti::arena arena;
     auto         ast{helpers::parse("const f := fn(): void {\n"
-                                    "    var x := 1;\n"
+                                    "    let mut x := 1;\n"
                                     "    x = 2;\n"
                                     "};\n",
                             arena)};

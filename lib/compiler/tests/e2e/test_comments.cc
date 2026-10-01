@@ -24,7 +24,7 @@ TEST_CASE("Comments in every plausible statement position are all skipped transp
         // leading comment
         pub const main := fn(): i32 { // trailing on brace
             // comment before decl
-            var sum: i32 = 0; // trailing
+            let mut sum: i32 = 0; // trailing
             // comment between statements
             if (sum == 0) { // comment in if header context
                 sum = sum + 1;
@@ -52,7 +52,7 @@ TEST_CASE("@returnAddress execution and caller return address capture") {
             };
 
             pub const main := fn(): i32 {
-                const addr := get_ret_addr();
+                let addr := get_ret_addr();
                 if (addr != 0) {
                     return 42;
                 } else {
@@ -77,8 +77,8 @@ TEST_CASE("@returnAddress execution and caller return address capture") {
             };
 
             pub const main := fn(): i32 {
-                const a := caller_a();
-                const b := caller_b();
+                let a := caller_a();
+                let b := caller_b();
                 if (a != 0 and b != 0 and a != b) {
                     return 42;
                 } else {

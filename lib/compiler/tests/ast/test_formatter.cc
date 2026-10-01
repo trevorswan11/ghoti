@@ -14,11 +14,11 @@ using helpers::round_trips;
 TEST_CASE("formatter round-trips simple declarations") {
     CHECK(format_source(R"(const version := "0.0.1";)") == "const version := \"0.0.1\";\n");
     CHECK(format_source("pub  const   x:i32=42;") == "pub const x: i32 = 42;\n");
-    CHECK(format_source("constexpr SIZE:=2uz;") == "constexpr SIZE := 2uz;\n");
-    CHECK(format_source("var a := 3u32;") == "var a := 3u32;\n");
-    CHECK(format_source("var a := 1i64;") == "var a := 1i64;\n");
-    CHECK(format_source("var a := 2.3;") == "var a := 2.3;\n");
-    CHECK(format_source("var a := 'a';") == "var a := 'a';\n");
+    CHECK(format_source("const SIZE:=2uz;") == "const SIZE := 2uz;\n");
+    CHECK(format_source("let mut a := 3u32;") == "let mut a := 3u32;\n");
+    CHECK(format_source("let mut a := 1i64;") == "let mut a := 1i64;\n");
+    CHECK(format_source("let mut a := 2.3;") == "let mut a := 2.3;\n");
+    CHECK(format_source("let mut a := 'a';") == "let mut a := 'a';\n");
 }
 
 TEST_CASE("formatter round-trips type aliases spelled only as types") {
@@ -36,12 +36,12 @@ TEST_CASE("formatter round-trips type aliases spelled only as types") {
 }
 
 TEST_CASE("formatter preserves numeric literal base, separators, and suffix verbatim") {
-    CHECK(format_source("var a := 0x2Fuz;") == "var a := 0x2Fuz;\n");
-    CHECK(format_source("var a := 0b00_11_00_11;") == "var a := 0b00_11_00_11;\n");
-    CHECK(format_source("var a := 1_000_000;") == "var a := 1_000_000;\n");
-    CHECK(format_source("var a := 0o17u64;") == "var a := 0o17u64;\n");
-    CHECK(format_source("var a := 2.5e10;") == "var a := 2.5e10;\n");
-    CHECK(format_source(R"(var a := '\n';)") == "var a := '\\n';\n");
+    CHECK(format_source("let mut a := 0x2Fuz;") == "let mut a := 0x2Fuz;\n");
+    CHECK(format_source("let mut a := 0b00_11_00_11;") == "let mut a := 0b00_11_00_11;\n");
+    CHECK(format_source("let mut a := 1_000_000;") == "let mut a := 1_000_000;\n");
+    CHECK(format_source("let mut a := 0o17u64;") == "let mut a := 0o17u64;\n");
+    CHECK(format_source("let mut a := 2.5e10;") == "let mut a := 2.5e10;\n");
+    CHECK(format_source(R"(let mut a := '\n';)") == "let mut a := '\\n';\n");
 }
 
 TEST_CASE("formatter preserves grouping parens the author wrote") {
@@ -96,21 +96,24 @@ TEST_CASE("formatter round-trips leaf statements") {
 }
 
 TEST_CASE("formatter round-trips types") {
-    CHECK(format_source("var a: []i32 = undefined;") == "var a: []i32 = undefined;\n");
-    CHECK(format_source("var a: std.ArrayList(u8) = undefined;") ==
-          "var a: std.ArrayList(u8) = undefined;\n");
-    CHECK(format_source("var a: List(i32) = undefined;") == "var a: List(i32) = undefined;\n");
-    CHECK(format_source("var v: mut volatile i32 = 42;") == "var v: mut volatile i32 = 42;\n");
-    CHECK(format_source("var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
-          "var f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
-    CHECK(format_source("var a: [N:0]u8 = undefined;") == "var a: [N:0]u8 = undefined;\n");
-    CHECK(format_source("var w: &dyn Writer = undefined;") == "var w: &dyn Writer = undefined;\n");
-    CHECK(format_source("var w: ^mut dyn io.Writer = undefined;") ==
-          "var w: ^mut dyn io.Writer = undefined;\n");
-    CHECK(format_source("var it: &dyn Iterator(Item = u8) = undefined;") ==
-          "var it: &dyn Iterator(Item = u8) = undefined;\n");
-    CHECK(format_source("var m: &dyn Map(Key = []u8, Value = i32) = undefined;") ==
-          "var m: &dyn Map(Key = []u8, Value = i32) = undefined;\n");
+    CHECK(format_source("let mut a: []i32 = undefined;") == "let mut a: []i32 = undefined;\n");
+    CHECK(format_source("let mut a: std.ArrayList(u8) = undefined;") ==
+          "let mut a: std.ArrayList(u8) = undefined;\n");
+    CHECK(format_source("let mut a: List(i32) = undefined;") ==
+          "let mut a: List(i32) = undefined;\n");
+    CHECK(format_source("let mut v: mut volatile i32 = 42;") ==
+          "let mut v: mut volatile i32 = 42;\n");
+    CHECK(format_source("let mut f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
+          "let mut f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
+    CHECK(format_source("let mut a: [N:0]u8 = undefined;") == "let mut a: [N:0]u8 = undefined;\n");
+    CHECK(format_source("let mut w: &dyn Writer = undefined;") ==
+          "let mut w: &dyn Writer = undefined;\n");
+    CHECK(format_source("let mut w: ^mut dyn io.Writer = undefined;") ==
+          "let mut w: ^mut dyn io.Writer = undefined;\n");
+    CHECK(format_source("let mut it: &dyn Iterator(Item = u8) = undefined;") ==
+          "let mut it: &dyn Iterator(Item = u8) = undefined;\n");
+    CHECK(format_source("let mut m: &dyn Map(Key = []u8, Value = i32) = undefined;") ==
+          "let mut m: &dyn Map(Key = []u8, Value = i32) = undefined;\n");
 }
 
 TEST_CASE("formatter lays out a function body with K&R braces") {
@@ -123,8 +126,8 @@ TEST_CASE("formatter lays out a function body with K&R braces") {
 }
 
 TEST_CASE("formatter round-trips a constexpr parameter modifier") {
-    CHECK(format_source("const f := fn(constexpr n: i32, x: i32): i32 { return x; };") ==
-          "const f := fn(constexpr n: i32, x: i32): i32 {\n    return x;\n};\n");
+    CHECK(format_source("const f := fn(comptime n: i32, x: i32): i32 { return x; };") ==
+          "const f := fn(comptime n: i32, x: i32): i32 {\n    return x;\n};\n");
 }
 
 TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies") {
@@ -228,8 +231,8 @@ TEST_CASE("formatter lays out if / match") {
 };
 )");
 
-    CHECK(format_source("const r := match constexpr (T) { i32 => 1, _ => 0 };") ==
-          "const r := match constexpr (T) { i32 => 1, _ => 0 };\n");
+    CHECK(format_source("const r := match comptime (T) { i32 => 1, _ => 0 };") ==
+          "const r := match comptime (T) { i32 => 1, _ => 0 };\n");
 
     CHECK(format_source("match (u) { .a => |&mut v| { v = 1; }, _ => {}, };") == R"(match (u) {
     .a => |&mut v| {
@@ -315,7 +318,7 @@ TEST_CASE("formatter breaks a wide value if/else-if chain one arm per line") {
 
 TEST_CASE("formatter keeps a trailing comment on an interior if-chain arm") {
     constexpr std::string_view source{R"(const f := fn(): i32 {
-    const d := if (aaaaaaaaaaaaaaaaaaaa) 1
+    let d := if (aaaaaaaaaaaaaaaaaaaa) 1
         else if (bbbbbbbbbbbbbbbbbbbb) 2 // pick two
         else 3;
     return d;
@@ -328,10 +331,10 @@ TEST_CASE("formatter preserves comments and blank lines inside a local @cfg bloc
     constexpr std::string_view source{R"(const f := fn(): i32 {
     @cfg (os == .windows) {
         // leading comment on the first statement
-        const a := 1; // trailing on a
+        let a := 1; // trailing on a
 
         // a blank line and a comment separate these
-        const b := 2;
+        let b := 2;
         return a + b;
     } else {
         return 0;
@@ -465,12 +468,13 @@ const b := 2;
 
 TEST_CASE("formatter round trip: declarations and literals") {
     round_trips(R"(pub const version := "0.0.1";)");
-    round_trips("constexpr SIZE := 2uz;");
-    round_trips("constexpr var n := 2uz;");
-    round_trips("var a: i32 = undefined;");
-    round_trips("var v: mut volatile i32 = 42;");
+    round_trips("const SIZE := 2uz;");
+    round_trips("comptime let mut n := 2uz;");
+    round_trips("let mut a: i32 = undefined;");
+    round_trips("let mut v: mut volatile i32 = 42;");
     round_trips("const v: volatile i32 = 42;");
-    round_trips("var a := 0x2Fuz; var b := 0b00_11_00_11; var c := 1_000; var d := 2.3f32;");
+    round_trips("let mut a := 0x2Fuz; let mut b := 0b00_11_00_11; let mut c := 1_000; let mut d := "
+                "2.3f32;");
     round_trips(R"('\n'; '\r'; '\t'; '\\'; '\''; '\0';)");
 }
 
@@ -486,9 +490,9 @@ TEST_CASE("formatter round trip: operators and grouping") {
     round_trips("@as(i32, a); .a; .{ .a = 3 }; TT{ .adfasf = a }; .{};");
     round_trips("_ = a +% b - c *% d + e <<% f;");
     round_trips("_ = -%a;");
-    round_trips("var x: u8 = 0; x +%= 1; x -%= 1; x *%= 2; x <<%= 1;");
+    round_trips("let mut x: u8 = 0; x +%= 1; x -%= 1; x *%= 2; x <<%= 1;");
     round_trips("_ = a +| b - c *| d + e <<| f -| g;");
-    round_trips("var x: u8 = 0; x +|= 1; x -|= 1; x *|= 2; x <<|= 1;");
+    round_trips("let mut x: u8 = 0; x +|= 1; x -|= 1; x *|= 2; x <<|= 1;");
     round_trips(R"(_ = "a" ++ "b" ++ c;)");
 }
 
@@ -508,32 +512,32 @@ TEST_CASE("formatter round trip: precedence and nesting are preserved") {
 }
 
 TEST_CASE("formatter round trip: functions and types") {
-    round_trips("var f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;");
+    round_trips("let mut f_ptr: ^fn(x: &a, y: ^mut B, ...): &[0x2uz][N]^E = undefined;");
     round_trips("fn(^mut this, a: A, b: ^B, ): i32 { c; };");
     round_trips("fn(self): i32 {};");
-    round_trips("var cb: extern fn(a: i32) callconv(.c): i32 = undefined;");
-    round_trips("var cb: ^extern fn(a: i32): i32 = undefined;");
-    round_trips("var cb: &fn(a: i32): i32 = undefined;");
+    round_trips("let mut cb: extern fn(a: i32) callconv(.c): i32 = undefined;");
+    round_trips("let mut cb: ^extern fn(a: i32): i32 = undefined;");
+    round_trips("let mut cb: &fn(a: i32): i32 = undefined;");
     round_trips("const Cb := extern fn(a: i32) callconv(.win64): i32;");
     round_trips("const Op := dyn Fn(a: i32): i32;");
     round_trips("const pick := fn(): fn(n: i32): i32 { return inc; };");
     round_trips("const pick := fn(): extern fn(n: i32): i32 { return inc; };");
     round_trips("_ = pick()(1);");
-    round_trips("const where := fn(): i32 { return if constexpr 1 else 2; };");
-    round_trips(
-        "constexpr f := fn(a: i32, b: i32): i32 { return if constexpr (a < b) a else b; };");
-    round_trips("var cb: ^dyn Fn(): void = undefined;");
-    round_trips("var w: &dyn Fn(Out = i32) = undefined;");
+    round_trips("const where := fn(): i32 { return if comptime 1 else 2; };");
+    round_trips("const f := fn(a: i32, b: i32): i32 { return if comptime (a < b) a else b; };");
+    round_trips("let mut cb: ^dyn Fn(): void = undefined;");
+    round_trips("let mut w: &dyn Fn(Out = i32) = undefined;");
     round_trips("pub const min := fn(a: auto, b: auto): auto { return if (a < b) a else b; };");
     round_trips("const T := i32; pub const a := ^^i32;");
-    round_trips("var a: std.ArrayList(u8) = undefined; var a: List(i32) = undefined; var a: []i32 "
+    round_trips("let mut a: std.ArrayList(u8) = undefined; let mut a: List(i32) = undefined; let "
+                "mut a: []i32 "
                 "= undefined;");
     round_trips("extern const foo: fn(): i32;");
     round_trips(R"(extern("kernel32") const bar: fn(): void;)");
     round_trips(R"(extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;)");
     round_trips(R"(export("ghoti_add") const add := fn(a: i32, b: i32): i32 { return a + b; };)");
-    round_trips("threadlocal var tls_counter: i32 = 0;");
-    round_trips("pub threadlocal var tls_state: i64 = 0i64;");
+    round_trips("threadlocal let mut tls_counter: i32 = 0;");
+    round_trips("pub threadlocal let mut tls_state: i64 = 0i64;");
     round_trips("weak extern const maybe: fn(): void;");
     round_trips("pub weak const overridable := fn(): i32 { return 1; };");
     round_trips("@[discardable] extern const puts: fn(s: ^u8): i32;");
@@ -557,7 +561,7 @@ TEST_CASE("formatter round trip: attribute lists") {
           "@[discardable] const log := fn(msg: i32): i32 {\n    return msg;\n};\n");
     round_trips("const S := struct { @[align(8)] a: u8, @[align(4)] pub b: u8 };");
     round_trips("const U := union { @[align(16)] a: i32, b: u8 };");
-    round_trips("@[align(64)] var buffer: [4]u8 = undefined;");
+    round_trips("@[align(64)] let mut buffer: [4]u8 = undefined;");
     round_trips("const I := interface { @[discardable] pub const close := fn(&self): i32; };");
     round_trips("@[deprecated(\"use y\")] const x := 1;");
     round_trips("const S := struct { @[deprecated] a: u8, b: u8 };");
@@ -579,16 +583,17 @@ TEST_CASE("formatter round trip: raw identifiers") {
 }
 
 TEST_CASE("formatter round trip: aggregates") {
-    round_trips("struct { var a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
+    round_trips(
+        "struct { let mut a: Foo = bar; const b := fn(^mut this, a: A, b: ^B): C { c; }; };");
     round_trips("union { a: i32, b: &mut T, };");
     round_trips("enum : u64 { A = 1u64, B = T, C, };");
     round_trips("enum : i64 { A = 2i64, const b := fn(&self, a: A): C { c; }; };");
-    round_trips("union { a: struct { b: Foo = bar, pub c: i32, var d: u32 = undefined; }, "
+    round_trips("union { a: struct { b: Foo = bar, pub c: i32, let mut d: u32 = undefined; }, "
                 "const b := fn(&self, a: A): C { c; }; };");
     round_trips(R"(const S := struct {
     x: i32,
     const make := fn(v: auto): i32 {
-        const r: @This() = S{ .x = v };
+        let r: @This() = S{ .x = v };
         return r.x;
     };
 };)");
@@ -645,7 +650,7 @@ TEST_CASE("formatter keeps a doc comment on an interface method that follows a d
 
     /// drains the whole source
     pub const readAll := fn(&mut self, buf: []mut u8): usize {
-        var i: usize = 0;
+        let mut i: usize = 0;
         if (i == buf.len) { // done
             return i;
         }
@@ -769,7 +774,7 @@ TEST_CASE("formatter round trip: interfaces and impls") {
     round_trips("impl File { pub const make := fn(): @This() { return .{}; }; }");
     round_trips("impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }");
     round_trips("impl(T: type) Debug for Box(T) { pub const fmt := fn(&self): void {}; }");
-    round_trips("impl(H: type, constexpr n: usize) Buf(H) { const cap := n; }");
+    round_trips("impl(H: type, comptime n: usize) Buf(H) { const cap := n; }");
 }
 
 TEST_CASE("formatter round trip: @cfg groups inside aggregate bodies") {
@@ -793,20 +798,20 @@ TEST_CASE("formatter round trip: @cfg groups gating aggregate members") {
 
 TEST_CASE("formatter round trip: control flow") {
     round_trips("if (a) { b; } else { c; };");
-    round_trips("if constexpr (a) { b; };");
+    round_trips("if comptime (a) { b; };");
     round_trips("while (true) : (i += 1) { a; } else return b;");
-    round_trips("while constexpr (a) { b; };");
+    round_trips("while comptime (a) { b; };");
     round_trips("do { a; } while (true);");
-    round_trips("do { a; } while constexpr (true);");
+    round_trips("do { a; } while comptime (true);");
     round_trips("for (arr, l, p) |i, &mut j, _| { a; } else return b;");
-    round_trips("for constexpr (arr, 0..) |v, i| { b; };");
+    round_trips("for comptime (arr, 0..) |v, i| { b; };");
     round_trips("loop { a; };");
-    round_trips("loop constexpr { a; };");
+    round_trips("loop comptime { a; };");
     round_trips("match (a) { b => |c| d, e => |_| f, g => h, _ => d, };");
     round_trips("match (n) { 1..10 => |v| v, 10..=20 => 2, _ => 0 };");
     round_trips("match (n) { 1, 2, 5..9 => |v| v, _ => 0 };");
-    round_trips("match constexpr (T) { i32 => 1, i64 => 2, _ => 0 };");
-    round_trips("match constexpr (n) { 1, 2 => |v| v, _ => 0 };");
+    round_trips("match comptime (T) { i32 => 1, i64 => 2, _ => 0 };");
+    round_trips("match comptime (n) { 1, 2 => |v| v, _ => 0 };");
     round_trips("a: { continue :a; };");
     round_trips(R"(test "dump" { import other; @expect(a == true); })");
 }
@@ -822,7 +827,7 @@ TEST_CASE("formatter round trip: parameter packs") {
 
 TEST_CASE("formatter round trip: nested module") {
     round_trips(R"(pub const main := fn(): i32 {
-    var u := U{ .b = 7 };
+    let mut u := U{ .b = 7 };
     for (0..3) |v| { sum = sum + v; }
     return match (u) { .a => 1, .b => 2, };
 };)");
@@ -842,7 +847,7 @@ const X := 1;
 // leading comment
 pub const main := fn(): i32 { // trailing on brace
     // comment before decl
-    var sum: i32 = 0; // trailing
+    let mut sum: i32 = 0; // trailing
     // comment between statements
     if (sum == 0) { // comment in if header context
         sum = sum + 1;
@@ -929,9 +934,9 @@ const c := 3; // comment c
 
 TEST_CASE("formatter preserves trailing comments on statements without extra blank lines") {
     constexpr std::string_view source{R"(pub const foo := fn(): void {
-    var x := 1; // comment on x
-    var y := 2; // comment on y
-    var z := 3;
+    let mut x := 1; // comment on x
+    let mut y := 2; // comment on y
+    let mut z := 3;
     // comment on z
 };
 )"};
@@ -948,10 +953,10 @@ const b: i32 = 3;
     CHECK(format_source(top_level) == top_level);
 
     constexpr std::string_view in_block{R"(const f := fn(): void {
-    var a := 1;
+    let mut a := 1;
 
     // some comment
-    var b := 2;
+    let mut b := 2;
 };
 )"};
     CHECK(format_source(in_block) == in_block);

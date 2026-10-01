@@ -66,12 +66,12 @@ TEST_CASE("anonymous closure with discarded parameter") {
 
 TEST_CASE("constexpr function with discarded parameter") {
     CHECK(helpers::compile_and_run(R"(
-        constexpr get_val := fn(_: i32): i32 {
+        const get_val := fn(_: i32): i32 {
             return 42;
         };
 
         pub const main := fn(): i32 {
-            const val := get_val(100);
+            let val := get_val(100);
             return val;
         };
     )") == 42);

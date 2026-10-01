@@ -52,12 +52,12 @@ TEST_CASE("errdefer executes on `?` error propagation") {
         };
         const run := fn(x: i32, log: ^mut i32): R {
             errdefer *log = 42;
-            const v := fail(x)?;
+            let v := fail(x)?;
             return R{ .ok = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = -1;
-            var log: i32 = 0;
+            let mut x: i32 = -1;
+            let mut log: i32 = 0;
             _ = run(x, ^mut log);
             return log;
         };
@@ -72,12 +72,12 @@ TEST_CASE("errdefer does not execute on success") {
         };
         const run := fn(x: i32, log: ^mut i32): R {
             errdefer *log = 42;
-            const v := succeed(x)?;
+            let v := succeed(x)?;
             return R{ .ok = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = 10;
-            var log: i32 = 0;
+            let mut x: i32 = 10;
+            let mut log: i32 = 0;
             _ = run(x, ^mut log);
             return log;
         };
@@ -95,12 +95,12 @@ TEST_CASE("defer and errdefer interleave in LIFO order") {
                 defer *log = *log * 10 + 1;
                 errdefer *log = *log * 10 + 2;
                 defer *log = *log * 10 + 3;
-                const v := fail(x)?;
+                let v := fail(x)?;
                 return R{ .ok = v };
             };
             pub const main := fn(): i32 {
-                var x: i32 = -1;
-                var log: i32 = 0;
+                let mut x: i32 = -1;
+                let mut log: i32 = 0;
                 _ = run(x, ^mut log);
                 return log - 300; // 3, then 2, then 1 -> 321
             };
@@ -117,12 +117,12 @@ TEST_CASE("defer and errdefer interleave in LIFO order") {
                 defer *log = *log * 10 + 1;
                 errdefer *log = *log * 10 + 2;
                 defer *log = *log * 10 + 3;
-                const v := succeed(x)?;
+                let v := succeed(x)?;
                 return R{ .ok = v };
             };
             pub const main := fn(): i32 {
-                var x: i32 = 9;
-                var log: i32 = 0;
+                let mut x: i32 = 9;
+                let mut log: i32 = 0;
                 _ = run(x, ^mut log);
                 return log; // 3, then 1 -> 31
             };
@@ -138,12 +138,12 @@ TEST_CASE("errdefer by-value capture receives error payload") {
         };
         const run := fn(x: i32, log: ^mut i32): R {
             errdefer |e| *log = e;
-            const v := fail(x)?;
+            let v := fail(x)?;
             return R{ .ok = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = -1;
-            var log: i32 = 0;
+            let mut x: i32 = -1;
+            let mut log: i32 = 0;
             _ = run(x, ^mut log);
             return log;
         };
@@ -158,12 +158,12 @@ TEST_CASE("errdefer discard capture works") {
         };
         const run := fn(x: i32, log: ^mut i32): R {
             errdefer |_| *log = 99;
-            const v := fail(x)?;
+            let v := fail(x)?;
             return R{ .ok = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = -1;
-            var log: i32 = 0;
+            let mut x: i32 = -1;
+            let mut log: i32 = 0;
             _ = run(x, ^mut log);
             return log;
         };
@@ -179,12 +179,12 @@ TEST_CASE("errdefer alias captures read error payload") {
             };
             const run := fn(x: i32, log: ^mut i32): R {
                 errdefer |&e| *log = e;
-                const v := fail(x)?;
+                let v := fail(x)?;
                 return R{ .ok = v };
             };
             pub const main := fn(): i32 {
-                var x: i32 = -1;
-                var log: i32 = 0;
+                let mut x: i32 = -1;
+                let mut log: i32 = 0;
                 _ = run(x, ^mut log);
                 return log;
             };
@@ -199,12 +199,12 @@ TEST_CASE("errdefer alias captures read error payload") {
             };
             const run := fn(x: i32, log: ^mut i32): R {
                 errdefer |^p| *log = *p;
-                const v := fail(x)?;
+                let v := fail(x)?;
                 return R{ .ok = v };
             };
             pub const main := fn(): i32 {
-                var x: i32 = -1;
-                var log: i32 = 0;
+                let mut x: i32 = -1;
+                let mut log: i32 = 0;
                 _ = run(x, ^mut log);
                 return log;
             };
@@ -220,15 +220,15 @@ TEST_CASE("errdefer with Option capturing void") {
         };
         const run := fn(x: i32, log: ^mut i32): O {
             errdefer |e| {
-                const check: void = e;
+                let check: void = e;
                 *log = 42;
             }
-            const v := fail(x)?;
+            let v := fail(x)?;
             return O{ .some = v };
         };
         pub const main := fn(): i32 {
-            var x: i32 = -1;
-            var log: i32 = 0;
+            let mut x: i32 = -1;
+            let mut log: i32 = 0;
             _ = run(x, ^mut log);
             return log;
         };
@@ -243,7 +243,7 @@ TEST_CASE("errdefer does not trigger on direct static error return under Definit
             return R{ .err = 1 };
         };
         pub const main := fn(): i32 {
-            var log: i32 = 0;
+            let mut log: i32 = 0;
             _ = direct_err(^mut log);
             return log; // Remains 0 because static return does not trigger errdefer under Definition A
         };

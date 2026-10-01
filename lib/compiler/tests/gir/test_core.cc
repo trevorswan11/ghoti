@@ -209,11 +209,11 @@ TEST_CASE("Comprehensive program lowering") {
         };
 
         const transform := fn(p: Point): i32 {
-            var res: i32 = 0;
+            let mut res: i32 = 0;
             defer res = res + 100;
 
-            const mx := max(p.x, p.y);
-            var i: i32 = 0;
+            let mx := max(p.x, p.y);
+            let mut i: i32 = 0;
             while (i < 3) {
                 res += mx;
                 i += 1;
@@ -223,8 +223,8 @@ TEST_CASE("Comprehensive program lowering") {
         };
 
         test "run_transform" {
-            const p := Point{ .x = 10, .y = 20 };
-            const ans := transform(p);
+            let p := Point{ .x = 10, .y = 20 };
+            let ans := transform(p);
         }
     )")};
 

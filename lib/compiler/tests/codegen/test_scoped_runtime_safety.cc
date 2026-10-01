@@ -51,7 +51,7 @@ TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
         };
         pub const reenabled := fn(a: i32, b: i32): i32 {
             @setRuntimeSafety(false);
-            var sum: i32 = 0;
+            let mut sum: i32 = 0;
             {
                 @setRuntimeSafety(true);
                 sum = a + b;
@@ -80,11 +80,11 @@ TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
 TEST_CASE("@runtimeSafety() observes the enclosing @setRuntimeSafety") {
     helpers::resolve_and_check(R"(
         const f := fn(): i32 {
-            constexpr { @assert(@runtimeSafety()); }
+            comptime { @assert(@runtimeSafety()); }
             @setRuntimeSafety(false);
-            constexpr { @assert(!@runtimeSafety()); }
+            comptime { @assert(!@runtimeSafety()); }
             const nested := fn(): i32 {
-                constexpr { @assert(@runtimeSafety()); }
+                comptime { @assert(@runtimeSafety()); }
                 return 0;
             };
             return nested();

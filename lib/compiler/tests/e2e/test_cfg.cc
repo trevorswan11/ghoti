@@ -9,8 +9,8 @@ namespace ghoti::tests {
 
 TEST_CASE("E2E cfg: a module-scope @cfg picks exactly one declaration") {
     CHECK(helpers::compile_and_run(R"(
-        @cfg(ptr_bits >= 16) { const N := 42; }
-        else                 { const N := 7; }
+        @cfg(ptr_bits >= 16) { let N := 42; }
+        else                 { let N := 7; }
 
         pub const main := fn(): i32 { return N; };
     )") == 42);
@@ -18,9 +18,9 @@ TEST_CASE("E2E cfg: a module-scope @cfg picks exactly one declaration") {
 
 TEST_CASE("E2E cfg: an else-@cfg chain falls through to the final else") {
     CHECK(helpers::compile_and_run(R"(
-        @cfg(ptr_bits == 7)      { const N := 1; }
-        else @cfg(ptr_bits == 9) { const N := 2; }
-        else                     { const N := 9; }
+        @cfg(ptr_bits == 7)      { let N := 1; }
+        else @cfg(ptr_bits == 9) { let N := 2; }
+        else                     { let N := 9; }
 
         pub const main := fn(): i32 { return N; };
     )") == 9);
@@ -40,7 +40,7 @@ TEST_CASE("E2E cfg: a @cfgValue predicate constant is readable as a constexpr bo
         const IS_WIDE := @cfgValue(ptr_bits >= 32);
 
         pub const main := fn(): i32 {
-            if constexpr (IS_WIDE) { return 1; }
+            if comptime (IS_WIDE) { return 1; }
             else                   { return 0; }
         };
     )") == 1);
@@ -52,7 +52,7 @@ TEST_CASE("E2E cfg: @cfgValue constants may chain acyclically and gate a @cfg bl
         const B := @cfgValue(A);
         const C := @cfgValue(A and B);
 
-        @cfg(C) { const R := 5; } else { const R := 0; }
+        @cfg(C) { let R := 5; } else { let R := 0; }
 
         pub const main := fn(): i32 { return R; };
     )") == 5);
@@ -107,7 +107,7 @@ TEST_CASE("E2E cfg: a selected struct @cfg block contributes real, ordered field
         };
 
         pub const main := fn(): i32 {
-            const s := S{ .a = 1, .b = 2, .c = 3, .d = 4 };
+            let s := S{ .a = 1, .b = 2, .c = 3, .d = 4 };
             return s.a + s.b + s.c + s.d;
         };
     )") == 10);
@@ -134,27 +134,27 @@ TEST_CASE("E2E cfg: an unselected struct @cfg block drops its fields; else wins"
         };
 
         pub const main := fn(): i32 {
-            const s := S{ .a = 40, .fallback = 2 };
+            let s := S{ .a = 40, .fallback = 2 };
             return s.a + s.fallback;
         };
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: a non-generic `if constexpr` over a @cfgValue prunes the dead arm") {
+TEST_CASE("E2E cfg: a non-generic `if comptime` over a @cfgValue prunes the dead arm") {
     CHECK(helpers::compile_and_run(R"(
         const IS_64 := @cfgValue(ptr_bits == 64);
 
         pub const main := fn(): i32 {
-            if constexpr (IS_64) { return 123; }
+            if comptime (IS_64) { return 123; }
             else                 { return never_declared_symbol + also_never; }
         };
     )") == 123);
 }
 
-TEST_CASE("E2E cfg: a generic `if constexpr` prunes the dead arm per instantiation") {
+TEST_CASE("E2E cfg: a generic `if comptime` prunes the dead arm per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const pick := fn(T: type, x: T): i32 {
-            if constexpr (T == i32) { return 100; }
+            if comptime (T == i32) { return 100; }
             else                    { return x.no_such_method_on_this_type(); }
         };
 
@@ -162,12 +162,12 @@ TEST_CASE("E2E cfg: a generic `if constexpr` prunes the dead arm per instantiati
     )") == 100);
 }
 
-TEST_CASE("E2E cfg: a valued `if constexpr` over a @cfgValue takes the live arm's type") {
+TEST_CASE("E2E cfg: a valued `if comptime` over a @cfgValue takes the live arm's type") {
     CHECK(helpers::compile_and_run(R"(
         const IS_64 := @cfgValue(ptr_bits == 64);
 
         pub const main := fn(): i32 {
-            const n := if constexpr (IS_64) 7 else true;
+            let n := if comptime (IS_64) 7 else true;
             return n + 35;
         };
     )") == 42);
@@ -223,7 +223,7 @@ TEST_CASE("E2E cfg: a non-braced @cfg arm on a variant / field may be followed b
             b: i32,
         };
         pub const main := fn(): i32 {
-            const s: S = .{ .a = 1, .w = 5, .b = 1 };
+            let s: S = .{ .a = 1, .w = 5, .b = 1 };
             return s.w + s.a + s.b;
         };
     )") == 7);
@@ -246,17 +246,17 @@ TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a
         R"(
             import "sys.gh" as sys;
             pub const main := fn(): i32 {
-                var buf: [sys.word]mut i32 = undefined;
+                let mut buf: [sys.word]mut i32 = undefined;
                 buf[sys.word - 1uz] = 3;
-                const via_if := if constexpr (sys.is_wide) 4 else 2;
-                const via_val := sys.is_wide;
+                let via_if := if comptime (sys.is_wide) 4 else 2;
+                let via_val := sys.is_wide;
                 return buf[sys.word - 1uz] + via_if + (if (via_val) 1 else 0);
             };
         )",
         {helpers::mock_file{"sys.gh",
                             R"(
-            pub constexpr is_wide := @cfgValue(ptr_bits >= 32);
-            pub constexpr word := @cfgValue(
+            pub const is_wide := @cfgValue(ptr_bits >= 32);
+            pub const word := @cfgValue(
                 ptr_bits == 64 => 8uz,
                 ptr_bits == 32 => 4uz,
                 _              => @compileError("unsupported"),
@@ -268,8 +268,8 @@ TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a
 
 TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs") {
     CHECK(helpers::compile_and_run(R"(
-        @cfg(endian == .little) { const MARK := 1; }
-        else                    { const MARK := 2; }
+        @cfg(endian == .little) { let MARK := 1; }
+        else                    { let MARK := 2; }
 
         pub const main := fn(): i32 {
             @cfg(endian == .big) { return 20; }

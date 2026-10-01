@@ -49,7 +49,7 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
         R"(
             import "win.gh" as win;
             pub const main := fn(args: [][:0]u8): void {
-                const e := win.last_error();
+                let e := win.last_error();
             };
         )",
         {helpers::mock_file{"win.gh", WIN_MODULE, "win"}})};
@@ -84,7 +84,7 @@ TEST_CASE("GIR reachability: a referenced root-module extern is retained") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
         pub const main := fn(args: [][:0]u8): void {
-            const e := GetLastError();
+            let e := GetLastError();
         };
     )")};
 

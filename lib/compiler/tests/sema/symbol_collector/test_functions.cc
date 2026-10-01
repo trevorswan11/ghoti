@@ -15,7 +15,7 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Function hollow types") {
     auto [ctx, idx]{
-        helpers::collect_and_check("const a := fn(&self, c: type): void { const foo := bar; };")};
+        helpers::collect_and_check("const a := fn(&self, c: type): void { let foo := bar; };")};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
 
@@ -38,15 +38,15 @@ TEST_CASE("Well-placed function control-flow statements") {
 }
 
 TEST_CASE("Constexpr function declaration") {
-    helpers::collect_and_check("pub constexpr work := fn(): i32 { return 1; };");
+    helpers::collect_and_check("pub const work := fn(): i32 { return 1; };");
 }
 
 TEST_CASE("Defer statements respect identifier collection rules") {
     helpers::test_collector_fail(
-        "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32 = undefined; } };",
+        "pub const main := fn(args: [][:0]u8): i32 { defer { let mut main: i32 = undefined; } };",
         sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:11",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 56UZ}});
+                         std::pair{0UZ, 60UZ}});
 }
 
 TEST_CASE("Function basic param redeclaration") {
@@ -59,13 +59,13 @@ TEST_CASE("Function basic param redeclaration") {
 
 TEST_CASE("Module-scope-only modifiers are rejected on a function-local declaration") {
     helpers::test_collector_fail(
-        "const f := fn(): void { pub const x := 5; };",
+        "const f := fn(): void { pub let x := 5; };",
         sema::diagnostic{"Modifier 'pub' cannot be used on a declaration local to a function",
                          sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
                          std::pair{0UZ, 24UZ}});
 
     helpers::test_collector_fail(
-        "const f := fn(): void { weak extern const g: i32; };",
+        "const f := fn(): void { weak extern let g: i32; };",
         sema::diagnostic{
             "Modifiers 'extern', 'weak' cannot be used on a declaration local to a function",
             sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
@@ -101,10 +101,10 @@ TEST_CASE("Function local param redeclaration") {
 
 TEST_CASE("Function block shadowing") {
     helpers::test_collector_fail(
-        "const f := fn(): void { var f := 3; };",
+        "const f := fn(): void { let mut f := 3; };",
         sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 28UZ}});
+                         std::pair{0UZ, 32UZ}});
 }
 
 } // namespace ghoti::tests

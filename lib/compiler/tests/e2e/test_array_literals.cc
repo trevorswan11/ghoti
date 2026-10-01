@@ -9,7 +9,7 @@ TEST_CASE("a positional `Alias{ ... }` literal initializes an array-type alias")
     CHECK(helpers::compile_and_run(R"(
         const Row := [3]i32;
         pub const main := fn(): i32 {
-            const r := Row{ 10, 20, 12 };
+            let r := Row{ 10, 20, 12 };
             return r[0] + r[1] + r[2];
         };
     )") == 42);
@@ -18,7 +18,7 @@ TEST_CASE("a positional `Alias{ ... }` literal initializes an array-type alias")
 TEST_CASE("an implicit `.{ ... }` literal initializes an array from context") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const r: [4]i32 = .{ 1, 2, 3, 4 };
+            let r: [4]i32 = .{ 1, 2, 3, 4 };
             return r[0] + r[1] + r[2] + r[3];
         };
     )") == 10);
@@ -38,7 +38,7 @@ TEST_CASE("an array-alias literal with the wrong element count is rejected") {
     helpers::expect_compile_error(R"(
         const Row := [3]i32;
         pub const main := fn(): i32 {
-            const r := Row{ 1, 2 };
+            let r := Row{ 1, 2 };
             return r[0];
         };
     )");
@@ -63,7 +63,7 @@ TEST_CASE("a single nested bare `.{...}` array element parses correctly") {
     CHECK(helpers::compile_and_run(R"(
         const P := struct { a: i32, b: i32 };
         pub const main := fn(): i32 {
-            const arr: [1]P = .{
+            let arr: [1]P = .{
                 .{ .a = 5, .b = 6 },
             };
             return arr[0].a + arr[0].b;
@@ -76,7 +76,7 @@ TEST_CASE("nested bare `.{...}` array elements mix with a trailing named entry s
         const P := struct { a: i32, b: i32 };
         const Box := struct { items: [2]P, tag: i32 };
         pub const main := fn(): i32 {
-            const box := Box{
+            let box := Box{
                 .items = .{
                     .{ .a = 1, .b = 1 },
                     .{ .a = 2, .b = 2 },

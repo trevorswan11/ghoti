@@ -332,7 +332,7 @@ auto parser::parse_statement(semicolon_behavior behavior)
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
         default:                   return ast::decl_stmt::parse(*this);
         }
-    } else if (current_token_is(token_type_t::CONSTEXPR)) {
+    } else if (current_token_is(token_type_t::COMPTIME)) {
         if (peek_token_is(token_type_t::LBRACE)) { return ast::block_stmt::parse(*this, true); }
         if (peek_token_is(token_type_t::IDENT)) {
             checkpoint cp{*this};
@@ -513,7 +513,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
-    fns[token_type_t::CONSTEXPR]         = ast::parse_constexpr_expr;
+    fns[token_type_t::COMPTIME]          = ast::parse_constexpr_expr;
 
     return fns;
 }();

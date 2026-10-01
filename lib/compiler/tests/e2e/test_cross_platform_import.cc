@@ -64,8 +64,8 @@ TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const th
             import "std.gh" as std;
             pub const main := fn(): i32 {
                 const e: std.os.Errno = std.os.Errno.NOPE;
-                const w := @as(i32, std.os.WHENCE_END);
-                const a := std.os.answer();
+                let w := @as(i32, std.os.WHENCE_END);
+                let a := std.os.answer();
                 return if (e == std.os.Errno.NOPE and w == 2) a else 1;
             };
         )",
@@ -87,9 +87,9 @@ TEST_CASE("E2E: importing every platform module still links on the host") {
             import "plat_windows.gh" as plat_windows;
 
             const plat_tag := fn(): i32 {
-                if constexpr (@targetOs() == .linux) {
+                if comptime (@targetOs() == .linux) {
                     return plat_linux.linux_tag();
-                } else if constexpr (@targetOs() == .macos) {
+                } else if comptime (@targetOs() == .macos) {
                     return plat_darwin.darwin_tag();
                 } else {
                     return plat_windows.windows_tag();

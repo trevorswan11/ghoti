@@ -11,7 +11,7 @@ TEST_CASE("Writing a struct field through a var local") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             p.y = p.y + 10;
             return p.y;
         };
@@ -22,7 +22,7 @@ TEST_CASE("Writing a struct field through a const local is rejected") {
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            const p := Point{ .x = 1, .y = 2 };
+            let p := Point{ .x = 1, .y = 2 };
             p.y = p.y + 10;
             return p.y;
         };
@@ -33,7 +33,7 @@ TEST_CASE("Writing a struct field through a &mut Point reference parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             const bump_y := fn(pt: &mut Point): void {
                 pt.y = pt.y + 10;
             };
@@ -47,7 +47,7 @@ TEST_CASE("Writing a struct field through a &Point (non-mut) reference is reject
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             const bump_y := fn(pt: &Point): void {
                 pt.y = pt.y + 10;
             };
@@ -61,7 +61,7 @@ TEST_CASE("Writing a struct field through a ^mut Point pointer parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             const bump_y := fn(pt: ^mut Point): void {
                 (*pt).y = (*pt).y + 10;
             };
@@ -75,7 +75,7 @@ TEST_CASE("Writing a struct field through a ^Point (non-mut) pointer is rejected
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             const bump_y := fn(pt: ^Point): void {
                 (*pt).y = (*pt).y + 10;
             };
@@ -90,7 +90,7 @@ TEST_CASE("Writing a nested struct field through a var local") {
         const Point := struct { px: i32, py: i32 };
         const Box := struct { corner: Point, size: i32 };
         pub const main := fn(): i32 {
-            var b := Box{ .corner = Point{ .px = 1, .py = 2 }, .size = 10 };
+            let mut b := Box{ .corner = Point{ .px = 1, .py = 2 }, .size = 10 };
             b.corner.py = b.corner.py + 100;
             return b.corner.py;
         };
@@ -101,7 +101,7 @@ TEST_CASE("Writing a struct field inside a mut array element") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var arr: [2uz]mut Point = [2uz]mut Point{
+            let mut arr: [2uz]mut Point = [2uz]mut Point{
                 Point{ .x = 1, .y = 2 }, Point{ .x = 3, .y = 4 }
             };
             arr[0].y = arr[0].y + 100;
@@ -114,7 +114,7 @@ TEST_CASE("Writing a struct field inside a non-mut array element is rejected") {
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var arr: [2uz]Point = [2uz]Point{
+            let mut arr: [2uz]Point = [2uz]Point{
                 Point{ .x = 1, .y = 2 }, Point{ .x = 3, .y = 4 }
             };
             arr[0].y = arr[0].y + 100;
@@ -127,10 +127,10 @@ TEST_CASE("Writing a struct field inside a mut slice element") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var arr: [2uz]mut Point = [2uz]mut Point{
+            let mut arr: [2uz]mut Point = [2uz]mut Point{
                 Point{ .x = 1, .y = 2 }, Point{ .x = 3, .y = 4 }
             };
-            var sl: []mut Point = arr;
+            let mut sl: []mut Point = arr;
             const bump := fn(s: []mut Point): void {
                 s[0].y = s[0].y + 100;
             };
@@ -144,7 +144,7 @@ TEST_CASE("Writing a union field through a var local") {
     CHECK(helpers::compile_and_run(R"(
         const U := union { flag: bool, val: i32 };
         pub const main := fn(): i32 {
-            var u := U{ .val = 5 };
+            let mut u := U{ .val = 5 };
             u.val = u.val + 10;
             return u.val;
         };
@@ -155,7 +155,7 @@ TEST_CASE("Writing a different union field than the active one updates the activ
     CHECK(helpers::compile_and_run(R"(
         const U := union { a: i32, b: i32 };
         pub const main := fn(): i32 {
-            var u := U{ .a = 1 };
+            let mut u := U{ .a = 1 };
             u.b = 99;
             return match (u) {
                 .a => 1,
@@ -169,7 +169,7 @@ TEST_CASE("Writing a union field through a const local is rejected") {
     helpers::expect_compile_error(R"(
         const U := union { flag: bool, val: i32 };
         pub const main := fn(): i32 {
-            const u := U{ .val = 5 };
+            let u := U{ .val = 5 };
             u.val = u.val + 10;
             return u.val;
         };
@@ -184,7 +184,7 @@ TEST_CASE("Mutating a by-value struct parameter's local copy persists across acc
                 pt.y = pt.y + 10;
                 return pt.y;
             };
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             return modify(p);
         };
     )") == 12);
@@ -197,7 +197,7 @@ TEST_CASE("Mutating a by-value struct parameter does not affect the caller's cop
             const modify := fn(pt: Point): void {
                 pt.y = pt.y + 10;
             };
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             modify(p);
             return p.y;
         };

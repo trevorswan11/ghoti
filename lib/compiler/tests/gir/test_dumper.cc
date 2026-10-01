@@ -173,11 +173,11 @@ constexpr std::string_view golden_input{R"(
     };
 
     const compute_point := fn(p: Point): i32 {
-        var acc: i32 = 0;
+        let mut acc: i32 = 0;
         defer acc = acc + 1;
 
-        const clamped := clamp(p.x, 0, 50);
-        var i: i32 = 0;
+        let clamped := clamp(p.x, 0, 50);
+        let mut i: i32 = 0;
         while (i < 3) {
             acc += clamped;
             i += 1;
@@ -194,7 +194,7 @@ constexpr std::string_view golden_input{R"(
     };
 
     const raw_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
-        var ret: i64 = 0i64;
+        let mut ret: i64 = 0i64;
         asm {
             template: "syscall",
             outputs: ("={rax}" = ret),
@@ -206,9 +206,9 @@ constexpr std::string_view golden_input{R"(
     };
 
     test "golden_run" {
-        const p := Point{ .x = 25, .y = 10 };
-        const ans := compute_point(p);
-        const code := match_color(.RED);
+        let p := Point{ .x = 25, .y = 10 };
+        let ans := compute_point(p);
+        let code := match_color(.RED);
     }
 )"};
 

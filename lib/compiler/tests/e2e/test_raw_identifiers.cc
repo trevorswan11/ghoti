@@ -9,8 +9,8 @@ namespace ghoti::tests {
 TEST_CASE("E2E raw identifier: a keyword-named binding is usable") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const @"type" := 40;
-            const @"match" := 2;
+            let @"type" := 40;
+            let @"match" := 2;
             return @"type" + @"match";
         };
     )") == 42);
@@ -34,7 +34,7 @@ TEST_CASE("E2E raw identifier: keyword-named struct fields round-trip through co
         };
 
         pub const main := fn(): i32 {
-            const b: Box = .{ .@"struct" = 30, .@"fn" = 12 };
+            let b: Box = .{ .@"struct" = 30, .@"fn" = 12 };
             return b.@"struct" + b.@"fn";
         };
     )") == 42);
@@ -43,7 +43,7 @@ TEST_CASE("E2E raw identifier: keyword-named struct fields round-trip through co
 TEST_CASE("E2E raw identifier: a primitive spelling can name a user binding") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const @"i32": i32 = 42;
+            let @"i32": i32 = 42;
             return @"i32";
         };
     )") == 42);

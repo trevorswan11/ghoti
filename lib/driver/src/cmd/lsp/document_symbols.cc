@@ -24,8 +24,8 @@ auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> sy
             return symbol_kind::STRUCT;
         }
     }
-    return decl.has_modifier(ast::decl_modifiers::CONSTANT) ? symbol_kind::CONSTANT
-                                                            : symbol_kind::VARIABLE;
+    return decl.has_modifier(ast::decl_modifiers::MUT) ? symbol_kind::VARIABLE
+                                                       : symbol_kind::CONSTANT;
 }
 
 auto document_symbols(const mod::module& module) -> nlohmann::json {

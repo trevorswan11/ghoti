@@ -44,7 +44,7 @@ TEST_CASE("Out of order enum") {
 
 TEST_CASE("Illegal struct members") {
     helpers::test_parser_fail(
-        "struct { extern var foo: bar; };",
+        "struct { extern let mut foo: bar; };",
         syntax::diagnostic{"Member declarations may neither be marked extern nor export",
                            syntax::error::INVALID_MEMBER,
                            std::pair{0UZ, 9UZ}});
@@ -98,11 +98,12 @@ TEST_CASE("Illegal modified type literal") {
     };
 
     helpers::test_parser_fail("const U := &union { a: i32 };", expected_diag(11UZ));
-    helpers::test_parser_fail("const S := ^struct { pub var foo := bar; };", expected_diag(11UZ));
+    helpers::test_parser_fail("const S := ^struct { pub let mut foo := bar; };",
+                              expected_diag(11UZ));
     helpers::test_parser_fail("const E := ^enum { a };", expected_diag(11UZ));
     helpers::test_parser_fail("const I := &mut interface { const f := fn(&self): i32; };",
                               expected_diag(11UZ));
-    helpers::test_parser_fail("var s: ^struct { a: i32 } = undefined;", expected_diag(7UZ));
+    helpers::test_parser_fail("let mut s: ^struct { a: i32 } = undefined;", expected_diag(11UZ));
 }
 
 } // namespace ghoti::tests

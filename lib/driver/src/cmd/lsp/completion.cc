@@ -33,8 +33,8 @@ auto completion_kind_of(const mod::module& module, const ast::decl_stmt& decl) -
             return completion_kind::STRUCT;
         }
     }
-    return decl.has_modifier(ast::decl_modifiers::CONSTANT) ? completion_kind::CONSTANT
-                                                            : completion_kind::VARIABLE;
+    return decl.has_modifier(ast::decl_modifiers::MUT) ? completion_kind::VARIABLE
+                                                       : completion_kind::CONSTANT;
 }
 
 auto at_or_before(source_location a, source_location b) -> bool {

@@ -14,28 +14,28 @@ TEST_CASE("A parameter pack must be the last parameter") {
                                                  std::pair{0UZ, 21UZ}});
 }
 
-TEST_CASE("`for constexpr` cannot have an else/non-break clause") {
+TEST_CASE("`for comptime` cannot have an else/non-break clause") {
     helpers::test_parser_fail(
-        "for constexpr (a) |v| { b; } else return c;",
-        syntax::diagnostic{"`for constexpr` cannot have an `else`/non-break clause",
-                           syntax::error::CONSTEXPR_LOOP_HAS_ELSE,
-                           std::pair{0UZ, 29UZ}});
+        "for comptime (a) |v| { b; } else return c;",
+        syntax::diagnostic{"`for comptime` cannot have an `else`/non-break clause",
+                           syntax::error::COMPTIME_LOOP_HAS_ELSE,
+                           std::pair{0UZ, 28UZ}});
 }
 
-TEST_CASE("`while constexpr` cannot have an else/non-break clause") {
+TEST_CASE("`while comptime` cannot have an else/non-break clause") {
     helpers::test_parser_fail(
-        "while constexpr (a) { b; } else return c;",
-        syntax::diagnostic{"`while constexpr` cannot have an `else`/non-break clause",
-                           syntax::error::CONSTEXPR_LOOP_HAS_ELSE,
-                           std::pair{0UZ, 27UZ}});
+        "while comptime (a) { b; } else return c;",
+        syntax::diagnostic{"`while comptime` cannot have an `else`/non-break clause",
+                           syntax::error::COMPTIME_LOOP_HAS_ELSE,
+                           std::pair{0UZ, 26UZ}});
 }
 
-TEST_CASE("`for constexpr` cannot be labeled") {
+TEST_CASE("`for comptime` cannot be labeled") {
     helpers::test_parser_fail(
-        "blk: for constexpr (a) |v| { b; };",
-        syntax::diagnostic{"`for constexpr` cannot be labeled; it has no `break`/`continue` to "
+        "blk: for comptime (a) |v| { b; };",
+        syntax::diagnostic{"`for comptime` cannot be labeled; it has no `break`/`continue` to "
                            "target",
-                           syntax::error::CONSTEXPR_LOOP_LABELED,
+                           syntax::error::COMPTIME_LOOP_LABELED,
                            std::pair{0UZ, 5UZ}});
 }
 

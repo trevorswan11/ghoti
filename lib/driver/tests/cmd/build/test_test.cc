@@ -32,7 +32,7 @@ TEST_CASE("test command execution") {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
                 test "simple passing test" {{
-                    const a := 10 + 20;
+                    let a := 10 + 20;
                     @expect(a == 30);
                     @require(a > 0);
                 }}

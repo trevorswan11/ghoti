@@ -48,7 +48,7 @@ TEST_CASE("LLVM lowering globals and initializers from source") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const GLOBAL_CONST: i32 = 100;
-        var global_var: i64 = 500;
+        let mut global_var: i64 = 500;
     )")};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
@@ -68,8 +68,8 @@ TEST_CASE("LLVM lowering loops and mutation") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const sum_to := fn(n: i32): i32 {
-            var sum: i32 = 0;
-            var i: i32 = 1;
+            let mut sum: i32 = 0;
+            let mut i: i32 = 1;
             while (i <= n) {
                 sum = sum + i;
                 i = i + 1;

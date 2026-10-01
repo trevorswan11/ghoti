@@ -56,7 +56,7 @@ TEST_CASE("cfg: a nested @cfg splices its selected arm and prunes the rest") {
     constexpr std::string_view src{R"(
         pub const f := fn(): i32 {
             if (true) {
-                @cfg(ptr_bits >= 8) { const fine := 1; }
+                @cfg(ptr_bits >= 8) { let fine := 1; }
                 else                { @compileError("pruned nested arm"); }
             }
             return 0;

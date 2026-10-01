@@ -49,7 +49,7 @@ TEST_CASE("`rest[k]` requires an in-range, compile-time constant index") {
     )",
                           sema::error::PACK_INDEX_OUT_OF_RANGE));
     CHECK(helpers::raised(R"(
-        const f := fn(rest...): i32 { var i: usize = 0; return rest[i]; };
+        const f := fn(rest...): i32 { let mut i: usize = 0; return rest[i]; };
         const use := fn(): void { _ = f(1, 2); };
     )",
                           sema::error::PACK_INDEX_NOT_CONST));
@@ -61,21 +61,21 @@ TEST_CASE("an `impl I...` bound is enforced against every pack argument") {
         const Good := struct {};
         impl Format for Good { const fmt := fn(&self): i32 { return 1; }; };
         const f := fn(rest: impl Format...): void {};
-        const use := fn(): void { const g := Good{}; f(g, g, g); };
+        const use := fn(): void { let g := Good{}; f(g, g, g); };
     )");
     CHECK(helpers::raised(R"(
         const Format := interface { const fmt := fn(&self): i32; };
         const Good := struct {};
         impl Format for Good { const fmt := fn(&self): i32 { return 1; }; };
         const f := fn(rest: impl Format...): void {};
-        const use := fn(): void { const g := Good{}; f(g, 5); };
+        const use := fn(): void { let g := Good{}; f(g, 5); };
     )",
                           sema::error::UNSATISFIED_BOUND));
 }
 
 TEST_CASE("a bare parameter pack is out of position") {
     CHECK(helpers::raised(R"(
-        const f := fn(rest...): void { var v := rest; };
+        const f := fn(rest...): void { let mut v := rest; };
         const use := fn(): void { f(1, 2); };
     )",
                           sema::error::PACK_USE_OUT_OF_POSITION));
@@ -98,7 +98,7 @@ TEST_CASE("`expr...` only expands the enclosing parameter pack") {
     CHECK(helpers::raised(R"(
         const g := fn(rest...): void {};
         const f := fn(rest...): void {
-            var arr: [2]i32 = .{1, 2};
+            let mut arr: [2]i32 = .{1, 2};
             g(arr...);
         };
         const use := fn(): void { f(1, 2); };

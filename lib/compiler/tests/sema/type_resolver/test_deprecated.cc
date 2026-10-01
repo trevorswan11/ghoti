@@ -79,8 +79,8 @@ TEST_CASE("Deprecated fields, types and statics warn where they are named") {
             @[deprecated] pub const ORIGIN: i32 = 0;
         };
         pub const main := fn(): i32 {
-            const o: Old = .{ .a = 1 };
-            const p: P = .{ .x = 1, .y = 2 };
+            let o: Old = .{ .a = 1 };
+            let p: P = .{ .x = 1, .y = 2 };
             return p.x + P.ORIGIN + o.a;
         };
     )")};
@@ -96,10 +96,10 @@ TEST_CASE("Initializing a deprecated field warns at the initializer") {
         const P := struct { @[deprecated("use y")] x: i32 = 0, y: i32 };
         const U := union { @[deprecated] legacy: i32, current: i32 };
         pub const main := fn(): i32 {
-            const a: P = .{ .x = 1, .y = 2 };
-            const b := P{ .x = 3, .y = 4 };
-            const c: P = .{ .y = 5 };
-            const u: U = .{ .legacy = 6 };
+            let a: P = .{ .x = 1, .y = 2 };
+            let b := P{ .x = 3, .y = 4 };
+            let c: P = .{ .y = 5 };
+            let u: U = .{ .legacy = 6 };
             return a.y + b.y + c.y;
         };
     )")};
@@ -116,8 +116,8 @@ TEST_CASE("Deprecated uses inside instantiations warn once per site") {
         const generic := fn(T: type, x: T): i32 { return stale(); };
         const build := fn(T: type): Boxed(T) { return .{ .old = 1, .value = 2 }; };
         pub const main := fn(): i32 {
-            const a := build(i32);
-            const b := build(i64);
+            let a := build(i32);
+            let b := build(i64);
             return generic(i32, 1) + generic(u8, 2) + a.value + @intCast(i32, b.value);
         };
     )")};

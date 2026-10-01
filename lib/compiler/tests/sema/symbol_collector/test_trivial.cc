@@ -91,36 +91,28 @@ TEST_CASE("Semantically illegal statements") {
 using namespace std::string_view_literals;
 
 constexpr std::array RESTRICTED_INPUTS{
-    std::pair{"a := struct { var b := 2; };"sv, "struct"sv},
+    std::pair{"a := struct { let mut b := 2; };"sv, "struct"sv},
     std::pair{"a := enum { A };"sv, "enum"sv},
     std::pair{"a := union { b: bool };"sv, "union"sv},
 };
 
-TEST_CASE("Redundant constexpr usage for declarations") {
-    for (const auto& [input, desc] : RESTRICTED_INPUTS) {
-        helpers::test_collector_fail(
-            fmt::format("constexpr {}", input),
-            sema::diagnostic{fmt::format("All {}s are implicitly constexpr", desc),
-                             sema::error::REDUNDANT_CONSTEXPR,
-                             std::pair{0UZ, 0UZ}});
-    }
-}
-
 TEST_CASE("Restricted non-const top level declarations") {
     for (const auto& [input, desc] : RESTRICTED_INPUTS) {
-        helpers::test_collector_fail(
-            fmt::format("var {}", input),
-            sema::diagnostic{fmt::format("All {}s must be marked const", desc),
-                             sema::error::ILLEGAL_NON_CONST_STATEMENT,
-                             std::pair{0UZ, 0UZ}});
+        for (const auto binding : {"let"sv, "let mut"sv}) {
+            helpers::test_collector_fail(
+                fmt::format("{} {}", binding, input),
+                sema::diagnostic{fmt::format("All {}s must be declared with 'const'", desc),
+                                 sema::error::ILLEGAL_NON_CONST_STATEMENT,
+                                 std::pair{0UZ, 0UZ}});
+        }
     }
 }
 
 TEST_CASE("Restricted non-const member types") {
     for (const auto& [input, desc] : RESTRICTED_INPUTS) {
         helpers::test_collector_fail(
-            fmt::format("const S := struct {{ var {} }};", input),
-            sema::diagnostic{fmt::format("All {}s must be marked const", desc),
+            fmt::format("const S := struct {{ let mut {} }};", input),
+            sema::diagnostic{fmt::format("All {}s must be declared with 'const'", desc),
                              sema::error::ILLEGAL_NON_CONST_STATEMENT,
                              std::pair{0UZ, 20UZ}});
     }

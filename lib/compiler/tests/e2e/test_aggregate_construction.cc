@@ -21,7 +21,7 @@ TEST_CASE("`@Enum` constructs an enum type from an `EnumInfo` descriptor") {
                 },
                 .exhaustive = true,
             });
-            var v: T = T.b;
+            let mut v: T = T.b;
             return @backingInt(v);
         };
     )") == 20);
@@ -38,7 +38,7 @@ TEST_CASE("`@Enum` variants are usable with `@tagName`") {
                 },
                 .exhaustive = true,
             });
-            const s := @tagName(T.b);
+            let s := @tagName(T.b);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == 99);
@@ -56,7 +56,7 @@ TEST_CASE("`@Struct` constructs a struct type from a `StructInfo` descriptor") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 10, .y = 20 };
+            let mut v: T = .{ .x = 10, .y = 20 };
             return v.x + v.y;
         };
     )") == 30);
@@ -75,7 +75,7 @@ TEST_CASE("`@Struct` accepts a `^.{...}` slice literal for its `fields` descript
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 2, .y = 9 };
+            let mut v: T = .{ .x = 2, .y = 9 };
             return v.x + v.y + v.z;
         };
     )") == 12);
@@ -93,7 +93,7 @@ TEST_CASE("`@Struct` applies a field's own `default_value`") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 1 };
+            let mut v: T = .{ .x = 1 };
             return v.x + v.y;
         };
     )") == 100);
@@ -112,7 +112,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<module-scope const>`") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 1 };
+            let mut v: T = .{ .x = 1 };
             return v.x + v.y;
         };
     )") == 100);
@@ -121,7 +121,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<module-scope const>`") {
 TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const local_default: i32 = 99;
+            let local_default: i32 = 99;
             const T := @Struct(builtin.StructInfo{
                 .fields = [2]builtin.StructFieldInfo{
                     .{ .name = "x", .@"type" = i32 },
@@ -133,7 +133,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 1 };
+            let mut v: T = .{ .x = 1 };
             return v.x + v.y;
         };
     )") == 100);
@@ -142,7 +142,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
 TEST_CASE("`@Struct`'s `default_value` accepts `^<constexpr parameter>` inside a generic "
           "`fn(...): type` constructor") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := fn(T: type, constexpr default_z: T): type {
+        const Point := fn(T: type, comptime default_z: T): type {
             return @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = T },
@@ -156,7 +156,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<constexpr parameter>` inside a
         };
 
         pub const main := fn(): i32 {
-            const p: Point(i32, 1) = .{ .x = 2, .y = 9 };
+            let p: Point(i32, 1) = .{ .x = 2, .y = 9 };
             return p.x + p.y + p.z;
         };
     )") == 12);
@@ -177,7 +177,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts a struct-typed value") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 1 };
+            let mut v: T = .{ .x = 1 };
             return v.x + v.pt.a + v.pt.b;
         };
     )") == 8);
@@ -196,7 +196,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts an array-typed value") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{};
+            let mut v: T = .{};
             return v.arr[0] + v.arr[1];
         };
     )") == 11);
@@ -218,7 +218,7 @@ TEST_CASE("`@Struct`'s `default_value` recurses through a nested aggregate") {
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{};
+            let mut v: T = .{};
             return v.o.inner.n + v.o.tag;
         };
     )") == 9);
@@ -244,7 +244,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<cross-module const>`") {
                     .is_packed = false,
                     .backing_bits = 0,
                 });
-                var v: T = .{ .x = 1 };
+                let mut v: T = .{ .x = 1 };
                 return v.x + v.y;
             };
         )",
@@ -263,7 +263,7 @@ TEST_CASE("`@Union` constructs an untagged union type from a `UnionInfo` descrip
                 .is_packed = false,
                 .tagged = false,
             });
-            var v: T = .{ .i = 42 };
+            let mut v: T = .{ .i = 42 };
             return v.i;
         };
     )") == 42);
@@ -282,7 +282,7 @@ TEST_CASE("`@Struct` widens an unsuffixed float `default_value` to a narrower fi
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 2f32 };
+            let mut v: T = .{ .x = 2f32 };
             return @intFromFloat(i32, v.x + v.y);
         };
     )") == 3);
@@ -299,7 +299,7 @@ TEST_CASE("`@Struct` diagnoses a field descriptor with a typo'd key instead of c
                 .is_packed = false,
                 .backing_bits = 0,
             });
-            var v: T = .{ .x = 1 };
+            let mut v: T = .{ .x = 1 };
             return v.x;
         };
     )",
@@ -330,9 +330,9 @@ TEST_CASE("`@Struct`/`@Union`/`@Enum` infer an implicit `.{...}` descriptor's ty
                 .fields = [1]builtin.EnumFieldInfo{ .{ .name = "a", .value = 5 } },
                 .exhaustive = true,
             });
-            var s: S = .{ .x = 1 };
-            var u: U = .{ .x = 2 };
-            var e: E = E.a;
+            let mut s: S = .{ .x = 1 };
+            let mut u: U = .{ .x = 2 };
+            let mut e: E = E.a;
             return s.x + u.x + @backingInt(e);
         };
     )") == 8);
@@ -350,7 +350,7 @@ TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor
                 .is_packed = false,
                 .tagged = true,
             });
-            var v: T = .{ .i = 55 };
+            let mut v: T = .{ .i = 55 };
             return v.i;
         };
     )") == 55);

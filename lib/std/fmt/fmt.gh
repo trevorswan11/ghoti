@@ -14,8 +14,8 @@ test {
 
 pub import "int.gh" as int;
 
-pub constexpr digits2 := int.digits2;
-pub constexpr digit_to_char := int.digit_to_char;
+pub const digits2 := int.digits2;
+pub const digit_to_char := int.digit_to_char;
 
 test {
     import "int.gh";
@@ -35,13 +35,13 @@ pub const Format := interface {
 
 pub const Case := enum : u1 { lower, upper };
 
-pub const format := fn(w: &mut impl Writer, constexpr fmt: []u8, args...): std.Result(void, Error) {
-    constexpr {
+pub const format := fn(w: &mut impl Writer, comptime fmt: []u8, args...): std.Result(void, Error) {
+    comptime {
         spec.validate(fmt, args.len);
     }
 
-    var dyn_w: &mut dyn Writer = w;
-    constexpr var cursor: usize = 0;
+    let mut dyn_w: &mut dyn Writer = w;
+    comptime let mut cursor: usize = 0;
 
-    for constexpr (args, 0..) |arg, i| {}
+    for comptime (args, 0..) |arg, i| {}
 };

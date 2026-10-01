@@ -90,10 +90,10 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
             Error: type;
             pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error);
             pub const readAll := fn(&mut self, buf: []mut u8): Result(usize, Error) {
-                var i: usize = 0;
+                let mut i: usize = 0;
                 loop {
                     if (i == buf.len) { break; }
-                    const n := self.read(buf[i..])?;
+                    let n := self.read(buf[i..])?;
                     if (n == 0) { break; }
                     i += n;
                 };
@@ -107,8 +107,8 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
         impl reader.Reader for {0} {{
             const Error := u8;
             pub const read := fn(&mut self, buf: []mut u8): reader.Result(usize, Error) {{
-                const rem := self.data.len - self.pos;
-                const n := if (buf.len < rem) buf.len else rem;
+                let rem := self.data.len - self.pos;
+                let n := if (buf.len < rem) buf.len else rem;
                 self.pos += n;
                 return .{{ .ok = n }};
             }};

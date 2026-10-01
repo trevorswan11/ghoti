@@ -25,7 +25,7 @@ constexpr std::string_view main_gh{R"(
 import std;
 
 pub const main := fn(args: [][:0]u8): i32 {
-    const message := "Hello, world!";
+    let message := "Hello, world!";
     std.io.println(message);
     return 0;
 };

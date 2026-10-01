@@ -15,11 +15,11 @@ TEST_CASE("Well-formed integer / float builtins resolve") {
             return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
         };
         const k := fn(a: u32, b: u32): bool {
-            var out: u32 = 0u32;
+            let mut out: u32 = 0u32;
             return @addWithOverflow(a, b, &mut out);
         };
         const p := fn(a: u32, b: u32): bool {
-            var out: u32 = 0u32;
+            let mut out: u32 = 0u32;
             return @mulWithOverflow(a, b, ^mut out); // a `^mut T` pointer is also accepted
         };
     )");
@@ -53,7 +53,7 @@ TEST_CASE("@addWithOverflow rejects a by-value result argument") {
     helpers::test_resolver_fail(
         R"(
 const foo := fn(a: i32, b: i32): bool {
-    var out: i32 = 0;
+    let mut out: i32 = 0;
     return @addWithOverflow(a, b, out);
 };
 )",
@@ -67,13 +67,13 @@ TEST_CASE("Compile-time division / modulo by zero is an error") {
     helpers::test_checker_fail(
         "const bad := @divTrunc(10, 0);",
         sema::diagnostic{"Division by zero in compile-time constant expression",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         sema::error::COMPTIME_EVALUATION_FAILED,
                          std::pair{0UZ, 22UZ}});
 
     helpers::test_checker_fail(
         "const bad := @mod(10, 0);",
         sema::diagnostic{"Modulo by zero in compile-time constant expression",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         sema::error::COMPTIME_EVALUATION_FAILED,
                          std::pair{0UZ, 17UZ}});
 }
 

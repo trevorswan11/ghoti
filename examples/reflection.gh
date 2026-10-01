@@ -2,11 +2,11 @@ import std;
 
 const Point := @Struct(.{
     .fields = ^.{
-        .{ .name = "x", .@"type" = i32 },
-        .{ .name = "y", .@"type" = i32 },
+        .{ .name = "x", .type = i32 },
+        .{ .name = "y", .type = i32 },
         .{
             .name = "z",
-            .@"type" = i32,
+            .type = i32,
             .default_value = @ptrCast(^opaque, ^1),
         },
     },
@@ -22,6 +22,6 @@ impl Point {
 }
 
 test "Type creation" {
-    const p: Point = .{ .x = 2, .y = 9 };
+    let p: Point = .{ .x = 2, .y = 9 };
     @expect(p.sum() == 12);
 }

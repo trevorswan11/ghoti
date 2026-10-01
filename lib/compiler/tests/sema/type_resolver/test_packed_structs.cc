@@ -26,8 +26,8 @@ TEST_CASE("taking the address of a bit-packed packed struct field is rejected") 
     CHECK(helpers::raised(R"(
         const S := packed struct { a: u3, b: u5 };
         pub const main := fn(): i32 {
-            var s: S = .{ .a = 1, .b = 2 };
-            const p := &s.a;
+            let mut s: S = .{ .a = 1, .b = 2 };
+            let p := &s.a;
             return 0;
         };
     )",
@@ -62,8 +62,8 @@ TEST_CASE("taking the address of a bit-packed union field is rejected") {
     CHECK(helpers::raised(R"(
         const U := packed union { a: u8, b: u3 };
         pub const main := fn(): i32 {
-            var u: U = .{ .a = 1 };
-            const p := &u.a;
+            let mut u: U = .{ .a = 1 };
+            let p := &u.a;
             return 0;
         };
     )",

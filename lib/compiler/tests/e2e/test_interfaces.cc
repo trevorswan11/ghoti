@@ -17,7 +17,7 @@ TEST_CASE("an inherent impl method runs on an instance") {
             pub const sum := fn(&self): i32 { return self.x + self.y; };
         }
         pub const main := fn(): i32 {
-            var p := Point{ .x = 12, .y = 30 };
+            let mut p := Point{ .x = 12, .y = 30 };
             return p.sum();
         };
     )") == 42);
@@ -30,7 +30,7 @@ TEST_CASE("an inherent impl static constructor runs via implicit access") {
             pub const of := fn(v: i32): @This() { return .{ .v = v }; };
         }
         pub const main := fn(): i32 {
-            const b := Box.of(7);
+            let b := Box.of(7);
             return b.v;
         };
     )") == 7);
@@ -46,7 +46,7 @@ TEST_CASE("a trait impl method runs through static dispatch") {
             pub const apply := fn(&self, n: i32): i32 { return n * self.factor; };
         }
         pub const main := fn(): i32 {
-            var t := Twice{ .factor = 3 };
+            let mut t := Twice{ .factor = 3 };
             return t.apply(14);
         };
     )") == 42);
@@ -63,7 +63,7 @@ TEST_CASE("a trait impl inherits and runs an interface default method") {
             pub const step := fn(&self): i32 { return self.by; };
         }
         pub const main := fn(): i32 {
-            var o := One{ .by = 14 };
+            let mut o := One{ .by = 14 };
             return o.stepThrice();
         };
     )") == 42);
@@ -77,7 +77,7 @@ TEST_CASE("a type can implement two different interfaces") {
         impl Reader for Dev { pub const rd := fn(&self): i32 { return self.r; }; }
         impl Writer for Dev { pub const wr := fn(&self): i32 { return self.w; }; }
         pub const main := fn(): i32 {
-            var d := Dev{ .r = 20, .w = 22 };
+            let mut d := Dev{ .r = 20, .w = 22 };
             return d.rd() + d.wr();
         };
     )") == 42);
@@ -90,7 +90,7 @@ TEST_CASE("an `impl I` bounded generic parameter dispatches to the argument's im
         impl Doubler for Twice { pub const apply := fn(&self, n: i32): i32 { return n * self.k; }; }
         const run := fn(d: &impl Doubler, n: i32): i32 { return d.apply(n); };
         pub const main := fn(): i32 {
-            var t := Twice{ .k = 3 };
+            let mut t := Twice{ .k = 3 };
             return run(&t, 14);
         };
     )") == 42);
@@ -105,7 +105,7 @@ TEST_CASE("an `impl (A + B)` intersection parameter uses both interfaces") {
         impl W for Dev { pub const wr := fn(&self): i32 { return self.b; }; }
         const tee := fn(x: &impl (R + W)): i32 { return x.rd() + x.wr(); };
         pub const main := fn(): i32 {
-            var d := Dev{ .a = 19, .b = 23 };
+            let mut d := Dev{ .a = 19, .b = 23 };
             return tee(&d);
         };
     )") == 42);
@@ -118,7 +118,7 @@ TEST_CASE("a parameterized inherent impl adds a method to every instantiation of
             pub const doubled := fn(&self): T { return self.val + self.val; };
         }
         pub const main := fn(): i32 {
-            var b: Box(i32) = .{ .val = 21 };
+            let mut b: Box(i32) = .{ .val = 21 };
             return b.doubled();
         };
     )") == 42);
@@ -131,8 +131,8 @@ TEST_CASE("one parameterized-impl method set serves repeated uses of the same in
             pub const get := fn(&self): T { return self.val; };
         }
         pub const main := fn(): i32 {
-            var a: Box(i32) = .{ .val = 20 };
-            var b: Box(i32) = .{ .val = 22 };
+            let mut a: Box(i32) = .{ .val = 20 };
+            let mut b: Box(i32) = .{ .val = 22 };
             return a.get() + b.get();
         };
     )") == 42);
@@ -146,7 +146,7 @@ TEST_CASE("a parameterized trait impl over a local ctor dispatches statically") 
             pub const show := fn(&self): i32 { return self.val; };
         }
         pub const main := fn(): i32 {
-            var b: Box(i32) = .{ .val = 42 };
+            let mut b: Box(i32) = .{ .val = 42 };
             return b.show();
         };
     )") == 42);
@@ -160,7 +160,7 @@ TEST_CASE("a parameterized impl with two type parameters remaps each independent
             pub const second := fn(&self): B { return self.b; };
         }
         pub const main := fn(): i32 {
-            var p: Pair(i32, i64) = .{ .a = 30, .b = 12 };
+            let mut p: Pair(i32, i64) = .{ .a = 30, .b = 12 };
             return p.first() + @intCast(i32, p.second());
         };
     )") == 42);
@@ -168,13 +168,13 @@ TEST_CASE("a parameterized impl with two type parameters remaps each independent
 
 TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bodies") {
     CHECK(helpers::compile_and_run(R"(
-        const Ring := fn(constexpr sz: usize): type { return struct { head: usize }; };
-        impl(constexpr n: usize) Ring(n) {
+        const Ring := fn(comptime sz: usize): type { return struct { head: usize }; };
+        impl(comptime n: usize) Ring(n) {
             pub const capacity := fn(&self): usize { return n; };
             pub const half := fn(&self): usize { return n / 2; };
         }
         pub const main := fn(): i32 {
-            var r: Ring(28) = .{ .head = 0 };
+            let mut r: Ring(28) = .{ .head = 0 };
             return @intCast(i32, r.capacity()) + @intCast(i32, r.half());
         };
     )") == 42);
@@ -182,12 +182,12 @@ TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bo
 
 TEST_CASE("a parameterized impl mixes a type and a `constexpr` parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const Slot := fn(T: type, constexpr tag: i32): type { return struct { val: T }; };
-        impl(T: type, constexpr tag: i32) Slot(T, tag) {
+        const Slot := fn(T: type, comptime tag: i32): type { return struct { val: T }; };
+        impl(T: type, comptime tag: i32) Slot(T, tag) {
             pub const tagged := fn(&self): T { return self.val + tag; };
         }
         pub const main := fn(): i32 {
-            var s: Slot(i32, 2) = .{ .val = 40 };
+            let mut s: Slot(i32, 2) = .{ .val = 40 };
             return s.tagged();
         };
     )") == 42);
@@ -195,17 +195,17 @@ TEST_CASE("a parameterized impl mixes a type and a `constexpr` parameter") {
 
 TEST_CASE("a `constexpr` parameterized-impl param drives a runtime loop bound") {
     CHECK(helpers::compile_and_run(R"(
-        const Counter := fn(constexpr limit: usize): type { return struct { base: i32 }; };
-        impl(constexpr n: usize) Counter(n) {
+        const Counter := fn(comptime limit: usize): type { return struct { base: i32 }; };
+        impl(comptime n: usize) Counter(n) {
             pub const upto := fn(&self): i32 {
-                var acc: i32 = self.base;
-                var i: usize = 0;
+                let mut acc: i32 = self.base;
+                let mut i: usize = 0;
                 while (i < n) { acc = acc + 1; i = i + 1; }
                 return acc;
             };
         }
         pub const main := fn(): i32 {
-            var c: Counter(9) = .{ .base = 33 };
+            let mut c: Counter(9) = .{ .base = 33 };
             return c.upto();
         };
     )") == 42);
@@ -216,7 +216,7 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               R"(
         import "shapes.gh" as shapes;
         pub const main := fn(): i32 {
-            var s: shapes.Scaled(i32) = .{ .base = 42 };
+            let mut s: shapes.Scaled(i32) = .{ .base = 42 };
             return s.size();
         };
     )",
@@ -233,18 +233,18 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               })) == 42);
 }
 
-TEST_CASE("`if constexpr` on a parameterized-impl `constexpr` param folds per instantiation") {
+TEST_CASE("`if comptime` on a parameterized-impl `constexpr` param folds per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
-        impl(constexpr n: usize) Buf(n) {
+        const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
+        impl(comptime n: usize) Buf(n) {
             pub const kind := fn(&self): i32 {
-                if constexpr (n > 4) { return 100 + self.head; }
+                if comptime (n > 4) { return 100 + self.head; }
                 return self.head;
             };
         }
         pub const main := fn(): i32 {
-            var big: Buf(8) = .{ .head = 1 };
-            var small: Buf(2) = .{ .head = 5 };
+            let mut big: Buf(8) = .{ .head = 1 };
+            let mut small: Buf(2) = .{ .head = 5 };
             return big.kind() + small.kind();
         };
     )") == 106);
@@ -252,33 +252,33 @@ TEST_CASE("`if constexpr` on a parameterized-impl `constexpr` param folds per in
 
 TEST_CASE("`match constexpr` on a parameterized-impl `constexpr` param selects per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
-        impl(constexpr n: usize) Buf(n) {
+        const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
+        impl(comptime n: usize) Buf(n) {
             pub const bucket := fn(&self): i32 {
-                return match constexpr (n) { 0 => 0, 1 => 10, _ => 99 } + self.head;
+                return match comptime (n) { 0 => 0, 1 => 10, _ => 99 } + self.head;
             };
         }
         pub const main := fn(): i32 {
-            var one: Buf(1) = .{ .head = 2 };
-            var many: Buf(7) = .{ .head = 0 };
+            let mut one: Buf(1) = .{ .head = 2 };
+            let mut many: Buf(7) = .{ .head = 0 };
             return one.bucket() + many.bucket();
         };
     )") == 111);
 }
 
-TEST_CASE("a dead `if constexpr` arm in a parameterized-impl body is never resolved") {
+TEST_CASE("a dead `if comptime` arm in a parameterized-impl body is never resolved") {
     // The `big` arm reads a field that does not exist; it must not be type-checked for
     // `Tag(false)`.
     CHECK(helpers::compile_and_run(R"(
-        const Tag := fn(constexpr big: bool): type { return struct { v: i32 }; };
-        impl(constexpr big: bool) Tag(big) {
+        const Tag := fn(comptime big: bool): type { return struct { v: i32 }; };
+        impl(comptime big: bool) Tag(big) {
             pub const describe := fn(&self): i32 {
-                if constexpr (big) { return self.v + self.missing_field; }
+                if comptime (big) { return self.v + self.missing_field; }
                 return self.v;
             };
         }
         pub const main := fn(): i32 {
-            var s: Tag(false) = .{ .v = 42 };
+            let mut s: Tag(false) = .{ .v = 42 };
             return s.describe();
         };
     )") == 42);
@@ -286,17 +286,17 @@ TEST_CASE("a dead `if constexpr` arm in a parameterized-impl body is never resol
 
 TEST_CASE("a dead `match constexpr` arm in a parameterized-impl body is never resolved") {
     CHECK(helpers::compile_and_run(R"(
-        const Tag := fn(constexpr mode: i32): type { return struct { v: i32 }; };
-        impl(constexpr mode: i32) Tag(mode) {
+        const Tag := fn(comptime mode: i32): type { return struct { v: i32 }; };
+        impl(comptime mode: i32) Tag(mode) {
             pub const run := fn(&self): i32 {
-                return match constexpr (mode) {
+                return match comptime (mode) {
                     0 => self.v,
                     _ => self.v + self.only_when_nonzero,
                 };
             };
         }
         pub const main := fn(): i32 {
-            var s: Tag(0) = .{ .v = 42 };
+            let mut s: Tag(0) = .{ .v = 42 };
             return s.run();
         };
     )") == 42);
@@ -313,7 +313,7 @@ TEST_CASE("an `impl (A + B + C)` intersection parameter accepts three interfaces
         impl C for Dev { pub const c := fn(&self): i32 { return self.n * 3; }; }
         const sum := fn(x: &impl (A + B + C)): i32 { return x.a() + x.b() + x.c(); };
         pub const main := fn(): i32 {
-            var d := Dev{ .n = 7 };
+            let mut d := Dev{ .n = 7 };
             return sum(&d);
         };
     )") == 42);
@@ -326,7 +326,7 @@ TEST_CASE("a method call through a `&dyn I` dispatches to the concrete impl") {
         impl W for File { pub const val := fn(&self): i32 { return self.fd; }; }
         const use := fn(w: &dyn W): i32 { return w.val(); };
         pub const main := fn(): i32 {
-            var f := File{ .fd = 42 };
+            let mut f := File{ .fd = 42 };
             return use(&f);
         };
     )") == 42);
@@ -342,7 +342,7 @@ TEST_CASE("a `^dyn I` fat pointer carries a default method through its vtable") 
         impl Shape for Box { pub const area := fn(&self): i32 { return self.w * self.h; }; }
         const total := fn(s: ^dyn Shape): i32 { return s.area() + s.scaled(2); };
         pub const main := fn(): i32 {
-            var b := Box{ .w = 3, .h = 4 };
+            let mut b := Box{ .w = 3, .h = 4 };
             return total(^b);
         };
     )") == 36);
@@ -354,7 +354,7 @@ TEST_CASE("`&dyn I` dispatches across a module boundary") {
             import "sh.gh" as sh;
             const measure := fn(x: &dyn sh.Shape): i32 { return x.area(); };
             pub const main := fn(): i32 {
-                var q: sh.Sq = .{ .s = 7 };
+                let mut q: sh.Sq = .{ .s = 7 };
                 return measure(&q) - 7;
             };
         )",
@@ -379,7 +379,7 @@ TEST_CASE("`&dyn I` fills a defaulted associated type declared in another module
             }
             const feed := fn(s: &mut dyn sk.Outer.Sink): i32 { return s.put(3); };
             pub const main := fn(): i32 {
-                var s: S = .{ .total = 1 };
+                let mut s: S = .{ .total = 1 };
                 return feed(&mut s);
             };
         )",
@@ -408,8 +408,8 @@ TEST_CASE("an aliased bare `dyn I` dispatches through `&` and `^`, across module
             const by_ref := fn(s: &mut sk.Bound): i32 { return s.put(3); };
             const by_ptr := fn(s: ^mut sk.Bound): i32 { return s.put(3); };
             pub const main := fn(): i32 {
-                var s: S = .{ .total = 1 };
-                const a := by_ref(&mut s);
+                let mut s: S = .{ .total = 1 };
+                let a := by_ref(&mut s);
                 return a + by_ptr(^mut s);
             };
         )",
@@ -428,14 +428,14 @@ TEST_CASE("`[]^dyn I` iterates a heterogeneous collection through the vtable") {
         const A := struct { a: i32 };
         impl N for A { pub const v := fn(&self): i32 { return self.a; }; }
         const sumAll := fn(xs: []^dyn N): i32 {
-            var total: i32 = 0;
+            let mut total: i32 = 0;
             for (xs) |x| { total = total + x.v(); }
             return total;
         };
         pub const main := fn(): i32 {
-            var p := A{ .a = 10 };
-            var q := A{ .a = 32 };
-            var arr: [2]^dyn N = .{ ^p, ^q };
+            let mut p := A{ .a = 10 };
+            let mut q := A{ .a = 32 };
+            let mut arr: [2]^dyn N = .{ ^p, ^q };
             return sumAll(arr[..]);
         };
     )") == 42);
@@ -451,7 +451,7 @@ TEST_CASE("`&dyn I(Assoc = T)` substitutes the associated type in method signatu
         }
         const takeFirst := fn(s: &dyn Src(Item = i32)): i32 { return s.first(); };
         pub const main := fn(): i32 {
-            var b := Box{ .v = 42 };
+            let mut b := Box{ .v = 42 };
             return takeFirst(&b);
         };
     )") == 42);
@@ -466,8 +466,8 @@ TEST_CASE("two impls of the same interface keep distinct methods under static an
         impl N for B { pub const get := fn(&self): i32 { return self.y * 10; }; }
         const dyn_get := fn(n: &dyn N): i32 { return n.get(); };
         pub const main := fn(): i32 {
-            var a := A{ .x = 1 };
-            var b := B{ .y = 2 };
+            let mut a := A{ .x = 1 };
+            let mut b := B{ .y = 2 };
             return a.get() + b.get() + dyn_get(&a) + dyn_get(&b);
         };
     )") == 42);
@@ -480,7 +480,7 @@ TEST_CASE("a `&dyn I` argument coerces from a plain `&mut T`") {
         impl N for Ctr { pub const bump := fn(&mut self): i32 { self.n = self.n + 1; return self.n; }; }
         const run := fn(x: &mut dyn N): i32 { return x.bump() + x.bump(); };
         pub const main := fn(): i32 {
-            var c := Ctr{ .n = 19 };
+            let mut c := Ctr{ .n = 19 };
             return run(&mut c);
         };
     )") == 41);
@@ -494,8 +494,8 @@ TEST_CASE("a `^dyn I` stored in a struct field dispatches when used later") {
         const Holder := struct { inner: ^dyn N };
         const readHeld := fn(h: &Holder): i32 { return h.inner.get(); };
         pub const main := fn(): i32 {
-            var s := Src{ .v = 42 };
-            var h := Holder{ .inner = ^s };
+            let mut s := Src{ .v = 42 };
+            let mut h := Holder{ .inner = ^s };
             return readHeld(&h);
         };
     )") == 42);
@@ -516,7 +516,7 @@ TEST_CASE("several methods dispatch through one `&dyn I`") {
         }
         const norm := fn(v: &dyn Vec): i32 { return v.x() + v.y() + v.z(); };
         pub const main := fn(): i32 {
-            var p := P{ .a = 12, .b = 14, .c = 16 };
+            let mut p := P{ .a = 12, .b = 14, .c = 16 };
             return norm(&p);
         };
     )") == 42);
@@ -530,7 +530,7 @@ TEST_CASE("a `&dyn I` passes through two call layers") {
         const inner := fn(n: &dyn N): i32 { return n.get(); };
         const outer := fn(n: &dyn N): i32 { return inner(n) + 1; };
         pub const main := fn(): i32 {
-            var t := T{ .v = 41 };
+            let mut t := T{ .v = 41 };
             return outer(&t);
         };
     )") == 42);
@@ -549,9 +549,9 @@ TEST_CASE("a `&mut dyn I` method mutates state observed by a later `&dyn I` call
         }
         const fill := fn(a: &mut dyn Acc): void { a.add(20); a.add(22); };
         pub const main := fn(): i32 {
-            var sum := Sum{ .s = 0 };
+            let mut sum := Sum{ .s = 0 };
             fill(&mut sum);
-            var view: &dyn Acc = &sum;
+            let mut view: &dyn Acc = &sum;
             return view.total();
         };
     )") == 42);
@@ -567,7 +567,7 @@ TEST_CASE("a `&dyn I` default method calls a required method through the same vt
         impl Countable for Bag { pub const count := fn(&self): i32 { return self.n; }; }
         const check := fn(c: &dyn Countable): i32 { return c.count() * 10 + c.isEmpty(); };
         pub const main := fn(): i32 {
-            var b := Bag{ .n = 4 };
+            let mut b := Bag{ .n = 4 };
             return check(&b) + 2;
         };
     )") == 42);
@@ -592,13 +592,13 @@ TEST_CASE("`impl` works on every aggregate kind (enum, union, extern, packed)") 
         const EPk := extern packed struct { a: i32, b: u8 };
         impl EPk { pub const geta := fn(&self): i32 { return self.a; }; }
         pub const main := fn(): i32 {
-            var d := Dir.A;
-            var t: Tag = .{ .i = 5 };
-            var e: Ext = .{ .a = 6, .b = 0 };
-            var p: Pk = .{ .a = 4, .b = 3 };
-            var u: EU = .{ .a = 8 };
-            var q: EPk = .{ .a = 3, .b = 0 };
-            var view: &dyn N = &t;
+            let mut d := Dir.A;
+            let mut t: Tag = .{ .i = 5 };
+            let mut e: Ext = .{ .a = 6, .b = 0 };
+            let mut p: Pk = .{ .a = 4, .b = 3 };
+            let mut u: EU = .{ .a = 8 };
+            let mut q: EPk = .{ .a = 3, .b = 0 };
+            let mut view: &dyn N = &t;
             return d.twice() + view.v() + e.v() + p.sum() + u.geti() + q.geta();
         };
     )") == 2 + 5 + 6 + 7 + 8 + 3);
@@ -610,11 +610,11 @@ TEST_CASE("`@dynCast` recovers a concrete pointer from a `&dyn I`") {
         const T := struct { a: i32, b: i32 };
         impl N for T { pub const v := fn(&self): i32 { return self.a; }; }
         const back := fn(w: &dyn N): i32 {
-            var t: ^T = @dynCast(^T, w);
+            let mut t: ^T = @dynCast(^T, w);
             return t.a + t.b;
         };
         pub const main := fn(): i32 {
-            var x := T{ .a = 20, .b = 22 };
+            let mut x := T{ .a = 20, .b = 22 };
             return back(&x);
         };
     )") == 42);
@@ -626,11 +626,11 @@ TEST_CASE("`@dynCast` to `&mut T` allows mutating through the recovered referenc
         const Cell := struct { n: i32 };
         impl N for Cell { pub const get := fn(&self): i32 { return self.n; }; }
         const bump := fn(w: &mut dyn N): void {
-            var c: &mut Cell = @dynCast(&mut Cell, w);
+            let mut c: &mut Cell = @dynCast(&mut Cell, w);
             c.n = c.n + 1;
         };
         pub const main := fn(): i32 {
-            var cell := Cell{ .n = 41 };
+            let mut cell := Cell{ .n = 41 };
             bump(&mut cell);
             return cell.n;
         };
@@ -653,7 +653,7 @@ TEST_CASE("Two impls in separate modules sharing an interface") {
             pub const base := fn(&self): i32 { return self.v; };
         }
         pub const make_a := fn(): i32 {
-            var a := AType{ .v = 4 };
+            let mut a := AType{ .v = 4 };
             return a.add_three();
         };
     )"};
@@ -666,7 +666,7 @@ TEST_CASE("Two impls in separate modules sharing an interface") {
                 pub const base := fn(&self): i32 { return self.v; };
             }
             pub const main := fn(): i32 {
-                var b := BType{ .v = 0 };
+                let mut b := BType{ .v = 0 };
                 return ma.make_a();
             };
         )",
@@ -698,8 +698,8 @@ TEST_CASE("Multiple impls of shared interface retain inherited defaults") {
                 pub const code := fn(&self): i32 { return self.c; };
             }
             pub const main := fn(): i32 {
-                var a := Alpha{ .c = 2 };
-                var b := Beta{ .c = 3 };
+                let mut a := Alpha{ .c = 2 };
+                let mut b := Beta{ .c = 3 };
                 return (a.score() - 4) + (b.score() + 1);
             };
         )",
@@ -724,7 +724,7 @@ TEST_CASE("Cross-module inherited default method compiles and runs") {
                 pub const id := fn(&self): i32 { return self.val; };
             }
             pub const main := fn(): i32 {
-                var it := Item{ .val = 2 };
+                let mut it := Item{ .val = 2 };
                 return it.boosted_id();
             };
         )",
@@ -744,8 +744,8 @@ TEST_CASE("a global variable initialized with a `^dyn I` fat pointer dispatches 
         const Holder := struct {
             vtable: ^dyn Counter,
         };
-        var counter_impl: MyCounter = .{ .val = 42 };
-        pub var global_holder: Holder = .{
+        let mut counter_impl: MyCounter = .{ .val = 42 };
+        pub let mut global_holder: Holder = .{
             .vtable = ^counter_impl,
         };
         pub const main := fn(): i32 {
@@ -769,8 +769,8 @@ TEST_CASE(
         const Wrapper := struct {
             ptr: ^mut dyn Resetter,
         };
-        var state_impl: State = .{ .val = 10 };
-        pub var wrapper: Wrapper = .{
+        let mut state_impl: State = .{ .val = 10 };
+        pub let mut wrapper: Wrapper = .{
             .ptr = ^mut state_impl,
         };
         pub const main := fn(): i32 {

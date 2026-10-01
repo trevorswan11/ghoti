@@ -177,7 +177,7 @@ auto dumper::visit(node_id, const call_expr& call) -> void {
 
 auto dumper::visit(node_id, const do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "DoWhileLoopExpression{}", do_while.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "DoWhileLoopExpression{}", do_while.is_constexpr ? " (comptime)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Body: ", indent_.current_branch());
@@ -248,7 +248,7 @@ auto dumper::visit(node_id, const enum_expr& enum_expr) -> void {
 
 auto dumper::visit(node_id, const for_loop_expr& for_loop) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "ForLoopExpression{}", for_loop.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "ForLoopExpression{}", for_loop.is_constexpr ? " (comptime)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Iterables:", indent_.current_branch());
@@ -303,7 +303,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
                            fmt::println(out_,
                                         "{}Param{}{}:",
                                         indent_.current_branch(),
-                                        parameter.is_constexpr_written ? " (constexpr)" : "",
+                                        parameter.is_constexpr_written ? " (comptime)" : "",
                                         parameter.is_pack ? " (pack)" : "");
                            {
                                const bool          no_type{!parameter.explicit_type.is_valid()};
@@ -385,8 +385,7 @@ auto dumper::visit(node_id, const if_expr& if_expr) -> void {
     fmt::println(out_, "IfExpression");
     {
         const indent::guard g{indent_, false};
-        fmt::println(
-            out_, "{}Constexpr: {}", indent_.current_branch(), if_expr.constexpr_condition);
+        fmt::println(out_, "{}Comptime: {}", indent_.current_branch(), if_expr.constexpr_condition);
     }
 
     if (if_expr.condition) {
@@ -426,7 +425,7 @@ auto dumper::visit(node_id, const index_expr& index) -> void {
 
 auto dumper::visit(node_id, const infinite_loop_expr& loop) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "InfiniteLoopExpression{}", loop.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "InfiniteLoopExpression{}", loop.is_constexpr ? " (comptime)" : "");
     const auto& block{ast_.get_as<block_stmt>(*loop.block)};
     dump_node_list(block);
 }
@@ -563,7 +562,7 @@ auto dumper::visit(node_id, const label_expr& label) -> void {
 
 auto dumper::visit(node_id, const match_expr& match) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "MatchExpression{}", match.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "MatchExpression{}", match.is_constexpr ? " (comptime)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Matcher: ", indent_.current_branch());
@@ -877,7 +876,7 @@ auto dumper::visit(node_id, const interface_expr& node) -> void {
 
 auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "WhileLoopExpression{}", while_expr.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "WhileLoopExpression{}", while_expr.is_constexpr ? " (comptime)" : "");
     {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Condition: ", indent_.current_branch());
@@ -906,7 +905,7 @@ auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
 
 auto dumper::visit(node_id, const block_stmt& block) -> void {
     PROFILE_FUNCTION();
-    fmt::println(out_, "BlockStatement{}", block.is_constexpr ? " (constexpr)" : "");
+    fmt::println(out_, "BlockStatement{}", block.is_constexpr ? " (comptime)" : "");
     if (block.empty()) {
         const indent::guard g{indent_, true};
         fmt::println(out_, "{}<empty>", indent_.current_branch());
@@ -1070,7 +1069,7 @@ auto dumper::visit(node_id, const impl_stmt& node) -> void {
             fmt::println(out_,
                          "{}Param{}:",
                          indent_.current_branch(),
-                         parameter.is_constexpr_written ? " (constexpr)" : "");
+                         parameter.is_constexpr_written ? " (comptime)" : "");
             {
                 const indent::guard g_name{indent_, false};
                 fmt::print(out_, "{}Name: ", indent_.current_branch());

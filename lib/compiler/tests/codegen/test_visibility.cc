@@ -27,8 +27,8 @@ namespace {
 constexpr std::string_view visible_library{R"(
 @[visibility(.hidden)] export const helper := fn(): i32 { return 1; };
 export const api := fn(): i32 { return helper() + 1; };
-@[visibility(.hidden)] export var hidden_state: i32 = 3;
-export var shared_state: i32 = 4;
+@[visibility(.hidden)] export let mut hidden_state: i32 = 3;
+export let mut shared_state: i32 = 4;
 )"};
 
 [[nodiscard]] auto ir_for(std::string_view source, std::string_view triple) -> std::string {
@@ -46,8 +46,8 @@ TEST_CASE("visibility lowers onto functions and globals") {
         @[visibility(.hidden)] export const hidden_fn := fn(): i32 { return 1; };
         @[visibility(.protected)] pub const protected_fn := fn(): i32 { return 2; };
         @[visibility(.default)] export const default_fn := fn(): i32 { return 3; };
-        @[visibility(.hidden)] export var hidden_var: i32 = 1;
-        @[visibility(.protected)] pub var protected_var: i32 = 2;
+        @[visibility(.hidden)] export let mut hidden_var: i32 = 1;
+        @[visibility(.protected)] pub let mut protected_var: i32 = 2;
     )",
                          "x86_64-unknown-linux-gnu")};
     CHECK(ir.contains("define hidden i32 @hidden_fn("));
@@ -72,7 +72,7 @@ TEST_CASE("@typeInfo of a function declaration reflects its visibility") {
     helpers::resolve_and_check(R"(
         @[visibility(.hidden)] export const quiet := fn(): i32 { return 1; };
         export const loud := fn(): i32 { return 2; };
-        constexpr {
+        comptime {
             @assert(@typeInfo(quiet).function.visibility == .hidden);
             @assert(@typeInfo(loud).function.visibility == .default);
             @assert(@typeInfo(@TypeOf(quiet)).function.visibility == .default);
@@ -87,7 +87,7 @@ TEST_CASE("visibility needs a symbol other objects can link to") {
     auto [ctx, idx]{helpers::resolve_for_target(R"(@[visibility(.hidden)] const internal := 1;
 @[visibility(.hidden)] const private_fn := fn(): void {};
 pub const f := fn(): void {
-    @[visibility(.hidden)] var local: i32 = 0;
+    @[visibility(.hidden)] let mut local: i32 = 0;
     _ = local;
 };
 )",
@@ -106,8 +106,8 @@ TEST_CASE("Protected visibility is rejected outside ELF") {
                                           "arm64-apple-macos",
                                           "wasm32-unknown-unknown"}) {
         INFO(triple);
-        auto [ctx, idx]{
-            helpers::resolve_for_target("@[visibility(.protected)] pub var g: i32 = 0;", triple)};
+        auto [ctx, idx]{helpers::resolve_for_target(
+            "@[visibility(.protected)] pub let mut g: i32 = 0;", triple)};
         helpers::check_errors_against<sema::diagnostics>(
             ctx->root_mod,
             sema::diagnostic{fmt::format("Visibility '.protected' needs an ELF target; '{}' has no "

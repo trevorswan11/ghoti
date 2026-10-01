@@ -24,8 +24,8 @@ TEST_CASE("address of a scalar static member constant") {
     CHECK(helpers::compile_and_run(R"(
         const Cfg := struct {
             const BASE := 21;
-            const via_this := fn(): i32 { const p := ^@This().BASE; return *p; };
-            const via_name := fn(): i32 { const p := ^Cfg.BASE; return *p; };
+            const via_this := fn(): i32 { let p := ^@This().BASE; return *p; };
+            const via_name := fn(): i32 { let p := ^Cfg.BASE; return *p; };
         };
 
         pub const main := fn(): i32 {
@@ -42,11 +42,11 @@ TEST_CASE("address of an aggregate static member constant (vtable singleton)") {
         const Widget := struct {
             const table := VTable{ .step = inc };
             const run := fn(): i32 {
-                const vt := ^Widget.table;
+                let vt := ^Widget.table;
                 return vt.step(41);
             };
             const run_this := fn(): i32 {
-                const vt := ^@This().table;
+                let vt := ^@This().table;
                 return vt.step(41);
             };
         };
@@ -63,7 +63,7 @@ TEST_CASE("reference to a global constant aggregate, then field access") {
         const ORIGIN := Point{ .x = 40, .y = 2 };
 
         pub const main := fn(): i32 {
-            const r := &ORIGIN;
+            let r := &ORIGIN;
             return r.x + r.y;
         };
     )") == 42);

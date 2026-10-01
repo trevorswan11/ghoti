@@ -99,10 +99,10 @@ pub const Rewrappable := interface {
 extern const __ghoti_test_take_skipped: fn(): bool;
 
 pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
-    var failures: i32 = 0;
-    var skipped: i32 = 0;
+    let mut failures: i32 = 0;
+    let mut skipped: i32 = 0;
     for (tests) |entry| {
-        const passed := entry.func();
+        let passed := entry.func();
         if (__ghoti_test_take_skipped()) {
             skipped += 1;
         } else if (!passed) {
@@ -216,7 +216,7 @@ pub const UnionInfo := struct {
 
 pub const EnumFieldInfo := struct {
     pub name: []u8,
-    pub value: constexpr_int,
+    pub value: comptime_int,
 };
 
 pub const EnumInfo := struct {
@@ -251,8 +251,8 @@ pub const FnInfo := struct {
 pub const TypeInfo := union {
     int: IntInfo,
     float: FloatInfo,
-    @"constexpr_int": void,
-    @"constexpr_float": void,
+    @"comptime_int": void,
+    @"comptime_float": void,
     @"bool": void,
     @"void": void,
     @"noreturn": void,

@@ -96,7 +96,7 @@ TEST_CASE("GIR a reached `unreachable` routes through panic_handler") {
 TEST_CASE("GIR array literal stack allocation and initialization") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_array_lit := fn(): i32 {
-            var a: [3]i32 = [3]i32{ 10, 20, 30 };
+            let mut a: [3]i32 = [3]i32{ 10, 20, 30 };
             return a[1];
         };
     )")};
@@ -157,8 +157,8 @@ TEST_CASE("GIR required libraries are deduplicated") {
 TEST_CASE("GIR builtins cast operations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_casts := fn(x: i32, ptr: ^i32): usize {
-            const w := @as(i64, x);
-            const u := @intFromPtr(ptr);
+            let w := @as(i64, x);
+            let u := @intFromPtr(ptr);
             return u;
         };
     )")};
@@ -195,7 +195,7 @@ TEST_CASE("GIR linkage and visibility attributes") {
         export const exp_fn := fn(): void {};
         pub const pub_fn := fn(): void {};
         const priv_fn := fn(): void {};
-        export const exp_global: i32 = 10;
+        export let exp_global: i32 = 10;
         pub const pub_global: i32 = 20;
         const priv_global: i32 = 30;
     )")};
@@ -248,7 +248,7 @@ TEST_CASE("GIR indirect call formatting") {
             return x + 1;
         };
         const call_indirect := fn(): i32 {
-            var fptr: ^fn(n: i32): i32 = target;
+            let mut fptr: ^fn(n: i32): i32 = target;
             return fptr(42);
         };
     )")};

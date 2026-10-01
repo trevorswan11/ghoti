@@ -175,7 +175,7 @@ auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&
         // An untyped float the emitter coerced into an integer slot is still a float, which no
         // integer destination accepts
         if (val.data.is<f128>() && is_integer(val.type->get_kind())) {
-            return ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+            return ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         }
         return ctx_.default_concrete(*val.type);
     }
@@ -665,7 +665,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
-                const bool src_is_int{is_integer(src_k) || src_k == type_kind::CONSTEXPR_INT ||
+                const bool src_is_int{is_integer(src_k) || src_k == type_kind::COMPTIME_INT ||
                                       src_k == type_kind::BOOL};
                 const bool dest_is_int{is_integer(dest_k)};
                 if (!src_is_int || !dest_is_int) {

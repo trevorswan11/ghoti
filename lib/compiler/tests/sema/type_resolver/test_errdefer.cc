@@ -107,7 +107,7 @@ TEST_CASE("errdefer capture typing") {
         auto [ctx, idx]{helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
             const f := fn(): Result(i32, bool) {
                 errdefer |e| {
-                    const check: bool = e;
+                    let check: bool = e;
                 }
                 return .{ .ok = 1 };
             };
@@ -118,10 +118,10 @@ TEST_CASE("errdefer capture typing") {
         auto [ctx, idx]{helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
             const f := fn(): Result(i32, bool) {
                 errdefer |&e| {
-                    const check: &bool = e;
+                    let check: &bool = e;
                 }
                 errdefer |^p| {
-                    const check_p: ^bool = p;
+                    let check_p: ^bool = p;
                 }
                 return .{ .ok = 1 };
             };
@@ -141,7 +141,7 @@ TEST_CASE("errdefer capture typing") {
         auto [ctx, idx]{helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
             const f := fn(): Option(i32) {
                 errdefer |e| {
-                    const v: void = e;
+                    let v: void = e;
                 }
                 return .{ .some = 1 };
             };

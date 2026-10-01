@@ -11,7 +11,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("Test statement symbol collection") {
-    auto [ctx, idx]{helpers::collect_and_check(R"(test "foo" { const foo := bar; })")};
+    auto [ctx, idx]{helpers::collect_and_check(R"(test "foo" { let foo := bar; })")};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
     const auto& table{UNWRAP(registry.get_opt(idx))};
@@ -25,10 +25,10 @@ TEST_CASE("Test statement symbol collection") {
 
 TEST_CASE("Test shadowing") {
     helpers::test_collector_fail(
-        R"(const a := 2; test "foo" { const a := 3; })",
+        R"(const a := 2; test "foo" { let a := 3; })",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 33UZ}});
+                         std::pair{0UZ, 31UZ}});
 }
 
 TEST_CASE("Illegal test location") {

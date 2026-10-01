@@ -124,7 +124,7 @@ TEST_CASE("completion_items offers attribute names inside an attribute list") {
 }
 
 TEST_CASE("attribute_context_at sees the word under the cursor") {
-    constexpr std::string_view source{"@[visibility(.hidden)] export const f := 1;"};
+    constexpr std::string_view source{"@[visibility(.hidden)] export let f := 1;"};
     const auto                 on_name{UNWRAP(lsp::attribute_context_at(source, {0, 5}))};
     CHECK(on_name.word == "visibility");
     CHECK_FALSE(on_name.in_args_of);

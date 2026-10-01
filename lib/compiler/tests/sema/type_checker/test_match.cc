@@ -13,7 +13,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
             R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                var u := U{ .a = 5 };
+                let mut u := U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -30,7 +30,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
             R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                const u := U{ .a = 5 };
+                let u := U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -46,7 +46,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         helpers::test_checker_fail(
             R"(
             const f := fn(): void {
-                var x: i32 = 1;
+                let mut x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
                     _ => {},
@@ -62,7 +62,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         helpers::test_checker_fail(
             R"(
             const f := fn(): void {
-                const x: i32 = 1;
+                let x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
                     _ => {},
@@ -80,7 +80,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         helpers::type_check_and_verify(R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                var u := U{ .a = 5 };
+                let mut u := U{ .a = 5 };
                 match (u) {
                     .a => |&mut v| { v = 10; },
                     _ => {},
@@ -94,7 +94,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
             R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                var u := U{ .a = 5 };
+                let mut u := U{ .a = 5 };
                 match (u) {
                     .a => |&v| { v = 10; },
                     _ => {},
@@ -110,7 +110,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         helpers::type_check_and_verify(R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                var u := U{ .a = 5 };
+                let mut u := U{ .a = 5 };
                 match (u) {
                     .a => |^mut v| { *v = 10; },
                     _ => {},
@@ -124,7 +124,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
             R"(
             const U := union { a: i32 };
             const f := fn(): void {
-                var u := U{ .a = 5 };
+                let mut u := U{ .a = 5 };
                 match (u) {
                     .a => |^v| { *v = 10; },
                     _ => {},

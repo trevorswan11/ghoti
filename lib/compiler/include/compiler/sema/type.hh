@@ -43,8 +43,8 @@ enum class type_kind : u8 {
     F64,
     F80,
     F128,
-    CONSTEXPR_INT,
-    CONSTEXPR_FLOAT,
+    COMPTIME_INT,
+    COMPTIME_FLOAT,
     VOID_,
     UNDEFINED,
     NULLPTR,
@@ -112,11 +112,11 @@ class type;
 }
 
 [[nodiscard]] constexpr auto is_constexpr_int(type_kind kind) noexcept -> bool {
-    return kind == type_kind::CONSTEXPR_INT;
+    return kind == type_kind::COMPTIME_INT;
 }
 
 [[nodiscard]] constexpr auto is_constexpr_float(type_kind kind) noexcept -> bool {
-    return kind == type_kind::CONSTEXPR_FLOAT;
+    return kind == type_kind::COMPTIME_FLOAT;
 }
 
 // The width a character literal's untyped constant defaults to
@@ -424,7 +424,7 @@ class key_t {
         // named fields so width/signedness survive even on an unresolved pooled twin.
         if constexpr (sizeof...(Markers) == 2 &&
                       (std::integral<std::remove_cvref_t<Markers>> && ...)) {
-            if (kind == type_kind::INT || kind == type_kind::CONSTEXPR_INT) {
+            if (kind == type_kind::INT || kind == type_kind::COMPTIME_INT) {
                 const u64 packed[]{static_cast<u64>(markers)...};
                 int_bits_   = static_cast<u16>(packed[0]);
                 int_signed_ = packed[1] != 0;
@@ -440,7 +440,7 @@ class key_t {
     auto set_kind(type_kind kind) noexcept -> void {
         kind_ = kind;
         // Repurposing a copied `INT` key to another kind must drop its width identity.
-        if (kind != type_kind::INT && kind != type_kind::CONSTEXPR_INT) {
+        if (kind != type_kind::INT && kind != type_kind::COMPTIME_INT) {
             int_bits_   = 0;
             int_signed_ = false;
         }

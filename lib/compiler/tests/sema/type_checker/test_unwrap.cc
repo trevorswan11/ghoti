@@ -35,7 +35,7 @@ TEST_CASE("`?` type-checks the lowered Result propagation") {
 const R := Result(i32, i32);
 const inner := fn(): R { return R{ .ok = 1 }; };
 const outer := fn(): R {
-    const v := inner()?;
+    let v := inner()?;
     return R{ .ok = v };
 };
 )");

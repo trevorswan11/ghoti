@@ -23,7 +23,7 @@ TEST_CASE("E2E: an `impl` block on a struct whose method returns `Ctor(Self)` co
         impl File {}
 
         pub const main := fn(): i32 {
-            const r := File.open(7);
+            let r := File.open(7);
             return match (r) { .ok => |f| f.handle, .err => 0 };
         };
     )")};
@@ -48,7 +48,7 @@ TEST_CASE("E2E: an `impl` target's method param names a not-yet-resolved sibling
         impl File {}
 
         pub const main := fn(): i32 {
-            const f: Flags = .{ .m = .write, .create = false };
+            let f: Flags = .{ .m = .write, .create = false };
             return match (File.open(f)) { .ok => |x| x.handle, .err => 0 };
         };
     )")};
@@ -111,7 +111,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through 
         R"(
             import "dev.gh" as d;
             pub const main := fn(): i32 {
-                var x := d.Dev{ .acc = 0 };
+                let mut x := d.Dev{ .acc = 0 };
                 return x.putN(10, 3);
             };
         )",
@@ -142,7 +142,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`
         R"(
             import "dev.gh" as d;
             pub const main := fn(): i32 {
-                var x := d.Dev{ .acc = 0 };
+                let mut x := d.Dev{ .acc = 0 };
                 return x.putN(10);
             };
         )",
@@ -228,7 +228,7 @@ TEST_CASE("E2E: a cross-module interface default method the impl does not overri
         R"(
             import "one.gh" as m;
             pub const main := fn(): i32 {
-                var o := m.One{ .by = 14 };
+                let mut o := m.One{ .by = 14 };
                 return o.stepThrice();
             };
         )",
@@ -264,10 +264,10 @@ TEST_CASE(
             Error: type;
             pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error);
             pub const writeAll := fn(&mut self, bytes: []u8): res.Result(void, Error) {
-                var off: usize = 0;
+                let mut off: usize = 0;
                 loop {
                     if (off == bytes.len) { break; }
-                    const n := self.write(bytes[off..])?;
+                    let n := self.write(bytes[off..])?;
                     off += n;
                 };
                 return .{ .ok = {} };
@@ -291,8 +291,8 @@ TEST_CASE(
         R"(
             import "sink.gh" as m;
             pub const main := fn(): i32 {
-                var s := m.Sink{ .total = 0 };
-                const buf := [3uz]u8{ 1, 2, 3 };
+                let mut s := m.Sink{ .total = 0 };
+                let buf := [3uz]u8{ 1, 2, 3 };
                 _ = s.writeAll(buf);
                 return @intCast(i32, s.total);
             };
@@ -329,7 +329,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
             Error: type;
             pub const write := fn(&mut self, bytes: []u8): res.Result(usize, Error);
             pub const writeAll := fn(&mut self, bytes: []u8): res.Result(void, Error) {
-                var off: usize = 0;
+                let mut off: usize = 0;
                 loop {
                     if (off == bytes.len) { break; }
                     off += self.write(bytes[off..])?;
@@ -337,7 +337,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
                 return .{ .ok = {} };
             };
             pub const writeByte := fn(&mut self, b: u8): res.Result(void, Error) {
-                const one := [1uz]u8{ b };
+                let one := [1uz]u8{ b };
                 return self.writeAll(one);
             };
         };
@@ -359,7 +359,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         R"(
             import "sink.gh" as m;
             pub const main := fn(): i32 {
-                var s := m.Sink{ .total = 0 };
+                let mut s := m.Sink{ .total = 0 };
                 _ = s.writeByte('x');
                 _ = s.writeByte('y');
                 return @intCast(i32, s.total);
@@ -397,10 +397,10 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
             Error: type;
             pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error);
             pub const readAll := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
-                var i: usize = 0;
+                let mut i: usize = 0;
                 loop {
                     if (i == buf.len) { break; }
-                    const n := self.read(buf[i..])?;
+                    let n := self.read(buf[i..])?;
                     if (n == 0) { break; }
                     i += n;
                 };
@@ -416,8 +416,8 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         impl reader.Reader for Early {
             const Error := u8;
             pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
-                const rem := self.data.len - self.pos;
-                const n := if (buf.len < rem) buf.len else rem;
+                let rem := self.data.len - self.pos;
+                let n := if (buf.len < rem) buf.len else rem;
                 self.pos += n;
                 return .{ .ok = n };
             };
@@ -434,21 +434,21 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
             impl reader.Reader for Late {
                 const Error := u8;
                 pub const read := fn(&mut self, buf: []mut u8): res.Result(usize, Error) {
-                    const rem := self.data.len - self.pos;
-                    const n := if (buf.len < rem) buf.len else rem;
+                    let rem := self.data.len - self.pos;
+                    let n := if (buf.len < rem) buf.len else rem;
                     self.pos += n;
                     return .{ .ok = n };
                 };
             }
 
             pub const main := fn(): i32 {
-                var eb: [6]mut u8 = undefined;
-                var e := early.Early{ .data = eb };
-                var lb: [6]mut u8 = undefined;
-                var l := Late{ .data = lb };
-                var out: [4]mut u8 = undefined;
-                const en := match (e.readAll(out[..])) { .ok => |n| n, .err => 0uz };
-                const ln := match (l.readAll(out[..])) { .ok => |n| n, .err => 0uz };
+                let mut eb: [6]mut u8 = undefined;
+                let mut e := early.Early{ .data = eb };
+                let mut lb: [6]mut u8 = undefined;
+                let mut l := Late{ .data = lb };
+                let mut out: [4]mut u8 = undefined;
+                let en := match (e.readAll(out[..])) { .ok => |n| n, .err => 0uz };
+                let ln := match (l.readAll(out[..])) { .ok => |n| n, .err => 0uz };
                 return @intCast(i32, en + ln);
             };
         )",
@@ -472,8 +472,8 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
         const get_stat := fn(): R(Stat) { return .{ .ok = .{ .n = 35u64 } }; };
 
         pub const main := fn(): i32 {
-            const a := match (get_num()) { .ok => |n| n, .err => 0uz };
-            const b := match (get_stat()) { .ok => |s| s.size(), .err => 0u64 };
+            let a := match (get_num()) { .ok => |n| n, .err => 0uz };
+            let b := match (get_stat()) { .ok => |s| s.size(), .err => 0u64 };
             return @intCast(i32, a) + @intCast(i32, b);
         };
     )")};

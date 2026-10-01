@@ -23,25 +23,25 @@ TEST_CASE("Operator type checking") {
         helpers::test_checker_fail(
             R"(
             const f := fn(a: bool, b: bool): void {
-                const x := a + b;
+                let x := a + b;
             };
         )",
             sema::diagnostic{"Operator '+' cannot be applied to types 'bool' and 'bool'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 31UZ}});
+                             std::pair{2UZ, 29UZ}});
     }
 
     SECTION("Mismatched numeric types in addition without cast fails") {
         helpers::test_checker_fail(
             R"(
             const f := fn(a: i32, b: f32): void {
-                const x := a + b;
+                let x := a + b;
             };
         )",
             sema::diagnostic{"no peer type for 'i32' and 'f32'; convert the integer with "
                              "`@floatFromInt`",
                              sema::error::NO_PEER_TYPE,
-                             std::pair{2UZ, 27UZ}});
+                             std::pair{2UZ, 25UZ}});
     }
 
     SECTION("Comparing two differently-typed integer variables still fails") {
@@ -60,37 +60,37 @@ TEST_CASE("Operator type checking") {
         helpers::test_checker_fail(
             R"(
             const f := fn(a: i32): void {
-                const x := !a;
+                let x := !a;
             };
         )",
             sema::diagnostic{"Logical negation '!' requires a boolean operand; found 'i32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 28UZ}});
+                             std::pair{2UZ, 26UZ}});
     }
 
     SECTION("Unary negation on unsigned integer fails") {
         helpers::test_checker_fail(
             R"(
             const f := fn(a: u32): void {
-                const x := -a;
+                let x := -a;
             };
         )",
             sema::diagnostic{
                 "Unary negation '-' requires a signed integer or float operand; found 'u32'",
                 sema::error::OPERATOR_TYPE_MISMATCH,
-                std::pair{2UZ, 28UZ}});
+                std::pair{2UZ, 26UZ}});
     }
 
     SECTION("Bitwise negation on float fails") {
         helpers::test_checker_fail(
             R"(
             const f := fn(a: f32): void {
-                const x := ~a;
+                let x := ~a;
             };
         )",
             sema::diagnostic{"Bitwise negation '~' requires an integer operand; found 'f32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 28UZ}});
+                             std::pair{2UZ, 26UZ}});
     }
 
     SECTION("Comparing two unions directly fails") {
@@ -125,7 +125,7 @@ TEST_CASE("Operator type checking") {
 TEST_CASE("Discard statement evaluating expression") {
     helpers::type_check_and_verify(R"(
         pub const test_fn := fn(): i32 {
-            var x: i32 = 5;
+            let mut x: i32 = 5;
             _ = x + 10;
             return x;
         };
@@ -160,7 +160,7 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
     SECTION("type checker") {
         check_attributed(R"(
             pub const g := fn(x: auto): i32 {
-                const y: bool = true;
+                let y: bool = true;
                 return @intCast(x % y);
             };
         )",
@@ -170,7 +170,7 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
     SECTION("GIR emission") {
         check_attributed(R"(
             pub const g := fn(x: auto): i32 {
-                var a: u16 = 0;
+                let mut a: u16 = 0;
                 a = x;
                 return a;
             };

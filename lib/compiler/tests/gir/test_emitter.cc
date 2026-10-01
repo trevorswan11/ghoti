@@ -28,7 +28,7 @@ auto find_call_instruction(const gir::segment& seg) -> stdx::option<const gir::i
 TEST_CASE("Emitter top-level globals and type declarations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const MAX_COUNT: i32 = 100;
-        var current_count: i32 = 42;
+        let mut current_count: i32 = 42;
         const Count := i32;
     )")};
 
@@ -104,7 +104,7 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
 TEST_CASE("Emitter local variable alloca, store, load, and compound assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const compute := fn(x: i32): i32 {
-            var acc: i32 = x;
+            let mut acc: i32 = x;
             acc += 5;
             return acc;
         };
@@ -195,10 +195,10 @@ TEST_CASE("Emitter function calls") {
 TEST_CASE("Emitter test blocks") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         test "simple addition test" {
-            var res: i32 = 2 + 3;
+            let mut res: i32 = 2 + 3;
         }
         test {
-            var res: i32 = 2 + 3;
+            let mut res: i32 = 2 + 3;
         }
     )")};
 

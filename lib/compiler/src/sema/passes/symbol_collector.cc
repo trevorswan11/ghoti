@@ -59,6 +59,29 @@ auto function_local_illegal_modifiers(const ast::decl_stmt& decl) {
     return found;
 }
 
+// The first linkage modifier on `decl`, which needs a symbol to attach to
+auto linkage_modifier(const ast::decl_stmt& decl) -> stdx::option<std::string_view> {
+    using ast::decl_modifiers;
+    static constexpr std::array<std::pair<decl_modifiers, std::string_view>, 4> linkage{{
+        {decl_modifiers::EXTERN, syntax::keywords::EXTERN.name},
+        {decl_modifiers::EXPORT, syntax::keywords::EXPORT.name},
+        {decl_modifiers::WEAK, syntax::keywords::WEAK.name},
+        {decl_modifiers::THREADLOCAL, syntax::keywords::THREADLOCAL.name},
+    }};
+    for (const auto& [flag, spelling] : linkage) {
+        if (decl.has_modifier(flag)) { return spelling; }
+    }
+    return stdx::none;
+}
+
+// A fn literal, or an `extern` function signature
+auto declares_function(const ast::decl_stmt& decl) -> bool {
+    if (decl.value) { return decl.value->is<ast::function_expr>(); }
+    return decl.explicit_type &&
+           (decl.explicit_type->get_token_type() == syntax::token_type_t::FUNCTION ||
+            decl.explicit_type->get_token_type() == syntax::token_type_t::EXTERN);
+}
+
 } // namespace
 
 auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod::module_state {
@@ -576,6 +599,28 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
     }
 
+    // Linkage attaches to a function itself, which `const` binds; data needs `let`'s storage
+    if (const auto linkage{linkage_modifier(decl)}) {
+        const bool is_fn{declares_function(decl)};
+        const bool is_comptime{decl.has_modifier(ast::decl_modifiers::COMPTIME)};
+        if (is_fn && (!is_comptime || decl.has_modifier(ast::decl_modifiers::MUT))) {
+            ctx_.diags.emplace_back(
+                fmt::format("A '{}' function is declared with 'const'", *linkage),
+                error::ILLEGAL_BINDING_KIND,
+                collecting_.ast.location_of(id));
+        } else if (!is_fn && is_comptime) {
+            ctx_.diags.emplace_back(fmt::format("'{}' needs storage, which a compile-time "
+                                                "declaration lacks; use 'let' or 'let mut'",
+                                                *linkage),
+                                    error::ILLEGAL_BINDING_KIND,
+                                    collecting_.ast.location_of(id));
+        } else if (is_fn && *linkage == syntax::keywords::THREADLOCAL.name) {
+            ctx_.diags.emplace_back("A function cannot be 'threadlocal'",
+                                    error::ILLEGAL_BINDING_KIND,
+                                    collecting_.ast.location_of(id));
+        }
+    }
+
     // Attributes that reach through to a function literal see its parameters, so collect there
     const bool initializes_fn_literal{decl.value && decl.value->is<ast::function_expr>()};
     collect_attribute_args(decl.attributes,
@@ -588,24 +633,20 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto value{*decl.value};
     if (value.any<ast::enum_expr, ast::union_expr, ast::struct_expr, ast::interface_expr>()) {
         pending_type_name_ = name;
-        if (decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
-            ctx_.diags.emplace_back(
-                fmt::format("All {}s are implicitly constexpr", value->display_name()),
-                error::REDUNDANT_CONSTEXPR,
+        if (!decl.has_modifier(ast::decl_modifiers::COMPTIME) ||
+            decl.has_modifier(ast::decl_modifiers::MUT)) {
+            ctx_.poison_symbol(
+                sym,
+                fmt::format("All {}s must be declared with 'const'", value->display_name()),
+                error::ILLEGAL_NON_CONST_STATEMENT,
                 collecting_.ast.location_of(id));
-        } else if (!decl.has_modifier(ast::decl_modifiers::CONSTANT)) {
-            ctx_.poison_symbol(sym,
-                               fmt::format("All {}s must be marked const", value->display_name()),
-                               error::ILLEGAL_NON_CONST_STATEMENT,
-                               collecting_.ast.location_of(id));
         } else {
             sym.set_kind(symbol_kind::TYPE);
         }
     } else if (value.is<ast::function_expr>()) {
-        if (!decl.has_modifier(ast::decl_modifiers::CONSTEXPR) &&
-            !decl.has_modifier(ast::decl_modifiers::CONSTANT)) {
+        if (decl.has_modifier(ast::decl_modifiers::MUT)) {
             ctx_.poison_symbol(sym,
-                               "All function declarations must be const or constexpr",
+                               "A function declaration is either 'const' or 'let'",
                                error::ILLEGAL_NON_CONST_STATEMENT,
                                collecting_.ast.location_of(id));
         } else {

@@ -36,7 +36,7 @@ auto collect_and_validate_label(std::string_view input, usize expected_size) -> 
 } // namespace
 
 TEST_CASE("Label collection") {
-    collect_and_validate_label("const a := blk: for (0..5) |i| { const foo := bar; };", 3);
+    collect_and_validate_label("const a := blk: for (0..5) |i| { let foo := bar; };", 3);
     collect_and_validate_label("const a := blk: { if (b) { break :blk c; } else break :blk 5; };",
                                4);
 }
@@ -51,10 +51,10 @@ TEST_CASE("Label redeclaration") {
 
 TEST_CASE("Label shadowing") {
     helpers::test_collector_fail(
-        "const a := blk: { var blk: i32 = undefined; };",
+        "const a := blk: { let mut blk: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'blk'; previous declaration here: 1:15",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 22UZ}});
+                         std::pair{0UZ, 26UZ}});
 }
 
 } // namespace ghoti::tests

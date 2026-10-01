@@ -31,8 +31,8 @@ TEST_CASE("A type alias is rejected where a value of that type is expected") {
 }
 
 TEST_CASE("A type is rejected in assignment, argument, and return positions") {
-    helpers::test_resolver_fail("var x: i32 = 0; const f := fn(): void { x = u8; };",
-                                type_as_value("i32", "u8", 44UZ));
+    helpers::test_resolver_fail("let mut x: i32 = 0; const f := fn(): void { x = u8; };",
+                                type_as_value("i32", "u8", 48UZ));
     helpers::test_resolver_fail(
         "const f := fn(x: i32): i32 { return x; }; const g := fn(): i32 { return f(i32); };",
         type_as_value("i32", "i32", 74UZ));
@@ -56,7 +56,7 @@ TEST_CASE("Type-accepting slots and ordinary values are unaffected") {
         "const Color := enum { red, green }; const c: Color = Color.red; const d: Color = .green;");
     helpers::resolve_and_check(
         "const g := fn(x: auto): usize { return @sizeOf(@TypeOf(x)); }; const n := g(3);");
-    helpers::resolve_and_check("var p: i32 = 1; const q: ^i32 = ^p;");
+    helpers::resolve_and_check("let mut p: i32 = 1; const q: ^i32 = ^p;");
     helpers::resolve_and_check("const S := struct { a: i32 }; const s: S = S{ .a = 1 };");
 }
 

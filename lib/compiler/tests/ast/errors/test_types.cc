@@ -14,13 +14,13 @@ TEST_CASE("Function type restrictions") {
     const auto expected_diag = [] -> syntax::diagnostic {
         return {"A function type is immutable; use `&fn`/`^fn` without `mut`",
                 syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
-                std::pair{0UZ, 7UZ}};
+                std::pair{0UZ, 11UZ}};
     };
 
-    const auto illegal{GENERATE("var a: &mut fn(): void;"sv,
-                                "var a: ^mut fn(): void;"sv,
-                                "var a: &mut extern fn(): void;"sv,
-                                "var a: &mut dyn Fn(): void;"sv)};
+    const auto illegal{GENERATE("let mut a: &mut fn(): void;"sv,
+                                "let mut a: ^mut fn(): void;"sv,
+                                "let mut a: &mut extern fn(): void;"sv,
+                                "let mut a: &mut dyn Fn(): void;"sv)};
     helpers::test_parser_fail(illegal, expected_diag());
 }
 
@@ -33,27 +33,27 @@ TEST_CASE("An `extern fn` type literal cannot carry a body") {
 }
 
 TEST_CASE("Bodied function type") {
-    helpers::test_parser_fail("var a: ^mut fn(): void { b; };",
+    helpers::test_parser_fail("let mut a: ^mut fn(): void { b; };",
                               syntax::diagnostic{"Function types may not have a body",
                                                  syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
-                                                 std::pair{0UZ, 12UZ}});
+                                                 std::pair{0UZ, 16UZ}});
 }
 
 TEST_CASE("Function return type restrictions") {
-    helpers::test_parser_fail("var a: fn(): &void;",
+    helpers::test_parser_fail("let mut a: fn(): &void;",
                               syntax::diagnostic{"Explicit `void` type cannot have a modifier",
                                                  syntax::error::ILLEGAL_VOID_TYPE_MODIFIER,
-                                                 std::pair{0UZ, 13UZ}});
+                                                 std::pair{0UZ, 17UZ}});
 
-    helpers::test_parser_fail("var a: fn(): &type;",
+    helpers::test_parser_fail("let mut a: fn(): &type;",
                               syntax::diagnostic{"Explicit `type` type cannot have a modifier",
                                                  syntax::error::ILLEGAL_TYPE_TYPE_MODIFIER,
-                                                 std::pair{0UZ, 13UZ}});
+                                                 std::pair{0UZ, 17UZ}});
 
-    helpers::test_parser_fail("var a: fn(): &noreturn;",
+    helpers::test_parser_fail("let mut a: fn(): &noreturn;",
                               syntax::diagnostic{"Explicit `noreturn` type cannot have a modifier",
                                                  syntax::error::ILLEGAL_NORETURN_TYPE_MODIFIER,
-                                                 std::pair{0UZ, 13UZ}});
+                                                 std::pair{0UZ, 17UZ}});
 }
 
 } // namespace ghoti::tests

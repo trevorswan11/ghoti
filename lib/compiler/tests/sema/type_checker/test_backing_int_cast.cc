@@ -14,14 +14,14 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
             const P := packed struct { a: u3, b: u5, };
             const U := union { a: i32, b: f32, };
             pub const test_fn := fn(): void {
-                const e: u8 = @backingInt(E.y);
-                const f: E = @fromBackingInt(1);
-                const g := @fromBackingInt(E, 0u8);
-                var p: P = .{ .a = 1, .b = 2 };
-                const h: u8 = @backingInt(p);
-                const i: P = @fromBackingInt(h);
-                var u: U = .{ .a = 1 };
-                const j: i32 = @backingInt(u);
+                let e: u8 = @backingInt(E.y);
+                let f: E = @fromBackingInt(1);
+                let g := @fromBackingInt(E, 0u8);
+                let mut p: P = .{ .a = 1, .b = 2 };
+                let h: u8 = @backingInt(p);
+                let i: P = @fromBackingInt(h);
+                let mut u: U = .{ .a = 1 };
+                let j: i32 = @backingInt(u);
             };
         )");
     }
@@ -31,13 +31,13 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
             R"(
             const E := enum { x, y };
             pub const test_fn := fn(): void {
-                const a := @as(i32, E.x);
+                let a := @as(i32, E.x);
             };
         )",
             sema::diagnostic{
                 "`@as` cannot convert an enum to an integer; use `@backingInt` instead",
                 sema::error::TYPE_MISMATCH,
-                std::pair{3UZ, 27UZ}});
+                std::pair{3UZ, 25UZ}});
     }
 
     SECTION("@as from an integer to an enum is rejected in favor of @fromBackingInt") {
@@ -45,27 +45,27 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
             R"(
             const E := enum { x, y };
             pub const test_fn := fn(): void {
-                const b := @as(E, 1);
+                let b := @as(E, 1);
             };
         )",
             sema::diagnostic{
                 "`@as` cannot convert an integer to an enum; use `@fromBackingInt` instead",
                 sema::error::TYPE_MISMATCH,
-                std::pair{3UZ, 27UZ}});
+                std::pair{3UZ, 25UZ}});
     }
 
     SECTION("@backingInt of a type with no backing integer fails") {
         helpers::test_checker_fail(
             R"(
             pub const test_fn := fn(): void {
-                const c := @backingInt(5);
+                let c := @backingInt(5);
             };
         )",
             sema::diagnostic{
                 "`@backingInt` operand must be an enum, a packed struct or union, or a "
-                "tagged union; found 'constexpr_int'",
+                "tagged union; found 'comptime_int'",
                 sema::error::TYPE_MISMATCH,
-                std::pair{2UZ, 39UZ}});
+                std::pair{2UZ, 37UZ}});
     }
 
     SECTION("@fromBackingInt cannot build a tagged union") {
@@ -73,13 +73,13 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
             R"(
             const U := union { a: i32, b: f32, };
             pub const test_fn := fn(): void {
-                const d := @fromBackingInt(U, 1);
+                let d := @fromBackingInt(U, 1);
             };
         )",
             sema::diagnostic{"`@fromBackingInt` target must be an enum or a packed struct or "
                              "union; found 'U'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 43UZ}});
+                             std::pair{3UZ, 41UZ}});
     }
 
     SECTION("@fromBackingInt rejects an operand wider than the backing integer") {
@@ -87,13 +87,13 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
             R"(
             const P := packed struct { a: u8, };
             pub const test_fn := fn(w: u16): void {
-                const d := @fromBackingInt(P, w);
+                let d := @fromBackingInt(P, w);
             };
         )",
             sema::diagnostic{"`@fromBackingInt` operand must be an integer assignable to 'u8', the "
                              "backing integer of 'P'; found 'u16'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 46UZ}});
+                             std::pair{3UZ, 44UZ}});
     }
 }
 

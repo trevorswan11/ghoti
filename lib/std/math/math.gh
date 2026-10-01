@@ -2,23 +2,23 @@ import std;
 
 import "float.gh" as float;
 
-pub constexpr is_nan := float.is_nan;
-pub constexpr reconstruct_float := float.reconstruct_float;
-pub constexpr mantissa_one := float.mantissa_one;
-pub constexpr float_fractional_bits := float.float_fractional_bits;
-pub constexpr float_mantissa_bits := float.float_mantissa_bits;
-pub constexpr float_exponent_bits := float.float_exponent_bits;
-pub constexpr float_exponent_min := float.float_exponent_min;
-pub constexpr float_exponent_max := float.float_exponent_max;
-pub constexpr nan := float.nan;
-pub constexpr snan := float.snan;
+pub const is_nan := float.is_nan;
+pub const reconstruct_float := float.reconstruct_float;
+pub const mantissa_one := float.mantissa_one;
+pub const float_fractional_bits := float.float_fractional_bits;
+pub const float_mantissa_bits := float.float_mantissa_bits;
+pub const float_exponent_bits := float.float_exponent_bits;
+pub const float_exponent_min := float.float_exponent_min;
+pub const float_exponent_max := float.float_exponent_max;
+pub const nan := float.nan;
+pub const snan := float.snan;
 
 test {
     import "float.gh";
 }
 
 /// Asserts that `int` is strictly positive
-pub constexpr is_power_of_two := fn(int: auto): bool {
+pub const is_power_of_two := fn(int: auto): bool {
     @assert(int > 0);
     return (int & (int - 1)) == 0;
 };
@@ -36,13 +36,13 @@ test "is_power_of_two" {
 }
 
 /// Cast an integer to a different integer type only if it fits.
-pub constexpr int_cast := fn(T: type, x: auto): std.Option(T) {
-    constexpr {
+pub const int_cast := fn(T: type, x: auto): std.Option(T) {
+    comptime {
         @assert(@typeInfo(T) == .int);
-        @assert(@typeInfo(@TypeOf(x)) == .int or @typeInfo(@TypeOf(x)) == .@"constexpr_int");
+        @assert(@typeInfo(@TypeOf(x)) == .int or @typeInfo(@TypeOf(x)) == .comptime_int);
     }
 
-    if constexpr (@TypeOf(x) == constexpr_int) {
+    if comptime (@TypeOf(x) == comptime_int) {
         if (x > max_int(T)) {
             return .empty;
         } else if (x < min_int(T)) {
@@ -76,12 +76,12 @@ test "int_cast" {
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
 /// Suitable for 0-based bit indices of T.
-pub constexpr Log2Int := fn(T: type): type {
-    return match constexpr (@typeInfo(T)) {
-        .@"constexpr_int" => constexpr_int,
+pub const Log2Int := fn(T: type): type {
+    return match comptime (@typeInfo(T)) {
+        .comptime_int => comptime_int,
         .int => |info| blk: {
-            constexpr bits: u16 = @typeInfo(T).int.bits;
-            constexpr log2_bits := if (bits <= 1) 1 else 16 - @clz(bits - 1);
+            const bits: u16 = @typeInfo(T).int.bits;
+            const log2_bits := if (bits <= 1) 1 else 16 - @clz(bits - 1);
             break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
         },
         _ => @compileError("Log2Int requires an integer argument type"),
@@ -89,15 +89,15 @@ pub constexpr Log2Int := fn(T: type): type {
 };
 
 test "Log2Int construction" {
-    @expect(Log2Int(constexpr_int) == constexpr_int);
+    @expect(Log2Int(comptime_int) == comptime_int);
     @expect(Log2Int(u64) == u6);
     @expect(Log2Int(u65) == u7);
     @expect(Log2Int(u32) == u5);
 }
 
 /// Returns the maximum value of integer type T.
-pub constexpr max_int := fn(T: type): constexpr_int {
-    constexpr info := @typeInfo(T).int;
+pub const max_int := fn(T: type): comptime_int {
+    const info := @typeInfo(T).int;
     return (1 << (info.bits - @intFromBool(info.signedness == .signed))) - 1;
 };
 
@@ -119,9 +119,9 @@ test "max_int" {
 }
 
 /// Returns the minimum value of integer type T.
-pub constexpr min_int := fn(T: type): constexpr_int {
-    constexpr info := @typeInfo(T).int;
-    return if constexpr (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
+pub const min_int := fn(T: type): comptime_int {
+    const info := @typeInfo(T).int;
+    return if comptime (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
 };
 
 test "min_int" {
@@ -143,9 +143,9 @@ test "min_int" {
 }
 
 /// Returns the maximum of at least two values which are implicitly convertible
-pub constexpr max := fn(a: auto, b: auto, c...): auto {
-    var largest := if (a > b) a else b;
-    for constexpr (c) |arg| {
+pub const max := fn(a: auto, b: auto, c...): auto {
+    let mut largest := if (a > b) a else b;
+    for comptime (c) |arg| {
         if (arg > largest) largest = arg;
     }
     return largest;
@@ -156,7 +156,7 @@ test "max" {
     @expect(max(-4, -123) == -4);
     @expect(max(-4, -123, 45) == 45);
     @expect(max(-4, -123, 45, 78, 90, -23) == 90);
-    constexpr {
+    comptime {
         @assert(max(1, 2) == 2);
         @assert(max(-4, -123, 45) == 45);
         @assert(max(-4, -123, 45, 78, 90, -23) == 90);
@@ -164,9 +164,9 @@ test "max" {
 }
 
 /// Returns the minimum of at least two values which are implicitly convertible
-pub constexpr min := fn(a: auto, b: auto, c...): auto {
-    var smallest := if (a < b) a else b;
-    for constexpr (c) |arg| {
+pub const min := fn(a: auto, b: auto, c...): auto {
+    let mut smallest := if (a < b) a else b;
+    for comptime (c) |arg| {
         if (arg < smallest) smallest = arg;
     }
     return smallest;
@@ -177,7 +177,7 @@ test "min" {
     @expect(min(-4, -123) == -123);
     @expect(min(-4, -123, 45) == -123);
     @expect(min(-4, -1, 45, 78, 90, -23) == -23);
-    constexpr {
+    comptime {
         @assert(min(1, 2) == 1);
         @assert(min(-4, -123, 45) == -123);
         @assert(min(-4, -1, 45, 78, 90, -23) == -23);

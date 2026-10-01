@@ -10,9 +10,9 @@ TEST_CASE("E2E: a local `const` alias of a type constructor call is a type, not 
 
         pub const main := fn(): i32 {
             const P := Pair(i32);
-            const x := P{ .a = 1, .b = 2 };
-            const y: P = .{ .a = 10, .b = 20 };
-            var z: P = undefined;
+            let x := P{ .a = 1, .b = 2 };
+            let y: P = .{ .a = 10, .b = 20 };
+            let mut z: P = undefined;
             z.b = 100;
             return x.b + y.b + z.b;
         };
@@ -24,8 +24,8 @@ TEST_CASE("E2E: a local `constexpr` alias of a type constructor call is a type")
         const Pair := fn(T: type): type { return struct { a: T, b: T }; };
 
         pub const main := fn(): i32 {
-            constexpr P := Pair(i32);
-            const x := P{ .a = 1, .b = 2 };
+            const P := Pair(i32);
+            let x := P{ .a = 1, .b = 2 };
             return x.a + x.b;
         };
     )") == 3);
@@ -38,11 +38,11 @@ TEST_CASE("E2E: pointer and slice types built over a local constructor alias") {
         pub const main := fn(): i32 {
             const B := Box(i32);
             const PB := ^mut B;
-            var b: B = .{ .v = 1 };
-            const p: PB = ^mut b;
+            let mut b: B = .{ .v = 1 };
+            let p: PB = ^mut b;
             p.v = 41;
-            const bs := [2]B{ b, .{ .v = 1 } };
-            const s: []B = bs[0..2];
+            let bs := [2]B{ b, .{ .v = 1 } };
+            let s: []B = bs[0..2];
             return s[0].v + s[1].v;
         };
     )") == 42);
@@ -54,7 +54,7 @@ TEST_CASE("E2E: a constructor alias inside a generic body re-resolves per instan
 
         const wrap := fn(T: type, val: T): i32 {
             const B := Box(T);
-            const b := B{ .v = val };
+            let b := B{ .v = val };
             return @intCast(i32, @sizeOf(B)) + @intCast(i32, b.v);
         };
 
@@ -71,11 +71,11 @@ TEST_CASE("E2E: `Result.map_err`-shaped constexpr alias in a generic method (#33
                 ok: T,
                 err: E,
 
-                pub constexpr map_err := fn(&self, func: auto): auto {
-                    constexpr fn_info := @typeInfo(@TypeOf(func));
+                pub const map_err := fn(&self, func: auto): auto {
+                    const fn_info := @typeInfo(@TypeOf(func));
                     @assert(fn_info == .function, "map_err requires a function argument");
-                    constexpr NewErr := fn_info.function.return_type;
-                    constexpr NewRes := Result(T, NewErr);
+                    const NewErr := fn_info.function.return_type;
+                    const NewRes := Result(T, NewErr);
 
                     return match (self) {
                         .ok => |happy| NewRes{ .ok = happy },
@@ -88,11 +88,11 @@ TEST_CASE("E2E: `Result.map_err`-shaped constexpr alias in a generic method (#33
         const widen := fn(e: u8): i32 { return @intCast(i32, e) * 2; };
 
         pub const main := fn(): i32 {
-            const a: Result(i32, u8) = .{ .err = 20 };
-            const b: Result(i32, u8) = .{ .ok = 2 };
-            const ma := a.map_err(widen);
-            const mb := b.map_err(widen);
-            var acc: i32 = 0;
+            let a: Result(i32, u8) = .{ .err = 20 };
+            let b: Result(i32, u8) = .{ .ok = 2 };
+            let ma := a.map_err(widen);
+            let mb := b.map_err(widen);
+            let mut acc: i32 = 0;
             match (ma) { .ok => |v| { acc += v; }, .err => |e| { acc += e; } }
             match (mb) { .ok => |v| { acc += v; }, .err => |e| { acc += e; } }
             return acc;
@@ -111,8 +111,8 @@ TEST_CASE("E2E: `@This()` and `@Int(...)` aliases bind types") {
 
         pub const main := fn(): i32 {
             const U7 := @Int(.{ .signedness = .unsigned, .bits = 7 });
-            const x: U7 = 40;
-            const c := Counter.bump(.{ .n = 1 });
+            let x: U7 = 40;
+            let c := Counter.bump(.{ .n = 1 });
             return @intCast(i32, x) + c.n;
         };
     )") == 42);
@@ -128,7 +128,7 @@ TEST_CASE("E2E: module-scope aliases of `void` and of a constructor call are sto
 
         pub const main := fn(): i32 {
             nothing();
-            const p: P = .{ .a = 7 };
+            let p: P = .{ .a = 7 };
             return p.a;
         };
     )") == 7);
@@ -139,8 +139,8 @@ TEST_CASE("E2E: a generic returning its `T: type` parameter's value is still a v
         const dup := fn(T: type, val: T): T { return val + val; };
 
         pub const main := fn(): i32 {
-            const a := dup(i32, 20);
-            const b := dup(u8, 1u8);
+            let a := dup(i32, 20);
+            let b := dup(u8, 1u8);
             return a + @intCast(i32, b);
         };
     )") == 42);
@@ -152,7 +152,7 @@ TEST_CASE("E2E: `@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
 
         const size := fn(T: type): i32 { return @intCast(i32, @sizeOf(Box(T))); };
         const size_cx := fn(T: type): i32 {
-            constexpr n := @sizeOf(Box(T));
+            const n := @sizeOf(Box(T));
             return @intCast(i32, n);
         };
 
@@ -177,10 +177,10 @@ TEST_CASE("E2E: `&dyn I` / `^dyn I` aliases written as decls") {
         const total := fn(a: AnyShape, b: AnyShapePtr): i32 { return a.area() + b.area(); };
 
         pub const main := fn(): i32 {
-            const x := Sq{ .s = 3 };
-            const y := Sq{ .s = 4 };
+            let x := Sq{ .s = 3 };
+            let y := Sq{ .s = 4 };
             const Local := &dyn Shape;
-            const z: Local = &y;
+            let z: Local = &y;
             return total(&x, ^y) + z.area() - @intCast(i32, @sizeOf(AnyShape));
         };
     )") == 9 + 16 + 16 - 16);
@@ -195,9 +195,9 @@ TEST_CASE("E2E: `opaque`, `type`, and `noreturn` aliases") {
         const fail := fn(): Never { unreachable; };
 
         pub const main := fn(): i32 {
-            const h: Handle = nullptr;
+            let h: Handle = nullptr;
             const T: Type = i32;
-            const v: T = 42;
+            let v: T = 42;
             if (h != nullptr) { fail(); }
             return v;
         };
@@ -210,13 +210,13 @@ TEST_CASE("E2E: pointer and reference aliases over `type`-valued operands") {
         const inc := fn(a: i32): i32 { return a + 1; };
 
         pub const main := fn(): i32 {
-            const x: i32 = 20;
+            let x: i32 = 20;
             const T := @TypeOf(x);
             const P := ^T;
             const R := &T;
-            const p: P = ^x;
-            const r: R = &x;
-            const f: Fp = ^inc;
+            let p: P = ^x;
+            let r: R = &x;
+            let f: Fp = ^inc;
             return *p + r + (*f)(0) + f(0);
         };
     )") == 42);
@@ -230,7 +230,7 @@ TEST_CASE("E2E: a bare `dyn I` alias is indirected at its use sites") {
         impl Shape for Sq { pub const area := fn(&self): i32 { return self.s * self.s; }; }
         const measure := fn(x: &AnyShape): i32 { return x.area(); };
         pub const main := fn(): i32 {
-            const q: Sq = .{ .s = 6 };
+            let q: Sq = .{ .s = 6 };
             return measure(&q) + 6;
         };
     )") == 42);
@@ -245,9 +245,9 @@ TEST_CASE("E2E: a non-generic constructor returning an existing scalar type fold
 
         pub const main := fn(): i32 {
             const Narrow := choose(false);
-            const a: Wide = 30;
-            const b: Narrow = 3;
-            const c: choose(false) = 1;
+            let a: Wide = 30;
+            let b: Narrow = 3;
+            let c: choose(false) = 1;
             return @intCast(i32, @sizeOf(Wide) + @sizeOf(Narrow)) + @intCast(i32, a) +
                    @intCast(i32, b) + @intCast(i32, c);
         };
@@ -262,8 +262,8 @@ TEST_CASE("E2E: struct and union fields typed by a `type` value store the denote
         const Either := union { f: Callback, n: i32 };
 
         pub const main := fn(): i32 {
-            const h := Holder{ .f = inc, .g = inc };
-            const e := Either{ .f = inc };
+            let h := Holder{ .f = inc, .g = inc };
+            let e := Either{ .f = inc };
             return h.f(1) + h.g(2) + e.f(3);
         };
     )") == 2 + 3 + 4);
@@ -275,9 +275,9 @@ TEST_CASE("E2E: calling through a `^fn(...)` value loads the function it points 
         const Holder := struct { f: ^fn(a: i32): i32 };
 
         pub const main := fn(): i32 {
-            const f: ^fn(a: i32): i32 = ^inc;
-            var g: ^fn(a: i32): i32 = ^inc;
-            const h := Holder{ .f = ^inc };
+            let f: ^fn(a: i32): i32 = ^inc;
+            let mut g: ^fn(a: i32): i32 = ^inc;
+            let h := Holder{ .f = ^inc };
             return (*f)(0) + f(1) + g(2) + h.f(3);
         };
     )") == 1 + 2 + 3 + 4);
@@ -289,12 +289,12 @@ TEST_CASE("E2E: module-scope function pointer globals are loaded, assigned, and 
         const dbl := fn(a: i32): i32 { return a * 2; };
 
         const Fixed: ^fn(a: i32): i32 = ^inc;
-        var by_ptr: ^fn(a: i32): i32 = ^inc;
-        var by_val: fn(a: i32): i32 = inc;
+        let mut by_ptr: ^fn(a: i32): i32 = ^inc;
+        let mut by_val: fn(a: i32): i32 = inc;
 
         pub const main := fn(): i32 {
-            const a := Fixed(1) + (*Fixed)(2);
-            const b := by_ptr(3) + by_val(4);
+            let a := Fixed(1) + (*Fixed)(2);
+            let b := by_ptr(3) + by_val(4);
             by_ptr = ^dbl;
             by_val = dbl;
             return a + b + by_ptr(5) + by_val(6);

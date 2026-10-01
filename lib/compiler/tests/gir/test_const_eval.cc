@@ -299,11 +299,11 @@ TEST_CASE("Array dimension resolution constant eval") {
 
 TEST_CASE("Const eval function evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr add := fn(a: i32, b: i32): i32 {
-            const sum := a + b;
+        const add := fn(a: i32, b: i32): i32 {
+            let sum := a + b;
             return sum;
         };
-        constexpr max_val := fn(a: i32, b: i32): i32 {
+        const max_val := fn(a: i32, b: i32): i32 {
             if (a > b) {
                 return a;
             } else {
@@ -328,18 +328,18 @@ TEST_CASE("Const eval function evaluation") {
 
 TEST_CASE("Const eval variable mutation and loops") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr loop_sum := fn(n: i32): i32 {
-            var i := 1;
-            var sum := 0;
+        const loop_sum := fn(n: i32): i32 {
+            let mut i := 1;
+            let mut sum := 0;
             while (i <= n) {
                 sum += i;
                 i += 1;
             }
             return sum;
         };
-        constexpr collatz := fn(start: i32): i32 {
-            var n := start;
-            var steps := 0;
+        const collatz := fn(start: i32): i32 {
+            let mut n := start;
+            let mut steps := 0;
             while (n > 1) {
                 if (n % 2 == 0) {
                     n /= 2;
@@ -368,15 +368,15 @@ TEST_CASE("Const eval variable mutation and loops") {
 
 TEST_CASE("Const eval for loops over ranges and arrays") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr range_sum := fn(n: i32): i32 {
-            var sum := 0;
+        const range_sum := fn(n: i32): i32 {
+            let mut sum := 0;
             for (1..(n + 1)) |i| {
                 sum += i;
             }
             return sum;
         };
-        constexpr arr_sum := fn(): i32 {
-            var sum := 0;
+        const arr_sum := fn(): i32 {
+            let mut sum := 0;
             for (0..3, [_]i32{10, 20, 30}) |i, val| {
                 sum += val;
             }
@@ -460,7 +460,7 @@ TEST_CASE("Union constant eval active and inactive member access") {
 
 TEST_CASE("Match constant eval expression evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr classify := fn(x: i32): i32 {
+        const classify := fn(x: i32): i32 {
             return match (x) {
                 0 => 100,
                 1 => 200,
@@ -468,7 +468,7 @@ TEST_CASE("Match constant eval expression evaluation") {
             };
         };
         const Color := enum { RED, GREEN, BLUE };
-        constexpr color_code := fn(c: Color): i32 {
+        const color_code := fn(c: Color): i32 {
             return match (c) {
                 .RED => 10,
                 .GREEN => 20,
@@ -625,9 +625,9 @@ TEST_CASE("Const eval string concatenation and comparison folding") {
 
 TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr count_loop := fn(n: i32): i32 {
+        const count_loop := fn(n: i32): i32 {
             @setEvalRecursionLimit(10);
-            var i := 0;
+            let mut i := 0;
             while (i < n) { i += 1; }
             return i;
         };
@@ -692,9 +692,9 @@ TEST_CASE("Const eval folds impl method call") {
 TEST_CASE("unlabeled constexpr block in statement position executes at compile time") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const main := fn(): i32 {
-            constexpr {
-                const a := 40;
-                const b := 2;
+            comptime {
+                let a := 40;
+                let b := 2;
                 @assert(a + b == 42);
             }
             return 0;
@@ -709,7 +709,7 @@ TEST_CASE("unlabeled constexpr block in statement position executes at compile t
 
 TEST_CASE("Const eval rejects reached unreachable code") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr bad := fn(): i32 {
+        const bad := fn(): i32 {
             unreachable;
         };
         const call_bad := bad();
@@ -729,7 +729,7 @@ TEST_CASE("Const eval rejects reached unreachable code") {
 TEST_CASE("Const eval unreachable in conditional branches") {
     SECTION("Dead branch with unreachable does not error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            constexpr pick := fn(x: i32): i32 {
+            const pick := fn(x: i32): i32 {
                 if (x == 0) {
                     return 42;
                 } else {
@@ -752,7 +752,7 @@ TEST_CASE("Const eval unreachable in conditional branches") {
 
     SECTION("Taken branch with unreachable errors") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            constexpr pick := fn(x: i32): i32 {
+            const pick := fn(x: i32): i32 {
                 if (x == 0) {
                     return 42;
                 } else {
@@ -777,7 +777,7 @@ TEST_CASE("Const eval unreachable in conditional branches") {
 TEST_CASE("Const eval unreachable in match expression") {
     SECTION("Unreached catch-all arm does not error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            constexpr dispatch := fn(tag: i32): i32 {
+            const dispatch := fn(tag: i32): i32 {
                 return match (tag) {
                     0 => 10,
                     1 => 20,
@@ -800,7 +800,7 @@ TEST_CASE("Const eval unreachable in match expression") {
 
     SECTION("Reached unreachable arm errors") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            constexpr dispatch := fn(tag: i32): i32 {
+            const dispatch := fn(tag: i32): i32 {
                 return match (tag) {
                     0 => 10,
                     _ => unreachable,
@@ -821,11 +821,11 @@ TEST_CASE("Const eval unreachable in match expression") {
     }
 }
 
-TEST_CASE("`for constexpr` iterating over `[]u8` parameter") {
+TEST_CASE("`for comptime` iterating over `[]u8` parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr parse_usize := fn(constexpr digits: []u8): usize {
-            constexpr var n: usize = 0;
-            for constexpr (digits) |c| {
+        const parse_usize := fn(comptime digits: []u8): usize {
+            comptime let mut n: usize = 0;
+            for comptime (digits) |c| {
                 n = n * 10 + @intCast(usize, c - '0');
             }
             return n;
@@ -843,8 +843,8 @@ TEST_CASE("`for constexpr` iterating over `[]u8` parameter") {
 
 TEST_CASE("`loop` infinite loop expression in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr find_val := fn(): i32 {
-            constexpr var i := 0;
+        const find_val := fn(): i32 {
+            comptime let mut i := 0;
             loop {
                 i = i + 1;
                 if (i < 5) { continue; }
@@ -865,8 +865,8 @@ TEST_CASE("`loop` infinite loop expression in `const_eval`") {
 
 TEST_CASE("`defer` in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr test_defer := fn(): i32 {
-            constexpr var x := 1;
+        const test_defer := fn(): i32 {
+            comptime let mut x := 1;
             {
                 defer x = x + 10;
                 x = x + 1;
@@ -886,8 +886,8 @@ TEST_CASE("`defer` in `const_eval`") {
 
 TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr test_order := fn(): i32 {
-            constexpr var x := 0;
+        const test_order := fn(): i32 {
+            comptime let mut x := 0;
             {
                 defer x = x * 10 + 1;
                 defer x = x * 10 + 2;
@@ -926,13 +926,13 @@ TEST_CASE("`errdefer` in `const_eval`") {
         }
 
         const R := Result(i32, i32);
-        constexpr fail := fn(): R { return R{ .err = 42 }; };
-        constexpr succeed := fn(): R { return R{ .ok = 100 }; };
+        const fail := fn(): R { return R{ .err = 42 }; };
+        const succeed := fn(): R { return R{ .ok = 100 }; };
 
-        constexpr var err_log: i32 = 0;
-        constexpr test_err := fn(): R {
+        comptime let mut err_log: i32 = 0;
+        const test_err := fn(): R {
             errdefer |e| err_log = e;
-            const v := fail()?;
+            let v := fail()?;
             return R{ .ok = v };
         };
 
@@ -971,19 +971,19 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
         }
 
         const R := Result(i32, i32);
-        constexpr fail := fn(): R { return R{ .err = 77 }; };
+        const fail := fn(): R { return R{ .err = 77 }; };
 
-        constexpr var ref_log: i32 = 0;
-        constexpr test_ref := fn(): R {
+        comptime let mut ref_log: i32 = 0;
+        const test_ref := fn(): R {
             errdefer |&e| ref_log = e;
-            const v := fail()?;
+            let v := fail()?;
             return R{ .ok = v };
         };
 
-        constexpr var ptr_log: i32 = 0;
-        constexpr test_ptr := fn(): R {
+        comptime let mut ptr_log: i32 = 0;
+        const test_ptr := fn(): R {
             errdefer |^p| ptr_log = *p;
-            const v := fail()?;
+            let v := fail()?;
             return R{ .ok = v };
         };
 

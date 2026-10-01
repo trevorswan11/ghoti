@@ -10,14 +10,14 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view K1{R"(
-    pub var counter: i32 = 10;
+    pub let mut counter: i32 = 10;
     pub const bump := fn(): void { counter = counter + 1; };
     pub const get  := fn(): i32  { return counter; };
     pub const tag  := fn(): i32  { return 3; };
 )"};
 
 constexpr std::string_view K2{R"(
-    pub var counter: i32 = 50;
+    pub let mut counter: i32 = 50;
     pub const bump := fn(): void { counter = counter + 10; };
     pub const get  := fn(): i32  { return counter; };
     pub const tag  := fn(): i32  { return 7; };
@@ -95,8 +95,8 @@ TEST_CASE("E2E: two structs in one module with a same-named static method") {
         };
 
         pub const main := fn(): i32 {
-            const a := A.make(10);
-            const b := B.make(4);
+            let a := A.make(10);
+            let b := B.make(4);
             return a.n + b.m;   // 10 + 12 = 22
         };
     )") == 22);
@@ -116,8 +116,8 @@ TEST_CASE("E2E: two structs in one module with a same-named `^self` method") {
         };
 
         pub const main := fn(): i32 {
-            const a := A.make(10);
-            const b := B.make(10);
+            let a := A.make(10);
+            let b := B.make(10);
             return a.value() + b.value();   // 11 + 20 = 31
         };
     )") == 31);
@@ -150,10 +150,10 @@ TEST_CASE("E2E: same-named method on same-named struct in two modules") {
             import "sb.gh" as sb;
 
             pub const main := fn(): i32 {
-                const a := sa.Shape.make(4);   // area -> 5
-                const b := sb.Shape.make(4);   // area -> 20
-                const viaObj := a.area();
-                const viaType := sb.Shape.area(^b);
+                let a := sa.Shape.make(4);   // area -> 5
+                let b := sb.Shape.make(4);   // area -> 20
+                let viaObj := a.area();
+                let viaType := sb.Shape.area(^b);
                 return viaObj + viaType;        // 5 + 20 = 25
             };
         )",
@@ -174,7 +174,7 @@ TEST_CASE("E2E: a module function and a struct method sharing a name do not cros
         };
 
         pub const main := fn(): i32 {
-            const w := Widget.make(9);   // n = 18
+            let w := Widget.make(9);   // n = 18
             return make(7) + w.n;        // 107 + 18 = 125
         };
     )") == 125);

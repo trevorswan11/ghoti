@@ -143,8 +143,8 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::F64, type_kind::F64);
     inject_type(kws::F80, type_kind::F80);
     inject_type(kws::F128, type_kind::F128);
-    inject_type(kws::CONSTEXPR_INT, type_kind::CONSTEXPR_INT);
-    inject_type(kws::CONSTEXPR_FLOAT, type_kind::CONSTEXPR_FLOAT);
+    inject_type(kws::COMPTIME_INT, type_kind::COMPTIME_INT);
+    inject_type(kws::COMPTIME_FLOAT, type_kind::COMPTIME_FLOAT);
     inject_type(kws::BOOL, type_kind::BOOL);
     inject_type(kws::VOID, type_kind::VOID_);
 
@@ -371,20 +371,20 @@ auto context::inject_prelude() -> void {
 }
 
 auto context::get_char_constant() -> type& {
-    auto& type{*pool[{type_kind::CONSTEXPR_INT, types::mut::CONSTANT, CHAR_CONSTANT_BITS, false}]};
+    auto& type{*pool[{type_kind::COMPTIME_INT, types::mut::CONSTANT, CHAR_CONSTANT_BITS, false}]};
     if (!type.is_resolved()) { type.resolve<types::builtin_type>(); }
     return type;
 }
 
 auto context::default_concrete(type& t) -> type& {
     switch (t.get_kind()) {
-    case type_kind::CONSTEXPR_INT:
+    case type_kind::COMPTIME_INT:
         if (t.get_key().get_int_bits() == CHAR_CONSTANT_BITS) {
             return get_int(CHAR_CONSTANT_BITS, false);
         }
         return get_int(32, true);
-    case type_kind::CONSTEXPR_FLOAT: return get_builtin_resolved_type(type_kind::F64);
-    default:                         return t;
+    case type_kind::COMPTIME_FLOAT: return get_builtin_resolved_type(type_kind::F64);
+    default:                        return t;
     }
 }
 

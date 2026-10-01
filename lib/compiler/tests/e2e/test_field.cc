@@ -9,7 +9,7 @@ TEST_CASE("`@field` reads a struct's own field by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            const p := Point{ .x = 7, .y = 8 };
+            let p := Point{ .x = 7, .y = 8 };
             return @field(p, "x") + @field(p, "y");
         };
     )") == 15);
@@ -19,7 +19,7 @@ TEST_CASE("`@field` reads a union's own field by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
         const U := union { a: i32, b: i32 };
         pub const main := fn(): i32 {
-            const u := U{ .a = 42 };
+            let u := U{ .a = 42 };
             return @field(u, "a");
         };
     )") == 42);
@@ -31,7 +31,7 @@ TEST_CASE("`@field` reads through a pointer and a reference") {
         const via_ptr := fn(p: ^Point): i32 { return @field(p, "x"); };
         const via_ref := fn(p: &Point): i32 { return @field(p, "y"); };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 3, .y = 4 };
+            let mut p := Point{ .x = 3, .y = 4 };
             return via_ptr(^p) + via_ref(&p);
         };
     )") == 7);
@@ -43,7 +43,7 @@ TEST_CASE(
         const Point := struct { x: i32, y: i32 };
         const field_name := fn(): []u8 { return "y"; };
         pub const main := fn(): i32 {
-            const p := Point{ .x = 1, .y = 99 };
+            let p := Point{ .x = 1, .y = 99 };
             return @field(p, field_name());
         };
     )") == 99);
@@ -53,7 +53,7 @@ TEST_CASE("`@field` is lvalue-capable: writing through it mutates the original")
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            var p := Point{ .x = 1, .y = 2 };
+            let mut p := Point{ .x = 1, .y = 2 };
             @field(p, "x") = 10;
             return p.x;
         };
@@ -64,7 +64,7 @@ TEST_CASE("`@field` rejects an unknown field name") {
     helpers::expect_compile_error(R"(
         const Point := struct { x: i32, y: i32 };
         pub const main := fn(): i32 {
-            const p := Point{ .x = 1, .y = 2 };
+            let p := Point{ .x = 1, .y = 2 };
             return @field(p, "z");
         };
     )");
@@ -86,7 +86,7 @@ TEST_CASE("`@field` on a type reads and writes a static `var` member by a compil
     CHECK(helpers::compile_and_run(R"(
         const Point := struct {
             x: i32,
-            var counter: i32 = 100;
+            let mut counter: i32 = 100;
         };
         pub const main := fn(): i32 {
             @field(Point, "counter") = 50;
@@ -111,7 +111,7 @@ TEST_CASE("`@field` on a type rejects a method (bound access is not supported)")
             const make := fn(): i32 { return 5; };
         };
         pub const main := fn(): i32 {
-            const f := @field(Point, "make");
+            let f := @field(Point, "make");
             return 0;
         };
     )");

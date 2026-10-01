@@ -31,26 +31,26 @@ pub const stderr := fn(): Result(File, Error) {
 
 /// Print the contents of `bytes` to stdout
 pub const print := fn(bytes: []u8): Result(void, Error) {
-    var f := stdout()?;
+    let mut f := stdout()?;
     return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stdout, followed by a newline
 pub const println := fn(bytes: []u8): Result(void, Error) {
-    var f := stdout()?;
+    let mut f := stdout()?;
     f.write_all(bytes)?;
     return f.write_byte('\n');
 };
 
 /// Print the contents of `bytes` to stderr
 pub const eprint := fn(bytes: []u8): Result(void, Error) {
-    var f := stderr()?;
+    let mut f := stderr()?;
     return f.write_all(bytes);
 };
 
 /// Print the contents of `bytes` to stderr, followed by a newline
 pub const eprintln := fn(bytes: []u8): Result(void, Error) {
-    var f := stderr()?;
+    let mut f := stderr()?;
     f.write_all(bytes)?;
     return f.write_byte('\n');
 };

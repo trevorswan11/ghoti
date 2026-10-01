@@ -18,7 +18,7 @@ TEST_CASE("A no-self function member is called directly through implicit access"
         };
 
         pub const main := fn(): i32 {
-            const a: T = .init();
+            let a: T = .init();
             return a.x;
         };
     )") == 99);
@@ -35,8 +35,8 @@ TEST_CASE("A no-self function member is bound bare through implicit access and c
         };
 
         pub const main := fn(): i32 {
-            const f: fn(): T = .init;
-            const a := f();
+            let f: fn(): T = .init;
+            let a := f();
             return a.x;
         };
     )") == 42);
@@ -53,7 +53,7 @@ TEST_CASE("A no-self function member taking arguments is called through implicit
         };
 
         pub const main := fn(): i32 {
-            const a: T = .from(7);
+            let a: T = .from(7);
             return a.x;
         };
     )") == 7);
@@ -63,7 +63,7 @@ TEST_CASE("Implicit access on the left side of a comparison is rejected") {
     helpers::expect_compile_error(R"(
         const U := union { a: i32, b: i32 };
         pub const main := fn(): i32 {
-            var u := U{ .a = 1 };
+            let mut u := U{ .a = 1 };
             if (.a == u) { return 1; }
             return 0;
         };
@@ -72,16 +72,16 @@ TEST_CASE("Implicit access on the left side of a comparison is rejected") {
 
 TEST_CASE("Member constant on a generic type constructor returned via implicit access") {
     CHECK(helpers::compile_and_run(R"(
-        pub constexpr Option := fn(T: type): type {
+        pub const Option := fn(T: type): type {
             return union {
                 some: T,
                 none: void,
 
-                pub constexpr of := fn(val: T): @This() {
+                pub const of := fn(val: T): @This() {
                     return .{ .some = val };
                 };
 
-                pub constexpr empty: @This() = .{ .none = {} };
+                pub const empty: @This() = .{ .none = {} };
             };
         };
 
@@ -100,8 +100,8 @@ TEST_CASE("Member constant on a generic type constructor returned via implicit a
         };
 
         pub const main := fn(): i32 {
-            const a := make_opt(true);
-            const b := make_opt(false);
+            let a := make_opt(true);
+            let b := make_opt(false);
             if (get_val(a) != 42) { return 1; }
             if (get_val(b) != -1) { return 2; }
             return 0;

@@ -21,7 +21,7 @@ constexpr std::string_view SHAPES{R"(
 TEST_CASE("`@typeName` of a primitive type") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const s := @typeName(i32);
+            let s := @typeName(i32);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (3 + 'i'));
@@ -32,7 +32,7 @@ TEST_CASE("`@typeName` of a user struct reports its declared name") {
         const Point := struct { x: i32, y: i32 };
 
         pub const main := fn(): i32 {
-            const s := @typeName(Point);
+            let s := @typeName(Point);
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]) + @as(i32, s[4]) - 187;
         };
     )") == (5 * 10 + 'P' + 't' - 187));
@@ -43,7 +43,7 @@ TEST_CASE("`@typeName` of a user enum reports its declared name") {
         const Color := enum { red, green, blue };
 
         pub const main := fn(): i32 {
-            const s := @typeName(Color);
+            let s := @typeName(Color);
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]);
         };
     )") == (5 * 10 + 'C'));
@@ -54,8 +54,8 @@ TEST_CASE("`@typeName` takes the type of a value expression") {
         const Widget := struct { n: i32 };
 
         pub const main := fn(): i32 {
-            var w: Widget = .{ .n = 0 };
-            const s := @typeName(@TypeOf(w));
+            let mut w: Widget = .{ .n = 0 };
+            let s := @typeName(@TypeOf(w));
             return @intCast(i32, s.len) * 10 + @as(i32, s[0]) - 100;
         };
     )") == (6 * 10 + 'W' - 100));
@@ -64,7 +64,7 @@ TEST_CASE("`@typeName` takes the type of a value expression") {
 TEST_CASE("`@typeName` of a pointer type renders structurally") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const s := @typeName(^u8);
+            let s := @typeName(^u8);
             return @intCast(i32, s.len) + @as(i32, s[0]);
         };
     )") == (3 + '^'));
@@ -73,7 +73,7 @@ TEST_CASE("`@typeName` of a pointer type renders structurally") {
 TEST_CASE("`@typeName` renders the `mut` qualifier on a pointer's pointee") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const s := @typeName(^mut u8);
+            let s := @typeName(^mut u8);
             return @intCast(i32, s.len)  + @as(i32, s[1]);
         };
     )") == (7 + 'm'));
@@ -82,7 +82,7 @@ TEST_CASE("`@typeName` renders the `mut` qualifier on a pointer's pointee") {
 TEST_CASE("`@typeName` of a function type uses `:` before the return type") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            const s := @typeName(fn(): i32);
+            let s := @typeName(fn(): i32);
             return @as(i32, s[4]) + @as(i32, s[3]);
         };
     )") == (':' + ')'));
@@ -100,11 +100,11 @@ TEST_CASE("`@typeName` of an imported aggregate reports its declared name") {
             };
 
             pub const main := fn(): i32 {
-                const p := @typeName(shapes.Point);
+                let p := @typeName(shapes.Point);
                 if (!same(p[0..p.len], "Point")) { return 1; }
-                const c := @typeName(shapes.Color);
+                let c := @typeName(shapes.Color);
                 if (!same(c[0..c.len], "Color")) { return 2; }
-                const h := @typeName(@TypeOf(shapes.hidden()));
+                let h := @typeName(@TypeOf(shapes.hidden()));
                 if (!same(h[0..h.len], "Hidden")) { return 3; }
                 return 0;
             };
@@ -125,13 +125,13 @@ TEST_CASE("`@typeName` names user aggregates nested inside compound types") {
             };
 
             pub const main := fn(): i32 {
-                const p := @typeName(^shapes.Point);
+                let p := @typeName(^shapes.Point);
                 if (!same(p[0..p.len], "^Point")) { return 1; }
-                const a := @typeName([2]Local);
+                let a := @typeName([2]Local);
                 if (!same(a[0..a.len], "[2]Local")) { return 2; }
-                const f := @typeName(fn(c: shapes.Color): Local);
+                let f := @typeName(fn(c: shapes.Color): Local);
                 if (!same(f[0..f.len], "fn(Color): Local")) { return 3; }
-                const s := @typeName([]mut shapes.Point);
+                let s := @typeName([]mut shapes.Point);
                 if (!same(s[0..s.len], "[]mut Point")) { return 4; }
                 return 0;
             };

@@ -35,7 +35,7 @@ auto check_clean_in_mode(std::string_view source, sema::optimize_mode mode) -> v
 
 TEST_CASE("@optimizeMode() and @runtimeSafety() fold to the build's mode") {
     check_clean_in_mode(R"(
-        constexpr {
+        comptime {
             @assert(@optimizeMode() == .debug);
             @assert(@optimizeMode() == builtin.OptimizeMode.debug);
             @assert(@runtimeSafety());
@@ -43,14 +43,14 @@ TEST_CASE("@optimizeMode() and @runtimeSafety() fold to the build's mode") {
     )",
                         sema::optimize_mode::DEBUG);
     check_clean_in_mode(R"(
-        constexpr {
+        comptime {
             @assert(@optimizeMode() == .release_fast);
             @assert(!@runtimeSafety());
         }
     )",
                         sema::optimize_mode::RELEASE_FAST);
     check_clean_in_mode(R"(
-        constexpr {
+        comptime {
             @assert(@optimizeMode() == .release_safe);
             @assert(@runtimeSafety());
         }
@@ -61,31 +61,31 @@ TEST_CASE("@optimizeMode() and @runtimeSafety() fold to the build's mode") {
 TEST_CASE("`optimize` and `safety` are @cfg names") {
     constexpr std::string_view source{R"(
         @cfg (optimize == .debug) {
-            const level := 0;
+            let level := 0;
         } else @cfg (optimize == .release_small) {
-            const level := 2;
+            let level := 2;
         } else {
-            const level := 1;
+            let level := 1;
         }
         @cfg (safety) {
-            const checked := true;
+            let checked := true;
         } else {
-            const checked := false;
+            let checked := false;
         }
         const tag := @cfgValue(safety);
     )"};
     check_clean_in_mode(
-        fmt::format("{}\nconstexpr {{ @assert(level == 0 and checked and tag); }}", source),
+        fmt::format("{}\ncomptime {{ @assert(level == 0 and checked and tag); }}", source),
         sema::optimize_mode::DEBUG);
     check_clean_in_mode(
-        fmt::format("{}\nconstexpr {{ @assert(level == 2 and !checked and !tag); }}", source),
+        fmt::format("{}\ncomptime {{ @assert(level == 2 and !checked and !tag); }}", source),
         sema::optimize_mode::RELEASE_SMALL);
-    check_clean_in_mode(fmt::format("{}\nconstexpr {{ @assert(level == 1 and checked); }}", source),
+    check_clean_in_mode(fmt::format("{}\ncomptime {{ @assert(level == 1 and checked); }}", source),
                         sema::optimize_mode::RELEASE_SAFE);
 }
 
 TEST_CASE("A misspelled build mode in @cfg is an error") {
-    const auto ctx{resolve_in_mode("@cfg (optimize == .relase_fast) { const x := 1; }",
+    const auto ctx{resolve_in_mode("@cfg (optimize == .relase_fast) { let x := 1; }",
                                    sema::optimize_mode::DEBUG)};
     CHECK_FALSE(ctx->root_mod.is_ok());
 }

@@ -8,7 +8,7 @@ test {
 
 pub const PageAllocator := page_alloc.PageAllocator;
 
-var page_alloc_impl: PageAllocator = .{};
-pub var page_allocator: std.mem.Allocator = .{
+let mut page_alloc_impl: PageAllocator = .{};
+pub let mut page_allocator: std.mem.Allocator = .{
     .vtable = ^mut page_alloc_impl,
 };

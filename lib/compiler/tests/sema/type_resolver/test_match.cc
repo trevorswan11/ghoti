@@ -102,16 +102,16 @@ TEST_CASE("Resolving well-formed builtin-type matching") {
 
 TEST_CASE("Resolving match arm captures with reference/pointer modifiers") {
     helpers::resolve_and_check(
-        "const U := union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |&v| v };");
+        "const U := union { a: i32 }; let mut u := U{ .a = 5 }; _ = match (u) { .a => |&v| v };");
+    helpers::resolve_and_check("const U := union { a: i32 }; let mut u := U{ .a = 5 }; _ = match "
+                               "(u) { .a => |&mut v| v };");
     helpers::resolve_and_check(
-        "const U := union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |&mut v| v };");
-    helpers::resolve_and_check(
-        "const U := union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |^v| *v };");
-    helpers::resolve_and_check(
-        "const U := union { a: i32 }; var u := U{ .a = 5 }; _ = match (u) { .a => |^mut v| *v };");
+        "const U := union { a: i32 }; let mut u := U{ .a = 5 }; _ = match (u) { .a => |^v| *v };");
+    helpers::resolve_and_check("const U := union { a: i32 }; let mut u := U{ .a = 5 }; _ = match "
+                               "(u) { .a => |^mut v| *v };");
 
     // Whole-value (non-union) captures accept the same modifiers
-    helpers::resolve_and_check("var x: i32 = 1; _ = match (x) { 1 => |&mut v| v, _ => 0 };");
+    helpers::resolve_and_check("let mut x: i32 = 1; _ = match (x) { 1 => |&mut v| v, _ => 0 };");
 }
 
 TEST_CASE("Illegal mutable capture of an immutable match arm value") {
@@ -263,7 +263,7 @@ TEST_CASE("Illegal match arms with primitives") {
             };
         };
 
-        helpers::test_resolver_fail("match (1) { 3 => 5 };", expected_diag("constexpr_int"));
+        helpers::test_resolver_fail("match (1) { 3 => 5 };", expected_diag("comptime_int"));
         helpers::test_resolver_fail("match (1i64) { 3 => 5 };", expected_diag("i64"));
         helpers::test_resolver_fail("match (1z) { 3 => 5 };", expected_diag("isize"));
         helpers::test_resolver_fail("match (1u32) { 3 => 5 };", expected_diag("u32"));
@@ -329,83 +329,84 @@ TEST_CASE("Illegal resolved builtin matcher type") {
 }
 
 TEST_CASE("Resolving well-formed range matching") {
-    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 0..5 => 1, 5..10 => 2, _ => 0 };");
-    helpers::resolve_and_check("var x: u8 = 0; _ = match (x) { 0..=4 => |v| v, _ => 0 };");
     helpers::resolve_and_check(
-        "var x: i32 = 0; var lo := 1; var hi := 8; _ = match (x) { lo..hi => 1, _ => 0 };");
+        "let mut x: i32 = 0; _ = match (x) { 0..5 => 1, 5..10 => 2, _ => 0 };");
+    helpers::resolve_and_check("let mut x: u8 = 0; _ = match (x) { 0..=4 => |v| v, _ => 0 };");
+    helpers::resolve_and_check("let mut x: i32 = 0; let mut lo := 1; let mut hi := 8; _ = match "
+                               "(x) { lo..hi => 1, _ => 0 };");
 }
 
-TEST_CASE("Resolving a 'match constexpr'") {
+TEST_CASE("Resolving a 'match comptime'") {
     helpers::resolve_and_check(
-        "const T := i32; _ = match constexpr (T) { i32 => 1, bool => not_real, _ => 0 };");
+        "const T := i32; _ = match comptime (T) { i32 => 1, bool => not_real, _ => 0 };");
     helpers::resolve_and_check(
-        "constexpr N := 2; _ = match constexpr (N) { 1 => 10, 2 => 20, 3 => bad, _ => 0 };");
-    helpers::resolve_and_check(
-        "constexpr N := 2; _ = match constexpr (N) { 1, 2 => |v| v, _ => 0 };");
+        "const N := 2; _ = match comptime (N) { 1 => 10, 2 => 20, 3 => bad, _ => 0 };");
+    helpers::resolve_and_check("const N := 2; _ = match comptime (N) { 1, 2 => |v| v, _ => 0 };");
 }
 
-TEST_CASE("Illegal 'match constexpr'") {
+TEST_CASE("Illegal 'match comptime'") {
     helpers::test_resolver_fail(
-        "var x: i32 = 0; _ = match constexpr (x) { 1 => 2, _ => 0 };",
-        sema::diagnostic{"'match constexpr' requires a compile-time-known scrutinee",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
-                         std::pair{0UZ, 37UZ}});
+        "let mut x: i32 = 0; _ = match comptime (x) { 1 => 2, _ => 0 };",
+        sema::diagnostic{"'match comptime' requires a compile-time-known scrutinee",
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 40UZ}});
     helpers::test_resolver_fail(
-        "constexpr N := 9; _ = match constexpr (N) { 1 => 10, 2 => 20 };",
-        sema::diagnostic{"'match constexpr' has no arm matching the scrutinee and no '_' arm",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
-                         std::pair{0UZ, 22UZ}});
+        "const N := 9; _ = match comptime (N) { 1 => 10, 2 => 20 };",
+        sema::diagnostic{"'match comptime' has no arm matching the scrutinee and no '_' arm",
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 18UZ}});
     helpers::test_resolver_fail(
-        "const T := i32; _ = match constexpr (T) { i32 => |t| 1, _ => 0 };",
-        sema::diagnostic{"'match constexpr' on a type value cannot bind a capture",
+        "const T := i32; _ = match comptime (T) { i32 => |t| 1, _ => 0 };",
+        sema::diagnostic{"'match comptime' on a type value cannot bind a capture",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 49UZ}});
+    helpers::test_resolver_fail(
+        "const N := 1; _ = match comptime (N) { 1 => |&mut v| v, _ => 0 };",
+        sema::diagnostic{"'match comptime' captures cannot use a reference or pointer modifier",
                          sema::error::ILLEGAL_MATCH_PATTERN,
                          std::pair{0UZ, 50UZ}});
-    helpers::test_resolver_fail(
-        "constexpr N := 1; _ = match constexpr (N) { 1 => |&mut v| v, _ => 0 };",
-        sema::diagnostic{"'match constexpr' captures cannot use a reference or pointer modifier",
-                         sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 55UZ}});
 }
 
 TEST_CASE("Resolving multi-value match arms") {
-    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 1, 2, 3 => |v| v, _ => 0 };");
-    helpers::resolve_and_check("var x: i32 = 0; _ = match (x) { 0, 5..9 => |v| v, _ => 0 };");
-    helpers::resolve_and_check("const U := union { a: i32, b: i32 }; var u := U{ .a = 1 }; "
+    helpers::resolve_and_check("let mut x: i32 = 0; _ = match (x) { 1, 2, 3 => |v| v, _ => 0 };");
+    helpers::resolve_and_check("let mut x: i32 = 0; _ = match (x) { 0, 5..9 => |v| v, _ => 0 };");
+    helpers::resolve_and_check("const U := union { a: i32, b: i32 }; let mut u := U{ .a = 1 }; "
                                "_ = match (u) { .a, .b => |v| v };");
 }
 
 TEST_CASE("A multi-variant capture requires one shared payload type") {
     helpers::test_resolver_fail(
-        "const U := union { a: i32, b: bool }; var u := U{ .a = 1 }; "
+        "const U := union { a: i32, b: bool }; let mut u := U{ .a = 1 }; "
         "_ = match (u) { .a, .b => |v| v };",
         sema::diagnostic{"A capture on a multi-variant match arm requires every listed "
                          "variant to carry the same payload type",
                          sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 87UZ}});
+                         std::pair{0UZ, 91UZ}});
 }
 
 TEST_CASE("Multi-value arms still reject overlapping constants") {
-    helpers::test_resolver_fail("var x: i32 = 0; _ = match (x) { 0, 4 => 1, 4..8 => 2, _ => 0 };",
-                                sema::diagnostic{"This match arm pattern overlaps an earlier arm",
-                                                 sema::error::ILLEGAL_MATCH_PATTERN,
-                                                 std::pair{0UZ, 43UZ}});
+    helpers::test_resolver_fail(
+        "let mut x: i32 = 0; _ = match (x) { 0, 4 => 1, 4..8 => 2, _ => 0 };",
+        sema::diagnostic{"This match arm pattern overlaps an earlier arm",
+                         sema::error::ILLEGAL_MATCH_PATTERN,
+                         std::pair{0UZ, 47UZ}});
 }
 
 TEST_CASE("Illegal range match arms") {
     helpers::test_resolver_fail(
-        "var b := true; _ = match (b) { 0..1 => 1, _ => 0 };",
+        "let mut b := true; _ = match (b) { 0..1 => 1, _ => 0 };",
         sema::diagnostic{"Range patterns are not allowed when matching on 'bool'",
                          sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 26UZ}});
+                         std::pair{0UZ, 30UZ}});
     helpers::test_resolver_fail(
-        "var x: i32 = 0; _ = match (x) { 5..1 => 1, _ => 0 };",
+        "let mut x: i32 = 0; _ = match (x) { 5..1 => 1, _ => 0 };",
         sema::diagnostic{"Range pattern is empty; its lower bound exceeds its upper bound",
                          sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 32UZ}});
-    helpers::test_resolver_fail("var x: i32 = 0; _ = match (x) { 0..5 => 1, 3 => 2, _ => 0 };",
+                         std::pair{0UZ, 36UZ}});
+    helpers::test_resolver_fail("let mut x: i32 = 0; _ = match (x) { 0..5 => 1, 3 => 2, _ => 0 };",
                                 sema::diagnostic{"This match arm pattern overlaps an earlier arm",
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
-                                                 std::pair{0UZ, 43UZ}});
+                                                 std::pair{0UZ, 47UZ}});
 }
 
 TEST_CASE("Illegal resolved arbitrary matcher type") {
@@ -423,15 +424,15 @@ TEST_CASE("Illegal resolved arbitrary matcher type") {
                                 sema::diagnostic{"A 'match' on a type requires a catch-all '_' arm",
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
                                                  std::pair{0UZ, 0UZ}});
-    helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("^constexpr_int", 7));
-    helpers::test_resolver_fail("var a: fn(): void = undefined; match (&a) { 3 => 5 };",
-                                expected_diag("fn(): void", 38));
-    helpers::test_resolver_fail("var a: fn(): void = undefined; match (a) { 3 => 5 };",
-                                expected_diag("fn(): void", 38));
-    helpers::resolve_and_check("var x := 4; _ = match (&mut x) { 3 => 5, _ => 0 };");
+    helpers::test_resolver_fail("match (^4) { 3 => 5 };", expected_diag("^comptime_int", 7));
+    helpers::test_resolver_fail("let mut a: fn(): void = undefined; match (&a) { 3 => 5 };",
+                                expected_diag("fn(): void", 42));
+    helpers::test_resolver_fail("let mut a: fn(): void = undefined; match (a) { 3 => 5 };",
+                                expected_diag("fn(): void", 42));
+    helpers::resolve_and_check("let mut x := 4; _ = match (&mut x) { 3 => 5, _ => 0 };");
     helpers::test_resolver_fail(
         "import std; match (std) { 3 => 5 };",
-        helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern var a: i32;", "std"}),
+        helpers::make_vector<mock_file>(mock_file{"std.gh", "pub extern let mut a: i32;", "std"}),
         expected_diag("module std", 19));
 }
 

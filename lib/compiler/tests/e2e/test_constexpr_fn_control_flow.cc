@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("a `constexpr fn`'s unfoldable early-return condition doesn't get skipped") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr len_eq := fn(a: []u8, b: []u8): bool {
+        pub const len_eq := fn(a: []u8, b: []u8): bool {
             if (a.len != b.len) return false;
             return true;
         };
@@ -24,7 +24,7 @@ TEST_CASE("a `constexpr fn`'s unfoldable early-return condition doesn't get skip
 TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch both fold "
           "correctly") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+        pub const eql := fn(T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
             if (a.len == 0) return true;
             if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
@@ -42,10 +42,10 @@ TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch
     )") == 0);
 }
 
-TEST_CASE("the same `eql`-shaped constexpr fn also folds at COMPILE TIME under `if constexpr` "
+TEST_CASE("the same `eql`-shaped constexpr fn also folds at COMPILE TIME under `if comptime` "
           "(not just when run as a regular call)") {
     CHECK(helpers::compile_and_run(R"(
-        constexpr eql := fn(T: type, a: []T, b: []T): bool {
+        const eql := fn(T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
             if (a.len == 0) return true;
             if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
@@ -55,8 +55,8 @@ TEST_CASE("the same `eql`-shaped constexpr fn also folds at COMPILE TIME under `
             return true;
         };
         pub const main := fn(): i32 {
-            if constexpr (eql(u8, "abcd", "abcd")) {} else { @compileError("expected equal"); }
-            if constexpr (eql(u8, "abcd", "abZd")) { @compileError("expected not equal"); }
+            if comptime (eql(u8, "abcd", "abcd")) {} else { @compileError("expected equal"); }
+            if comptime (eql(u8, "abcd", "abZd")) { @compileError("expected not equal"); }
             return 0;
         };
     )") == 0);

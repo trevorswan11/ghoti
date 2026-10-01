@@ -150,6 +150,9 @@ class type_resolver {
     template <ast::IndexableID ID>
     [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
     [[nodiscard]] auto declares_generic_params(const ast::function_expr& fn_expr) const -> bool;
+    // The first runtime local a `const` closure captures, which only a `let` closure may
+    [[nodiscard]] auto const_closure_runtime_capture(const ast::decl_stmt& decl) const
+        -> stdx::option<std::string_view>;
     [[nodiscard]] auto names_a_value(const symbol& sym, usize table_idx) -> bool;
     [[nodiscard]] auto check_array_dimension(ast::expr_handle dimension, const type& item_type)
         -> stdx::option<diagnostic>;
@@ -202,8 +205,8 @@ class type_resolver {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
             auto& first{*return_types.front()};
             // An inferred (`: auto`) return type never stays `constexpr_*`: pin it to its peer.
-            if (first.get_kind() == type_kind::CONSTEXPR_INT) { return ctx.get_int(32, true); }
-            if (first.get_kind() == type_kind::CONSTEXPR_FLOAT) {
+            if (first.get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
+            if (first.get_kind() == type_kind::COMPTIME_FLOAT) {
                 return ctx.get_builtin_resolved_type(type_kind::F64);
             }
             return first;

@@ -30,7 +30,7 @@ TEST_CASE("identifier_at finds a reference and its declaration through the side 
 
     const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
-    CHECK(type.to_string() == "constexpr_int");
+    CHECK(type.to_string() == "comptime_int");
 
     // get_symbol_span resolves to the declared name itself, not the whole `pub const` statement
     const auto def_loc{UNWRAP(module->get_identifier_definition(id))};
@@ -58,7 +58,7 @@ TEST_CASE("hover-style type resolution still works around an unrelated syntax er
 
     const auto  id{UNWRAP(lsp::identifier_at(*module, {1, 15}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
-    CHECK(type.to_string() == "constexpr_int");
+    CHECK(type.to_string() == "comptime_int");
 
     const auto def_loc{UNWRAP(module->get_identifier_definition(id))};
     CHECK(def_loc.span.start.line == 0);
@@ -154,12 +154,12 @@ TEST_CASE("hover-style type resolution names the module on an import alias and i
 TEST_CASE("hover-style type resolution shows the null-terminated sentinel on array/slice types") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_position_index_null_terminated.gh"};
-    CHECK(loader.add(path, "pub const f := fn(s: [:0]u8): void { const l := s; };\n"));
+    CHECK(loader.add(path, "pub const f := fn(s: [:0]u8): void { let l := s; };\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 48}))};
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 46}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
     CHECK(type.to_string() == "[:0]u8");
 }

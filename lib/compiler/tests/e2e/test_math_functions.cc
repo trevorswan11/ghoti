@@ -30,10 +30,10 @@ auto run_with_builtins(std::string_view source) -> void {
 TEST_CASE("math builtins fold at compile time, correctly rounded") {
     // The expected bits are mpmath's results rounded to nearest
     CHECK(helpers::compile_and_run(R"(
-        constexpr e: f64 = @exp(1.0);
-        constexpr root: f64 = @sqrt(2.0);
-        constexpr sine: f32 = @sin(0.1);
-        constexpr ln10: f64 = @log(10.0);
+        const e: f64 = @exp(1.0);
+        const root: f64 = @sqrt(2.0);
+        const sine: f32 = @sin(0.1);
+        const ln10: f64 = @log(10.0);
         pub const main := fn(): i32 {
             if (@bitCast(u64, e) != 0x4005bf0a8b145769u64) { return 1; }
             if (@bitCast(u64, root) != 0x3ff6a09e667f3bcdu64) { return 2; }
@@ -53,13 +53,13 @@ TEST_CASE("an untyped math result is computed in the type it lands in") {
     // Rounding the f128 result to f32 again would differ from the direct f32 result somewhere;
     // here both paths must give the direct one
     CHECK(helpers::compile_and_run(R"(
-        constexpr untyped := @sin(0.1);
-        constexpr later: f32 = untyped;
-        constexpr direct: f32 = @sin(0.1);
+        const untyped := @sin(0.1);
+        const later: f32 = untyped;
+        const direct: f32 = @sin(0.1);
         pub const main := fn(): i32 {
             if (@TypeOf(untyped) != @TypeOf(0.1)) { return 1; }
             if (@bitCast(u32, later) != @bitCast(u32, direct)) { return 2; }
-            const passed: f32 = untyped;
+            let passed: f32 = untyped;
             if (@bitCast(u32, passed) != 0x3dcc7576u32) { return 3; }
             return 0;
         };
@@ -69,10 +69,10 @@ TEST_CASE("an untyped math result is computed in the type it lands in") {
 TEST_CASE("a math builtin keeps its operand's float type") {
     helpers::type_check_and_verify(R"(
         pub const f := fn(a: f32, b: f64, c: f16, d: f128): void {
-            const x: f32 = @sin(a);
-            const y: f64 = @log(b);
-            const z: f16 = @sqrt(c);
-            const w: f128 = @floor(d);
+            let x: f32 = @sin(a);
+            let y: f64 = @log(b);
+            let z: f16 = @sqrt(c);
+            let w: f128 = @floor(d);
             _ = x; _ = y; _ = z; _ = w;
         };
     )");
@@ -81,20 +81,19 @@ TEST_CASE("a math builtin keeps its operand's float type") {
 TEST_CASE("math builtins reject integers, types, and results past the range") {
     helpers::test_checker_fail(R"(
         pub const f := fn(n: i32): void {
-            const x := @sqrt(n);
+            let x := @sqrt(n);
         };
     )",
                                sema::diagnostic{"'@sqrt' operand must be a float; found 'i32'; "
                                                 "convert it with `@floatFromInt`",
                                                 sema::error::TYPE_MISMATCH,
-                                                std::pair{2UZ, 29UZ}});
+                                                std::pair{2UZ, 27UZ}});
+    helpers::expect_compile_error("pub const main := fn(): i32 { let x := @sin(f32); return 0; };");
     helpers::expect_compile_error(
-        "pub const main := fn(): i32 { const x := @sin(f32); return 0; };");
-    helpers::expect_compile_error(
-        "pub const main := fn(): i32 { const b := @exp(true); return 0; };");
+        "pub const main := fn(): i32 { let b := @exp(true); return 0; };");
 
     const auto [ctx, idx]{helpers::expect_compile_error(R"(
-        constexpr big: f64 = @exp(1000.0);
+        const big: f64 = @exp(1000.0);
     )")};
     const auto& diags{ctx->root_mod.diagnostics.as<sema::diagnostics>()};
     CHECK(std::ranges::any_of(diags, [](const auto& diag) {
@@ -102,7 +101,7 @@ TEST_CASE("math builtins reject integers, types, and results past the range") {
     }));
     // A pole is a value, not an error
     CHECK(helpers::compile_and_run(R"(
-        constexpr pole: f64 = @log(0.0);
+        const pole: f64 = @log(0.0);
         pub const main := fn(): i32 { return if (pole < -1.0e308) 0 else 1; };
     )") == 0);
 }
@@ -112,9 +111,9 @@ TEST_CASE("runtime math calls the target's routines, never LLVM's foldable intri
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const g := fn(q: f128): f128 { return @exp(q); };
         pub const f := fn(a: f32, b: f64, h: f16): f64 {
-            const s := @sin(a);
-            const r := @sqrt(b);
-            const l := @log10(h);
+            let s := @sin(a);
+            let r := @sqrt(b);
+            let l := @log10(h);
             return @floatCast(f64, s) + r + @floatCast(f64, l);
         };
     )")};
@@ -130,9 +129,9 @@ TEST_CASE("runtime math calls the target's routines, never LLVM's foldable intri
 
 TEST_CASE("runtime math matches compile-time math") {
     run_with_builtins(R"(
-        var one: f64 = 1.0;
-        var tenth: f32 = 0.1f32;
-        var two: f64 = 2.0;
+        let mut one: f64 = 1.0;
+        let mut tenth: f32 = 0.1f32;
+        let mut two: f64 = 2.0;
         pub const main := fn(): i32 {
             if (@exp(one) != @exp(1.0)) { return 1; }
             if (@sin(tenth) != @sin(0.1f32)) { return 2; }

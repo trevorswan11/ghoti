@@ -13,7 +13,7 @@ TEST_CASE("`return .{...}` infers the struct type from the return type") {
         };
 
         pub const main := fn(): i32 {
-            const p := make();
+            let p := make();
             return p.x + p.y;
         };
     )") == 42);
@@ -28,7 +28,7 @@ TEST_CASE("`return .{...}` works in both arms of an `if` expression") {
         };
 
         pub const main := fn(): i32 {
-            const p := pick(true);
+            let p := pick(true);
             return p.x + p.y;
         };
     )") == 42);
@@ -47,7 +47,7 @@ TEST_CASE("`return .{...}` works in a `match` arm value") {
         };
 
         pub const main := fn(): i32 {
-            const p := from_tag(.a);
+            let p := from_tag(.a);
             return p.x + p.y;
         };
     )") == 42);
@@ -76,7 +76,7 @@ TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
         const Point := struct { x: i32, y: i32 };
 
         const build := fn(): Point {
-            var i: i32 = 0;
+            let mut i: i32 = 0;
             return outer: loop {
                 i += 1;
                 if (i == 3) { break :outer .{ .x = 21, .y = 21 }; }
@@ -84,7 +84,7 @@ TEST_CASE("`return .{...}` flows through a labeled loop `break`") {
         };
 
         pub const main := fn(): i32 {
-            const p := build();
+            let p := build();
             return p.x + p.y;
         };
     )") == 42);
@@ -105,7 +105,7 @@ TEST_CASE("`return .{...}` for a method returning `@This()`") {
         };
 
         pub const main := fn(): i32 {
-            const c := Counter.zero().bumped(42);
+            let c := Counter.zero().bumped(42);
             return c.value;
         };
     )") == 42);

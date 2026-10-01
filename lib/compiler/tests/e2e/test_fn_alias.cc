@@ -52,8 +52,8 @@ TEST_CASE("module-scope alias of a static member function") {
         const relay := fn(f: fn(n: i32): Box, x: i32): Box { return f(x); };
 
         pub const main := fn(): i32 {
-            const a := make(40);        // direct call through the alias
-            const b := relay(make, 2);  // alias passed as a fn-pointer argument
+            let a := make(40);        // direct call through the alias
+            let b := relay(make, 2);  // alias passed as a fn-pointer argument
             return a.n + b.n;
         };
     )") == 42);
@@ -69,9 +69,9 @@ TEST_CASE("unbound method reference: `^self` and `&mut self` receivers") {
         };
 
         pub const main := fn(): i32 {
-            var b := Box.of(3);
-            const scale := Box.scaled;   // fn(^Box, i32): i32
-            const store := Box.set;      // fn(&mut Box, i32): void
+            let mut b := Box.of(3);
+            let scale := Box.scaled;   // fn(^Box, i32): i32
+            let store := Box.set;      // fn(&mut Box, i32): void
             store(&mut b, 6);
             return scale(^b, 7);
         };
@@ -88,7 +88,7 @@ TEST_CASE("unbound method reference passed as a `fn`-pointer argument") {
         const relay := fn(f: fn(r: &Box): i32, r: &Box): i32 { return f(r); };
 
         pub const main := fn(): i32 {
-            const b := Box{ .n = 42 };
+            let b := Box{ .n = 42 };
             return relay(Box.get, &b);
         };
     )") == 42);
@@ -128,8 +128,8 @@ TEST_CASE("a no-self struct-member `const fn` stored into a `fn`-pointer field i
         };
 
         pub const main := fn(): i32 {
-            var b := Box{ .val = 100 };
-            const e := b.erased();
+            let mut b := Box{ .val = 100 };
+            let e := b.erased();
             return e.call(5);
         };
     )") == 105);
@@ -157,8 +157,8 @@ TEST_CASE("an extracted method is not callable via a dot expression on an instan
         };
 
         pub const main := fn(): i32 {
-            const m := Box.scaled;
-            const b := Box{ .n = 6 };
+            let m := Box.scaled;
+            let b := Box{ .n = 6 };
             return b.m(7);
         };
     )");

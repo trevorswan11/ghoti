@@ -27,8 +27,8 @@ TEST_CASE("A capturing closure satisfies a fn(T): U generic parameter") {
         };
 
         const test_fn := fn(): i32 {
-            var offset: i32 = 10;
-            const add_offset := fn(x: i32): i32 {
+            let mut offset: i32 = 10;
+            let add_offset := fn(x: i32): i32 {
                 return x + offset;
             };
             return apply(i32, 5, add_offset);
@@ -43,8 +43,8 @@ TEST_CASE("A closure whose signature does not match the declared fn(T): U shape 
         };
 
         const test_fn := fn(): i32 {
-            var offset: i32 = 10;
-            const add := fn(x: i32, y: i32): i32 {
+            let mut offset: i32 = 10;
+            let add := fn(x: i32, y: i32): i32 {
                 return x + y + offset;
             };
             return apply(i32, 5, add);
@@ -60,8 +60,8 @@ TEST_CASE("A non-generic-looking function with a plain fn(...) parameter still a
         };
 
         const test_fn := fn(): i32 {
-            var offset: i32 = 10;
-            const add_offset := fn(x: i32): i32 {
+            let mut offset: i32 = 10;
+            let add_offset := fn(x: i32): i32 {
                 return x + offset;
             };
             return apply_once(add_offset);

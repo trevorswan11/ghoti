@@ -18,35 +18,35 @@ TEST_CASE("wrapping binary '+%' rejects float operands") {
 
 TEST_CASE("wrapping binary '+%' rejects pointer operands") {
     helpers::test_resolver_fail(
-        "var p: ^i32 = undefined; const x := p +% 1;",
+        "let mut p: ^i32 = undefined; const x := p +% 1;",
         sema::diagnostic{"operator '+%' expects two integer operands; found '^i32' and "
-                         "'constexpr_int'",
+                         "'comptime_int'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
-                         std::pair{0UZ, 36UZ}});
+                         std::pair{0UZ, 40UZ}});
 }
 
 TEST_CASE("wrapping compound '+%=' rejects boolean operands") {
     helpers::test_resolver_fail(
-        "var b: bool = true; b +%= true;",
+        "let mut b: bool = true; b +%= true;",
         sema::diagnostic{"operator '+%=' expects two integer operands; found 'bool' and 'bool'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
-                         std::pair{0UZ, 20UZ}});
+                         std::pair{0UZ, 24UZ}});
 }
 
 TEST_CASE("wrapping prefix '-%' rejects float operands") {
     helpers::test_resolver_fail(
-        "var some_f32: f32 = 1.0f32; const x := -%some_f32;",
+        "let mut some_f32: f32 = 1.0f32; const x := -%some_f32;",
         sema::diagnostic{"operator '-%' expects a signed integer operand; found 'f32'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
-                         std::pair{0UZ, 39UZ}});
+                         std::pair{0UZ, 43UZ}});
 }
 
 TEST_CASE("wrapping prefix '-%' rejects unsigned integer operands") {
     helpers::test_resolver_fail(
-        "var u: u32 = 1u32; const x := -%u;",
+        "let mut u: u32 = 1u32; const x := -%u;",
         sema::diagnostic{"operator '-%' expects a signed integer operand; found 'u32'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
-                         std::pair{0UZ, 30UZ}});
+                         std::pair{0UZ, 34UZ}});
 }
 
 TEST_CASE("wrapping operators accept concrete and constexpr integers") {

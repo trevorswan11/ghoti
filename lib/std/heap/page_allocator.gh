@@ -66,8 +66,8 @@ test "PageAllocator: alloc/write/free round-trips through the global singleton" 
 }
 
 test "PageAllocator: a local instance also works, not just the global singleton" {
-    var local: PageAllocator = .{};
-    const a := std.mem.Allocator{ .vtable = ^mut local };
+    let mut local: PageAllocator = .{};
+    let a := std.mem.Allocator{ .vtable = ^mut local };
     match (a.alloc(u8, std.os.page_size() * 2uz)) {
         .ok => |buf| {
             buf[0] = 1u8;

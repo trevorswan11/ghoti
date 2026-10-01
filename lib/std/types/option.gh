@@ -1,16 +1,16 @@
-pub constexpr Option := fn(T: type): type {
+pub const Option := fn(T: type): type {
     return union {
         some: T,
         none: void,
 
-        pub constexpr of := fn(val: T): @This() {
+        pub const of := fn(val: T): @This() {
             return .{ .some = val };
         };
 
-        pub constexpr empty: @This() = .{ .none = {} };
+        pub const empty: @This() = .{ .none = {} };
 
         /// Returns the contained `some` value or a provided default.
-        pub constexpr unwrap_or := fn(&self, default: T): T {
+        pub const unwrap_or := fn(&self, default: T): T {
             return match (self) {
                 .some => |s| s,
                 .none => default,
@@ -20,7 +20,7 @@ pub constexpr Option := fn(T: type): type {
 };
 
 test "Option.unwrap_or returns the default when disengaged" {
-    var o: Option(i32) = .of(1);
+    let mut o: Option(i32) = .of(1);
     @expect(o.unwrap_or(20) == 1);
     o = .empty;
     @expect(o.unwrap_or(42) == 42);
@@ -31,8 +31,8 @@ impl(T: type) builtin.Unwrappable for Option(T) {
     const Residual := void;
     pub const branch := fn(self): builtin.Flow(T, void) {
         return match (self) {
-            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-            .none => builtin.Flow(T, void){ .@"break" = {} },
+            .some => |v| builtin.Flow(T, void){ .continue = v },
+            .none => builtin.Flow(T, void){ .break = {} },
         };
     };
 }

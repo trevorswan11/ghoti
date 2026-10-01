@@ -20,11 +20,11 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Declaration auto type inference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        var a: auto = 42;
+        let mut a: auto = 42;
         const b: auto = true;
-        var c := 100i64;
+        let mut c := 100i64;
         const d := false;
-        var s := "hello";
+        let mut s := "hello";
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
@@ -75,7 +75,7 @@ TEST_CASE("Declaration auto type inference") {
 }
 
 TEST_CASE("Declaration auto without initializer fails") {
-    helpers::test_resolver_fail("var a: auto = undefined;",
+    helpers::test_resolver_fail("let mut a: auto = undefined;",
                                 sema::diagnostic{"Type 'auto' requires an initializer expression",
                                                  sema::error::AUTO_WITHOUT_INITIALIZER,
                                                  std::pair{0UZ, 0UZ}});
@@ -119,30 +119,30 @@ TEST_CASE("Illegal auto usage in type aliases and function types") {
 
     SECTION("Function pointer type cannot have auto parameter") {
         helpers::test_resolver_fail(
-            "var f: fn(x: auto): i32 = undefined;",
+            "let mut f: fn(x: auto): i32 = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' parameter types",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 13UZ}});
+                             std::pair{0UZ, 17UZ}});
     }
 
     SECTION("Function pointer type cannot have auto return type") {
         helpers::test_resolver_fail(
-            "var f: fn(n: i32): auto = undefined;",
+            "let mut f: fn(n: i32): auto = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' return type",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 19UZ}});
+                             std::pair{0UZ, 23UZ}});
     }
 
     SECTION("Array type cannot have auto element type") {
-        helpers::test_resolver_fail("var a: [5]auto = undefined;",
+        helpers::test_resolver_fail("let mut a: [5]auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 10UZ}});
+                                                     std::pair{0UZ, 14UZ}});
 
-        helpers::test_resolver_fail("var a: []auto = undefined;",
+        helpers::test_resolver_fail("let mut a: []auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 9UZ}});
+                                                     std::pair{0UZ, 13UZ}});
     }
 }
 
@@ -232,7 +232,7 @@ TEST_CASE("Function return type auto inference") {
     SECTION("Infers return type from constexpr conditional branches") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             const f := fn(): auto {
-                if constexpr (true) {
+                if comptime (true) {
                     return 42;
                 } else {
                     return 100;
@@ -452,7 +452,7 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
     SECTION("`@TypeOf` of an `auto` parameter") {
         check_widths(R"(
             const f := fn(value: auto): auto {
-                var a: @TypeOf(value) = value;
+                let mut a: @TypeOf(value) = value;
                 return a;
             };
             const x := f(5u16);
@@ -463,7 +463,7 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
     SECTION("A `T: type` parameter") {
         check_widths(R"(
             const f := fn(T: type, value: T): auto {
-                var a: T = value;
+                let mut a: T = value;
                 return a;
             };
             const x := f(u16, 5);
@@ -474,11 +474,11 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
     SECTION("A `using` alias built from `@typeInfo(@TypeOf(value))`") {
         check_widths(R"(
             const f := fn(value: auto, base: u8): auto {
-                constexpr info := @typeInfo(@TypeOf(value)).int;
-                constexpr bits := @max(info.bits, 8u16);
+                const info := @typeInfo(@TypeOf(value)).int;
+                const bits := @max(info.bits, 8u16);
                 const MinInt := @Int(.{ .signedness = .unsigned, .bits = bits });
-                var a: MinInt = value;
-                const d: MinInt = a % @intCast(MinInt, base);
+                let mut a: MinInt = value;
+                let d: MinInt = a % @intCast(MinInt, base);
                 return d;
             };
             const x := f(5u16, 2);

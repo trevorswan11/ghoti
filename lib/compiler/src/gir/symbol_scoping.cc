@@ -57,7 +57,7 @@ auto scan_decl(scan_state&           st,
     const auto name{name_ident->name};
 
     const bool is_fn{ast.get_as_opt<ast::function_expr>(*decl.value).has_value()};
-    const bool is_var{decl.has_modifier(ast::decl_modifiers::VARIABLE)};
+    const bool is_var{decl.has_modifier(ast::decl_modifiers::MUT)};
 
     if (is_fn || is_var) {
         st.name_counts[std::string{name}] += 1;

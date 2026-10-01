@@ -49,20 +49,20 @@ TEST_CASE("A non-C-ABI return width is rejected in an extern fn signature") {
 
 TEST_CASE("f16 is rejected on an extern global") {
     helpers::test_resolver_fail(
-        "extern var g: f16;",
+        "extern let mut g: f16;",
         sema::diagnostic{"'f16' has no C ABI representation; extern signatures accept "
                          "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
-                         std::pair{0UZ, 14UZ}});
+                         std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("f128 is rejected on an extern global") {
     helpers::test_resolver_fail(
-        "extern var g: f128;",
+        "extern let mut g: f128;",
         sema::diagnostic{"'f128' has no C ABI representation; extern signatures accept "
                          "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
-                         std::pair{0UZ, 14UZ}});
+                         std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("C-ABI extern signatures and aggregates are accepted") {

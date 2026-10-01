@@ -13,7 +13,7 @@ TEST_CASE("A struct literal applies `= default` for every omitted field") {
     CHECK(helpers::compile_and_run(R"(
         const P := struct { pub a: i32, pub b: i32 = 42, pub c: i32 = 7 };
         pub const main := fn(): i32 {
-            var p := P{ .a = 1 };
+            let mut p := P{ .a = 1 };
             return p.a + p.b + p.c;
         };
     )") == 50);
@@ -23,7 +23,7 @@ TEST_CASE("An explicitly-provided field overrides its default") {
     CHECK(helpers::compile_and_run(R"(
         const P := struct { pub a: i32 = 1, pub b: i32 = 2 };
         pub const main := fn(): i32 {
-            var p := P{ .b = 99 };
+            let mut p := P{ .b = 99 };
             return p.a + p.b;
         };
     )") == 100);
@@ -46,8 +46,8 @@ TEST_CASE("A defaulted slice field is initialized, not garbage") {
         const Buf := struct { pub data: []mut u8, pub pos: usize = 0 };
         const room := fn(b: &Buf): usize { return b.data.len - b.pos; };
         pub const main := fn(): i32 {
-            var backing: [16]mut u8 = undefined;
-            var b := Buf{ .data = backing };
+            let mut backing: [16]mut u8 = undefined;
+            let mut b := Buf{ .data = backing };
             return @intCast(i32, b.pos) * 100 + @intCast(i32, room(&b));
         };
     )") == 16);
@@ -63,7 +63,7 @@ TEST_CASE("A field default that references another module resolves") {
               R"(
             import "opts.gh" as opts;
             pub const main := fn(): i32 {
-                var o := opts.Options{ .name = "x" };
+                let mut o := opts.Options{ .name = "x" };
                 return o.cap - 200;
             };
         )",

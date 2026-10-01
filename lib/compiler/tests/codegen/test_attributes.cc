@@ -45,7 +45,7 @@ TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
         @[inline(.always)] pub const always := fn(x: i32): i32 { return x; };
         @[inline(.never)] pub const never := fn(x: i32): i32 { return x; };
         pub const hint := @[inline(.hint)] fn(x: i32): i32 { return x; };
-        constexpr FAST := true;
+        const FAST := true;
         @[inline(if (FAST) .always else .never)] pub const computed := fn(x: i32): i32 {
             return x;
         };
@@ -123,7 +123,7 @@ TEST_CASE("@[align(n)] raises a field's alignment in the aggregate layout") {
     helpers::resolve_and_check(R"(
         const S := struct { a: u8, @[align(16)] b: u8 };
         const Outer := struct { tag: u8, inner: S };
-        constexpr {
+        comptime {
             @assert(@alignOf(S) == 16);
             @assert(@sizeOf(S) == 32);
             @assert(@sizeOf(Outer) == 48);
@@ -136,12 +136,12 @@ TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const S := struct { a: u8, @[align(16)] b: u8, c: u8 };
-        pub var global_s: S = .{ .a = 1, .b = 2, .c = 3 };
+        pub let mut global_s: S = .{ .a = 1, .b = 2, .c = 3 };
         pub const main := fn(args: [][:0]u8): i32 {
-            var s: S = .{ .a = 4, .b = 5, .c = 6 };
+            let mut s: S = .{ .a = 4, .b = 5, .c = 6 };
             s.b += global_s.b;
-            const bp: ^mut u8 = ^mut s.b;
-            const p: ^mut S = @fieldParentPtr(S, "b", bp);
+            let bp: ^mut u8 = ^mut s.b;
+            let p: ^mut S = @fieldParentPtr(S, "b", bp);
             return @as(i32, s.b) + @as(i32, p.c);
         };
     )")};
@@ -167,11 +167,11 @@ TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        @[align(64)] pub var buffer: [4]u8 = undefined;
+        @[align(64)] pub let mut buffer: [4]u8 = undefined;
         @[align(32)] pub const aligned_fn := fn(x: i32): i32 { return x; };
         pub const main := fn(args: [][:0]u8): i32 {
-            @[align(32)] var counter: i32 = 0;
-            @[align(16)] const fixed: i32 = 5;
+            @[align(32)] let mut counter: i32 = 0;
+            @[align(16)] let fixed: i32 = 5;
             counter += fixed;
             return counter + aligned_fn(1) + buffer[0];
         };
@@ -197,9 +197,9 @@ TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
 }
 
 TEST_CASE("@[align(n)] is validated") {
-    CHECK(has_error("@[align(3)] var x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("@[align(0)] var x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("@[align(8)] constexpr X := 3;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("@[align(3)] let mut x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("@[align(0)] let mut x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("@[align(8)] const X := 3;", sema::error::ILLEGAL_ATTRIBUTE));
     CHECK(has_error("const S := struct { @[inline(.always)] a: i32 };",
                     sema::error::ILLEGAL_ATTRIBUTE));
     CHECK(
@@ -214,7 +214,7 @@ TEST_CASE("An attribute list inside an aggregate starts a field or a member") {
             @[discardable] pub const get := fn(&self): u8 { return self.a; };
         };
         pub const main := fn(): i32 {
-            const s: S = .{ .a = 1, .b = 2 };
+            let s: S = .{ .a = 1, .b = 2 };
             s.get();
             return 0;
         };
@@ -235,8 +235,8 @@ TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
         @[align(if (@sizeOf(T) > 4) 64 else 16)]
         const first := fn(T: type, a: T, b: T): T { return a; };
         pub const main := fn(args: [][:0]u8): i32 {
-            const small := first(i32, 1, 2);
-            const big := first(i64, 3, 4);
+            let small := first(i32, 1, 2);
+            let big := first(i64, 3, 4);
             return small + @intCast(i32, big);
         };
     )")};
@@ -271,7 +271,7 @@ TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         @[align(if (n > 2) 64 else 32)]
-        const scaled := fn(constexpr n: i32, x: i32): i32 { return x * n; };
+        const scaled := fn(comptime n: i32, x: i32): i32 { return x * n; };
         pub const main := fn(args: [][:0]u8): i32 { return scaled(2, 1) + scaled(3, 1); };
     )")};
 
@@ -292,7 +292,7 @@ TEST_CASE("A type constructor's field attributes fold per instantiation") {
         const Boxed := fn(T: type): type {
             return struct { tag: u8, @[align(@alignOf(T) * 4)] value: T };
         };
-        constexpr {
+        comptime {
             @assert(@alignOf(Boxed(i32)) == 16);
             @assert(@alignOf(Boxed(u8)) == 4);
             @assert(@sizeOf(Boxed(i32)) == 32);

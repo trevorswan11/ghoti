@@ -17,12 +17,12 @@ pub const Alignment := enum : std.math.Log2Int(usize) {
     @"64" = 6,
     _,
 
-    pub constexpr from_byte_units := fn(n: usize): Alignment {
+    pub const from_byte_units := fn(n: usize): Alignment {
         @assert(std.math.is_power_of_two(n));
         return @fromBackingInt(@intCast(std.math.Log2Int(usize), @ctz(n)));
     };
 
-    pub constexpr of := fn(T: type): Alignment {
+    pub const of := fn(T: type): Alignment {
         return from_byte_units(@alignOf(T));
     };
 };
@@ -49,13 +49,13 @@ test "Alignment.of" {
 }
 
 pub const round_up_page := fn(len: usize): usize {
-    const ps := std.os.page_size();
+    let ps := std.os.page_size();
     return (len + ps - 1uz) & ~(ps - 1uz);
 };
 
 /// Returns true if and only if the slices have the same length and all elements
 /// compare true using equality operator.
-pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+pub const eql := fn(T: type, a: []T, b: []T): bool {
     if (a.len != b.len) return false;
     if (a.len == 0) return true;
     if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
@@ -74,7 +74,7 @@ test "eql over bytes" {
 
 /// Returns true if haystack starts with needle.
 /// Time complexity: O(needle.len)
-pub constexpr starts_with := fn(T: type, haystack: []T, needle: []T): bool {
+pub const starts_with := fn(T: type, haystack: []T, needle: []T): bool {
     return if (needle.len > haystack.len) false else eql(T, haystack[0..needle.len], needle);
 };
 

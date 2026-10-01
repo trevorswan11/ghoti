@@ -24,7 +24,7 @@ templ SyntaxControlFlowPage() {
 			{ `import std;
 
 pub const main := fn(args: [][:0]u8): void {
-    const message := "Hello, world!";
+    let message := "Hello, world!";
     std::io::println(message);
 };` }
 		</code>
@@ -116,7 +116,7 @@ pub const main := fn(args: [][:0]u8): void {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `if constexpr (true) {
+			{ `if comptime (true) {
     ...
 } else {
     ...
@@ -125,7 +125,7 @@ pub const main := fn(args: [][:0]u8): void {
 	</pre>
 	<ul>
 		<li>In the above example, the top block is the only statement evaluated, with the <code>else</code> branch and condition being completely dropped at runtime</li>
-		<li>Statements inside the consequent of a conditional are still scoped as written, <code>constexpr</code> will not hoist a branch into the outer scope</li>
+		<li>Statements inside the consequent of a conditional are still scoped as written, <code>comptime</code> will not hoist a branch into the outer scope</li>
 	</ul>
 	<h2>Defer</h2>
 	<ul>

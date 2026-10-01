@@ -19,7 +19,7 @@ TEST_CASE("Top-level array const indexed with a runtime (non-constant) index") {
     CHECK(helpers::compile_and_run(R"(
         const ARR := [3]i32{7, 8, 9};
         pub const main := fn(): i32 {
-            var i: usize = 2;
+            let mut i: usize = 2;
             return ARR[i];
         };
     )") == 9);
@@ -94,7 +94,7 @@ TEST_CASE("Top-level sentinel-string const iterated at runtime") {
     CHECK(helpers::compile_and_run(R"(
         const P: [:0]u8 = "ABC";
         pub const main := fn(): i32 {
-            var n: i32 = 0;
+            let mut n: i32 = 0;
             for (P) |c| { n += @as(i32, c); }
             return n - 100;
         };
@@ -128,7 +128,7 @@ TEST_CASE("E2E WS-5: module-scope struct const referenced by pointer/ref") {
         };
 
         pub const main := fn(): i32 {
-            const px := get_x(&ORIGIN);
+            let px := get_x(&ORIGIN);
             return px + ORIGIN.y;
         };
     )") == 30);
@@ -144,7 +144,7 @@ TEST_CASE("E2E WS-5: module-scope array of structs indexed and iterated") {
         };
 
         pub const main := fn(): i32 {
-            var sum: i32 = 0;
+            let mut sum: i32 = 0;
             for (ITEMS) |e| {
                 sum += e.val;
             }
@@ -208,8 +208,8 @@ TEST_CASE("E2E WS-6: match arm return statement without semicolon") {
 TEST_CASE("E2E WS-6: match arm break and continue statements without semicolon") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var sum: i32 = 0;
-            var i: i32 = 0;
+            let mut sum: i32 = 0;
+            let mut i: i32 = 0;
             while (i < 10) {
                 i += 1;
                 match (i) {
@@ -226,8 +226,8 @@ TEST_CASE("E2E WS-6: match arm break and continue statements without semicolon")
 TEST_CASE("E2E WS-6: pointer-to-bool coercion in @assert and @verify") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var x: i32 = 123;
-            const p: ^i32 = ^x;
+            let mut x: i32 = 123;
+            let p: ^i32 = ^x;
             @assert(p);
             @assert(p, "pointer must be non-null");
             @verify(p);

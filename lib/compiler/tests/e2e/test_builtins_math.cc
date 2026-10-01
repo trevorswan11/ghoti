@@ -7,16 +7,16 @@ namespace ghoti::tests {
 TEST_CASE("@min / @max on runtime integers and floats") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a: i32 = 17;
-            var b: i32 = 25;
+            let mut a: i32 = 17;
+            let mut b: i32 = 25;
             return @min(a, b) + @max(a, b);
         };
     )") == 42);
 
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a: f64 = 3.5;
-            var b: f64 = 41.5;
+            let mut a: f64 = 3.5;
+            let mut b: f64 = 41.5;
             return @intFromFloat(i32, @min(a, b)) + @intFromFloat(i32, @max(a, b));
         };
     )") == 44);
@@ -25,8 +25,8 @@ TEST_CASE("@min / @max on runtime integers and floats") {
 TEST_CASE("@divTrunc / @divFloor / @rem / @mod match their sign conventions") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a: i32 = -17;
-            var b: i32 = 5;
+            let mut a: i32 = -17;
+            let mut b: i32 = 5;
             // divTrunc = -3, divFloor = -4, rem = -2, mod = 3
             return (@divTrunc(a, b) * -10) + (@divFloor(a, b) * -3) + (-@rem(a, b)) + @mod(a, b);
         };
@@ -36,7 +36,7 @@ TEST_CASE("@divTrunc / @divFloor / @rem / @mod match their sign conventions") {
 TEST_CASE("previously compile-time-only integer bit builtins now lower at runtime") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var x: u32 = 16u32;
+            let mut x: u32 = 16u32;
             return @intCast(i32, @clz(x)) + @intCast(i32, @ctz(x)) + @intCast(i32, @popCount(x)) + @abs(-9);
         };
     )") == 27 + 4 + 1 + 9);
@@ -45,19 +45,19 @@ TEST_CASE("previously compile-time-only integer bit builtins now lower at runtim
 TEST_CASE("@addWithOverflow / @mulWithOverflow report the flag and write the wrapped value") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a: i32 = 6;
-            var b: i32 = 7;
-            var out: i32 = 0;
-            const of := @mulWithOverflow(a, b, &mut out);
+            let mut a: i32 = 6;
+            let mut b: i32 = 7;
+            let mut out: i32 = 0;
+            let of := @mulWithOverflow(a, b, &mut out);
             return if (of) 0; else out;
         };
     )") == 42);
 
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var big: i32 = 2000000000;
-            var out: i32 = 0;
-            const of := @addWithOverflow(big, big, &mut out);
+            let mut big: i32 = 2000000000;
+            let mut out: i32 = 0;
+            let of := @addWithOverflow(big, big, &mut out);
             return if (of) 42; else 0;
         };
     )") == 42);

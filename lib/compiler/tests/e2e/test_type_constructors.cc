@@ -21,9 +21,9 @@ TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") 
         };
 
         pub const main := fn(): i32 {
-            const a: IntOr = parse(true);
-            const b: IntOr = parse(false);
-            var acc: i32 = 0;
+            let a: IntOr = parse(true);
+            let b: IntOr = parse(false);
+            let mut acc: i32 = 0;
             match (a) { .ok => { acc = acc + a.ok; }, .err => { acc = acc + 100; } }
             match (b) { .ok => { acc = acc + 100; }, .err => { acc = acc + b.err; } }
             return acc;
@@ -42,15 +42,15 @@ TEST_CASE("E2E: a `fn(T: type): type` returning an existing scalar type is usabl
     )") == 42);
 }
 
-TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `constexpr_int`") {
+TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `comptime_int`") {
     CHECK(helpers::compile_and_run(R"(
         const Log2Int := fn(T: type): type {
-            if (T == constexpr_int) return constexpr_int;
+            if (T == comptime_int) return comptime_int;
             return u8;
         };
 
         pub const main := fn(): i32 {
-            if (Log2Int(constexpr_int) == constexpr_int and Log2Int(i32) == u8) { return 42; }
+            if (Log2Int(comptime_int) == comptime_int and Log2Int(i32) == u8) { return 42; }
             return 0;
         };
     )") == 42);
@@ -63,7 +63,7 @@ TEST_CASE("E2E: a later parameter and the return type depend on an earlier param
         };
 
         pub const main := fn(): i32 {
-            const x: i32 = 7;
+            let x: i32 = 7;
             return pick(x, 2);
         };
     )") == 9);
@@ -78,8 +78,8 @@ TEST_CASE("E2E: a later parameter's type is a type-constructor call over an earl
         };
 
         pub const main := fn(): i32 {
-            const x: i32 = 0;
-            const boxed: Box(i32) = .{ .val = 9 };
+            let x: i32 = 0;
+            let boxed: Box(i32) = .{ .val = 9 };
             return unbox(x, boxed);
         };
     )") == 9);
@@ -94,9 +94,9 @@ TEST_CASE("E2E: the return type may also be a type-constructor call over an earl
         };
 
         pub const main := fn(): i32 {
-            const x: i32 = 0;
-            const boxed: Box(i32) = .{ .val = 9 };
-            const out := rewrap(x, boxed);
+            let x: i32 = 0;
+            let boxed: Box(i32) = .{ .val = 9 };
+            let out := rewrap(x, boxed);
             return out.val;
         };
     )") == 9);
@@ -110,8 +110,8 @@ TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` c
         const BoxF := Box(f64);
 
         pub const main := fn(): i32 {
-            const a: BoxI = .{ .val = 5 };
-            const b: BoxF = .{ .val = 2.5 };
+            let a: BoxI = .{ .val = 5 };
+            let b: BoxF = .{ .val = 2.5 };
             return a.val + @intFromFloat(i32, b.val);
         };
     )") == 7);
@@ -125,9 +125,9 @@ TEST_CASE("E2E: two instantiations of a generic `union` constructor, matched ind
         const OptB := Option(u8);
 
         pub const main := fn(): i32 {
-            const x: OptI = .{ .some = 30 };
-            const y: OptB = .{ .some = @as(u8, 12) };
-            var acc: i32 = 0;
+            let x: OptI = .{ .some = 30 };
+            let y: OptB = .{ .some = @as(u8, 12) };
+            let mut acc: i32 = 0;
             match (x) { .some => { acc = acc + x.some; }, .none => {} }
             match (y) { .some => { acc = acc + @as(i32, y.some); }, .none => {} }
             return acc;
@@ -145,8 +145,8 @@ TEST_CASE("E2E: repeated same-argument instantiation shares one type") {
         const relay := fn(b: B1): B2 { return b; };
 
         pub const main := fn(): i32 {
-            const a: B1 = .{ .val = 20 };
-            const b: B2 = relay(.{ .val = 22 });
+            let a: B1 = .{ .val = 20 };
+            let b: B2 = relay(.{ .val = 22 });
             return a.val + b.val;
         };
     )") == 42);
@@ -158,7 +158,7 @@ TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh struct") {
         const Point := MakePoint();
 
         pub const main := fn(): i32 {
-            const p: Point = .{ .x = 3, .y = 4 };
+            let p: Point = .{ .x = 3, .y = 4 };
             return p.x + p.y;
         };
     )") == 7);
@@ -170,7 +170,7 @@ TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh union") {
         const Cell := MakeCell();
 
         pub const main := fn(): i32 {
-            const c: Cell = .{ .i = 99 };
+            let c: Cell = .{ .i = 99 };
             match (c) { .i => { return c.i; }, .f => { return 0; } }
         };
     )") == 99);
@@ -189,7 +189,7 @@ TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
         const Chosen := pick(true);
 
         pub const main := fn(): i32 {
-            const v: Chosen = .{ .a = 3, .b = 4 };
+            let v: Chosen = .{ .a = 3, .b = 4 };
             return @intCast(i32, v.a + v.b);
         };
     )") == 7);
@@ -221,7 +221,7 @@ TEST_CASE("E2E: a single generic type constructor instantiation with a member fu
         };
 
         pub const main := fn(): i32 {
-            const a := Vec(i32).make(41);
+            let a := Vec(i32).make(41);
             return a.item + 1;
         };
     )") == 42);
@@ -241,8 +241,8 @@ TEST_CASE("E2E: two instantiations of a generic type constructor do not alias th
         const VL := Vec(i64);
 
         pub const main := fn(): i32 {
-            const a := VI.make(3);
-            const b := VL.make(7);
+            let a := VI.make(3);
+            let b := VL.make(7);
             return @intCast(i32, a.doubled()) + @intCast(i32, b.doubled());   // 6 + 14
         };
     )") == 20);
@@ -260,7 +260,7 @@ TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
         const M := Make();
 
         pub const main := fn(): i32 {
-            const a := M.of(21);
+            let a := M.of(21);
             return a.doubled();
         };
     )") == 42);
@@ -280,7 +280,7 @@ TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method cal
         const BI := Box(i32);
 
         pub const main := fn(): i32 {
-            var b := BI.make(10);
+            let mut b := BI.make(10);
             b.bump(5);
             return b.twice();   // (10 + 5) * 2
         };
@@ -302,7 +302,7 @@ TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") 
             import "lib.gh" as lib;
             const M := lib.Make();
             pub const main := fn(): i32 {
-                const a := M.of(21);
+                let a := M.of(21);
                 return a.doubled();
             };
         )",
@@ -326,8 +326,8 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
             const VI := v.Vec(i32);
             const VL := v.Vec(i64);
             pub const main := fn(): i32 {
-                const a := VI.make(3);
-                const b := VL.make(7);
+                let a := VI.make(3);
+                let b := VL.make(7);
                 return @intCast(i32, a.doubled()) + @intCast(i32, b.doubled());   // 6 + 14
             };
         )",
@@ -351,7 +351,7 @@ TEST_CASE("E2E: a generic type constructor without member functions still resolv
         const Pair := fn(A: type, B: type): type { return struct { a: A, b: B }; };
 
         pub const main := fn(): i32 {
-            const p: Pair(i32, i32) = .{ .a = 4, .b = 3 };
+            let p: Pair(i32, i32) = .{ .a = 4, .b = 3 };
             return p.a + p.b;
         };
     )") == 7);
@@ -360,7 +360,7 @@ TEST_CASE("E2E: a generic type constructor without member functions still resolv
 TEST_CASE("E2E: a type constructor's members read its `constexpr` value parameters") {
     SECTION("a scalar `constexpr` parameter") {
         CHECK(helpers::compile_and_run(R"(
-            const Box := fn(T: type, constexpr tag: i32): type {
+            const Box := fn(T: type, comptime tag: i32): type {
                 return struct {
                     val: T,
                     pub const tagged := fn(&self): i32 { return self.val + tag; };
@@ -370,7 +370,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
             const B := Box(i32, 100);
 
             pub const main := fn(): i32 {
-                var b: B = .{ .val = 5 };
+                let mut b: B = .{ .val = 5 };
                 return b.tagged();
             };
         )") == 105);
@@ -380,7 +380,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
         CHECK(helpers::compile_and_run(R"(
             const dbl := fn(x: i32): i32 { return x * 2; };
 
-            const Wrap := fn(T: type, constexpr f: fn(x: i32): i32): type {
+            const Wrap := fn(T: type, comptime f: fn(x: i32): i32): type {
                 return struct {
                     val: T,
                     pub const apply := fn(&self): i32 { return f(self.val); };
@@ -390,7 +390,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
             const W := Wrap(i32, dbl);
 
             pub const main := fn(): i32 {
-                var w: W = .{ .val = 21 };
+                let mut w: W = .{ .val = 21 };
                 return w.apply();
             };
         )") == 42);
@@ -398,7 +398,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
 
     SECTION("a local function as a `constexpr` function-value parameter") {
         CHECK(helpers::compile_and_run(R"(
-            const Wrap := fn(T: type, constexpr f: fn(x: i32): i32): type {
+            const Wrap := fn(T: type, comptime f: fn(x: i32): i32): type {
                 return struct {
                     val: T,
                     pub const apply := fn(&self): i32 { return f(self.val); };
@@ -408,7 +408,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
             pub const main := fn(): i32 {
                 const dbl := fn(x: i32): i32 { return x * 2; };
                 const W := Wrap(i32, dbl);
-                var w: W = .{ .val = 21 };
+                let mut w: W = .{ .val = 21 };
                 return w.apply();
             };
         )") == 42);
@@ -416,7 +416,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
 
     SECTION("two instantiations keep distinct constexpr values") {
         CHECK(helpers::compile_and_run(R"(
-            const Box := fn(T: type, constexpr tag: i32): type {
+            const Box := fn(T: type, comptime tag: i32): type {
                 return struct {
                     val: T,
                     pub const tagged := fn(&self): i32 { return self.val + tag; };
@@ -427,8 +427,8 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
             const B20 := Box(i32, 20);
 
             pub const main := fn(): i32 {
-                var a: B10 = .{ .val = 1 };
-                var b: B20 = .{ .val = 1 };
+                let mut a: B10 = .{ .val = 1 };
+                let mut b: B20 = .{ .val = 1 };
                 return a.tagged() + b.tagged();
             };
         )") == 11 + 21);
@@ -438,7 +438,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
 TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type constructor "
           "attaches its members") {
     CHECK(helpers::compile_and_run(R"(
-        const Point := fn(T: type, constexpr default_z: T): type {
+        const Point := fn(T: type, comptime default_z: T): type {
             return @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = T },
@@ -451,13 +451,13 @@ TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type const
             });
         };
 
-        impl(T: type, constexpr default_z: T) Point(T, default_z) {
+        impl(T: type, comptime default_z: T) Point(T, default_z) {
             pub const sum := fn(self): i32 { return self.x + self.y + self.z; };
         }
 
         pub const main := fn(): i32 {
-            const a: Point(i32, 1) = .{ .x = 2, .y = 9 };
-            const b: Point(i32, 7) = .{ .x = 2, .y = 9 };
+            let a: Point(i32, 1) = .{ .x = 2, .y = 9 };
+            let b: Point(i32, 7) = .{ .x = 2, .y = 9 };
             return a.sum() + b.sum();   // (2+9+1) + (2+9+7)
         };
     )") == 12 + 18);
@@ -466,19 +466,19 @@ TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type const
 TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr` parameter") {
     SECTION("the array length folds from the constructor's `constexpr` binding") {
         CHECK(helpers::compile_and_run(R"(
-            const Vec := fn(constexpr n: usize): type {
+            const Vec := fn(comptime n: usize): type {
                 return struct {
                     head: i32,
                     const probe := fn(&self): i32 {
-                        var buf: [n]i32 = undefined;
-                        const b0: i32 = buf[0];
+                        let mut buf: [n]i32 = undefined;
+                        let b0: i32 = buf[0];
                         return b0 - b0 + self.head + @intCast(i32, n);
                     };
                 };
             };
 
             pub const main := fn(): i32 {
-                var v: Vec(9) = .{ .head = 33 };
+                let mut v: Vec(9) = .{ .head = 33 };
                 return v.probe();
             };
         )") == 42);
@@ -486,15 +486,15 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
 
     SECTION("a `[n]mut T` local is writable and reads back what was stored") {
         CHECK(helpers::compile_and_run(R"(
-            const Vec := fn(constexpr n: usize): type {
+            const Vec := fn(comptime n: usize): type {
                 return struct {
                     head: i32,
                     const sum := fn(&self): i32 {
-                        var buf: [n]mut i32 = undefined;
-                        var i: usize = 0;
+                        let mut buf: [n]mut i32 = undefined;
+                        let mut i: usize = 0;
                         while (i < n) { buf[i] = @intCast(i32, i) * 2; i = i + 1; }
-                        var acc: i32 = 0;
-                        var j: usize = 0;
+                        let mut acc: i32 = 0;
+                        let mut j: usize = 0;
                         while (j < n) { acc = acc + buf[j]; j = j + 1; }
                         return acc + self.head;
                     };
@@ -502,7 +502,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
             };
 
             pub const main := fn(): i32 {
-                var v: Vec(5) = .{ .head = 3 };
+                let mut v: Vec(5) = .{ .head = 3 };
                 return v.sum();   // (0+2+4+6+8) + 3
             };
         )") == 23);
@@ -510,15 +510,15 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
 
     SECTION("two instantiations keep independent array lengths") {
         CHECK(helpers::compile_and_run(R"(
-            const Vec := fn(constexpr n: usize): type {
+            const Vec := fn(comptime n: usize): type {
                 return struct {
                     pad: i32,
                     const fill := fn(&self): i32 {
-                        var buf: [n]mut i32 = undefined;
-                        var i: usize = 0;
+                        let mut buf: [n]mut i32 = undefined;
+                        let mut i: usize = 0;
                         while (i < n) : (i += 1) { buf[i] = @intCast(i32, i); }
-                        var acc: i32 = 0;
-                        var j: usize = 0;
+                        let mut acc: i32 = 0;
+                        let mut j: usize = 0;
                         while (j < n) : (j += 1) { acc = acc + buf[j]; }
                         return acc;
                     };
@@ -526,8 +526,8 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
             };
 
             pub const main := fn(): i32 {
-                var a: Vec(3) = .{ .pad = 0 };
-                var b: Vec(5) = .{ .pad = 0 };
+                let mut a: Vec(3) = .{ .pad = 0 };
+                let mut b: Vec(5) = .{ .pad = 0 };
                 return a.fill() + b.fill();   // (0+1+2) + (0+1+2+3+4)
             };
         )") == 3 + 10);
@@ -536,12 +536,12 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
 
 TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `constexpr` parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const probe := fn(constexpr n: usize, head: i32): i32 {
-            var buf: [n]mut i32 = undefined;
-            var i: usize = 0;
+        const probe := fn(comptime n: usize, head: i32): i32 {
+            let mut buf: [n]mut i32 = undefined;
+            let mut i: usize = 0;
             while (i < n) { buf[i] = @intCast(i32, i) * 2; i = i + 1; }
-            var acc: i32 = 0;
-            var j: usize = 0;
+            let mut acc: i32 = 0;
+            let mut j: usize = 0;
             while (j < n) { acc = acc + buf[j]; j = j + 1; }
             return acc + head + @intCast(i32, n);
         };
@@ -558,9 +558,9 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
                 some: T,
                 none: void,
 
-                pub constexpr of := fn(val: T): @This() { return .{ .some = val }; };
+                pub const of := fn(val: T): @This() { return .{ .some = val }; };
 
-                pub constexpr unwrap_or := fn(&self, default: T): T {
+                pub const unwrap_or := fn(&self, default: T): T {
                     return match (self) {
                         .some => |s| s,
                         .none => default,
@@ -585,7 +585,7 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
         }
 
         test "explicit qualified ctor call + own inline method" {
-            var a: Option(u8) = Option(u8).of(5u8);
+            let mut a: Option(u8) = Option(u8).of(5u8);
             @expect(a.unwrap_or(0) == 5);
         }
     )") == 0);

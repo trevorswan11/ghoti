@@ -8,8 +8,8 @@ namespace ghoti::tests {
 TEST_CASE("@memcpy copies a slice's worth of bytes") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var dst := [4uz]mut u8{ 0, 0, 0, 0 };
-            const src := [4uz]u8{ 10, 20, 30, 40 };
+            let mut dst := [4uz]mut u8{ 0, 0, 0, 0 };
+            let src := [4uz]u8{ 10, 20, 30, 40 };
             @memcpy(dst[0..4], src[0..4]);
             return @as(i32, dst[0]) + @as(i32, dst[1]) + @as(i32, dst[2]) + @as(i32, dst[3]);
         };
@@ -19,8 +19,8 @@ TEST_CASE("@memcpy copies a slice's worth of bytes") {
 TEST_CASE("@memcpy scales the byte length by the element size") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var dst := [3uz]mut u32{ 0, 0, 0 };
-            const src := [3uz]u32{ 1, 2, 3 };
+            let mut dst := [3uz]mut u32{ 0, 0, 0 };
+            let src := [3uz]u32{ 1, 2, 3 };
             @memcpy(dst[0..3], src[0..3]);
             return @intCast(i32, dst[0]) + @intCast(i32, dst[1]) + @intCast(i32, dst[2]);
         };
@@ -30,7 +30,7 @@ TEST_CASE("@memcpy scales the byte length by the element size") {
 TEST_CASE("@memset fills a mutable slice with a byte") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var buf := [5uz]mut u8{ 1, 2, 3, 4, 5 };
+            let mut buf := [5uz]mut u8{ 1, 2, 3, 4, 5 };
             @memset(buf[1..4], 0u8);
             return @as(i32, buf[0]) + @as(i32, buf[1]) + @as(i32, buf[2]) + @as(i32, buf[3]) +
                    @as(i32, buf[4]);
@@ -41,7 +41,7 @@ TEST_CASE("@memset fills a mutable slice with a byte") {
 TEST_CASE("@memmove handles a forward-overlapping copy") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a := [5uz]mut u8{ 1, 2, 3, 4, 5 };
+            let mut a := [5uz]mut u8{ 1, 2, 3, 4, 5 };
             @memmove(a[1..5], a[0..4]); // a becomes { 1, 1, 2, 3, 4 }
             return @as(i32, a[0]) + @as(i32, a[1]) + @as(i32, a[2]) +
                    @as(i32, a[3]) + @as(i32, a[4]);
@@ -52,7 +52,7 @@ TEST_CASE("@memmove handles a forward-overlapping copy") {
 TEST_CASE("@memmove handles a backward-overlapping copy") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var a := [5uz]mut u8{ 1, 2, 3, 4, 5 };
+            let mut a := [5uz]mut u8{ 1, 2, 3, 4, 5 };
             @memmove(a[0..4], a[1..5]); // a becomes { 2, 3, 4, 5, 5 }
             return @as(i32, a[0]) + @as(i32, a[1]) + @as(i32, a[2]) +
                    @as(i32, a[3]) + @as(i32, a[4]);
@@ -63,8 +63,8 @@ TEST_CASE("@memmove handles a backward-overlapping copy") {
 TEST_CASE("@memcpy rejects an immutable destination") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
-            const dst := [2uz]u8{ 0, 0 };
-            const src := [2uz]u8{ 1, 2 };
+            let dst := [2uz]u8{ 0, 0 };
+            let src := [2uz]u8{ 1, 2 };
             @memcpy(dst[0..2], src[0..2]);
             return 0;
         };

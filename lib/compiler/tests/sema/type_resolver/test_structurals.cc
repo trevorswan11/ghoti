@@ -35,7 +35,7 @@ pub const BarU := union {
 
 pub const BarS := struct {
     A: i32,
-    pub var baz: i32 = 23;
+    pub let mut baz: i32 = 23;
     pub const bar := fn(&self, c: u8): []u8 {};
 };
 )"};
@@ -79,7 +79,7 @@ TEST_CASE("Free function resolved access") {
 
 TEST_CASE("Enum resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var e1: other.BarE = .A;
+let mut e1: other.BarE = .A;
 const e2 := other.BarE.A;
 const e3 := e1.bar('a');
 
@@ -95,7 +95,7 @@ const func := other.BarE.bar;
 
 TEST_CASE("Union resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var ua: other.BarU = .{ .A = 1, };
+let mut ua: other.BarU = .{ .A = 1, };
 const ub := other.BarU{ .A = 1, };
 const uc := ua.bar('a');
 
@@ -111,7 +111,7 @@ const func := other.BarU.bar;
 
 TEST_CASE("Struct resolved access") {
     auto [ctx, idx]{setup_access_test(R"(
-var s1: other.BarS = .{ .A = 42, };
+let mut s1: other.BarS = .{ .A = 42, };
 const s2 := other.BarS{ .A = 1, };
 const s3 := s1.baz;
 const s4 := s1.bar('a');
@@ -156,9 +156,9 @@ TEST_CASE("An anonymous aggregate type may be followed by a default value") {
 
     SECTION("local declaration") {
         helpers::resolve_and_check(
-            "const f := fn(): void { var a: enum { lo, hi } = .lo; _ = a; };");
+            "const f := fn(): void { let mut a: enum { lo, hi } = .lo; _ = a; };");
         helpers::resolve_and_check(
-            "const g := fn(): void { var a: struct { x: i32 } = .{ .x = 1 }; _ = a; };");
+            "const g := fn(): void { let mut a: struct { x: i32 } = .{ .x = 1 }; _ = a; };");
     }
 }
 
@@ -174,35 +174,35 @@ TEST_CASE("Legal circular module-based access resolution") {
 
 TEST_CASE("Access through non-user-type types") {
     test_access_fail(
-        "var a: i32 = .z;",
+        "let mut a: i32 = .z;",
         sema::diagnostic{
             "Can only access inner objects inside of structs, unions, and enums; found 'i32'",
             sema::error::TYPE_MISMATCH,
-            std::pair{0UZ, 41UZ}});
+            std::pair{0UZ, 45UZ}});
 }
 
 TEST_CASE("Implicitly accessing unknown user-type fields/members") {
     const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {fmt::format("Type '{}' has no field named 'z'", type_name),
                 sema::error::UNDECLARED_IDENTIFIER,
-                std::pair{0UZ, 49UZ}};
+                std::pair{0UZ, 53UZ}};
     };
 
-    test_access_fail("var a: other.BarE = .z;", expected_diag("BarE"));
-    test_access_fail("var a: other.BarU = .z;", expected_diag("BarU"));
-    test_access_fail("var a: other.BarS = .z;", expected_diag("BarS"));
+    test_access_fail("let mut a: other.BarE = .z;", expected_diag("BarE"));
+    test_access_fail("let mut a: other.BarU = .z;", expected_diag("BarU"));
+    test_access_fail("let mut a: other.BarS = .z;", expected_diag("BarS"));
 }
 
 TEST_CASE("Dot-accessing unknown user-type fields/members") {
     const auto expected_diag = [](std::string_view type_name) -> sema::diagnostic {
         return {fmt::format("Type '{}' has no field named 'z'", type_name),
                 sema::error::UNDECLARED_IDENTIFIER,
-                std::pair{0UZ, 48UZ}};
+                std::pair{0UZ, 52UZ}};
     };
 
-    test_access_fail("var a := other.BarE.z;", expected_diag("BarE"));
-    test_access_fail("var a := other.BarU.z;", expected_diag("BarU"));
-    test_access_fail("var a := other.BarS.z;", expected_diag("BarS"));
+    test_access_fail("let mut a := other.BarE.z;", expected_diag("BarE"));
+    test_access_fail("let mut a := other.BarU.z;", expected_diag("BarU"));
+    test_access_fail("let mut a := other.BarS.z;", expected_diag("BarS"));
 }
 
 TEST_CASE("Unknown array/slice members name the full type") {
@@ -210,17 +210,17 @@ TEST_CASE("Unknown array/slice members name the full type") {
                                 sema::diagnostic{"Type '[3]i32' has no field named 'nope'",
                                                  sema::error::UNDECLARED_IDENTIFIER,
                                                  std::pair{0UZ, 45UZ}});
-    helpers::test_resolver_fail("var s: []u8 = undefined; const b := s.nope;",
+    helpers::test_resolver_fail("let mut s: []u8 = undefined; const b := s.nope;",
                                 sema::diagnostic{"Type '[]u8' has no field named 'nope'",
                                                  sema::error::UNDECLARED_IDENTIFIER,
-                                                 std::pair{0UZ, 38UZ}});
+                                                 std::pair{0UZ, 42UZ}});
 }
 
 TEST_CASE("Unknown member lookup in module") {
-    test_access_fail("var a := other.BarF;",
+    test_access_fail("let mut a := other.BarF;",
                      sema::diagnostic{"Module 'other' has no member named 'BarF'",
                                       sema::error::UNDECLARED_IDENTIFIER,
-                                      std::pair{0UZ, 43UZ}});
+                                      std::pair{0UZ, 47UZ}});
 }
 
 TEST_CASE("Incomplete type used during resolution") {

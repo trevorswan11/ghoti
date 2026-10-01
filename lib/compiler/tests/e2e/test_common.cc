@@ -7,7 +7,7 @@ namespace ghoti::tests {
 TEST_CASE("Pure noop function with loops") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): void {
-            const a := [_]i32{};
+            let a := [_]i32{};
             for (a) |_| {}
             while (false) {}
             do {} while (false);
@@ -19,7 +19,7 @@ TEST_CASE("Pure noop function with loops") {
 TEST_CASE("compound assignment operators use their own operator, not +") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
-            var x: i32 = 20;
+            let mut x: i32 = 20;
             x -= 4;                 // 16
             x *= 3;                 // 48
             x /= 2;                 // 24
@@ -41,7 +41,7 @@ TEST_CASE("@sizeOf / @bitSizeOf of a function-local type folds") {
             const Small := packed struct { x: u3, y: u5 };
             if (@sizeOf(Pair) != 8) { return 1; }
             if (@sizeOf(Small) != 1 or @bitSizeOf(Small) != 8) { return 2; }
-            var p: Pair = .{ .a = 3, .b = 4 };
+            let mut p: Pair = .{ .a = 3, .b = 4 };
             return p.a + p.b + @intCast(i32, @sizeOf(Pair));
         };
     )") == 15);
@@ -73,7 +73,7 @@ TEST_CASE("Module-scope `const P = @ptrFromInt(...)` materializes cleanly") {
     const auto exit_code{helpers::compile_and_run(R"(
         const P: ^mut opaque = @ptrFromInt(^mut opaque, 0x1000uz);
         pub const main := fn(): i32 {
-            const addr := @intFromPtr(P);
+            let addr := @intFromPtr(P);
             return if (addr == 0x1000uz) 7 else 0;
         };
     )")};

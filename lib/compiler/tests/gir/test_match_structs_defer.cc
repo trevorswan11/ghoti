@@ -92,7 +92,7 @@ TEST_CASE("GIR struct initialization and field access") {
         };
 
         const test_struct := fn(): i32 {
-            var p: Point = Point{ .x = 10, .y = 20 };
+            let mut p: Point = Point{ .x = 10, .y = 20 };
             return p.x + p.y;
         };
     )")};
@@ -120,7 +120,7 @@ TEST_CASE("GIR struct field assignment and compound assignment") {
         };
 
         const test_mutate := fn(): i32 {
-            var p: Point = .{ .x = 1, .y = 2 };
+            let mut p: Point = .{ .x = 1, .y = 2 };
             p.x = 42;
             p.y += 10;
             return p.x + p.y;
@@ -158,8 +158,8 @@ TEST_CASE("GIR array index expression and assignment") {
 TEST_CASE("GIR address_of and dereference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_ptr := fn(x: i32): i32 {
-            var a: i32 = x;
-            const p: ^i32 = ^a;
+            let mut a: i32 = x;
+            let p: ^i32 = ^a;
             *p = 99;
             return *p;
         };
@@ -179,7 +179,7 @@ TEST_CASE("GIR address_of and dereference") {
 TEST_CASE("GIR defer at block exit with LIFO execution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer := fn(): i32 {
-            var a: i32 = 0;
+            let mut a: i32 = 0;
             {
                 defer a = a * 2;
                 defer a = a + 10;
@@ -206,7 +206,7 @@ TEST_CASE("GIR defer at block exit with LIFO execution") {
 TEST_CASE("GIR defer at early return triggers unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer_return := fn(x: i32): i32 {
-            var a: i32 = 0;
+            let mut a: i32 = 0;
             defer a = 100;
             if (x > 0) {
                 return 1;
@@ -227,8 +227,8 @@ TEST_CASE("GIR defer at early return triggers unwinding") {
 TEST_CASE("GIR defer at loop break and continue unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const test_defer_loop := fn(): i32 {
-            var sum: i32 = 0;
-            var i: i32 = 0;
+            let mut sum: i32 = 0;
+            let mut i: i32 = 0;
             while (i < 10) {
                 defer i = i + 1;
                 if (i == 5) {
@@ -287,7 +287,7 @@ TEST_CASE("GIR structs with nested struct field access") {
         };
 
         const test_nested := fn(): i32 {
-            var o: Outer = Outer{
+            let mut o: Outer = Outer{
                 .inner = Inner{ .val = 7 },
                 .scale = 6,
             };

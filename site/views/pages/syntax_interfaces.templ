@@ -7,14 +7,14 @@ templ SyntaxInterfacesPage() {
 			An interface is declared with the standard declaration syntax and the <code>interface</code> type-expression prefix, akin to <code>struct</code> / <code>enum</code> / <code>union</code>
 			<ul>
 				<li>The declaration must be <code>const</code></li>
-				<li>An interface is a first-class <code>type</code> value: <code>constexpr</code>-composable, aliasable with <code>const</code>, re-exportable, and usable as a <code>T: type</code> argument</li>
+				<li>An interface is a first-class <code>type</code> value: compile-time composable, aliasable with <code>const</code>, re-exportable, and usable as a <code>T: type</code> argument</li>
 			</ul>
 		</li>
 		<li>
 			An interface body holds, in order:
 			<ul>
 				<li><strong>Associated types</strong>: <code>Name: type;</code> (required) or <code>Name: type = Default;</code> (defaulted)</li>
-				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); <code>constexpr</code>-evaluated and may not depend on <code>{ "@this()" }</code></li>
+				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); evaluated at compile time and may not depend on <code>{ "@this()" }</code></li>
 				<li><strong>Required methods</strong>: a bodyless <code>const</code> function declaration with a mandatory <code>self</code> parameter: <code>pub const write := fn(&amp;mut self, b: []u8): usize;</code></li>
 				<li><strong>Default methods</strong>: the same, but with a body; an implementer that omits the name inherits it, one that provides the name overrides it</li>
 			</ul>
@@ -50,7 +50,7 @@ templ SyntaxInterfacesPage() {
     const debugName := fn(&self): []u8;                     // sealed requirement
 
     pub const writeAll := fn(&mut self, bytes: []u8): usize {   // default method
-        var off: usize = 0;
+        let mut off: usize = 0;
         while (off < bytes.len) { off = off + self.write(bytes[off..]); }
         return off;
     };
@@ -69,7 +69,7 @@ const Marker := interface {};   // zero-member marker interface` }
 				<li>Supplies every required method; omitting a defaulted method inherits the interface's body</li>
 				<li>Inside the block <code>self</code> has type <code>T</code>; bare sibling names resolve against <code>T</code>, the interface's associated items, and the other methods in the block</li>
 				<li>After the impl, both <code>t.method(x)</code> and <code>T.method(&amp;t, x)</code> resolve</li>
-				<li>A trait impl satisfies a contract and nothing more: a <code>const</code> whose name is not an associated item of <code>I</code> is rejected. A static <code>var</code> is the one exception (it lowers to an <code>(I, T)</code>-keyed global)</li>
+				<li>A trait impl satisfies a contract and nothing more: a <code>const</code> whose name is not an associated item of <code>I</code> is rejected. A static <code>let mut</code> is the one exception (it lowers to an <code>(I, T)</code>-keyed global)</li>
 			</ul>
 		</li>
 		<li>
@@ -81,9 +81,9 @@ const Marker := interface {};   // zero-member marker interface` }
 			</ul>
 		</li>
 		<li>
-			<strong>Parameterized impl</strong>: <code>impl(P: type, ..., constexpr n: T, ...) [I for] Ctor(P, n) { "{ ... }" }</code>
+			<strong>Parameterized impl</strong>: <code>impl(P: type, ..., comptime n: T, ...) [I for] Ctor(P, n) { "{ ... }" }</code>
 			<ul>
-				<li>The parenthesized list uses the generic-parameter grammar (<code>P: type</code>, <code>constexpr n: usize</code>, …) and its parameters are in scope throughout the block</li>
+				<li>The parenthesized list uses the generic-parameter grammar (<code>P: type</code>, <code>comptime n: usize</code>, …) and its parameters are in scope throughout the block</li>
 				<li>The block is re-instantiated per monomorphization of <code>Ctor</code>; its methods are added to every concrete instantiation</li>
 				<li>Coherence is checked against the <em>base</em> constructor and the interface (with a trait impl): an impl parameter is not "local", so a fully-foreign inherent <code>impl(T) foreign::Ctor(T)</code> is rejected</li>
 			</ul>
@@ -144,7 +144,7 @@ impl(T: type) Box(T) {               // one method per Box(...) instantiation
 };
 
 pub const main := fn(): i32 {
-    var f := File{ .fd = 1 };
+    let mut f := File{ .fd = 1 };
     return @as(i32, dump(&f, "hi"));
 };` }
 		</code>
@@ -178,17 +178,17 @@ pub const main := fn(): i32 {
 };
 
 pub const main := fn(): i32 {
-    var f := File{ .fd = 1 };
-    var n := write_all(&mut f, "hi");   // &mut File -> &mut dyn Writer
+    let mut f := File{ .fd = 1 };
+    let mut n := write_all(&mut f, "hi");   // &mut File -> &mut dyn Writer
 
-    var again: ^File = @dynCast(^File, &f);   // unsafe recovery
+    let mut again: ^File = @dynCast(^File, &f);   // unsafe recovery
     return @as(i32, n + again.fd);
 };` }
 		</code>
 	</pre>
 	<h2>{ "@implements" }</h2>
 	<ul>
-		<li><code>{ "@implements(T | value, I)" }</code> is a <code>constexpr bool</code> is-a predicate, usable anywhere a <code>constexpr</code> bool is</li>
+		<li><code>{ "@implements(T | value, I)" }</code> is a compile-time <code>bool</code> is-a predicate, usable anywhere a compile-time <code>bool</code> is</li>
 		<li>The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>)</li>
 		<li><code>I</code> may be an intersection: <code>{ "@implements(File, (Reader + Writer))" }</code></li>
 		<li>It returns <code>false</code> on a non-conforming argument</li>
@@ -196,7 +196,7 @@ pub const main := fn(): i32 {
 	<pre>
 		<code class="language-ghoti">
 			{ `const encode := fn(T: type, v: T): []u8 {
-    if constexpr (!@implements(T, Writer)) {
+    if comptime (!@implements(T, Writer)) {
         @compileError("encode requires T: Writer");
     }
     return v.debugName();

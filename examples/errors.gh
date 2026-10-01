@@ -7,12 +7,12 @@ pub const main := fn(args: [][:0]u8): i32 {
     }
 
     const run := fn(): std.Result(void, std.io.Error) {
-        var file: std.io.File = .open(args[1], .{})?;
+        let mut file: std.io.File = .open(args[1], .{})?;
         defer file.close();
 
-        var buf: [4096]mut u8 = undefined;
+        let mut buf: [4096]mut u8 = undefined;
         loop {
-            const n := file.read(buf)?;
+            let n := file.read(buf)?;
             if (n == 0) {
                 break;
             } else {

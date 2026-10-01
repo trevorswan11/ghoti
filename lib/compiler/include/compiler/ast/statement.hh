@@ -66,9 +66,9 @@ struct continue_stmt {
 };
 
 enum class decl_modifiers : u16 {
-    VARIABLE    = 1 << 0,
-    CONSTANT    = 1 << 1,
-    CONSTEXPR   = 1 << 2,
+    MUT         = 1 << 0, // `let mut`, or `comptime let mut` with `COMPTIME`
+    LET         = 1 << 1,
+    COMPTIME    = 1 << 2, // `const`, or `comptime let mut` with `MUT`
     PUBLIC      = 1 << 3,
     EXTERN      = 1 << 4,
     EXPORT      = 1 << 5,
@@ -93,6 +93,9 @@ struct decl_stmt {
     [[nodiscard]] auto has_modifier(decl_modifiers flag) const noexcept -> bool {
         return modifiers_has(modifiers, flag);
     }
+
+    // A compile-time declaration whose initializer is evaluated, not a function or type it names
+    [[nodiscard]] auto evaluates_at_compile_time() const noexcept -> bool;
 
   private:
     static auto modifiers_has(decl_modifiers modifiers, decl_modifiers flag) noexcept -> bool {

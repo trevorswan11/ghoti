@@ -16,7 +16,7 @@ TEST_CASE("Illegal usage of const capture") {
             const MyCtx := struct { offset: i32 };
 
             pub const main := fn(): i32 {
-                const arr := [_]mut i32{1, 2, 3, 4};
+                let arr := [_]mut i32{1, 2, 3, 4};
                 map(i32, arr, MyCtx, fn(x: i32, ctx: MyCtx): i32 {
                     return x + ctx.offset;
                 }, MyCtx{ .offset = 10 });
@@ -36,7 +36,7 @@ TEST_CASE("Illegal usage of const capture") {
         const MyCtx := struct { offset: i32 };
 
         pub const main := fn(): i32 {
-            const arr := [_]mut i32{1, 2, 3, 4};
+            let arr := [_]mut i32{1, 2, 3, 4};
             map(i32, arr, MyCtx, fn(x: i32, ctx: MyCtx): i32 {
                 return x + ctx.offset;
             }, MyCtx{ .offset = 10 });
@@ -49,7 +49,7 @@ TEST_CASE("A plain (no-modifier) capture is always read-only") {
     SECTION("Array element, mutable array") {
         helpers::expect_compile_error(R"(
     pub const main := fn(): void {
-        var arr := [_]mut i32{1, 2, 3, 4};
+        let mut arr := [_]mut i32{1, 2, 3, 4};
         for (arr) |v| { v = 0; }
     };)");
     }
@@ -66,7 +66,7 @@ TEST_CASE("Attempted mutable capture of const value in capture clause") {
     SECTION("By const reference") {
         helpers::expect_compile_error(R"(
     pub const main := fn(): void {
-        const arr := [_]i32{1, 2, 3, 4};
+        let arr := [_]i32{1, 2, 3, 4};
         for (arr) |&mut a| {}
     };)");
     }
@@ -74,7 +74,7 @@ TEST_CASE("Attempted mutable capture of const value in capture clause") {
     SECTION("By const pointer") {
         helpers::expect_compile_error(R"(
     pub const main := fn(): void {
-        const arr := [_]i32{1, 2, 3, 4};
+        let arr := [_]i32{1, 2, 3, 4};
         for (arr) |^mut a| {}
     };)");
     }

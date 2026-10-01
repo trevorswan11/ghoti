@@ -28,11 +28,11 @@ namespace {
 
 // `f128` addition and comparison are runtime libcalls on every target
 constexpr std::string_view f128_program{R"(
-var a: f128 = 1.5;
-var b: f128 = 2.25;
+let mut a: f128 = 1.5;
+let mut b: f128 = 2.25;
 
 pub const main := fn(_: [][:0]u8): i32 {
-    const c := a + b;
+    let c := a + b;
     if (@bitCast(u128, c) == @bitCast(u128, b)) { return 7; }
     if (@bitCast(u128, c) == @bitCast(u128, a)) { return 5; }
     return 3;

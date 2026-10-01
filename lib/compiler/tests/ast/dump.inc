@@ -51,7 +51,7 @@ DiscardStatement
     └─ Non-Exhaustive: true
 DeclStatement
 ├─ Name: IdentifierExpression: SIZE
-├─ Modifiers: CONSTEXPR
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: IntLiteralExpression: 2uz
 BlockStatement
@@ -76,7 +76,7 @@ ExpressionStatement
         └─ Value: IdentifierExpression: b
 DeclStatement
 ├─ Name: IdentifierExpression: f_ptr
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: PTR)
 │   └─ FunctionExpression
 │       ├─ Parameters:
@@ -111,13 +111,13 @@ ExpressionStatement
     └─ Members:
         ├─ DeclStatement
         │   ├─ Name: IdentifierExpression: a
-        │   ├─ Modifiers: VARIABLE
+        │   ├─ Modifiers: MUT
         │   ├─ Type: ExplicitType (modifier: VALUE)
         │   │   └─ IdentifierExpression: Foo
         │   └─ Value: IdentifierExpression: bar
         └─ DeclStatement
             ├─ Name: IdentifierExpression: b
-            ├─ Modifiers: CONSTANT
+            ├─ Modifiers: COMPTIME
             ├─ Type: (inferred)
             └─ Value: FunctionExpression
                 ├─ Self: this (modifier: MUT_PTR)
@@ -170,7 +170,7 @@ ExpressionStatement
             └─ Dispatch: ExpressionStatement
                 └─ Expr: IdentifierExpression: d
 ExpressionStatement
-└─ Expr: MatchExpression (constexpr)
+└─ Expr: MatchExpression (comptime)
     ├─ Matcher: IdentifierExpression: a
     └─ Arms:
         ├─ Arm:
@@ -235,7 +235,7 @@ ExpressionStatement
     └─ Value: IntLiteralExpression: 2
 ExpressionStatement
 └─ Expr: IfExpression
-    ├─ Constexpr: false
+    ├─ Comptime: false
     ├─ Condition: IdentifierExpression: a
     ├─ Consequence: BlockStatement
     │   └─ ExpressionStatement
@@ -245,7 +245,7 @@ ExpressionStatement
             └─ Expr: IdentifierExpression: c
 ExpressionStatement
 └─ Expr: IfExpression
-    ├─ Constexpr: true
+    ├─ Comptime: true
     ├─ Condition: IdentifierExpression: a
     └─ Consequence: BlockStatement
         └─ ExpressionStatement
@@ -304,7 +304,7 @@ ExpressionStatement
         └─ IdentifierExpression: a
 DeclStatement
 ├─ Name: IdentifierExpression: T
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: IdentifierExpression: i32 (primitive)
 ExpressionStatement
@@ -376,7 +376,7 @@ ExpressionStatement
     └─ Upper: IdentifierExpression: b
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ ArrayType
 │       ├─ Dimensions: (slice)
@@ -432,14 +432,14 @@ ExpressionStatement
     │               └─ Members:
     │                   └─ DeclStatement
     │                       ├─ Name: IdentifierExpression: d
-    │                       ├─ Modifiers: VARIABLE
+    │                       ├─ Modifiers: MUT
     │                       ├─ Type: ExplicitType (modifier: VALUE)
     │                       │   └─ IdentifierExpression: u32 (primitive)
     │                       └─ Value: UndefinedExpression
     └─ Members:
         └─ DeclStatement
             ├─ Name: IdentifierExpression: b
-            ├─ Modifiers: CONSTANT
+            ├─ Modifiers: COMPTIME
             ├─ Type: (inferred)
             └─ Value: FunctionExpression
                 ├─ Self: self (modifier: REF)
@@ -467,7 +467,7 @@ ExpressionStatement
     └─ Members:
         └─ DeclStatement
             ├─ Name: IdentifierExpression: b
-            ├─ Modifiers: CONSTANT
+            ├─ Modifiers: COMPTIME
             ├─ Type: (inferred)
             └─ Value: FunctionExpression
                 ├─ Self: self (modifier: REF)
@@ -486,7 +486,7 @@ ExpressionStatement
                         └─ Expr: IdentifierExpression: c
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: VoidExpression
 TestStatement
@@ -508,7 +508,7 @@ TestStatement
                     └─ RHS: BoolExpression: true
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ CallExpression
 │       ├─ Callee: DotExpression (DOT)
@@ -519,7 +519,7 @@ DeclStatement
 └─ Value: UndefinedExpression
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ DotExpression (DOT)
 │       ├─ Object: IdentifierExpression: std
@@ -527,7 +527,7 @@ DeclStatement
 └─ Value: UndefinedExpression
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ CallExpression
 │       ├─ Callee: IdentifierExpression: List
@@ -545,7 +545,7 @@ ExpressionStatement
             └─ Label: IdentifierExpression: a
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: CONSTANT|PUBLIC
+├─ Modifiers: COMPTIME|PUBLIC
 ├─ Type: (inferred)
 └─ Value: AddressOfExpression (CARET)
     └─ Operand: AddressOfExpression (CARET)
@@ -574,7 +574,7 @@ ExpressionStatement
 └─ Expr: IntLiteralExpression: '\0'
 DeclStatement
 ├─ Name: IdentifierExpression: a
-├─ Modifiers: VARIABLE
+├─ Modifiers: MUT
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ IdentifierExpression: i32 (primitive)
 └─ Value: UndefinedExpression
@@ -598,7 +598,7 @@ ExpressionStatement
     └─ Items: <empty>
 DeclStatement
 ├─ Name: IdentifierExpression: foo
-├─ Modifiers: CONSTANT|EXTERN
+├─ Modifiers: COMPTIME|EXTERN
 └─ Type: ExplicitType (modifier: VALUE)
     └─ FunctionExpression
         ├─ Variadic: false
@@ -606,7 +606,7 @@ DeclStatement
             └─ IdentifierExpression: i32 (primitive)
 DeclStatement
 ├─ Name: IdentifierExpression: bar
-├─ Modifiers: CONSTANT|EXTERN
+├─ Modifiers: COMPTIME|EXTERN
 ├─ Extern Target: StringExpression: kernel32
 └─ Type: ExplicitType (modifier: VALUE)
     └─ FunctionExpression
@@ -615,7 +615,7 @@ DeclStatement
             └─ IdentifierExpression: void (primitive)
 DeclStatement
 ├─ Name: IdentifierExpression: errno_loc
-├─ Modifiers: CONSTANT|EXTERN
+├─ Modifiers: COMPTIME|EXTERN
 ├─ Extern Target: StringExpression: c
 ├─ Link Name: StringExpression: __errno_location
 └─ Type: ExplicitType (modifier: VALUE)
@@ -625,7 +625,7 @@ DeclStatement
             └─ IdentifierExpression: i32
 DeclStatement
 ├─ Name: IdentifierExpression: add
-├─ Modifiers: CONSTANT|EXPORT
+├─ Modifiers: COMPTIME|EXPORT
 ├─ Link Name: StringExpression: ghoti_add
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
@@ -644,13 +644,13 @@ DeclStatement
             └─ Value: IdentifierExpression: a
 DeclStatement
 ├─ Name: IdentifierExpression: tls_ctr
-├─ Modifiers: VARIABLE|THREADLOCAL
+├─ Modifiers: MUT|THREADLOCAL
 ├─ Type: ExplicitType (modifier: VALUE)
 │   └─ IdentifierExpression: i32 (primitive)
 └─ Value: IntLiteralExpression: 0
 DeclStatement
 ├─ Name: IdentifierExpression: maybe
-├─ Modifiers: CONSTANT|EXTERN|WEAK
+├─ Modifiers: COMPTIME|EXTERN|WEAK
 └─ Type: ExplicitType (modifier: VALUE)
     └─ FunctionExpression
         ├─ Variadic: false
@@ -658,7 +658,7 @@ DeclStatement
             └─ IdentifierExpression: void (primitive)
 DeclStatement
 ├─ Name: IdentifierExpression: mv
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
     ├─ Variadic: false
@@ -671,7 +671,7 @@ DeclStatement
             └─ Value: IntLiteralExpression: 0
 DeclStatement
 ├─ Name: IdentifierExpression: stub
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
     ├─ Attributes:
@@ -685,7 +685,7 @@ DeclStatement
         └─ <empty>
 DeclStatement
 ├─ Name: IdentifierExpression: cb
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
     ├─ Variadic: false
@@ -697,7 +697,7 @@ DeclStatement
         └─ <empty>
 DeclStatement
 ├─ Name: IdentifierExpression: ExS
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: StructExpression
     ├─ Extern: true
@@ -709,7 +709,7 @@ DeclStatement
                 └─ IdentifierExpression: i32 (primitive)
 DeclStatement
 ├─ Name: IdentifierExpression: ExPS
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: StructExpression
     ├─ Extern: true
@@ -759,7 +759,7 @@ ExpressionStatement
                 └─ IdentifierExpression: T
 DeclStatement
 ├─ Name: IdentifierExpression: ExU
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: UnionExpression
     ├─ Extern: true
@@ -820,12 +820,12 @@ ExpressionStatement
     └─ Operand: IdentifierExpression: b
 DeclStatement
 ├─ Name: IdentifierExpression: IMark
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: InterfaceExpression
 DeclStatement
 ├─ Name: IdentifierExpression: IW
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: InterfaceExpression
     ├─ AssociatedTypes:
@@ -910,7 +910,7 @@ ImplStatement
 └─ Members:
     └─ DeclStatement
         ├─ Name: IdentifierExpression: fromRaw
-        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Modifiers: COMPTIME|PUBLIC
         ├─ Type: (inferred)
         └─ Value: FunctionExpression
             ├─ Parameters:
@@ -942,7 +942,7 @@ ImplStatement
 └─ Members:
     └─ DeclStatement
         ├─ Name: IdentifierExpression: write
-        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Modifiers: COMPTIME|PUBLIC
         ├─ Type: (inferred)
         └─ Value: FunctionExpression
             ├─ Self: self (modifier: MUT_REF)
@@ -978,7 +978,7 @@ ImplStatement
 └─ Members:
     └─ DeclStatement
         ├─ Name: IdentifierExpression: make
-        ├─ Modifiers: CONSTANT|PUBLIC
+        ├─ Modifiers: COMPTIME|PUBLIC
         ├─ Type: (inferred)
         └─ Value: FunctionExpression
             ├─ Parameters:
@@ -1003,7 +1003,7 @@ ImplStatement
                                 └─ Value: IdentifierExpression: raw
 DeclStatement
 ├─ Name: IdentifierExpression: useDyn
-├─ Modifiers: CONSTANT
+├─ Modifiers: COMPTIME
 ├─ Type: (inferred)
 └─ Value: FunctionExpression
     ├─ Parameters:

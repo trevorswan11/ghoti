@@ -8,8 +8,8 @@ namespace ghoti::tests {
 TEST_CASE("`expr...` forwards a pack to another pack function") {
     CHECK(helpers::compile_and_run(R"(
         const sum := fn(rest...): i32 {
-            var total: i32 = 0;
-            for constexpr (rest) |v| { total = total + v; }
+            let mut total: i32 = 0;
+            for comptime (rest) |v| { total = total + v; }
             return total;
         };
         const forward_only := fn(rest...): i32 { return sum(rest...); };
@@ -20,8 +20,8 @@ TEST_CASE("`expr...` forwards a pack to another pack function") {
 TEST_CASE("`expr...` forwards a pack alongside a leading fixed argument") {
     CHECK(helpers::compile_and_run(R"(
         const sum := fn(rest...): i32 {
-            var total: i32 = 0;
-            for constexpr (rest) |v| { total = total + v; }
+            let mut total: i32 = 0;
+            for comptime (rest) |v| { total = total + v; }
             return total;
         };
         const forward := fn(a: i32, rest...): i32 { return a + sum(rest...); };
@@ -32,8 +32,8 @@ TEST_CASE("`expr...` forwards a pack alongside a leading fixed argument") {
 TEST_CASE("the same pack may be expanded more than once in one call site") {
     CHECK(helpers::compile_and_run(R"(
         const sum := fn(rest...): i32 {
-            var total: i32 = 0;
-            for constexpr (rest) |v| { total = total + v; }
+            let mut total: i32 = 0;
+            for comptime (rest) |v| { total = total + v; }
             return total;
         };
         const twice := fn(rest...): i32 { return sum(rest...) + sum(rest...); };
@@ -50,11 +50,11 @@ TEST_CASE("`expr...` forwards a pack into a plain (non-pack) function's fixed pa
 }
 
 TEST_CASE("the same pack function instantiated at two different arities does not corrupt shared "
-          "`for constexpr` scope typing") {
+          "`for comptime` scope typing") {
     CHECK(helpers::compile_and_run(R"(
         const sum := fn(rest...): i32 {
-            var total: i32 = 0;
-            for constexpr (rest) |v| { total = total + v; }
+            let mut total: i32 = 0;
+            for comptime (rest) |v| { total = total + v; }
             return total;
         };
         pub const main := fn(): i32 { return sum(1, 2, 3, 4) + sum(1, 2); };
@@ -65,7 +65,7 @@ TEST_CASE("`expr...` may only expand the enclosing parameter pack") {
     helpers::expect_compile_error(R"(
         const sum := fn(rest...): i32 { return rest.len; };
         const bad := fn(rest...): i32 {
-            var arr: [2]i32 = .{1, 2};
+            let mut arr: [2]i32 = .{1, 2};
             return sum(arr...);
         };
         pub const main := fn(): i32 { return bad(1, 2); };

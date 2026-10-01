@@ -17,8 +17,8 @@ TEST_CASE("LLVM lowering alloca, store, load, addressOf, deref from source") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const test_pointers := fn(): i32 {
-            var a: i32 = 42;
-            var ptr: ^i32 = ^a;
+            let mut a: i32 = 42;
+            let mut ptr: ^i32 = ^a;
             return *ptr;
         };
     )")};
@@ -37,7 +37,7 @@ TEST_CASE("LLVM lowering struct and array indexing") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const get_elem := fn(): i32 {
-            var arr: [5uz]i32 = [5uz]i32{10, 20, 30, 40, 50};
+            let mut arr: [5uz]i32 = [5uz]i32{10, 20, 30, 40, 50};
             return arr[2uz];
         };
 
@@ -47,7 +47,7 @@ TEST_CASE("LLVM lowering struct and array indexing") {
         };
 
         pub const get_point_y := fn(): i32 {
-            var pt := Point{ .x = 1, .y = 42 };
+            let mut pt := Point{ .x = 1, .y = 42 };
             return pt.y;
         };
     )")};
@@ -67,7 +67,7 @@ TEST_CASE("LLVM lowering volatile load and store") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const test_volatile := fn(): i32 {
-            var v: mut volatile i32 = 42;
+            let mut v: mut volatile i32 = 42;
             v = v + 1;
             return v;
         };

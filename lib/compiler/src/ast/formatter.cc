@@ -674,14 +674,13 @@ auto formatter::decl_prefix(const decl_stmt& node) -> syntax::doc_id {
     if (node.has_modifier(decl_modifiers::THREADLOCAL)) {
         parts.emplace_back(doc_manager_.text("threadlocal "));
     }
-    if (node.has_modifier(decl_modifiers::CONSTEXPR)) {
-        parts.emplace_back(doc_manager_.text("constexpr "));
-    } else if (node.has_modifier(decl_modifiers::CONSTANT)) {
-        parts.emplace_back(doc_manager_.text("const "));
-    }
-    // `constexpr var` is the one combination where both mutability keywords render together.
-    if (node.has_modifier(decl_modifiers::VARIABLE)) {
-        parts.emplace_back(doc_manager_.text("var "));
+    const bool is_mut{node.has_modifier(decl_modifiers::MUT)};
+    if (node.has_modifier(decl_modifiers::COMPTIME)) {
+        parts.emplace_back(doc_manager_.text(is_mut ? "comptime let mut " : "const "));
+    } else if (is_mut) {
+        parts.emplace_back(doc_manager_.text("let mut "));
+    } else if (node.has_modifier(decl_modifiers::LET)) {
+        parts.emplace_back(doc_manager_.text("let "));
     }
     return doc_manager_.concat(std::move(parts));
 }
@@ -834,7 +833,7 @@ auto formatter::visit(node_id, const do_while_loop_expr& node) -> syntax::doc_id
     return doc_manager_.concat({
         doc_manager_.text("do "),
         format(node.block),
-        doc_manager_.text(node.is_constexpr ? " while constexpr (" : " while ("),
+        doc_manager_.text(node.is_constexpr ? " while comptime (" : " while ("),
         format(node.condition),
         doc_manager_.text(")"),
     });
@@ -857,7 +856,7 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "for constexpr " : "for "),
+        doc_manager_.text(node.is_constexpr ? "for comptime " : "for "),
         doc_manager_.delimited(
             "(", ")", std::move(iterables), false, false, node.iterables_force_break),
         doc_manager_.text(" "),
@@ -906,7 +905,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             continue;
         }
         params.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
+            {doc_manager_.text(param.is_constexpr_written ? "comptime " : ""),
              format(param.name),
              doc_manager_.text(": "),
              bound == doc_manager_.nil() ? format(param.explicit_type)
@@ -958,7 +957,7 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
     const auto head_clause{[&](const if_expr& n) -> syntax::doc_id {
         return doc_manager_.concat({
             doc_manager_.text("if "),
-            n.constexpr_condition ? doc_manager_.text("constexpr ") : doc_manager_.nil(),
+            n.constexpr_condition ? doc_manager_.text("comptime ") : doc_manager_.nil(),
             n.condition
                 ? doc_manager_.concat(
                       {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
@@ -1032,7 +1031,7 @@ auto formatter::visit(node_id, const index_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const infinite_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(
-        {doc_manager_.text(node.is_constexpr ? "loop constexpr " : "loop "), format(node.block)});
+        {doc_manager_.text(node.is_constexpr ? "loop comptime " : "loop "), format(node.block)});
 }
 
 auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id {
@@ -1165,7 +1164,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "match constexpr (" : "match ("),
+        doc_manager_.text(node.is_constexpr ? "match comptime (" : "match ("),
         format(node.matcher),
         doc_manager_.text(") "),
         doc_manager_.delimited(
@@ -1274,7 +1273,7 @@ auto formatter::visit(node_id, const interface_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "while constexpr (" : "while ("),
+        doc_manager_.text(node.is_constexpr ? "while comptime (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
         node.continuation
@@ -1399,13 +1398,13 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
         body.emplace_back(dangling);
     }
 
-    const auto open_brace{node.is_constexpr ? "constexpr {" : "{"};
+    const auto open_brace{node.is_constexpr ? "comptime {" : "{"};
     if (body.empty()) {
         if (header_trailing != doc_manager_.nil()) {
             return doc_manager_.concat(
                 {doc_manager_.text(open_brace), header_trailing, doc_manager_.text("}")});
         }
-        return doc_manager_.text(node.is_constexpr ? "constexpr {}" : "{}");
+        return doc_manager_.text(node.is_constexpr ? "comptime {}" : "{}");
     }
 
     std::vector<syntax::doc_id> open_parts;
@@ -1544,7 +1543,7 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
         params.reserve(node.impl_params.size());
         for (const auto& param : node.impl_params) {
             params.emplace_back(doc_manager_.concat(
-                {doc_manager_.text(param.is_constexpr_written ? "constexpr " : ""),
+                {doc_manager_.text(param.is_constexpr_written ? "comptime " : ""),
                  format(param.name),
                  doc_manager_.text(": "),
                  format(param.explicit_type)}));

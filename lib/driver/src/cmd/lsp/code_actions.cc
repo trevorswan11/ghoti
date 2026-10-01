@@ -69,9 +69,10 @@ auto code_actions(const std::string& uri, const nlohmann::json& diagnostics) -> 
             out.push_back(quick_fix(
                 "Insert missing '" + std::string{*spelling} + "'", uri, start, *spelling, diag));
         } else if (code == "ILLEGAL_DECL_MODIFIERS" &&
-                   message == "Exactly one mutability modifier may be used; found 0") {
-            out.push_back(quick_fix("Add 'const' modifier", uri, start, "const ", diag));
-            out.push_back(quick_fix("Add 'var' modifier", uri, start, "var ", diag));
+                   message == "Exactly one of 'const', 'let' or 'let mut' may be used; found 0") {
+            out.push_back(quick_fix("Add 'const'", uri, start, "const ", diag));
+            out.push_back(quick_fix("Add 'let'", uri, start, "let ", diag));
+            out.push_back(quick_fix("Add 'let mut'", uri, start, "let mut ", diag));
         }
     }
 

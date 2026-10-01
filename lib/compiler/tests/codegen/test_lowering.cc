@@ -24,8 +24,8 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
         };
 
         pub const compute := fn(n: i64): i64 {
-            var sum: i64 = 0i64;
-            var i: i64 = 1i64;
+            let mut sum: i64 = 0i64;
+            let mut i: i64 = 1i64;
             while (i <= n) {
                 sum = add(sum, i);
                 i = i + 1i64;
@@ -78,15 +78,15 @@ TEST_CASE("E2E LLVM Emission: Array Manipulation, Mutation & Pointers") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const swap := fn(a: ^mut i32, b: ^mut i32): void {
-            const tmp: i32 = *a;
+            let tmp: i32 = *a;
             *a = *b;
             *b = tmp;
         };
 
         pub const sum_array := fn(): i32 {
-            var arr: [4uz]i32 = [4uz]i32{10, 20, 30, 40};
-            var sum: i32 = 0;
-            var i: usize = 0uz;
+            let mut arr: [4uz]i32 = [4uz]i32{10, 20, 30, 40};
+            let mut sum: i32 = 0;
+            let mut i: usize = 0uz;
             while (i < 4uz) {
                 sum = sum + arr[i];
                 i = i + 1uz;

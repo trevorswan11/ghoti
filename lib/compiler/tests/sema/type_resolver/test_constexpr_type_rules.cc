@@ -15,68 +15,70 @@ namespace ghoti::tests {
 
 TEST_CASE("`constexpr` on a `type` parameter is redundant") {
     helpers::test_resolver_fail(
-        "const f := fn(constexpr t: type): i32 { _ = t; return 0; };",
-        sema::diagnostic{"'constexpr' is redundant on a parameter of type 'type'; type values "
+        "const f := fn(comptime t: type): i32 { _ = t; return 0; };",
+        sema::diagnostic{"'comptime' is redundant on a parameter of type 'type'; type values "
                          "are always compile-time known",
-                         sema::error::REDUNDANT_CONSTEXPR,
-                         std::pair{0UZ, 24UZ}});
+                         sema::error::REDUNDANT_COMPTIME,
+                         std::pair{0UZ, 23UZ}});
 }
 
 TEST_CASE("`constexpr` on a parameter typed by an earlier generic type param isn't redundant") {
     helpers::resolve_and_check(
-        "const Point := fn(T: type, constexpr default_z: T): type { return T; };");
+        "const Point := fn(T: type, comptime default_z: T): type { return T; };");
 }
 
 TEST_CASE("a `var` binding cannot hold a `type` value") {
     const auto mutable_type_diag = [](usize col) {
-        return sema::diagnostic{"a 'type' value cannot be stored in a mutable ('var') binding; "
-                                "use 'const' or 'constexpr' instead",
+        return sema::diagnostic{"a 'type' value cannot be stored in a 'let' or 'let mut' binding; "
+                                "use 'const' instead",
                                 sema::error::MUTABLE_TYPE_BINDING,
                                 std::pair{0UZ, col}};
     };
 
-    helpers::test_resolver_fail("var a: type = i32;", mutable_type_diag(0UZ));
-    helpers::test_resolver_fail("var a := i32;", mutable_type_diag(0UZ));
-    helpers::test_resolver_fail("var a := ^mut i32;", mutable_type_diag(0UZ));
-    helpers::test_resolver_fail("var a := []u8;", mutable_type_diag(0UZ));
-    helpers::test_resolver_fail("const S := struct { x: i32 }; var a := S;",
+    helpers::test_resolver_fail("let mut a: type = i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("let mut a := i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("let mut a := ^mut i32;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("let mut a := []u8;", mutable_type_diag(0UZ));
+    helpers::test_resolver_fail("const S := struct { x: i32 }; let mut a := S;",
                                 mutable_type_diag(30UZ));
     helpers::test_resolver_fail(
-        "const Box := fn(T: type): type { return struct { v: T }; }; var a := Box(i32);",
+        "const Box := fn(T: type): type { return struct { v: T }; }; let mut a := Box(i32);",
         mutable_type_diag(60UZ));
 
     helpers::resolve_and_check("const a: type = i32;");
     helpers::resolve_and_check("const a := i32;");
-    helpers::resolve_and_check("constexpr a: type = i32;");
-    helpers::resolve_and_check("constexpr a := i32;");
+    helpers::resolve_and_check("const a: type = i32;");
+    helpers::resolve_and_check("const a := i32;");
     helpers::resolve_and_check("const S := struct { x: i32 };");
     helpers::resolve_and_check("const f := fn(t: type): i32 { _ = t; return 0; };");
 
-    helpers::resolve_and_check("const P := struct { x: i32 }; var p: P = undefined;");
-    helpers::resolve_and_check("var arr: [2uz]i32 = [_]i32{1, 2};");
+    helpers::resolve_and_check("const P := struct { x: i32 }; let mut p: P = undefined;");
+    helpers::resolve_and_check("let mut arr: [2uz]i32 = [_]i32{1, 2};");
 }
 
-TEST_CASE("a `var` binding cannot hold an aggregate of `type`s") {
+TEST_CASE("a `let` binding cannot hold an aggregate of `type`s") {
     const auto mutable_holder_diag = [](std::string_view type_name, usize col) {
         return sema::diagnostic{
             fmt::format("a value of type '{}' holds 'type's and only exists at compile time, so it "
-                        "cannot be stored in a mutable ('var') binding; use 'const' or 'constexpr' "
-                        "instead",
+                        "cannot be stored in a 'let' or 'let mut' binding; use 'const' instead",
                         type_name),
             sema::error::MUTABLE_TYPE_BINDING,
             std::pair{0UZ, col}};
     };
 
-    helpers::test_resolver_fail("var ts := [_]type{ i32, u8 };", mutable_holder_diag("[2]type", 0));
-    helpers::test_resolver_fail("var ts: [2]type = undefined;", mutable_holder_diag("[2]type", 0));
-    helpers::test_resolver_fail("const S := struct { t: type }; var s := S{ .t = i32 };",
+    helpers::test_resolver_fail("let mut ts := [_]type{ i32, u8 };",
+                                mutable_holder_diag("[2]type", 0));
+    helpers::test_resolver_fail("let ts := [_]type{ i32, u8 };", mutable_holder_diag("[2]type", 0));
+    helpers::test_resolver_fail("let mut ts: [2]type = undefined;",
+                                mutable_holder_diag("[2]type", 0));
+    helpers::test_resolver_fail("const S := struct { t: type }; let mut s := S{ .t = i32 };",
                                 mutable_holder_diag("S", 31));
 
     helpers::resolve_and_check("const ts := [_]type{ i32, u8 };");
-    helpers::resolve_and_check("constexpr ts := [_]type{ i32, u8 };");
-    helpers::resolve_and_check("constexpr ts: [2]type = .{ i32, u8 };");
-    helpers::resolve_and_check("constexpr ts: []type = ^.{ i32, u8 };");
-    helpers::resolve_and_check("const S := struct { t: type }; constexpr s := S{ .t = i32 };");
+    helpers::resolve_and_check("const ts := [_]type{ i32, u8 };");
+    helpers::resolve_and_check("const ts: [2]type = .{ i32, u8 };");
+    helpers::resolve_and_check("const ts: []type = ^.{ i32, u8 };");
+    helpers::resolve_and_check("const S := struct { t: type }; const s := S{ .t = i32 };");
 }
 
 TEST_CASE("an aggregate of `type`s is a storageless compile-time value") {
@@ -88,10 +90,10 @@ TEST_CASE("an aggregate of `type`s is a storageless compile-time value") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const ts := [_]type{ i32, u8 };
-        constexpr cts := [_]type{ bool, f32 };
-        constexpr nested := [_][2]type{ .{ i32, u8 }, .{ bool, f32 } };
+        const cts := [_]type{ bool, f32 };
+        const nested := [_][2]type{ .{ i32, u8 }, .{ bool, f32 } };
         const S := struct { t: type, n: i32 };
-        constexpr s := S{ .t = i32, .n = 1 };
+        const s := S{ .t = i32, .n = 1 };
         const T := i32;
         const xs := [_]i32{ 1, 2 };
         const first := ts[0];

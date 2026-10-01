@@ -88,7 +88,7 @@ pub const Allocator := struct {
     /// have the same address and alignment property.
     pub const destroy := fn(self, ptr: auto): void {
         const T := @TypeOf(ptr);
-        const raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
+        let raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
         return self.vtable.free(raw, .of(T));
     };
 
@@ -102,7 +102,7 @@ pub const Allocator := struct {
     /// For allocating a single item, see `create`.
     pub const alloc := fn(self, T: type, len: usize): std.Result([]mut T, AllocError) {
         // Guard the byte-count multiply against overflow before it reaches the allocator.
-        var size: usize = undefined;
+        let mut size: usize = undefined;
         if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
             return .fail(.out_of_memory);
         }
@@ -116,17 +116,17 @@ pub const Allocator := struct {
     /// If memory has length 0, free is a no-op.
     /// To free a single item, see `destroy`.
     pub const free := fn(self, T: type, mem: []mut T): void {
-        var size: usize = undefined;
-        const overflowed := @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
+        let mut size: usize = undefined;
+        let overflowed := @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
         @assert(!overflowed, "Attempt to free overflowed allocation");
-        const raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
+        let raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
         return self.vtable.free(raw, .of(T));
     };
 
     /// Copies `slice` to newly allocated memory. Caller owns the memory.
     pub const dupe := fn(self, T: type, slice: []T): std.Result([]mut T, AllocError) {
         // TODO(tcs): Also implement dupeZ for null temrination
-        const new_buf := self.alloc(T, slice.len)?;
+        let new_buf := self.alloc(T, slice.len)?;
         @memcpy(new_buf, slice);
         return new_buf;
     };

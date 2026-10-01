@@ -162,7 +162,7 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
-    const auto& cx_int{ctx->get_type(sema::type_kind::CONSTEXPR_INT)};
+    const auto& cx_int{ctx->get_type(sema::type_kind::COMPTIME_INT)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
 
     const auto decl_type = [&](std::string_view name) -> const sema::type& {
@@ -210,7 +210,7 @@ TEST_CASE("Builtin pointer conversions") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
         },
-        "var a := [_]i32{0, 1, 2};");
+        "let mut a := [_]i32{0, 1, 2};");
 
     test_builtin_resolve(
         bis::PTR_FROM_INT, "^i32, 0xc0ffeeu64", [](helpers::sema_test_context& ctx) -> sema::type& {
@@ -230,7 +230,7 @@ TEST_CASE("Builtins memory operation") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var d: []mut u8 = undefined; var s: []u8 = undefined;");
+        "let mut d: []mut u8 = undefined; let mut s: []u8 = undefined;");
 
     test_builtin_resolve(
         bis::MEMSET,
@@ -238,7 +238,7 @@ TEST_CASE("Builtins memory operation") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var d: []mut u8 = undefined;");
+        "let mut d: []mut u8 = undefined;");
 }
 
 TEST_CASE("@memcpy rejects a non-contiguous or immutable destination") {
@@ -285,7 +285,7 @@ TEST_CASE("@panic requires a compile-time-constant message") {
     helpers::test_resolver_fail(
         R"(const f := fn(m: []u8): void { @panic(m); };)",
         sema::diagnostic{"@panic message must be a compile-time-constant string",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
+                         sema::error::COMPTIME_EVALUATION_FAILED,
                          std::pair{0UZ, 38UZ}});
 }
 
@@ -299,7 +299,7 @@ TEST_CASE("Builtin function arity mismatch") {
 TEST_CASE("Const cast quick type checking") {
     helpers::test_resolver_fail(
         "const foo := @constCast(1);",
-        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'constexpr_int'",
+        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'comptime_int'",
                          sema::error::TYPE_MISMATCH,
                          std::pair{0UZ, 24UZ}});
 }
@@ -409,11 +409,11 @@ TEST_CASE("Free call and discard statements evaluate expressions without assignm
 
 TEST_CASE("@export rejects what it can't export") {
     helpers::test_resolver_fail(
-        "var g: i32 = 1; @export(g, .{ .name = \"g\" });",
+        "let mut g: i32 = 1; @export(g, .{ .name = \"g\" });",
         sema::diagnostic{"'@export' expects a function declared with 'const', like "
                          "'@export(add, .{ .name = \"add\" })'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 24UZ}});
+                         std::pair{0UZ, 28UZ}});
     helpers::test_resolver_fail(
         "const f := fn(): void {}; @export(f, .{ .name = \"\" });",
         sema::diagnostic{"An exported symbol name can't be empty or hold a zero byte",
@@ -444,7 +444,7 @@ TEST_CASE("@embed non-existent file produces sema error") {
         R"(const data := @embed("/nonexistent/file/path/that/does/not/exist.txt");)",
         sema::diagnostic{
             "failed to read embedded file '/nonexistent/file/path/that/does/not/exist.txt'",
-            sema::error::CONSTEXPR_EVALUATION_FAILED,
+            sema::error::COMPTIME_EVALUATION_FAILED,
             std::pair{0UZ, 21UZ}});
 }
 
@@ -452,7 +452,7 @@ TEST_CASE("@returnAddress builtin in sema") {
     SECTION("resolves to usize inside function") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             pub const get_ret_addr := fn(): usize {
-                const addr := @returnAddress();
+                let addr := @returnAddress();
                 return addr;
             };
         )")};

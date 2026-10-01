@@ -26,7 +26,7 @@ TEST_CASE("Codegen: extern link-name override renames the imported symbol") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;
         pub const main := fn(args: [][:0]u8): void {
-            const p := errno_loc();
+            let p := errno_loc();
         };
     )")};
 
@@ -56,7 +56,7 @@ TEST_CASE("Codegen: threadlocal extern global gets a TLS model") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        threadlocal extern var tls_errno: i32;
+        threadlocal extern let mut tls_errno: i32;
         pub const main := fn(args: [][:0]u8): void {};
     )")};
 
@@ -105,8 +105,8 @@ TEST_CASE("Codegen: a bounds check pulls in the weak default panic_handler") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const main := fn(args: [][:0]u8): void {
-            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
-            const x := arr[args.len];
+            let arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            let x := arr[args.len];
         };
     )")};
 
@@ -125,8 +125,8 @@ TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
             @trap();
         };
         pub const main := fn(args: [][:0]u8): void {
-            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
-            const x := arr[args.len];
+            let arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            let x := arr[args.len];
         };
     )")};
 

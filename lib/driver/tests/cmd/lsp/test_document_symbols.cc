@@ -17,7 +17,7 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view source{"pub const X := 5;\n"
-                                  "var y := 1;\n"
+                                  "let mut y := 1;\n"
                                   "const add := fn(a: i32, b: i32): i32 { return a + b; };\n"
                                   "const Point := struct { x: i32, py: i32 };\n"
                                   "const Color := enum { RED, GREEN, BLUE };\n"};

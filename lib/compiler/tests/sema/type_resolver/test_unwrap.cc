@@ -51,7 +51,7 @@ TEST_CASE("Resolving well-formed `?` propagation") {
         helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
         const R := Result(i32, i32);
         const g := fn(): R { return R{ .ok = 1 }; };
-        const f := fn(): R { const v := g()?; return R{ .ok = v }; };
+        const f := fn(): R { let v := g()?; return R{ .ok = v }; };
     )");
     }
 
@@ -59,7 +59,7 @@ TEST_CASE("Resolving well-formed `?` propagation") {
         helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
         const O := Option(i32);
         const g := fn(): O { return O{ .some = 1 }; };
-        const f := fn(): O { const v := g()?; return O{ .some = v }; };
+        const f := fn(): O { let v := g()?; return O{ .some = v }; };
     )");
     }
 
@@ -68,7 +68,7 @@ TEST_CASE("Resolving well-formed `?` propagation") {
         const E := Result(i32, i32);
         const F := Result(bool, i32);
         const inner := fn(): E { return E{ .ok = 1 }; };
-        const outer := fn(): F { const v := inner()?; _ = v; return F{ .ok = true }; };
+        const outer := fn(): F { let v := inner()?; _ = v; return F{ .ok = true }; };
     )");
     }
 }
@@ -177,7 +177,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             pub const from_residual := fn(r: u8): @This() { return MyRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): MyRes {
-            const v := m?;
+            let v := m?;
             return MyRes{ .val = v };
         };
         const g := fn(m: MyRes): i32 {
@@ -205,7 +205,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             pub const from_residual := fn(r: u32): @This() { return BigRes{ .fail = r }; };
         }
         const f := fn(m: MyRes): BigRes {
-            const v := m?;
+            let v := m?;
             return BigRes{ .val = v };
         };
         )");

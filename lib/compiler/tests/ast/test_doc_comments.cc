@@ -87,7 +87,7 @@ TEST_CASE("a `///` on a nested declaration does not leak to the next top-level d
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(const f := fn(): void {
     /// nested
-    const local := 1;
+    let local := 1;
     _ = local;
 };
 const g := 2;

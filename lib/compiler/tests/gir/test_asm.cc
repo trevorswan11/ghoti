@@ -27,7 +27,7 @@ TEST_CASE("GIR: inline asm lowers to an INLINE_ASM instruction") {
 TEST_CASE("GIR: inline asm result slot yields a typed temporary") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
         pub const timestamp := fn(): u32 {
-            const lo := asm u32 {
+            let lo := asm u32 {
                 template: "rdtsc",
                 outputs: ("={eax}" = _),
                 options: (volatile),

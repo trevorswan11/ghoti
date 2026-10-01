@@ -47,7 +47,7 @@ TEST_CASE("GIR single monomorphized instantiation") {
 
 TEST_CASE("GIR constexpr parameter monomorphizes per value") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const shifted := fn(constexpr by: i32, x: i32): i32 {
+        const shifted := fn(comptime by: i32, x: i32): i32 {
             return x + by;
         };
 
@@ -73,7 +73,7 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
 
 TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const room := fn(constexpr n: usize): usize { return @sizeOf([n]i32); };
+        const room := fn(comptime n: usize): usize { return @sizeOf([n]i32); };
 
         const test_fn := fn(): usize {
             return room(2uz) + room(5uz);
@@ -95,7 +95,7 @@ TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
 TEST_CASE("GIR constexpr struct value dedups regardless of field order") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const P := struct { x: i32, y: i32 };
-        const dot := fn(constexpr p: P): i32 { return p.x + p.y; };
+        const dot := fn(comptime p: P): i32 { return p.x + p.y; };
 
         const test_fn := fn(): i32 {
             return dot(P{ .x = 1, .y = 2 }) + dot(P{ .y = 2, .x = 1 }) + dot(P{ .x = 9, .y = 9 });
@@ -119,8 +119,8 @@ TEST_CASE("GIR multiple instantiations with diverse types") {
         };
 
         const test_multi := fn(x: i32, y: i32, u: f64, v: f64): void {
-            const r1 := add(x, y);
-            const r2 := add(u, v);
+            let r1 := add(x, y);
+            let r2 := add(u, v);
         };
     )")};
 

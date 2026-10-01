@@ -202,9 +202,9 @@ TEST_CASE("@implements evaluates to the right constexpr bool") {
         impl W for Yes { pub const f := fn(&self): void {}; }
 
         const check := fn(): void {
-            if constexpr (!@implements(Yes, W)) { @compileError("Yes should implement W"); }
-            if constexpr (@implements(No, W)) { @compileError("No must not implement W"); }
-            if constexpr (@implements(i32, W)) { @compileError("i32 must not implement W"); }
+            if comptime (!@implements(Yes, W)) { @compileError("Yes should implement W"); }
+            if comptime (@implements(No, W)) { @compileError("No must not implement W"); }
+            if comptime (@implements(i32, W)) { @compileError("i32 must not implement W"); }
         };
 )");
 }
@@ -215,7 +215,7 @@ TEST_CASE("@implements also accepts a value as its first argument") {
         const Yes := struct { x: i32 };
         impl W for Yes { pub const f := fn(&self): void {}; }
         const check := fn(y: Yes): void {
-            if constexpr (!@implements(y, W)) { @compileError("value form should agree"); }
+            if comptime (!@implements(y, W)) { @compileError("value form should agree"); }
         };
 )");
 }
@@ -223,7 +223,7 @@ TEST_CASE("@implements also accepts a value as its first argument") {
 TEST_CASE("an interface cannot be stored by value") {
     CHECK(helpers::raised(R"(
         const W := interface { pub const f := fn(&self): void; };
-        var w: W = undefined;
+        let mut w: W = undefined;
 )",
                           sema::error::INTERFACE_NOT_A_VALUE));
 }
@@ -301,7 +301,7 @@ TEST_CASE("a static `var` is allowed inside a trait impl") {
         const W := interface { pub const write := fn(&mut self): void; };
         const F := struct { x: i32 };
         impl W for F {
-            var calls: i32 = 0;
+            let mut calls: i32 = 0;
             pub const write := fn(&mut self): void {};
         }
 )");
@@ -345,7 +345,7 @@ TEST_CASE("a parameterized inherent impl expands for each concrete instantiation
             pub const get := fn(&self): T { return self.v; };
         }
         const use := fn(): i32 {
-            var b: Box(i32) = .{ .v = 7 };
+            let mut b: Box(i32) = .{ .v = 7 };
             return b.get();
         };
 )");
@@ -359,7 +359,7 @@ TEST_CASE("a parameterized trait impl over a local ctor conforms and its method 
             pub const show := fn(&self): i32 { return self.v; };
         }
         const use := fn(): i32 {
-            var b: Box(i32) = .{ .v = 5 };
+            let mut b: Box(i32) = .{ .v = 5 };
             return b.show();
         };
 )");
@@ -386,7 +386,7 @@ TEST_CASE("a parameterized impl with several type params conforms per instantiat
             pub const rhs := fn(&self): i32 { return self.b; };
         }
         const use := fn(): i32 {
-            var p: Pair(i32, i32) = .{ .a = 1, .b = 2 };
+            let mut p: Pair(i32, i32) = .{ .a = 1, .b = 2 };
             return p.lhs() + p.rhs();
         };
 )");
@@ -394,17 +394,17 @@ TEST_CASE("a parameterized impl with several type params conforms per instantiat
 
 TEST_CASE("a `constexpr` parameterized-impl param resolves as a value and an array dimension") {
     helpers::resolve_and_check(R"(
-        const Buf := fn(constexpr cap: usize): type { return struct { head: i32 }; };
-        impl(constexpr n: usize) Buf(n) {
+        const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
+        impl(comptime n: usize) Buf(n) {
             pub const cap := fn(&self): usize { return n; };
             pub const scratch := fn(&self): i32 {
-                var tmp: [n]i32 = undefined;
-                const first: i32 = tmp[0];
+                let mut tmp: [n]i32 = undefined;
+                let first: i32 = tmp[0];
                 return first - first + self.head + @as(i32, n / 2);
             };
         }
         const use := fn(): i32 {
-            var b: Buf(8) = .{ .head = 1 };
+            let mut b: Buf(8) = .{ .head = 1 };
             return @as(i32, b.cap()) + b.scratch();
         };
 )");
@@ -419,7 +419,7 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
             pub const label := fn(&self): i32 { return self.v; };
         }
         const use := fn(): i32 {
-            var b: other.Bag(i32) = .{ .v = 7 };
+            let mut b: other.Bag(i32) = .{ .v = 7 };
             return b.label();
         };
 )",
@@ -482,7 +482,7 @@ TEST_CASE("an aliased bare `dyn I` is still unsized by value") {
     for (const auto* use : {"const S := struct { w: Bound };",
                             "const g := fn(w: Bound): void { _ = w; };",
                             "const g := fn(w: &Bound): Bound { return undefined; };",
-                            "const g := fn(): void { var w: Bound = undefined; _ = w; };",
+                            "const g := fn(): void { let mut w: Bound = undefined; _ = w; };",
                             "const g := fn(ws: []Bound): void { _ = ws; };"}) {
         CAPTURE(use);
         CHECK(helpers::raised(fmt::format("{}\n{}", prelude, use),
@@ -549,7 +549,7 @@ TEST_CASE("`&mut T` coerces to a `&mut dyn I` parameter") {
         const File := struct { fd: i32 };
         impl W for File { pub const wr := fn(&self): i32 { return self.fd; }; }
         const sink := fn(w: &dyn W): i32 { return w.wr(); };
-        const use := fn(): i32 { var f := File{ .fd = 7 }; return sink(&f); };
+        const use := fn(): i32 { let mut f := File{ .fd = 7 }; return sink(&f); };
 )");
 }
 
@@ -568,7 +568,7 @@ TEST_CASE("`&dyn A` is not assignable to `&dyn B`") {
     CHECK(checker_raised(R"(
         const A := interface { pub const a := fn(&self): i32; };
         const B := interface { pub const b := fn(&self): i32; };
-        const use := fn(x: &dyn A): void { var y: &dyn B = x; _ = y; };
+        const use := fn(x: &dyn A): void { let mut y: &dyn B = x; _ = y; };
 )",
                          sema::error::TYPE_MISMATCH));
 }
@@ -576,7 +576,7 @@ TEST_CASE("`&dyn A` is not assignable to `&dyn B`") {
 TEST_CASE("`&dyn I` with different associated-type bindings are distinct types") {
     CHECK(checker_raised(R"(
         const I := interface { Out: type; pub const get := fn(&self): Out; };
-        const use := fn(x: &dyn I(Out = i32)): void { var y: &dyn I(Out = u8) = x; _ = y; };
+        const use := fn(x: &dyn I(Out = i32)): void { let mut y: &dyn I(Out = u8) = x; _ = y; };
 )",
                          sema::error::TYPE_MISMATCH));
 }

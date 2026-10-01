@@ -73,7 +73,7 @@ TEST_CASE("callable parameter names come from literals, `fn` types, and `dyn Fn`
 TEST_CASE("a self-referential alias chain stops instead of recursing forever") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const main := fn(): i32 {
-            const @"i32": i32 = 42;
+            let @"i32": i32 = 42;
             return @"i32";
         };
     )")};

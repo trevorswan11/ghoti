@@ -136,6 +136,6 @@ pub const Errno := enum : i32 {
     _,
 };
 
-pub constexpr EWOULDBLOCK := Errno.EAGAIN; /// Operation would block
-pub constexpr ENOTSUP := Errno.EOPNOTSUPP; /// Operation not supported
-pub constexpr EDEADLOCK := Errno.EDEADLK; /// File locking deadlock error
+pub const EWOULDBLOCK := Errno.EAGAIN; /// Operation would block
+pub const ENOTSUP := Errno.EOPNOTSUPP; /// Operation not supported
+pub const EDEADLOCK := Errno.EDEADLK; /// File locking deadlock error
