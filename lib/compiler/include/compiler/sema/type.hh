@@ -111,24 +111,24 @@ class type;
     }
 }
 
-[[nodiscard]] constexpr auto is_constexpr_int(type_kind kind) noexcept -> bool {
+[[nodiscard]] constexpr auto is_comptime_int(type_kind kind) noexcept -> bool {
     return kind == type_kind::COMPTIME_INT;
 }
 
-[[nodiscard]] constexpr auto is_constexpr_float(type_kind kind) noexcept -> bool {
+[[nodiscard]] constexpr auto is_comptime_float(type_kind kind) noexcept -> bool {
     return kind == type_kind::COMPTIME_FLOAT;
 }
 
 // The width a character literal's untyped constant defaults to
 constexpr u16 CHAR_CONSTANT_BITS{21};
 
-[[nodiscard]] constexpr auto is_constexpr_numeric(type_kind kind) noexcept -> bool {
-    return is_constexpr_int(kind) || is_constexpr_float(kind);
+[[nodiscard]] constexpr auto is_comptime_numeric(type_kind kind) noexcept -> bool {
+    return is_comptime_int(kind) || is_comptime_float(kind);
 }
 
-// A constexpr literal counts as numeric for arithmetic, comparison, and coercion purposes.
+// A comptime literal counts as numeric for arithmetic, comparison, and coercion purposes.
 [[nodiscard]] constexpr auto is_numeric(type_kind kind) noexcept -> bool {
-    return is_integer(kind) || is_float(kind) || is_constexpr_numeric(kind);
+    return is_integer(kind) || is_float(kind) || is_comptime_numeric(kind);
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
@@ -216,7 +216,7 @@ using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view
 [[nodiscard]] auto holds_type_values(const type& t) noexcept -> bool;
 
 // True when a value of `t` is an aggregate holding `type`s (`[2]type`, but not a bare `type`)
-[[nodiscard]] auto is_constexpr_aggregate(const type& t) noexcept -> bool;
+[[nodiscard]] auto is_comptime_aggregate(const type& t) noexcept -> bool;
 
 namespace types {
 
@@ -640,10 +640,9 @@ static_assert(stdx::TriviallyDestructible<type>);
 
 // Whether the compile-time integer `value` (two's-complement, up to 128 bits) is representable
 // in the concrete integer type `target`
-[[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
-    -> bool;
+[[nodiscard]] auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool;
 
-// The format a compile-time float of type `t` is held in; `constexpr_float` keeps full `f128`
+// The format a compile-time float of type `t` is held in; `comptime_float` keeps full `f128`
 [[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;
 
 // `value` rounded into `t`'s format, unchanged when `t` is not a float type. A math result that
@@ -653,7 +652,7 @@ fit_float(f128 value, const type& t, stdx::option<math_origin> origin = stdx::no
 
 // Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
 // already infinite or NaN, or a target that is not a concrete float, always fits
-[[nodiscard]] auto constexpr_float_fits(f128 value, const type& target) -> bool;
+[[nodiscard]] auto comptime_float_fits(f128 value, const type& target) -> bool;
 
 // Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
 // none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.

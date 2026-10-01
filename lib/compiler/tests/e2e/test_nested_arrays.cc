@@ -77,7 +77,7 @@ TEST_CASE("Three dimensional array with loop-indexed stores") {
     )") == 53);
 }
 
-TEST_CASE("Nested array with constexpr dimensions and runtime indices") {
+TEST_CASE("Nested array with comptime dimensions and runtime indices") {
     CHECK(helpers::compile_and_run(R"(
         const N: usize = 3;
         pub const main := fn(): i32 {
@@ -172,7 +172,7 @@ TEST_CASE("Slice of nested array rows") {
     )") == 73);
 }
 
-TEST_CASE("Nested array mutated in a constexpr function") {
+TEST_CASE("Nested array mutated in a comptime function") {
     CHECK(helpers::compile_and_run(R"(
         const f := fn(): i32 {
             let mut m: [2]mut [2]mut i32 = .{.{1, 2}, .{3, 4}};

@@ -166,7 +166,7 @@ TEST_CASE("a parameterized impl with two type parameters remaps each independent
     )") == 42);
 }
 
-TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bodies") {
+TEST_CASE("a parameterized impl folds a `comptime` parameter into its method bodies") {
     CHECK(helpers::compile_and_run(R"(
         const Ring := fn(comptime sz: usize): type { return struct { head: usize }; };
         impl(comptime n: usize) Ring(n) {
@@ -180,7 +180,7 @@ TEST_CASE("a parameterized impl folds a `constexpr` parameter into its method bo
     )") == 42);
 }
 
-TEST_CASE("a parameterized impl mixes a type and a `constexpr` parameter") {
+TEST_CASE("a parameterized impl mixes a type and a `comptime` parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Slot := fn(T: type, comptime tag: i32): type { return struct { val: T }; };
         impl(T: type, comptime tag: i32) Slot(T, tag) {
@@ -193,7 +193,7 @@ TEST_CASE("a parameterized impl mixes a type and a `constexpr` parameter") {
     )") == 42);
 }
 
-TEST_CASE("a `constexpr` parameterized-impl param drives a runtime loop bound") {
+TEST_CASE("a `comptime` parameterized-impl param drives a runtime loop bound") {
     CHECK(helpers::compile_and_run(R"(
         const Counter := fn(comptime limit: usize): type { return struct { base: i32 }; };
         impl(comptime n: usize) Counter(n) {
@@ -233,7 +233,7 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               })) == 42);
 }
 
-TEST_CASE("`if comptime` on a parameterized-impl `constexpr` param folds per instantiation") {
+TEST_CASE("`if comptime` on a parameterized-impl `comptime` param folds per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
         impl(comptime n: usize) Buf(n) {
@@ -250,7 +250,7 @@ TEST_CASE("`if comptime` on a parameterized-impl `constexpr` param folds per ins
     )") == 106);
 }
 
-TEST_CASE("`match constexpr` on a parameterized-impl `constexpr` param selects per instantiation") {
+TEST_CASE("`match comptime` on a parameterized-impl `comptime` param selects per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
         impl(comptime n: usize) Buf(n) {
@@ -284,7 +284,7 @@ TEST_CASE("a dead `if comptime` arm in a parameterized-impl body is never resolv
     )") == 42);
 }
 
-TEST_CASE("a dead `match constexpr` arm in a parameterized-impl body is never resolved") {
+TEST_CASE("a dead `match comptime` arm in a parameterized-impl body is never resolved") {
     CHECK(helpers::compile_and_run(R"(
         const Tag := fn(comptime mode: i32): type { return struct { v: i32 }; };
         impl(comptime mode: i32) Tag(mode) {

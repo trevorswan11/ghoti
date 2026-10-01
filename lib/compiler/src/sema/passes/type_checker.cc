@@ -152,7 +152,7 @@ auto type_checker::is_value_assignable(const gir::value&             val,
     if (is_assignable(val_t, dest_t)) { return true; }
     if (is_integer(val_t.get_kind()) && is_integer(dest_t.get_kind())) {
         if (const auto folded{folded_int(val)}) {
-            if (constexpr_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
+            if (comptime_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
             emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
                                         *folded,
                                         ctx_.type_display_name(dest_t)),
@@ -725,7 +725,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     if (is_implicit_widenable(*src_t, *dest_t)) {
                         allowed = true;
                     } else if (const auto folded{folded_int(inst.operands[0])}) {
-                        allowed = constexpr_int_fits(*folded, *dest_t, target_ptr_bits_);
+                        allowed = comptime_int_fits(*folded, *dest_t, target_ptr_bits_);
                     }
                 } else if (is_enum_repr_cast || is_float_cast) {
                     allowed = true;
@@ -800,7 +800,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     it != locals_.end() && it->second.is_const && it->second.is_alloca &&
                     it->second.type &&
                     it->second.type->get_kind() !=
-                        type_kind::CLOSURE // closure's `const` binding only pins the binding, not
+                        type_kind::CLOSURE // closure's `let` binding only pins the binding, not
                                            // its captured env
                 ) {
                     emit_diagnostic(

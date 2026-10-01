@@ -27,13 +27,13 @@ namespace ghoti::sema {
 
 class type;
 
-// Constexpr argument values per monomorphization, keyed by mangled name
-using constexpr_arg_map = ankerl::unordered_dense::map<std::string,
-                                                       stdx::box<std::vector<gir::const_value>>,
-                                                       stdx::string_transparent_hash,
-                                                       stdx::string_transparent_eq>;
+// Comptime argument values per monomorphization, keyed by mangled name
+using comptime_arg_map = ankerl::unordered_dense::map<std::string,
+                                                      stdx::box<std::vector<gir::const_value>>,
+                                                      stdx::string_transparent_hash,
+                                                      stdx::string_transparent_eq>;
 
-// A `fn(...): type` constructor's `constexpr` parameters, name -> folded value, so its aggregate's
+// A `fn(...): type` constructor's `comptime` parameters, name -> folded value, so its aggregate's
 // member functions can read them at emit time. Keyed by the constructor's mangled name.
 using type_ctor_binding_map =
     ankerl::unordered_dense::map<std::string,
@@ -41,7 +41,7 @@ using type_ctor_binding_map =
                                  stdx::string_transparent_hash,
                                  stdx::string_transparent_eq>;
 
-// Per-monomorphization body typing, replayed at emit time: `[n]T` with a `constexpr n`, and the
+// Per-monomorphization body typing, replayed at emit time: `[n]T` with a `comptime n`, and the
 // `@This()` shape of a `fn(T): type` constructor's member functions.
 struct body_type_diff {
     std::vector<std::pair<usize, stdx::option<type&>>>       node_types;
@@ -116,7 +116,7 @@ using body_type_diff_map = ankerl::unordered_dense::map<std::string,
 struct generic_instantiation_key {
     gsl::not_null<type*>              generic_fn_type;
     gsl::span<type*>                  arg_types;
-    gsl::span<const gir::const_value> constexpr_args; // in parameter order
+    gsl::span<const gir::const_value> comptime_args; // in parameter order
 
     [[nodiscard]] auto hash() const noexcept -> u64 {
         stdx::hasher h{reinterpret_cast<u64>(generic_fn_type.get())};
@@ -124,7 +124,7 @@ struct generic_instantiation_key {
             VERIFY(arg, "Null argument leaked from resolution");
             h.combine(reinterpret_cast<u64>(arg));
         }
-        for (const auto& cx : constexpr_args) { h.combine(cx.hash()); }
+        for (const auto& cx : comptime_args) { h.combine(cx.hash()); }
         return h.finalize();
     }
 
@@ -179,15 +179,15 @@ class generic_instantiation_cache {
     }
 
     // First write wins
-    auto set_constexpr_args(std::string key, std::vector<gir::const_value> args) -> void {
-        if (constexpr_args_.contains(key)) { return; }
-        constexpr_args_.insert_or_assign(
+    auto set_comptime_args(std::string key, std::vector<gir::const_value> args) -> void {
+        if (comptime_args_.contains(key)) { return; }
+        comptime_args_.insert_or_assign(
             std::move(key), stdx::make_box<std::vector<gir::const_value>>(std::move(args)));
     }
 
-    [[nodiscard]] auto get_constexpr_args(std::string_view key) const noexcept
+    [[nodiscard]] auto get_comptime_args(std::string_view key) const noexcept
         -> stdx::option<const std::vector<gir::const_value>&> {
-        if (const auto it{constexpr_args_.find(std::string{key})}; it != constexpr_args_.end()) {
+        if (const auto it{comptime_args_.find(std::string{key})}; it != comptime_args_.end()) {
             return *it->second;
         }
         return stdx::none;
@@ -216,7 +216,7 @@ class generic_instantiation_cache {
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
     body_type_diff_map    body_type_diffs_;
-    constexpr_arg_map     constexpr_args_;
+    comptime_arg_map      comptime_args_;
     type_ctor_binding_map type_ctor_bindings_;
 };
 
@@ -233,11 +233,11 @@ struct body_write_log {
 struct body_typing_snapshot {
     explicit body_typing_snapshot(const mod::module& m)
         : nodes{m.sema_side_tables.node_types.values},
-          types{m.sema_side_tables.explicit_types.values}, ifs{m.if_constexpr_results},
+          types{m.sema_side_tables.explicit_types.values}, ifs{m.if_comptime_results},
           matches{m.match_arm_results}, calls{m.sema_side_tables.generic_call_targets.values},
           attributes{m.node_attributes} {}
 
-    // Folds every still-deferred `[n]T` under the active `constexpr` frame, then records each
+    // Folds every still-deferred `[n]T` under the active `comptime` frame, then records each
     // side-table entry the resolution changed into `out`.
     auto diff_into(context&                            ctx,
                    mod::module&                        m,

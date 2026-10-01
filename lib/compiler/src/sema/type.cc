@@ -170,11 +170,11 @@ auto fit_float(f128 value, const type& t, stdx::option<math_origin> origin) -> f
     return value.round_to(*format);
 }
 
-auto constexpr_float_fits(f128 value, const type& target) -> bool {
+auto comptime_float_fits(f128 value, const type& target) -> bool {
     return !value.is_finite() || fit_float(value, target).is_finite();
 }
 
-auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
+auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
     u16  bits{0};
     bool is_signed{false};
     switch (target.get_kind()) {
@@ -325,7 +325,7 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     if (from_kind == type_kind::COMPTIME_FLOAT) {
         return is_float(to_kind) || to_kind == type_kind::COMPTIME_FLOAT;
     }
-    // A concrete numeric also flows into a `constexpr_*` slot
+    // A concrete numeric also flows into a `comptime_*` slot
     if (to_kind == type_kind::COMPTIME_INT) { return is_integer(from_kind); }
     if (to_kind == type_kind::COMPTIME_FLOAT) {
         return is_float(from_kind) || is_integer(from_kind);
@@ -612,7 +612,7 @@ auto holds_type_values(const type& t) noexcept -> bool {
     return false;
 }
 
-auto is_constexpr_aggregate(const type& t) noexcept -> bool {
+auto is_comptime_aggregate(const type& t) noexcept -> bool {
     if (t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>()) {
         return false;
     }
@@ -643,7 +643,7 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     }
 
     if (kind == type_kind::FUNCTION) {
-        // A thin slot may still bind a closure's own type through a `constexpr` param
+        // A thin slot may still bind a closure's own type through a `comptime` param
         if (unmodified && !is_erased_fn(t)) { return true; }
         if (const auto fn{data.as_opt<types::function>()}) {
             if (is_generic_type(fn->return_type, false)) { return true; }

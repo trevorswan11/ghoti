@@ -91,13 +91,13 @@ class type_resolver {
     // Records a parameterized `impl(P) [I for] Ctor(P)` root, keyed on its base ctor, for later
     // per-monomorphization expansion.
     auto register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl) -> void;
-    // Resolves a parameterized impl once against opaque sentinels + dummy `constexpr` values to
+    // Resolves a parameterized impl once against opaque sentinels + dummy `comptime` values to
     // record its abstract target + method signatures on the shared `impl_registry`
     auto build_param_impl_template(const ast::impl_stmt& impl, ast::node_id site) -> void;
     // A member `fn` whose type could not be resolved, which no instantiation re-resolves
     [[nodiscard]] auto member_function_is_poisoned(ast::member_handle member) const -> bool;
     // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
-    // impl params to concrete types / folded `constexpr` values, and diffs the result into `out`.
+    // impl params to concrete types / folded `comptime` values, and diffs the result into `out`.
     auto
          resolve_param_impl_bodies(mod::module&                                              impl_mod,
                                    const ast::impl_stmt&                                     impl,
@@ -120,8 +120,8 @@ class type_resolver {
         -> stdx::option<usize>;
     template <typename Eval>
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
-    // True when `expr` is a bare identifier declared `constexpr var` (no storage, no address).
-    auto names_constexpr_var(ast::expr_handle expr) -> bool;
+    // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
+    auto names_comptime_mut(ast::expr_handle expr) -> bool;
 
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
@@ -204,7 +204,7 @@ class type_resolver {
         [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
             auto& first{*return_types.front()};
-            // An inferred (`: auto`) return type never stays `constexpr_*`: pin it to its peer.
+            // An inferred (`: auto`) return type never stays `comptime_*`: pin it to its peer.
             if (first.get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
             if (first.get_kind() == type_kind::COMPTIME_FLOAT) {
                 return ctx.get_builtin_resolved_type(type_kind::F64);
@@ -245,8 +245,8 @@ class type_resolver {
         std::vector<type*> stack_;
     };
 
-    using structural_guard      = structural_type_stack::guard;
-    using constexpr_frame_guard = scope_guard<std::vector<constexpr_frame>>;
+    using structural_guard     = structural_type_stack::guard;
+    using comptime_frame_guard = scope_guard<std::vector<comptime_frame>>;
 
     // Resolves the provided type and unresolves upon destruction if not committed
     template <typename Resolvee> class committable_resolution {
@@ -371,8 +371,8 @@ class type_resolver {
     // Builds a `types::union_t` directly from a folded `UnionInfo` descriptor
     [[nodiscard]] auto synthesize_union(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
-    // Views a `constexpr_int` / `constexpr_float` as the concrete type it materializes to
-    [[nodiscard]] auto constexpr_numeric_view(type& t) -> type&;
+    // Views a `comptime_int` / `comptime_float` as the concrete type it materializes to
+    [[nodiscard]] auto comptime_numeric_view(type& t) -> type&;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
@@ -446,7 +446,7 @@ class type_resolver {
                                          ast::node_id call_id) const -> stdx::option<bool>;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
-    // A function declaration an argument names, as a value a `constexpr` parameter can hold
+    // A function declaration an argument names, as a value a `comptime` parameter can hold
     [[nodiscard]] auto declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
 
     [[nodiscard]] auto local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
@@ -457,7 +457,7 @@ class type_resolver {
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
                                           ast::expr_handle            dest) -> void;
-    [[nodiscard]] auto constexpr_closure_value(ast::expr_handle expr)
+    [[nodiscard]] auto comptime_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
 
     template <ast::IndexableID ID> auto resolve_call(ID, const ast::call_expr&) -> void;
@@ -477,7 +477,7 @@ class type_resolver {
     template <ast::IndexableID ID> auto resolve_ident(ID, const ast::identifier_expr&) -> void;
 
     // Records, for the reference node `ref_id`, the symbol-table index `owner_table_idx` that
-    // owns `sym`, iff `sym` names a top-level function or `var` global
+    // owns `sym`, iff `sym` names a top-level function or `let mut` global
     auto record_symbol_owner(ast::node_id       ref_id,
                              usize              owner_table_idx,
                              const mod::module& target_mod,
@@ -547,16 +547,16 @@ class type_resolver {
     // Resolves a `match` whose scrutinee is a compile-time `type` value
     auto resolve_type_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
 
-    // Resolves a `match constexpr`: folds the scrutinee, type-checks only the selected arm
-    auto resolve_constexpr_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
+    // Resolves a `match comptime`: folds the scrutinee, type-checks only the selected arm
+    auto resolve_comptime_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
 
-    // Resolves a `for constexpr`: unrolls into one resolve pass per compile-time-known iteration,
+    // Resolves a `for comptime`: unrolls into one resolve pass per compile-time-known iteration,
     // diffing each into a per-iteration `body_type_diff` for the emitter to replay.
-    auto resolve_constexpr_for(ast::node_id, const ast::for_loop_expr&) -> void;
+    auto resolve_comptime_for(ast::node_id, const ast::for_loop_expr&) -> void;
 
-    // Rejects a bare `break`/`continue` reaching a `for`/`while constexpr`'s own iteration
+    // Rejects a bare `break`/`continue` reaching a `for`/`while comptime`'s own iteration
     // boundary (nested ordinary loops declared inside the body are unaffected).
-    auto check_constexpr_loop_jumps(ast::stmt_handle body) -> void;
+    auto check_comptime_loop_jumps(ast::stmt_handle body) -> void;
 
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
@@ -603,8 +603,8 @@ class type_resolver {
     [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;
     [[nodiscard]] auto peer_view(type& t) -> type&;
 
-    // A `constexpr f: fn(...)` binds at compile time, so it keeps the thin function type
-    auto thin_if_constexpr(const ast::function_expr::parameter& param, type& param_type) -> type&;
+    // A `comptime f: fn(...)` binds at compile time, so it keeps the thin function type
+    auto thin_if_comptime(const ast::function_expr::parameter& param, type& param_type) -> type&;
 
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
     // `reject_unsized_slot`, plus the compile-time-only `@TypeOf(undefined)`
@@ -625,9 +625,9 @@ class type_resolver {
     auto visit(ast::node_id, const ast::block_stmt&) -> void;
 
     // Runs a lightweight AST simulation over `active_blocks_` up to the current statement index,
-    // materializing the latest compile-time values of mutable `constexpr var` locals.
-    // The resulting frame is installed into `ctx_.constexpr_binding_frames` during isolated folds.
-    [[nodiscard]] auto make_simulated_frame() -> constexpr_frame;
+    // materializing the latest compile-time values of mutable `comptime let mut` locals.
+    // The resulting frame is installed into `ctx_.comptime_binding_frames` during isolated folds.
+    [[nodiscard]] auto make_simulated_frame() -> comptime_frame;
 
     // Returns `true` if the resolution was successful
     [[nodiscard]] auto resolve_control_flow_label(stdx::option<ast::identifier_handle> label,
@@ -677,7 +677,7 @@ class type_resolver {
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
                              gsl::span<type*>                  concrete_args,
-                             gsl::span<const gir::const_value> constexpr_args = {})
+                             gsl::span<const gir::const_value> comptime_args = {})
         -> stdx::option<generic_instantiation_entry>;
 
     // Distinct opaque `type` sentinel used to stand in for one parameterized-impl type param
@@ -747,9 +747,9 @@ class type_resolver {
     ankerl::unordered_dense::set<usize> unused_value_nodes_;
 
     std::vector<enclosing_arm> enclosing_arms_;
-    // Skips `if`/`match constexpr` folding and the throwaway `Ctor(<dummy>)` cache insert
+    // Skips `if`/`match comptime` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
-    bool in_constexpr_loop_{false};
+    bool in_comptime_loop_{false};
 
     // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
     // at or above this floor  is re-typed even though an earlier pass already left its symbol

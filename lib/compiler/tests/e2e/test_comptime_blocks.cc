@@ -5,7 +5,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("top-level constexpr block at module level executes at compile time") {
+TEST_CASE("top-level comptime block at module level executes at compile time") {
     CHECK(helpers::compile_and_run(R"(
         comptime {
             let expected := 100;
@@ -18,7 +18,7 @@ TEST_CASE("top-level constexpr block at module level executes at compile time") 
     )") == 42);
 }
 
-TEST_CASE("unlabeled constexpr block in expression position evaluates to void") {
+TEST_CASE("unlabeled comptime block in expression position evaluates to void") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let v: void = comptime {
@@ -30,7 +30,7 @@ TEST_CASE("unlabeled constexpr block in expression position evaluates to void") 
     )") == 0);
 }
 
-TEST_CASE("labeled constexpr block yields break value (blk: constexpr { ... })") {
+TEST_CASE("labeled comptime block yields break value (blk: comptime { ... })") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let r := blk: comptime {
@@ -56,7 +56,7 @@ TEST_CASE("labeled comptime block yields break value with prefix syntax (comptim
     )") == 123);
 }
 
-TEST_CASE("constexpr block with loops and variable mutation") {
+TEST_CASE("comptime block with loops and variable mutation") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let sum := blk: comptime {
@@ -72,7 +72,7 @@ TEST_CASE("constexpr block with loops and variable mutation") {
     )") == 55);
 }
 
-TEST_CASE("nested loops inside labeled constexpr block breaking to inner loop vs outer label") {
+TEST_CASE("nested loops inside labeled comptime block breaking to inner loop vs outer label") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let val := outer: comptime {
@@ -95,7 +95,7 @@ TEST_CASE("nested loops inside labeled constexpr block breaking to inner loop vs
     )") == 12);
 }
 
-TEST_CASE("constexpr block non-foldable variable causes compile error") {
+TEST_CASE("comptime block non-foldable variable causes compile error") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
             let mut runtime_x: i32 = 10;
@@ -107,7 +107,7 @@ TEST_CASE("constexpr block non-foldable variable causes compile error") {
     )");
 }
 
-TEST_CASE("constexpr block compile-time failure via @compileError causes compile error") {
+TEST_CASE("comptime block compile-time failure via @compileError causes compile error") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
             comptime {

@@ -21,7 +21,7 @@ TEST_CASE("Builtin type resolution") {
         CHECK(sema::type_kind_display_name(type) == expected_name);
     };
 
-    check_bi_type("1", "comptime_int"); // unsuffixed: stays constexpr in an un-annotated const
+    check_bi_type("1", "comptime_int"); // unsuffixed: stays comptime in an un-annotated const
     check_bi_type("1i64", "i64");
     check_bi_type("1z", "isize");
     check_bi_type("1u32", "u32");

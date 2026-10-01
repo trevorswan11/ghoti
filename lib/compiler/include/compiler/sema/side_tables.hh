@@ -19,8 +19,8 @@ namespace ghoti::mod { struct module; } // namespace ghoti::mod
 
 namespace ghoti::sema {
 
-// Where a name was declared, in the declaring module's own AST: a `const`/`var` declaration, or
-// the type annotation of a parameter or aggregate field
+// Where a name was declared, in the declaring module's own AST: a `const`/`let`/`let mut`
+// declaration, or the type annotation of a parameter or aggregate field
 struct declaration_ref {
     stdx::option<const mod::module&>    owner;
     stdx::option<ast::node_id>          decl;
@@ -84,7 +84,7 @@ struct side_tables {
     detail::side_table<ast::node_id, stdx::option<std::string>> generic_call_targets;
 
     // Reference expression (ident / dot / module-access / implicit-access) to the symbol-table
-    // index that owns the top-level function or `var` global it resolves to
+    // index that owns the top-level function or `let mut` global it resolves to
     detail::side_table<ast::node_id, stdx::opt_size> resolved_symbol_owners;
 
     // function_expr node id to the free variables it implicitly captures, see `capture_list`

@@ -86,7 +86,7 @@ TEST_CASE("Return statement type checking") {
                 std::pair{5UZ, 20UZ}});
     }
 
-    SECTION("Constexpr multi-type if branches succeed") {
+    SECTION("Comptime multi-type if branches succeed") {
         helpers::type_check_and_verify(R"(
             const f := fn(): auto {
                 if comptime (true) {

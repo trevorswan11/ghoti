@@ -163,7 +163,7 @@ TEST_CASE("Function explicit type resolution") {
     CHECK(fn.conv == ast::calling_convention::C);
 }
 
-TEST_CASE("`extern fn`, `extern` decls, and `constexpr` params keep the thin function type") {
+TEST_CASE("`extern fn`, `extern` decls, and `comptime` params keep the thin function type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         let mut a: extern fn(n: i32): i32 = undefined;
         let mut b: fn(n: i32): i32 = undefined;

@@ -7,7 +7,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("a constexpr block folds calls into functions that take a parameter pack") {
+TEST_CASE("a comptime block folds calls into functions that take a parameter pack") {
     CHECK(helpers::compile_and_run_tests(R"(
         pub const max := fn(a: auto, b: auto, c...): auto {
             let mut largest := if (a > b) a else b;
@@ -75,7 +75,7 @@ TEST_CASE("both arms of a condition-less `if comptime` are type checked") {
     )");
 }
 
-TEST_CASE("a constexpr function's params read at compile time are implicitly constexpr") {
+TEST_CASE("a comptime function's params read at compile time are implicitly comptime") {
     CHECK(helpers::compile_and_run_tests(R"(
         pub const min_cx := fn(a: i32, b: i32): i32 {
             return if comptime (a < b) a else b;
@@ -102,7 +102,7 @@ TEST_CASE("a constexpr function's params read at compile time are implicitly con
     )") == 0);
 }
 
-TEST_CASE("a runtime argument to an implicitly constexpr parameter says why it is constexpr") {
+TEST_CASE("a runtime argument to an implicitly comptime parameter says why it is comptime") {
     CHECK(helpers::raised(R"(
         pub const min_cx := fn(a: i32, b: i32): i32 {
             return if comptime (a < b) a else b;

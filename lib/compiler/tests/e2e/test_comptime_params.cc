@@ -9,7 +9,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("constexpr parameter: distinct values monomorphize to distinct behavior") {
+TEST_CASE("comptime parameter: distinct values monomorphize to distinct behavior") {
     CHECK(helpers::compile_and_run(R"(
         const shifted := fn(comptime by: i32, x: i32): i32 {
             return x + by;
@@ -21,7 +21,7 @@ TEST_CASE("constexpr parameter: distinct values monomorphize to distinct behavio
     )") == 111);
 }
 
-TEST_CASE("constexpr parameter: reused value hits the instantiation cache once") {
+TEST_CASE("comptime parameter: reused value hits the instantiation cache once") {
     CHECK(helpers::compile_and_run(R"(
         const scale := fn(comptime k: i32, x: i32): i32 {
             return x * k;
@@ -33,7 +33,7 @@ TEST_CASE("constexpr parameter: reused value hits the instantiation cache once")
     )") == 6 + 15 + 4);
 }
 
-TEST_CASE("constexpr parameter: folds inside `if comptime` in the body") {
+TEST_CASE("comptime parameter: folds inside `if comptime` in the body") {
     CHECK(helpers::compile_and_run(R"(
         const clamp_double := fn(comptime n: i32): i32 {
             if comptime (n > 100) {
@@ -48,7 +48,7 @@ TEST_CASE("constexpr parameter: folds inside `if comptime` in the body") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: a struct value is usable in the body") {
+TEST_CASE("comptime parameter: a struct value is usable in the body") {
     CHECK(helpers::compile_and_run(R"(
         const P := struct { x: i32, y: i32 };
         const dot := fn(comptime p: P): i32 { return p.x * 10 + p.y; };
@@ -59,7 +59,7 @@ TEST_CASE("constexpr parameter: a struct value is usable in the body") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: `auto` is both value- and type-generic") {
+TEST_CASE("comptime parameter: `auto` is both value- and type-generic") {
     CHECK(helpers::compile_and_run(R"(
         const twice := fn(comptime v: auto): i32 { return @as(i32, v) + @as(i32, v); };
 
@@ -69,7 +69,7 @@ TEST_CASE("constexpr parameter: `auto` is both value- and type-generic") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: a compile-time function reference") {
+TEST_CASE("comptime parameter: a compile-time function reference") {
     CHECK(helpers::compile_and_run(R"(
         const inc := fn(x: i32): i32 { return x + 1; };
 
@@ -83,7 +83,7 @@ TEST_CASE("constexpr parameter: a compile-time function reference") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: a local function reference") {
+TEST_CASE("comptime parameter: a local function reference") {
     CHECK(helpers::compile_and_run(R"(
         const apply := fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(f(v)); };
 
@@ -95,7 +95,7 @@ TEST_CASE("constexpr parameter: a local function reference") {
     )") == 40);
 }
 
-TEST_CASE("constexpr parameter: a closure with compile-time captures") {
+TEST_CASE("comptime parameter: a closure with compile-time captures") {
     CHECK(helpers::compile_and_run(R"(
         const apply := fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
@@ -107,7 +107,7 @@ TEST_CASE("constexpr parameter: a closure with compile-time captures") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: an anonymous capturing closure literal") {
+TEST_CASE("comptime parameter: an anonymous capturing closure literal") {
     CHECK(helpers::compile_and_run(R"(
         const apply := fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(f(v)); };
 
@@ -118,7 +118,7 @@ TEST_CASE("constexpr parameter: an anonymous capturing closure literal") {
     )") == 42);
 }
 
-TEST_CASE("constexpr closure: distinct captured values monomorphize apart") {
+TEST_CASE("comptime closure: distinct captured values monomorphize apart") {
     CHECK(helpers::compile_and_run(R"(
         const apply := fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
@@ -132,7 +132,7 @@ TEST_CASE("constexpr closure: distinct captured values monomorphize apart") {
     )") == 10 + 100 + 11 + 102);
 }
 
-TEST_CASE("constexpr closure: invoked at constexpr and runtime in the body") {
+TEST_CASE("comptime closure: invoked at comptime and runtime in the body") {
     CHECK(helpers::compile_and_run(R"(
         const use := fn(comptime f: fn(n: i32): i32, v: i32): i32 {
             if comptime (f(1) == 5) { return f(v) + 100; }
@@ -146,7 +146,7 @@ TEST_CASE("constexpr closure: invoked at constexpr and runtime in the body") {
     )") == 142);
 }
 
-TEST_CASE("constexpr closure: a runtime capture is rejected") {
+TEST_CASE("comptime closure: a runtime capture is rejected") {
     helpers::expect_compile_error(R"(
         const apply := fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
 
@@ -158,7 +158,7 @@ TEST_CASE("constexpr closure: a runtime capture is rejected") {
     )");
 }
 
-TEST_CASE("constexpr parameter: forward-referenced constexpr argument") {
+TEST_CASE("comptime parameter: forward-referenced comptime argument") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 { return take(give()); };
         const give := fn(): i32 { return 42; };
@@ -166,7 +166,7 @@ TEST_CASE("constexpr parameter: forward-referenced constexpr argument") {
     )") == 42);
 }
 
-TEST_CASE("constexpr parameter: sizes a type in the body, per value") {
+TEST_CASE("comptime parameter: sizes a type in the body, per value") {
     CHECK(helpers::compile_and_run(R"(
         const bytes := fn(comptime n: usize): i32 {
             return @intCast(i32, @sizeOf([n]i32));
@@ -178,7 +178,7 @@ TEST_CASE("constexpr parameter: sizes a type in the body, per value") {
     )") == 8 + 20);
 }
 
-TEST_CASE("constexpr parameter: a non-constant argument is rejected") {
+TEST_CASE("comptime parameter: a non-constant argument is rejected") {
     helpers::expect_compile_error(R"(
         const need_const := fn(comptime n: i32): i32 {
             return n;
@@ -191,7 +191,7 @@ TEST_CASE("constexpr parameter: a non-constant argument is rejected") {
     )");
 }
 
-TEST_CASE("constexpr parameter: @compileError fires only for the offending instantiation") {
+TEST_CASE("comptime parameter: @compileError fires only for the offending instantiation") {
     helpers::expect_compile_error(R"(
         const bounded := fn(comptime n: i32): i32 {
             if comptime (n > 100) {
@@ -206,7 +206,7 @@ TEST_CASE("constexpr parameter: @compileError fires only for the offending insta
     )");
 }
 
-TEST_CASE("constexpr parameter: `constexpr` on a `type` parameter is redundant") {
+TEST_CASE("comptime parameter: `comptime` on a `type` parameter is redundant") {
     helpers::test_resolver_fail(
         "const zero := fn(comptime t: type): t { return 0; };",
         sema::diagnostic{"'comptime' is redundant on a parameter of type 'type'; type values "
@@ -215,7 +215,7 @@ TEST_CASE("constexpr parameter: `constexpr` on a `type` parameter is redundant")
                          std::pair{0UZ, 26UZ}});
 }
 
-TEST_CASE("constexpr parameter: an all-constexpr signature still works") {
+TEST_CASE("comptime parameter: an all-comptime signature still works") {
     CHECK(helpers::compile_and_run(R"(
         const combine := fn(comptime a: i32, comptime b: i32): i32 { return a * b; };
 

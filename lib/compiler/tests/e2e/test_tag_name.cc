@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`@tagName` folds at compile time for a constexpr enum value") {
+TEST_CASE("`@tagName` folds at compile time for a comptime enum value") {
     CHECK(helpers::compile_and_run(R"(
         const Color := enum { red, green, blue };
         pub const main := fn(): i32 {

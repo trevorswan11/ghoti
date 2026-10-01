@@ -302,7 +302,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
 
-    // `@implements(T | value, I)` -> bool (constexpr)
+    // `@implements(T | value, I)` -> bool (comptime)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
     inject_function(bis::FN_CTX, params(), t_auto);
 
@@ -394,9 +394,9 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     return type;
 }
 
-auto context::lookup_constexpr_binding(std::string_view name) const
+auto context::lookup_comptime_binding(std::string_view name) const
     -> stdx::option<const gir::const_value&> {
-    for (const auto& frame : constexpr_binding_frames | std::views::reverse) {
+    for (const auto& frame : comptime_binding_frames | std::views::reverse) {
         if (const auto it{frame.find(name)}; it != frame.end()) { return it->second; }
     }
     return stdx::none;

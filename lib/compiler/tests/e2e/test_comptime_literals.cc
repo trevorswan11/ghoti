@@ -22,7 +22,7 @@ TEST_CASE("a comptime_int literal coerces to many concrete widths") {
     )") == 0);
 }
 
-TEST_CASE("constexpr integer arithmetic does not overflow at 32 bits") {
+TEST_CASE("comptime integer arithmetic does not overflow at 32 bits") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let shifted := 1 << 40;                 // comptime_int, > 2^32
@@ -52,7 +52,7 @@ TEST_CASE("an unsuffixed integer literal forces to a float context") {
     )") == 0);
 }
 
-TEST_CASE("a constexpr literal mixed with a concrete operand adopts the concrete type") {
+TEST_CASE("a comptime literal mixed with a concrete operand adopts the concrete type") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let mut x: u16 = 40000;
@@ -71,7 +71,7 @@ TEST_CASE("an un-anchored comptime_int materializes as i32 at runtime") {
     CHECK(helpers::compile_and_run(R"(
         const echo := fn(v: auto): auto { return v; };
         pub const main := fn(): i32 {
-            let mut run := 5;                   // var -> i32
+            let mut run := 5;                   // let mut -> i32
             run = run * 3;
             if (run != 15) { return 1; }
             let e := echo(9);             // auto param materializes -> i32
@@ -96,7 +96,7 @@ TEST_CASE("@TypeOf of an unsuffixed literal is comptime_int / comptime_float") {
     )") == 0);
 }
 
-TEST_CASE("a constexpr literal that overflows its target is a compile error") {
+TEST_CASE("a comptime literal that overflows its target is a compile error") {
     helpers::expect_compile_error(R"(
         pub const main := fn(): i32 {
             let x: u8 = 300;

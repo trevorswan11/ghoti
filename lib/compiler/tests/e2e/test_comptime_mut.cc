@@ -153,7 +153,7 @@ TEST_CASE("assigning more than one level into a `comptime let mut` aggregate is 
     )");
 }
 
-TEST_CASE("nested `constexpr` argument folding resolves mutated `comptime let mut`") {
+TEST_CASE("nested `comptime` argument folding resolves mutated `comptime let mut`") {
     CHECK(helpers::compile_and_run(R"(
         const is_digit := fn(comptime c: u8): bool {
             return c >= '0' and c <= '9';
@@ -170,7 +170,7 @@ TEST_CASE("nested `constexpr` argument folding resolves mutated `comptime let mu
     )") == 42);
 }
 
-TEST_CASE("nested `constexpr` argument folding inside `while comptime` condition") {
+TEST_CASE("nested `comptime` argument folding inside `while comptime` condition") {
     CHECK(helpers::compile_and_run(R"(
         const is_digit := fn(comptime c: u8): bool {
             return c >= '0' and c <= '9';
@@ -184,7 +184,7 @@ TEST_CASE("nested `constexpr` argument folding inside `while comptime` condition
     )") == 3);
 }
 
-TEST_CASE("mutated `comptime let mut` array element visible to nested `constexpr` call") {
+TEST_CASE("mutated `comptime let mut` array element visible to nested `comptime` call") {
     CHECK(helpers::compile_and_run(R"(
         const double_val := fn(comptime x: i32): i32 {
             return x * 2;
@@ -198,7 +198,7 @@ TEST_CASE("mutated `comptime let mut` array element visible to nested `constexpr
     )") == 100);
 }
 
-TEST_CASE("mutated `comptime let mut` struct field visible to nested `constexpr` call") {
+TEST_CASE("mutated `comptime let mut` struct field visible to nested `comptime` call") {
     CHECK(helpers::compile_and_run(R"(
         const Point := struct { x: i32, y: i32 };
         const add_pts := fn(comptime a: i32, comptime b: i32): i32 {
@@ -229,7 +229,7 @@ TEST_CASE("`for comptime` iterating over string slice in e2e execution") {
     )") == 42);
 }
 
-TEST_CASE("constexpr call reaching unreachable fails compilation") {
+TEST_CASE("comptime call reaching unreachable fails compilation") {
     helpers::expect_compile_error(R"(
         const bad := fn(): i32 {
             unreachable;

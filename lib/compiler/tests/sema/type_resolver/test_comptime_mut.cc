@@ -7,7 +7,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`comptime let mut` is a legal mutable constexpr local") {
+TEST_CASE("`comptime let mut` is a legal mutable comptime local") {
     helpers::resolve_and_check("comptime let mut n := 0;");
     helpers::resolve_and_check("comptime let mut n: i32 = 0;");
 }

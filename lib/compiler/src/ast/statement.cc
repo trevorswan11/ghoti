@@ -25,17 +25,17 @@
 
 namespace ghoti::ast {
 
-auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
+auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
     -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    if (is_constexpr && parser.current_token_is(syntax::token_type_t::COMPTIME)) {
+    if (is_comptime && parser.current_token_is(syntax::token_type_t::COMPTIME)) {
         TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     }
 
     statements_t                             statements;
-    const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr};
+    const syntax::parser::compile_time_scope cx_scope{parser, is_comptime};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -43,7 +43,7 @@ auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
-    return parser.add_stmt<block_stmt>(start_token, std::move(statements), is_constexpr);
+    return parser.add_stmt<block_stmt>(start_token, std::move(statements), is_comptime);
 }
 
 auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
@@ -339,7 +339,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     if (value_initialized) {
         const bool is_comptime_decl{modifiers_has(modifiers, decl_modifiers::COMPTIME)};
         if (is_comptime_decl && parser.current_token_is(syntax::token_type_t::FUNCTION)) {
-            parser.arm_constexpr_param_inference();
+            parser.arm_comptime_param_inference();
         }
         const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl};
         decl_value.emplace(TRY(parser.parse_expression()));
@@ -612,7 +612,7 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
 namespace {
 
-// Parses an optional `(P: type, constexpr n: usize, ...)` parameter list after `impl`.
+// Parses an optional `(P: type, comptime n: usize, ...)` parameter list after `impl`.
 [[nodiscard]] auto parse_impl_params(syntax::parser& parser, bool& force_break)
     -> stdx::result<std::vector<function_expr::parameter>, syntax::diagnostic> {
     using tt = syntax::token_type_t;
@@ -623,9 +623,9 @@ namespace {
     while (!parser.peek_token_is(tt::RPAREN) && !parser.peek_token_is(tt::END)) {
         parser.advance(); // current == first token of the parameter
 
-        bool is_constexpr{false};
+        bool is_comptime{false};
         if (parser.current_token_is(tt::COMPTIME)) {
-            is_constexpr = true;
+            is_comptime = true;
             parser.advance();
         }
 
@@ -638,7 +638,7 @@ namespace {
                                    parser.get_current_token());
         }
 
-        params.emplace_back(name, *param_type, is_constexpr, false, is_constexpr);
+        params.emplace_back(name, *param_type, is_comptime, false, is_comptime);
         if (!parser.peek_token_is(tt::RPAREN)) {
             TRY(parser.expect_peek(tt::COMMA));
             force_break = parser.peek_token_is(tt::RPAREN); // trailing comma before `)`

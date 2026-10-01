@@ -103,7 +103,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
         }
     }
 
-    for (const auto& [idx, br] : m.if_constexpr_results) {
+    for (const auto& [idx, br] : m.if_comptime_results) {
         const auto prev{ifs.find(idx)};
         if (prev == ifs.end() || prev->second != br) { out.if_branches.emplace_back(idx, br); }
     }
@@ -113,14 +113,14 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
     }
 
     // Reset back to the pre-res baseline so a sibling replay diffs against the same starting point
-    m.if_constexpr_results = ifs;
-    m.match_arm_results    = matches;
+    m.if_comptime_results = ifs;
+    m.match_arm_results   = matches;
 }
 
 auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
     m.sema_side_tables.node_types.values           = nodes;
     m.sema_side_tables.explicit_types.values       = types;
-    m.if_constexpr_results                         = ifs;
+    m.if_comptime_results                          = ifs;
     m.match_arm_results                            = matches;
     m.sema_side_tables.generic_call_targets.values = calls;
     m.node_attributes                              = attributes;

@@ -10,7 +10,7 @@ namespace ghoti::tests {
 
 namespace syms = sema::symbols;
 
-TEST_CASE("if constexpr: a folded non-generic condition resolves only the live arm") {
+TEST_CASE("if comptime: a folded non-generic condition resolves only the live arm") {
     SECTION("Dead alternate is never name-resolved") {
         auto [ctx, idx]{helpers::resolve_and_check(
             "const chosen := if comptime (true) 7 else undeclared_in_dead_arm;")};
@@ -45,7 +45,7 @@ TEST_CASE("if constexpr: a folded non-generic condition resolves only the live a
     }
 }
 
-TEST_CASE("if constexpr: a non-foldable condition still resolves both arms") {
+TEST_CASE("if comptime: a non-foldable condition still resolves both arms") {
     const auto [codes, _]{
         helpers::resolve_diags("let f := fn(param: bool): i32 { if comptime (param) { return 1; } "
                                "else { return still_undeclared; } };")};
@@ -53,7 +53,7 @@ TEST_CASE("if constexpr: a non-foldable condition still resolves both arms") {
     CHECK(codes[0] == sema::error::UNDECLARED_IDENTIFIER);
 }
 
-TEST_CASE("if constexpr: a generic body prunes per instantiation") {
+TEST_CASE("if comptime: a generic body prunes per instantiation") {
     CHECK(helpers::resolve_diags(R"(
         const pick := fn(x: auto): i32 {
             if comptime (@TypeOf(x) == u8) {

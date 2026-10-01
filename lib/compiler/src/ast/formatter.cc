@@ -833,7 +833,7 @@ auto formatter::visit(node_id, const do_while_loop_expr& node) -> syntax::doc_id
     return doc_manager_.concat({
         doc_manager_.text("do "),
         format(node.block),
-        doc_manager_.text(node.is_constexpr ? " while comptime (" : " while ("),
+        doc_manager_.text(node.is_comptime ? " while comptime (" : " while ("),
         format(node.condition),
         doc_manager_.text(")"),
     });
@@ -856,7 +856,7 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "for comptime " : "for "),
+        doc_manager_.text(node.is_comptime ? "for comptime " : "for "),
         doc_manager_.delimited(
             "(", ")", std::move(iterables), false, false, node.iterables_force_break),
         doc_manager_.text(" "),
@@ -905,7 +905,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             continue;
         }
         params.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(param.is_constexpr_written ? "comptime " : ""),
+            {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
              format(param.name),
              doc_manager_.text(": "),
              bound == doc_manager_.nil() ? format(param.explicit_type)
@@ -957,7 +957,7 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
     const auto head_clause{[&](const if_expr& n) -> syntax::doc_id {
         return doc_manager_.concat({
             doc_manager_.text("if "),
-            n.constexpr_condition ? doc_manager_.text("comptime ") : doc_manager_.nil(),
+            n.comptime_condition ? doc_manager_.text("comptime ") : doc_manager_.nil(),
             n.condition
                 ? doc_manager_.concat(
                       {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
@@ -1031,7 +1031,7 @@ auto formatter::visit(node_id, const index_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const infinite_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(
-        {doc_manager_.text(node.is_constexpr ? "loop comptime " : "loop "), format(node.block)});
+        {doc_manager_.text(node.is_comptime ? "loop comptime " : "loop "), format(node.block)});
 }
 
 auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id {
@@ -1164,7 +1164,7 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "match comptime (" : "match ("),
+        doc_manager_.text(node.is_comptime ? "match comptime (" : "match ("),
         format(node.matcher),
         doc_manager_.text(") "),
         doc_manager_.delimited(
@@ -1273,7 +1273,7 @@ auto formatter::visit(node_id, const interface_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
-        doc_manager_.text(node.is_constexpr ? "while comptime (" : "while ("),
+        doc_manager_.text(node.is_comptime ? "while comptime (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
         node.continuation
@@ -1398,13 +1398,13 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
         body.emplace_back(dangling);
     }
 
-    const auto open_brace{node.is_constexpr ? "comptime {" : "{"};
+    const auto open_brace{node.is_comptime ? "comptime {" : "{"};
     if (body.empty()) {
         if (header_trailing != doc_manager_.nil()) {
             return doc_manager_.concat(
                 {doc_manager_.text(open_brace), header_trailing, doc_manager_.text("}")});
         }
-        return doc_manager_.text(node.is_constexpr ? "comptime {}" : "{}");
+        return doc_manager_.text(node.is_comptime ? "comptime {}" : "{}");
     }
 
     std::vector<syntax::doc_id> open_parts;
@@ -1543,7 +1543,7 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
         params.reserve(node.impl_params.size());
         for (const auto& param : node.impl_params) {
             params.emplace_back(doc_manager_.concat(
-                {doc_manager_.text(param.is_constexpr_written ? "comptime " : ""),
+                {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
                  format(param.name),
                  doc_manager_.text(": "),
                  format(param.explicit_type)}));

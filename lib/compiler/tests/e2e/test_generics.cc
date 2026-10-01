@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 using helpers::mock_file;
 
-TEST_CASE("a poisoned aggregate member does not crash a constexpr type-ctor instantiation") {
+TEST_CASE("a poisoned aggregate member does not crash a comptime type-ctor instantiation") {
     helpers::expect_compile_error(R"(
         const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
         const R := fn(T: type): type { return Result(T, i32); };

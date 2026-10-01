@@ -194,7 +194,7 @@ TEST_CASE("two trait impls for the same (I, T) pair are a duplicate") {
                           sema::error::DUPLICATE_IMPL));
 }
 
-TEST_CASE("@implements evaluates to the right constexpr bool") {
+TEST_CASE("@implements evaluates to the right comptime bool") {
     helpers::resolve_and_check(R"(
         const W := interface { pub const f := fn(&self): void; };
         const Yes := struct { x: i32 };
@@ -392,7 +392,7 @@ TEST_CASE("a parameterized impl with several type params conforms per instantiat
 )");
 }
 
-TEST_CASE("a `constexpr` parameterized-impl param resolves as a value and an array dimension") {
+TEST_CASE("a `comptime` parameterized-impl param resolves as a value and an array dimension") {
     helpers::resolve_and_check(R"(
         const Buf := fn(comptime cap: usize): type { return struct { head: i32 }; };
         impl(comptime n: usize) Buf(n) {

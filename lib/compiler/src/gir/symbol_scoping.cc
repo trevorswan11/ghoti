@@ -37,7 +37,7 @@ struct scan_state {
     const mod::module&         entry_mod;
 };
 
-// A function / `var` global whose name is fixed by an external contract must never be renamed.
+// A function / `let mut` global whose name is fixed by an external contract must never be renamed.
 [[nodiscard]] auto is_externally_fixed(const ast::decl_stmt& decl) -> bool {
     if (decl.has_modifier(ast::decl_modifiers::EXTERN)) { return true; }
     if (decl.has_modifier(ast::decl_modifiers::EXPORT)) { return true; }

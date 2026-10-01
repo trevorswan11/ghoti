@@ -70,7 +70,7 @@ TEST_CASE("`for comptime` unrolls over a compile-time range") {
     )") == 0);
 }
 
-TEST_CASE("`for comptime` unrolls over a module-level `constexpr` array") {
+TEST_CASE("`for comptime` unrolls over a module-level `comptime` array") {
     CHECK(helpers::compile_and_run(R"(
         const arr: [3]i32 = .{10, 20, 30};
         pub const main := fn(): i32 {
@@ -81,7 +81,7 @@ TEST_CASE("`for comptime` unrolls over a module-level `constexpr` array") {
     )") == 60);
 }
 
-TEST_CASE("`for comptime` unrolls over a function-local `constexpr` array") {
+TEST_CASE("`for comptime` unrolls over a function-local `comptime` array") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             const arr: [3]i32 = .{10, 20, 30};

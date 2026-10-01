@@ -70,9 +70,9 @@ class parser {
         bool       committed_{false};
     };
 
-    // Per function literal: the names its compile-time positions read, for implicit `constexpr`
-    // params in a `constexpr`-declared function (a nested literal gets its own frame)
-    struct constexpr_param_frame {
+    // Per function literal: the names its compile-time positions read, for implicit `comptime`
+    // params in a `const`-declared function (a nested literal gets its own frame)
+    struct comptime_param_frame {
         bool                          infer{false};
         u32                           compile_time_depth{0};
         std::vector<std::string_view> compile_time_names;
@@ -81,34 +81,34 @@ class parser {
     class function_scope {
       public:
         explicit function_scope(parser& p) : parser_{p} {
-            p.constexpr_param_frames_.emplace_back(
-                constexpr_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
-                                      .compile_time_depth = 0,
-                                      .compile_time_names = {}});
+            p.comptime_param_frames_.emplace_back(
+                comptime_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
+                                     .compile_time_depth = 0,
+                                     .compile_time_names = {}});
         }
-        ~function_scope() { parser_.constexpr_param_frames_.pop_back(); }
+        ~function_scope() { parser_.comptime_param_frames_.pop_back(); }
         MAKE_PINNED(function_scope);
 
-        [[nodiscard]] auto frame() const noexcept -> const constexpr_param_frame& {
-            return parser_.constexpr_param_frames_.back();
+        [[nodiscard]] auto frame() const noexcept -> const comptime_param_frame& {
+            return parser_.comptime_param_frames_.back();
         }
 
       private:
         parser& parser_;
     };
 
-    // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while constexpr` header,
-    // a `constexpr` block or label, or a `constexpr` declaration's initializer
+    // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while comptime` header,
+    // a `comptime` block or label, or a `const` declaration's initializer
     class compile_time_scope {
       public:
         compile_time_scope(parser& p, bool enabled) noexcept : parser_{p} {
-            if (enabled && !p.constexpr_param_frames_.empty()) {
-                frame_ = p.constexpr_param_frames_.size() - 1;
-                ++p.constexpr_param_frames_[*frame_].compile_time_depth;
+            if (enabled && !p.comptime_param_frames_.empty()) {
+                frame_ = p.comptime_param_frames_.size() - 1;
+                ++p.comptime_param_frames_[*frame_].compile_time_depth;
             }
         }
         ~compile_time_scope() {
-            if (frame_) { --parser_.constexpr_param_frames_[*frame_].compile_time_depth; }
+            if (frame_) { --parser_.comptime_param_frames_[*frame_].compile_time_depth; }
         }
         MAKE_PINNED(compile_time_scope);
 
@@ -252,8 +252,8 @@ class parser {
         return out;
     }
 
-    // The next function literal belongs to a `constexpr` declaration
-    auto arm_constexpr_param_inference() noexcept -> void { infer_next_fn_params_ = true; }
+    // The next function literal belongs to a `const` declaration
+    auto arm_comptime_param_inference() noexcept -> void { infer_next_fn_params_ = true; }
 
     // Inside `@TypeOf(x)` and friends only `x`'s type is read, never its value
     [[nodiscard]] auto enter_type_only_operand() noexcept -> counter<u32>::guard {
@@ -261,8 +261,8 @@ class parser {
     }
 
     auto note_identifier_reference(std::string_view name) -> void {
-        if (constexpr_param_frames_.empty() || type_only_depth_) { return; }
-        auto& frame{constexpr_param_frames_.back()};
+        if (comptime_param_frames_.empty() || type_only_depth_) { return; }
+        auto& frame{comptime_param_frames_.back()};
         if (frame.infer && frame.compile_time_depth > 0) {
             frame.compile_time_names.emplace_back(name);
         }
@@ -324,7 +324,7 @@ class parser {
     depth_counter                                    test_block_depth_;
     depth_counter                                    type_only_depth_;
 
-    std::vector<constexpr_param_frame> constexpr_param_frames_;
+    std::vector<comptime_param_frame> comptime_param_frames_;
 
     std::vector<pending_doc> pending_docs_;
     std::vector<pending_doc> pending_module_docs_;

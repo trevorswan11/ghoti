@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 // `@ptrFromArray` and `arr[lo..hi]` on a `[N]mut T` yield writable `^mut T` / `[]mut T`, so raw
 // buffers can be written through `p[i] = v` and subslice element assignment. The array *binding*
-// being `const` only prevents reseating it, not element writes.
+// being `let` only prevents reseating it, not element writes.
 
 TEST_CASE("`@ptrFromArray` on a `[N]mut T` yields a writable `^mut T`") {
     CHECK(helpers::compile_and_run(R"(

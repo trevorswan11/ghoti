@@ -31,13 +31,13 @@ namespace ghoti::gir {
 
 class const_eval {
   public:
-    struct constexpr_context_guard {
-        explicit constexpr_context_guard(const_eval& ce, bool enabled = true) noexcept
-            : ce_{ce}, prev_{ce.constexpr_context_} {
-            ce_.constexpr_context_ = enabled;
+    struct comptime_context_guard {
+        explicit comptime_context_guard(const_eval& ce, bool enabled = true) noexcept
+            : ce_{ce}, prev_{ce.comptime_context_} {
+            ce_.comptime_context_ = enabled;
         }
-        ~constexpr_context_guard() noexcept { ce_.constexpr_context_ = prev_; }
-        MAKE_PINNED(constexpr_context_guard);
+        ~comptime_context_guard() noexcept { ce_.comptime_context_ = prev_; }
+        MAKE_PINNED(comptime_context_guard);
 
       private:
         const_eval& ce_;
@@ -131,7 +131,7 @@ class const_eval {
     [[nodiscard]] auto force_deferred_type(sema::type& maybe_deferred) -> sema::type&;
 
     // The type a local of the call being evaluated was annotated with, when the annotation names
-    // one of the call's type parameters (`var a: T`); the shared body's typing only knows `T`
+    // one of the call's type parameters (`let mut a: T`); the shared body's typing only knows `T`
     [[nodiscard]] auto call_local_annotation(ast::node_id use, const ast::identifier_expr& ident)
         -> stdx::option<sema::type&>;
 
@@ -153,21 +153,21 @@ class const_eval {
         -> stdx::option<const_value>;
 
     /// Simulates the execution of preceding statements across active lexical blocks
-    /// up to each frame's `current_stmt_idx` for `constexpr var` observability
+    /// up to each frame's `current_stmt_idx` for `comptime let mut` observability
     auto simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
-                                sema::constexpr_frame&                    out_frame) -> void;
+                                sema::comptime_frame&                     out_frame) -> void;
 
-    [[nodiscard]] auto is_constexpr_context() const noexcept -> bool {
-        return recursion_depth_ > 0 || constexpr_context_;
+    [[nodiscard]] auto is_comptime_context() const noexcept -> bool {
+        return recursion_depth_ > 0 || comptime_context_;
     }
 
     // Whether a compile-time context asked for this evaluation, as opposed to an opportunistic
-    // fold of runtime code; selects the arm of a condition-less `if constexpr`
+    // fold of runtime code; selects the arm of a condition-less `if comptime`
     [[nodiscard]] auto in_evaluation_context() const noexcept -> bool {
-        return constexpr_context_ || ctx_.constexpr_evaluation_depth > 0;
+        return comptime_context_ || ctx_.comptime_evaluation_depth > 0;
     }
 
-    auto set_constexpr_context(bool enabled) noexcept -> void { constexpr_context_ = enabled; }
+    auto set_comptime_context(bool enabled) noexcept -> void { comptime_context_ = enabled; }
 
     // The arm a folded matcher selects; none when the matcher does not fold or nothing matches
     [[nodiscard]] auto selected_match_arm(const ast::match_expr& match) -> stdx::opt_size;
@@ -190,7 +190,7 @@ class const_eval {
         std::vector<defer_entry>                                    defers;
     };
 
-    // A `constexpr` callable (closure or plain function) bound to `name` in scope
+    // A `comptime` callable (closure or plain function) bound to `name` in scope
     struct bound_callable {
         gsl::not_null<mod::module*>              module;
         gsl::not_null<const ast::function_expr*> fn_expr;
@@ -291,16 +291,16 @@ class const_eval {
     eval_type_info(sema::type&                                    denoted,
                    stdx::option<const sema::resolved_attributes&> declared = stdx::none)
         -> const_value;
-    // An `if`'s folded condition; `if constexpr { ... }` is true only in a constexpr context
+    // An `if`'s folded condition; `if comptime { ... }` is true only in a comptime context
     auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
-    // Folds a declaration's initializer; a `constexpr` one is always compile-time evaluation
+    // Folds a declaration's initializer; a `const` one is always compile-time evaluation
     auto eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
-    auto eval_constexpr_fn(ast::node_id                      call_id,
-                           const ast::function_expr&         fn_expr,
-                           std::vector<const_value>&         args,
-                           stdx::option<const const_struct&> captures = stdx::none)
+    auto eval_comptime_fn(ast::node_id                      call_id,
+                          const ast::function_expr&         fn_expr,
+                          std::vector<const_value>&         args,
+                          stdx::option<const const_struct&> captures = stdx::none)
         -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
@@ -364,7 +364,7 @@ class const_eval {
     auto simulate_stmt(const ast::stmt_handle& stmt) -> void;
     auto simulate_expr(ast::node_id id) -> void;
 
-    // Bails if the decl does not have a constexpr modifier
+    // Bails if the decl does not have a comptime modifier
     auto simulate_decl(const ast::decl_stmt& decl) -> void;
     auto simulate_assignment(ast::node_id                id,
                              const ast::assignment_expr& assign,
@@ -378,7 +378,7 @@ class const_eval {
     auto simulate_label(const ast::label_expr& label) -> void;
 
   private:
-    // Names of mutable `constexpr var` bindings currently in scope during simulation.
+    // Names of mutable `comptime let mut` bindings currently in scope during simulation.
     ankerl::unordered_dense::set<std::string_view> active_cx_vars_;
     usize                                          max_recursion_depth_{256};
     std::vector<usize>                             recursion_limit_stack_;
@@ -393,7 +393,7 @@ class const_eval {
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
     stdx::option<std::string_view> pending_loop_label_;
     bool                           cond_unknown_{false};
-    bool                           constexpr_context_{false};
+    bool                           comptime_context_{false};
     eval_signal                    current_signal_{};
     stdx::option<const_value>      current_error_val_{};
 

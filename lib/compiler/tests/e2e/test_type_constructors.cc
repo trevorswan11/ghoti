@@ -357,8 +357,8 @@ TEST_CASE("E2E: a generic type constructor without member functions still resolv
     )") == 7);
 }
 
-TEST_CASE("E2E: a type constructor's members read its `constexpr` value parameters") {
-    SECTION("a scalar `constexpr` parameter") {
+TEST_CASE("E2E: a type constructor's members read its `comptime` value parameters") {
+    SECTION("a scalar `comptime` parameter") {
         CHECK(helpers::compile_and_run(R"(
             const Box := fn(T: type, comptime tag: i32): type {
                 return struct {
@@ -376,7 +376,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
         )") == 105);
     }
 
-    SECTION("a `constexpr` function-value parameter") {
+    SECTION("a `comptime` function-value parameter") {
         CHECK(helpers::compile_and_run(R"(
             const dbl := fn(x: i32): i32 { return x * 2; };
 
@@ -396,7 +396,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
         )") == 42);
     }
 
-    SECTION("a local function as a `constexpr` function-value parameter") {
+    SECTION("a local function as a `comptime` function-value parameter") {
         CHECK(helpers::compile_and_run(R"(
             const Wrap := fn(T: type, comptime f: fn(x: i32): i32): type {
                 return struct {
@@ -414,7 +414,7 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
         )") == 42);
     }
 
-    SECTION("two instantiations keep distinct constexpr values") {
+    SECTION("two instantiations keep distinct comptime values") {
         CHECK(helpers::compile_and_run(R"(
             const Box := fn(T: type, comptime tag: i32): type {
                 return struct {
@@ -463,8 +463,8 @@ TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type const
     )") == 12 + 18);
 }
 
-TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr` parameter") {
-    SECTION("the array length folds from the constructor's `constexpr` binding") {
+TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `comptime` parameter") {
+    SECTION("the array length folds from the constructor's `comptime` binding") {
         CHECK(helpers::compile_and_run(R"(
             const Vec := fn(comptime n: usize): type {
                 return struct {
@@ -534,7 +534,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `constexpr
     }
 }
 
-TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `constexpr` parameter") {
+TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `comptime` parameter") {
     CHECK(helpers::compile_and_run(R"(
         const probe := fn(comptime n: usize, head: i32): i32 {
             let mut buf: [n]mut i32 = undefined;

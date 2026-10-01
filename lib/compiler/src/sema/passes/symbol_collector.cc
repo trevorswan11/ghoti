@@ -538,7 +538,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
 
 auto symbol_collector::visit(ast::node_id id, const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
-    if (!block.is_constexpr && !in_expr_scope_ && table_stack_.size() == 1) {
+    if (!block.is_comptime && !in_expr_scope_ && table_stack_.size() == 1) {
         ctx_.diags.emplace_back("Cannot have block at the top level",
                                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                                 collecting_.ast.location_of(id));
@@ -581,7 +581,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     collecting_.add_identifier_position(decl.name);
 
     // An inline `struct`/`union`/`enum`/`interface` written as the declaration's type
-    // (`var a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
+    // (`let mut a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
     if (decl.explicit_type &&
         decl.explicit_type
             ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
@@ -716,7 +716,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
             break;
         case node_kind::LABEL_EXPRESSION: {
             const auto& lbl{collecting_.ast.get_as<ast::label_expr>(*expr.expression)};
-            if (!lbl.is_constexpr(collecting_.ast)) {
+            if (!lbl.is_comptime(collecting_.ast)) {
                 ctx_.diags.emplace_back(
                     "Control-flow constructs are not allowed as statements at the top level; "
                     "use `@cfg` for conditional declarations, or bind the value with "

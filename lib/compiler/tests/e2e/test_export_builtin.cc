@@ -100,7 +100,7 @@ TEST_CASE("a helper like Zig's `symbol` exports whatever function it's handed") 
     CHECK(alias->hasHiddenVisibility());
 }
 
-TEST_CASE("a constexpr function argument from another module calls the right function") {
+TEST_CASE("a comptime function argument from another module calls the right function") {
     // The callee's module has its own `pick`; the argument must still mean the caller's
     CHECK(helpers::compile_and_run(R"(
         import "apply.gh" as apply;

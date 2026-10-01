@@ -4,8 +4,8 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
-    SECTION("constexpr usize coerces to u8 in const and var decls") {
+TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
+    SECTION("comptime usize coerces to u8 in const and var decls") {
         CHECK(helpers::compile_and_run(R"(
             const LIMIT: usize = 200;
 
@@ -17,7 +17,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 50);
     }
 
-    SECTION("constexpr usize coerces to u8 in assignment") {
+    SECTION("comptime usize coerces to u8 in assignment") {
         CHECK(helpers::compile_and_run(R"(
             const LIMIT: usize = 200;
 
@@ -29,7 +29,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 90);
     }
 
-    SECTION("constexpr usize coerces to u8 in function argument and return") {
+    SECTION("comptime usize coerces to u8 in function argument and return") {
         CHECK(helpers::compile_and_run(R"(
             const LIMIT: usize = 120;
 
@@ -49,7 +49,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 110);
     }
 
-    SECTION("constexpr integer coerces in struct and array literals") {
+    SECTION("comptime integer coerces in struct and array literals") {
         CHECK(helpers::compile_and_run(R"(
             const V1: usize = 10;
             const V2: i64 = 20;
@@ -67,7 +67,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 70);
     }
 
-    SECTION("constexpr positive signed integer coerces to unsigned") {
+    SECTION("comptime positive signed integer coerces to unsigned") {
         CHECK(helpers::compile_and_run(R"(
             const POS: i32 = 42;
 
@@ -79,7 +79,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 84);
     }
 
-    SECTION("constexpr negative integer coerces to narrower signed type that fits") {
+    SECTION("comptime negative integer coerces to narrower signed type that fits") {
         CHECK(helpers::compile_and_run(R"(
             const NEG: i64 = -42;
 
@@ -91,7 +91,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 16);
     }
 
-    SECTION("constexpr-folded binary expression coerces to narrower integer") {
+    SECTION("comptime-folded binary expression coerces to narrower integer") {
         CHECK(helpers::compile_and_run(R"(
             pub const main := fn(): i32 {
                 let x: u8 = 100 + 50;
@@ -100,7 +100,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
         )") == 80);
     }
 
-    SECTION("a shift between a comptime_int literal and a concretely-typed constexpr local "
+    SECTION("a shift between a comptime_int literal and a concretely-typed comptime local "
             "still coerces back to a comptime_int-returning function's declared return type") {
         CHECK(helpers::compile_and_run(R"(
             const maxUnsigned := fn(T: type): comptime_int {
@@ -161,7 +161,7 @@ TEST_CASE("constexpr-fits implicit integer coercion runtime execution") {
     }
 
     SECTION(
-        "a chained double dot-access into an explicitly-typed constexpr decl does not spuriously "
+        "a chained double dot-access into an explicitly-typed comptime decl does not spuriously "
         "trip the shift-overflow safety check") {
         CHECK(helpers::compile_and_run(R"(
             const maxUnsigned := fn(T: type): comptime_int {

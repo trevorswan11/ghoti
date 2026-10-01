@@ -35,7 +35,7 @@ TEST_CASE("E2E cfg: a @cfg statement gates control flow inside a function body")
     )") == 64);
 }
 
-TEST_CASE("E2E cfg: a @cfgValue predicate constant is readable as a constexpr bool") {
+TEST_CASE("E2E cfg: a @cfgValue predicate constant is readable as a comptime bool") {
     CHECK(helpers::compile_and_run(R"(
         const IS_WIDE := @cfgValue(ptr_bits >= 32);
 
@@ -58,7 +58,7 @@ TEST_CASE("E2E cfg: @cfgValue constants may chain acyclically and gate a @cfg bl
     )") == 5);
 }
 
-TEST_CASE("E2E cfg: the @cfgValue guard form yields a per-target constexpr value") {
+TEST_CASE("E2E cfg: the @cfgValue guard form yields a per-target comptime value") {
     CHECK(helpers::compile_and_run(R"(
         const WORD := @cfgValue(
             ptr_bits == 64 => 8,

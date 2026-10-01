@@ -13,7 +13,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`constexpr` on a `type` parameter is redundant") {
+TEST_CASE("`comptime` on a `type` parameter is redundant") {
     helpers::test_resolver_fail(
         "const f := fn(comptime t: type): i32 { _ = t; return 0; };",
         sema::diagnostic{"'comptime' is redundant on a parameter of type 'type'; type values "
@@ -22,7 +22,7 @@ TEST_CASE("`constexpr` on a `type` parameter is redundant") {
                          std::pair{0UZ, 23UZ}});
 }
 
-TEST_CASE("`constexpr` on a parameter typed by an earlier generic type param isn't redundant") {
+TEST_CASE("`comptime` on a parameter typed by an earlier generic type param isn't redundant") {
     helpers::resolve_and_check(
         "const Point := fn(T: type, comptime default_z: T): type { return T; };");
 }
@@ -100,15 +100,15 @@ TEST_CASE("an aggregate of `type`s is a storageless compile-time value") {
         const len := ts.len;
     )")};
 
-    CHECK(kind_of(*ctx, idx, "ts") == storageless_kind::CONSTEXPR_VALUE);
-    CHECK(kind_of(*ctx, idx, "cts") == storageless_kind::CONSTEXPR_VALUE);
-    CHECK(kind_of(*ctx, idx, "nested") == storageless_kind::CONSTEXPR_VALUE);
-    CHECK(kind_of(*ctx, idx, "s") == storageless_kind::CONSTEXPR_VALUE);
+    CHECK(kind_of(*ctx, idx, "ts") == storageless_kind::COMPTIME_VALUE);
+    CHECK(kind_of(*ctx, idx, "cts") == storageless_kind::COMPTIME_VALUE);
+    CHECK(kind_of(*ctx, idx, "nested") == storageless_kind::COMPTIME_VALUE);
+    CHECK(kind_of(*ctx, idx, "s") == storageless_kind::COMPTIME_VALUE);
 
     // A struct holding a `type` field is itself still just a type
     CHECK_FALSE(kind_of(*ctx, idx, "S"));
     CHECK(UNWRAP(kind_of(*ctx, idx, "T")) == storageless_kind::ALIAS);
-    CHECK(UNWRAP(kind_of(*ctx, idx, "first")) != storageless_kind::CONSTEXPR_VALUE);
+    CHECK(UNWRAP(kind_of(*ctx, idx, "first")) != storageless_kind::COMPTIME_VALUE);
     CHECK_FALSE(kind_of(*ctx, idx, "xs"));
     CHECK_FALSE(kind_of(*ctx, idx, "len"));
 }

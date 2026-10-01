@@ -229,7 +229,7 @@ auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
     return ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR;
 }
 
-// Every guard arm (and the `_ =>` fallback) must yield the same `constexpr` type
+// Every guard arm (and the `_ =>` fallback) must yield the same `comptime` type
 auto cfg_pass::check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr) -> bool {
     PROFILE_FUNCTION();
     stdx::option<cfg_value> common;

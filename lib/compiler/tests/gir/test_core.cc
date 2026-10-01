@@ -139,7 +139,7 @@ TEST_CASE("GIR function management and local ID allocation") {
     function fn{arena, "compute", fn_type};
     CHECK(fn.get_name() == "compute");
     CHECK_FALSE(fn.get_is_test());
-    CHECK_FALSE(fn.get_is_constexpr());
+    CHECK_FALSE(fn.get_is_comptime());
 
     fn.add_param("a", i32_type);
     fn.add_param("b", i32_type);

@@ -37,7 +37,7 @@ TEST_CASE("Well-placed function control-flow statements") {
     helpers::collect_and_check("pub const main := fn(args: [][:0]u8): i32 { defer a = 2; };");
 }
 
-TEST_CASE("Constexpr function declaration") {
+TEST_CASE("Comptime function declaration") {
     helpers::collect_and_check("pub const work := fn(): i32 { return 1; };");
 }
 

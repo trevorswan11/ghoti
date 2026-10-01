@@ -17,7 +17,7 @@ TEST_CASE("Context-inferred 1-argument casts sema type checking") {
             };
 
             const f := fn(len: usize): i32 {
-                // 1. Typed const/var declaration
+                // 1. Typed let/let mut declaration
                 let mut a: i32 = @intCast(len);
                 let b: u16 = @intCast(len);
 
@@ -121,7 +121,7 @@ TEST_CASE("Context-inferred 1-argument casts sema type checking") {
         CHECK(diags.message_contains("`@intCast` operand must be an integer type; found 'bool'"));
     }
 
-    SECTION("Constexpr evaluation of 1-arg @intCast") {
+    SECTION("Comptime evaluation of 1-arg @intCast") {
         helpers::type_check_and_verify(R"(
             const a: u8 = @intCast(200);
             const b: i32 = @intCast(1000);

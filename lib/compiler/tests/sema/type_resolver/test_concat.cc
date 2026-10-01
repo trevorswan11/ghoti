@@ -7,11 +7,11 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`++` concatenates two constexpr byte-strings") {
+TEST_CASE("`++` concatenates two comptime byte-strings") {
     helpers::resolve_and_check(R"(const s := "ab" ++ "cde";)");
 }
 
-TEST_CASE("`++` concatenates two constexpr arrays of the same element type") {
+TEST_CASE("`++` concatenates two comptime arrays of the same element type") {
     helpers::resolve_and_check(R"(
         const a: [2]i32 = .{1, 2};
         const b: [3]i32 = .{3, 4, 5};

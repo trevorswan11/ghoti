@@ -49,7 +49,7 @@ TEST_CASE("wrapping prefix '-%' rejects unsigned integer operands") {
                          std::pair{0UZ, 34UZ}});
 }
 
-TEST_CASE("wrapping operators accept concrete and constexpr integers") {
+TEST_CASE("wrapping operators accept concrete and comptime integers") {
     helpers::resolve_and_check("const c := 1 +% 2;");
     helpers::resolve_and_check("const f := fn(a: u8, b: u8): u8 { return a +% b; };");
     helpers::resolve_and_check("const f := fn(a: i8): i8 { return -%a; };");

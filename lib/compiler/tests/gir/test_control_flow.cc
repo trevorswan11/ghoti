@@ -81,9 +81,9 @@ TEST_CASE("GIR if expression yielding value") {
     CHECK(dump_text.contains("ret i32"));
 }
 
-TEST_CASE("GIR constexpr if branching") {
+TEST_CASE("GIR comptime if branching") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_constexpr_if := fn(): i32 {
+        const test_comptime_if := fn(): i32 {
             if comptime (true) {
                 return 42;
             } else {
@@ -98,17 +98,17 @@ TEST_CASE("GIR constexpr if branching") {
     REQUIRE(gir_mod.get_functions().size() == 1);
     const auto& fn{UNWRAP(gir_mod.get_functions()[0])};
 
-    // Constexpr folding should emit only active branch, no cond_goto
+    // Comptime folding should emit only active branch, no cond_goto
     REQUIRE(fn.get_segments().size() == 1);
     const auto& seg{UNWRAP(fn.get_segments()[0])};
     REQUIRE(seg.has_terminator());
     CHECK(seg.get_instructions().back()->kind == gir::instruction_kind::RET);
 }
 
-TEST_CASE("GIR constexpr if error handling") {
+TEST_CASE("GIR comptime if error handling") {
     SECTION("Non-constant condition fails with COMPTIME_EVALUATION_FAILED") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            let test_dyn_constexpr_if := fn(param: bool): i32 {
+            let test_dyn_comptime_if := fn(param: bool): i32 {
                 if comptime (param) {
                     return 1;
                 } else {
@@ -128,7 +128,7 @@ TEST_CASE("GIR constexpr if error handling") {
 
     SECTION("Non-boolean condition fails with TYPE_MISMATCH") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const test_non_bool_constexpr_if := fn(): i32 {
+            const test_non_bool_comptime_if := fn(): i32 {
                 if comptime (123) {
                     return 1;
                 }

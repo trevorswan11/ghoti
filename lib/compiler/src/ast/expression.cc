@@ -360,7 +360,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
 
 namespace {
 
-// An expression in a position that `enabled` makes compile-time (a `constexpr` header)
+// An expression in a position that `enabled` makes compile-time (a `comptime` header)
 auto parse_compile_time_expression(syntax::parser& parser, bool enabled)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     const syntax::parser::compile_time_scope cx_scope{parser, enabled};
@@ -378,10 +378,10 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     const block_handle block{TRY(block_stmt::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::WHILE));
 
-    bool is_constexpr{false};
+    bool is_comptime{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
         parser.advance();
-        is_constexpr = true;
+        is_comptime = true;
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
@@ -394,9 +394,9 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     parser.advance();
 
     // There's no continuation or non break clause so this is easy :)
-    const auto condition{TRY(parse_compile_time_expression(parser, is_constexpr))};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_comptime))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_constexpr);
+    return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_comptime);
 }
 
 namespace {
@@ -489,8 +489,8 @@ parse_aggregate_cfg_group(syntax::parser& parser,
             std::string{*err_msg}, syntax::error::INVALID_MEMBER, parser.get_location_of(*member));
     }
 
-    // Carry a leading `///` block onto a `const` / `var` member the same way top-level decls get
-    // theirs, so it is available on hover.
+    // Carry a leading `///` block onto a `const` / `let` / `let mut` member the same way top-level
+    // decls get theirs, so it is available on hover.
     if (const auto decl{parser.get_ast().get_as_opt<decl_stmt>(*member)}) {
         parser.attach_member_doc(decl->name, doc_floor);
     }
@@ -708,10 +708,10 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    bool is_constexpr{false};
+    bool is_comptime{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
         parser.advance();
-        is_constexpr = true;
+        is_comptime = true;
     }
 
     // Iterables have to be surrounded by parentheses
@@ -724,7 +724,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
     std::vector<expr_handle>                 iterables;
     bool                                     iterables_force_break{false};
-    const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr};
+    const syntax::parser::compile_time_scope cx_scope{parser, is_comptime};
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -777,7 +777,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle        block{TRY(block_stmt::parse(parser))};
     stdx::option<stmt_handle> non_break;
-    if (is_constexpr) {
+    if (is_comptime) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
             return make_syntax_err("`for comptime` cannot have an `else`/non-break clause",
                                    syntax::error::COMPTIME_LOOP_HAS_ELSE,
@@ -802,7 +802,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
                                           non_break,
                                           iterables_force_break,
                                           captures_force_break,
-                                          is_constexpr);
+                                          is_comptime);
 }
 
 // Variadic must be handled first and should break the enclosing loop
@@ -820,10 +820,10 @@ auto try_parse_variadic_fn(syntax::parser& parser) -> stdx::result<bool, syntax:
 
 namespace {
 
-// A `constexpr` function's param read by a compile-time position binds at compile time (#337)
-auto infer_constexpr_params(syntax::parser&                              parser,
-                            const syntax::parser::constexpr_param_frame& frame,
-                            std::vector<function_expr::parameter>&       parameters) -> void {
+// A `const` function's param read by a compile-time position binds at compile time (#337)
+auto infer_comptime_params(syntax::parser&                             parser,
+                           const syntax::parser::comptime_param_frame& frame,
+                           std::vector<function_expr::parameter>&      parameters) -> void {
     if (!frame.infer) { return; }
     for (auto& param : parameters) {
         if (param.is_pack || !param.name.is<identifier_expr>()) { continue; }
@@ -833,7 +833,7 @@ auto infer_constexpr_params(syntax::parser&                              parser,
             continue;
         }
         const auto name{parser.get_ast().get_as<identifier_expr>(param.name).name};
-        if (std::ranges::contains(frame.compile_time_names, name)) { param.is_constexpr = true; }
+        if (std::ranges::contains(frame.compile_time_names, name)) { param.is_comptime = true; }
     }
 }
 
@@ -959,9 +959,9 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
             // If there was no self parameter then we can't advance on the first pass
             if (!first || self) { parser.advance(); }
 
-            bool is_constexpr{false};
+            bool is_comptime{false};
             if (parser.current_token_is(syntax::token_type_t::COMPTIME)) {
-                is_constexpr = true;
+                is_comptime = true;
                 parser.advance();
             }
 
@@ -1016,7 +1016,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                 }
             }
 
-            parameters.emplace_back(name, param_explicit_type, is_constexpr, is_pack, is_constexpr);
+            parameters.emplace_back(name, param_explicit_type, is_comptime, is_pack, is_comptime);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
                 // A comma immediately before `)` is a trailing comma: keep one param per line.
@@ -1072,7 +1072,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
-    infer_constexpr_params(parser, fn_scope.frame(), parameters);
+    infer_comptime_params(parser, fn_scope.frame(), parameters);
     return parser.add_expr<function_expr>(start_token,
                                           self,
                                           std::move(parameters),
@@ -1132,15 +1132,15 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    bool constexpr_condition{false};
+    bool comptime_condition{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        constexpr_condition = true;
+        comptime_condition = true;
         parser.advance();
     }
 
-    // `if constexpr a else b` has no condition: it branches on the evaluation context itself
+    // `if comptime a else b` has no condition: it branches on the evaluation context itself
     stdx::option<expr_handle> condition;
-    if (!(constexpr_condition && !parser.peek_token_is(syntax::token_type_t::LPAREN))) {
+    if (!(comptime_condition && !parser.peek_token_is(syntax::token_type_t::LPAREN))) {
         // Conditions have to be surrounded by parentheses
         TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
         parser.advance();
@@ -1150,7 +1150,7 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
                                    start_token);
         }
 
-        const syntax::parser::compile_time_scope cx_scope{parser, constexpr_condition};
+        const syntax::parser::compile_time_scope cx_scope{parser, comptime_condition};
         condition.emplace(TRY(parser.parse_expression()));
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
@@ -1163,7 +1163,7 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
         syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
 
     return parser.add_expr<if_expr>(
-        start_token, constexpr_condition, condition, consequence, alternate);
+        start_token, comptime_condition, condition, consequence, alternate);
 }
 
 auto index_expr::parse(syntax::parser& parser, expr_handle array)
@@ -1186,15 +1186,15 @@ auto infinite_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    bool       is_constexpr{false};
+    bool       is_comptime{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
         parser.advance();
-        is_constexpr = true;
+        is_comptime = true;
     }
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     const block_handle block{TRY(block_stmt::parse(parser))};
-    return parser.add_expr<infinite_loop_expr>(start_token, block, is_constexpr);
+    return parser.add_expr<infinite_loop_expr>(start_token, block, is_comptime);
 }
 
 auto cfg_value_expr::parse(syntax::parser& parser)
@@ -1443,12 +1443,12 @@ auto label_expr::parse(syntax::parser& parser, expr_handle name)
         start_token, stdx::option<identifier_handle>{identifier_handle{name}}, body);
 }
 
-auto label_expr::is_constexpr(const AST& ast) const noexcept -> bool {
-    if (const auto block{ast.get_as_opt<block_stmt>(body)}) { return block->is_constexpr; }
+auto label_expr::is_comptime(const AST& ast) const noexcept -> bool {
+    if (const auto block{ast.get_as_opt<block_stmt>(body)}) { return block->is_comptime; }
     return false;
 }
 
-auto parse_constexpr_expr(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+auto parse_comptime_expr(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
@@ -1473,7 +1473,7 @@ auto parse_constexpr_expr(syntax::parser& parser) -> stdx::result<expr_handle, s
                                    parser.get_location_of(*raw_stmt));
         }
 
-        parser.get_ast().get_as_mut<block_stmt>(*body).is_constexpr = true;
+        parser.get_ast().get_as_mut<block_stmt>(*body).is_comptime = true;
         return parser.add_expr<label_expr>(
             start_token, stdx::option<identifier_handle>{ident}, body);
     }
@@ -1490,7 +1490,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         const auto& stmt{parser.get_node<expr_stmt>(*raw_stmt)};
         switch (stmt.expression->get_kind()) {
         case node_kind::FOR_LOOP_EXPRESSION:
-            if (parser.get_node<for_loop_expr>(*stmt.expression).is_constexpr) {
+            if (parser.get_node<for_loop_expr>(*stmt.expression).is_comptime) {
                 return make_syntax_err("`for comptime` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::COMPTIME_LOOP_LABELED,
@@ -1498,7 +1498,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
             }
             return stmt.expression;
         case node_kind::WHILE_LOOP_EXPRESSION:
-            if (parser.get_node<while_loop_expr>(*stmt.expression).is_constexpr) {
+            if (parser.get_node<while_loop_expr>(*stmt.expression).is_comptime) {
                 return make_syntax_err("`while comptime` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::COMPTIME_LOOP_LABELED,
@@ -1506,7 +1506,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
             }
             return stmt.expression;
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
-            if (parser.get_node<do_while_loop_expr>(*stmt.expression).is_constexpr) {
+            if (parser.get_node<do_while_loop_expr>(*stmt.expression).is_comptime) {
                 return make_syntax_err(
                     "`do ... while comptime` cannot be labeled; it has no `break`/"
                     "`continue` to target",
@@ -1515,7 +1515,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
             }
             return stmt.expression;
         case node_kind::INFINITE_LOOP_EXPRESSION:
-            if (parser.get_node<infinite_loop_expr>(*stmt.expression).is_constexpr) {
+            if (parser.get_node<infinite_loop_expr>(*stmt.expression).is_comptime) {
                 return make_syntax_err("`loop comptime` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::COMPTIME_LOOP_LABELED,
@@ -1542,10 +1542,10 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    // `match constexpr` selects its live arm at compile time, like `if comptime`.
-    bool is_constexpr{false};
+    // `match comptime` selects its live arm at compile time, like `if comptime`.
+    bool is_comptime{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        is_constexpr = true;
+        is_comptime = true;
         parser.advance();
     }
 
@@ -1558,7 +1558,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                start_token);
     }
 
-    const auto matcher{TRY(parse_compile_time_expression(parser, is_constexpr))};
+    const auto matcher{TRY(parse_compile_time_expression(parser, is_comptime))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -1682,7 +1682,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<match_expr>(
-        start_token, matcher, std::move(arms), catch_all_idx, is_constexpr, arms_force_break);
+        start_token, matcher, std::move(arms), catch_all_idx, is_comptime, arms_force_break);
 }
 
 namespace {
@@ -1952,10 +1952,10 @@ auto while_loop_expr::parse(syntax::parser& parser)
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    bool is_constexpr{false};
+    bool is_comptime{false};
     if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
         parser.advance();
-        is_constexpr = true;
+        is_comptime = true;
     }
 
     // Conditions have to be surrounded by parentheses
@@ -1967,7 +1967,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
                                start_token);
     }
 
-    const auto condition{TRY(parse_compile_time_expression(parser, is_constexpr))};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_comptime))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
     // Continuation expression is optional and is handled as in zig
@@ -1993,7 +1993,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle        block{TRY(block_stmt::parse(parser))};
     stdx::option<stmt_handle> non_break;
-    if (is_constexpr) {
+    if (is_comptime) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
             return make_syntax_err("`while comptime` cannot have an `else`/non-break clause",
                                    syntax::error::COMPTIME_LOOP_HAS_ELSE,
@@ -2004,7 +2004,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
             TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK));
     }
     return parser.add_expr<while_loop_expr>(
-        start_token, condition, continuation, block, non_break, is_constexpr);
+        start_token, condition, continuation, block, non_break, is_comptime);
 }
 
 auto parse_member_block(syntax::parser& parser) -> stdx::result<member_list, syntax::diagnostic> {

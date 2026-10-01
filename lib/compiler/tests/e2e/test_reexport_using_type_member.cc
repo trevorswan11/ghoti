@@ -102,7 +102,7 @@ TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` captur
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `constexpr` static members") {
+TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `comptime` static members") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "agg.gh" as agg;

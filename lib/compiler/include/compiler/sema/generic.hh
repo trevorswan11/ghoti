@@ -20,7 +20,7 @@ namespace ghoti::sema {
 
 class type;
 
-// A template when it has an `auto`/`type` parameter or a `constexpr` parameter
+// A template when it has an `auto`/`type` parameter or a `comptime` parameter
 struct generic_function_info {
     gsl::not_null<mod::module*>              module;
     ast::node_id                             node_id;

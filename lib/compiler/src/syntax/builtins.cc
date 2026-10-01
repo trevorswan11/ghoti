@@ -16,7 +16,7 @@ namespace ghoti::syntax {
 namespace {
 
 constexpr auto ALL_BUILTINS_BY_SV{std::apply(
-    [](auto&&... builtin) { return string_utils::make_constexpr_map<token_type_t>(builtin...); },
+    [](auto&&... builtin) { return string_utils::make_comptime_map<token_type_t>(builtin...); },
     ALL_BUILTINS)};
 
 constexpr auto ALL_BUILTINS_BY_TT{[] -> auto {

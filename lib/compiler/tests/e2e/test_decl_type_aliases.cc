@@ -19,7 +19,7 @@ TEST_CASE("E2E: a local `const` alias of a type constructor call is a type, not 
     )") == 122);
 }
 
-TEST_CASE("E2E: a local `constexpr` alias of a type constructor call is a type") {
+TEST_CASE("E2E: a local `comptime` alias of a type constructor call is a type") {
     CHECK(helpers::compile_and_run(R"(
         const Pair := fn(T: type): type { return struct { a: T, b: T }; };
 
@@ -64,7 +64,7 @@ TEST_CASE("E2E: a constructor alias inside a generic body re-resolves per instan
     )") == 1 + 3 + 8 + 30);
 }
 
-TEST_CASE("E2E: `Result.map_err`-shaped constexpr alias in a generic method (#334)") {
+TEST_CASE("E2E: `Result.map_err`-shaped comptime alias in a generic method (#334)") {
     CHECK(helpers::compile_and_run(R"(
         const Result := fn(T: type, E: type): type {
             return union {

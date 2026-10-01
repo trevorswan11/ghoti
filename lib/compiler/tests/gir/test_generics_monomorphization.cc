@@ -45,7 +45,7 @@ TEST_CASE("GIR single monomorphized instantiation") {
     CHECK(has_test_fn);
 }
 
-TEST_CASE("GIR constexpr parameter monomorphizes per value") {
+TEST_CASE("GIR comptime parameter monomorphizes per value") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const shifted := fn(comptime by: i32, x: i32): i32 {
             return x + by;
@@ -63,7 +63,7 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
     for (const auto& fn : gir_mod.get_functions()) {
         if (fn->get_name().starts_with("shifted__")) {
             shifted_variants.insert(fn->get_name());
-            // `constexpr by` is erased from the signature; only the runtime `x` remains.
+            // `comptime by` is erased from the signature; only the runtime `x` remains.
             REQUIRE(fn->get_params().size() == 1);
             CHECK(fn->get_params()[0]->name == "x");
         }
@@ -71,7 +71,7 @@ TEST_CASE("GIR constexpr parameter monomorphizes per value") {
     CHECK(shifted_variants.size() == 2);
 }
 
-TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
+TEST_CASE("GIR comptime parameter sizes a type per instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const room := fn(comptime n: usize): usize { return @sizeOf([n]i32); };
 
@@ -92,7 +92,7 @@ TEST_CASE("GIR constexpr parameter sizes a type per instantiation") {
     REQUIRE(rets.size() == 2);
 }
 
-TEST_CASE("GIR constexpr struct value dedups regardless of field order") {
+TEST_CASE("GIR comptime struct value dedups regardless of field order") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const P := struct { x: i32, y: i32 };
         const dot := fn(comptime p: P): i32 { return p.x + p.y; };

@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("a `constexpr fn`'s unfoldable early-return condition doesn't get skipped") {
+TEST_CASE("a `comptime fn`'s unfoldable early-return condition doesn't get skipped") {
     CHECK(helpers::compile_and_run_tests(R"(
         pub const len_eq := fn(a: []u8, b: []u8): bool {
             if (a.len != b.len) return false;
@@ -21,7 +21,7 @@ TEST_CASE("a `constexpr fn`'s unfoldable early-return condition doesn't get skip
     )") == 0);
 }
 
-TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch both fold "
+TEST_CASE("`eql`-shaped comptime fn: early length mismatch and content mismatch both fold "
           "correctly") {
     CHECK(helpers::compile_and_run_tests(R"(
         pub const eql := fn(T: type, a: []T, b: []T): bool {
@@ -42,7 +42,7 @@ TEST_CASE("`eql`-shaped constexpr fn: early length mismatch and content mismatch
     )") == 0);
 }
 
-TEST_CASE("the same `eql`-shaped constexpr fn also folds at COMPILE TIME under `if comptime` "
+TEST_CASE("the same `eql`-shaped comptime fn also folds at COMPILE TIME under `if comptime` "
           "(not just when run as a regular call)") {
     CHECK(helpers::compile_and_run(R"(
         const eql := fn(T: type, a: []T, b: []T): bool {

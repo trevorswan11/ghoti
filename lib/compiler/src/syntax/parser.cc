@@ -513,7 +513,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
-    fns[token_type_t::COMPTIME]          = ast::parse_constexpr_expr;
+    fns[token_type_t::COMPTIME]          = ast::parse_comptime_expr;
 
     return fns;
 }();

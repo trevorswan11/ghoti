@@ -28,9 +28,9 @@ struct block_stmt {
     MAKE_ITERATOR(statements_t, std::vector<stmt_handle>, statements);
 
     statements_t statements;
-    bool         is_constexpr{false};
+    bool         is_comptime{false};
 
-    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_constexpr = false)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_comptime = false)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 

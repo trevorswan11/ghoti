@@ -18,7 +18,7 @@ TEST_CASE("`++` concatenates two byte-string literals") {
     )") == 0);
 }
 
-TEST_CASE("`++` concatenates two constexpr integer arrays") {
+TEST_CASE("`++` concatenates two comptime integer arrays") {
     CHECK(helpers::compile_and_run(R"(
         const a: [2]i32 = .{1, 2};
         const b: [3]i32 = .{3, 4, 5};
@@ -69,7 +69,7 @@ TEST_CASE("`++` of a typed array with a sentineled string literal materializes e
     )") == 0);
 }
 
-TEST_CASE("`++` concatenates two function-local constexpr array identifiers") {
+TEST_CASE("`++` concatenates two function-local comptime array identifiers") {
     CHECK(helpers::compile_and_run(R"(
         pub const main := fn(): i32 {
             let a: [2]i32 = .{1, 2};

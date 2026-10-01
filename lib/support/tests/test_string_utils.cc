@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Lowercase string constexpr construction") {
+TEST_CASE("Lowercase string comptime construction") {
     STATIC_CHECK(string_utils::lowercase_str<>("a").view() == "a");
     STATIC_CHECK(string_utils::lowercase_str<>("A").view() == "a");
     STATIC_CHECK(string_utils::lowercase_str<>("").view() == "");

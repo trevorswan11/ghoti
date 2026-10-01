@@ -94,7 +94,7 @@ template <typename T>
         }
     }
 
-    // `constexpr_int` folds modulo 2^128, where shifting out all 128 bits is still meaningful
+    // `comptime_int` folds modulo 2^128, where shifting out all 128 bits is still meaningful
     u64  width{128};
     bool full_shift_ok{true};
     if (operand_type && operand_type->get_kind() == sema::type_kind::INT) {
@@ -200,7 +200,7 @@ template <typename T>
     }
 }
 
-// A concrete float operand decides the result format over a `constexpr_float` one
+// A concrete float operand decides the result format over a `comptime_float` one
 [[nodiscard]] auto float_result_type(const const_value& lhs, const const_value& rhs)
     -> stdx::option<sema::type&> {
     for (const auto* operand : {&lhs, &rhs}) {
@@ -311,7 +311,7 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
                                  u16                       bits,
                                  bool                      is_signed,
                                  stdx::option<sema::type&> res_type) -> const_value {
-    // No bit-masking is needed at or past 128 bits: the fold already happened in constexpr
+    // No bit-masking is needed at or past 128 bits: the fold already happened in comptime
     if (bits == 0 || bits >= 128) {
         if (!res_type) { return folded; }
         if (is_signed) {
@@ -370,7 +370,7 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     }
 }
 
-// A concrete integer operand decides the result type over a `constexpr_int` one
+// A concrete integer operand decides the result type over a `comptime_int` one
 [[nodiscard]] auto integer_result_type(const const_value& lhs, const const_value& rhs)
     -> stdx::option<sema::type&> {
     for (const auto* operand : {&lhs, &rhs}) {
@@ -396,8 +396,8 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     }
 }
 
-// Same as `integer_target_width`, but an untyped constexpr int operand resolves as `i32`
-[[nodiscard]] auto integer_or_constexpr_width(const sema::type& t, u32 ptr_bits)
+// Same as `integer_target_width`, but an untyped comptime int operand resolves as `i32`
+[[nodiscard]] auto integer_or_comptime_width(const sema::type& t, u32 ptr_bits)
     -> stdx::option<u16> {
     if (t.get_kind() == sema::type_kind::COMPTIME_INT) { return u16{32}; }
     if (const auto w{integer_target_width(t, ptr_bits)}) { return w->first; }
@@ -479,9 +479,9 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
 
 auto const_eval::eval(ast::node_id id) -> const_value {
     PROFILE_FUNCTION();
-    const constexpr_context_guard g{*this, true};
-    const auto                    diags_before{ctx_.diags.size()};
-    auto                          res{try_eval(id)};
+    const comptime_context_guard g{*this, true};
+    const auto                   diags_before{ctx_.diags.size()};
+    auto                         res{try_eval(id)};
     if (!res || res->is_poison()) {
         if (ctx_.diags.size() == diags_before) {
             ctx_.diags.emplace_back("Expression cannot be evaluated as a compile-time constant",
@@ -1012,7 +1012,7 @@ auto const_eval::lookup_local_binding(std::string_view name) const noexcept
     for (auto& frame : call_stack_ | std::views::reverse) {
         if (auto it{frame.bindings.find(name)}; it != frame.bindings.end()) { return it->second; }
     }
-    if (const auto cx{ctx_.lookup_constexpr_binding(name)}) { return *cx; }
+    if (const auto cx{ctx_.lookup_comptime_binding(name)}) { return *cx; }
     if (const auto it{global_cx_vars_.find(std::string{name})}; it != global_cx_vars_.end()) {
         return it->second;
     }
@@ -1028,7 +1028,7 @@ auto const_eval::set_local_binding(std::string_view name, const_value val) -> bo
         }
     }
 
-    for (auto& frame : ctx_.constexpr_binding_frames | std::views::reverse) {
+    for (auto& frame : ctx_.comptime_binding_frames | std::views::reverse) {
         if (auto it{frame.find(name)}; it != frame.end()) {
             it->second = std::move(val);
             return true;
@@ -1146,7 +1146,7 @@ auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
         return false;
     }
 
-    // `*s = v` over a range writes through that range, but a `const` slice binding only names a
+    // `*s = v` over a range writes through that range, but a `let` slice binding only names a
     // copy here, so writing through one can't be folded
     if (const auto deref{module_->ast.get_as_opt<ast::dereference_expr>(target)}) {
         const auto rhs_type{module_->get_sema_type_opt(deref->rhs)};
@@ -1223,7 +1223,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
                                ctx_.get_builtin_resolved_type(sema::type_kind::NULLPTR)};
         },
         [&](ast::unreachable_expr) -> stdx::option<const_value> {
-            if (is_constexpr_context()) {
+            if (is_comptime_context()) {
                 ctx_.diags.emplace_back("reached unreachable code",
                                         sema::error::UNREACHABLE_CODE_REACHED,
                                         module_->ast.location_of(id));
@@ -1341,9 +1341,9 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(rhs)}) {
-        // A `constexpr` parameter or other local binding has no addressable symbol backing it
+        // A `comptime` parameter or other local binding has no addressable symbol backing it
         if (rhs_val && !rhs_val->is_poison() &&
-            (lookup_local_binding(ident->name) || ctx_.lookup_constexpr_binding(ident->name))) {
+            (lookup_local_binding(ident->name) || ctx_.lookup_comptime_binding(ident->name))) {
             return const_value{const_addr{{}, {*rhs_val}}, *sema_type};
         }
 
@@ -1432,7 +1432,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                     if (decl->value) {
                         const_eval inner_eval{ctx_, target_mod};
                         inner_eval.set_symbol_scoping(symbol_scoping_);
-                        inner_eval.set_constexpr_context(is_constexpr_context());
+                        inner_eval.set_comptime_context(is_comptime_context());
                         if (auto val{inner_eval.eval_decl_value(*decl)}; val && !val->is_poison()) {
                             pointee.emplace_back(std::move(*val));
                         }
@@ -1443,7 +1443,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
         }
     }
 
-    // General fallback: `^<constexpr expr>` / `&<constexpr expr>` with no named/addressable
+    // General fallback: `^<comptime expr>` / `&<comptime expr>` with no named/addressable
     // symbol to reference
     if (rhs_val && !rhs_val->is_poison() && !module_->ast.get_as_opt<ast::identifier_expr>(rhs) &&
         !module_->ast.get_as_opt<ast::dot_expr>(rhs)) {
@@ -1700,15 +1700,14 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                                    : st->enclosing.active_body_diff};
             const mod::body_diff_guard diff_guard{st->enclosing, diff};
 
-            stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>> ctor_binding_guard;
+            stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>> ctor_binding_guard;
             if (prefix) {
                 if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
-                    sema::constexpr_frame ctor_frame;
+                    sema::comptime_frame ctor_frame;
                     for (const auto& [name, val] : *bindings) {
                         ctor_frame.insert_or_assign(name, val);
                     }
-                    ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
-                                               std::move(ctor_frame));
+                    ctor_binding_guard.emplace(ctx_.comptime_binding_frames, std::move(ctor_frame));
                 }
             }
 
@@ -1839,16 +1838,16 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
                                                             : st_data->enclosing.active_body_diff};
                         const mod::body_diff_guard diff_guard{st_data->enclosing, diff};
 
-                        stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>>
+                        stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>>
                             ctor_binding_guard;
                         if (prefix) {
                             if (const auto bindings{
                                     ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
-                                sema::constexpr_frame ctor_frame;
+                                sema::comptime_frame ctor_frame;
                                 for (const auto& [name, val] : *bindings) {
                                     ctor_frame.insert_or_assign(name, val);
                                 }
-                                ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
+                                ctor_binding_guard.emplace(ctx_.comptime_binding_frames,
                                                            std::move(ctor_frame));
                             }
                         }
@@ -1942,7 +1941,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
         }
     }
 
-    // A `const` / `constexpr` static member (a value or a function) of a struct / union / enum.
+    // A `let` / `const` static member (a value or a function) of a struct / union / enum.
     const bool is_structural{kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
                              kind == sema::type_kind::ENUM};
     if (!is_structural) { return stdx::none; }
@@ -1987,12 +1986,12 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
                                            : owner_mod.active_body_diff};
     const mod::body_diff_guard diff_guard{owner_mod, diff};
 
-    stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>> ctor_binding_guard;
+    stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>> ctor_binding_guard;
     if (prefix) {
         if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
-            sema::constexpr_frame ctor_frame;
+            sema::comptime_frame ctor_frame;
             for (const auto& [name, val] : *bindings) { ctor_frame.insert_or_assign(name, val); }
-            ctor_binding_guard.emplace(ctx_.constexpr_binding_frames, std::move(ctor_frame));
+            ctor_binding_guard.emplace(ctx_.comptime_binding_frames, std::move(ctor_frame));
         }
     }
 
@@ -2000,7 +1999,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
         if (&owner_mod == module_.get()) { return eval_decl_value(*mdecl); }
         const_eval owner_eval{ctx_, owner_mod};
         owner_eval.set_symbol_scoping(symbol_scoping_);
-        owner_eval.set_constexpr_context(is_constexpr_context());
+        owner_eval.set_comptime_context(is_comptime_context());
         return owner_eval.eval_decl_value(*mdecl);
     }()};
 
@@ -2021,7 +2020,7 @@ auto const_eval::enum_member_values(const sema::types::enum_t& en) -> std::vecto
     // A member's initializer lives in the enum's defining module, not necessarily this one
     const_eval enclosing_eval{ctx_, en.enclosing};
     enclosing_eval.set_symbol_scoping(symbol_scoping_);
-    enclosing_eval.set_constexpr_context(is_constexpr_context());
+    enclosing_eval.set_comptime_context(is_comptime_context());
 
     // Like C and Zig, an unvalued member continues from its predecessor
     std::vector<i128> values;
@@ -2495,7 +2494,7 @@ auto const_eval::eval_module_member(mod::module& target_mod, std::string_view me
 
     const_eval inner_eval{ctx_, target_mod};
     inner_eval.set_symbol_scoping(symbol_scoping_);
-    inner_eval.set_constexpr_context(is_constexpr_context());
+    inner_eval.set_comptime_context(is_comptime_context());
     return inner_eval.eval_decl_value(*decl);
 }
 
@@ -2590,7 +2589,7 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
                     auto* const prev{module_.get()};
                     if (&decl_mod != prev) { set_module(decl_mod); }
                     std::vector<const_value> args{*operand};
-                    const auto               flow_val{eval_constexpr_fn(id, *fn_expr, args)};
+                    const auto               flow_val{eval_comptime_fn(id, *fn_expr, args)};
                     if (&decl_mod != prev) { set_module(*prev); }
                     if (flow_val) {
                         // Inspect the active variant in the returned `Flow(Output, Residual)`
@@ -2829,7 +2828,7 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
                                      : "Modulo by zero in compile-time constant expression");
         }
         const auto exact{checked_signed_arith(op_type, l, r)};
-        if (!exact || !sema::constexpr_int_fits(*exact, *res_type, ptr_bits)) {
+        if (!exact || !sema::comptime_int_fits(*exact, *res_type, ptr_bits)) {
             return on_fold_error(fmt::format("Signed integer overflow in compile-time constant "
                                              "expression: the result does not fit '{}'",
                                              ctx_.type_display_name(*res_type)));
@@ -2909,7 +2908,7 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     }
 
     // Wrapping ops fold as their plain base op, then truncate to the operand's concrete width
-    // (two's-complement wrap). A width-less `constexpr_int` result has nothing to wrap to, so it
+    // (two's-complement wrap). A width-less `comptime_int` result has nothing to wrap to, so it
     // folds exactly as the plain operator would.
     if (const auto plain_op{wrapping_base_op(op_type)}) {
         const auto folded{is_integer_arm(lhs) && is_integer_arm(rhs)
@@ -2930,12 +2929,12 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                  res_type->get_kind() == sema::type_kind::ISIZE,
                                  res_type);
         }
-        // `constexpr_int` (or anything else non-scalar-width): no wrap, plain-op result stands.
+        // `comptime_int` (or anything else non-scalar-width): no wrap, plain-op result stands.
         return folded;
     }
 
     // Saturating ops clamp the exact result to the first concrete integer operand's range; with
-    // only width-less `constexpr_int` operands there is no range, so they fold as the plain op
+    // only width-less `comptime_int` operands there is no range, so they fold as the plain op
     if (const auto plain_op{saturating_base_op(op_type)}) {
         const auto                ptr_bits{target_pointer_bits()};
         stdx::option<sema::type&> res_type;
@@ -3129,7 +3128,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
         // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
         // exact path below negates it first and range-checks the result
         const bool in_range{
-            sema::constexpr_int_fits(*val->as_int_opt(), *type, target_pointer_bits())};
+            sema::comptime_int_fits(*val->as_int_opt(), *type, target_pointer_bits())};
         if (unary_op && width && width->first <= 128 && in_range) {
             const semantics::int_domain domain{width->first, width->second};
             const auto                  folded{semantics::fold_int_unary(
@@ -3151,7 +3150,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
         if (is_integer_arm(*val) && width && width->second) {
             const auto exact{
                 checked_signed_arith(syntax::token_type_t::MINUS, 0, *val->as_int_opt())};
-            if (!exact || !sema::constexpr_int_fits(*exact, *type, target_pointer_bits())) {
+            if (!exact || !sema::comptime_int_fits(*exact, *type, target_pointer_bits())) {
                 ctx_.diags.emplace_back(fmt::format("Signed integer overflow in compile-time "
                                                     "constant expression: the result does not "
                                                     "fit '{}'",
@@ -3200,7 +3199,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
             const auto ptr_bits{target_pointer_bits()};
             return wrap_to_width(*negated, static_cast<u16>(ptr_bits), true, res_type);
         }
-        return negated; // `constexpr_int`: no wrap, plain negate stands.
+        return negated; // `comptime_int`: no wrap, plain negate stands.
     } else if (op_type == syntax::token_type_t::BANG) {
         if (val->is<bool>()) { return const_value{!val->as<bool>(), val->get_type()}; }
     } else if (op_type == syntax::token_type_t::NOT) {
@@ -3215,7 +3214,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
-    if (const auto cx{ctx_.lookup_constexpr_binding(ident.name)}) { return *cx; }
+    if (const auto cx{ctx_.lookup_comptime_binding(ident.name)}) { return *cx; }
     if (const auto it{global_cx_vars_.find(std::string{ident.name})}; it != global_cx_vars_.end()) {
         return it->second;
     }
@@ -3282,7 +3281,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     if (effective_tbl != module_->root_table_idx) {
         if (!sym.has_kind()) { return stdx::none; }
         if (sym.get_kind() != sema::symbol_kind::TYPE) {
-            // A local, immutable `const`/`constexpr`
+            // A local, immutable `let`/`const`
             if (sym.get_kind() == sema::symbol_kind::VALUE) {
                 if (const auto node{sym.get_data().as_opt<sema::symbols::node_t>()}) {
                     if (const auto decl{module_->ast.get_as_opt<ast::decl_stmt>(*node)};
@@ -3347,7 +3346,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     const auto fn_token{call.function->get_token_type()};
     if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(id, call, fn_token); }
 
-    // A `constexpr` callable (closure or function) parameter invoked inside a monomorphized body.
+    // A `comptime` callable (closure or function) parameter invoked inside a monomorphized body.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto bc{lookup_bound_callable(ident->name)}) {
             auto args_opt{eval_call_args(call)};
@@ -3355,7 +3354,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             auto&       args{*args_opt};
             auto* const prev{module_.get()};
             set_module(*bc->module);
-            auto res{eval_constexpr_fn(id, *bc->fn_expr, args, bc->captures)};
+            auto res{eval_comptime_fn(id, *bc->fn_expr, args, bc->captures)};
             set_module(*prev);
             return res;
         }
@@ -3406,7 +3405,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
 
                 auto* const prev{module_.get()};
                 if (callee_mod != prev) { set_module(*callee_mod); }
-                auto res{eval_constexpr_fn(id, *fn_expr, args)};
+                auto res{eval_comptime_fn(id, *fn_expr, args)};
                 if (callee_mod != prev) { set_module(*prev); }
                 for (usize a{0}; a < call.arguments.size() && a < fn_expr->parameters.size(); ++a) {
                     if (fn_expr->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
@@ -3571,21 +3570,21 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                                        : method_mod->active_body_diff};
                 const mod::body_diff_guard diff_guard{*method_mod, diff};
 
-                stdx::option<ghoti::scope_guard<std::vector<sema::constexpr_frame>>>
+                stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>>
                     ctor_binding_guard;
                 if (prefix) {
                     if (const auto bindings{
                             ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
-                        sema::constexpr_frame ctor_frame;
+                        sema::comptime_frame ctor_frame;
                         for (const auto& [name, val] : *bindings) {
                             ctor_frame.insert_or_assign(name, val);
                         }
-                        ctor_binding_guard.emplace(ctx_.constexpr_binding_frames,
+                        ctor_binding_guard.emplace(ctx_.comptime_binding_frames,
                                                    std::move(ctor_frame));
                     }
                 }
 
-                auto res{eval_constexpr_fn(id, *method_fn, args)};
+                auto res{eval_comptime_fn(id, *method_fn, args)};
                 if (method_mod != prev) { set_module(*prev); }
                 if (dot && method_fn->self && method_fn->self->modifier.is_mutable_ref() &&
                     !args.empty()) {
@@ -4003,7 +4002,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
-        const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
+        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
         const auto bits{*bits_opt};
         auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
@@ -4022,7 +4021,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
         const auto ptr_bits{target_pointer_bits()};
         const auto arg_ty{arg->get_type()};
-        const auto bits_opt{arg_ty ? integer_or_constexpr_width(*arg_ty, ptr_bits) : stdx::none};
+        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
         const auto bits{*bits_opt};
         auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
@@ -4141,7 +4140,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             if (!operand || operand->is_poison()) { return operand; }
             const auto as_float{operand->is<f128>() ? stdx::option<f128>{operand->as<f128>()}
                                                     : operand->int_as_float_opt()};
-            if (as_float && !sema::constexpr_float_fits(*as_float, *result_type)) {
+            if (as_float && !sema::comptime_float_fits(*as_float, *result_type)) {
                 ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
                                                     *as_float,
                                                     ctx_.type_display_name(*result_type)),
@@ -4387,7 +4386,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
                                     ? integer_target_width(*operand->get_type(), ptr_bits)
                                     : stdx::none};
         const auto target_width{integer_target_width(*target, ptr_bits)};
-        bool       fits{sema::constexpr_int_fits(*src_int, *target, ptr_bits)};
+        bool       fits{sema::comptime_int_fits(*src_int, *target, ptr_bits)};
         if (source_width && target_width && source_width->first <= 128 &&
             target_width->first <= 128) {
             const semantics::int_domain from{source_width->first, source_width->second};
@@ -4469,7 +4468,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         if (!format || !f) { return stdx::none; }
         // Rounded once into the target; only a finite value can be out of range
-        if (!sema::constexpr_float_fits(*f, *target)) {
+        if (!sema::comptime_float_fits(*f, *target)) {
             ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
                                                 *f,
                                                 ctx_.type_display_name(*target)),
@@ -4503,7 +4502,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             // Converted exactly first so an overflowing result is still reported by value
             const auto f{operand->int_as_float_opt()};
             if (!f) { return stdx::none; }
-            if (!sema::constexpr_float_fits(*f, *target)) {
+            if (!sema::comptime_float_fits(*f, *target)) {
                 ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
                                                     *f,
                                                     ctx_.type_display_name(*target)),
@@ -4562,7 +4561,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (const auto f{operand->as_opt<f128>()};
             f && builtin_type == syntax::token_type_t::BUILTIN_AS) {
             if (const auto format{sema::float_format_of(*target)}) {
-                if (!sema::constexpr_float_fits(*f, *target)) {
+                if (!sema::comptime_float_fits(*f, *target)) {
                     ctx_.diags.emplace_back(
                         fmt::format("float value {} is out of range for type '{}'",
                                     *f,
@@ -4581,7 +4580,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
         if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
             sema::is_integer(target->get_kind()) &&
-            !sema::constexpr_int_fits(*src_int, *target, ptr_bits)) {
+            !sema::comptime_int_fits(*src_int, *target, ptr_bits)) {
             auto operand_node{*op_h};
             if (const auto un{module_->ast.get_as_opt<ast::unary_expr>(operand_node)};
                 un && ast::node_id{operand_node}.get_token_type() == syntax::token_type_t::MINUS) {
@@ -4642,7 +4641,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
 auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable> {
     PROFILE_FUNCTION();
-    // Find a constexpr callable value bound to `name` (call frame first, then constexpr frame).
+    // Find a comptime callable value bound to `name` (call frame first, then comptime frame).
     stdx::option<const const_value&> v;
     for (auto& fr : call_stack_ | std::views::reverse) {
         if (auto it{fr.bindings.find(name)}; it != fr.bindings.end()) {
@@ -4650,7 +4649,7 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
             break;
         }
     }
-    if (!v) { v = ctx_.lookup_constexpr_binding(name); }
+    if (!v) { v = ctx_.lookup_comptime_binding(name); }
     if (!v) { return stdx::none; }
 
     if (const auto cl{v->as_opt<const_closure>()}) {
@@ -4680,8 +4679,8 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
 
 auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value> {
     ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
-    const sema::constexpr_evaluation_scope scope{ctx_, decl.evaluates_at_compile_time()};
-    auto                                   value{try_eval(*decl.value)};
+    const sema::comptime_evaluation_scope scope{ctx_, decl.evaluates_at_compile_time()};
+    auto                                  value{try_eval(*decl.value)};
     if (value && decl.explicit_type) {
         // Inside a call, an annotation naming a type parameter means this call's argument; the
         // shared body's typing only knows the parameter
@@ -4728,7 +4727,7 @@ namespace {
 [[nodiscard]] auto binds_number_to_non_number(const sema::type& arg, const sema::type& param)
     -> bool {
     const auto arg_kind{arg.get_kind()};
-    const bool scalar{sema::is_numeric(arg_kind) || sema::is_constexpr_numeric(arg_kind) ||
+    const bool scalar{sema::is_numeric(arg_kind) || sema::is_comptime_numeric(arg_kind) ||
                       arg_kind == sema::type_kind::BOOL};
     switch (param.get_kind()) {
     case sema::type_kind::ARRAY:
@@ -4742,14 +4741,14 @@ namespace {
 
 } // namespace
 
-auto const_eval::eval_constexpr_fn(ast::node_id                      call_id,
-                                   const ast::function_expr&         fn_expr,
-                                   std::vector<const_value>&         args,
-                                   stdx::option<const const_struct&> captures)
+auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
+                                  const ast::function_expr&         fn_expr,
+                                  std::vector<const_value>&         args,
+                                  stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     // A trailing `rest...` pack binds as a constant array of every remaining argument, so
-    // `rest.len`, `rest[k]`, `for constexpr (rest)`, and `rest...` forwarding all fold
+    // `rest.len`, `rest[k]`, `for comptime (rest)`, and `rest...` forwarding all fold
     const bool  has_pack{!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack};
     const bool  has_self{fn_expr.self.has_value()};
     const usize fixed_args{fn_expr.parameters.size() - (has_pack ? 1UZ : 0UZ) +
@@ -4980,7 +4979,7 @@ auto const_eval::eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<co
 auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const constexpr_context_guard cx_g{*this, constexpr_context_ || block.is_constexpr};
+    const comptime_context_guard cx_g{*this, comptime_context_ || block.is_comptime};
     call_stack_.emplace_back();
     stdx::option<const_value> result;
     for (usize idx{0}; idx < block.statements.size(); ++idx) {
@@ -5031,10 +5030,9 @@ auto const_eval::eval_label(ast::node_id, const ast::label_expr& label)
     stdx::option<std::string_view> label_name;
     if (label.name) { label_name = module_->ast.get_as<ast::identifier_expr>(*label.name).name; }
 
-    const auto                    body_id{*label.body};
-    const constexpr_context_guard cx_g{*this,
-                                       constexpr_context_ || label.is_constexpr(module_->ast)};
-    stdx::option<const_value>     body_res;
+    const auto                   body_id{*label.body};
+    const comptime_context_guard cx_g{*this, comptime_context_ || label.is_comptime(module_->ast)};
+    stdx::option<const_value>    body_res;
     if (label.body.is<ast::block_stmt>()) {
         body_res = eval_block(body_id, module_->ast.get_as<ast::block_stmt>(body_id));
     } else {
@@ -5076,8 +5074,8 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(decl.name)};
             if (!call_stack_.empty()) {
                 call_stack_.back().bindings.insert_or_assign(ident.name, *val);
-            } else if (!ctx_.constexpr_binding_frames.empty()) {
-                ctx_.constexpr_binding_frames.back().insert_or_assign(ident.name, *val);
+            } else if (!ctx_.comptime_binding_frames.empty()) {
+                ctx_.comptime_binding_frames.back().insert_or_assign(ident.name, *val);
             }
         } else {
             cond_unknown_ = true;
@@ -5306,9 +5304,9 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
 }
 
 auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
-                                        sema::constexpr_frame& out_frame) -> void {
+                                        sema::comptime_frame& out_frame) -> void {
     if (blocks.empty()) { return; }
-    const constexpr_context_guard g{*this, true};
+    const comptime_context_guard g{*this, true};
 
     // Fast pre-scan: if none of the active blocks contain a `comptime let mut` declaration,
     // there are no mutable compile-time locals to track and we can bail out immediately.
@@ -5339,8 +5337,8 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
         if (pushed_frame) { call_stack_.pop_back(); }
     })};
 
-    // Seed the simulation frame with enclosing `constexpr` parameters and constants
-    for (const auto& outer_frame : ctx_.constexpr_binding_frames) {
+    // Seed the simulation frame with enclosing `comptime` parameters and constants
+    for (const auto& outer_frame : ctx_.comptime_binding_frames) {
         for (const auto& [k, v] : outer_frame) {
             call_stack_.back().bindings.insert_or_assign(k, v);
         }
@@ -5364,7 +5362,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
     }
 
     // Export the materialized bindings so the caller can install them into
-    // `ctx_.constexpr_binding_frames` during isolated subexpression folding.
+    // `ctx_.comptime_binding_frames` during isolated subexpression folding.
     if (!cond_unknown_) {
         for (const auto& [k, v] : call_stack_.back().bindings) { out_frame.insert_or_assign(k, v); }
     }
@@ -5429,7 +5427,7 @@ auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
 auto const_eval::simulate_expr(ast::node_id id) -> void {
     if (cond_unknown_ || current_signal_.kind) { return; }
     if (module_->ast[id].is<ast::unreachable_expr>()) {
-        if (is_constexpr_context()) {
+        if (is_comptime_context()) {
             ctx_.diags.emplace_back("reached unreachable code",
                                     sema::error::UNREACHABLE_CODE_REACHED,
                                     module_->ast.location_of(id));

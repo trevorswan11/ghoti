@@ -183,7 +183,7 @@ TEST_CASE("@[discardable] is rejected where it cannot apply") {
     }
 }
 
-TEST_CASE("@[discardable(<constexpr bool>)] gates the discard behavior on the condition") {
+TEST_CASE("@[discardable(<comptime bool>)] gates the discard behavior on the condition") {
     const auto ok{[](std::string_view body) {
         auto [ctx, idx]{helpers::resolve(body)};
         helpers::check_errors<sema::diagnostics>(ctx->root_mod);

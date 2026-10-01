@@ -43,13 +43,13 @@ class function {
     function(ghoti::arena& arena,
              std::string   name,
              sema::type&   type,
-             bool          is_test      = false,
-             bool          is_constexpr = false,
-             bool          is_variadic  = false,
-             gir::linkage  linkage      = linkage::INTERNAL,
-             std::string   abi_name     = "c") noexcept
+             bool          is_test     = false,
+             bool          is_comptime = false,
+             bool          is_variadic = false,
+             gir::linkage  linkage     = linkage::INTERNAL,
+             std::string   abi_name    = "c") noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
-          is_constexpr_{is_constexpr}, is_variadic_{is_variadic}, linkage_{linkage},
+          is_comptime_{is_comptime}, is_variadic_{is_variadic}, linkage_{linkage},
           abi_name_{std::move(abi_name)} {}
     ~function() = default;
     MAKE_PINNED(function);
@@ -57,7 +57,7 @@ class function {
     MAKE_GETTER(name, std::string_view);
     MAKE_GETTER(type, sema::type&);
     MAKE_GETTER(is_test, bool);
-    MAKE_GETTER(is_constexpr, bool);
+    MAKE_GETTER(is_comptime, bool);
     MAKE_GETTER(is_variadic, bool);
     MAKE_GETTER(linkage, gir::linkage);
     MAKE_GETTER(abi_name, std::string_view);
@@ -132,7 +132,7 @@ class function {
     std::vector<segment*>      segments_;
     usize                      next_local_index_{0};
     bool                       is_test_{false};
-    bool                       is_constexpr_{false};
+    bool                       is_comptime_{false};
     bool                       is_variadic_{false};
     bool                       is_weak_{false};
     sema::resolved_attributes  attributes_{};

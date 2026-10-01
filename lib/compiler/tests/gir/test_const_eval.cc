@@ -689,7 +689,7 @@ TEST_CASE("Const eval folds impl method call") {
     CHECK(val_a.as_int_opt() == 42);
 }
 
-TEST_CASE("unlabeled constexpr block in statement position executes at compile time") {
+TEST_CASE("unlabeled comptime block in statement position executes at compile time") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const main := fn(): i32 {
             comptime {
@@ -701,7 +701,7 @@ TEST_CASE("unlabeled constexpr block in statement position executes at compile t
         };
     )")};
 
-    // The constexpr block must have produced zero instructions in GIR, leaving only the return
+    // The comptime block must have produced zero instructions in GIR, leaving only the return
     const auto gir_text{helpers::dump_named_fn(*ctx, "main")};
     CHECK(gir_text.contains("ret i32 0"));
     CHECK_FALSE(gir_text.contains("add i32"));

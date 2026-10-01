@@ -13,7 +13,7 @@ TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through 
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope constexpr ptr sentinel compares equal to the same runtime pointer") {
+TEST_CASE("E2E: module-scope comptime ptr sentinel compares equal to the same runtime pointer") {
     CHECK(helpers::compile_and_run(R"(
         const IHV: ^mut opaque = @ptrFromInt(^mut opaque, 0xFFFFFFFFFFFFFFFFuz);
         pub const main := fn(): i32 {
@@ -41,7 +41,7 @@ TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones"
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope constexpr usize maximum via @bitCast folds to all-ones") {
+TEST_CASE("E2E: module-scope comptime usize maximum via @bitCast folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @bitCast(usize, -1i64);
         pub const main := fn(): i32 {

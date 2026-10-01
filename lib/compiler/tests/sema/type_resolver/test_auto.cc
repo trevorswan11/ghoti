@@ -229,7 +229,7 @@ TEST_CASE("Function return type auto inference") {
         CHECK(r_type == ctx->get_int_type(64, true));
     }
 
-    SECTION("Infers return type from constexpr conditional branches") {
+    SECTION("Infers return type from comptime conditional branches") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             const f := fn(): auto {
                 if comptime (true) {

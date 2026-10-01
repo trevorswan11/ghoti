@@ -21,7 +21,7 @@ namespace ghoti::syntax {
 namespace {
 
 constexpr auto KEYWORD_LOOKUP{
-    std::apply([](auto&&... kw) { return string_utils::make_constexpr_map<token_type_t>(kw...); },
+    std::apply([](auto&&... kw) { return string_utils::make_comptime_map<token_type_t>(kw...); },
                ALL_KEYWORDS)};
 
 constexpr auto ALL_KEYWORDS_TT{[] -> auto {

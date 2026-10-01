@@ -266,7 +266,7 @@ TEST_CASE("A generic function's conditional discardable folds per instantiation"
         sema::error::UNUSED_RESULT));
 }
 
-TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {
+TEST_CASE("A comptime parameter reaches the function's attribute arguments") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

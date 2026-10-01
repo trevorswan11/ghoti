@@ -85,7 +85,7 @@ struct parameterized_impl {
 // the impl's method signatures. Method bodies are re-resolved per instantiation, not remapped.
 struct param_impl_template {
     stdx::option<type&> abstract_target{};
-    std::vector<type*>  sentinels{}; // per impl param; null for a constexpr one
+    std::vector<type*>  sentinels{}; // per impl param; null for a comptime one
 };
 
 class impl_registry {

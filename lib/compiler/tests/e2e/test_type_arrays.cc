@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: a local `constexpr` array of `type`s is compile-time only") {
+TEST_CASE("E2E: a local `comptime` array of `type`s is compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
             const ts := [_]type{ i32, u8 };

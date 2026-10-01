@@ -7,8 +7,8 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("constexpr-fits coercion diagnostics in type checker (D3)") {
-    SECTION("constexpr integer out of range in const decl reports LITERAL_OUT_OF_RANGE") {
+TEST_CASE("comptime-fits coercion diagnostics in type checker (D3)") {
+    SECTION("comptime integer out of range in const decl reports LITERAL_OUT_OF_RANGE") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
@@ -21,7 +21,7 @@ TEST_CASE("constexpr-fits coercion diagnostics in type checker (D3)") {
                              std::pair{3UZ, 32UZ}});
     }
 
-    SECTION("constexpr integer out of range in var decl reports LITERAL_OUT_OF_RANGE") {
+    SECTION("comptime integer out of range in var decl reports LITERAL_OUT_OF_RANGE") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
@@ -34,7 +34,7 @@ TEST_CASE("constexpr-fits coercion diagnostics in type checker (D3)") {
                              std::pair{3UZ, 34UZ}});
     }
 
-    SECTION("constexpr negative integer into unsigned reports LITERAL_OUT_OF_RANGE") {
+    SECTION("comptime negative integer into unsigned reports LITERAL_OUT_OF_RANGE") {
         helpers::test_checker_fail(
             R"(
             const NEG: i32 = -5;
@@ -47,7 +47,7 @@ TEST_CASE("constexpr-fits coercion diagnostics in type checker (D3)") {
                              std::pair{3UZ, 33UZ}});
     }
 
-    SECTION("constexpr integer out of range in call argument reports LITERAL_OUT_OF_RANGE") {
+    SECTION("comptime integer out of range in call argument reports LITERAL_OUT_OF_RANGE") {
         helpers::test_checker_fail(
             R"(
             const OVER: usize = 400;
