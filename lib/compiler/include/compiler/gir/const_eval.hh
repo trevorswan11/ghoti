@@ -294,7 +294,12 @@ class const_eval {
     // An `if`'s folded condition; `if comptime { ... }` is true only in a comptime context
     auto eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<const_value>;
     // Folds a declaration's initializer; a `const` one is always compile-time evaluation
-    auto eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value>;
+    // Whether a type annotation names a `comptime let mut` binding, whose value changes
+    [[nodiscard]] auto names_comptime_mut(ast::explicit_type_id annotation) const -> bool;
+    auto               eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value>;
+    // `= undefined` for `declared` under compile-time evaluation: an aggregate gets its full
+    // shape with every leaf undefined, so elements and fields can be written one at a time
+    auto undefined_value_of(sema::type& declared) -> const_value;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
     auto eval_comptime_fn(ast::node_id                      call_id,

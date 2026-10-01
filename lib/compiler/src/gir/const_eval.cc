@@ -2894,6 +2894,14 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
                                     ast::node_id         id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
 
+    // An element or field left `undefined` and never written has no value to compute with
+    if ((lhs.is<undefined_val>() || rhs.is<undefined_val>()) && in_evaluation_context()) {
+        ctx_.diags.emplace_back("an undefined value was read at compile time",
+                                sema::error::COMPTIME_EVALUATION_FAILED,
+                                module_->ast.location_of(id));
+        return const_value::make_poison();
+    }
+
     // Operands of different concrete number types are converted to their peer type first
     if (const auto peer{numeric_operand_peer(ctx_, lhs, rhs, op_type)}) {
         return fold_binary_values(op_type, as_peer(lhs, *peer), as_peer(rhs, *peer), id);
@@ -3635,6 +3643,14 @@ auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call
     return module_->get_sema_type_opt(call.function);
 }
 
+auto const_eval::names_comptime_mut(ast::explicit_type_id annotation) const -> bool {
+    const auto declared{module_->get_identifier_declaration(annotation)};
+    if (!declared || !declared->decl || !declared->owner) { return false; }
+    const auto decl{declared->owner->ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
+    return decl && decl->has_modifier(ast::decl_modifiers::COMPTIME) &&
+           decl->has_modifier(ast::decl_modifiers::MUT);
+}
+
 auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_expr& ident)
     -> stdx::option<sema::type&> {
     if (call_stack_.empty()) { return stdx::none; }
@@ -3648,7 +3664,8 @@ auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_e
     const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl->explicit_type)};
     const bool plain{decl->explicit_type->get_modifier().get_raw() ==
                      ast::type_modifier::modifier::VALUE};
-    if (!named || !plain) { return stdx::none; }
+    // A `comptime let mut` type has moved on since; the resolver pinned what it held here
+    if (!named || !plain || names_comptime_mut(*decl->explicit_type)) { return stdx::none; }
     const auto annotated{lookup_local_binding(named->name)};
     const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>() : stdx::none};
     if (!bound || !*bound) { return stdx::none; }
@@ -4682,23 +4699,64 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
     return stdx::none;
 }
 
+auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
+    // Past this many leaves an undefined aggregate stays opaque rather than being expanded
+    constexpr usize max_leaves{1UZ << 16};
+    usize           leaves{0};
+    const auto      build{[&](this const auto& self, sema::type& t) -> stdx::option<const_value> {
+        auto& concrete{force_deferred_type(t)};
+        if (const auto arr{concrete.get_data().as_opt<sema::types::array>()}) {
+            if (leaves + arr->len > max_leaves) { return stdx::none; }
+            const_array out;
+            out.elements.reserve(arr->len);
+            for (usize i{0}; i < arr->len; ++i) {
+                auto elem{self(arr->underlying)};
+                if (!elem) { return stdx::none; }
+                out.elements.emplace_back(std::move(*elem));
+            }
+            return const_value{std::move(out), concrete};
+        }
+        if (const auto st{concrete.get_data().as_opt<sema::types::struct_t>()};
+            st && !st->is_bit_packed() && st->ast_fields.size() == st->fields.size()) {
+            const_struct out;
+            for (usize i{0}; i < st->fields.size(); ++i) {
+                const auto& field_name{
+                    st->enclosing.ast.get_as<ast::identifier_expr>(st->ast_fields[i].name).name};
+                auto field{self(*st->fields[i])};
+                if (!field) { return stdx::none; }
+                out.fields.insert_or_assign(std::string{field_name}, std::move(*field));
+            }
+            return const_value{std::move(out), concrete};
+        }
+        ++leaves;
+        return const_value{undefined_val{}, concrete};
+    }};
+    return build(declared).value_or(const_value{undefined_val{}, declared});
+}
+
 auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value> {
     ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
     const sema::comptime_evaluation_scope scope{ctx_, decl.evaluates_at_compile_time()};
     auto                                  value{try_eval(*decl.value)};
+    // Only real compile-time evaluation builds out an undefined aggregate's shape
+    const bool expand_undefined{value && value->is<undefined_val>() && in_evaluation_context()};
     if (value && decl.explicit_type) {
         // Inside a call, an annotation naming a type parameter means this call's argument; the
         // shared body's typing only knows the parameter
         const auto named{module_->ast.get_as_opt<ast::identifier_expr>(*decl.explicit_type)};
         const bool plain{decl.explicit_type->get_modifier().get_raw() ==
                          ast::type_modifier::modifier::VALUE};
-        if (!call_stack_.empty() && named && plain) {
+        if (!call_stack_.empty() && named && plain && !names_comptime_mut(*decl.explicit_type)) {
             const auto annotated{lookup_local_binding(named->name)};
             const auto bound{annotated ? annotated->as_opt<stdx::option<sema::type&>>()
                                        : stdx::none};
-            if (bound && *bound) { return with_declared_type(std::move(*value), **bound); }
+            if (bound && *bound) {
+                if (expand_undefined) { return undefined_value_of(**bound); }
+                return with_declared_type(std::move(*value), **bound);
+            }
         }
         if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
+            if (expand_undefined) { return undefined_value_of(*declared); }
             return with_declared_type(std::move(*value), *declared);
         }
     }
@@ -5358,6 +5416,11 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
     // stopping strictly before `current_stmt_idx` in each frame.
     for (const auto& frame : blocks) {
         if (!frame.block) { continue; }
+        if (frame.carried) {
+            for (const auto& [k, v] : *frame.carried) {
+                call_stack_.back().bindings.insert_or_assign(k, v);
+            }
+        }
         for (usize i{0}; i < frame.current_stmt_idx && i < frame.block->statements.size(); ++i) {
             simulate_stmt(frame.block->statements[i]);
             if (cond_unknown_) {

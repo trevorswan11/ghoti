@@ -4425,8 +4425,9 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         reresolve_floor_           = saved_floor;
     })};
 
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
-    bool        any_poison{false};
+    const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
+    bool                         any_poison{false};
+    stdx::option<comptime_frame> carried;
     for (usize k{0}; k < *count; ++k) {
         ctx_.advance_epoch();
         const body_typing_snapshot snap{resolving_};
@@ -4451,13 +4452,22 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
             }
         }
 
+        std::vector<std::string_view> capture_names;
+        for (const auto& [name, _] : frame) { capture_names.emplace_back(name); }
         const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(frame)};
         const active_block_guard   guard{active_blocks_, block};
+        active_blocks_.back().carried = carried;
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
             active_blocks_.back().current_stmt_idx = idx;
             resolve(block.statements[idx]);
             if (last_type_->is_poison()) { any_poison = true; }
         }
+
+        // The next iteration starts from what this one left in its `comptime let mut` locals
+        active_blocks_.back().current_stmt_idx = block.statements.size();
+        auto after{make_simulated_frame()};
+        for (const auto name : capture_names) { after.erase(name); }
+        carried.emplace(std::move(after));
 
         body_type_diff typing;
         snap.diff_into(ctx_, resolving_, typing);
@@ -5129,7 +5139,9 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
         // Identifier handles are not unique in the tree, but their symbol can be used to find root
-        auto& resolved{get_resolved_symbol_type(symbol_data)};
+        // A `comptime let mut` type is whatever the statements so far left it holding
+        auto& resolved{
+            comptime_type_var_value(sym).value_or(get_resolved_symbol_type(symbol_data))};
         if (resolved.get_kind() == type_kind::F80 && !target_has_x86_fp80()) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
@@ -5861,6 +5873,27 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
                         resolving_.ast.get_as<ast::identifier_expr>(dot->member).name),
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(assign.lhs)));
+    }
+    // A `comptime let mut` type takes any other type
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(assign.lhs)}) {
+        const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+        if (sym && comptime_type_var_value(*sym)) {
+            TRY_RESOLVE(assign.rhs);
+            if (id.get_token_type() != syntax::token_type_t::ASSIGN ||
+                operand_nature(assign.rhs) != operand_nature_t::TYPE) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     fmt::format("'{}' holds a type, so only a type can be "
+                                                 "assigned to it",
+                                                 ident->name),
+                                     error::TYPE_MISMATCH,
+                                     resolving_.ast.location_of(assign.rhs)));
+            }
+            auto& void_t{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+            resolving_.set_sema_type(id, void_t);
+            return last_type_.emplace(void_t);
+        }
     }
     {
         const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
@@ -9418,13 +9451,106 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
         const mutating_context_guard cx_loop_g{in_comptime_loop_,
                                                while_loop.is_comptime || in_comptime_loop_};
-        if (resolve_block_statements(block)) { return fail_scoped_body(); }
+        // A body that changes a `comptime let mut` type is typed once per iteration
+        const bool per_iteration{while_loop.is_comptime && !while_loop.continuation &&
+                                 assigns_comptime_type_var(*while_loop.block)};
+        if (per_iteration ? resolve_comptime_while_iterations(id, while_loop, block)
+                          : resolve_block_statements(block)) {
+            return fail_scoped_body();
+        }
     }
 
     if (while_loop.non_break) { TRY_RESOLVE(*while_loop.non_break); }
     resolving_.set_sema_type(
         id, loop_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : loop_type);
     last_type_.emplace(resolving_.get_sema_type(id));
+}
+
+auto type_resolver::assigns_comptime_type_var(ast::node_id root) -> bool {
+    bool       found{false};
+    const auto walk{[&](this const auto& self, ast::node_id n) -> void {
+        if (found || !n.is_valid()) { return; }
+        resolving_.ast[n].visit(
+            [&](const ast::assignment_expr& data) {
+                if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(data.lhs)}) {
+                    const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+                    if (sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) {
+                        found = true;
+                    }
+                }
+            },
+            [&](const ast::block_stmt& data) {
+                for (const auto s : data) { self(*s); }
+            },
+            [&](const ast::expr_stmt& data) { self(*data.expression); },
+            [&](const ast::if_expr& data) {
+                self(*data.consequence);
+                if (data.alternate) { self(*data.alternate); }
+            },
+            [&](const ast::label_expr& data) { self(*data.body); },
+            [&](const auto&) {});
+    }};
+    walk(root);
+    return found;
+}
+
+auto type_resolver::resolve_comptime_while_iterations(ast::node_id                id,
+                                                      const ast::while_loop_expr& while_loop,
+                                                      const ast::block_stmt&      block) -> bool {
+    const auto saved_for_gi{for_generic_instantiation_};
+    const auto saved_floor{reresolve_floor_};
+    for_generic_instantiation_ = true;
+    reresolve_floor_.emplace(resolving_.get_sema_type(id).get_symbol_table_idx());
+    const auto restore_reresolve{gsl::finally([&] {
+        for_generic_instantiation_ = saved_for_gi;
+        reresolve_floor_           = saved_floor;
+    })};
+
+    stdx::option<comptime_frame> carried;
+    constexpr usize              max_iterations{1'024};
+    for (usize k{0}; k < max_iterations; ++k) {
+        // The condition sees what the previous iteration left behind
+        stdx::option<comptime_frame> start;
+        {
+            const active_block_guard guard{active_blocks_, block};
+            active_blocks_.back().carried = carried;
+            start.emplace(make_simulated_frame());
+        }
+        stdx::option<bool> keep_going;
+        {
+            const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(*start)};
+            gir::const_eval            evaluator{ctx_, resolving_};
+            const gir::const_eval::comptime_context_guard g{evaluator, true};
+            const auto cond{evaluator.try_eval(while_loop.condition)};
+            if (const auto folded{cond ? cond->as_opt<bool>() : stdx::none}) {
+                keep_going = *folded;
+            }
+        }
+        // An unfoldable condition is reported when the loop is unrolled
+        if (!keep_going || !*keep_going) { return false; }
+
+        ctx_.advance_epoch();
+        const body_typing_snapshot snap{resolving_};
+        const active_block_guard   guard{active_blocks_, block};
+        active_blocks_.back().carried = carried;
+        for (usize idx{0}; idx < block.statements.size(); ++idx) {
+            active_blocks_.back().current_stmt_idx = idx;
+            resolve(block.statements[idx]);
+            if (last_type_->is_poison()) { return true; }
+        }
+        active_blocks_.back().current_stmt_idx = block.statements.size();
+        carried.emplace(make_simulated_frame());
+
+        body_type_diff typing;
+        snap.diff_into(ctx_, resolving_, typing);
+        ctx_.instantiation_cache.set_body_type_diff(
+            fmt::format("{}whileloop#{}#{}",
+                        typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",
+                        id.get_index(),
+                        k),
+            std::move(typing));
+    }
+    return false;
 }
 
 // DONT CALL ME FROM ANY LOOP/CONDITION/FN RESOLVER
@@ -9816,10 +9942,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
-        // Only `const` holds what exists solely at compile time; `comptime let mut` stays scalar
+        // Only a compile-time binding (`const` or `comptime let mut`) holds what exists solely at
+        // compile time
         const bool runtime_binding{!decl.has_modifier(ast::decl_modifiers::COMPTIME)};
-        if ((runtime_binding || decl.has_modifier(ast::decl_modifiers::MUT)) &&
-            (literal_type_anno || binds_type)) {
+        if (runtime_binding && (literal_type_anno || binds_type)) {
             ctx_.poison_symbol(sym,
                                "a 'type' value cannot be stored in a 'let' or 'let mut' binding; "
                                "use 'const' instead",
@@ -12770,6 +12896,25 @@ auto type_resolver::names_a_value(const symbol& sym, usize table_idx) -> bool {
     return folded && !folded->is_poison() && !folded->is<stdx::option<sema::type&>>();
 }
 
+auto type_resolver::comptime_type_var_value(const symbol& sym) -> stdx::option<type&> {
+    if (!sym.has_kind() || sym.get_kind() != symbol_kind::TYPE) { return stdx::none; }
+    const auto node{sym.get_data().as_opt<symbols::node_t>()};
+    const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    if (!decl || !decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
+        !decl->has_modifier(ast::decl_modifiers::MUT)) {
+        return stdx::none;
+    }
+    const auto& name{resolving_.ast.get_as<ast::identifier_expr>(decl->name).name};
+    if (name != sym.get_name()) { return stdx::none; }
+
+    // Its value here is whatever the statements before this point left it holding
+    const comptime_frame_guard sim_guard{ctx_.comptime_binding_frames, make_simulated_frame()};
+    const auto                 current{ctx_.lookup_comptime_binding(name)};
+    const auto                 held{current ? current->as_opt<stdx::option<type&>>() : stdx::none};
+    if (held && *held) { return **held; }
+    return stdx::none;
+}
+
 auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
 
@@ -12822,6 +12967,15 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     auto& sym{*symbol_opt};
     resolving_.set_identifier_definition(id, {resolving_.path, sym.get_symbol_span(resolving_)});
     record_scoped_declaration(id, symbol_table, sym);
+
+    // A `comptime let mut` type names whatever type it holds at this point
+    if (sym.get_status() == symbol_status::RESOLVED) {
+        if (const auto current{comptime_type_var_value(sym)}) {
+            auto& resolved{apply_explicit_modifiers(id, *current)};
+            resolving_.set_sema_type(id, resolved);
+            return last_type_.emplace(resolved);
+        }
+    }
 
     // `resolve_ident` re-looks-up the name from scratch, which would just rediscover the
     // shadowing symbol we already routed around above; resolve the override directly instead.

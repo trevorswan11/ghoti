@@ -60,8 +60,21 @@ let mut e: []u8 = undefined; // Allowed, e is uninitialized and future assignmen
 		<li>Types, functions, <code>undefined</code> aliases, and values that hold <code>type</code>s are always declared with <code>const</code></li>
 		<li>Taking the address of a <code>const</code> (<code>^TABLE</code>) gives a pointer to one read-only copy</li>
 		<li><code>comptime let mut</code> declares a local that changes while compiling, such as a cursor in a <code>{ "for comptime" }</code> loop; it has no address</li>
+		<li>
+			A <code>comptime let mut</code> can hold a type: each use names the type it holds at that point, and only another type can be assigned to it
+			<ul>
+				<li>A <code>{ "for comptime" }</code> or <code>{ "while comptime" }</code> loop can build a type up one iteration at a time</li>
+			</ul>
+		</li>
 		<li><code>comptime let</code> without <code>mut</code> is an error: that is spelled <code>const</code></li>
 	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `comptime let mut T: type = u8;
+for comptime (0..3) |_| { T = Wrap(T); }
+let nested: T = undefined;   // Wrap(Wrap(Wrap(u8)))` }
+		</code>
+	</pre>
 	<h2>Runtime Values</h2>
 	<ul>
 		<li><code>let</code> declares a value that cannot be reassigned, and <code>let mut</code> one that can</li>

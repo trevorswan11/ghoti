@@ -599,6 +599,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Every function declared with `const` infers its compile-time parameters: a parameter its body reads at compile time (`if comptime (a < b)`, `const s := @sizeOf(@TypeOf(x))`) is compile-time at each call, as only `constexpr`-declared functions did before
 - `comptime <expr>` evaluates one expression at compile time (`let table := comptime build(64);`, `comptime validate(fmt);`); it binds like a prefix operator, so `comptime f(x) + y` folds only `f(x)`, and writing it where evaluation is already compile-time is an error
 - Fixed: a `void` function whose body runs off its end couldn't be called at compile time (`comptime { check(); }`)
+- A `comptime let mut` can hold a type (`comptime let mut T: type = u8; T = Wrap(T);`); each use names the type it holds at that point, including across `for comptime` and `while comptime` iterations, and only a type can be assigned to it
+- Fixed: a function that fills an `undefined` array or struct one element or field at a time (for example in a runtime `while` loop) couldn't be evaluated at compile time; reading an element that was never written is now a compile error
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

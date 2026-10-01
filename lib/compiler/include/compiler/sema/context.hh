@@ -36,14 +36,16 @@ namespace ghoti::ast { struct block_stmt; } // namespace ghoti::ast
 namespace ghoti::sema {
 
 /// Tracks the active lexical block and statement position currently being type-resolved
+using comptime_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
+
 struct active_block_frame {
     stdx::option<const ast::block_stmt&> block{};
     usize                                current_stmt_idx{0};
     stdx::option<bool>                   runtime_safety{}; // set by `@setRuntimeSafety`
     usize                                safety_fn_depth{0};
+    // A `for comptime` body's `comptime let mut` values as the previous iteration left them
+    stdx::option<comptime_frame> carried{};
 };
-
-using comptime_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 
 // Mirrors `builtin.OptimizeMode`
 enum class optimize_mode : u8 {

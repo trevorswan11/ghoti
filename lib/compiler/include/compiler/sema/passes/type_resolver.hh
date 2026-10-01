@@ -150,6 +150,8 @@ class type_resolver {
     template <ast::IndexableID ID>
     [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
     [[nodiscard]] auto declares_generic_params(const ast::function_expr& fn_expr) const -> bool;
+    // The type a `comptime let mut` type binding holds at the current point, if `sym` is one
+    [[nodiscard]] auto comptime_type_var_value(const symbol& sym) -> stdx::option<type&>;
     // The first runtime local a `const` closure captures, which only a `let` closure may
     [[nodiscard]] auto const_closure_runtime_capture(const ast::decl_stmt& decl) const
         -> stdx::option<std::string_view>;
@@ -162,6 +164,13 @@ class type_resolver {
     // Reports a loop/block/test body failure without discarding the node's own scope type
     auto               fail_scoped_body() -> void;
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
+    // Whether `root` assigns to a `comptime let mut` type anywhere outside a nested function
+    [[nodiscard]] auto assigns_comptime_type_var(ast::node_id root) -> bool;
+    // Types a `while comptime` body once per iteration, recording each pass's typing; true if
+    // the body poisoned
+    [[nodiscard]] auto resolve_comptime_while_iterations(ast::node_id                id,
+                                                         const ast::while_loop_expr& while_loop,
+                                                         const ast::block_stmt&      block) -> bool;
     [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
     [[nodiscard]] auto is_runtime_local_decl(ast::node_id decl) const -> bool;
 

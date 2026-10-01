@@ -2063,6 +2063,30 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto  name{name_ident.name};
     const auto  sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local declaration must have a resolved sema type");
+    // A `comptime let mut` type lives only in the comptime frame, where assignments rebind it
+    if (decl.has_modifier(ast::decl_modifiers::COMPTIME) &&
+        decl.has_modifier(ast::decl_modifiers::MUT) && decl.value &&
+        (sema_type->get_kind() == sema::type_kind::TYPE ||
+         active_mod().get_storageless_kind(id) == mod::storageless_kind::ALIAS)) {
+        const gir::const_eval::comptime_context_guard g{const_eval_, true};
+        if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+            scopes_.back().bindings.emplace(name,
+                                            local_binding{
+                                                .id              = {0, local_kind::TEMPORARY},
+                                                .type            = *sema_type,
+                                                .is_alloca       = false,
+                                                .const_val       = stdx::none,
+                                                .is_const        = true,
+                                                .is_comptime_mut = true,
+                                            });
+            ctx_.comptime_binding_frames.back().insert_or_assign(name, *cv);
+        } else {
+            ctx_.diags.emplace_back("`comptime let mut` initializer must be known at compile time",
+                                    sema::error::COMPTIME_MUT_NOT_FOLDABLE,
+                                    active_ast().location_of(*decl.value));
+        }
+        return;
+    }
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
     if (active_mod().is_comptime_value_decl(id)) { return check_comptime_value_decl(decl); }
     if (active_mod().is_storageless_decl(id)) { return; }
@@ -4889,6 +4913,15 @@ auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& w
         const_eval_.clear_memo();
         const auto cond{fold_comptime_loop_condition(while_loop.condition, "`while comptime`")};
         if (!cond || !*cond) { break; }
+        // A body that changes a `comptime let mut` type was typed once per iteration
+        const auto diff{ctx_.instantiation_cache.get_body_type_diff(
+            fmt::format("{}whileloop#{}#{}",
+                        typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",
+                        id.get_index(),
+                        iterations))};
+        // Without one, the enclosing instantiation's typing stays in effect
+        stdx::option<mod::body_diff_guard> diff_guard;
+        if (diff) { diff_guard.emplace(active_mod(), diff); }
         if (comptime_unroll_limit_reached(iterations++, "`while comptime`", id)) { break; }
         if (emit_comptime_loop_body(block) == comptime_body_exit::BREAK) { break; }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
