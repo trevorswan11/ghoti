@@ -115,7 +115,7 @@ constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
                                              token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
 constexpr builtin_t SET_EVAL_UNROLL_LIMIT{"@setEvalUnrollLimit",
                                           token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT};
-constexpr builtin_t SET_MAIN_SYMBOL{"@setMainSymbol", token_type_t::BUILTIN_SET_MAIN_SYMBOL};
+constexpr builtin_t EXPORT{"@export", token_type_t::BUILTIN_EXPORT};
 
 constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
 constexpr builtin_t TRAP{"@trap", token_type_t::BUILTIN_TRAP};
@@ -243,7 +243,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::BRANCH_HINT,
     builtins::SET_EVAL_RECURSION_LIMIT,
     builtins::SET_EVAL_UNROLL_LIMIT,
-    builtins::SET_MAIN_SYMBOL,
+    builtins::EXPORT,
     builtins::PANIC,
     builtins::TRAP,
     builtins::FN_CTX,

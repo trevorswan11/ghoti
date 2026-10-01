@@ -372,26 +372,26 @@ TEST_CASE("@setEvalRecursionLimit top-level placement produces error") {
 }
 
 TEST_CASE("Free call and discard statements evaluate expressions without assignment") {
-    SECTION("Free call @setMainSymbol") {
+    SECTION("Free call @export") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            @setMainSymbol("custom_entry");
-            pub const custom_entry := fn(): void {};
+            const custom_entry := fn(): void {};
+            @export(custom_entry, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "custom_entry");
     }
 
-    SECTION("Free call @setMainSymbol with leading underscore") {
+    SECTION("Free call @export of a leading-underscore name") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            @setMainSymbol("_my_custom_main");
-            pub const _my_custom_main := fn(): void {};
+            const _my_custom_main := fn(): void {};
+            @export(_my_custom_main, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "_my_custom_main");
     }
 
-    SECTION("Discard statement with @setMainSymbol") {
+    SECTION("Discard statement with @export") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            _ = @setMainSymbol("discarded_main");
-            pub const discarded_main := fn(): void {};
+            const discarded_main := fn(): void {};
+            _ = @export(discarded_main, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "discarded_main");
     }
@@ -407,19 +407,18 @@ TEST_CASE("Free call and discard statements evaluate expressions without assignm
     }
 }
 
-TEST_CASE("@setMainSymbol invalid identifier error") {
+TEST_CASE("@export rejects what it can't export") {
     helpers::test_resolver_fail(
-        "@setMainSymbol(\"invalid main name\");",
-        sema::diagnostic{
-            "@setMainSymbol argument must be a valid identifier; found 'invalid main name'",
-            sema::error::TYPE_MISMATCH,
-            std::pair{0UZ, 15UZ}});
-
-    helpers::test_resolver_fail(
-        "@setMainSymbol(\"123bad\");",
-        sema::diagnostic{"@setMainSymbol argument must be a valid identifier; found '123bad'",
+        "var g: i32 = 1; @export(g, .{ .name = \"g\" });",
+        sema::diagnostic{"'@export' expects a function declared with 'const', like "
+                         "'@export(add, .{ .name = \"add\" })'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 15UZ}});
+                         std::pair{0UZ, 24UZ}});
+    helpers::test_resolver_fail(
+        "const f := fn(): void {}; @export(f, .{ .name = \"\" });",
+        sema::diagnostic{"An exported symbol name can't be empty or hold a zero byte",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 38UZ}});
 }
 
 TEST_CASE("@embed builtin constant eval in sema") {

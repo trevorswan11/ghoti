@@ -1310,12 +1310,36 @@ template <NodeData Expr>
 MAKE_INFIX_PARSER(assignment_expr)
 MAKE_INFIX_PARSER(binary_expr)
 
+namespace {
+
+// A keyword right after `.` can only be a name, so `.weak` and `x.type` read as members
+[[nodiscard]] auto is_keyword_member(const syntax::token_t& token) noexcept -> bool {
+    return token.type != syntax::token_type_t::IDENT && token.slice != "_" &&
+           syntax::token_type::is_valid_identifier_name(token.slice);
+}
+
+// The name after a `.`, with the parser on it
+[[nodiscard]] auto parse_member_name(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    auto token{parser.get_current_token()};
+    if (!is_keyword_member(token)) { return identifier_expr::parse(parser); }
+    const auto name{parser.get_ast().intern(token.slice)};
+    token.type = syntax::token_type_t::IDENT;
+    return parser.add_expr<identifier_expr>(token, name);
+}
+
+} // namespace
+
 auto dot_expr::parse(syntax::parser& parser, expr_handle outer)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    TRY(parser.expect_peek(syntax::token_type_t::IDENT));
-    const identifier_handle inner{TRY(identifier_expr::parse(parser))};
+    if (is_keyword_member(parser.get_peek_token())) {
+        parser.advance();
+    } else {
+        TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    }
+    const identifier_handle inner{TRY(parse_member_name(parser))};
     return parser.add_expr<dot_expr>(start_token, outer, inner);
 }
 
@@ -1720,7 +1744,7 @@ auto implicit_access_expr::parse(syntax::parser& parser)
 
     parser.advance();
     // A trailing `(...)` for implicit calls are picked up by the enclosing Pratt loop.
-    const identifier_handle operand{TRY(identifier_expr::parse(parser))};
+    const identifier_handle operand{TRY(parse_member_name(parser))};
     return parser.add_expr<implicit_access_expr>(prefix_token, operand);
 }
 

@@ -529,7 +529,12 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
     // Make this constructor instantiation's `constexpr` parameter values visible to the bodyA
     sema::constexpr_frame ctor_frame;
     if (const auto bindings{ctx_.instantiation_cache.get_type_ctor_bindings(tcm.typing_key)}) {
-        for (const auto& [name, val] : *bindings) { ctor_frame.insert_or_assign(name, val); }
+        for (const auto& [name, val] : *bindings) {
+            ctor_frame.insert_or_assign(name, val);
+            if (const auto closure{val.as_opt<const_closure>()}) {
+                ctor_closure_bindings_.emplace_back(name, *closure);
+            }
+        }
     }
     const constexpr_frame_guard ctor_binding_guard{ctx_.constexpr_binding_frames,
                                                    std::move(ctor_frame)};
@@ -1421,12 +1426,29 @@ auto emitter::emit_function(ast::node_id                   id,
 
     const auto is_constexpr{decl.has_modifier(ast::decl_modifiers::CONSTEXPR)};
     // A name-override emit is a per-instantiation monomorph
-    const auto linkage{name_override ? gir::linkage::INTERNAL : get_decl_linkage(decl)};
+    const auto exports{name_override ? std::vector<const sema::function_export*>{}
+                                     : ctx_.exports.of(active_mod(), *decl.value)};
+    const auto linkage{name_override     ? gir::linkage::INTERNAL
+                       : exports.empty() ? get_decl_linkage(decl)
+                                         : gir::linkage::EXPORT};
     auto&      fn{
         add_gir_function(gir_name, *sema_type, false, is_constexpr, fn_expr.variadic, linkage)};
     if (!name_override) { fn.set_link_name(get_link_name(active_ast(), decl)); }
     fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
     apply_fn_attributes(fn, active_mod(), *decl.value);
+    // The first `@export` names the function's own symbol; each further one is an alias of it
+    for (usize i{0}; i < exports.size(); ++i) {
+        const auto& exported{*exports[i]};
+        if (i == 0) {
+            fn.set_link_name(exported.name);
+            fn.set_weak(exported.weak);
+            auto attributes{fn.get_attributes()};
+            attributes.visibility = exported.visibility;
+            fn.set_attributes(attributes);
+        } else {
+            fn.add_alias({exported.name, exported.weak, exported.visibility});
+        }
+    }
     fn.set_calling_conv(fn_expr.conv);
 
     auto& entry{fn.add_segment()};
@@ -1458,6 +1480,19 @@ auto emitter::emit_function(ast::node_id                   id,
     }
 
     bind_declared_params(fn, fn_expr, active_mod());
+    for (const auto& [name, closure] : std::exchange(ctor_closure_bindings_, {})) {
+        auto&       callable_type{closure.module ? closure.module->get_sema_type(closure.fn_node)
+                                                 : active_mod().get_sema_type(closure.fn_node)};
+        const value bound{emit_constexpr_closure(closure), callable_type};
+        scopes_.back().bindings.emplace(name,
+                                        local_binding{
+                                            .id        = {0, local_kind::TEMPORARY},
+                                            .type      = callable_type,
+                                            .is_alloca = false,
+                                            .const_val = bound,
+                                            .is_const  = true,
+                                        });
+    }
 
     emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {

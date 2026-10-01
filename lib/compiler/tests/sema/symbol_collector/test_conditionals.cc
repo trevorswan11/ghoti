@@ -130,7 +130,8 @@ TEST_CASE("Binding control flow with a top-level `const` is still allowed") {
     CHECK_FALSE(first_collect_error("const a := if constexpr (true) 1 else 2;"));
     CHECK_FALSE(first_collect_error("const a := match (1) { 1 => 10, _ => 20 };"));
     CHECK_FALSE(first_collect_error("const a := blk: { break :blk 7; };"));
-    CHECK_FALSE(first_collect_error("@setMainSymbol(\"go\"); pub const go := fn(): void {};"));
+    CHECK_FALSE(
+        first_collect_error("const go := fn(): void {}; @export(go, .{ .name = \"main\" });"));
 }
 
 } // namespace ghoti::tests

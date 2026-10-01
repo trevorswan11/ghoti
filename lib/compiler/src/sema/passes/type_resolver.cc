@@ -1784,30 +1784,8 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
-        if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
-            stdx::option<std::string> main_name;
-            if (const auto str_expr{resolving_.ast.get_as_opt<ast::string_expr>(*expr_h)}) {
-                main_name.emplace(str_expr->value);
-            } else {
-                gir::const_eval evaluator{ctx_, resolving_};
-                if (const auto val{evaluator.try_eval(*expr_h)}) {
-                    if (const auto str{val->as_opt<std::string>()}) { main_name.emplace(*str); }
-                }
-            }
-
-            if (main_name) {
-                if (!syntax::token_type::is_valid_identifier_name(*main_name)) {
-                    return make_sema_err(
-                        fmt::format(
-                            "@setMainSymbol argument must be a valid identifier; found '{}'",
-                            *main_name),
-                        error::TYPE_MISMATCH,
-                        resolving_.ast.location_of(*expr_h));
-                }
-                ctx_.user_main_name = *main_name;
-            }
-        }
+    case token_type_t::BUILTIN_EXPORT: {
+        if (auto problem{record_export(call)}) { return stdx::err{std::move(*problem)}; }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
@@ -2990,6 +2968,32 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
     return stdx::none;
 }
 
+auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
+    ast::node_id named{expr};
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
+    const auto declared{resolving_.get_identifier_declaration(named)};
+    if (!declared || !declared->owner || !declared->decl) { return stdx::none; }
+    auto&      owner{const_cast<mod::module&>(*declared->owner)};
+    const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
+    if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::VARIABLE) ||
+        !owner.ast.get_as_opt<ast::function_expr>(*decl->value)) {
+        return stdx::none;
+    }
+    const auto fn_type{owner.get_sema_type_opt(*decl->value)};
+    if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION ||
+        ctx_.generic_functions.get_opt(*fn_type)) {
+        return stdx::none;
+    }
+    return gir::const_value{gir::const_value::data_t{
+                                gir::const_closure{
+                                    .fn_node  = *decl->value,
+                                    .module   = owner,
+                                    .captures = {},
+                                },
+                            },
+                            *fn_type};
+}
+
 auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
     const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
     if (!ident) { return stdx::none; }
@@ -3715,6 +3719,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     const gir::const_eval::constexpr_context_guard g{evaluator, true};
                     if (auto cv{evaluator.try_eval(*expr_h)}; cv && !cv->is_poison()) {
                         folded.emplace(std::move(*cv));
+                        // A top-level function folds to its name, which the callee's module can't
+                        // look up; pass the function itself
+                        if (folded->is<std::string>()) {
+                            if (auto ref{declared_fn_ref(*expr_h)}) { folded = std::move(ref); }
+                        }
                     } else if (auto ref{local_const_fn_ref(*expr_h)}) {
                         folded.emplace(std::move(*ref));
                     } else if (auto clv{constexpr_closure_value(*expr_h)}) {
@@ -3891,7 +3900,21 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         }
 
         auto args_result{resolve_result::OK};
-        if (descriptor_hint && !call.arguments.empty()) {
+        if (call.function->get_token_type() == token_type_t::BUILTIN_EXPORT &&
+            call.arguments.size() == 2) {
+            // The function stands alone; the options are a `builtin.ExportOptions` literal
+            {
+                const structural_guard shield{implicit_type_stack_, nullptr};
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
+            }
+            if (args_result == resolve_result::OK) {
+                const structural_guard g{implicit_type_stack_,
+                                         ctx_.get_builtin_type("ExportOptions")};
+                args_result = resolve_call_args(
+                    gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
+            }
+        } else if (descriptor_hint && !call.arguments.empty()) {
             const structural_guard g{implicit_type_stack_, *descriptor_hint};
             args_result = call.arguments[0].visit([this](auto arg_id) {
                 resolve(arg_id);
@@ -10477,6 +10500,150 @@ auto type_resolver::resolve_field_attributes(const stdx::option<ast::attribute_l
         }
     }
     return alignment;
+}
+
+auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<diagnostic> {
+    const auto& target_arg{call.arguments[0]};
+    const auto  target_expr{target_arg.as_opt<ast::expr_handle>()};
+    const auto  target_loc{get_call_arg_location(target_arg)};
+    const auto  not_a_function{[&] {
+        return diagnostic{"'@export' expects a function declared with 'const', like "
+                           "'@export(add, .{ .name = \"add\" })'",
+                          error::TYPE_MISMATCH,
+                          target_loc};
+    }};
+    if (!target_expr) { return not_a_function(); }
+
+    // The function the argument names: a declaration written out, or a function passed to a
+    // `constexpr` parameter (a helper in the style of Zig's `symbol`)
+    stdx::option<const mod::module&>    owner;
+    stdx::option<ast::node_id>          fn_node;
+    stdx::option<const ast::decl_stmt&> decl;
+    ast::node_id                        named{*target_expr};
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
+    if (const auto declared{resolving_.get_identifier_declaration(named)};
+        declared && declared->owner && declared->decl) {
+        const auto found{declared->owner->ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
+        if (found && found->value && !found->has_modifier(ast::decl_modifiers::VARIABLE)) {
+            owner.emplace(*declared->owner);
+            fn_node.emplace(*found->value);
+            decl.emplace(*found);
+        }
+    } else {
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      value{evaluator.try_eval(*target_expr)};
+        if (const auto closure{value ? value->as_opt<gir::const_closure>() : stdx::none};
+            closure && closure->captures.fields.empty()) {
+            owner.emplace(closure->module ? *closure->module : resolving_);
+            fn_node.emplace(closure->fn_node);
+        }
+    }
+    if (!owner || !fn_node || !owner->ast.get_as_opt<ast::function_expr>(*fn_node)) {
+        return not_a_function();
+    }
+
+    const auto fn_type{owner->get_sema_type_opt(*fn_node)};
+    if (fn_type && ctx_.generic_functions.get_opt(*fn_type)) {
+        return diagnostic{"'@export' can't export a generic function; export a non-generic "
+                          "wrapper that calls one instantiation",
+                          error::TYPE_MISMATCH,
+                          target_loc};
+    }
+    if (fn_type && sema::signature_of(*fn_type) &&
+        sema::signature_of(*fn_type)->return_type.get_kind() == type_kind::TYPE) {
+        return diagnostic{"'@export' can't export a function that returns a type; it only exists "
+                          "at compile time",
+                          error::TYPE_MISMATCH,
+                          target_loc};
+    }
+    const auto fn_name{decl ? owner->ast.get_as<ast::identifier_expr>(decl->name).name
+                            : std::string_view{}};
+    if (decl && decl->has_modifier(ast::decl_modifiers::EXPORT)) {
+        return diagnostic{fmt::format("'{}' is already exported by its declaration; give every "
+                                      "name it needs with '@export' instead",
+                                      fn_name),
+                          error::TYPE_MISMATCH,
+                          target_loc};
+    }
+
+    // The options fold to a `builtin.ExportOptions` value
+    const auto&                    options_arg{call.arguments[1]};
+    const auto                     options_loc{get_call_arg_location(options_arg)};
+    const auto                     options_expr{options_arg.as_opt<ast::expr_handle>()};
+    stdx::option<gir::const_value> folded;
+    if (options_expr) {
+        gir::const_eval evaluator{ctx_, resolving_};
+        folded = evaluator.try_eval(*options_expr);
+    }
+    const auto options{folded ? folded->as_opt<gir::const_struct>() : stdx::none};
+    const auto name_value{options ? options->get_field_opt("name") : stdx::none};
+    const auto name{name_value ? name_value->as_opt<std::string>() : stdx::none};
+    if (!name) {
+        return diagnostic{"'@export' options must be a compile-time 'builtin.ExportOptions' with "
+                          "a 'name'",
+                          error::TYPE_MISMATCH,
+                          options_loc};
+    }
+    if (name->empty() || name->contains('\0')) {
+        return diagnostic{"An exported symbol name can't be empty or hold a zero byte",
+                          error::TYPE_MISMATCH,
+                          options_loc};
+    }
+    const auto enum_field{[&](std::string_view field) -> std::string {
+        const auto value{options->get_field_opt(field)};
+        const auto variant{value ? value->as_opt<gir::const_enum>() : stdx::none};
+        return variant ? variant->name : std::string{};
+    }};
+    const auto visibility{ast::symbol_visibility_from_name(enum_field("visibility"))
+                              .value_or(ast::symbol_visibility::DEFAULT)};
+    if (visibility == ast::symbol_visibility::PROTECTED &&
+        !codegen::resolve_target_triple(ctx_.target_opts.triple_str).isOSBinFormatELF()) {
+        return diagnostic{
+            "Visibility '.protected' needs an ELF target", error::TYPE_MISMATCH, options_loc};
+    }
+
+    // Exporting a function as `main` makes it the program's entry point
+    if (*name == "main") {
+        if (!decl || &*owner != &resolving_) {
+            return diagnostic{"A function exported as 'main' must be declared in the module that "
+                              "exports it, and named directly",
+                              error::TYPE_MISMATCH,
+                              target_loc};
+        }
+        const auto declared_main{resolving_.root_table_idx ? ctx_.registry.get_from_opt(
+                                                                 *resolving_.root_table_idx, "main")
+                                                           : stdx::none};
+        if (declared_main && fn_name != "main") {
+            return diagnostic{fmt::format("'{}' can't be exported as 'main' because this module "
+                                          "already declares 'main'",
+                                          fn_name),
+                              error::TYPE_MISMATCH,
+                              target_loc};
+        }
+        ctx_.user_main_name = std::string{fn_name};
+    }
+
+    if (const auto earlier{ctx_.exports.named(*name)}) {
+        // Resolving the same `@export` again (a generic body, a re-resolution) is no conflict
+        const bool same{earlier->owner && &*earlier->owner == &*owner &&
+                        earlier->fn_node.get_index() == fn_node->get_index()};
+        if (same) { return stdx::none; }
+        return diagnostic{fmt::format("The symbol '{}' is already exported at {}:{}",
+                                      *name,
+                                      earlier->site.line + 1,
+                                      earlier->site.column + 1),
+                          error::TYPE_MISMATCH,
+                          options_loc};
+    }
+    ctx_.exports.add({
+        .owner      = *owner,
+        .fn_node    = *fn_node,
+        .name       = *name,
+        .weak       = enum_field("linkage") == "weak",
+        .visibility = visibility,
+        .site       = resolving_.ast.location_of(call.function),
+    });
+    return stdx::none;
 }
 
 auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)

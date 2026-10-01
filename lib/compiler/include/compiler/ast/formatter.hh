@@ -126,6 +126,8 @@ class formatter {
     auto visit(node_id, const assignment_expr&) -> syntax::doc_id;
     auto visit(node_id, const binary_expr&) -> syntax::doc_id;
     auto visit(node_id, const dot_expr&) -> syntax::doc_id;
+    // The name after a `.`
+    auto member_name(identifier_handle member) -> syntax::doc_id;
     auto visit(node_id, const range_expr&) -> syntax::doc_id;
     auto visit(node_id, const initializer_expr&) -> syntax::doc_id;
     auto visit(node_id, const label_expr&) -> syntax::doc_id;

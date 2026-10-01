@@ -18,6 +18,7 @@
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
@@ -28,6 +29,7 @@
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::ast { struct block_stmt; } // namespace ghoti::ast
 
@@ -68,6 +70,46 @@ enum class deprecation_policy : u8 {
     ALLOW,
 };
 
+// One symbol `@export` defines for a function declaration
+struct function_export {
+    stdx::option<const mod::module&> owner;
+    ast::node_id                     fn_node; // the exported function literal
+    std::string                      name;
+    bool                             weak{false};
+    ast::symbol_visibility           visibility{ast::symbol_visibility::DEFAULT};
+    source_location                  site;
+};
+
+// Every `@export` in the program, shared by every module's context
+class export_registry {
+  public:
+    auto add(function_export entry) -> void { exports_.emplace_back(std::move(entry)); }
+
+    // The exports of one function literal, in the order they were written
+    [[nodiscard]] auto of(const mod::module& owner, ast::node_id fn_node) const
+        -> std::vector<const function_export*> {
+        std::vector<const function_export*> found;
+        for (const auto& entry : exports_) {
+            if (entry.owner && entry.owner == owner &&
+                entry.fn_node.get_index() == fn_node.get_index() &&
+                entry.fn_node.get_kind() == fn_node.get_kind()) {
+                found.emplace_back(&entry);
+            }
+        }
+        return found;
+    }
+
+    [[nodiscard]] auto named(std::string_view name) const -> stdx::option<const function_export&> {
+        for (const auto& entry : exports_) {
+            if (entry.name == name) { return entry; }
+        }
+        return stdx::none;
+    }
+
+  private:
+    std::vector<function_export> exports_;
+};
+
 // A contextual wrapper around sematic steps
 //
 // Owns its own diagnostic list
@@ -101,6 +143,9 @@ struct context {
     // Declared names for user struct/enum/union types, for `@typeName`
     type_name_map& user_type_names;
 
+    // `@export`ed symbols, shared with every imported module's context
+    export_registry& exports;
+
     // Cache of read embedded files (path string -> optional file contents)
     ankerl::unordered_dense::map<std::string, stdx::option<std::string>> embed_cache;
 
@@ -130,7 +175,7 @@ struct context {
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
           diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
-          user_type_names{*arena.make<type_name_map>()} {}
+          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -144,8 +189,8 @@ struct context {
           build_mode{other.build_mode}, deprecated_policy{other.deprecated_policy},
           constexpr_binding_frames{other.constexpr_binding_frames},
           constexpr_evaluation_depth{other.constexpr_evaluation_depth},
-          user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
-          env_epoch{other.env_epoch} {}
+          user_type_names{other.user_type_names}, exports{other.exports},
+          embed_cache{other.embed_cache}, env_epoch{other.env_epoch} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

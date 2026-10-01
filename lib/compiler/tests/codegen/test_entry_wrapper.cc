@@ -299,15 +299,15 @@ TEST_CASE("Non-Linux targets keep the crt-provided entry and get no _start") {
     }
 }
 
-TEST_CASE("@setMainSymbol sets user main correctly") {
+TEST_CASE("@export as 'main' picks the entry point") {
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        @setMainSymbol("my_main");
-        pub const my_main := fn(): i32 {
+        const my_main := fn(): i32 {
             return 42;
         };
+        @export(my_main, .{ .name = "main" });
     )")};
     CHECK(ctx->analyzer.get_ctx().user_main_name == "my_main");
     REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));

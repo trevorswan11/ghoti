@@ -396,6 +396,24 @@ TEST_CASE("E2E: a type constructor's members read its `constexpr` value paramete
         )") == 42);
     }
 
+    SECTION("a local function as a `constexpr` function-value parameter") {
+        CHECK(helpers::compile_and_run(R"(
+            const Wrap := fn(T: type, constexpr f: fn(x: i32): i32): type {
+                return struct {
+                    val: T,
+                    pub const apply := fn(&self): i32 { return f(self.val); };
+                };
+            };
+
+            pub const main := fn(): i32 {
+                const dbl := fn(x: i32): i32 { return x * 2; };
+                const W := Wrap(i32, dbl);
+                var w: W = .{ .val = 21 };
+                return w.apply();
+            };
+        )") == 42);
+    }
+
     SECTION("two instantiations keep distinct constexpr values") {
         CHECK(helpers::compile_and_run(R"(
             const Box := fn(T: type, constexpr tag: i32): type {

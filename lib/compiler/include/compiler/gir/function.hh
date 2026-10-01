@@ -24,13 +24,21 @@ namespace ghoti::mod { struct module; } // namespace ghoti::mod
 
 namespace ghoti::gir {
 
-struct parameter {
-    std::string name;
-    sema::type& type;
-    local_id    id;
-};
-
 class function {
+  public:
+    struct parameter {
+        std::string name;
+        sema::type& type;
+        local_id    id;
+    };
+
+    // Another symbol for this function, from a second `@export`
+    struct alias {
+        std::string            name;
+        bool                   weak{false};
+        ast::symbol_visibility visibility{ast::symbol_visibility::DEFAULT};
+    };
+
   public:
     function(ghoti::arena& arena,
              std::string   name,
@@ -69,6 +77,11 @@ class function {
         return source_module_;
     }
     auto set_source_module(mod::module& m) -> void { source_module_.emplace(m); }
+
+    [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
+        return aliases_;
+    }
+    auto add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
@@ -127,6 +140,7 @@ class function {
     gir::linkage               linkage_{linkage::INTERNAL};
     std::string                abi_name_{"c"};
     std::string                link_name_;
+    std::vector<alias>         aliases_;
     std::string                test_desc_;
     std::string                test_file_;
     u32                        test_line_{1};

@@ -4619,27 +4619,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_SET_MAIN_SYMBOL: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (expr_h) {
-            if (const auto val{try_eval(*expr_h)}) {
-                if (const auto str{val->as_opt<std::string>()}) {
-                    if (!syntax::token_type::is_valid_identifier_name(*str)) {
-                        ctx_.diags.emplace_back(
-                            fmt::format(
-                                "@setMainSymbol argument must be a valid identifier; found '{}'",
-                                *str),
-                            sema::error::TYPE_MISMATCH,
-                            module_->ast.location_of(*expr_h));
-                        return const_value::make_poison();
-                    }
-                    ctx_.user_main_name = *str;
-                }
-            }
-        }
+    // Recorded by the resolver; the call itself has no value
+    case syntax::token_type_t::BUILTIN_EXPORT:
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
-    }
     case syntax::token_type_t::BUILTIN_COMPILE_ERROR: {
         std::string message{"compilation aborted by @compileError"};
         if (!call.arguments.empty()) {

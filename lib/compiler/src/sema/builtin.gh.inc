@@ -144,6 +144,16 @@ pub const Inline := enum { always, never, hint, default };
 /// `protected` exists only in ELF.
 pub const Visibility := enum { default, hidden, protected };
 
+/// Whether another definition of an `@export`ed symbol may replace it at link time.
+pub const Linkage := enum { strong, @"weak" };
+
+/// How `@export(f, options)` defines `f` under another symbol name.
+pub const ExportOptions := struct {
+    pub name: [:0]u8,
+    pub linkage: Linkage = .strong,
+    pub visibility: Visibility = .default,
+};
+
 pub const Signedness := enum : u1 { signed, unsigned };
 
 pub const IntInfo := struct {

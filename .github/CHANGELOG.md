@@ -566,6 +566,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
 - A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
 - A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- `@export(f, .{ .name = "sym", .linkage = .weak, .visibility = .hidden })` defines a function under another symbol name, once per name, like Zig's `@export`; `builtin.ExportOptions` and `builtin.Linkage` describe the options
+    - **Breaking:** `@setMainSymbol` is removed; write `@export(entry, .{ .name = "main" })` in the root module instead (the entry needn't be `pub`)
+    - An exported function (`@export` or `export(...)`) in an imported module is no longer dropped when nothing calls it
+    - `@export` also takes a function passed to a `constexpr` parameter, so a Zig-style `symbol(f, name)` helper works
+- Fixed a type constructor's member calling a function passed to its `constexpr` parameter (`Wrap(i32, f)` with `f(self.val)` in a method) crashing the compiler
+- Fixed a function passed to another module's `constexpr` parameter resolving by name in the callee's module (it could call the callee's own function of the same name)
+- A keyword is a name right after `.`: `.weak`, `x.type`, `.{ .export = 1 }`; declaring such a field or variant still takes `@"..."`
 - Unicode escapes: `\u{H...}` encodes a scalar value as UTF-8, and `\xHH` is one raw byte, in strings, character literals, and raw identifiers (#325); a malformed escape is reported at the escape
 - **Breaking:** a character literal is its code point, an untyped integer constant that defaults to `u21` (`var c := 'a';` is a `u21`); it still coerces to `u8` wherever one is expected, and `'é'`, `'😀'`, and `'\u{1F600}'` work. A literal with more than one code point is an error
 - Raw identifiers must be valid UTF-8, match byte for byte after decoding escapes (no normalization), and stay raw when formatted (#326)

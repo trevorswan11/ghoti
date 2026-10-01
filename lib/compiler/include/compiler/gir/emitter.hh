@@ -604,30 +604,33 @@ class emitter {
     }
 
   private:
-    sema::context&                ctx_;
-    mod::module&                  ast_module_;
-    stdx::option<mod::module&>    active_module_{ast_module_};
-    bool                          attributed_foreign_diags_{false};
-    const_eval                    const_eval_;
-    builder                       builder_;
-    module                        gir_module_;
-    std::vector<scope_frame>      scopes_;
-    std::vector<loop_context>     loop_stack_;
-    bool                          constexpr_loop_continue_{false};
-    bool                          constexpr_loop_break_{false};
-    stdx::option<value>           constexpr_loop_break_value_{};
-    stdx::option<value>           current_error_slot_{};
-    default_counter               anon_test_desc_counter_;
-    default_counter               anon_test_fn_counter_;
-    default_counter               anon_fn_counter_;
-    default_counter               anon_slice_lit_counter_;
-    std::vector<std::string>      open_fn_names_;
-    std::vector<bool>             open_fn_is_closure_;
-    std::vector<sema::type*>      user_type_stack_;
-    std::vector<std::string_view> pending_builtin_runtime_;
-    symbol_scoping                symbol_scoping_;
-    bool                          runtime_safety_{true};
-    u32                           target_ptr_bits_{64};
+    sema::context&             ctx_;
+    mod::module&               ast_module_;
+    stdx::option<mod::module&> active_module_{ast_module_};
+    bool                       attributed_foreign_diags_{false};
+    const_eval                 const_eval_;
+    builder                    builder_;
+    module                     gir_module_;
+    std::vector<scope_frame>   scopes_;
+    std::vector<loop_context>  loop_stack_;
+    bool                       constexpr_loop_continue_{false};
+    bool                       constexpr_loop_break_{false};
+    stdx::option<value>        constexpr_loop_break_value_{};
+    stdx::option<value>        current_error_slot_{};
+    default_counter            anon_test_desc_counter_;
+    default_counter            anon_test_fn_counter_;
+    default_counter            anon_fn_counter_;
+    default_counter            anon_slice_lit_counter_;
+    std::vector<std::string>   open_fn_names_;
+    // A type constructor's function-valued `constexpr` arguments, bound as callables inside the
+    // member function being emitted
+    std::vector<std::pair<std::string_view, const_closure>> ctor_closure_bindings_;
+    std::vector<bool>                                       open_fn_is_closure_;
+    std::vector<sema::type*>                                user_type_stack_;
+    std::vector<std::string_view>                           pending_builtin_runtime_;
+    symbol_scoping                                          symbol_scoping_;
+    bool                                                    runtime_safety_{true};
+    u32                                                     target_ptr_bits_{64};
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).

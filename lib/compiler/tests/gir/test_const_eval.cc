@@ -641,9 +641,10 @@ TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
     CHECK(val_res.as_int_opt() == 5);
 }
 
-TEST_CASE("Const eval @setMainSymbol sets main symbol name") {
+TEST_CASE("Const eval folds @export to void and the resolver names the entry point") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const setup := @setMainSymbol("custom_entry");
+        const custom_entry := fn(): void {};
+        const setup := @export(custom_entry, .{ .name = "main" });
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 

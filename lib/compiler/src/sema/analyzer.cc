@@ -375,6 +375,13 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
         return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
     }
 
+    // `@export(f, .{ .name = "main" })` picks the entry point, and needn't be `pub`
+    const auto exported_main{ctx_.exports.named("main")};
+    if (exported_main && exported_main->owner && &*exported_main->owner != &root_module) {
+        return make_sema_err("Only the root module can export a function as 'main'",
+                             error::TYPE_MISMATCH);
+    }
+
     const std::string_view main_name{ctx_.user_main_name};
     const auto&            root_table{registry_.get(*root_module.root_table_idx)};
     const auto             main_sym_opt{root_table.get_opt(main_name)};
@@ -386,7 +393,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     }
 
     const auto& main_sym{*main_sym_opt};
-    if (!main_sym.is_public(root_module)) {
+    if (!exported_main && !main_sym.is_public(root_module)) {
         return make_sema_err("'main' function must be declared 'pub'",
                              error::TYPE_MISMATCH,
                              main_sym.get_symbol_location(root_module));

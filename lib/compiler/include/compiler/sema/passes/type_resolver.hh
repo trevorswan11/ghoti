@@ -416,6 +416,8 @@ class type_resolver {
     [[nodiscard]] auto fold_attribute_enum(const ast::attribute& item, std::string_view enum_name)
         -> stdx::option<std::string>;
     // `visibility`'s argument, rejecting `.protected` outside ELF
+    // Records one `@export(f, options)`, or says why it can't
+    [[nodiscard]] auto record_export(const ast::call_expr& call) -> stdx::option<diagnostic>;
     [[nodiscard]] auto fold_visibility(const ast::attribute& item)
         -> stdx::option<ast::symbol_visibility>;
     // `visibility` only means something on a declaration with an externally linked symbol
@@ -441,6 +443,8 @@ class type_resolver {
                                          ast::node_id call_id) const -> stdx::option<bool>;
     // Errors on a non-`void` call result dropped in statement position
     auto check_unused_result(ast::node_id stmt_id, const ast::expr_stmt& stmt) -> void;
+    // A function declaration an argument names, as a value a `constexpr` parameter can hold
+    [[nodiscard]] auto declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
 
     [[nodiscard]] auto local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value>;
     // The compile-time-known element count of an array- or slice-valued expression: an array's

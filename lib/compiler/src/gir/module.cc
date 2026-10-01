@@ -117,8 +117,15 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
         }
     }};
 
-    // Roots: caller entry points + every non-extern root-module function
+    // Roots: caller entry points + every non-extern root-module function, and everything exported
+    // from any module, since the linker reaches it by name
     for (const auto root : roots) { enqueue_fn(root); }
+    for (const auto* fn : functions_) {
+        if (fn->get_linkage() == gir::linkage::EXPORT) { enqueue_fn(fn->get_name()); }
+    }
+    for (const auto* g : globals_) {
+        if (g->linkage == gir::linkage::EXPORT) { referenced_globals.insert(g->name); }
+    }
     for (usize i{0}; i < import_boundary_fn_ && i < functions_.size(); ++i) {
         if (!is_extern(functions_[i]->get_linkage())) { enqueue_fn(functions_[i]->get_name()); }
     }

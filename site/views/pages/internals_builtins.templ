@@ -228,9 +228,27 @@ pub const AtomicRmwOp := enum {
 	<h3>{ "@setEvalRecursionLimit" }</h3>
 	<pre><code class="language-ghoti">{ `@setEvalRecursionLimit(limit: usize): void` }</code></pre>
 	<p>Sets the maximum recursion depth limit for compile-time (<code>constexpr</code>) expression evaluation.</p>
-	<h3>{ "@setMainSymbol" }</h3>
-	<pre><code class="language-ghoti">{ `@setMainSymbol(symbol_name: [:0]u8): void` }</code></pre>
-	<p>Overrides the default entry point symbol name used by the compiler when linking the executable.</p>
+	<h3>{ "@export" }</h3>
+	<pre><code class="language-ghoti">{ `@export(function: auto, options: builtin.ExportOptions): void` }</code></pre>
+	<p>Defines <code>function</code>, a function declared with <code>const</code>, under the symbol <code>options.name</code>. <code>options.linkage</code> is <code>.strong</code> (the default) or <code>.weak</code>, which lets another definition of the symbol replace this one at link time, and <code>options.visibility</code> is <code>.default</code>, <code>.hidden</code>, or <code>.protected</code> (ELF only), as for the <code>{ `@[visibility(...)]` }</code> attribute.</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `const add := fn(a: f128, b: f128): f128 { ... };
+@export(add, .{ .name = "__addtf3", .linkage = .weak, .visibility = .hidden });
+@cfg(arch == .arm) { @export(add, .{ .name = "__aeabi_addtf3", .linkage = .weak, .visibility = .hidden }); }` }
+		</code>
+	</pre>
+	<p>Export one function as many times as it needs names; each extra export is an alias of the same code. Every symbol name can be exported once, a generic function can't be exported (export a wrapper around one instantiation), and a declaration written <code>{ `export("...")` }</code> already has its symbol, so it can't also use <code>{ "@export" }</code>. An exported function is kept even when nothing in the program calls it, in any module.</p>
+	<p><code>{ "@export" }</code> also takes a function passed to a <code>constexpr</code> parameter, so one helper can fix the options for a whole library:</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `pub const symbol := fn(constexpr f: auto, constexpr name: [:0]u8): void {
+    @export(f, .{ .name = name, .linkage = .weak, .visibility = .hidden });
+};
+symbol(addtf3, "__addtf3");` }
+		</code>
+	</pre>
+	<p>Exporting a function as <code>main</code> makes it the program's entry point instead of <code>{ `pub const main` }</code>; it needn't be <code>pub</code>. Only the root module can do this, and not while it also declares <code>main</code>.</p>
 	<h2>Control Flow</h2>
 	<h3>{ "@panic" }</h3>
 	<pre><code class="language-ghoti">{ `@panic(message: [:0]u8): noreturn` }</code></pre>

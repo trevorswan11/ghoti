@@ -1058,8 +1058,18 @@ auto formatter::visit(node_id id, const binary_expr& node) -> syntax::doc_id {
     return doc_manager_.group(doc_manager_.concat({lhs, tail}));
 }
 
+auto formatter::member_name(identifier_handle member) -> syntax::doc_id {
+    // After `.` a keyword needs no `@"..."`: `.weak`, `x.type`
+    const auto& name{ast_.get_as<identifier_expr>(member).name};
+    if (name != "_" && syntax::token_type::is_valid_identifier_name(name)) {
+        return doc_manager_.text(name);
+    }
+    return format(member);
+}
+
 auto formatter::visit(node_id, const dot_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({format(node.object), doc_manager_.text("."), format(node.member)});
+    return doc_manager_.concat(
+        {format(node.object), doc_manager_.text("."), member_name(node.member)});
 }
 
 auto formatter::visit(node_id id, const range_expr& node) -> syntax::doc_id {
@@ -1193,7 +1203,7 @@ auto formatter::visit(node_id id, const unwrap_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_id {
-    return doc_manager_.concat({doc_manager_.text("."), format(node.member)});
+    return doc_manager_.concat({doc_manager_.text("."), member_name(node.member)});
 }
 
 #define MAKE_VERBATIM_FORMAT(Type, txt)                                                   \
@@ -1572,7 +1582,8 @@ auto formatter::visit(explicit_type_id id, const identifier_expr& node) -> synta
 auto formatter::visit(explicit_type_id id, const dot_expr& node) -> syntax::doc_id {
     return with_modifier(
         id,
-        doc_manager_.concat({format(node.object), doc_manager_.text("."), format(node.member)}));
+        doc_manager_.concat(
+            {format(node.object), doc_manager_.text("."), member_name(node.member)}));
 }
 
 auto formatter::visit(explicit_type_id id, const call_expr& node) -> syntax::doc_id {

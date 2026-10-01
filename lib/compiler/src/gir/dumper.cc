@@ -192,7 +192,7 @@ auto dumper::dump(const function& fn) -> void {
         }
 
         auto params_str{fmt::to_string(
-            fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
+            fmt::join(fn.get_params() | std::views::transform([](const function::parameter* p) {
                           return fmt::format("{}: {}", p->name, p->type.to_string());
                       }),
                       ", "))};

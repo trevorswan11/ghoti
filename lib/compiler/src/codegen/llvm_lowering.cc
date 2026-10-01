@@ -1558,6 +1558,18 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
         arg->setName(param->name);
     }
 
+    // Every further `@export` name is another symbol for the same code
+    for (const auto& alias : fn.get_aliases()) {
+        auto* symbol{llvm::GlobalAlias::create(fn_ty,
+                                               0,
+                                               alias.weak ? llvm::GlobalValue::WeakAnyLinkage
+                                                          : llvm::GlobalValue::ExternalLinkage,
+                                               alias.name,
+                                               llvm_fn,
+                                               llvm_module_.get())};
+        apply_visibility(*symbol, alias.visibility);
+    }
+
     globals_[fn.get_name()] = llvm_fn;
     return llvm_fn;
 }
