@@ -589,10 +589,28 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
 - Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)
 - Fixed: `if (c) value else return e` stored a `void` into the result instead of skipping the arm
+- **Breaking:** declarations are `const` (known at compile time), `let` (an immutable runtime value), or `let mut` (a mutable one), replacing `constexpr`, `const`, and `var`
+    - A compile-time mutable local is `comptime let mut` (was `constexpr var`); `comptime let` is an error, since that is `const`
+    - Types, `undefined` aliases, and values holding `type`s are declared with `const`; a closure that captures runtime state is declared with `let`
+    - `extern`, `export`, `weak`, and `threadlocal` data needs `let` or `let mut`; a function with linkage is declared with `const` (`pub weak const panic_handler = fn ...`, `extern const puts: fn(...)`)
+    - A `let` still folds where a compile-time value is needed (`let n = 4; let a: [n]u8 = ...`); `let mut` never does
+- **Breaking:** the walrus operator `:=` is removed; an unannotated declaration is written with `=` (`const x = 5;`, `let mut n = 0;`), as are interface methods (`const area = fn(self): f64;`)
+- **Breaking:** every other `constexpr` is spelled `comptime`: parameters (`fn(comptime n: usize)`), `impl(comptime N: usize)`, `if`/`match`/`for`/`while`/`loop comptime`, `do ... while comptime`, and `comptime { ... }` / `comptime name: { ... }` blocks
+- **Breaking:** `constexpr_int` and `constexpr_float` are renamed `comptime_int` and `comptime_float` (and the matching `builtin.TypeInfo` variants); diagnostic codes named `CONSTEXPR_*` are renamed `COMPTIME_*`
+- Every function declared with `const` infers its compile-time parameters: a parameter its body reads at compile time (`if comptime (a < b)`, `const s = @sizeOf(@TypeOf(x))`) is compile-time at each call, as only `constexpr`-declared functions did before
+- `comptime <expr>` evaluates one expression at compile time (`let table = comptime build(64);`, `comptime validate(fmt);`); it binds like a prefix operator, so `comptime f(x) + y` folds only `f(x)`, and writing it where evaluation is already compile-time is an error
+- Fixed: a `void` function whose body runs off its end couldn't be called at compile time (`comptime { check(); }`)
+- A `comptime let mut` can hold a type (`comptime let mut T: type = u8; T = Wrap(T);`); each use names the type it holds at that point, including across `for comptime` and `while comptime` iterations, and only a type can be assigned to it
+- Fixed: a function that fills an `undefined` array or struct one element or field at a time (for example in a runtime `while` loop) couldn't be evaluated at compile time; reading an element that was never written is now a compile error
+- Fixed: compiler crashes on four kinds of invalid code, which are now errors:
+    - a closure assigning to a captured binding that isn't a `let mut` (a `let`, a parameter, or a loop capture); writing through a captured slice, pointer, or reference still works
+    - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
+    - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
+    - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
-    - Both can be evaluated at compile time: `constexpr { @assert(std.math.max(1, 2) == 2); }`
+    - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling

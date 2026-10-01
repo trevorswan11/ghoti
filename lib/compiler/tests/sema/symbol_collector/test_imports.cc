@@ -17,10 +17,10 @@ using helpers::mock_file;
 
 TEST_CASE("Import aliases correctly used") {
     auto [ctx, idx]{helpers::collect_and_check(
-        R"(import foo as A; import "f.gh" as F; const foo := bar;)",
+        R"(import foo as A; import "f.gh" as F; const foo = bar;)",
         helpers::make_vector<mock_file>(
-            mock_file{.path = "foo.gh", .source = "const foo := bar;", .name = "foo"},
-            mock_file{.path = "f.gh", .source = "const foo := bar;"}))};
+            mock_file{.path = "foo.gh", .source = "const foo = bar;", .name = "foo"},
+            mock_file{.path = "f.gh", .source = "const foo = bar;"}))};
 
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 3);
@@ -44,7 +44,7 @@ TEST_CASE("Public import query") {
     auto [ctx, idx]{helpers::collect_and_check(
         "pub import std;",
         helpers::make_vector<mock_file>(
-            mock_file{.path = "std.gh", .source = "var a: i32 = undefined;", .name = "std"}))};
+            mock_file{.path = "std.gh", .source = "let mut a: i32 = undefined;", .name = "std"}))};
 
     auto&       table{UNWRAP(ctx->analyzer.get_table_opt(idx))};
     const auto& std_import{UNWRAP(table.get_opt("std"))};

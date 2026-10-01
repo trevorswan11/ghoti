@@ -30,7 +30,7 @@ namespace {
 
 auto test_decl_fail(std::initializer_list<syntax::keyword_t> modifiers,
                     syntax::diagnostic&&                     expected_error,
-                    std::string_view                         init = "a := 2;") -> void {
+                    std::string_view                         init = "a = 2;") -> void {
     std::ostringstream ss;
     for (const auto& keyword : modifiers) { ss << keyword.name << " "; }
     ss << init;
@@ -39,36 +39,37 @@ auto test_decl_fail(std::initializer_list<syntax::keyword_t> modifiers,
 
 } // namespace
 
-TEST_CASE("Mutability restrictions") {
-    const auto expected_diag = [](usize mod_count = 2) -> syntax::diagnostic {
-        return {fmt::format("Exactly one mutability modifier may be used; found {}", mod_count),
+TEST_CASE("A declaration has exactly one binding form") {
+    const auto expected_diag = [](usize column) -> syntax::diagnostic {
+        return {"Exactly one of 'const', 'let' or 'let mut' may be used; found 2",
                 syntax::error::ILLEGAL_DECL_MODIFIERS,
-                std::pair{0UZ, 0UZ}};
+                std::pair{0UZ, column}};
     };
 
-    constexpr std::array contending_mut{keywords::CONSTEXPR, keywords::VAR, keywords::CONSTANT};
-    for (const auto& mut : helpers::combinations(contending_mut)) {
-        if (mut.first.type == keywords::CONSTEXPR.type && mut.second.type == keywords::VAR.type) {
-            continue;
-        }
-        test_decl_fail({mut.first, mut.second}, expected_diag());
-    }
-    test_decl_fail({keywords::CONSTEXPR, keywords::VAR, keywords::CONSTANT}, expected_diag(3));
+    helpers::test_parser_fail("const let a = 2;", expected_diag(6));
+    helpers::test_parser_fail("let const a = 2;", expected_diag(4));
+    helpers::test_parser_fail("let mut const a = 2;", expected_diag(8));
+    helpers::test_parser_fail("const let mut a = 2;", expected_diag(6));
+    helpers::test_parser_fail("pub let mut comptime let mut a = 2;", expected_diag(12));
 }
 
-TEST_CASE("`constexpr var` is a legal mutability combination") {
-    helpers::resolve_and_check("constexpr var a := 2;");
+TEST_CASE("`comptime` only introduces `let mut`") {
+    helpers::resolve_and_check("comptime let mut a = 2;");
+    helpers::test_parser_fail("comptime let a = 2;",
+                              syntax::diagnostic{"A 'comptime let' is spelled 'const'",
+                                                 syntax::error::ILLEGAL_DECL_MODIFIERS,
+                                                 std::pair{0UZ, 0UZ}});
+    helpers::test_parser_fail("comptime a = 2;",
+                              syntax::diagnostic{"Expected 'let', found an identifier",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 std::pair{0UZ, 9UZ}});
 }
 
-TEST_CASE("Constexpr restrictions") {
-    const auto expected_diag = [] -> syntax::diagnostic {
-        return {"Extern values cannot be known at compile time",
-                syntax::error::ILLEGAL_DECL_MODIFIERS,
-                std::pair{0UZ, 0UZ}};
-    };
-
-    test_decl_fail({keywords::CONSTEXPR, keywords::EXTERN}, expected_diag());
-    test_decl_fail({keywords::EXTERN, keywords::CONSTEXPR}, expected_diag());
+TEST_CASE("`:=` is not a declaration operator") {
+    helpers::test_parser_fail("const a := 2;",
+                              syntax::diagnostic{"Expected an expression, found '='",
+                                                 syntax::error::MISSING_PREFIX_PARSER,
+                                                 std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("ABI/Linkage restrictions") {
@@ -78,8 +79,8 @@ TEST_CASE("ABI/Linkage restrictions") {
                 std::pair{0UZ, 0UZ}};
     };
 
-    test_decl_fail({keywords::EXPORT, keywords::EXTERN, keywords::VAR}, expected_diag());
-    test_decl_fail({keywords::EXTERN, keywords::EXPORT, keywords::VAR}, expected_diag());
+    test_decl_fail({keywords::EXPORT, keywords::EXTERN, keywords::LET}, expected_diag());
+    test_decl_fail({keywords::EXTERN, keywords::EXPORT, keywords::LET}, expected_diag());
 }
 
 TEST_CASE("Extern requirements") {
@@ -90,7 +91,7 @@ TEST_CASE("Extern requirements") {
     };
 
     test_decl_fail({keywords::EXTERN, keywords::CONSTANT}, expected_diag());
-    test_decl_fail({keywords::EXTERN, keywords::VAR}, expected_diag());
+    test_decl_fail({keywords::EXTERN, keywords::LET}, expected_diag());
 }
 
 TEST_CASE("Malformed extern targets") {
@@ -120,40 +121,41 @@ TEST_CASE("Malformed extern targets") {
 }
 
 TEST_CASE("Malformed raw identifiers") {
-    helpers::test_parser_fail(R"(const @"" := 0;)",
+    helpers::test_parser_fail(R"(const @"" = 0;)",
                               syntax::diagnostic{"A raw identifier cannot be empty",
                                                  syntax::error::EMPTY_RAW_IDENTIFIER,
                                                  std::pair{0UZ, 6UZ}});
 
-    helpers::test_parser_fail(R"(const x := @"unterminated;)",
+    helpers::test_parser_fail(R"(const x = @"unterminated;)",
                               syntax::diagnostic{"Unterminated raw identifier",
                                                  syntax::error::UNTERMINATED_RAW_IDENTIFIER,
-                                                 std::pair{0UZ, 11UZ}});
+                                                 std::pair{0UZ, 10UZ}});
 }
 
 TEST_CASE("Non-extern declarations must be value-initialized") {
     const auto expected_diag = [] -> syntax::diagnostic {
         return {"Non-extern declarations must be value-initialized; use '= undefined' to leave a "
-                "'var' unspecified",
+                "'let mut' unspecified",
                 syntax::error::DECL_MISSING_VALUE,
                 std::pair{0UZ, 0UZ}};
     };
 
     test_decl_fail({keywords::CONSTANT}, expected_diag(), "a: i32;");
-    test_decl_fail({keywords::CONSTEXPR}, expected_diag(), "a: i32;");
-    test_decl_fail({keywords::VAR}, expected_diag(), "a: i32;");
+    test_decl_fail({keywords::LET}, expected_diag(), "a: i32;");
+    test_decl_fail({keywords::LET, keywords::MUT}, expected_diag(), "a: i32;");
+    test_decl_fail({keywords::COMPTIME, keywords::LET, keywords::MUT}, expected_diag(), "a: i32;");
 }
 
 TEST_CASE("Non-terminated decls") {
     helpers::test_parser_fail(
-        "var a: i32 = 2",
+        "let mut a: i32 = 2",
         syntax::diagnostic{
-            "Expected ';', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected ';', found the end of input", syntax::error::UNEXPECTED_TOKEN, 0, 18});
 }
 
 TEST_CASE("Duplicate declaration modifier") {
     helpers::test_parser_fail(
-        "var var a: i32;",
+        "pub pub let a: i32;",
         syntax::diagnostic{"Declaration modifiers may only be used once in any order",
                            syntax::error::DUPLICATE_DECL_MODIFIER,
                            std::pair{0UZ, 4UZ}});
@@ -168,7 +170,7 @@ TEST_CASE("Illegal deferred statements") {
 
     helpers::test_parser_fail("defer import std;", expected_diag());
     helpers::test_parser_fail("defer return 3;", expected_diag());
-    helpers::test_parser_fail("defer var a: i32 = 2;", expected_diag());
+    helpers::test_parser_fail("defer let mut a: i32 = 2;", expected_diag());
 }
 
 TEST_CASE("Missing deferred statements") {
@@ -305,11 +307,11 @@ TEST_CASE("`using` is an ordinary identifier") {
 
 TEST_CASE("A failed top-level statement is skipped as a unit without cascading errors") {
     helpers::test_parser_fail(
-        R"(const f := fn(x: i32, y): i32 { return 0; };
-const g := 1 +;)",
-        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 23},
+        R"(const f = fn(x: i32, y): i32 { return 0; };
+const g = 1 +;)",
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 22},
         syntax::diagnostic{
-            "Expected an expression, found ';'", syntax::error::MISSING_PREFIX_PARSER, 1, 14});
+            "Expected an expression, found ';'", syntax::error::MISSING_PREFIX_PARSER, 1, 13});
 }
 
 } // namespace ghoti::tests

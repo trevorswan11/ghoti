@@ -42,15 +42,15 @@ TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        @[inline(.always)] pub const always := fn(x: i32): i32 { return x; };
-        @[inline(.never)] pub const never := fn(x: i32): i32 { return x; };
-        pub const hint := @[inline(.hint)] fn(x: i32): i32 { return x; };
-        constexpr FAST := true;
-        @[inline(if (FAST) .always else .never)] pub const computed := fn(x: i32): i32 {
+        @[inline(.always)] pub const always = fn(x: i32): i32 { return x; };
+        @[inline(.never)] pub const never = fn(x: i32): i32 { return x; };
+        pub const hint = @[inline(.hint)] fn(x: i32): i32 { return x; };
+        const FAST = true;
+        @[inline(if (FAST) .always else .never)] pub const computed = fn(x: i32): i32 {
             return x;
         };
-        pub const plain := fn(x: i32): i32 { return x; };
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const plain = fn(x: i32): i32 { return x; };
+        pub const main = fn(args: [][:0]u8): i32 {
             return always(1) + never(2) + hint(3) + computed(4) + plain(5);
         };
     )")};
@@ -77,13 +77,13 @@ TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") 
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const trap_stub := @[naked] fn(): void {
+        pub const trap_stub = @[naked] fn(): void {
             asm {
                 template: "",
                 options: (volatile, noreturn),
             };
         };
-        pub const main := fn(args: [][:0]u8): void {};
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -95,35 +95,35 @@ TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") 
 
 TEST_CASE("Function-only attributes are validated") {
     SECTION("inline needs a builtin.Inline value") {
-        CHECK(has_error("@[inline(1)] const f := fn(): i32 { return 0; };",
+        CHECK(has_error("@[inline(1)] const f = fn(): i32 { return 0; };",
                         sema::error::ILLEGAL_ATTRIBUTE));
-        CHECK(has_error("@[inline(.sometimes)] const f := fn(): i32 { return 0; };",
+        CHECK(has_error("@[inline(.sometimes)] const f = fn(): i32 { return 0; };",
                         sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("naked cannot also be inline(.always)") {
-        CHECK(has_error("@[naked, inline(.always)] const f := fn(): void {};",
+        CHECK(has_error("@[naked, inline(.always)] const f = fn(): void {};",
                         sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("a declaration that is not initialized by a function literal") {
         CHECK(has_error(R"(
-            const f := fn(): i32 { return 0; };
-            @[inline(.always)] const g := f;
+            const f = fn(): i32 { return 0; };
+            @[inline(.always)] const g = f;
         )",
                         sema::error::ILLEGAL_ATTRIBUTE));
         CHECK(has_error("@[naked] extern const f: fn(): void;", sema::error::ILLEGAL_ATTRIBUTE));
         CHECK(has_error("@[inline(.never)] const X: i32 = 3;", sema::error::ILLEGAL_ATTRIBUTE));
     }
     SECTION("the same attribute on the declaration and its literal") {
-        CHECK(has_error("@[inline(.never)] const f := @[inline(.always)] fn(): i32 { return 0; };",
+        CHECK(has_error("@[inline(.never)] const f = @[inline(.always)] fn(): i32 { return 0; };",
                         sema::error::ILLEGAL_ATTRIBUTE));
     }
 }
 
 TEST_CASE("@[align(n)] raises a field's alignment in the aggregate layout") {
     helpers::resolve_and_check(R"(
-        const S := struct { a: u8, @[align(16)] b: u8 };
-        const Outer := struct { tag: u8, inner: S };
-        constexpr {
+        const S = struct { a: u8, @[align(16)] b: u8 };
+        const Outer = struct { tag: u8, inner: S };
+        comptime {
             @assert(@alignOf(S) == 16);
             @assert(@sizeOf(S) == 32);
             @assert(@sizeOf(Outer) == 48);
@@ -135,13 +135,13 @@ TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const S := struct { a: u8, @[align(16)] b: u8, c: u8 };
-        pub var global_s: S = .{ .a = 1, .b = 2, .c = 3 };
-        pub const main := fn(args: [][:0]u8): i32 {
-            var s: S = .{ .a = 4, .b = 5, .c = 6 };
+        const S = struct { a: u8, @[align(16)] b: u8, c: u8 };
+        pub let mut global_s: S = .{ .a = 1, .b = 2, .c = 3 };
+        pub const main = fn(args: [][:0]u8): i32 {
+            let mut s: S = .{ .a = 4, .b = 5, .c = 6 };
             s.b += global_s.b;
-            const bp: ^mut u8 = ^mut s.b;
-            const p: ^mut S = @fieldParentPtr(S, "b", bp);
+            let bp: ^mut u8 = ^mut s.b;
+            let p: ^mut S = @fieldParentPtr(S, "b", bp);
             return @as(i32, s.b) + @as(i32, p.c);
         };
     )")};
@@ -159,7 +159,7 @@ TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
 }
 
 TEST_CASE("@[align(n)] is not supported on union fields") {
-    CHECK(has_error("const U := union { @[align(8)] a: u8, b: u16 };",
+    CHECK(has_error("const U = union { @[align(8)] a: u8, b: u16 };",
                     sema::error::ILLEGAL_ATTRIBUTE));
 }
 
@@ -167,11 +167,11 @@ TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        @[align(64)] pub var buffer: [4]u8 = undefined;
-        @[align(32)] pub const aligned_fn := fn(x: i32): i32 { return x; };
-        pub const main := fn(args: [][:0]u8): i32 {
-            @[align(32)] var counter: i32 = 0;
-            @[align(16)] const fixed: i32 = 5;
+        @[align(64)] pub let mut buffer: [4]u8 = undefined;
+        @[align(32)] pub const aligned_fn = fn(x: i32): i32 { return x; };
+        pub const main = fn(args: [][:0]u8): i32 {
+            @[align(32)] let mut counter: i32 = 0;
+            @[align(16)] let fixed: i32 = 5;
             counter += fixed;
             return counter + aligned_fn(1) + buffer[0];
         };
@@ -197,24 +197,23 @@ TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
 }
 
 TEST_CASE("@[align(n)] is validated") {
-    CHECK(has_error("@[align(3)] var x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("@[align(0)] var x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("@[align(8)] constexpr X := 3;", sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(has_error("const S := struct { @[inline(.always)] a: i32 };",
+    CHECK(has_error("@[align(3)] let mut x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("@[align(0)] let mut x: i32 = 0;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("@[align(8)] const X = 3;", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("const S = struct { @[inline(.always)] a: i32 };",
                     sema::error::ILLEGAL_ATTRIBUTE));
-    CHECK(
-        has_error("const S := struct { @[discardable] a: i32 };", sema::error::ILLEGAL_ATTRIBUTE));
+    CHECK(has_error("const S = struct { @[discardable] a: i32 };", sema::error::ILLEGAL_ATTRIBUTE));
 }
 
 TEST_CASE("An attribute list inside an aggregate starts a field or a member") {
     helpers::resolve_and_check(R"(
-        const S := struct {
+        const S = struct {
             @[align(8)] a: u8,
             @[align(4)] pub b: u8,
-            @[discardable] pub const get := fn(&self): u8 { return self.a; };
+            @[discardable] pub const get = fn(&self): u8 { return self.a; };
         };
-        pub const main := fn(): i32 {
-            const s: S = .{ .a = 1, .b = 2 };
+        pub const main = fn(): i32 {
+            let s: S = .{ .a = 1, .b = 2 };
             s.get();
             return 0;
         };
@@ -222,7 +221,7 @@ TEST_CASE("An attribute list inside an aggregate starts a field or a member") {
 }
 
 TEST_CASE("The removed `@alignas` builtin no longer parses") {
-    syntax::parser p{"const S := struct { @alignas(4) a: i32 };"};
+    syntax::parser p{"const S = struct { @alignas(4) a: i32 };"};
     ghoti::arena   arena;
     ast::AST       ast;
     CHECK_FALSE(p.consume(ast, arena).empty());
@@ -233,10 +232,10 @@ TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         @[align(if (@sizeOf(T) > 4) 64 else 16)]
-        const first := fn(T: type, a: T, b: T): T { return a; };
-        pub const main := fn(args: [][:0]u8): i32 {
-            const small := first(i32, 1, 2);
-            const big := first(i64, 3, 4);
+        const first = fn(T: type, a: T, b: T): T { return a; };
+        pub const main = fn(args: [][:0]u8): i32 {
+            let small = first(i32, 1, 2);
+            let big = first(i64, 3, 4);
             return small + @intCast(i32, big);
         };
     )")};
@@ -257,22 +256,22 @@ TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
 TEST_CASE("A generic function's conditional discardable folds per instantiation") {
     constexpr std::string_view generic{R"(
         @[discardable(@sizeOf(T) == 1)]
-        const echo := fn(T: type, x: T): T { return x; };
+        const echo = fn(T: type, x: T): T { return x; };
     )"};
     helpers::resolve_and_check(
-        fmt::format("{}\npub const main := fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
+        fmt::format("{}\npub const main = fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
     CHECK(has_error(
-        fmt::format("{}\npub const main := fn(): i32 {{ echo(i32, 1); return 0; }};", generic),
+        fmt::format("{}\npub const main = fn(): i32 {{ echo(i32, 1); return 0; }};", generic),
         sema::error::UNUSED_RESULT));
 }
 
-TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {
+TEST_CASE("A comptime parameter reaches the function's attribute arguments") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         @[align(if (n > 2) 64 else 32)]
-        const scaled := fn(constexpr n: i32, x: i32): i32 { return x * n; };
-        pub const main := fn(args: [][:0]u8): i32 { return scaled(2, 1) + scaled(3, 1); };
+        const scaled = fn(comptime n: i32, x: i32): i32 { return x * n; };
+        pub const main = fn(args: [][:0]u8): i32 { return scaled(2, 1) + scaled(3, 1); };
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -289,10 +288,10 @@ TEST_CASE("A constexpr parameter reaches the function's attribute arguments") {
 
 TEST_CASE("A type constructor's field attributes fold per instantiation") {
     helpers::resolve_and_check(R"(
-        const Boxed := fn(T: type): type {
+        const Boxed = fn(T: type): type {
             return struct { tag: u8, @[align(@alignOf(T) * 4)] value: T };
         };
-        constexpr {
+        comptime {
             @assert(@alignOf(Boxed(i32)) == 16);
             @assert(@alignOf(Boxed(u8)) == 4);
             @assert(@sizeOf(Boxed(i32)) == 32);
@@ -301,12 +300,12 @@ TEST_CASE("A type constructor's field attributes fold per instantiation") {
 }
 
 TEST_CASE("An attribute argument must be known at compile time") {
-    CHECK(has_error("@[align(n)] const f := fn(n: usize): i32 { return 0; };",
+    CHECK(has_error("@[align(n)] const f = fn(n: usize): i32 { return 0; };",
                     sema::error::ILLEGAL_ATTRIBUTE));
 }
 
 TEST_CASE("The removed `naked fn` prefix no longer parses") {
-    syntax::parser p{"const f := naked fn(): void {};"};
+    syntax::parser p{"const f = naked fn(): void {};"};
     ghoti::arena   arena;
     ast::AST       ast;
     CHECK_FALSE(p.consume(ast, arena).empty());

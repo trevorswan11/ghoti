@@ -28,12 +28,12 @@ TEST_CASE("Function missing return type") {
                                                  28});
 }
 
-TEST_CASE("An inferred-type parameter reports a diagnostic instead of crashing") {
-    helpers::test_parser_fail("fn(x := 1): i32;",
+TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
+    helpers::test_parser_fail("fn(x = 1): i32;",
                               syntax::diagnostic{"Function parameters must be explicitly typed",
                                                  syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
                                                  0,
-                                                 8});
+                                                 7});
 }
 
 TEST_CASE("Function parameter missing type") {
@@ -138,11 +138,11 @@ TEST_CASE("Discarded function type parameters") {
             std::pair{0UZ, 11UZ}});
 
     helpers::test_parser_fail(
-        "var f: fn(_: i32): i32;",
+        "let mut f: fn(_: i32): i32;",
         syntax::diagnostic{
             "Function type parameter names cannot be discarded; a parameter name is required",
             syntax::error::FN_TYPE_PARAMETER_DISCARDED,
-            std::pair{0UZ, 10UZ}});
+            std::pair{0UZ, 14UZ}});
 }
 
 } // namespace ghoti::tests

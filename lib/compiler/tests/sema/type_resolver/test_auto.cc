@@ -20,11 +20,11 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Declaration auto type inference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        var a: auto = 42;
+        let mut a: auto = 42;
         const b: auto = true;
-        var c := 100i64;
-        const d := false;
-        var s := "hello";
+        let mut c = 100i64;
+        const d = false;
+        let mut s = "hello";
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
@@ -75,7 +75,7 @@ TEST_CASE("Declaration auto type inference") {
 }
 
 TEST_CASE("Declaration auto without initializer fails") {
-    helpers::test_resolver_fail("var a: auto = undefined;",
+    helpers::test_resolver_fail("let mut a: auto = undefined;",
                                 sema::diagnostic{"Type 'auto' requires an initializer expression",
                                                  sema::error::AUTO_WITHOUT_INITIALIZER,
                                                  std::pair{0UZ, 0UZ}});
@@ -83,14 +83,14 @@ TEST_CASE("Declaration auto without initializer fails") {
 
 TEST_CASE("Illegal auto usage in structural types") {
     SECTION("Struct field without default value") {
-        helpers::test_resolver_fail("const S := struct { a: auto, };",
+        helpers::test_resolver_fail("const S = struct { a: auto, };",
                                     sema::diagnostic{"Struct field 'a' cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 23UZ}});
+                                                     std::pair{0UZ, 22UZ}});
     }
 
     SECTION("Struct field with default value infers type") {
-        auto [ctx, idx]{helpers::resolve_and_check("const S := struct { a: auto = 42, };")};
+        auto [ctx, idx]{helpers::resolve_and_check("const S = struct { a: auto = 42, };")};
         const auto [s_sym, s_sym_data, s_node_data, s_type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("S", idx)};
         CHECK(s_sym.get_kind_opt() == sema::symbol_kind::TYPE);
@@ -102,57 +102,57 @@ TEST_CASE("Illegal auto usage in structural types") {
     }
 
     SECTION("Union field cannot have auto") {
-        helpers::test_resolver_fail("const U := union { a: auto, };",
+        helpers::test_resolver_fail("const U = union { a: auto, };",
                                     sema::diagnostic{"Union field 'a' cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 22UZ}});
+                                                     std::pair{0UZ, 21UZ}});
     }
 }
 
 TEST_CASE("Illegal auto usage in type aliases and function types") {
     SECTION("Type alias cannot be auto") {
-        helpers::test_resolver_fail("const A := auto;",
+        helpers::test_resolver_fail("const A = auto;",
                                     sema::diagnostic{"Type aliases cannot be 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 11UZ}});
+                                                     std::pair{0UZ, 10UZ}});
     }
 
     SECTION("Function pointer type cannot have auto parameter") {
         helpers::test_resolver_fail(
-            "var f: fn(x: auto): i32 = undefined;",
+            "let mut f: fn(x: auto): i32 = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' parameter types",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 13UZ}});
+                             std::pair{0UZ, 17UZ}});
     }
 
     SECTION("Function pointer type cannot have auto return type") {
         helpers::test_resolver_fail(
-            "var f: fn(n: i32): auto = undefined;",
+            "let mut f: fn(n: i32): auto = undefined;",
             sema::diagnostic{"Function types cannot have 'auto' return type",
                              sema::error::ILLEGAL_AUTO_USAGE,
-                             std::pair{0UZ, 19UZ}});
+                             std::pair{0UZ, 23UZ}});
     }
 
     SECTION("Array type cannot have auto element type") {
-        helpers::test_resolver_fail("var a: [5]auto = undefined;",
+        helpers::test_resolver_fail("let mut a: [5]auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 10UZ}});
+                                                     std::pair{0UZ, 14UZ}});
 
-        helpers::test_resolver_fail("var a: []auto = undefined;",
+        helpers::test_resolver_fail("let mut a: []auto = undefined;",
                                     sema::diagnostic{"Array elements cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 9UZ}});
+                                                     std::pair{0UZ, 13UZ}});
     }
 }
 
 TEST_CASE("Function return type auto inference") {
     SECTION("Infers return type from return statement with value") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const f := fn(): auto {
+            const f = fn(): auto {
                 return 42;
             };
-            const result := f();
+            const result = f();
         )")};
 
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
@@ -167,8 +167,8 @@ TEST_CASE("Function return type auto inference") {
 
     SECTION("Infers void when function body has no return statements") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const f := fn(): auto {};
-            const result := f();
+            const f = fn(): auto {};
+            const result = f();
         )")};
 
         const auto [f_sym, f_sym_data, f_node, f_type, f_type_data]{
@@ -182,7 +182,7 @@ TEST_CASE("Function return type auto inference") {
 
     SECTION("Infers void when function returns without expression") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const f := fn(): auto {
+            const f = fn(): auto {
                 return;
             };
         )")};
@@ -194,7 +194,7 @@ TEST_CASE("Function return type auto inference") {
 
     SECTION("Infers return type from conditional branches") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const f := fn(x: i32): auto {
+            const f = fn(x: i32): auto {
                 if (x > 0) {
                     return true;
                 } else {
@@ -210,13 +210,13 @@ TEST_CASE("Function return type auto inference") {
 
     SECTION("Nested functions infer independent auto return types") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const outer := fn(): auto {
-                const inner := fn(): auto {
+            const outer = fn(): auto {
+                const inner = fn(): auto {
                     return 100i64;
                 };
                 return inner();
             };
-            const result := outer();
+            const result = outer();
         )")};
 
         const auto [out_sym, out_sym_data, out_node, out_type, out_type_data]{
@@ -229,10 +229,10 @@ TEST_CASE("Function return type auto inference") {
         CHECK(r_type == ctx->get_int_type(64, true));
     }
 
-    SECTION("Infers return type from constexpr conditional branches") {
+    SECTION("Infers return type from comptime conditional branches") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const f := fn(): auto {
-                if constexpr (true) {
+            const f = fn(): auto {
+                if comptime (true) {
                     return 42;
                 } else {
                     return 100;
@@ -249,11 +249,11 @@ TEST_CASE("Function return type auto inference") {
 TEST_CASE("Generic function instantiation and deduplication") {
     SECTION("Instantiates generic function with different parameter types") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const id := fn(x: auto): auto {
+            const id = fn(x: auto): auto {
                 return x;
             };
-            const r1 := id(42);
-            const r2 := id(true);
+            const r1 = id(42);
+            const r2 = id(true);
         )")};
 
         const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
@@ -271,11 +271,11 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
     SECTION("Deduplicates multiple calls with identical argument types") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const id := fn(x: auto): auto {
+            const id = fn(x: auto): auto {
                 return x;
             };
-            const a := id(10);
-            const b := id(20);
+            const a = id(10);
+            const b = id(20);
         )")};
 
         const auto [a_sym, a_sym_data, a_node, a_type]{
@@ -292,11 +292,11 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
     SECTION("Instantiates generic function with multiple auto parameters") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const add := fn(a: auto, b: auto): auto {
+            const add = fn(a: auto, b: auto): auto {
                 return a + b;
             };
-            const r1 := add(1, 2);
-            const r2 := add(10i64, 20i64);
+            const r1 = add(1, 2);
+            const r2 = add(10i64, 20i64);
         )")};
 
         const auto [r1_sym, r1_sym_data, r1_node, r1_type]{
@@ -314,10 +314,10 @@ TEST_CASE("Generic function instantiation and deduplication") {
 
     SECTION("Instantiates generic function with mixed concrete and auto parameters") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const choose := fn(flag: bool, x: auto): auto {
+            const choose = fn(flag: bool, x: auto): auto {
                 return x;
             };
-            const r := choose(true, 99);
+            const r = choose(true, 99);
         )")};
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
@@ -333,10 +333,10 @@ TEST_CASE("Generic function instantiation error handling") {
     SECTION("Type error inside generic function body poisons call site") {
         helpers::test_resolver_fail(
             R"(
-            const bad := fn(x: auto): auto {
+            const bad = fn(x: auto): auto {
                 return x.non_existent_field;
             };
-            const res := bad(42);
+            const res = bad(42);
         )",
             sema::diagnostic{
                 "Can only access inner objects inside of structs, unions, and enums; found 'i32'",
@@ -347,10 +347,10 @@ TEST_CASE("Generic function instantiation error handling") {
 
 TEST_CASE("Cross-module generic function instantiation") {
     constexpr std::string_view math_gh{R"(
-        pub const identity := fn(val: auto): auto {
+        pub const identity = fn(val: auto): auto {
             return val;
         };
-        pub const double_val := fn(x: auto): auto {
+        pub const double_val = fn(x: auto): auto {
             return x + x;
         };
     )"};
@@ -358,9 +358,9 @@ TEST_CASE("Cross-module generic function instantiation") {
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "math.gh" as math;
-            const a := math.identity(42);
-            const b := math.identity(true);
-            const c := math.double_val(100i64);
+            const a = math.identity(42);
+            const b = math.identity(true);
+            const c = math.double_val(100i64);
         )",
         helpers::make_vector<helpers::mock_file>(
             helpers::mock_file{.path = "math.gh", .source = math_gh}))};
@@ -381,12 +381,12 @@ TEST_CASE("Cross-module generic function instantiation") {
 TEST_CASE("Generic functions with complex types and chaining") {
     SECTION("Generic function accepting struct parameter") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const Point := struct { x: i32, y: i32, };
-            const get_x := fn(p: auto): auto {
+            const Point = struct { x: i32, y: i32, };
+            const get_x = fn(p: auto): auto {
                 return p.x;
             };
-            const pt := Point{ .x = 10, .y = 20 };
-            const px := get_x(pt);
+            const pt = Point{ .x = 10, .y = 20 };
+            const px = get_x(pt);
         )")};
 
         const auto [px_sym, px_sym_data, px_node, px_type]{
@@ -396,11 +396,11 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
     SECTION("Generic function indexing slice/array") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const first := fn(arr: auto): auto {
+            const first = fn(arr: auto): auto {
                 return arr[0];
             };
-            const s := "hello";
-            const c := first(s);
+            const s = "hello";
+            const c = first(s);
         )")};
 
         const auto [c_sym, c_sym_data, c_node, c_type]{
@@ -410,10 +410,10 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
     SECTION("Generic function with explicit non-auto return type") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const is_positive := fn(x: auto): bool {
+            const is_positive = fn(x: auto): bool {
                 return x > 0;
             };
-            const r := is_positive(10);
+            const r = is_positive(10);
         )")};
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
@@ -423,13 +423,13 @@ TEST_CASE("Generic functions with complex types and chaining") {
 
     SECTION("Chained generic function calls") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const inner := fn(x: auto): auto {
+            const inner = fn(x: auto): auto {
                 return x;
             };
-            const outer := fn(y: auto): auto {
+            const outer = fn(y: auto): auto {
                 return inner(y);
             };
-            const res := outer(42);
+            const res = outer(42);
         )")};
 
         const auto [res_sym, res_sym_data, res_node, res_type]{
@@ -451,38 +451,38 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
 
     SECTION("`@TypeOf` of an `auto` parameter") {
         check_widths(R"(
-            const f := fn(value: auto): auto {
-                var a: @TypeOf(value) = value;
+            const f = fn(value: auto): auto {
+                let mut a: @TypeOf(value) = value;
                 return a;
             };
-            const x := f(5u16);
-            const y := f(7u32);
+            const x = f(5u16);
+            const y = f(7u32);
         )");
     }
 
     SECTION("A `T: type` parameter") {
         check_widths(R"(
-            const f := fn(T: type, value: T): auto {
-                var a: T = value;
+            const f = fn(T: type, value: T): auto {
+                let mut a: T = value;
                 return a;
             };
-            const x := f(u16, 5);
-            const y := f(u32, 7);
+            const x = f(u16, 5);
+            const y = f(u32, 7);
         )");
     }
 
     SECTION("A `using` alias built from `@typeInfo(@TypeOf(value))`") {
         check_widths(R"(
-            const f := fn(value: auto, base: u8): auto {
-                constexpr info := @typeInfo(@TypeOf(value)).int;
-                constexpr bits := @max(info.bits, 8u16);
-                const MinInt := @Int(.{ .signedness = .unsigned, .bits = bits });
-                var a: MinInt = value;
-                const d: MinInt = a % @intCast(MinInt, base);
+            const f = fn(value: auto, base: u8): auto {
+                const info = @typeInfo(@TypeOf(value)).int;
+                const bits = @max(info.bits, 8u16);
+                const MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                let mut a: MinInt = value;
+                let d: MinInt = a % @intCast(MinInt, base);
                 return d;
             };
-            const x := f(5u16, 2);
-            const y := f(7u32, 4);
+            const x = f(5u16, 2);
+            const y = f(7u32, 4);
         )");
     }
 }
@@ -493,9 +493,9 @@ TEST_CASE("Dereferencing pointer and reference expressions") {
         const r: &i32 = undefined;
         const pp: ^^i32 = undefined;
 
-        const val_p := *p;
-        const val_r := *r;
-        const val_pp := **pp;
+        const val_p = *p;
+        const val_r = *r;
+        const val_pp = **pp;
     )")};
 
     const auto [p_sym, _, p_decl, p_type]{

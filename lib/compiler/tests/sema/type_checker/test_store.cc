@@ -12,8 +12,8 @@ namespace ghoti::tests {
 TEST_CASE("Type checker store and assignment validation") {
     SECTION("Valid variable assignment succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): void {
-                var x: i32 = 0;
+            const f = fn(): void {
+                let mut x: i32 = 0;
                 x = 42;
             };
         )");
@@ -22,8 +22,8 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Assignment with incompatible type fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                var x: i32 = 0;
+            const f = fn(): void {
+                let mut x: i32 = 0;
                 x = true;
             };
         )",
@@ -36,7 +36,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Store through mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 *p = 42;
             };
         )");
@@ -45,7 +45,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Store through const pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^i32): void {
+            const f = fn(p: ^i32): void {
                 *p = 42;
             };
         )",
@@ -57,7 +57,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Store incompatible type through pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 *p = true;
             };
         )",
@@ -71,8 +71,8 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                var x: opaque = undefined;
+            const f = fn(): void {
+                let mut x: opaque = undefined;
             };
         )",
             sema::diagnostic{"Cannot allocate variable of opaque type",
@@ -82,7 +82,7 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Indexed store through a mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^mut i32): void {
+            const f = fn(p: ^mut i32): void {
                 p[0] = 42;
             };
         )");
@@ -91,7 +91,7 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Indexed store through a const pointer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^i32): void {
+            const f = fn(p: ^i32): void {
                 p[0] = 42;
             };
         )",
@@ -103,8 +103,8 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Writing an element of a const-element array still fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                var a: [4uz]i32 = [4uz]i32{0, 0, 0, 0};
+            const f = fn(): void {
+                let mut a: [4uz]i32 = [4uz]i32{0, 0, 0, 0};
                 a[0] = 42;
             };
         )",
@@ -115,14 +115,14 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Copying a const-element array into mutable-element storage succeeds") {
         helpers::type_check_and_verify(R"(
-            const make := fn(): [3]u8 { return [3]u8{1, 2, 3}; };
-            const f := fn(): void {
-                const arr: [3]u8 = .{1, 2, 3};
-                var m: [3]mut u8 = arr;
-                var n: [3]mut u8 = [3]u8{1, 2, 3};
-                var k: [3]mut u8 = make();
-                const h: [2][2]u8 = .{.{1, 2}, .{3, 4}};
-                var g: [2]mut [2]mut u8 = h;
+            const make = fn(): [3]u8 { return [3]u8{1, 2, 3}; };
+            const f = fn(): void {
+                let arr: [3]u8 = .{1, 2, 3};
+                let mut m: [3]mut u8 = arr;
+                let mut n: [3]mut u8 = [3]u8{1, 2, 3};
+                let mut k: [3]mut u8 = make();
+                let h: [2][2]u8 = .{.{1, 2}, .{3, 4}};
+                let mut g: [2]mut [2]mut u8 = h;
                 m[0] = 10;
                 n[0] = 1;
                 k[0] = 1;
@@ -134,18 +134,18 @@ TEST_CASE("Type checker store and assignment validation") {
 
     SECTION("Copying a mutable-element array into const-element storage succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): void {
-                var m: [3]mut u8 = .{1, 2, 3};
-                const c: [3]u8 = m;
+            const f = fn(): void {
+                let mut m: [3]mut u8 = .{1, 2, 3};
+                let c: [3]u8 = m;
             };
         )");
     }
 
     SECTION("Const-element array argument binds a mutable-element array parameter") {
         helpers::type_check_and_verify(R"(
-            const g := fn(a: [3]mut u8): u8 { return a[0]; };
-            const f := fn(): void {
-                const arr: [3]u8 = .{1, 2, 3};
+            const g = fn(a: [3]mut u8): u8 { return a[0]; };
+            const f = fn(): void {
+                let arr: [3]u8 = .{1, 2, 3};
                 _ = g(arr);
             };
         )");
@@ -154,35 +154,35 @@ TEST_CASE("Type checker store and assignment validation") {
     SECTION("Array copy still rejects gaining pointee mutability through pointer elements") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(p: ^u8): void {
-                const arr: [2]^u8 = .{p, p};
-                var m: [2]mut ^mut u8 = arr;
+            const f = fn(p: ^u8): void {
+                let arr: [2]^u8 = .{p, p};
+                let mut m: [2]mut ^mut u8 = arr;
             };
         )",
             sema::diagnostic{"Type mismatch in store: cannot assign '[2]^u8' to '[2]mut ^mut u8'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 40UZ}});
+                             std::pair{3UZ, 44UZ}});
     }
 
     SECTION("Array copy still rejects gaining mutability through slice elements") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(s: []u8): void {
-                const arr: [2][]u8 = .{s, s};
-                var m: [2][]mut u8 = arr;
+            const f = fn(s: []u8): void {
+                let arr: [2][]u8 = .{s, s};
+                let mut m: [2][]mut u8 = arr;
             };
         )",
             sema::diagnostic{"Type mismatch in store: cannot assign '[2][]u8' to '[2][]mut u8'",
                              sema::error::TYPE_MISMATCH,
-                             std::pair{3UZ, 37UZ}});
+                             std::pair{3UZ, 41UZ}});
     }
 
     SECTION("Const-element array still does not coerce to a mutable-element slice") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                var arr: [3]u8 = .{1, 2, 3};
-                const s: []mut u8 = arr;
+            const f = fn(): void {
+                let mut arr: [3]u8 = .{1, 2, 3};
+                let s: []mut u8 = arr;
             };
         )",
             sema::diagnostic{"Type mismatch in store: cannot assign '[]u8' to '[]mut u8'",
@@ -200,32 +200,32 @@ TEST_CASE("Type checker store and assignment validation") {
                                  std::pair{line, col}});
         };
 
-        SECTION("`const` and `var` declarations") {
+        SECTION("`let` and `let mut` declarations") {
             expect_ref_to_ptr(R"(
-            const f := fn(): void {
-                var x: i32 = 0;
-                const p: ^mut i32 = &mut x;
+            const f = fn(): void {
+                let mut x: i32 = 0;
+                let p: ^mut i32 = &mut x;
             };
         )",
                               3,
-                              36,
+                              34,
                               true);
             expect_ref_to_ptr(R"(
-            const f := fn(): void {
-                var x: i32 = 0;
-                var p: ^i32 = &x;
+            const f = fn(): void {
+                let mut x: i32 = 0;
+                let mut p: ^i32 = &x;
             };
         )",
                               3,
-                              30,
+                              34,
                               true);
         }
 
         SECTION("Assignment, call argument, and struct field initializer") {
             expect_ref_to_ptr(R"(
-            const f := fn(p: ^mut i32): void {
-                var x: i32 = 0;
-                var q: ^i32 = p;
+            const f = fn(p: ^mut i32): void {
+                let mut x: i32 = 0;
+                let mut q: ^i32 = p;
                 q = &x;
             };
         )",
@@ -233,9 +233,9 @@ TEST_CASE("Type checker store and assignment validation") {
                               20,
                               true);
             expect_ref_to_ptr(R"(
-            const g := fn(q: ^i32): i32 { return *q; };
-            const f := fn(): i32 {
-                const x: i32 = 0;
+            const g = fn(q: ^i32): i32 { return *q; };
+            const f = fn(): i32 {
+                let x: i32 = 0;
                 return g(&x);
             };
         )",
@@ -243,23 +243,23 @@ TEST_CASE("Type checker store and assignment validation") {
                               25,
                               true);
             expect_ref_to_ptr(R"(
-            const S := struct { p: ^i32 };
-            const f := fn(): void {
-                const x: i32 = 0;
-                const s: S = .{ .p = &x };
+            const S = struct { p: ^i32 };
+            const f = fn(): void {
+                let x: i32 = 0;
+                let s: S = .{ .p = &x };
             };
         )",
                               4,
-                              37,
+                              35,
                               true);
         }
 
         SECTION("A reference-typed value that isn't a `&` expression gets no `^` hint") {
             expect_ref_to_ptr(R"(
-            const f := fn(x: &i32): ^i32 { return x; };
+            const f = fn(x: &i32): ^i32 { return x; };
         )",
                               1,
-                              50,
+                              49,
                               false);
         }
     }

@@ -28,9 +28,9 @@ auto hover_names(const mod::module& module, std::string_view name) -> stdx::opti
 }
 
 constexpr std::string_view CALLBACKS{R"(
-    pub const Callback := fn(code: i32): bool;
-    pub const OnKey := Callback;
-    pub const notify := fn(message: []u8, level: u8): void {};
+    pub const Callback = fn(code: i32): bool;
+    pub const OnKey = Callback;
+    pub const notify = fn(message: []u8, level: u8): void {};
 )"};
 
 } // namespace
@@ -39,9 +39,9 @@ TEST_CASE("callable parameter names follow aliases declared in another module") 
     // A bodyless `fn(...)` type's own parameter symbols never resolve, so check errors only
     auto [ctx, idx]{helpers::resolve(R"(
         import "cb.gh" as cb;
-        const Handler := struct { on_event: cb.Callback, on_key: cb.OnKey };
-        const apply := fn(handler: cb.Callback, code: i32): bool { return handler(code); };
-        const relay := cb.notify;
+        const Handler = struct { on_event: cb.Callback, on_key: cb.OnKey };
+        const apply = fn(handler: cb.Callback, code: i32): bool { return handler(code); };
+        const relay = cb.notify;
     )",
                                      {helpers::mock_file{"cb.gh", CALLBACKS, "cb"}})};
     const auto& root{ctx->root_mod};
@@ -56,9 +56,9 @@ TEST_CASE("callable parameter names follow aliases declared in another module") 
 
 TEST_CASE("callable parameter names come from literals, `fn` types, and `dyn Fn` aliases") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := fn(lhs: i32, rhs: i32): i32 { return lhs + rhs; };
-        const Op := dyn Fn(value: i32): i32;
-        const apply := fn(op: Op, raw: fn(first: i32, second: i32): i32): i32 {
+        const add = fn(lhs: i32, rhs: i32): i32 { return lhs + rhs; };
+        const Op = dyn Fn(value: i32): i32;
+        const apply = fn(op: Op, raw: fn(first: i32, second: i32): i32): i32 {
             return op(raw(1, 2)) + add(3, 4);
         };
     )")};
@@ -72,8 +72,8 @@ TEST_CASE("callable parameter names come from literals, `fn` types, and `dyn Fn`
 
 TEST_CASE("a self-referential alias chain stops instead of recursing forever") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
-            const @"i32": i32 = 42;
+        pub const main = fn(): i32 {
+            let @"i32": i32 = 42;
             return @"i32";
         };
     )")};

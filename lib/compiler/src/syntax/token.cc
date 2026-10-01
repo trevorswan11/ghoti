@@ -224,9 +224,9 @@ auto token_t::materialize_raw_identifier() const -> std::string {
 
 auto token_t::is_decl_token() const noexcept -> bool {
     switch (type) {
-    case token_type_t::VAR:
+    case token_type_t::LET:
     case token_type_t::CONSTANT:
-    case token_type_t::CONSTEXPR:
+    case token_type_t::COMPTIME:
     case token_type_t::PUBLIC:
     case token_type_t::EXTERN:
     case token_type_t::EXPORT:

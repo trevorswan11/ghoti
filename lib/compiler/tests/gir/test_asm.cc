@@ -9,7 +9,7 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR: inline asm lowers to an INLINE_ASM instruction") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        pub const sys_write := fn(n: i64, fd: i64, buf: ^u8, len: usize): void {
+        pub const sys_write = fn(n: i64, fd: i64, buf: ^u8, len: usize): void {
             asm {
                 template: "syscall",
                 inputs: ("{rax}" = n, "{rdi}" = fd, "{rsi}" = buf, "{rdx}" = len),
@@ -26,8 +26,8 @@ TEST_CASE("GIR: inline asm lowers to an INLINE_ASM instruction") {
 
 TEST_CASE("GIR: inline asm result slot yields a typed temporary") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        pub const timestamp := fn(): u32 {
-            const lo := asm u32 {
+        pub const timestamp = fn(): u32 {
+            let lo = asm u32 {
                 template: "rdtsc",
                 outputs: ("={eax}" = _),
                 options: (volatile),
@@ -42,7 +42,7 @@ TEST_CASE("GIR: inline asm result slot yields a typed temporary") {
 
 TEST_CASE("GIR: noreturn inline asm is followed by unreachable") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        pub const halt := fn(code: i64): void {
+        pub const halt = fn(code: i64): void {
             asm {
                 template: "syscall",
                 inputs: ("{rax}" = code),

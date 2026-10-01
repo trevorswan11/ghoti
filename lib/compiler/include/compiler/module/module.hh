@@ -69,7 +69,7 @@ struct cfg_value_result {
     ast::node_id chosen{ast::node_id::make_invalid()};
 };
 
-// Which arm of an `if constexpr` the resolver folded to
+// Which arm of an `if comptime` the resolver folded to
 enum class if_branch : u8 {
     CONSEQUENCE,
     ALTERNATE,
@@ -82,8 +82,8 @@ struct dyn_vtable {
 
 // Why a `decl_stmt` has no runtime storage
 enum class storageless_kind : u8 {
-    ALIAS,           // Aliases a type or module
-    CONSTEXPR_VALUE, // Value holds types
+    ALIAS,          // Aliases a type or module
+    COMPTIME_VALUE, // Value holds types
 };
 
 struct module {
@@ -108,8 +108,8 @@ struct module {
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
 
-    // `if constexpr` node index -> the arm the type resolver folded to
-    ankerl::unordered_dense::map<usize, if_branch> if_constexpr_results;
+    // `if comptime` node index -> the arm the type resolver folded to
+    ankerl::unordered_dense::map<usize, if_branch> if_comptime_results;
 
     // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
     ankerl::unordered_dense::map<usize, usize> match_arm_results;
@@ -168,8 +168,8 @@ struct module {
     }
 
     // Every use of a compile-time-only value decl must fold through const_eval
-    [[nodiscard]] auto is_constexpr_value_decl(ast::node_id id) const noexcept -> bool {
-        return get_storageless_kind(id) == storageless_kind::CONSTEXPR_VALUE;
+    [[nodiscard]] auto is_comptime_value_decl(ast::node_id id) const noexcept -> bool {
+        return get_storageless_kind(id) == storageless_kind::COMPTIME_VALUE;
     }
 
     module(std::filesystem::path path,

@@ -17,7 +17,7 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 
-    // Validate that root module contains valid 'pub const main := fn(args: [][:0]u8): void'
+    // Validate that root module contains valid 'pub const main = fn(args: [][:0]u8): void'
     if (auto val_res{analyzer.validate_main_entry(*module)}; !val_res) {
         fmt::println(error_stream_, "{}", val_res.error());
         return stdx::err{clap::error::COMPILATION_FAILED};

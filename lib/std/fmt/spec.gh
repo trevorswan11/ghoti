@@ -1,13 +1,13 @@
 import std;
 
-pub const Align := enum : i32 {
+pub const Align = enum : i32 {
     left,
     right,
     center,
 
     /// Converts the provided byte to an alignment character
-    pub constexpr from := fn(constexpr c: u8): @This() {
-        return match constexpr (c) {
+    pub const from = fn(comptime c: u8): @This() {
+        return match comptime (c) {
             '<' => .left,
             '>' => .right,
             '^' => .center,
@@ -16,8 +16,8 @@ pub const Align := enum : i32 {
     };
 
     /// Checks if the provided byte is a valid alignment character
-    pub constexpr is_valid := fn(constexpr c: u8): bool {
-        return match constexpr (c) {
+    pub const is_valid = fn(comptime c: u8): bool {
+        return match comptime (c) {
             '<', '>', '^' => true,
             _ => false,
         };
@@ -25,24 +25,24 @@ pub const Align := enum : i32 {
 };
 
 test "Align at compile time" {
-    constexpr a_left := Align.from('<');
+    const a_left = Align.from('<');
     @expect(a_left == .left);
-    constexpr a_right := Align.from('>');
+    const a_right = Align.from('>');
     @expect(a_right == .right);
-    constexpr a_center := Align.from('^');
+    const a_center = Align.from('^');
     @expect(a_center == .center);
 
-    constexpr v_left := Align.is_valid('<');
+    const v_left = Align.is_valid('<');
     @expect(v_left == true);
-    constexpr v_right := Align.is_valid('>');
+    const v_right = Align.is_valid('>');
     @expect(v_right == true);
-    constexpr v_center := Align.is_valid('^');
+    const v_center = Align.is_valid('^');
     @expect(v_center == true);
-    constexpr v_bad := Align.is_valid('x');
+    const v_bad = Align.is_valid('x');
     @expect(v_bad == false);
 }
 
-pub const Kind := enum : u8 {
+pub const Kind = enum : u8 {
     d = 'd',
     x = 'x',
     X = 'X',
@@ -56,8 +56,8 @@ pub const Kind := enum : u8 {
     @"?" = '?',
 
     /// Checks if the provided byte is a valid kind character
-    pub constexpr is_valid := fn(constexpr byte: u8): bool {
-        return match constexpr (byte) {
+    pub const is_valid = fn(comptime byte: u8): bool {
+        return match comptime (byte) {
             'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' => true,
             _ => false,
         };
@@ -65,16 +65,16 @@ pub const Kind := enum : u8 {
 };
 
 test "Kind.is_valid at compile time" {
-    constexpr kinds := [_]u8{ 'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' };
-    for constexpr (kinds) |kind| {
-        constexpr k := Kind.is_valid(kind);
+    const kinds = [_]u8{ 'd', 'x', 'X', 'b', 'o', 'c', 's', 'e', 'f', 'p', '?' };
+    for comptime (kinds) |kind| {
+        const k = Kind.is_valid(kind);
         @expect(k == true);
     }
-    constexpr k_invalid := Kind.is_valid('z');
+    const k_invalid = Kind.is_valid('z');
     @expect(k_invalid == false);
 }
 
-pub const Spec := struct {
+pub const Spec = struct {
     pub arg_idx: std.Option(usize) = .empty,
     pub fill: u8 = ' ',
     pub align: std.Option(Align) = .empty,
@@ -86,58 +86,58 @@ pub const Spec := struct {
     pub kind: std.Option(Kind) = .empty, // none means default '{}'
 
     /// Populates the spec with parsed information from its body
-    pub constexpr parse_body := fn(&mut self, constexpr fmt: []u8, constexpr start: usize): usize {
-        constexpr var i := start;
+    pub const parse_body = fn(&mut self, comptime fmt: []u8, comptime start: usize): usize {
+        comptime let mut i = start;
 
         // Fill and align lookahead
-        if constexpr (i + 1 < fmt.len and Align.is_valid(fmt[i + 1])) {
+        if comptime (i + 1 < fmt.len and Align.is_valid(fmt[i + 1])) {
             self.fill = fmt[i];
             self.align = .of(.from(fmt[i + 1]));
             i += 2;
-        } else if constexpr (i < fmt.len and Align.is_valid(fmt[i])) {
+        } else if comptime (i < fmt.len and Align.is_valid(fmt[i])) {
             self.align = .of(.from(fmt[i]));
             i += 1;
         }
 
         // sign
-        if constexpr (i < fmt.len and fmt[i] == '+') {
+        if comptime (i < fmt.len and fmt[i] == '+') {
             self.plus = true;
             i += 1;
         }
 
         // alt
-        if constexpr (i < fmt.len and fmt[i] == '#') {
+        if comptime (i < fmt.len and fmt[i] == '#') {
             self.alt = true;
             i += 1;
         }
 
         // zero
-        if constexpr (i < fmt.len and fmt[i] == '0') {
+        if comptime (i < fmt.len and fmt[i] == '0') {
             self.zero = true;
             i += 1;
         }
 
         // width
-        constexpr width_start := i;
-        while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
-        if constexpr (i > width_start) {
+        const width_start = i;
+        while comptime (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
+        if comptime (i > width_start) {
             self.width = .of(parse_usize(fmt[width_start..i]));
         }
 
         // precision
-        if constexpr (i < fmt.len and fmt[i] == '.') {
+        if comptime (i < fmt.len and fmt[i] == '.') {
             i += 1;
-            constexpr prec_start := i;
-            while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
-            if constexpr (i == prec_start) {
+            const prec_start = i;
+            while comptime (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
+            if comptime (i == prec_start) {
                 @compileError("fmt: bad spec: '.' with no precision digits");
             }
             self.precision = .of(parse_usize(fmt[prec_start..i]));
         }
 
         // kind
-        if constexpr (i < fmt.len and fmt[i] != '}') {
-            if constexpr (!Kind.is_valid(fmt[i])) {
+        if comptime (i < fmt.len and fmt[i] != '}') {
+            if comptime (!Kind.is_valid(fmt[i])) {
                 @compileError("fmt: bad spec: unrecognized type char");
             }
             self.kind = .of(@fromBackingInt(fmt[i]));
@@ -149,8 +149,8 @@ pub const Spec := struct {
 };
 
 test "Spec.parse_body parses all spec inputs at compile time" {
-    constexpr var s: Spec = .{};
-    constexpr end := s.parse_body("*^+08.3f}", 0);
+    comptime let mut s: Spec = .{};
+    const end = s.parse_body("*^+08.3f}", 0);
     @expect(end == 8);
     @expect(s.fill == '*');
     match (s.align) {
@@ -174,22 +174,22 @@ test "Spec.parse_body parses all spec inputs at compile time" {
     }
 }
 
-pub const Placeholder := struct {
+pub const Placeholder = struct {
     spec: Spec,
     next: usize,
 
-    pub constexpr parse := fn(constexpr fmt: []u8, constexpr at: usize): @This() {
-        constexpr var i := at + 1;
-        constexpr var s: Spec = .{};
+    pub const parse = fn(comptime fmt: []u8, comptime at: usize): @This() {
+        comptime let mut i = at + 1;
+        comptime let mut s: Spec = .{};
 
-        constexpr digit_start := i;
-        while constexpr (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
-        if constexpr (i > digit_start) {
+        const digit_start = i;
+        while comptime (i < fmt.len and is_digit(fmt[i])) : (i += 1) {}
+        if comptime (i > digit_start) {
             s.arg_idx = .of(parse_usize(fmt[digit_start..i]));
         }
 
         // Without a colon the spec is extremely simple
-        if constexpr (i < fmt.len and fmt[i] == ':') {
+        if comptime (i < fmt.len and fmt[i] == ':') {
             i += 1;
             i = s.parse_body(fmt, i);
         }
@@ -202,7 +202,7 @@ pub const Placeholder := struct {
 };
 
 test "Placeholder.parse at compile time" {
-    constexpr p_empty := Placeholder.parse("{}", 0);
+    const p_empty = Placeholder.parse("{}", 0);
     @expect(p_empty.next == 2);
     @expect(p_empty.spec.fill == ' ');
     @expect(p_empty.spec.plus == false);
@@ -213,14 +213,14 @@ test "Placeholder.parse at compile time" {
         .none => {},
     }
 
-    constexpr p_idx: Placeholder = .parse("{3}", 0);
+    const p_idx: Placeholder = .parse("{3}", 0);
     @expect(p_idx.next == 3);
     match (p_idx.spec.arg_idx) {
         .some => |idx| @expect(idx == 3),
         .none => unreachable,
     }
 
-    constexpr p_spec: Placeholder = .parse("{2:#08x}", 0);
+    const p_spec: Placeholder = .parse("{2:#08x}", 0);
     @expect(p_spec.next == 8);
     match (p_spec.spec.arg_idx) {
         .some => |idx| @expect(idx == 2),
@@ -238,52 +238,52 @@ test "Placeholder.parse at compile time" {
     }
 }
 
-pub constexpr is_digit := fn(constexpr c: u8): bool {
+pub const is_digit = fn(comptime c: u8): bool {
     return c >= '0' and c <= '9';
 };
 
 test "is_digit at compile time" {
-    constexpr d0 := is_digit('0');
+    const d0 = is_digit('0');
     @expect(d0 == true);
-    constexpr d9 := is_digit('9');
+    const d9 = is_digit('9');
     @expect(d9 == true);
-    constexpr da := is_digit('a');
+    const da = is_digit('a');
     @expect(da == false);
 }
 
 /// Parses a decimal integer from a slice of ASCII digit bytes at compile time.
-pub constexpr parse_usize := fn(constexpr digits: []u8): usize {
-    constexpr var n: usize = 0;
-    for constexpr (digits) |c| {
+pub const parse_usize = fn(comptime digits: []u8): usize {
+    comptime let mut n: usize = 0;
+    for comptime (digits) |c| {
         n = n * 10 + @intCast(usize, c - '0');
     }
     return n;
 };
 
 test "parse_usize at compile time" {
-    constexpr n0 := parse_usize("0");
+    const n0 = parse_usize("0");
     @expect(n0 == 0);
-    constexpr n42 := parse_usize("42");
+    const n42 = parse_usize("42");
     @expect(n42 == 42);
-    constexpr n1234 := parse_usize("1234");
+    const n1234 = parse_usize("1234");
     @expect(n1234 == 1234);
 }
 
-pub constexpr next_placeholder := fn(constexpr fmt: []u8, constexpr from: usize): usize {
-    constexpr var i := from;
-    while constexpr (i < fmt.len) : (i += 1) {
-        if constexpr (fmt[i] == '{') {
+pub const next_placeholder = fn(comptime fmt: []u8, comptime from: usize): usize {
+    comptime let mut i = from;
+    while comptime (i < fmt.len) : (i += 1) {
+        if comptime (fmt[i] == '{') {
             // Ignore double {{
-            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '{') {
+            if comptime (i + 1 < fmt.len and fmt[i + 1] == '{') {
                 i += 1;
                 continue;
             }
             return i;
         }
 
-        if constexpr (fmt[i] == '}') {
+        if comptime (fmt[i] == '}') {
             // Ignore double }}
-            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '}') {
+            if comptime (i + 1 < fmt.len and fmt[i + 1] == '}') {
                 i += 1;
             }
             continue;
@@ -293,30 +293,30 @@ pub constexpr next_placeholder := fn(constexpr fmt: []u8, constexpr from: usize)
 };
 
 test "next_placeholder at compile time" {
-    constexpr p1 := next_placeholder("a{{b}}c{}", 0);
+    const p1 = next_placeholder("a{{b}}c{}", 0);
     @expect(p1 == 7);
-    constexpr p2 := next_placeholder("no placeholders", 0);
+    const p2 = next_placeholder("no placeholders", 0);
     @expect(p2 == 15);
-    constexpr p3 := next_placeholder("{}", 0);
+    const p3 = next_placeholder("{}", 0);
     @expect(p3 == 0);
-    constexpr p4 := next_placeholder("{{}}", 0);
+    const p4 = next_placeholder("{{}}", 0);
     @expect(p4 == 4);
 }
 
-pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): void {
-    constexpr var i: usize = 0;
-    constexpr var placeholder_count: usize = 0;
-    while constexpr (i < fmt.len) {
-        if constexpr (fmt[i] == '{') {
-            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '{') {
+pub const validate = fn(comptime fmt: []u8, comptime arg_count: usize): void {
+    comptime let mut i: usize = 0;
+    comptime let mut placeholder_count: usize = 0;
+    while comptime (i < fmt.len) {
+        if comptime (fmt[i] == '{') {
+            if comptime (i + 1 < fmt.len and fmt[i + 1] == '{') {
                 i += 2;
                 continue;
             }
 
             // parseAt will compile error internally if the spec is bad
-            constexpr parsed: Placeholder = .parse(fmt, i);
-            match constexpr (parsed.spec.arg_idx) {
-                .some => |arg_idx| if constexpr (arg_idx >= arg_count) {
+            const parsed: Placeholder = .parse(fmt, i);
+            match comptime (parsed.spec.arg_idx) {
+                .some => |arg_idx| if comptime (arg_idx >= arg_count) {
                     @compileError("fmt: explicit arg index out of range");
                 },
                 .none => {},
@@ -326,8 +326,8 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
             continue;
         }
 
-        if constexpr (fmt[i] == '}') {
-            if constexpr (i + 1 < fmt.len and fmt[i + 1] == '}') {
+        if comptime (fmt[i] == '}') {
+            if comptime (i + 1 < fmt.len and fmt[i + 1] == '}') {
                 i += 2;
                 continue;
             }
@@ -336,7 +336,7 @@ pub constexpr validate := fn(constexpr fmt: []u8, constexpr arg_count: usize): v
         i += 1;
     }
 
-    if constexpr (placeholder_count != arg_count) {
+    if comptime (placeholder_count != arg_count) {
         @compileError("fmt: wrong number of arguments");
     }
 };
@@ -348,29 +348,29 @@ test "validate at compile time" {
     validate("{:#08x} = {:+5.2f}", 2);
 }
 
-const to_io_err := fn(_: std.io.Error): std.fmt.Error {
+const to_io_err = fn(_: std.io.Error): std.fmt.Error {
     return .io;
 };
 
-pub const pad := fn(
+pub const pad = fn(
     w: &mut dyn std.io.Writer,
     spec: Spec,
     body: []u8,
     default_align: Align,
 ): std.Result(void, std.fmt.Error) {
-    const width := match (spec.width) {
+    let width = match (spec.width) {
         .some => |explicit_width| explicit_width,
         .none => return w.write_all(body).map_err(to_io_err),
     };
     if (width <= body.len) return w.write_all(body).map_err(to_io_err);
 
-    const padding := width - body.len;
-    const left_pad := match (spec.align.unwrap_or(default_align)) {
+    let padding = width - body.len;
+    let left_pad = match (spec.align.unwrap_or(default_align)) {
         .left => 0uz,
         .right => padding,
         .center => padding / 2,
     };
-    const right_pad := padding - left_pad;
+    let right_pad = padding - left_pad;
 
     for (0..left_pad) |_| {
         w.write_byte(spec.fill).map_err(to_io_err)?;
@@ -384,8 +384,8 @@ pub const pad := fn(
 };
 
 test "pad applies default and explicit alignment" {
-    var backing: [16]mut u8 = undefined;
-    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    let mut backing: [16]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
 
     @expect(pad(^mut stream, .{ .width = .of(6) }, "hi", .left) == .ok);
     @expect(std.mem.eql(u8, "hi    ", backing[..stream.pos]));
@@ -396,7 +396,7 @@ test "pad applies default and explicit alignment" {
 }
 
 /// Write N bytes of value `byte` to the writer
-pub const write_fill_n := fn(
+pub const write_fill_n = fn(
     w: &mut dyn std.io.Writer,
     byte: u8,
     n: usize,
@@ -409,13 +409,13 @@ pub const write_fill_n := fn(
 
 /// Writes `body` padded per `spec`, where `body[..prefix_len]` is a sign/radix prefix.
 /// The zero flag overrides fill/align and places '0's between the prefix and the digits
-pub const pad_number := fn(
+pub const pad_number = fn(
     w: &mut dyn std.io.Writer,
     spec: Spec,
     body: []u8,
     prefix_len: usize,
 ): std.Result(void, std.fmt.Error) {
-    const width := match (spec.width) {
+    let width = match (spec.width) {
         .some => |explicit_width| explicit_width,
         .none => return w.write_all(body).map_err(to_io_err),
     };
@@ -430,8 +430,8 @@ pub const pad_number := fn(
 };
 
 test "pad_number places zeros after the prefix and defers to pad otherwise" {
-    var backing: [16]mut u8 = undefined;
-    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    let mut backing: [16]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
 
     @expect(pad_number(&mut stream, .{}, "-0x1f", 3) == .ok);
     @expect(std.mem.eql(u8, "-0x1f", backing[..stream.pos]));
@@ -445,7 +445,7 @@ test "pad_number places zeros after the prefix and defers to pad otherwise" {
     @expect(std.mem.eql(u8, "-0x0001f", backing[..stream.pos]));
 
     stream.pos = 0;
-    const zero_with_align: Spec = .{
+    let zero_with_align: Spec = .{
         .width = .of(6),
         .zero = true,
         .fill = '*',
@@ -467,12 +467,12 @@ test "pad_number places zeros after the prefix and defers to pad otherwise" {
 }
 
 /// Writes a literal/escaped curly brace sequence to the writer
-pub const write_literal := fn(
+pub const write_literal = fn(
     w: &mut dyn std.io.Writer,
     raw: []u8,
 ): std.Result(void, std.fmt.Error) {
-    var start: usize = 0;
-    var i: usize = 0;
+    let mut start: usize = 0;
+    let mut i: usize = 0;
     loop {
         if (i >= raw.len) break;
         if (raw[i] == '{' or raw[i] == '}') {
@@ -493,8 +493,8 @@ pub const write_literal := fn(
 };
 
 test "write_literal unescapes braces and coalesces runs" {
-    var backing: [16]mut u8 = undefined;
-    var stream: std.io.FixedBufferStream = .{ .buf = backing };
+    let mut backing: [16]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
     @expect(write_literal(&mut stream, "a{{b}}c") == .ok);
     @expect(std.mem.eql(u8, "a{b}c", backing[..stream.pos]));
 }

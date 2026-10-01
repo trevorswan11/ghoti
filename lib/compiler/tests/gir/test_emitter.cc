@@ -28,8 +28,8 @@ auto find_call_instruction(const gir::segment& seg) -> stdx::option<const gir::i
 TEST_CASE("Emitter top-level globals and type declarations") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const MAX_COUNT: i32 = 100;
-        var current_count: i32 = 42;
-        const Count := i32;
+        let mut current_count: i32 = 42;
+        const Count = i32;
     )")};
 
     gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
@@ -58,7 +58,7 @@ TEST_CASE("Emitter top-level globals and type declarations") {
 
 TEST_CASE("Emitter linear function with binary arithmetic") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := fn(a: i32, b: i32): i32 {
+        const add = fn(a: i32, b: i32): i32 {
             return a + b;
         };
     )")};
@@ -103,8 +103,8 @@ TEST_CASE("Emitter linear function with binary arithmetic") {
 
 TEST_CASE("Emitter local variable alloca, store, load, and compound assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const compute := fn(x: i32): i32 {
-            var acc: i32 = x;
+        const compute = fn(x: i32): i32 {
+            let mut acc: i32 = x;
             acc += 5;
             return acc;
         };
@@ -136,10 +136,10 @@ TEST_CASE("Emitter local variable alloca, store, load, and compound assignment")
 
 TEST_CASE("Emitter unary operations and comparisons") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const check_negative := fn(val: i32): bool {
+        const check_negative = fn(val: i32): bool {
             return val < 0;
         };
-        const negate_val := fn(val: i32): i32 {
+        const negate_val = fn(val: i32): i32 {
             return -val;
         };
     )")};
@@ -168,10 +168,10 @@ TEST_CASE("Emitter unary operations and comparisons") {
 
 TEST_CASE("Emitter function calls") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const double_it := fn(x: i32): i32 {
+        const double_it = fn(x: i32): i32 {
             return x * 2;
         };
-        const quad := fn(x: i32): i32 {
+        const quad = fn(x: i32): i32 {
             return double_it(double_it(x));
         };
     )")};
@@ -195,10 +195,10 @@ TEST_CASE("Emitter function calls") {
 TEST_CASE("Emitter test blocks") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         test "simple addition test" {
-            var res: i32 = 2 + 3;
+            let mut res: i32 = 2 + 3;
         }
         test {
-            var res: i32 = 2 + 3;
+            let mut res: i32 = 2 + 3;
         }
     )")};
 
@@ -217,8 +217,8 @@ TEST_CASE("Emitter test blocks") {
 
 TEST_CASE("Anonymous function expression and local lambda binding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const run := fn(x: i32): i32 {
-            const add_one := fn(v: i32): i32 {
+        const run = fn(x: i32): i32 {
+            const add_one = fn(v: i32): i32 {
                 return v + 1;
             };
             return add_one(x);
@@ -246,7 +246,7 @@ TEST_CASE("Anonymous function expression and local lambda binding") {
 
 TEST_CASE("Immediate anonymous function invocation in expression position") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const calc := fn(a: i32): i32 {
+        const calc = fn(a: i32): i32 {
             return (fn(x: i32): i32 { return x * 3; })(a);
         };
     )")};
@@ -273,14 +273,14 @@ TEST_CASE("Immediate anonymous function invocation in expression position") {
 
 TEST_CASE("Emitter struct method call with self parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
-            pub const get_x := fn(&self): i32 {
+            pub const get_x = fn(&self): i32 {
                 return self.x;
             };
         };
-        const test_method := fn(p: Point): i32 {
+        const test_method = fn(p: Point): i32 {
             return p.get_x();
         };
     )")};
@@ -305,14 +305,14 @@ TEST_CASE("Emitter struct method call with self parameter") {
 
 TEST_CASE("Emitter struct method call with explicit self parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
-            pub const get_x := fn(&self): i32 {
+            pub const get_x = fn(&self): i32 {
                 return self.x;
             };
         };
-        const test_explicit := fn(p: Point): i32 {
+        const test_explicit = fn(p: Point): i32 {
             return Point.get_x(&p);
         };
     )")};
@@ -332,7 +332,7 @@ TEST_CASE("Emitter struct method call with explicit self parameter") {
 
 TEST_CASE("Deferred array underlying a reference parameter resolves to a concrete array") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const bump_first := fn(a: &mut [3uz]mut i32): void {
+        const bump_first = fn(a: &mut [3uz]mut i32): void {
             a[0] = a[0] + 5;
         };
     )")};

@@ -13,7 +13,7 @@ namespace ghoti::tests {
 TEST_CASE("Operator type checking") {
     SECTION("Valid binary arithmetic succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(a: i32, b: i32): i32 {
+            const f = fn(a: i32, b: i32): i32 {
                 return a + b;
             };
         )");
@@ -22,32 +22,32 @@ TEST_CASE("Operator type checking") {
     SECTION("Adding booleans fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: bool, b: bool): void {
-                const x := a + b;
+            const f = fn(a: bool, b: bool): void {
+                let x = a + b;
             };
         )",
             sema::diagnostic{"Operator '+' cannot be applied to types 'bool' and 'bool'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 31UZ}});
+                             std::pair{2UZ, 28UZ}});
     }
 
     SECTION("Mismatched numeric types in addition without cast fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: i32, b: f32): void {
-                const x := a + b;
+            const f = fn(a: i32, b: f32): void {
+                let x = a + b;
             };
         )",
             sema::diagnostic{"no peer type for 'i32' and 'f32'; convert the integer with "
                              "`@floatFromInt`",
                              sema::error::NO_PEER_TYPE,
-                             std::pair{2UZ, 27UZ}});
+                             std::pair{2UZ, 24UZ}});
     }
 
     SECTION("Comparing two differently-typed integer variables still fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: i32, b: usize): void {
+            const f = fn(a: i32, b: usize): void {
                 _ = a < b;
             };
         )",
@@ -59,45 +59,45 @@ TEST_CASE("Operator type checking") {
     SECTION("Logical negation on non-boolean fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: i32): void {
-                const x := !a;
+            const f = fn(a: i32): void {
+                let x = !a;
             };
         )",
             sema::diagnostic{"Logical negation '!' requires a boolean operand; found 'i32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 28UZ}});
+                             std::pair{2UZ, 25UZ}});
     }
 
     SECTION("Unary negation on unsigned integer fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: u32): void {
-                const x := -a;
+            const f = fn(a: u32): void {
+                let x = -a;
             };
         )",
             sema::diagnostic{
                 "Unary negation '-' requires a signed integer or float operand; found 'u32'",
                 sema::error::OPERATOR_TYPE_MISMATCH,
-                std::pair{2UZ, 28UZ}});
+                std::pair{2UZ, 25UZ}});
     }
 
     SECTION("Bitwise negation on float fails") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(a: f32): void {
-                const x := ~a;
+            const f = fn(a: f32): void {
+                let x = ~a;
             };
         )",
             sema::diagnostic{"Bitwise negation '~' requires an integer operand; found 'f32'",
                              sema::error::OPERATOR_TYPE_MISMATCH,
-                             std::pair{2UZ, 28UZ}});
+                             std::pair{2UZ, 25UZ}});
     }
 
     SECTION("Comparing two unions directly fails") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(a: U, b: U): bool {
+            const U = union { a: i32 };
+            const f = fn(a: U, b: U): bool {
                 return a == b;
             };
         )",
@@ -110,8 +110,8 @@ TEST_CASE("Operator type checking") {
     SECTION("Comparing two structs directly fails") {
         helpers::test_checker_fail(
             R"(
-            const S := struct { a: i32 };
-            const f := fn(a: S, b: S): bool {
+            const S = struct { a: i32 };
+            const f = fn(a: S, b: S): bool {
                 return a == b;
             };
         )",
@@ -124,8 +124,8 @@ TEST_CASE("Operator type checking") {
 
 TEST_CASE("Discard statement evaluating expression") {
     helpers::type_check_and_verify(R"(
-        pub const test_fn := fn(): i32 {
-            var x: i32 = 5;
+        pub const test_fn = fn(): i32 {
+            let mut x: i32 = 5;
             _ = x + 10;
             return x;
         };
@@ -136,7 +136,7 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
           "defining module") {
     const auto check_attributed{[](std::string_view dep_gh, sema::error expected) {
         auto [ctx, idx]{helpers::type_check(
-            R"(import "dep.gh" as dep; pub const main := fn(): i32 { return dep.g(5u32); };)",
+            R"(import "dep.gh" as dep; pub const main = fn(): i32 { return dep.g(5u32); };)",
             helpers::make_vector<helpers::mock_file>(
                 helpers::mock_file{.path = "dep.gh", .source = dep_gh}))};
 
@@ -159,8 +159,8 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
 
     SECTION("type checker") {
         check_attributed(R"(
-            pub const g := fn(x: auto): i32 {
-                const y: bool = true;
+            pub const g = fn(x: auto): i32 {
+                let y: bool = true;
                 return @intCast(x % y);
             };
         )",
@@ -169,8 +169,8 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
 
     SECTION("GIR emission") {
         check_attributed(R"(
-            pub const g := fn(x: auto): i32 {
-                var a: u16 = 0;
+            pub const g = fn(x: auto): i32 {
+                let mut a: u16 = 0;
                 a = x;
                 return a;
             };

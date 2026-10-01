@@ -39,7 +39,7 @@ TEST_CASE("a leading `///` block attaches to the following declaration") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(/// The answer to everything.
 /// Second line.
-const answer := 42;
+const answer = 42;
 )",
                             arena)};
     REQUIRE(first_doc(ast));
@@ -48,7 +48,7 @@ const answer := 42;
 
 TEST_CASE("a trailing same-line `///` attaches to its declaration") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const answer := 42; /// on the same line\n", arena)};
+    auto         ast{helpers::parse("const answer = 42; /// on the same line\n", arena)};
     REQUIRE(first_doc(ast));
     CHECK(*first_doc(ast) == "on the same line");
 }
@@ -56,7 +56,7 @@ TEST_CASE("a trailing same-line `///` attaches to its declaration") {
 TEST_CASE("plain comments carry no doc") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(// just a comment
-const answer := 42;
+const answer = 42;
 )",
                             arena)};
     CHECK(!first_doc(ast));
@@ -66,7 +66,7 @@ TEST_CASE("`//!` at the top of the file documents the module") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(//! This module does things.
 //! And more things.
-const x := 1;
+const x = 1;
 )",
                             arena)};
     CHECK(ast.module_doc() == "This module does things.\nAnd more things.");
@@ -75,9 +75,9 @@ const x := 1;
 
 TEST_CASE("a `//!` after real code is not treated as a module doc") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const x := 1;
+    auto         ast{helpers::parse(R"(const x = 1;
 //! too late
-const y := 2;
+const y = 2;
 )",
                             arena)};
     CHECK(ast.module_doc().empty());
@@ -85,12 +85,12 @@ const y := 2;
 
 TEST_CASE("a `///` on a nested declaration does not leak to the next top-level declaration") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const f := fn(): void {
+    auto         ast{helpers::parse(R"(const f = fn(): void {
     /// nested
-    const local := 1;
+    let local = 1;
     _ = local;
 };
-const g := 2;
+const g = 2;
 )",
                             arena)};
     const auto&  g{ast.get_as<ast::decl_stmt>(ast.get_roots()[1])};
@@ -101,7 +101,7 @@ TEST_CASE("doc attachment survives an intervening plain comment") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(/// documented
 // noise
-const answer := 1;
+const answer = 1;
 )",
                             arena)};
     REQUIRE(first_doc(ast));
@@ -110,7 +110,7 @@ const answer := 1;
 
 TEST_CASE("a leading `///` on a struct field attaches to that field's name") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const Point := struct {
+    auto         ast{helpers::parse(R"(const Point = struct {
     /// The horizontal coordinate.
     x: i32,
     y: i32,
@@ -126,7 +126,7 @@ TEST_CASE("a leading `///` on a struct field attaches to that field's name") {
 
 TEST_CASE("a leading `///` on an enum variant attaches to that variant's name") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const Color := enum : u32 {
+    auto         ast{helpers::parse(R"(const Color = enum : u32 {
     /// The warm one.
     red = 1u32,
     green = 2u32,
@@ -142,7 +142,7 @@ TEST_CASE("a leading `///` on an enum variant attaches to that variant's name") 
 
 TEST_CASE("a leading `///` on a union field attaches to that field's name") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const Value := union {
+    auto         ast{helpers::parse(R"(const Value = union {
     /// Present when the value is an integer.
     int: i64,
     flag: bool,
@@ -157,10 +157,10 @@ TEST_CASE("a leading `///` on a union field attaches to that field's name") {
 
 TEST_CASE("a leading `///` on a `const` member attaches to that member's name") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const Math := struct {
+    auto         ast{helpers::parse(R"(const Math = struct {
     dummy: u8,
     /// Ratio of a circle's circumference to its diameter.
-    const PI := 3;
+    const PI = 3;
 };
 )",
                             arena)};
@@ -175,7 +175,7 @@ TEST_CASE("a leading `///` on a `const` member attaches to that member's name") 
 TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant / union field") {
     SECTION("struct field, comma then doc") {
         ghoti::arena arena;
-        auto         ast{helpers::parse(R"(const Stat := struct {
+        auto         ast{helpers::parse(R"(const Stat = struct {
     st_dev: i32, /// [XSI] ID of device containing file
     st_mode: u16,
 };
@@ -190,7 +190,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
 
     SECTION("enum variant, comma then doc") {
         ghoti::arena arena;
-        auto         ast{helpers::parse(R"(const Errno := enum : i32 {
+        auto         ast{helpers::parse(R"(const Errno = enum : i32 {
     EPERM = 1, /// Operation not permitted
     ECHILD = 10,
     _,
@@ -205,7 +205,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
 
     SECTION("last field, no trailing comma") {
         ghoti::arena arena;
-        auto         ast{helpers::parse(R"(const U := union {
+        auto         ast{helpers::parse(R"(const U = union {
     a: u8,
     b: u16 /// the wide one
 };
@@ -221,7 +221,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
 TEST_CASE("a `///` leading a struct decl does not leak onto its first field") {
     ghoti::arena arena;
     auto         ast{helpers::parse(R"(/// A 2D point.
-const Point := struct {
+const Point = struct {
     x: i32,
 };
 )",

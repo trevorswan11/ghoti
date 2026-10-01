@@ -35,15 +35,14 @@ namespace {
 } // namespace
 
 TEST_CASE("Do-while loop collection") {
-    auto ctx{
-        test_loop("const a := do { const foo := bar; } while (blk: { const foo := bar; });", 4, 1)};
+    auto ctx{test_loop("const a = do { let foo = bar; } while (blk: { let foo = bar; });", 4, 1)};
     ctx->test_common_decl_collection(1);
     ctx->test_common_decl_collection(3);
 }
 
 TEST_CASE("For loop collection") {
-    auto ctx{test_loop("const a := for (0..5, blk: { const foo := bar; }) |i, j| { const foo := "
-                       "bar; } else { const foo := bar; };",
+    auto ctx{test_loop("const a = for (0..5, blk: { let foo = bar; }) |i, j| { const foo = "
+                       "bar; } else { let foo = bar; };",
                        5,
                        3)};
 
@@ -59,13 +58,13 @@ TEST_CASE("For loop collection") {
 }
 
 TEST_CASE("Infinite loop collection") {
-    auto ctx{test_loop("const a := loop { const foo := bar; };", 2, 1)};
+    auto ctx{test_loop("const a = loop { let foo = bar; };", 2, 1)};
     ctx->test_common_decl_collection(1);
 }
 
 TEST_CASE("While loop collection") {
-    auto ctx{test_loop("const a := while (blk: { const foo := bar; }) : (i += blk: { const foo "
-                       ":= bar; }) { const foo := bar; } else { const foo := bar; };",
+    auto ctx{test_loop("const a = while (blk: { let foo = bar; }) : (i += blk: { const foo "
+                       "= bar; }) { let foo = bar; } else { const foo = bar; };",
                        7,
                        5)};
     ctx->test_common_decl_collection(2);
@@ -76,43 +75,43 @@ TEST_CASE("While loop collection") {
 
 TEST_CASE("Well-placed loop control flow") {
     SECTION("For loops") {
-        helpers::collect_and_check("const a := for (0..5) |i| { break; };");
-        helpers::collect_and_check("const a := for (0..5) |i| { continue; };");
+        helpers::collect_and_check("const a = for (0..5) |i| { break; };");
+        helpers::collect_and_check("const a = for (0..5) |i| { continue; };");
     }
 
     SECTION("Do-while loop") {
-        helpers::collect_and_check("const a := do { break; } while (true);");
-        helpers::collect_and_check("const a := do { continue; } while (true);");
+        helpers::collect_and_check("const a = do { break; } while (true);");
+        helpers::collect_and_check("const a = do { continue; } while (true);");
     }
 
     SECTION("Infinite loop") {
-        helpers::collect_and_check("const a := loop { break; };");
-        helpers::collect_and_check("const a := loop { continue; };");
+        helpers::collect_and_check("const a = loop { break; };");
+        helpers::collect_and_check("const a = loop { continue; };");
     }
 
     SECTION("While loops") {
-        helpers::collect_and_check("const a := while (true) { break; };");
-        helpers::collect_and_check("const a := while (true) { continue; };");
+        helpers::collect_and_check("const a = while (true) { break; };");
+        helpers::collect_and_check("const a = while (true) { continue; };");
     }
 }
 
 TEST_CASE("Non-break collected as separate scope") {
     helpers::collect_and_check(
-        "const a := for (0..5) |i| { const foo := bar; } else { const foo := bar; };");
+        "const a = for (0..5) |i| { let foo = bar; } else { let foo = bar; };");
 
     helpers::collect_and_check(
-        "const a := while (true) : (i += 1) { const foo := bar; } else { const foo := bar; };");
+        "const a = while (true) : (i += 1) { let foo = bar; } else { let foo = bar; };");
 }
 
 TEST_CASE("Non-break collection shadowing") {
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { const foo := bar; } else { var a: i32 = undefined; };",
+        "const a = for (0..5) |i| { let foo = bar; } else { let mut a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 59UZ}});
 
     helpers::test_collector_fail(
-        "const a := while (true) : (i += 1) { const foo := bar; } else { var a: i32 = undefined; "
+        "const a = while (true) : (i += 1) { let foo = bar; } else { let mut a: i32 = undefined; "
         "};",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
@@ -121,28 +120,28 @@ TEST_CASE("Non-break collection shadowing") {
 
 TEST_CASE("Shadowing in loops") {
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { var a: i32 = undefined; };",
+        "const a = for (0..5) |i| { let mut a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 32UZ}});
+                         std::pair{0UZ, 35UZ}});
 
     helpers::test_collector_fail(
-        "const a := for (0..5) |i| { var i: i32 = undefined; };",
-        sema::diagnostic{"Redeclaration of symbol 'i'; previous declaration here: 1:24",
+        "const a = for (0..5) |i| { let mut i: i32 = undefined; };",
+        sema::diagnostic{"Redeclaration of symbol 'i'; previous declaration here: 1:23",
                          sema::error::IDENTIFIER_REDECLARATION,
-                         std::pair{0UZ, 32UZ}});
+                         std::pair{0UZ, 35UZ}});
 
     helpers::test_collector_fail(
-        "const a := loop { var a: i32 = undefined; };",
+        "const a = loop { let mut a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 22UZ}});
+                         std::pair{0UZ, 25UZ}});
 
     helpers::test_collector_fail(
-        "const a := while (true) { var a: i32 = undefined; };",
+        "const a = while (true) { let mut a: i32 = undefined; };",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 30UZ}});
+                         std::pair{0UZ, 33UZ}});
 }
 
 } // namespace ghoti::tests

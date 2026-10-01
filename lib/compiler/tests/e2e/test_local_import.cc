@@ -15,7 +15,7 @@ constexpr std::string_view IMPORTED_TESTS{R"(
 )"};
 
 constexpr std::string_view IMPORTED_FN{R"(
-    pub const answer := fn(): i32 { return 42; };
+    pub const answer = fn(): i32 { return 42; };
 )"};
 
 } // namespace
@@ -29,7 +29,7 @@ TEST_CASE("E2E: a root test block that only imports a file runs that file's test
 TEST_CASE("E2E: an import inside a function body still links the imported module") {
     CHECK(helpers::compile_and_run(
               R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 import "dep.gh" as dep;
                 return dep.answer();
             };

@@ -25,8 +25,8 @@ TEST_CASE("Codegen: extern link-name override renames the imported symbol") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("c", "__errno_location") const errno_loc: fn(): ^mut i32;
-        pub const main := fn(args: [][:0]u8): void {
-            const p := errno_loc();
+        pub const main = fn(args: [][:0]u8): void {
+            let p = errno_loc();
         };
     )")};
 
@@ -41,7 +41,7 @@ TEST_CASE("Codegen: export link-name override renames the exported symbol") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        export("ghoti_add") const add := fn(a: i32, b: i32): i32 { return a + b; };
+        export("ghoti_add") const add = fn(a: i32, b: i32): i32 { return a + b; };
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -56,8 +56,8 @@ TEST_CASE("Codegen: threadlocal extern global gets a TLS model") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        threadlocal extern var tls_errno: i32;
-        pub const main := fn(args: [][:0]u8): void {};
+        threadlocal extern let mut tls_errno: i32;
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -73,7 +73,7 @@ TEST_CASE("Codegen: weak extern function uses extern_weak linkage") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         weak extern const maybe_present: fn(): void;
-        pub const main := fn(args: [][:0]u8): void {
+        pub const main = fn(args: [][:0]u8): void {
             maybe_present();
         };
     )")};
@@ -89,8 +89,8 @@ TEST_CASE("Codegen: weak definition uses weak_any linkage") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub weak const overridable := fn(): i32 { return 1; };
-        pub const main := fn(args: [][:0]u8): void {};
+        pub weak const overridable = fn(): i32 { return 1; };
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -104,9 +104,9 @@ TEST_CASE("Codegen: a bounds check pulls in the weak default panic_handler") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(args: [][:0]u8): void {
-            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
-            const x := arr[args.len];
+        pub const main = fn(args: [][:0]u8): void {
+            let arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            let x = arr[args.len];
         };
     )")};
 
@@ -121,12 +121,12 @@ TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const panic_handler := fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+        pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
             @trap();
         };
-        pub const main := fn(args: [][:0]u8): void {
-            const arr: [3]i32 = [3]i32{ 1, 2, 3 };
-            const x := arr[args.len];
+        pub const main = fn(args: [][:0]u8): void {
+            let arr: [3]i32 = [3]i32{ 1, 2, 3 };
+            let x = arr[args.len];
         };
     )")};
 
@@ -141,13 +141,13 @@ TEST_CASE("Codegen: naked function carries the naked attribute and no synthesize
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        @[naked] pub const trap_stub := fn(): void {
+        @[naked] pub const trap_stub = fn(): void {
             asm {
                 template: "",
                 options: (volatile, noreturn),
             };
         };
-        pub const main := fn(args: [][:0]u8): void {};
+        pub const main = fn(args: [][:0]u8): void {};
     )")};
 
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
@@ -171,8 +171,8 @@ TEST_CASE("Codegen: callconv sets the LLVM calling convention on the function an
 
     // `.win64` is only valid on an x86_64 target
     auto [ctx, idx]{helpers::resolve_for_target(R"(
-        pub const handler := fn() callconv(.win64): void {};
-        pub const main := fn(args: [][:0]u8): void {
+        pub const handler = fn() callconv(.win64): void {};
+        pub const main = fn(args: [][:0]u8): void {
             handler();
         };
     )",

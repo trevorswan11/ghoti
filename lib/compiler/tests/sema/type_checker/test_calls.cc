@@ -10,10 +10,10 @@ namespace ghoti::tests {
 TEST_CASE("Function call type checking") {
     SECTION("Valid call with exact argument types succeeds") {
         helpers::type_check_and_verify(R"(
-            const add := fn(a: i32, b: i32): i32 {
+            const add = fn(a: i32, b: i32): i32 {
                 return a + b;
             };
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return add(10, 20);
             };
         )");
@@ -21,10 +21,10 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid call with implicitly widened argument succeeds") {
         helpers::type_check_and_verify(R"(
-            const take_u32 := fn(x: u32): u32 {
+            const take_u32 = fn(x: u32): u32 {
                 return x;
             };
-            const f := fn(b: u8): u32 {
+            const f = fn(b: u8): u32 {
                 return take_u32(b);
             };
         )");
@@ -33,10 +33,10 @@ TEST_CASE("Function call type checking") {
     SECTION("Call with wrong argument count fails with ARITY_MISMATCH") {
         helpers::test_checker_fail(
             R"(
-            const add := fn(a: i32, b: i32): i32 {
+            const add = fn(a: i32, b: i32): i32 {
                 return a + b;
             };
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return add(10);
             };
         )",
@@ -48,10 +48,10 @@ TEST_CASE("Function call type checking") {
     SECTION("Call with incompatible argument type fails with TYPE_MISMATCH") {
         helpers::test_checker_fail(
             R"(
-            const add := fn(a: i32, b: i32): i32 {
+            const add = fn(a: i32, b: i32): i32 {
                 return a + b;
             };
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return add(10, true);
             };
         )",
@@ -65,7 +65,7 @@ TEST_CASE("Function call type checking") {
     SECTION("Valid call to extern function succeeds") {
         helpers::type_check_and_verify(R"(
             extern const puts: fn(s: ^u8): i32;
-            const f := fn(msg: ^u8): i32 {
+            const f = fn(msg: ^u8): i32 {
                 return puts(msg);
             };
         )");
@@ -75,7 +75,7 @@ TEST_CASE("Function call type checking") {
         helpers::test_checker_fail(
             R"(
             extern const puts: fn(s: ^u8): i32;
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return puts(42);
             };
         )",
@@ -87,10 +87,10 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid variadic function call with additional arguments succeeds") {
         helpers::type_check_and_verify(R"(
-            const printf := fn(fmt: ^u8, ...): i32 {
+            const printf = fn(fmt: ^u8, ...): i32 {
                 return 0;
             };
-            const f := fn(msg: ^u8): i32 {
+            const f = fn(msg: ^u8): i32 {
                 return printf(msg, 1, 2, true);
             };
         )");
@@ -99,7 +99,7 @@ TEST_CASE("Function call type checking") {
     SECTION("Valid extern variadic function call succeeds") {
         helpers::type_check_and_verify(R"(
             extern const printf: fn(s: ^u8, ...): i32;
-            const f := fn(msg: ^u8): i32 {
+            const f = fn(msg: ^u8): i32 {
                 return printf(msg, 42, 3.14);
             };
         )");
@@ -109,7 +109,7 @@ TEST_CASE("Function call type checking") {
         helpers::test_checker_fail(
             R"(
             extern const printf: fn(s: ^u8, ...): i32;
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return printf();
             };
         )",
@@ -122,7 +122,7 @@ TEST_CASE("Function call type checking") {
         helpers::test_checker_fail(
             R"(
             extern const printf: fn(s: ^u8, ...): i32;
-            const f := fn(): i32 {
+            const f = fn(): i32 {
                 return printf(123, 456);
             };
         )",
@@ -134,9 +134,9 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Valid C va builtins type check successfully") {
         helpers::type_check_and_verify(R"(
-            const f := fn(ap: ^mut opaque, dest: ^mut opaque, ...): void {
+            const f = fn(ap: ^mut opaque, dest: ^mut opaque, ...): void {
                 @cVaStart(ap);
-                const val: i32 = @cVaArg(ap, i32);
+                let val: i32 = @cVaArg(ap, i32);
                 @cVaCopy(dest, ap);
                 @cVaEnd(ap);
             };
@@ -145,11 +145,11 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Indirect function pointer call succeeds") {
         helpers::type_check_and_verify(R"(
-            const target := fn(x: i32): i32 {
+            const target = fn(x: i32): i32 {
                 return x + 1;
             };
-            const f := fn(): i32 {
-                var fptr: ^fn(n: i32): i32 = target;
+            const f = fn(): i32 {
+                let mut fptr: ^fn(n: i32): i32 = target;
                 return fptr(42);
             };
         )");
@@ -158,11 +158,11 @@ TEST_CASE("Function call type checking") {
     SECTION("Indirect function pointer call with wrong arity fails") {
         helpers::test_checker_fail(
             R"(
-            const target := fn(x: i32): i32 {
+            const target = fn(x: i32): i32 {
                 return x + 1;
             };
-            const f := fn(): i32 {
-                var fptr: ^fn(n: i32): i32 = target;
+            const f = fn(): i32 {
+                let mut fptr: ^fn(n: i32): i32 = target;
                 return fptr();
             };
         )",
@@ -173,11 +173,11 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Passing array to slice parameter succeeds") {
         helpers::type_check_and_verify(R"(
-            const sum := fn(s: []i32): i32 {
+            const sum = fn(s: []i32): i32 {
                 return s[0];
             };
-            const f := fn(): i32 {
-                const arr: [3]i32 = [3]i32{1, 2, 3};
+            const f = fn(): i32 {
+                let arr: [3]i32 = [3]i32{1, 2, 3};
                 return sum(arr);
             };
         )");
@@ -185,11 +185,11 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Slice and pointer builtins type check successfully") {
         helpers::type_check_and_verify(R"(
-            const f := fn(p: ^i32): void {
-                const p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
-                const arr: [3]i32 = [3]i32{1, 2, 3};
-                const p3: ^i32 = @ptrFromArray(arr);
-                const s: []i32 = @sliceFromPtr(p, 10UZ);
+            const f = fn(p: ^i32): void {
+                let p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
+                let arr: [3]i32 = [3]i32{1, 2, 3};
+                let p3: ^i32 = @ptrFromArray(arr);
+                let s: []i32 = @sliceFromPtr(p, 10UZ);
                 @panic("error");
             };
         )");
@@ -197,11 +197,11 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Extern union field selection type checks successfully") {
         helpers::type_check_and_verify(R"(
-            const RawData := extern union {
+            const RawData = extern union {
                 val: i32,
                 raw: f64,
             };
-            const f := fn(u: RawData): i32 {
+            const f = fn(u: RawData): i32 {
                 return u.val;
             };
         )");
@@ -209,11 +209,11 @@ TEST_CASE("Function call type checking") {
 
     SECTION("Packed extern struct type checks successfully") {
         helpers::type_check_and_verify(R"(
-            const CPacked := extern packed struct {
+            const CPacked = extern packed struct {
                 tag: u8,
                 @[align(4)] data: i32,
             };
-            const f := fn(p: CPacked): i32 {
+            const f = fn(p: CPacked): i32 {
                 return p.data;
             };
         )");
@@ -222,7 +222,7 @@ TEST_CASE("Function call type checking") {
 
 TEST_CASE("@setEvalRecursionLimit inside function scope succeeds") {
     helpers::type_check_and_verify(R"(
-        pub const test_fn := fn(): void {
+        pub const test_fn = fn(): void {
             @setEvalRecursionLimit(100);
         };
     )");

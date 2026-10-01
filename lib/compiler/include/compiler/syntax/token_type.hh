@@ -31,7 +31,6 @@ enum class token_type_t : u8 {
     CHAR,
 
     ASSIGN,
-    WALRUS,
     PLUS,
     PLUS_PLUS,
     MINUS,
@@ -118,9 +117,9 @@ enum class token_type_t : u8 {
     CARET_MUT,
 
     FUNCTION,
-    VAR,
+    LET,
     CONSTANT,
-    CONSTEXPR,
+    COMPTIME,
     STRUCT,
     ENUM,
     UNION,
@@ -160,8 +159,8 @@ enum class token_type_t : u8 {
     F64_TYPE,
     F80_TYPE,
     F128_TYPE,
-    CONSTEXPR_INT_TYPE,
-    CONSTEXPR_FLOAT_TYPE,
+    COMPTIME_INT_TYPE,
+    COMPTIME_FLOAT_TYPE,
     BOOL_TYPE,
     VOID_TYPE,
 

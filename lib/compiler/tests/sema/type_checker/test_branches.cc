@@ -10,7 +10,7 @@ namespace ghoti::tests {
 TEST_CASE("Branch and control flow type checking") {
     SECTION("Valid if condition succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(cond: bool): i32 {
+            const f = fn(cond: bool): i32 {
                 if (cond) {
                     return 1;
                 } else {
@@ -22,8 +22,8 @@ TEST_CASE("Branch and control flow type checking") {
 
     SECTION("Valid while loop condition succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(): i32 {
-                var i: i32 = 0;
+            const f = fn(): i32 {
+                let mut i: i32 = 0;
                 while (i < 10) {
                     i += 1;
                 }
@@ -34,8 +34,8 @@ TEST_CASE("Branch and control flow type checking") {
 
     SECTION("Valid match expression arms succeed") {
         helpers::type_check_and_verify(R"(
-            const f := fn(x: i32): i32 {
-                const y: i32 = match (x) {
+            const f = fn(x: i32): i32 {
+                let y: i32 = match (x) {
                     1 => 10,
                     2 => 20,
                     _ => 30,
@@ -47,8 +47,8 @@ TEST_CASE("Branch and control flow type checking") {
 
     SECTION("Match expression with unreachable arm succeeds") {
         helpers::type_check_and_verify(R"(
-            const f := fn(x: i32): i32 {
-                const y: i32 = match (x) {
+            const f = fn(x: i32): i32 {
+                let y: i32 = match (x) {
                     1 => 10,
                     _ => unreachable,
                 };
@@ -60,15 +60,15 @@ TEST_CASE("Branch and control flow type checking") {
     SECTION("Match expression with mismatched arm types fails in type checker") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(x: i32): i32 {
-                const y := match (x) {
+            const f = fn(x: i32): i32 {
+                let y = match (x) {
                     1 => 10,
                     _ => true,
                 };
                 return y;
             };
         )",
-            sema::diagnostic{"no peer type for 'constexpr_int' and 'bool'",
+            sema::diagnostic{"no peer type for 'comptime_int' and 'bool'",
                              sema::error::NO_PEER_TYPE,
                              std::pair{4UZ, 25UZ}});
     }

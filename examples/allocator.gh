@@ -1,9 +1,9 @@
 import std;
 
-pub const main := fn(): i32 {
-    const run := fn(): std.Result(i32, std.mem.AllocError) {
-        const allocator := std.heap.page_allocator;
-        const mem := allocator.alloc(i32, 10)?;
+pub const main = fn(): i32 {
+    const run = fn(): std.Result(i32, std.mem.AllocError) {
+        let allocator = std.heap.page_allocator;
+        let mem = allocator.alloc(i32, 10)?;
         defer allocator.free(i32, mem);
 
         for (mem, 0..) |&mut v, i| {
@@ -12,7 +12,7 @@ pub const main := fn(): i32 {
 
         return .{
             .ok = blk: {
-                var acc: i32 = 0;
+                let mut acc: i32 = 0;
                 for (mem) |v| {
                     acc += v;
                 };

@@ -111,11 +111,11 @@ TEST_CASE("CodeGen OptLevel translation") {
 
 TEST_CASE("Object file emission") {
     constexpr auto input = R"(
-        pub const add := fn(a: i64, b: i64): i64 {
+        pub const add = fn(a: i64, b: i64): i64 {
             return a + b;
         };
 
-        pub const multiply := fn(a: i64, b: i64): i64 {
+        pub const multiply = fn(a: i64, b: i64): i64 {
             return a * b;
         };
     )";

@@ -15,7 +15,7 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Function hollow types") {
     auto [ctx, idx]{
-        helpers::collect_and_check("const a := fn(&self, c: type): void { const foo := bar; };")};
+        helpers::collect_and_check("const a = fn(&self, c: type): void { let foo = bar; };")};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
 
@@ -32,52 +32,52 @@ TEST_CASE("Function hollow types") {
 }
 
 TEST_CASE("Well-placed function control-flow statements") {
-    helpers::collect_and_check("pub const main := fn(args: [][:0]u8): void { return; };");
-    helpers::collect_and_check("pub const main := fn(args: [][:0]u8): i32 { return 0; };");
-    helpers::collect_and_check("pub const main := fn(args: [][:0]u8): i32 { defer a = 2; };");
+    helpers::collect_and_check("pub const main = fn(args: [][:0]u8): void { return; };");
+    helpers::collect_and_check("pub const main = fn(args: [][:0]u8): i32 { return 0; };");
+    helpers::collect_and_check("pub const main = fn(args: [][:0]u8): i32 { defer a = 2; };");
 }
 
-TEST_CASE("Constexpr function declaration") {
-    helpers::collect_and_check("pub constexpr work := fn(): i32 { return 1; };");
+TEST_CASE("Comptime function declaration") {
+    helpers::collect_and_check("pub const work = fn(): i32 { return 1; };");
 }
 
 TEST_CASE("Defer statements respect identifier collection rules") {
     helpers::test_collector_fail(
-        "pub const main := fn(args: [][:0]u8): i32 { defer { var main: i32 = undefined; } };",
+        "pub const main = fn(args: [][:0]u8): i32 { defer { let mut main: i32 = undefined; } };",
         sema::diagnostic{"Attempt to shadow identifier 'main'; previous declaration here: 1:11",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 56UZ}});
+                         std::pair{0UZ, 59UZ}});
 }
 
 TEST_CASE("Function basic param redeclaration") {
     helpers::test_collector_fail(
-        "const f := fn(f: bool): void {};",
+        "const f = fn(f: bool): void {};",
         sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 14UZ}});
+                         std::pair{0UZ, 13UZ}});
 }
 
 TEST_CASE("Module-scope-only modifiers are rejected on a function-local declaration") {
     helpers::test_collector_fail(
-        "const f := fn(): void { pub const x := 5; };",
+        "const f = fn(): void { pub let x = 5; };",
         sema::diagnostic{"Modifier 'pub' cannot be used on a declaration local to a function",
                          sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
-                         std::pair{0UZ, 24UZ}});
+                         std::pair{0UZ, 23UZ}});
 
     helpers::test_collector_fail(
-        "const f := fn(): void { weak extern const g: i32; };",
+        "const f = fn(): void { weak extern let g: i32; };",
         sema::diagnostic{
             "Modifiers 'extern', 'weak' cannot be used on a declaration local to a function",
             sema::error::ILLEGAL_LOCAL_DECL_MODIFIER,
-            std::pair{0UZ, 24UZ}});
+            std::pair{0UZ, 23UZ}});
 }
 
 TEST_CASE("Aggregate static members keep their visibility modifier inside a type constructor") {
     helpers::collect_and_check(R"(
-        const Make := fn(): type {
+        const Make = fn(): type {
             return struct {
                 item: i32,
-                pub const of := fn(v: i32): @This() { return .{ .item = v }; };
+                pub const of = fn(v: i32): @This() { return .{ .item = v }; };
             };
         };
 )");
@@ -85,26 +85,26 @@ TEST_CASE("Aggregate static members keep their visibility modifier inside a type
 
 TEST_CASE("Function self param redeclaration") {
     helpers::test_collector_fail(
-        "const f := fn(f): void {};",
+        "const f = fn(f): void {};",
         sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 14UZ}});
+                         std::pair{0UZ, 13UZ}});
 }
 
 TEST_CASE("Function local param redeclaration") {
     helpers::test_collector_fail(
-        "const f := fn(a, a: bool): void {};",
-        sema::diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:15",
+        "const f = fn(a, a: bool): void {};",
+        sema::diagnostic{"Redeclaration of symbol 'a'; previous declaration here: 1:14",
                          sema::error::IDENTIFIER_REDECLARATION,
-                         std::pair{0UZ, 17UZ}});
+                         std::pair{0UZ, 16UZ}});
 }
 
 TEST_CASE("Function block shadowing") {
     helpers::test_collector_fail(
-        "const f := fn(): void { var f := 3; };",
+        "const f = fn(): void { let mut f = 3; };",
         sema::diagnostic{"Attempt to shadow identifier 'f'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
-                         std::pair{0UZ, 28UZ}});
+                         std::pair{0UZ, 31UZ}});
 }
 
 } // namespace ghoti::tests

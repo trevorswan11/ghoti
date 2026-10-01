@@ -58,7 +58,7 @@ templ SyntaxTypesPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const func := fn(p: type): void { ... };
+			{ `const func = fn(p: type): void { ... };
 func(&mut P);` }
 		</code>
 	</pre>
@@ -68,8 +68,8 @@ func(&mut P);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const tP := &mut P;
-const func := fn(p: type): void { ... };
+			{ `const tP = &mut P;
+const func = fn(p: type): void { ... };
 func(tP);` }
 		</code>
 	</pre>
@@ -80,8 +80,8 @@ func(tP);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Callback := fn(status: i32, result: ^bool): void;
-const register := fn(cb: Callback): void { ... };` }
+			{ `const Callback = fn(status: i32, result: ^bool): void;
+const register = fn(cb: Callback): void { ... };` }
 		</code>
 	</pre>
 	<h2>Pointers vs. References</h2>
@@ -105,7 +105,7 @@ const register := fn(cb: Callback): void { ... };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: ^A = ...;
+			{ `let mut a: ^A = ...;
 a.b;   // Syntactic sugar
 (*a).b; // Equivalent expression` }
 		</code>
@@ -146,16 +146,16 @@ a.b;   // Syntactic sugar
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand := union {
+			{ `const Hand = union {
     card: bool,
     pen: i32,
     shoe: void,
     deck: struct {
-        var hearts: [12uz]Card;
-        var diamonds: [12uz]Card;
-        var clubs: [12uz]Card;
-        var spades: [12uz]Card;
-        var has_jokers: bool;
+        let mut hearts: [12uz]Card;
+        let mut diamonds: [12uz]Card;
+        let mut clubs: [12uz]Card;
+        let mut spades: [12uz]Card;
+        let mut has_jokers: bool;
     },
 };` }
 		</code>
@@ -188,7 +188,7 @@ a.b;   // Syntactic sugar
 		</li>
 		<li><code>isize</code> / <code>usize</code>: Platform-width signed/unsigned integers equivalent to <code>ptrdiff_t</code> / <code>size_t</code> (64-bit on 64-bit targets), written with the <code>z</code> / <code>uz</code> suffix</li>
 		<li>
-			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>constexpr_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
+			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>comptime_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
 		</li>
 		<li>
 			<code>u8</code> doubles as the character/byte type &mdash; a character literal such as <code>'a'</code> has type <code>u8</code>
@@ -205,7 +205,7 @@ a.b;   // Syntactic sugar
 		<li><code>f80</code>: x86 80-bit extended precision &mdash; available on x86 / x86-64 targets only; using it elsewhere is a compile error. Written with the <code>f80</code> suffix</li>
 		<li><code>f128</code>: IEEE-754 binary128 (quad), written with the <code>f128</code> suffix</li>
 		<li>
-			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>constexpr_float</code>, materializing as <code>f64</code> when left un-anchored
+			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>comptime_float</code>, materializing as <code>f64</code> when left un-anchored
 			<ul>
 				<li><code>f80</code> and <code>f128</code> constant expressions are <em>not</em> folded at compile time (folding them at <code>f64</code> would silently lose precision); such expressions must be evaluated at runtime</li>
 			</ul>
@@ -219,11 +219,11 @@ a.b;   // Syntactic sugar
 	<h2>Special Types</h2>
 	<ul>
 		<li>
-			<code>constexpr_int</code> / <code>constexpr_float</code>: The type of an unsuffixed integer / real literal and of pure constexpr arithmetic over them
+			<code>comptime_int</code> / <code>comptime_float</code>: The type of an unsuffixed integer / real literal and of pure compile-time arithmetic over them
 			<ul>
 				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
-				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>constexpr_int</code> is a compile error, not a silent wrap</li>
-				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> keeps the constexpr type</li>
+				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>comptime_int</code> is a compile error, not a silent wrap</li>
+				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>let mut</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> or <code>let</code> keeps the <code>comptime_int</code> type</li>
 				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@TypeOf" }</code> of an unsuffixed literal yields</li>
 			</ul>
 		</li>
@@ -238,7 +238,7 @@ a.b;   // Syntactic sugar
 			<ul>
 				<li>This is restricted to values and cannot be used to represent a type, see the <code>type</code> type</li>
 				<li>This is valid for parameters and for the return type</li>
-				<li>It can also be used in declarations, but this behaves the same as the walrus (<code>:=</code>) inference operator</li>
+				<li>It can also be used in declarations, but this behaves the same as leaving the type annotation out</li>
 			</ul>
 		</li>
 		<li>

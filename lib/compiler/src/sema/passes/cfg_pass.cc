@@ -35,7 +35,7 @@ using syntax::token_type_t;
 // A human-readable name for a `cfgval::value`'s alternative, for diagnostics.
 [[nodiscard]] auto value_type_name(const cfgval::value& value) -> std::string_view {
     return value.visit([](bool) -> std::string_view { return "bool"; },
-                       [](i64) -> std::string_view { return "constexpr int"; },
+                       [](i64) -> std::string_view { return "comptime int"; },
                        [](cfgval::member) -> std::string_view { return "enum member"; },
                        [](cfgval::text) -> std::string_view { return "[:0]u8"; },
                        [](cfgval::diverges) -> std::string_view { return "noreturn"; });
@@ -229,7 +229,7 @@ auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
     return ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR;
 }
 
-// Every guard arm (and the `_ =>` fallback) must yield the same `constexpr` type
+// Every guard arm (and the `_ =>` fallback) must yield the same `comptime` type
 auto cfg_pass::check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr) -> bool {
     PROFILE_FUNCTION();
     stdx::option<cfg_value> common;
@@ -684,6 +684,7 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
         [&](const ast::unary_expr& un) { recurse_into_expr(un.rhs); },
         [&](const ast::reference_expr& ref) { recurse_into_expr(ref.rhs); },
         [&](const ast::dereference_expr& deref) { recurse_into_expr(deref.rhs); },
+        [&](const ast::comptime_expr& cx) { recurse_into_expr(cx.rhs); },
         [&](const ast::address_of_expr& adr) { recurse_into_expr(adr.rhs); },
         [&](const ast::unwrap_expr& unwrap) { recurse_into_expr(unwrap.operand); },
         [&](const ast::dot_expr& dot) { recurse_into_expr(dot.object); },

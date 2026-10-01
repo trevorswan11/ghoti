@@ -27,7 +27,7 @@ using peer_result = stdx::result<gsl::not_null<type*>, peer_error>;
     const auto to_kind{to.get_kind()};
     if (is_numeric(from_kind) && is_numeric(to_kind)) {
         // A concrete number never becomes an untyped constant
-        if (is_constexpr_numeric(to_kind) && !is_constexpr_numeric(from_kind)) { return false; }
+        if (is_comptime_numeric(to_kind) && !is_comptime_numeric(from_kind)) { return false; }
         return is_same_unqualified(from, to) || is_implicit_widenable(from, to);
     }
     if (is_numeric(from_kind) || is_numeric(to_kind)) { return false; }
@@ -115,7 +115,7 @@ struct sequence_shape {
     const auto a_kind{a.get_kind()};
     const auto b_kind{b.get_kind()};
     const auto is_floating{
-        [](type_kind kind) { return is_float(kind) || is_constexpr_float(kind); }};
+        [](type_kind kind) { return is_float(kind) || is_comptime_float(kind); }};
     if (is_integer(a_kind) && is_integer(b_kind)) { return "convert one with `@intCast`"; }
     if ((is_integer(a_kind) && is_floating(b_kind)) ||
         (is_floating(a_kind) && is_integer(b_kind))) {

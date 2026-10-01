@@ -18,7 +18,7 @@ TEST_CASE("runtime safety on: arithmetic and indexing emit guards") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(a: i32, b: i32, xs: []i32, i: i32): i32 {
+        pub const f = fn(a: i32, b: i32, xs: []i32, i: i32): i32 {
             return a + b + xs[i];
         };
     )")};
@@ -35,7 +35,7 @@ TEST_CASE("runtime safety off: no arithmetic or bounds guards are emitted") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(a: i32, b: i32, xs: []i32, i: i32): i32 {
+        pub const f = fn(a: i32, b: i32, xs: []i32, i: i32): i32 {
             return a + b + xs[i];
         };
     )")};
@@ -53,7 +53,7 @@ TEST_CASE("runtime safety on: pointer dereference emits a null-pointer guard") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^i32): i32 {
+        pub const f = fn(p: ^i32): i32 {
             return *p;
         };
     )")};
@@ -70,7 +70,7 @@ TEST_CASE("runtime safety off: pointer dereference emits no null-pointer guard")
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^i32): i32 {
+        pub const f = fn(p: ^i32): i32 {
             return *p;
         };
     )")};

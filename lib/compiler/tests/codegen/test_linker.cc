@@ -28,7 +28,7 @@ TEST_CASE("In-process LLD execution for main entry point across targets and opti
 
     // No `args` param, so this links even without a real sysroot for the target.
     constexpr auto input = R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 0;
         };
     )";
@@ -73,7 +73,7 @@ TEST_CASE("extern targets are forwarded to the real linker invocation") {
 
     constexpr auto input = R"(
         extern("ghoti_test_missing_lib_9f3a") const foo: fn(): void;
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             foo();
             return 0;
         };
@@ -108,8 +108,8 @@ TEST_CASE("macOS targets link against libSystem from any host") {
 
     constexpr auto input = R"(
         extern("System", "write") const sys_write: fn(fd: i32, buf: ^u8, count: usize): isize;
-        pub const main := fn(): i32 {
-            const msg := "hi";
+        pub const main = fn(): i32 {
+            let msg = "hi";
             return @as(i32, sys_write(1, msg.ptr, msg.len));
         };
     )";
@@ -141,12 +141,12 @@ TEST_CASE("a builtins archive fills symbols that nothing else defines") {
     // Linking the object directly skips the `extern` library, so only the archive can satisfy it
     constexpr auto user     = R"(
         extern("ghoti_unused_lib", "ghoti_builtins_probe") const probe: fn(): i32;
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return probe();
         };
     )";
     constexpr auto builtins = R"(
-        export("ghoti_builtins_probe") const probe := fn(): i32 { return 0; };
+        export("ghoti_builtins_probe") const probe = fn(): i32 { return 0; };
     )";
 
     llvm::LLVMContext context;
@@ -173,7 +173,7 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
     stdx::untracked_scope untracked_guard;
 
     constexpr auto input = R"(
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const main = fn(args: [][:0]u8): i32 {
             return @as(i32, args.len);
         };
     )";

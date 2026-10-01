@@ -81,24 +81,24 @@ templ SyntaxStructsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Rgb565 := packed struct {   // backed by a u16: 5 + 6 + 5 bits, red in the low bits
+			{ `const Rgb565 = packed struct {   // backed by a u16: 5 + 6 + 5 bits, red in the low bits
     red: u5,
     green: u6,
     blue: u5,
 };
 
-const Foo := struct {           // Standard declaration with type inference
+const Foo = struct {           // Standard declaration with type inference
     bar: i32,                   // Private field without default value (must appear in initializer list)
     pub boo: u32 = 4u32,        // Public field with default value
 
-    pub var foo := 3.4;         // Decl variables are struct globals and are not instance specific
+    pub let mut foo = 3.4;         // Decl variables are struct globals and are not instance specific
     const baz: []u8 = "baz";  // Constant decl, must be initialized in-line
 
-    const worker_one := fn(&self): void {           // Functions can have an explicit 'self' parameter
+    const worker_one = fn(&self): void {           // Functions can have an explicit 'self' parameter
         // ...
     };
 
-    const worker_two := fn(&mut self): void {       // The self parameter can be marked '&mut' to mutate state
+    const worker_two = fn(&mut self): void {       // The self parameter can be marked '&mut' to mutate state
         // ...
     };
 
@@ -106,13 +106,13 @@ const Foo := struct {           // Standard declaration with type inference
         // ...
     };
 
-    pub const fee := "Hello, World!";           // Decls can be placed anywhere after the fields
+    pub const fee = "Hello, World!";           // Decls can be placed anywhere after the fields
 };
 
 Foo.foo;                                           // All members are resolved using the '.' operator
 Foo.worker_three();                                // The same goes for functions
 
-var foo: Foo = .{ .bar = 42, };
+let mut foo: Foo = .{ .bar = 42, };
 Foo.worker_two(&mut foo);   // Member functions may be called explicitly
 foo.worker_two();           // Or with this shorthand` }
 		</code>
@@ -130,9 +130,9 @@ foo.worker_two();           // Or with this shorthand` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const S = struct { var a: int; };
+			{ `const S = struct { let mut a: int; };
 
-const s1 := S{ .a = 3 };
+const s1 = S{ .a = 3 };
 const s2: S = .{ .a = 3 };` }
 		</code>
 	</pre>
@@ -148,7 +148,7 @@ const s2: S = .{ .a = 3 };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Point = struct { var x: int; var y: int; };
+			{ `const Point = struct { let mut x: int; let mut y: int; };
 
 const make = fn(hi: bool): Point {
     return if (hi) .{ .x = 1, .y = 2 }; else .{ .x = 0, .y = 0 };

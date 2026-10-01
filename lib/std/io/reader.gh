@@ -1,19 +1,19 @@
 import std;
 
-pub const Reader := interface {
+pub const Reader = interface {
     Error: type = std.io.Error;
 
     /// Read `buf.len` into the provided byte buffer
-    pub const read := fn(&mut self, buf: []mut u8): std.Result(usize, Error);
+    pub const read = fn(&mut self, buf: []mut u8): std.Result(usize, Error);
 
     /// Try to read into the provided byte buffer
-    pub const read_all := fn(&mut self, buf: []mut u8): std.Result(usize, Error) {
-        var i: usize = 0;
+    pub const read_all = fn(&mut self, buf: []mut u8): std.Result(usize, Error) {
+        let mut i: usize = 0;
         loop {
             if (i == buf.len) {
                 break;
             }
-            const n := self.read(buf[i..])?;
+            let n = self.read(buf[i..])?;
             if (n == 0) { // EOF
                 break;
             }

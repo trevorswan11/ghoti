@@ -332,21 +332,22 @@ auto parser::parse_statement(semicolon_behavior behavior)
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
         default:                   return ast::decl_stmt::parse(*this);
         }
-    } else if (current_token_is(token_type_t::CONSTEXPR)) {
+    } else if (current_token_is(token_type_t::COMPTIME)) {
         if (peek_token_is(token_type_t::LBRACE)) { return ast::block_stmt::parse(*this, true); }
-        if (peek_token_is(token_type_t::IDENT)) {
-            checkpoint cp{*this};
+        if (peek_token_is(token_type_t::LET)) { return ast::decl_stmt::parse(*this); }
+        // `comptime x = ...` / `comptime x: T` is a declaration missing its `let mut`; an
+        // assignment can't be forced to compile time anyway
+        const bool missing_let{[&] {
+            if (!peek_token_is(token_type_t::IDENT)) { return false; }
+            const transaction tx{*this};
             advance();
-            if (peek_token_is(token_type_t::COLON)) {
-                advance();
-                if (peek_token_is(token_type_t::LBRACE)) {
-                    rollback(cp);
-                    return ast::expr_stmt::parse(*this, behavior);
-                }
-            }
-            rollback(cp);
-        }
-        return ast::decl_stmt::parse(*this);
+            if (peek_token_is(token_type_t::ASSIGN)) { return true; }
+            if (!peek_token_is(token_type_t::COLON)) { return false; }
+            advance();
+            return !peek_token_is(token_type_t::LBRACE);
+        }()};
+        if (missing_let) { return ast::decl_stmt::parse(*this); }
+        return ast::expr_stmt::parse(*this, behavior);
     } else if (current_token_.is_decl_token()) {
         return ast::decl_stmt::parse(*this);
     }
@@ -504,7 +505,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
-    // Type keywords with no primitive spelling still name a type value (`const H := ^mut opaque;`)
+    // Type keywords with no primitive spelling still name a type value (`const H = ^mut opaque;`)
     for (const auto tt : {token_type_t::TYPE_TYPE,
                           token_type_t::AUTO_TYPE,
                           token_type_t::OPAQUE_TYPE,
@@ -513,7 +514,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     }
     for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
-    fns[token_type_t::CONSTEXPR]         = ast::parse_constexpr_expr;
+    fns[token_type_t::COMPTIME]          = ast::parse_comptime_expr;
 
     return fns;
 }();

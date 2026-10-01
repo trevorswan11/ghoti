@@ -61,8 +61,8 @@ Many build functions heavily reference [allyourcodebase](https://github.com/ally
 ```ghoti
 import std;
 
-pub const main := fn(args: [][:0]u8): void {
-    const message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): void {
+    const message = "Hello, world!";
     _ = std.io.println(message);
 };
 ```

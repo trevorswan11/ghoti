@@ -28,11 +28,11 @@ namespace {
 
 // `f128` addition and comparison are runtime libcalls on every target
 constexpr std::string_view f128_program{R"(
-var a: f128 = 1.5;
-var b: f128 = 2.25;
+let mut a: f128 = 1.5;
+let mut b: f128 = 2.25;
 
-pub const main := fn(_: [][:0]u8): i32 {
-    const c := a + b;
+pub const main = fn(_: [][:0]u8): i32 {
+    let c = a + b;
     if (@bitCast(u128, c) == @bitCast(u128, b)) { return 7; }
     if (@bitCast(u128, c) == @bitCast(u128, a)) { return 5; }
     return 3;
@@ -40,25 +40,25 @@ pub const main := fn(_: [][:0]u8): i32 {
 )"};
 
 constexpr std::string_view plain_program{R"(
-pub const main := fn(_: [][:0]u8): i32 { return 4; };
+pub const main = fn(_: [][:0]u8): i32 { return 4; };
 )"};
 
 // Returns its second operand, so the caller can tell the value really crossed the ABI
 constexpr std::string_view second_operand_rt{R"(
-export const __addtf3 := fn(a: f128, b: f128): f128 {
+export const __addtf3 = fn(a: f128, b: f128): f128 {
     _ = a;
     return b;
 };
 )"};
 
 constexpr std::string_view self_calling_rt{R"(
-export const __addtf3 := fn(a: f128, b: f128): f128 {
+export const __addtf3 = fn(a: f128, b: f128): f128 {
     return a + b;
 };
 )"};
 
 constexpr std::string_view broken_rt{R"(
-export const __addtf3 := fn(a: f128, b: f128): f128 {
+export const __addtf3 = fn(a: f128, b: f128): f128 {
     return a + not_declared;
 };
 )"};

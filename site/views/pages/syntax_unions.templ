@@ -48,14 +48,14 @@ templ SyntaxUnionsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand := union {
+			{ `const Hand = union {
     card: bool,
     pen: i32,
     shoe: void,
 };
 
-var h1 := Hand{ .card = true }; // Initializes h1 to have the card field active
-var h2: Hand = .{ .card = true }; // Equivalent to h1
+let mut h1 = Hand{ .card = true }; // Initializes h1 to have the card field active
+let mut h2: Hand = .{ .card = true }; // Equivalent to h1
 
 if (h1 == Hand.card) { ... }; // Checks if the card field is active
 if (h1 == .card) { ... }; // Equivalent to above

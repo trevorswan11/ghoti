@@ -19,7 +19,7 @@ namespace ghoti::tests {
 TEST_CASE("to_lsp_diagnostics is empty for a clean module") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_diagnostics_clean.gh"};
-    CHECK(loader.add(path, "pub const x := 5;\n"));
+    CHECK(loader.add(path, "pub const x = 5;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
@@ -29,7 +29,7 @@ TEST_CASE("to_lsp_diagnostics is empty for a clean module") {
 TEST_CASE("to_lsp_diagnostics reports a syntax error with a code, message, and range") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_diagnostics_broken.gh"};
-    CHECK(loader.add(path, "pub const x := ;\n"));
+    CHECK(loader.add(path, "pub const x = ;\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
@@ -50,8 +50,8 @@ TEST_CASE("to_lsp_diagnostics reports a deprecated use as a tagged warning") {
     const std::filesystem::path path{"test_diagnostics_deprecated.gh"};
     CHECK(loader.add(path, R"(
 @[deprecated("use `newer`")]
-const older := fn(): i32 { return 1; };
-pub const x := older();
+const older = fn(): i32 { return 1; };
+pub const x = older();
 )"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
@@ -71,11 +71,11 @@ pub const x := older();
 TEST_CASE("a shared session that analyzes two impls of one interface keeps inherited defaults") {
     mod::overlay_loader loader;
     CHECK(loader.add(std::filesystem::path{"reader.gh"}, R"(
-        pub const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-            const Output := T;
-            const Residual := E;
-            pub const branch := fn(self): builtin.Flow(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(self): builtin.Flow(T, E) {
                 return match (self) {
                     .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
                     .err => |e| builtin.Flow(T, E){ .@"break" = e },
@@ -83,17 +83,17 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
             };
         }
         impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-            const From := E;
-            pub const from_residual := fn(r: E): @This() { return .{ .err = r }; };
+            const From = E;
+            pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
         }
-        pub const Reader := interface {
+        pub const Reader = interface {
             Error: type;
-            pub const read := fn(&mut self, buf: []mut u8): Result(usize, Error);
-            pub const readAll := fn(&mut self, buf: []mut u8): Result(usize, Error) {
-                var i: usize = 0;
+            pub const read = fn(&mut self, buf: []mut u8): Result(usize, Error);
+            pub const readAll = fn(&mut self, buf: []mut u8): Result(usize, Error) {
+                let mut i: usize = 0;
                 loop {
                     if (i == buf.len) { break; }
-                    const n := self.read(buf[i..])?;
+                    let n = self.read(buf[i..])?;
                     if (n == 0) { break; }
                     i += n;
                 };
@@ -103,17 +103,17 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
     )"));
     constexpr std::string_view impl_body{R"(
         import "reader.gh" as reader;
-        pub const {0} := struct {{ pub data: []mut u8, pub pos: usize = 0 }};
+        pub const {0} = struct {{ pub data: []mut u8, pub pos: usize = 0 }};
         impl reader.Reader for {0} {{
-            const Error := u8;
-            pub const read := fn(&mut self, buf: []mut u8): reader.Result(usize, Error) {{
-                const rem := self.data.len - self.pos;
-                const n := if (buf.len < rem) buf.len else rem;
+            const Error = u8;
+            pub const read = fn(&mut self, buf: []mut u8): reader.Result(usize, Error) {{
+                let rem = self.data.len - self.pos;
+                let n = if (buf.len < rem) buf.len else rem;
                 self.pos += n;
                 return .{{ .ok = n }};
             }};
         }}
-        pub const drain := fn(s: &mut {0}, out: []mut u8): usize {{
+        pub const drain = fn(s: &mut {0}, out: []mut u8): usize {{
             return match (s.readAll(out)) {{ .ok => |n| n, .err => 0uz }};
         }};
     )"};

@@ -65,7 +65,7 @@ namespace {
 TEST_CASE("Main function entry validation") {
     SECTION("Valid main entry with fn(args: [][:0]u8): void passes") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main := fn(args: [][:0]u8): void {
+            pub const main = fn(args: [][:0]u8): void {
                 return;
             };
         )")};
@@ -74,7 +74,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Missing main function returns error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const not_main := fn(args: [][:0]u8): void {
+            pub const not_main = fn(args: [][:0]u8): void {
                 return;
             };
         )")};
@@ -83,7 +83,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Private main function (not pub) returns error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            const main := fn(args: [][:0]u8): void {
+            const main = fn(args: [][:0]u8): void {
                 return;
             };
         )")};
@@ -92,7 +92,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Main with 0 params is valid") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main := fn(): void {
+            pub const main = fn(): void {
                 return;
             };
         )")};
@@ -101,7 +101,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Main with 0 params and i32 return is valid") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return 0;
             };
         )")};
@@ -110,7 +110,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Main with non-void and non-i32 return returns error") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main := fn(args: [][:0]u8): bool {
+            pub const main = fn(args: [][:0]u8): bool {
                 return true;
             };
         )")};
@@ -119,7 +119,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Main with i32 return is valid") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main := fn(args: [][:0]u8): i32 {
+            pub const main = fn(args: [][:0]u8): i32 {
                 return 0;
             };
         )")};
@@ -128,7 +128,7 @@ TEST_CASE("Main function entry validation") {
 
     SECTION("Main with incorrect param type returns error") {
         constexpr auto input = R"(
-            pub const main := fn(args: []u8): void {
+            pub const main = fn(args: []u8): void {
                 return;
             };
         )";
@@ -142,7 +142,7 @@ TEST_CASE("Executable LLVM IR lowering with entry wrapper") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(args: [][:0]u8): void {
+        pub const main = fn(args: [][:0]u8): void {
             return;
         };
     )")};
@@ -173,7 +173,7 @@ TEST_CASE("Windows entry wrapper with an args parameter emits valid, verifiable 
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const main = fn(args: [][:0]u8): i32 {
             return @as(i32, args.len);
         };
     )")};
@@ -190,7 +190,7 @@ TEST_CASE("Parameterless main function lowering") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 42;
         };
     )")};
@@ -211,7 +211,7 @@ TEST_CASE("Linux executables get a freestanding _start that calls main and exits
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 1;
         };
     )")};
@@ -260,7 +260,7 @@ TEST_CASE("A Linux arch with no freestanding _start is rejected with a diagnosti
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 0;
         };
     )")};
@@ -280,7 +280,7 @@ TEST_CASE("Non-Linux targets keep the crt-provided entry and get no _start") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 0;
         };
     )")};
@@ -304,7 +304,7 @@ TEST_CASE("@export as 'main' picks the entry point") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const my_main := fn(): i32 {
+        const my_main = fn(): i32 {
             return 42;
         };
         @export(my_main, .{ .name = "main" });

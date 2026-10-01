@@ -148,21 +148,21 @@ TEST_CASE("GIR dumper formatting") {
 }
 
 constexpr std::string_view golden_input{R"(
-    const Real := f64;
-    const MAX_SIZE := 100uz;
+    const Real = f64;
+    const MAX_SIZE = 100uz;
 
-    const Point := struct {
+    const Point = struct {
         x: i32,
         y: i32,
     };
 
-    const Color := enum {
+    const Color = enum {
         RED,
         GREEN,
         BLUE,
     };
 
-    const clamp := fn(val: auto, min_val: auto, max_val: auto): auto {
+    const clamp = fn(val: auto, min_val: auto, max_val: auto): auto {
         if (val < min_val) {
             return min_val;
         }
@@ -172,12 +172,12 @@ constexpr std::string_view golden_input{R"(
         return val;
     };
 
-    const compute_point := fn(p: Point): i32 {
-        var acc: i32 = 0;
+    const compute_point = fn(p: Point): i32 {
+        let mut acc: i32 = 0;
         defer acc = acc + 1;
 
-        const clamped := clamp(p.x, 0, 50);
-        var i: i32 = 0;
+        let clamped = clamp(p.x, 0, 50);
+        let mut i: i32 = 0;
         while (i < 3) {
             acc += clamped;
             i += 1;
@@ -185,7 +185,7 @@ constexpr std::string_view golden_input{R"(
         return acc + p.y;
     };
 
-    const match_color := fn(c: Color): i32 {
+    const match_color = fn(c: Color): i32 {
         return match (c) {
             .RED => 1,
             .GREEN => 2,
@@ -193,8 +193,8 @@ constexpr std::string_view golden_input{R"(
         };
     };
 
-    const raw_write := fn(fd: i64, buf: ^u8, len: usize): i64 {
-        var ret: i64 = 0i64;
+    const raw_write = fn(fd: i64, buf: ^u8, len: usize): i64 {
+        let mut ret: i64 = 0i64;
         asm {
             template: "syscall",
             outputs: ("={rax}" = ret),
@@ -206,9 +206,9 @@ constexpr std::string_view golden_input{R"(
     };
 
     test "golden_run" {
-        const p := Point{ .x = 25, .y = 10 };
-        const ans := compute_point(p);
-        const code := match_color(.RED);
+        let p = Point{ .x = 25, .y = 10 };
+        let ans = compute_point(p);
+        let code = match_color(.RED);
     }
 )"};
 

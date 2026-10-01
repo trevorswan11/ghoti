@@ -1,7 +1,7 @@
 //! Linux error codes from `asm-generic/errno-base.h` and `asm-generic/errno.h`.
 //!
 //! A raw syscall reports failure by returning `-errno` in the result register
-pub const Errno := enum : i32 {
+pub const Errno = enum : i32 {
     EPERM = 1, /// Operation not permitted
     ENOENT = 2, /// No such file or directory
     ESRCH = 3, /// No such process
@@ -136,6 +136,6 @@ pub const Errno := enum : i32 {
     _,
 };
 
-pub constexpr EWOULDBLOCK := Errno.EAGAIN; /// Operation would block
-pub constexpr ENOTSUP := Errno.EOPNOTSUPP; /// Operation not supported
-pub constexpr EDEADLOCK := Errno.EDEADLK; /// File locking deadlock error
+pub const EWOULDBLOCK = Errno.EAGAIN; /// Operation would block
+pub const ENOTSUP = Errno.EOPNOTSUPP; /// Operation not supported
+pub const EDEADLOCK = Errno.EDEADLK; /// File locking deadlock error

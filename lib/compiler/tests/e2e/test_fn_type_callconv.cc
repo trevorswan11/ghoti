@@ -7,9 +7,9 @@ namespace ghoti::tests {
 
 TEST_CASE("an `extern fn(...): T` type annotation accepts its own `callconv(.x)`") {
     CHECK(helpers::compile_and_run(R"(
-        const add := fn(a: i32, b: i32) callconv(.c): i32 { return a + b; };
-        pub const main := fn(): i32 {
-            var fp: extern fn(a: i32, b: i32) callconv(.c): i32 = add;
+        const add = fn(a: i32, b: i32) callconv(.c): i32 { return a + b; };
+        pub const main = fn(): i32 {
+            let mut fp: extern fn(a: i32, b: i32) callconv(.c): i32 = add;
             return fp(3, 4);
         };
     )") == 7);
@@ -17,22 +17,22 @@ TEST_CASE("an `extern fn(...): T` type annotation accepts its own `callconv(.x)`
 
 TEST_CASE("an erased `fn(...): T` annotation rejects `callconv(.x)`") {
     CHECK(helpers::raised(R"(
-        const add := fn(a: i32, b: i32) callconv(.c): i32 { return a + b; };
-        const run := fn(): i32 {
-            var fp: fn(a: i32, b: i32) callconv(.c): i32 = add;
+        const add = fn(a: i32, b: i32) callconv(.c): i32 { return a + b; };
+        const run = fn(): i32 {
+            let mut fp: fn(a: i32, b: i32) callconv(.c): i32 = add;
             return fp(1, 2);
         };
     )",
                           sema::error::CALLCONV_REQUIRES_EXTERN_FN));
-    CHECK(helpers::raised("const F := fn(a: i32) callconv(.c): i32;",
+    CHECK(helpers::raised("const F = fn(a: i32) callconv(.c): i32;",
                           sema::error::CALLCONV_REQUIRES_EXTERN_FN));
 }
 
 TEST_CASE("a `fn(...): T` type annotation with no `callconv` still defaults to `.c`") {
     CHECK(helpers::compile_and_run(R"(
-        const add := fn(a: i32, b: i32): i32 { return a + b; };
-        pub const main := fn(): i32 {
-            var fp: fn(a: i32, b: i32): i32 = add;
+        const add = fn(a: i32, b: i32): i32 { return a + b; };
+        pub const main = fn(): i32 {
+            let mut fp: fn(a: i32, b: i32): i32 = add;
             return fp(3, 4);
         };
     )") == 7);
@@ -40,9 +40,9 @@ TEST_CASE("a `fn(...): T` type annotation with no `callconv` still defaults to `
 
 TEST_CASE("assigning a mismatched-callconv function is rejected") {
     helpers::expect_compile_error(R"(
-        const add := fn(a: i32, b: i32) callconv(.win64): i32 { return a + b; };
-        pub const main := fn(): i32 {
-            var fp: extern fn(a: i32, b: i32) callconv(.c): i32 = add;
+        const add = fn(a: i32, b: i32) callconv(.win64): i32 { return a + b; };
+        pub const main = fn(): i32 {
+            let mut fp: extern fn(a: i32, b: i32) callconv(.c): i32 = add;
             return 0;
         };
     )");

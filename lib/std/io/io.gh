@@ -10,18 +10,18 @@ test {
     import "fixed_buffer.gh";
 }
 
-pub const Error := error.Error;
-pub const File := file.File;
-pub const Reader := reader.Reader;
-pub const Writer := writer.Writer;
-pub const Seeker := seeker.Seeker;
-pub const Whence := seeker.Whence;
-pub const FixedBufferStream := fixed_buffer.FixedBufferStream;
+pub const Error = error.Error;
+pub const File = file.File;
+pub const Reader = reader.Reader;
+pub const Writer = writer.Writer;
+pub const Seeker = seeker.Seeker;
+pub const Whence = seeker.Whence;
+pub const FixedBufferStream = fixed_buffer.FixedBufferStream;
 
-pub const stdout := stdio.stdout;
-pub const stdin := stdio.stdin;
-pub const stderr := stdio.stderr;
-pub const print := stdio.print;
-pub const println := stdio.println;
-pub const eprint := stdio.eprint;
-pub const eprintln := stdio.eprintln;
+pub const stdout = stdio.stdout;
+pub const stdin = stdio.stdin;
+pub const stderr = stdio.stderr;
+pub const print = stdio.print;
+pub const println = stdio.println;
+pub const eprint = stdio.eprint;
+pub const eprintln = stdio.eprintln;

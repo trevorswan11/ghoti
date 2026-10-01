@@ -82,11 +82,11 @@ class module {
                     std::string         abi_name = "c") -> global_decl&;
     auto add_function(std::string  name,
                       sema::type&  type,
-                      bool         is_test      = false,
-                      bool         is_constexpr = false,
-                      bool         is_variadic  = false,
-                      gir::linkage linkage      = linkage::INTERNAL,
-                      std::string  abi_name     = "c") -> function&;
+                      bool         is_test     = false,
+                      bool         is_comptime = false,
+                      bool         is_variadic = false,
+                      gir::linkage linkage     = linkage::INTERNAL,
+                      std::string  abi_name    = "c") -> function&;
 
     // Names extern decls contribute to the link line (excludes the default "c" target).
     [[nodiscard]] auto get_required_libraries() const -> std::vector<std::string>;

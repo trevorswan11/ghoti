@@ -46,7 +46,7 @@ pub import "node.gh" as node; // Public file import with alias` }
 		<code class="language-ghoti">
 			{ `pub import "io/io.gh" as io;
 pub import "containers/array_list.gh" as array_list;
-pub const ArrayList := array_list::ArrayList;
+pub const ArrayList = array_list::ArrayList;
 ...` }
 		</code>
 	</pre>
@@ -57,14 +57,14 @@ pub const ArrayList := array_list::ArrayList;
 	<ul>
 		<li><code>containers/array_list.gh</code> declares a public function <code>ArrayList</code> that returns a generically-typed struct</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `pub const ArrayList := fn(T: type): type {...};` }</code></pre>
+	<pre><code class="language-ghoti">{ `pub const ArrayList = fn(T: type): type {...};` }</code></pre>
 	<ul>
 		<li>This can be used just like any other function through the module access operator (<code>::</code>):</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: std::array_list::ArrayList(i32);
-var a: std::ArrayList(i32); // Allowed due to function declaration alias` }
+			{ `let mut a: std::array_list::ArrayList(i32);
+let mut a: std::ArrayList(i32); // Allowed due to function declaration alias` }
 		</code>
 	</pre>
 }

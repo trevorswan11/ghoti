@@ -20,7 +20,7 @@ namespace ghoti::sema {
 
 class type;
 
-// A template when it has an `auto`/`type` parameter or a `constexpr` parameter
+// A template when it has an `auto`/`type` parameter or a `comptime` parameter
 struct generic_function_info {
     gsl::not_null<mod::module*>              module;
     ast::node_id                             node_id;
@@ -111,7 +111,7 @@ struct generic_instantiation_request {
     gsl::not_null<mod::module*> module;
 };
 
-// One `const m := fn ...` member of an aggregate returned by a `fn(...): type` constructor
+// One `const m = fn ...` member of an aggregate returned by a `fn(...): type` constructor
 struct type_ctor_member_emit {
     gsl::not_null<type*> owner_clone; // the per-instantiation aggregate type
     ast::node_id         member_decl;

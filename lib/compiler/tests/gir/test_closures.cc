@@ -9,8 +9,8 @@ namespace ghoti::tests {
 
 TEST_CASE("A non-capturing closure emits as a plain function, no environment") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        const outer := fn(): i32 {
-            const add := fn(x: i32): i32 {
+        const outer = fn(): i32 {
+            let add = fn(x: i32): i32 {
                 return x;
             };
             return add(5);
@@ -24,9 +24,9 @@ TEST_CASE("A non-capturing closure emits as a plain function, no environment") {
 
 TEST_CASE("A VALUE capture loads once at env-construction and once at call time") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        const outer := fn(): i32 {
-            var offset: i32 = 10;
-            const add := fn(x: i32): i32 {
+        const outer = fn(): i32 {
+            let mut offset: i32 = 10;
+            let add = fn(x: i32): i32 {
                 return x + offset;
             };
             return add(5);
@@ -41,9 +41,9 @@ TEST_CASE("A VALUE capture loads once at env-construction and once at call time"
 
 TEST_CASE("A MUT_REF capture loads the reference once and reads/writes through it") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            var counter: i32 = 0;
-            const bump := fn(): void {
+        const outer = fn(): void {
+            let mut counter: i32 = 0;
+            let bump = fn(): void {
                 counter = counter + 1;
             };
         };
@@ -58,10 +58,10 @@ TEST_CASE("A MUT_REF capture loads the reference once and reads/writes through i
 
 TEST_CASE("A capture forwarded through an intermediate function reaches the innermost closure") {
     auto       ctx_idx{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            var offset: i32 = 0;
-            const middle := fn(): void {
-                const inner := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let mut offset: i32 = 0;
+            let middle = fn(): void {
+                let inner = fn(x: i32): i32 {
                     return x + offset;
                 };
             };

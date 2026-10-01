@@ -36,14 +36,16 @@ namespace ghoti::ast { struct block_stmt; } // namespace ghoti::ast
 namespace ghoti::sema {
 
 /// Tracks the active lexical block and statement position currently being type-resolved
+using comptime_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
+
 struct active_block_frame {
     stdx::option<const ast::block_stmt&> block{};
     usize                                current_stmt_idx{0};
     stdx::option<bool>                   runtime_safety{}; // set by `@setRuntimeSafety`
     usize                                safety_fn_depth{0};
+    // A `for comptime` body's `comptime let mut` values as the previous iteration left them
+    stdx::option<comptime_frame> carried{};
 };
-
-using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
 
 // Mirrors `builtin.OptimizeMode`
 enum class optimize_mode : u8 {
@@ -135,10 +137,10 @@ struct context {
     ankerl::unordered_dense::set<std::string> reported_deprecations;
 
     // For the generic instantiation currently being resolved or emitted
-    std::vector<constexpr_frame> constexpr_binding_frames;
+    std::vector<comptime_frame> comptime_binding_frames;
 
-    // Nonzero while resolving a `constexpr { ... }` body, whose folds are compile-time evaluation
-    usize constexpr_evaluation_depth{0};
+    // Nonzero while resolving a `comptime { ... }` body, whose folds are compile-time evaluation
+    usize comptime_evaluation_depth{0};
 
     // Declared names for user struct/enum/union types, for `@typeName`
     type_name_map& user_type_names;
@@ -187,8 +189,8 @@ struct context {
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
           build_mode{other.build_mode}, deprecated_policy{other.deprecated_policy},
-          constexpr_binding_frames{other.constexpr_binding_frames},
-          constexpr_evaluation_depth{other.constexpr_evaluation_depth},
+          comptime_binding_frames{other.comptime_binding_frames},
+          comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},
           embed_cache{other.embed_cache}, env_epoch{other.env_epoch} {}
 
@@ -208,7 +210,7 @@ struct context {
     // Gets the already-resolved poison type from the pool
     [[nodiscard]] auto get_poison() -> type&;
 
-    // A character literal's untyped constant: `constexpr_int`, but `u21` once it needs a type
+    // A character literal's untyped constant: `comptime_int`, but `u21` once it needs a type
     [[nodiscard]] auto get_char_constant() -> type&;
     // The concrete type an untyped `t` takes when nothing asks for one: `i32`, `u21` for a
     // character constant, or `f64`; any other type is itself
@@ -294,8 +296,8 @@ struct context {
     [[nodiscard]] auto store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
         -> std::string;
 
-    // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
-    [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const
+    // The bound value of a `comptime` parameter named `name`, searching innermost frame first
+    [[nodiscard]] auto lookup_comptime_binding(std::string_view name) const
         -> stdx::option<const gir::const_value&>;
 
     // Reads embedded file into embed_cache and returns reference to contents if successful
@@ -303,18 +305,18 @@ struct context {
         -> stdx::option<const std::string&>;
 };
 
-// Marks everything folded while it lives as compile-time evaluation (a `constexpr` block, label,
+// Marks everything folded while it lives as compile-time evaluation (a `comptime` block, label,
 // or declaration initializer), as opposed to an opportunistic fold of runtime code
-class constexpr_evaluation_scope {
+class comptime_evaluation_scope {
   public:
-    constexpr_evaluation_scope(context& ctx, bool enabled) noexcept
-        : depth_{ctx.constexpr_evaluation_depth}, enabled_{enabled} {
+    comptime_evaluation_scope(context& ctx, bool enabled) noexcept
+        : depth_{ctx.comptime_evaluation_depth}, enabled_{enabled} {
         if (enabled_) { ++depth_; }
     }
-    ~constexpr_evaluation_scope() noexcept {
+    ~comptime_evaluation_scope() noexcept {
         if (enabled_) { --depth_; }
     }
-    MAKE_PINNED(constexpr_evaluation_scope);
+    MAKE_PINNED(comptime_evaluation_scope);
 
   private:
     usize& depth_;

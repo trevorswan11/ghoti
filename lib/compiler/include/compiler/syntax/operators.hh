@@ -14,7 +14,6 @@ using operator_t = typed_identifier;
 namespace operators {
 
 constexpr operator_t ASSIGN{"=", token_type_t::ASSIGN};
-constexpr operator_t WALRUS{":=", token_type_t::WALRUS};
 constexpr operator_t PLUS{"+", token_type_t::PLUS};
 constexpr operator_t PLUS_PLUS{"++", token_type_t::PLUS_PLUS};
 constexpr operator_t PLUS_ASSIGN{"+=", token_type_t::PLUS_ASSIGN};

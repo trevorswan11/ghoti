@@ -40,7 +40,7 @@ auto test_user_type(std::string_view input, sema::type_kind kind, usize expected
 
 TEST_CASE("Struct hollow types") {
     auto        ctx{test_user_type(
-        "const a := struct { b: i32, var foo := bar; };", sema::type_kind::STRUCT, 2)};
+        "const a = struct { b: i32, let mut foo = bar; };", sema::type_kind::STRUCT, 2)};
     const auto& registry{ctx->analyzer.get_registry()};
     const auto& field{UNWRAP(registry.get_from_opt(1, "b"))};
     REQUIRE(field.get_data().as_opt<sema::symbols::struct_field>());
@@ -48,7 +48,7 @@ TEST_CASE("Struct hollow types") {
 }
 
 TEST_CASE("Enum hollow types") {
-    auto ctx{test_user_type("const a := enum {b, const foo := bar; };", sema::type_kind::ENUM, 2)};
+    auto ctx{test_user_type("const a = enum {b, const foo = bar; };", sema::type_kind::ENUM, 2)};
     const auto& registry{ctx->analyzer.get_registry()};
     const auto& enumeration{UNWRAP(registry.get_from_opt(1, "b"))};
     REQUIRE(enumeration.get_data().as_opt<sema::symbols::enumeration>());
@@ -56,8 +56,8 @@ TEST_CASE("Enum hollow types") {
 }
 
 TEST_CASE("Union hollow types") {
-    auto        ctx{test_user_type(
-        "const a := union { b: i32, const foo := bar; };", sema::type_kind::UNION, 2)};
+    auto ctx{
+        test_user_type("const a = union { b: i32, const foo = bar; };", sema::type_kind::UNION, 2)};
     const auto& registry{ctx->analyzer.get_registry()};
     const auto& field{UNWRAP(registry.get_from_opt(1, "b"))};
     REQUIRE(field.get_data().as_opt<sema::symbols::union_field>());
@@ -65,12 +65,12 @@ TEST_CASE("Union hollow types") {
 }
 
 TEST_CASE("Public type alias query") {
-    auto [ctx, idx]{helpers::collect_and_check("pub const I := i32;")};
+    auto [ctx, idx]{helpers::collect_and_check("pub const I = i32;")};
     const auto& int_alias{UNWRAP(ctx->analyzer.get_registry().get_from_opt(idx, "I"))};
     CHECK(int_alias.is_public(ctx->root_mod));
 
     // A decl's kind is only known once its value resolves
-    auto [resolved_ctx, resolved_idx]{helpers::resolve_and_check("pub const I := i32;")};
+    auto [resolved_ctx, resolved_idx]{helpers::resolve_and_check("pub const I = i32;")};
     const auto& resolved_alias{
         UNWRAP(resolved_ctx->analyzer.get_registry().get_from_opt(resolved_idx, "I"))};
     CHECK(resolved_alias.get_kind_opt() == sema::symbol_kind::TYPE);
@@ -83,12 +83,12 @@ TEST_CASE("Shadowing member/field declarations") {
                 std::pair{0UZ, col}};
     };
 
-    helpers::test_collector_fail("const a := struct { var a := 2; };", expected_diag(24));
-    helpers::test_collector_fail("const a := struct { a: i32, var b := 2; };", expected_diag(20));
-    helpers::test_collector_fail("const a := enum {a};", expected_diag(17));
-    helpers::test_collector_fail("const a := enum {b const a := 2; };", expected_diag(25));
-    helpers::test_collector_fail("const a := union { a: i32 };", expected_diag(19));
-    helpers::test_collector_fail("const a := union { b: i32 const a := 2; };", expected_diag(32));
+    helpers::test_collector_fail("const a = struct { let mut a = 2; };", expected_diag(27));
+    helpers::test_collector_fail("const a = struct { a: i32, let mut b = 2; };", expected_diag(19));
+    helpers::test_collector_fail("const a = enum {a};", expected_diag(16));
+    helpers::test_collector_fail("const a = enum {b const a = 2; };", expected_diag(24));
+    helpers::test_collector_fail("const a = union { a: i32 };", expected_diag(18));
+    helpers::test_collector_fail("const a = union { b: i32 const a = 2; };", expected_diag(31));
 }
 
 } // namespace ghoti::tests

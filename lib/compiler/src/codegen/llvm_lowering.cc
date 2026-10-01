@@ -99,34 +99,34 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     }
 }
 
-// A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
+// A `comptime_float` materializes as `f64`; a `comptime_int` as `i32`.
 [[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
-    return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
+    return sema::is_float(k) || k == sema::type_kind::COMPTIME_FLOAT;
 }
 
-// Neither `constexpr_int` nor `constexpr_float` has a concrete width/kind of its own
-[[nodiscard]] auto is_untyped_constexpr(sema::type_kind k) noexcept -> bool {
-    return k == sema::type_kind::CONSTEXPR_INT || k == sema::type_kind::CONSTEXPR_FLOAT;
+// Neither `comptime_int` nor `comptime_float` has a concrete width/kind of its own
+[[nodiscard]] auto is_untyped_comptime(sema::type_kind k) noexcept -> bool {
+    return k == sema::type_kind::COMPTIME_INT || k == sema::type_kind::COMPTIME_FLOAT;
 }
 
-[[nodiscard]] auto is_constexpr_only_signature(const sema::types::function& fn_data) noexcept
+[[nodiscard]] auto is_comptime_only_signature(const sema::types::function& fn_data) noexcept
     -> bool {
     return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
 }
 
 // The concrete peer type two operands should lower against, or none if both are
-// `is_untyped_constexpr`
+// `is_untyped_comptime`
 [[nodiscard]] auto concrete_peer_type(stdx::option<sema::type&> op0_ty,
                                       stdx::option<sema::type&> op1_ty)
     -> stdx::option<sema::type&> {
-    if (op0_ty && !is_untyped_constexpr(op0_ty->get_kind())) { return op0_ty; }
-    if (op1_ty && !is_untyped_constexpr(op1_ty->get_kind())) { return op1_ty; }
+    if (op0_ty && !is_untyped_comptime(op0_ty->get_kind())) { return op0_ty; }
+    if (op1_ty && !is_untyped_comptime(op1_ty->get_kind())) { return op1_ty; }
     return stdx::none;
 }
 
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
-    // Any float (or `constexpr_float`) operand makes the operation floating point.
+    // Any float (or `comptime_float`) operand makes the operation floating point.
     for (const auto& op : inst.operands) {
         if (op.type && materialized_is_float(op.type->get_kind())) { return true; }
     }
@@ -138,7 +138,7 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return val && val->getType()->isFloatingPointTy();
 }
 
-[[nodiscard]] auto constexpr_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
+[[nodiscard]] auto comptime_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
     if (const auto v{val.as_opt<i64>()}) { return *v >= 0; }
     if (const auto v{val.as_opt<i128>()}) { return *v >= 0; }
     return val.is<u64>() || val.is<u128>();
@@ -146,15 +146,15 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
     if (!inst.operands.empty() && inst.operands[0].type &&
-        inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) {
-        // `constexpr_int` alone carries no real signedness
+        inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
+        // `comptime_int` alone carries no real signedness
         for (const auto& op : inst.operands | std::views::drop(1)) {
-            if (op.type && op.type->get_kind() != sema::type_kind::CONSTEXPR_INT) {
+            if (op.type && op.type->get_kind() != sema::type_kind::COMPTIME_INT) {
                 return sema::is_signed_integer(*op.type);
             }
         }
         return !std::ranges::all_of(
-            inst.operands, [](const auto& op) { return constexpr_operand_is_nonnegative(op); });
+            inst.operands, [](const auto& op) { return comptime_operand_is_nonnegative(op); });
     }
     if (!inst.operands.empty() && inst.operands[0].type) {
         return sema::is_signed_integer(*inst.operands[0].type);
@@ -1446,7 +1446,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         init = const_to_llvm(*g.const_init, g_type);
     } else if (g.init_value && g.init_value->is<std::string>() &&
                g.type.get_kind() == sema::type_kind::SLICE) {
-        // The folded value of a constexpr str slice is a bare str, but the global's type is a slice
+        // The folded value of a comptime str slice is a bare str, but the global's type is a slice
         const auto& bytes{g.init_value->as<std::string>()};
         const auto  slice_data{g.type.get_data().as_opt<sema::types::slice>()};
         const bool  add_nul{slice_data && slice_data->null_terminated};
@@ -1580,7 +1580,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     if (!llvm_fn) { return llvm_fn; }
     const auto fn_data{sema::signature_of(fn.get_type())};
     if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
-        (fn_data && is_constexpr_only_signature(*fn_data))) {
+        (fn_data && is_comptime_only_signature(*fn_data))) {
         return llvm_fn;
     }
     clear_locals();
@@ -1681,7 +1681,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            (i < std::numeric_limits<i32>::min() ||
                                             i > std::numeric_limits<i32>::max())
                                           ? types_.get_int64_ty()
@@ -1691,7 +1691,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            u > std::numeric_limits<u32>::max()
                                           ? types_.get_int64_ty()
                                           : types_.translate(*val.type))
@@ -1701,7 +1701,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](i128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type
-                         ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                         ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                     (w < static_cast<i128>(std::numeric_limits<i32>::min()) ||
                                      w > static_cast<i128>(std::numeric_limits<i32>::max()))
                                 ? (w < static_cast<i128>(std::numeric_limits<i64>::min()) ||
@@ -1714,7 +1714,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? (val.type->get_kind() == sema::type_kind::CONSTEXPR_INT &&
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
                                            w > std::numeric_limits<u32>::max()
                                           ? (w > std::numeric_limits<u64>::max()
                                                  ? llvm::Type::getInt128Ty(context_)
@@ -2279,9 +2279,9 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     auto* src_ty{val->getType()};
     switch (inst.kind) {
     case gir::instruction_kind::INT_CAST: {
-        const bool is_sgn{inst.operands[0].type && inst.operands[0].type->get_kind() ==
-                                                       sema::type_kind::CONSTEXPR_INT
-                              ? !constexpr_operand_is_nonnegative(inst.operands[0])
+        const bool is_sgn{inst.operands[0].type &&
+                                  inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT
+                              ? !comptime_operand_is_nonnegative(inst.operands[0])
                               : is_signed_type(inst)};
         return builder_.CreateIntCast(val, target_ty, is_sgn);
     }

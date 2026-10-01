@@ -137,21 +137,21 @@ TEST_CASE("Word operators only match on a whole-word boundary") {
 }
 
 TEST_CASE("Lexing basic language snippet") {
-    test_lexer("const five := 5;\n"
-               "var ten := 10;\n\n"
-               "var add := fn(x: i32, y: i32): i32 {\n"
+    test_lexer("const five = 5;\n"
+               "let ten = 10;\n\n"
+               "let add = fn(x: i32, y: i32): i32 {\n"
                "   return x + y;\n"
                "};\n\n"
-               "var result := add(five, ten);\n"
-               "var fs: f64 = 4.2;",
+               "let result = add(five, ten);\n"
+               "let fs: f64 = 4.2;",
                {
                    {token_type_t::CONSTANT, "const"}, {token_type_t::IDENT, "five"},
-                   {token_type_t::WALRUS, ":="},      {token_type_t::INT_10, "5"},
-                   {token_type_t::SEMICOLON, ";"},    {token_type_t::VAR, "var"},
-                   {token_type_t::IDENT, "ten"},      {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},       {token_type_t::INT_10, "5"},
+                   {token_type_t::SEMICOLON, ";"},    {token_type_t::LET, "let"},
+                   {token_type_t::IDENT, "ten"},      {token_type_t::ASSIGN, "="},
                    {token_type_t::INT_10, "10"},      {token_type_t::SEMICOLON, ";"},
-                   {token_type_t::VAR, "var"},        {token_type_t::IDENT, "add"},
-                   {token_type_t::WALRUS, ":="},      {token_type_t::FUNCTION, "fn"},
+                   {token_type_t::LET, "let"},        {token_type_t::IDENT, "add"},
+                   {token_type_t::ASSIGN, "="},       {token_type_t::FUNCTION, "fn"},
                    {token_type_t::LPAREN, "("},       {token_type_t::IDENT, "x"},
                    {token_type_t::COLON, ":"},        {token_type_t::INT_TYPE, "i32"},
                    {token_type_t::COMMA, ","},        {token_type_t::IDENT, "y"},
@@ -161,12 +161,12 @@ TEST_CASE("Lexing basic language snippet") {
                    {token_type_t::RETURN, "return"},  {token_type_t::IDENT, "x"},
                    {token_type_t::PLUS, "+"},         {token_type_t::IDENT, "y"},
                    {token_type_t::SEMICOLON, ";"},    {token_type_t::RBRACE, "}"},
-                   {token_type_t::SEMICOLON, ";"},    {token_type_t::VAR, "var"},
-                   {token_type_t::IDENT, "result"},   {token_type_t::WALRUS, ":="},
+                   {token_type_t::SEMICOLON, ";"},    {token_type_t::LET, "let"},
+                   {token_type_t::IDENT, "result"},   {token_type_t::ASSIGN, "="},
                    {token_type_t::IDENT, "add"},      {token_type_t::LPAREN, "("},
                    {token_type_t::IDENT, "five"},     {token_type_t::COMMA, ","},
                    {token_type_t::IDENT, "ten"},      {token_type_t::RPAREN, ")"},
-                   {token_type_t::SEMICOLON, ";"},    {token_type_t::VAR, "var"},
+                   {token_type_t::SEMICOLON, ";"},    {token_type_t::LET, "let"},
                    {token_type_t::IDENT, "fs"},       {token_type_t::COLON, ":"},
                    {token_type_t::F64_TYPE, "f64"},   {token_type_t::ASSIGN, "="},
                    {token_type_t::REAL, "4.2"},       {token_type_t::SEMICOLON, ";"},
@@ -300,19 +300,20 @@ TEST_CASE("Lexing illegal underscored numbers") {
 }
 
 TEST_CASE("Lexing keywords") {
-    test_lexer("and or pub extern export volatile mut "
+    test_lexer("and or pub extern export volatile mut let comptime "
                "i32 i64 isize u32 u64 usize f32 f64 u8 bool void type test asm",
                {
-                   {token_type_t::BOOLEAN_AND, "and"},  {token_type_t::BOOLEAN_OR, "or"},
-                   {token_type_t::PUBLIC, "pub"},       {token_type_t::EXTERN, "extern"},
-                   {token_type_t::EXPORT, "export"},    {token_type_t::VOLATILE, "volatile"},
-                   {token_type_t::MUT, "mut"},          {token_type_t::INT_TYPE, "i32"},
-                   {token_type_t::INT_TYPE, "i64"},     {token_type_t::ISIZE_TYPE, "isize"},
-                   {token_type_t::INT_TYPE, "u32"},     {token_type_t::INT_TYPE, "u64"},
-                   {token_type_t::USIZE_TYPE, "usize"}, {token_type_t::F32_TYPE, "f32"},
-                   {token_type_t::F64_TYPE, "f64"},     {token_type_t::INT_TYPE, "u8"},
-                   {token_type_t::BOOL_TYPE, "bool"},   {token_type_t::VOID_TYPE, "void"},
-                   {token_type_t::TYPE_TYPE, "type"},   {token_type_t::TEST, "test"},
+                   {token_type_t::BOOLEAN_AND, "and"},   {token_type_t::BOOLEAN_OR, "or"},
+                   {token_type_t::PUBLIC, "pub"},        {token_type_t::EXTERN, "extern"},
+                   {token_type_t::EXPORT, "export"},     {token_type_t::VOLATILE, "volatile"},
+                   {token_type_t::MUT, "mut"},           {token_type_t::LET, "let"},
+                   {token_type_t::COMPTIME, "comptime"}, {token_type_t::INT_TYPE, "i32"},
+                   {token_type_t::INT_TYPE, "i64"},      {token_type_t::ISIZE_TYPE, "isize"},
+                   {token_type_t::INT_TYPE, "u32"},      {token_type_t::INT_TYPE, "u64"},
+                   {token_type_t::USIZE_TYPE, "usize"},  {token_type_t::F32_TYPE, "f32"},
+                   {token_type_t::F64_TYPE, "f64"},      {token_type_t::INT_TYPE, "u8"},
+                   {token_type_t::BOOL_TYPE, "bool"},    {token_type_t::VOID_TYPE, "void"},
+                   {token_type_t::TYPE_TYPE, "type"},    {token_type_t::TEST, "test"},
                    {token_type_t::ASM, "asm"},
                });
 }
@@ -331,25 +332,25 @@ TEST_CASE("Lexing interface / impl / dyn keywords") {
 }
 
 TEST_CASE("Lexing comments") {
-    test_lexer("const five := 5;\n"
-               "var ten_10 := 10;\n\n"
+    test_lexer("const five = 5;\n"
+               "let ten_10 = 10;\n\n"
                "// BOL\n"
-               "var result := add(five, ten); // EOL\n"
-               "var four_and_some := 4.2f32;",
+               "let result = add(five, ten); // EOL\n"
+               "let four_and_some = 4.2f32;",
                {
                    {token_type_t::CONSTANT, "const"}, {token_type_t::IDENT, "five"},
-                   {token_type_t::WALRUS, ":="},      {token_type_t::INT_10, "5"},
-                   {token_type_t::SEMICOLON, ";"},    {token_type_t::VAR, "var"},
-                   {token_type_t::IDENT, "ten_10"},   {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},       {token_type_t::INT_10, "5"},
+                   {token_type_t::SEMICOLON, ";"},    {token_type_t::LET, "let"},
+                   {token_type_t::IDENT, "ten_10"},   {token_type_t::ASSIGN, "="},
                    {token_type_t::INT_10, "10"},      {token_type_t::SEMICOLON, ";"},
-                   {token_type_t::COMMENT, " BOL"},   {token_type_t::VAR, "var"},
-                   {token_type_t::IDENT, "result"},   {token_type_t::WALRUS, ":="},
+                   {token_type_t::COMMENT, " BOL"},   {token_type_t::LET, "let"},
+                   {token_type_t::IDENT, "result"},   {token_type_t::ASSIGN, "="},
                    {token_type_t::IDENT, "add"},      {token_type_t::LPAREN, "("},
                    {token_type_t::IDENT, "five"},     {token_type_t::COMMA, ","},
                    {token_type_t::IDENT, "ten"},      {token_type_t::RPAREN, ")"},
                    {token_type_t::SEMICOLON, ";"},    {token_type_t::COMMENT, " EOL"},
-                   {token_type_t::VAR, "var"},        {token_type_t::IDENT, "four_and_some"},
-                   {token_type_t::WALRUS, ":="},      {token_type_t::REAL, "4.2f32"},
+                   {token_type_t::LET, "let"},        {token_type_t::IDENT, "four_and_some"},
+                   {token_type_t::ASSIGN, "="},       {token_type_t::REAL, "4.2f32"},
                    {token_type_t::SEMICOLON, ";"},
                });
 }
@@ -357,7 +358,7 @@ TEST_CASE("Lexing comments") {
 TEST_CASE("Lexing character literals") {
     test_lexer("if'e' else'\\'\nreturn'\\r' break'\\n'\n"
                "continue'\\0' for'\\'' while'\\\\' const''\n"
-               "var'asd'",
+               "let'asd'",
                {
                    {token_type_t::IF, "if"},
                    {token_type_t::CHAR, "'e'"},
@@ -375,23 +376,23 @@ TEST_CASE("Lexing character literals") {
                    {token_type_t::CHAR, "'\\\\'"},
                    {token_type_t::CONSTANT, "const"},
                    {token_type_t::CHAR, "''"},
-                   {token_type_t::VAR, "var"},
+                   {token_type_t::LET, "let"},
                    {token_type_t::CHAR, "'asd'"},
                });
 }
 
 TEST_CASE("Lexing string literals") {
     test_lexer(
-        R"("This is a string";const five := "Hello, World!";var ten: [:0]u8 = "Hello\n, World!\0";var one := "Hello, World!;)",
+        R"("This is a string";const five = "Hello, World!";let ten: [:0]u8 = "Hello\n, World!\0";let one = "Hello, World!;)",
         {
             {token_type_t::STRING, R"("This is a string")"},
             {token_type_t::SEMICOLON, ";"},
             {token_type_t::CONSTANT, "const"},
             {token_type_t::IDENT, "five"},
-            {token_type_t::WALRUS, ":="},
+            {token_type_t::ASSIGN, "="},
             {token_type_t::STRING, R"("Hello, World!")"},
             {token_type_t::SEMICOLON, ";"},
-            {token_type_t::VAR, "var"},
+            {token_type_t::LET, "let"},
             {token_type_t::IDENT, "ten"},
             {token_type_t::COLON, ":"},
             {token_type_t::LBRACKET, "["},
@@ -401,9 +402,9 @@ TEST_CASE("Lexing string literals") {
             {token_type_t::ASSIGN, "="},
             {token_type_t::STRING, R"("Hello\n, World!\0")"},
             {token_type_t::SEMICOLON, ";"},
-            {token_type_t::VAR, "var"},
+            {token_type_t::LET, "let"},
             {token_type_t::IDENT, "one"},
-            {token_type_t::WALRUS, ":="},
+            {token_type_t::ASSIGN, "="},
             {token_type_t::ILLEGAL, R"("Hello, World!;)"},
         });
 }
@@ -434,35 +435,35 @@ TEST_CASE("Lexing raw identifiers") {
 }
 
 TEST_CASE("Lexing multiline string literals") {
-    test_lexer("const five := \\\\Multiline stringing\n"
+    test_lexer("const five = \\\\Multiline stringing\n"
                ";\n"
-               "var ten := \\\\Multiline stringing\n"
+               "let ten = \\\\Multiline stringing\n"
                "\\\\Continuation\n"
                ";\n"
-               "const one := \\\\Nesting \" \' \\ [] const var\n"
+               "const one = \\\\Nesting \" \' \\ [] const var\n"
                "\\\\\n"
                ";\n",
                {
                    {token_type_t::CONSTANT, "const"},
                    {token_type_t::IDENT, "five"},
-                   {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},
                    {token_type_t::MULTILINE_STRING, "Multiline stringing"},
                    {token_type_t::SEMICOLON, ";"},
-                   {token_type_t::VAR, "var"},
+                   {token_type_t::LET, "let"},
                    {token_type_t::IDENT, "ten"},
-                   {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},
                    {token_type_t::MULTILINE_STRING, "Multiline stringing\n\\\\Continuation"},
                    {token_type_t::SEMICOLON, ";"},
                    {token_type_t::CONSTANT, "const"},
                    {token_type_t::IDENT, "one"},
-                   {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},
                    {token_type_t::MULTILINE_STRING, "Nesting \" \' \\ [] const var\n\\\\"},
                    {token_type_t::SEMICOLON, ";"},
                });
 }
 
 TEST_CASE("Lexing multiline string literals with indented continuations") {
-    test_lexer(R"(const s := \\First line
+    test_lexer(R"(const s = \\First line
     \\Second line
     \\    still indented
     ;
@@ -470,7 +471,7 @@ TEST_CASE("Lexing multiline string literals with indented continuations") {
                {
                    {token_type_t::CONSTANT, "const"},
                    {token_type_t::IDENT, "s"},
-                   {token_type_t::WALRUS, ":="},
+                   {token_type_t::ASSIGN, "="},
                    {token_type_t::MULTILINE_STRING,
                     "First line\n    \\\\Second line\n    \\\\    still indented"},
                    {token_type_t::SEMICOLON, ";"},

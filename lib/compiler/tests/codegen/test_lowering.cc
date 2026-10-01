@@ -19,13 +19,13 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const add := fn(a: i64, b: i64): i64 {
+        pub const add = fn(a: i64, b: i64): i64 {
             return a + b;
         };
 
-        pub const compute := fn(n: i64): i64 {
-            var sum: i64 = 0i64;
-            var i: i64 = 1i64;
+        pub const compute = fn(n: i64): i64 {
+            let mut sum: i64 = 0i64;
+            let mut i: i64 = 1i64;
             while (i <= n) {
                 sum = add(sum, i);
                 i = i + 1i64;
@@ -50,19 +50,19 @@ TEST_CASE("E2E LLVM Emission: Struct Operations and Nested Aggregates") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Vector2 := struct {
+        const Vector2 = struct {
             x: f64,
             y: f64,
         };
 
-        pub const add_vectors := fn(v1: Vector2, v2: Vector2): Vector2 {
+        pub const add_vectors = fn(v1: Vector2, v2: Vector2): Vector2 {
             return Vector2{
                 .x = v1.x + v2.x,
                 .y = v1.y + v2.y,
             };
         };
 
-        pub const dot_product := fn(v1: Vector2, v2: Vector2): f64 {
+        pub const dot_product = fn(v1: Vector2, v2: Vector2): f64 {
             return (v1.x * v2.x) + (v1.y * v2.y);
         };
     )")};
@@ -77,16 +77,16 @@ TEST_CASE("E2E LLVM Emission: Array Manipulation, Mutation & Pointers") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const swap := fn(a: ^mut i32, b: ^mut i32): void {
-            const tmp: i32 = *a;
+        pub const swap = fn(a: ^mut i32, b: ^mut i32): void {
+            let tmp: i32 = *a;
             *a = *b;
             *b = tmp;
         };
 
-        pub const sum_array := fn(): i32 {
-            var arr: [4uz]i32 = [4uz]i32{10, 20, 30, 40};
-            var sum: i32 = 0;
-            var i: usize = 0uz;
+        pub const sum_array = fn(): i32 {
+            let mut arr: [4uz]i32 = [4uz]i32{10, 20, 30, 40};
+            let mut sum: i32 = 0;
+            let mut i: usize = 0uz;
             while (i < 4uz) {
                 sum = sum + arr[i];
                 i = i + 1uz;

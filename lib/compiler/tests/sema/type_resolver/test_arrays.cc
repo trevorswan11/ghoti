@@ -53,7 +53,7 @@ TEST_CASE("Array resolution with explicit type") {
 }
 
 TEST_CASE("Array resolution with implicit type") {
-    auto [ctx, idx]{helpers::resolve_and_check("const a := [4]u64{1, 2, 3, 4 };")};
+    auto [ctx, idx]{helpers::resolve_and_check("const a = [4]u64{1, 2, 3, 4 };")};
     const auto [sym, sym_data, node_data, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
 
@@ -69,7 +69,7 @@ TEST_CASE("Array resolution with implicit type") {
 TEST_CASE("Indexing with single accessors") {
     const auto test_index = [](std::string_view type_mod) -> void {
         auto [ctx, idx]{helpers::resolve_and_check(
-            fmt::format("var a: {}u32 = undefined; const b := a[0];", type_mod))};
+            fmt::format("let mut a: {}u32 = undefined; const b = a[0];", type_mod))};
         const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
         CHECK(type == ctx->get_int_type(32, false));
     };
@@ -80,7 +80,7 @@ TEST_CASE("Indexing with single accessors") {
 }
 
 TEST_CASE("Indexing with slice accessor") {
-    auto [ctx, idx]{helpers::resolve_and_check("var a: ^u32 = undefined; const b := a[0..4];")};
+    auto [ctx, idx]{helpers::resolve_and_check("let mut a: ^u32 = undefined; const b = a[0..4];")};
     const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::node_t>("b", idx)};
 
     const auto& i32_type{ctx->get_int_type(32, false)};
@@ -89,29 +89,29 @@ TEST_CASE("Indexing with slice accessor") {
 }
 
 TEST_CASE("Well-formed arrays with structural types") {
-    helpers::resolve_and_check("const A := struct { a: i32, const b := [_]A{}; };");
-    helpers::resolve_and_check("const A := struct { a: []A, };");
+    helpers::resolve_and_check("const A = struct { a: i32, const b = [_]A{}; };");
+    helpers::resolve_and_check("const A = struct { a: []A, };");
     helpers::resolve_and_check(
-        "const A := struct { a: [6]^@This(), const b := fn(c: ^@This()): i32 {}; };");
-    helpers::resolve_and_check("const A := union { a: [4]^@This(), };");
-    helpers::resolve_and_check("const A := union { a: []@This(), };");
+        "const A = struct { a: [6]^@This(), const b = fn(c: ^@This()): i32 {}; };");
+    helpers::resolve_and_check("const A = union { a: [4]^@This(), };");
+    helpers::resolve_and_check("const A = union { a: []@This(), };");
 }
 
 TEST_CASE("an array or slice element cannot be a reference") {
-    CHECK(helpers::raised("const f := fn(): void { var a: [2]&i32 = undefined; _ = a; };",
+    CHECK(helpers::raised("const f = fn(): void { let mut a: [2]&i32 = undefined; _ = a; };",
                           sema::error::ILLEGAL_REFERENCE_FIELD));
-    CHECK(helpers::raised("const f := fn(s: []&mut i32): void { _ = s; };",
+    CHECK(helpers::raised("const f = fn(s: []&mut i32): void { _ = s; };",
                           sema::error::ILLEGAL_REFERENCE_FIELD));
     CHECK(
-        helpers::raised("const A := struct { a: [3]&i32 };", sema::error::ILLEGAL_REFERENCE_FIELD));
+        helpers::raised("const A = struct { a: [3]&i32 };", sema::error::ILLEGAL_REFERENCE_FIELD));
 }
 
 TEST_CASE("a `[N]&mut T` value (via a type parameter) decays to `[N]^mut T`") {
     helpers::resolve_and_check(R"(
-        const gen := fn(T: type, xs: [2]T): [2]T { return xs; };
-        const takeMut := fn(a: [2]^mut i32): void { *a[0] = 1; };
-        const use := fn(): void {
-            var x: i32 = 0; var y: i32 = 0;
+        const gen = fn(T: type, xs: [2]T): [2]T { return xs; };
+        const takeMut = fn(a: [2]^mut i32): void { *a[0] = 1; };
+        const use = fn(): void {
+            let mut x: i32 = 0; let mut y: i32 = 0;
             takeMut(gen(&mut i32, .{ &mut x, &mut y }));
         };
 )");
@@ -119,10 +119,10 @@ TEST_CASE("a `[N]&mut T` value (via a type parameter) decays to `[N]^mut T`") {
 
 TEST_CASE("Illegal index target") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "var a: u32 = undefined; const b := a[0];",
+        "let mut a: u32 = undefined; const b = a[0];",
         sema::diagnostic{"Can only index slices, arrays, and pointers; found 'u32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 35UZ}})};
+                         std::pair{0UZ, 38UZ}})};
     ctx->check_poisoned<syms::node_t>("b", idx);
 }
 
@@ -133,45 +133,45 @@ TEST_CASE("Illegal arrays dependent on incomplete types") {
                 std::pair{0UZ, col}};
     };
 
-    helpers::test_resolver_fail("const A := struct { a: [3]A, };", expected_diag(26));
-    helpers::test_resolver_fail("const A := struct { a: [3]@This(), };", expected_diag(26));
-    helpers::test_resolver_fail("const A := struct { a: @TypeOf([3]A), };", expected_diag(34));
-    helpers::test_resolver_fail("const A := union { a: [1]A, };", expected_diag(25));
-    helpers::test_resolver_fail("const A := union { a: @TypeOf([1]A), };", expected_diag(33));
-    helpers::test_resolver_fail("const A := struct { a: auto = [_]A{}, };", expected_diag(33));
+    helpers::test_resolver_fail("const A = struct { a: [3]A, };", expected_diag(25));
+    helpers::test_resolver_fail("const A = struct { a: [3]@This(), };", expected_diag(25));
+    helpers::test_resolver_fail("const A = struct { a: @TypeOf([3]A), };", expected_diag(33));
+    helpers::test_resolver_fail("const A = union { a: [1]A, };", expected_diag(24));
+    helpers::test_resolver_fail("const A = union { a: @TypeOf([1]A), };", expected_diag(32));
+    helpers::test_resolver_fail("const A = struct { a: auto = [_]A{}, };", expected_diag(32));
 }
 
 TEST_CASE("Dereferencing a slice needs a compile-time-known length") {
     helpers::test_resolver_fail(
-        "const f := fn(s: []u8): [2]u8 { return *s; };",
+        "const f = fn(s: []u8): [2]u8 { return *s; };",
         sema::diagnostic{"Cannot dereference a slice whose length is not known at compile time; "
                          "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
                          sema::error::UNKNOWN_SLICE_LENGTH,
-                         std::pair{0UZ, 39UZ}});
+                         std::pair{0UZ, 38UZ}});
     helpers::test_resolver_fail(
-        "const f := fn(s: []u8, i: usize): [2]u8 { return *s[i..]; };",
+        "const f = fn(s: []u8, i: usize): [2]u8 { return *s[i..]; };",
         sema::diagnostic{"Cannot dereference a slice whose length is not known at compile time; "
                          "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
                          sema::error::UNKNOWN_SLICE_LENGTH,
-                         std::pair{0UZ, 49UZ}});
+                         std::pair{0UZ, 48UZ}});
 }
 
 TEST_CASE("Constant range bounds are checked against a known container length") {
     helpers::test_resolver_fail(
-        "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[1..9]; };",
+        "const f = fn(): void { let a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[1..9]; };",
         sema::diagnostic{"Slice end 9 is out of bounds for a length of 4",
                          sema::error::SLICE_OUT_OF_BOUNDS,
-                         std::pair{0UZ, 64UZ}});
+                         std::pair{0UZ, 61UZ}});
     helpers::test_resolver_fail(
-        "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[0..2][0..=2]; };",
+        "const f = fn(): void { let a: [4]u8 = .{ 1, 2, 3, 4 }; _ = a[0..2][0..=2]; };",
         sema::diagnostic{"Slice end 3 is out of bounds for a length of 2",
                          sema::error::SLICE_OUT_OF_BOUNDS,
-                         std::pair{0UZ, 70UZ}});
+                         std::pair{0UZ, 67UZ}});
 }
 
 TEST_CASE("Copying into a slice range is checked statically") {
     constexpr std::string_view prefix{
-        "const f := fn(): void { var a: [4]mut u8 = .{ 1, 2, 3, 4 }; "};
+        "const f = fn(): void { let mut a: [4]mut u8 = .{ 1, 2, 3, 4 }; "};
     const auto at{[&](usize col) { return std::pair{0UZ, prefix.size() + col}; }};
     const auto src{[&](std::string_view body) { return fmt::format("{}{} }};", prefix, body); }};
 
@@ -184,19 +184,19 @@ TEST_CASE("Copying into a slice range is checked statically") {
     }
     SECTION("unknown destination length") {
         helpers::test_resolver_fail(
-            src("var i: usize = 1; const b: [2]u8 = .{ 9, 8 }; a[i..] = b;"),
+            src("let mut i: usize = 1; const b: [2]u8 = .{ 9, 8 }; a[i..] = b;"),
             sema::diagnostic{"Cannot copy into a slice whose length is not known at compile time; "
                              "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
                              sema::error::UNKNOWN_SLICE_LENGTH,
-                             at(47)});
+                             at(51)});
     }
     SECTION("unknown source length") {
         helpers::test_resolver_fail(
-            src("var i: usize = 1; a[0..2] = a[i..];"),
+            src("let mut i: usize = 1; a[0..2] = a[i..];"),
             sema::diagnostic{"Cannot copy from a slice whose length is not known at compile time; "
                              "slice it with constant bounds first (e.g. `s[i..][0..n]`)",
                              sema::error::UNKNOWN_SLICE_LENGTH,
-                             at(29)});
+                             at(33)});
     }
     SECTION("element type mismatch") {
         helpers::test_resolver_fail(
@@ -207,11 +207,11 @@ TEST_CASE("Copying into a slice range is checked statically") {
     }
     SECTION("immutable destination") {
         helpers::test_resolver_fail(
-            "const f := fn(): void { const a: [4]u8 = .{ 1, 2, 3, 4 }; a[1..3] = .{ 9, 8 }; };",
+            "const f = fn(): void { let a: [4]u8 = .{ 1, 2, 3, 4 }; a[1..3] = .{ 9, 8 }; };",
             sema::diagnostic{"Cannot copy into a slice of immutable elements; the destination "
                              "needs `mut` elements",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{0UZ, 59UZ}});
+                             std::pair{0UZ, 56UZ}});
     }
     SECTION("compound assignment") {
         helpers::test_resolver_fail(

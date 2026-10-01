@@ -7,7 +7,7 @@ templ SyntaxArraysPage() {
 		<li>
 			Arrays are defined with 3 key components
 			<ul>
-				<li>A size: This must be an underscore (signifying inferred size), a compile time constant (previously declared with <code>constexpr</code>), or an integer literal (suffix <code>uz</code>)</li>
+				<li>A size: This must be an underscore (signifying inferred size), a compile time constant (previously declared with <code>const</code>), or an integer literal (suffix <code>uz</code>)</li>
 				<li>A type: This can be any valid type, but it must be present and cannot be inferred</li>
 				<li>Items: These items must be of the type specified, and must match the provided size if provided</li>
 			</ul>
@@ -67,8 +67,8 @@ templ SyntaxArraysPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: &[S]&^mut T; // Normal array type
-var a: &[]&^mut T; // Analogous slice type` }
+			{ `let mut a: &[S]&^mut T; // Normal array type
+let mut a: &[]&^mut T; // Analogous slice type` }
 		</code>
 	</pre>
 	<ul>
@@ -101,7 +101,7 @@ var a: &[]&^mut T; // Analogous slice type` }
 		<li>
 			Indexing an array with a single value returns a value that is of the same type as the array's inner items
 			<ul>
-				<li>This can be used to chain array indexing as: <code>const val := matrix[0uz][1uz];</code></li>
+				<li>This can be used to chain array indexing as: <code>const val = matrix[0uz][1uz];</code></li>
 			</ul>
 		</li>
 		<li>Indexing an array with a range returns a slice that is exactly the size specified by said range</li>
@@ -122,9 +122,9 @@ var a: &[]&^mut T; // Analogous slice type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
-var a: [:0]i32; // Null terminated slice type
-var a: [5uz:0]i32; // Null terminated array type` }
+			{ `const a = [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
+let mut a: [:0]i32; // Null terminated slice type
+let mut a: [5uz:0]i32; // Null terminated array type` }
 		</code>
 	</pre>
 	<ul>
@@ -157,7 +157,7 @@ var a: [5uz:0]i32; // Null terminated array type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_]i32{1, 2, 3, 4};
+			{ `const a = [_]i32{1, 2, 3, 4};
 for (a) |b| { ... };` }
 		</code>
 	</pre>
@@ -167,10 +167,10 @@ for (a) |b| { ... };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a := [_]i32{1, 2, 3, 4};
+			{ `let mut a = [_]i32{1, 2, 3, 4};
 for (a) |&mut b| { ... };
 
-const c := [_]i32{1, 2, 3, 4};
+const c = [_]i32{1, 2, 3, 4};
 for (c) |&mut b| { ... }; // Illegal, c is a constant` }
 		</code>
 	</pre>

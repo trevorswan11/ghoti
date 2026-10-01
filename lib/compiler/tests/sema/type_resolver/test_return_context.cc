@@ -9,15 +9,15 @@ namespace ghoti::tests {
 
 TEST_CASE("`return` supplies the implicit type for a bare initializer") {
     helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
-        const make := fn(): Point { return .{ .x = 1, .y = 2 }; };
+        const Point = struct { x: i32, y: i32 };
+        const make = fn(): Point { return .{ .x = 1, .y = 2 }; };
     )");
 }
 
 TEST_CASE("`return` implicit-init context flows through an `if` expression") {
     helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
-        const pick := fn(b: bool): Point {
+        const Point = struct { x: i32, y: i32 };
+        const pick = fn(b: bool): Point {
             return if (b) .{ .x = 1, .y = 2 }; else .{ .x = 3, .y = 4 };
         };
     )");
@@ -25,9 +25,9 @@ TEST_CASE("`return` implicit-init context flows through an `if` expression") {
 
 TEST_CASE("`return` implicit-init context flows through `match` arms") {
     helpers::resolve_and_check(R"(
-        const Tag := enum { a, b };
-        const Point := struct { x: i32, y: i32 };
-        const from_tag := fn(t: Tag): Point {
+        const Tag = enum { a, b };
+        const Point = struct { x: i32, y: i32 };
+        const from_tag = fn(t: Tag): Point {
             return match (t) {
                 .a => .{ .x = 1, .y = 2 },
                 .b => .{ .x = 3, .y = 4 },
@@ -38,9 +38,9 @@ TEST_CASE("`return` implicit-init context flows through `match` arms") {
 
 TEST_CASE("`return` implicit-init context flows through a labeled loop `break`") {
     helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
-        const build := fn(): Point {
-            var i: i32 = 0;
+        const Point = struct { x: i32, y: i32 };
+        const build = fn(): Point {
+            let mut i: i32 = 0;
             return outer: loop {
                 i += 1;
                 if (i == 2) { break :outer .{ .x = 1, .y = 2 }; }
@@ -51,24 +51,24 @@ TEST_CASE("`return` implicit-init context flows through a labeled loop `break`")
 
 TEST_CASE("`return` supplies the implicit type for a bare `.variant`") {
     helpers::resolve_and_check(R"(
-        const Tag := enum { a, b, c };
-        const last := fn(): Tag { return .c; };
+        const Tag = enum { a, b, c };
+        const last = fn(): Tag { return .c; };
     )");
 }
 
 TEST_CASE("a `match` arm value is not forced to the matcher type") {
     helpers::test_resolver_fail(
         R"(
-        const Src := enum { a, b };
-        const Dst := enum { x, y };
-        const f := fn(s: Src): i32 {
-            const d := match (s) { .a => .x, .b => .y };
+        const Src = enum { a, b };
+        const Dst = enum { x, y };
+        const f = fn(s: Src): i32 {
+            let d = match (s) { .a => .x, .b => .y };
             return match (d) { .x => 0, .y => 1 };
         };
     )",
         sema::diagnostic{"Implicit access expression used outside of a typed context",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{4UZ, 41UZ}});
+                         std::pair{4UZ, 38UZ}});
 }
 
 } // namespace ghoti::tests

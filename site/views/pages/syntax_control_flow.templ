@@ -23,8 +23,8 @@ templ SyntaxControlFlowPage() {
 		<code class="language-ghoti">
 			{ `import std;
 
-pub const main := fn(args: [][:0]u8): void {
-    const message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): void {
+    let message = "Hello, world!";
     std::io::println(message);
 };` }
 		</code>
@@ -116,7 +116,7 @@ pub const main := fn(args: [][:0]u8): void {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `if constexpr (true) {
+			{ `if comptime (true) {
     ...
 } else {
     ...
@@ -125,8 +125,30 @@ pub const main := fn(args: [][:0]u8): void {
 	</pre>
 	<ul>
 		<li>In the above example, the top block is the only statement evaluated, with the <code>else</code> branch and condition being completely dropped at runtime</li>
-		<li>Statements inside the consequent of a conditional are still scoped as written, <code>constexpr</code> will not hoist a branch into the outer scope</li>
+		<li>Statements inside the consequent of a conditional are still scoped as written, <code>comptime</code> will not hoist a branch into the outer scope</li>
 	</ul>
+	<h2>Compile-time Evaluation</h2>
+	<ul>
+		<li><code>{ "comptime { ... }" }</code> runs a block at compile time, and <code>{ "comptime name: { ... }" }</code> is a labeled block whose <code>break</code> value is compile-time known</li>
+		<li>
+			<code>comptime expr</code> forces one expression to be evaluated at compile time; it is an error if it can't be
+			<ul>
+				<li><code>comptime</code> binds like a prefix operator: <code>comptime f(x) + y</code> folds <code>f(x)</code> only, and <code>comptime (a + b)</code> covers the whole sum</li>
+				<li>The result keeps its operand's type; an aggregate result becomes a constant</li>
+				<li>A <code>void</code> operand, such as <code>comptime validate(fmt);</code>, runs its checks at compile time and emits nothing</li>
+				<li>Inside a generic function or a type constructor it folds once per instantiation</li>
+			</ul>
+		</li>
+		<li><code>comptime</code> where evaluation already happens at compile time is an error: a <code>const</code> initializer, a <code>comptime</code> block or header, another <code>comptime</code>, or anywhere outside a function or test body</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `let table = comptime build_table(64); // computed while compiling, then stored
+let n = comptime twice(21) + x;        // only twice(21) is folded
+comptime validate(fmt);                 // a compile-time check
+const k = comptime 3;                  // Illegal, a const initializer is already compile-time` }
+		</code>
+	</pre>
 	<h2>Defer</h2>
 	<ul>
 		<li>Defer statements defer execution to the end of their scope</li>
@@ -142,7 +164,7 @@ pub const main := fn(args: [][:0]u8): void {
 		<code class="language-ghoti">
 			{ `import std;
 
-const main := fn(): void {
+const main = fn(): void {
     defer std::io::println("World!");
     defer std::io::print("Hello, ");
 };` }

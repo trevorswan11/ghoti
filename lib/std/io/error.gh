@@ -1,7 +1,7 @@
 //! Safe conversion wrapper from target-specific Errno
 import std;
 
-pub const Error := enum : i32 {
+pub const Error = enum : i32 {
     not_found,
     access_denied,
     broken_pipe,
@@ -17,7 +17,7 @@ pub const Error := enum : i32 {
     unexpected,
     _,
 
-    pub constexpr from_os := fn(errno: std.os.Errno): @This() {
+    pub const from_os = fn(errno: std.os.Errno): @This() {
         @cfg (os == .macos) {
             return match (errno) {
                 .ENOENT => .not_found,

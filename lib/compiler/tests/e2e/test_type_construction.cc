@@ -7,16 +7,16 @@ namespace ghoti::tests {
 
 TEST_CASE("`@Int` constructs an integer type from an `IntInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Int(.{ .bits = 32, .signedness = .signed });
-            var a: T = 42;
+        pub const main = fn(): i32 {
+            const T = @Int(.{ .bits = 32, .signedness = .signed });
+            let mut a: T = 42;
             return a;
         };
     )") == 42);
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Int(.{ .bits = 8, .signedness = .unsigned });
-            var a: T = 200;
+        pub const main = fn(): i32 {
+            const T = @Int(.{ .bits = 8, .signedness = .unsigned });
+            let mut a: T = 200;
             return @intCast(i32, a);
         };
     )") == 200);
@@ -24,9 +24,9 @@ TEST_CASE("`@Int` constructs an integer type from an `IntInfo` descriptor") {
 
 TEST_CASE("`@Float` constructs a floating-point type from a `FloatInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Float(.{ .bits = 64 });
-            var b: T = 3.5;
+        pub const main = fn(): i32 {
+            const T = @Float(.{ .bits = 64 });
+            let mut b: T = 3.5;
             return if (b == 3.5) 1 else 0;
         };
     )") == 1);
@@ -34,9 +34,9 @@ TEST_CASE("`@Float` constructs a floating-point type from a `FloatInfo` descript
 
 TEST_CASE("`@Float` rejects a bit width with no matching floating-point type") {
     helpers::expect_compile_error(R"(
-        pub const main := fn(): i32 {
-            const T := @Float(.{ .bits = 24 });
-            var b: T = 0.0;
+        pub const main = fn(): i32 {
+            const T = @Float(.{ .bits = 24 });
+            let mut b: T = 0.0;
             return 0;
         };
     )");
@@ -44,10 +44,10 @@ TEST_CASE("`@Float` rejects a bit width with no matching floating-point type") {
 
 TEST_CASE("`@Pointer` constructs a pointer type from a `PointerInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Pointer(.{ .child = i32, .is_mut = false, .is_volatile = false });
-            var v: i32 = 7;
-            var p: T = ^v;
+        pub const main = fn(): i32 {
+            const T = @Pointer(.{ .child = i32, .is_mut = false, .is_volatile = false });
+            let mut v: i32 = 7;
+            let mut p: T = ^v;
             return *p;
         };
     )") == 7);
@@ -55,10 +55,10 @@ TEST_CASE("`@Pointer` constructs a pointer type from a `PointerInfo` descriptor"
 
 TEST_CASE("`@Reference` constructs a reference type from a `PointerInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Reference(.{ .child = i32, .is_mut = true, .is_volatile = false });
-            var w: i32 = 3;
-            var r: T = &mut w;
+        pub const main = fn(): i32 {
+            const T = @Reference(.{ .child = i32, .is_mut = true, .is_volatile = false });
+            let mut w: i32 = 3;
+            let mut r: T = &mut w;
             r = 11;
             return w;
         };
@@ -67,10 +67,10 @@ TEST_CASE("`@Reference` constructs a reference type from a `PointerInfo` descrip
 
 TEST_CASE("`@Slice` constructs a slice type from a `SliceInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Slice(.{ .child = i32, .sentinel = false, .is_mut = false, .is_volatile = false });
-            var arr: [3]i32 = .{1, 2, 3};
-            var s: T = arr[0..3];
+        pub const main = fn(): i32 {
+            const T = @Slice(.{ .child = i32, .sentinel = false, .is_mut = false, .is_volatile = false });
+            let mut arr: [3]i32 = .{1, 2, 3};
+            let mut s: T = arr[0..3];
             return @intCast(i32, s.len);
         };
     )") == 3);
@@ -78,9 +78,9 @@ TEST_CASE("`@Slice` constructs a slice type from a `SliceInfo` descriptor") {
 
 TEST_CASE("`@Array` constructs an array type from an `ArrayInfo` descriptor") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const T := @Array(.{ .child = i32, .len = 4, .sentinel = false, .is_mut = false, .is_volatile = false });
-            var ar: T = .{9, 9, 9, 9};
+        pub const main = fn(): i32 {
+            const T = @Array(.{ .child = i32, .len = 4, .sentinel = false, .is_mut = false, .is_volatile = false });
+            let mut ar: T = .{9, 9, 9, 9};
             return ar[0];
         };
     )") == 9);
@@ -88,8 +88,8 @@ TEST_CASE("`@Array` constructs an array type from an `ArrayInfo` descriptor") {
 
 TEST_CASE("a struct literal with a `type`-kind field constructs without crashing") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const desc := builtin.PointerInfo{ .child = i32, .is_mut = false, .is_volatile = false };
+        pub const main = fn(): i32 {
+            const desc = builtin.PointerInfo{ .child = i32, .is_mut = false, .is_volatile = false };
             return if (desc.is_mut) 1 else 0;
         };
     )") == 0);

@@ -1,7 +1,7 @@
 import std;
 
 test "meta programming" {
-    const data: Data = .{
+    let data: Data = .{
         .count_donations = 12.34,
         .count_happy_people = 100,
         .count_balance = -1,
@@ -10,18 +10,18 @@ test "meta programming" {
     @expect(data.countStuff() == 111.34000015258789);
 }
 
-const Data := struct {
+const Data = struct {
     count_donations: f32,
     count_happy_people: u32,
     count_balance: i32,
     bike_flag: bool,
 
-    const countStuff := fn(self): f64 {
-        var accumulator: f64 = 0;
-        for constexpr (@typeInfo(@This()).@"struct".fields) |field| {
+    const countStuff = fn(self): f64 {
+        let mut accumulator: f64 = 0;
+        for comptime (@typeInfo(@This()).struct.fields) |field| {
             if (std.mem.starts_with(u8, field.name, "count_")) {
                 accumulator +=
-                    match constexpr (field.@"type") {
+                    match comptime (field.type) {
                         f32 => @field(self, field.name),
                         u32 => @field(self, field.name),
                         _ => 0.0,

@@ -12,7 +12,7 @@ namespace ghoti::tests {
 
 TEST_CASE("GIR match literal patterns and value yield") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_match := fn(x: i32): i32 {
+        const test_match = fn(x: i32): i32 {
             return match (x) {
                 1 => 10,
                 2 => 20,
@@ -36,13 +36,13 @@ TEST_CASE("GIR match literal patterns and value yield") {
 
 TEST_CASE("GIR match enum patterns") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum {
+        const Color = enum {
             RED,
             GREEN,
             BLUE,
         };
 
-        const test_match_enum := fn(c: Color): i32 {
+        const test_match_enum = fn(c: Color): i32 {
             return match (c) {
                 .RED => 1,
                 .GREEN => 2,
@@ -63,12 +63,12 @@ TEST_CASE("GIR match enum patterns") {
 
 TEST_CASE("GIR match arm capture") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const UnionVal := union {
+        const UnionVal = union {
             int_val: i32,
             bool_val: bool,
         };
 
-        const test_match_capture := fn(u: UnionVal): i32 {
+        const test_match_capture = fn(u: UnionVal): i32 {
             return match (u) {
                 .int_val => |val| val + 10,
                 _ => 0,
@@ -86,13 +86,13 @@ TEST_CASE("GIR match arm capture") {
 
 TEST_CASE("GIR struct initialization and field access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
         };
 
-        const test_struct := fn(): i32 {
-            var p: Point = Point{ .x = 10, .y = 20 };
+        const test_struct = fn(): i32 {
+            let mut p: Point = Point{ .x = 10, .y = 20 };
             return p.x + p.y;
         };
     )")};
@@ -114,13 +114,13 @@ TEST_CASE("GIR struct initialization and field access") {
 
 TEST_CASE("GIR struct field assignment and compound assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
         };
 
-        const test_mutate := fn(): i32 {
-            var p: Point = .{ .x = 1, .y = 2 };
+        const test_mutate = fn(): i32 {
+            let mut p: Point = .{ .x = 1, .y = 2 };
             p.x = 42;
             p.y += 10;
             return p.x + p.y;
@@ -139,7 +139,7 @@ TEST_CASE("GIR struct field assignment and compound assignment") {
 
 TEST_CASE("GIR array index expression and assignment") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_array := fn(arr: [4]i32, i: usize): i32 {
+        const test_array = fn(arr: [4]i32, i: usize): i32 {
             return arr[i];
         };
     )")};
@@ -157,9 +157,9 @@ TEST_CASE("GIR array index expression and assignment") {
 
 TEST_CASE("GIR address_of and dereference") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_ptr := fn(x: i32): i32 {
-            var a: i32 = x;
-            const p: ^i32 = ^a;
+        const test_ptr = fn(x: i32): i32 {
+            let mut a: i32 = x;
+            let p: ^i32 = ^a;
             *p = 99;
             return *p;
         };
@@ -178,8 +178,8 @@ TEST_CASE("GIR address_of and dereference") {
 
 TEST_CASE("GIR defer at block exit with LIFO execution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_defer := fn(): i32 {
-            var a: i32 = 0;
+        const test_defer = fn(): i32 {
+            let mut a: i32 = 0;
             {
                 defer a = a * 2;
                 defer a = a + 10;
@@ -205,8 +205,8 @@ TEST_CASE("GIR defer at block exit with LIFO execution") {
 
 TEST_CASE("GIR defer at early return triggers unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_defer_return := fn(x: i32): i32 {
-            var a: i32 = 0;
+        const test_defer_return = fn(x: i32): i32 {
+            let mut a: i32 = 0;
             defer a = 100;
             if (x > 0) {
                 return 1;
@@ -226,9 +226,9 @@ TEST_CASE("GIR defer at early return triggers unwinding") {
 
 TEST_CASE("GIR defer at loop break and continue unwinding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_defer_loop := fn(): i32 {
-            var sum: i32 = 0;
-            var i: i32 = 0;
+        const test_defer_loop = fn(): i32 {
+            let mut sum: i32 = 0;
+            let mut i: i32 = 0;
             while (i < 10) {
                 defer i = i + 1;
                 if (i == 5) {
@@ -257,7 +257,7 @@ TEST_CASE("GIR defer at loop break and continue unwinding") {
 
 TEST_CASE("GIR match on boolean patterns") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const test_match_bool := fn(flag: bool): i32 {
+        const test_match_bool = fn(flag: bool): i32 {
             return match (flag) {
                 true => 1,
                 false => 0,
@@ -277,17 +277,17 @@ TEST_CASE("GIR match on boolean patterns") {
 
 TEST_CASE("GIR structs with nested struct field access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Inner := struct {
+        const Inner = struct {
             val: i32,
         };
 
-        const Outer := struct {
+        const Outer = struct {
             inner: Inner,
             scale: i32,
         };
 
-        const test_nested := fn(): i32 {
-            var o: Outer = Outer{
+        const test_nested = fn(): i32 {
+            let mut o: Outer = Outer{
                 .inner = Inner{ .val = 7 },
                 .scale = 6,
             };

@@ -90,7 +90,7 @@ struct asm_expr {
 struct do_while_loop_expr {
     block_handle block;
     expr_handle  condition;
-    bool         is_constexpr{false};
+    bool         is_comptime{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -140,7 +140,7 @@ struct for_loop_expr {
     stdx::option<stmt_handle> non_break;
     bool                      iterables_force_break{false}; // trailing comma before `)`
     bool                      captures_force_break{false};  // trailing comma before `|`
-    bool                      is_constexpr{false};          // `for constexpr (...)`
+    bool                      is_comptime{false};           // `for comptime (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -179,9 +179,9 @@ struct function_expr {
     struct parameter {
         discardable_ident_handle name;
         explicit_type_id         explicit_type;
-        bool                     is_constexpr{false};
-        bool                     is_pack{false};              // `rest...` / `rest: impl I...`
-        bool                     is_constexpr_written{false}; // `is_constexpr` may also be inferred
+        bool                     is_comptime{false};
+        bool                     is_pack{false};             // `rest...` / `rest: impl I...`
+        bool                     is_comptime_written{false}; // `is_comptime` may also be inferred
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -216,7 +216,7 @@ struct function_expr {
 };
 
 // Consumes a leading `move` modifier before delegating to function_expr::parse
-// An identifier used as an expression; records compile-time reads for `constexpr` inference
+// An identifier used as an expression; records compile-time reads for `comptime` inference
 [[nodiscard]] auto parse_identifier_reference(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
@@ -240,14 +240,14 @@ struct identifier_expr {
 };
 
 struct if_expr {
-    bool                      constexpr_condition;
-    stdx::option<expr_handle> condition; // absent only for `if constexpr { ... }`
+    bool                      comptime_condition;
+    stdx::option<expr_handle> condition; // absent only for `if comptime { ... }`
     stmt_handle               consequence;
     stdx::option<stmt_handle> alternate;
 
-    // `if constexpr a else b`: `a` under compile-time evaluation, `b` at runtime
+    // `if comptime a else b`: `a` under compile-time evaluation, `b` at runtime
     [[nodiscard]] auto is_evaluation_context_branch() const noexcept -> bool {
-        return constexpr_condition && !condition;
+        return comptime_condition && !condition;
     }
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
@@ -264,14 +264,14 @@ struct index_expr {
 
 struct infinite_loop_expr {
     block_handle block;
-    bool         is_constexpr{false};
+    bool         is_comptime{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
-// `@cfgValue(<pred>)` -> constexpr bool, or the guard form
-// `@cfgValue(<pred> => <val>, ..., _ => <val>)` -> constexpr T
+// `@cfgValue(<pred>)` -> comptime bool, or the guard form
+// `@cfgValue(<pred> => <val>, ..., _ => <val>)` -> comptime T
 struct cfg_value_expr {
     struct guard {
         expr_handle predicate;
@@ -349,13 +349,13 @@ struct label_expr {
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle name)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 
-    [[nodiscard]] auto is_constexpr(const AST& ast) const noexcept -> bool;
+    [[nodiscard]] auto is_comptime(const AST& ast) const noexcept -> bool;
 
     [[nodiscard]] static auto deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         -> stdx::result<labeled_node_handle, syntax::diagnostic>;
 };
 
-[[nodiscard]] auto parse_constexpr_expr(syntax::parser& parser)
+[[nodiscard]] auto parse_comptime_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct match_expr {
@@ -377,7 +377,7 @@ struct match_expr {
     expr_handle      matcher;
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
-    bool             is_constexpr{false};
+    bool             is_comptime{false};
     bool             arms_force_break{false}; // trailing comma after the last arm
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
@@ -403,6 +403,8 @@ DECLARE_PREFIX_EXPRESSION(unary_expr)
 DECLARE_PREFIX_EXPRESSION(reference_expr)
 DECLARE_PREFIX_EXPRESSION(dereference_expr)
 DECLARE_PREFIX_EXPRESSION(address_of_expr)
+// `comptime <expr>`: `rhs` is evaluated at compile time
+DECLARE_PREFIX_EXPRESSION(comptime_expr)
 
 struct implicit_access_expr {
     identifier_handle member;
@@ -518,7 +520,7 @@ struct interface_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
-// A type with no expression spelling, written where a value is expected (`const D := &dyn I;`)
+// A type with no expression spelling, written where a value is expected (`const D = &dyn I;`)
 struct type_expr {
     explicit_type_id type;
 
@@ -532,7 +534,7 @@ struct while_loop_expr {
     stdx::option<expr_handle> continuation;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
-    bool                      is_constexpr{false}; // `while constexpr (...)`
+    bool                      is_comptime{false}; // `while comptime (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

@@ -33,14 +33,14 @@ templ InternalsLiteralsPage() {
 3_e14;         // Illegal` }
 		</code>
 	</pre>
-	<p>In all of these cases, the underscore has no impact on the resulting value of the numeric literal. Internally, the underscores are stripped out before constexpr evaluation and code generation.</p>
+	<p>In all of these cases, the underscore has no impact on the resulting value of the numeric literal. Internally, the underscores are stripped out before compile-time evaluation and code generation.</p>
 	<p>It is recommended to use underscores in numbers when there is a logical grouping of digits for your use case. They are implemented in such a way that there is a high amount of freedom for the programmer to convey the most meaning with their code.</p>
 	<h3>Trailing Numeric Literals</h3>
 	<p>To pin the exact type of a numeric literal, you may use the following suffixes. They are also discussed in the <a href="/doc/syntax/types">type</a> documentation.</p>
-	<p>An <em>unsuffixed</em> integer literal has type <a href="/doc/syntax/types"><code>constexpr_int</code></a>: it is compile-time known, coerces to any concrete numeric type it fits (integer <em>or</em> float), and folds at 128-bit precision. An unsuffixed real literal is likewise <code>constexpr_float</code> and coerces to any concrete float. A suffix removes that flexibility and fixes the type outright.</p>
+	<p>An <em>unsuffixed</em> integer literal has type <a href="/doc/syntax/types"><code>comptime_int</code></a>: it is compile-time known, coerces to any concrete numeric type it fits (integer <em>or</em> float), and folds at 128-bit precision. An unsuffixed real literal is likewise <code>comptime_float</code> and coerces to any concrete float. A suffix removes that flexibility and fixes the type outright.</p>
 	<ul>
-		<li>A <code>constexpr_int</code> whose folded value does not fit its concrete integer target is a compile error (no silent wrap); a leading <code>-</code> can still bring <code>-(2<sup>N-1</sup>)</code> into range.</li>
-		<li>An un-anchored <code>constexpr_int</code> / <code>constexpr_float</code> materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any runtime use. An un-annotated <code>const</code> keeps the constexpr type, so <code>const k := 5;</code> can still coerce to <code>u64</code> later.</li>
+		<li>A <code>comptime_int</code> whose folded value does not fit its concrete integer target is a compile error (no silent wrap); a leading <code>-</code> can still bring <code>-(2<sup>N-1</sup>)</code> into range.</li>
+		<li>An un-anchored <code>comptime_int</code> / <code>comptime_float</code> materializes as <code>i32</code> / <code>f64</code> at a <code>let mut</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any runtime use. An un-annotated <code>const</code> or <code>let</code> keeps the <code>comptime_int</code> type, so <code>const k = 5;</code> can still coerce to <code>u64</code> later.</li>
 	</ul>
 	<h4>Integer Suffixes</h4>
 	<table>
@@ -54,7 +54,7 @@ templ InternalsLiteralsPage() {
 		<tbody>
 			<tr>
 				<td>None</td>
-				<td><code>constexpr_int</code> (materializes as <code>i32</code>)</td>
+				<td><code>comptime_int</code> (materializes as <code>i32</code>)</td>
 				<td><code>42</code></td>
 			</tr>
 			<tr>
@@ -92,7 +92,7 @@ templ InternalsLiteralsPage() {
 		<tbody>
 			<tr>
 				<td>None</td>
-				<td><code>constexpr_float</code> (materializes as <code>f64</code>)</td>
+				<td><code>comptime_float</code> (materializes as <code>f64</code>)</td>
 				<td><code>3.14</code></td>
 			</tr>
 			<tr>
@@ -183,7 +183,7 @@ templ InternalsLiteralsPage() {
 	</table>
 	<p>A string's <code>.len</code> counts its encoded bytes: <code>{ `"\u{1F600}".len` }</code> is <code>4</code>. A malformed escape is reported at the escape itself.</p>
 	<h3>Character Literals</h3>
-	<p>A character literal is the code point of exactly one character or escape: <code>{ `'a'` }</code>, <code>{ `'é'` }</code>, <code>{ `'😀'` }</code>, <code>{ `'\u{1F600}'` }</code>, <code>{ `'\n'` }</code>. It is an untyped integer constant, so it takes whatever integer type holds it (<code>{ `const b: u8 = 'a';` }</code>, <code>{ `s[i] == 'x'` }</code>), and on its own it is a <code>u21</code>, the smallest type that holds every code point: <code>{ `var c := 'a';` }</code> is a <code>u21</code>. <code>{ `'\xFF'` }</code> is the value 255. A literal with more than one code point, like <code>{ `'ab'` }</code> or a family emoji joined from five, is an error.</p>
+	<p>A character literal is the code point of exactly one character or escape: <code>{ `'a'` }</code>, <code>{ `'é'` }</code>, <code>{ `'😀'` }</code>, <code>{ `'\u{1F600}'` }</code>, <code>{ `'\n'` }</code>. It is an untyped integer constant, so it takes whatever integer type holds it (<code>{ `const b: u8 = 'a';` }</code>, <code>{ `s[i] == 'x'` }</code>), and on its own it is a <code>u21</code>, the smallest type that holds every code point: <code>{ `let mut c = 'a';` }</code> is a <code>u21</code>. <code>{ `'\xFF'` }</code> is the value 255. A literal with more than one code point, like <code>{ `'ab'` }</code> or a family emoji joined from five, is an error.</p>
 	<h3>Raw Identifiers</h3>
-	<p><code>{ `@"..."` }</code> names anything, including keywords and any Unicode text: <code>{ `const @"😀" := 1;` }</code>. Escapes decode first, so <code>{ `@"\u{1F600}"` }</code> is the same name. Names compare byte for byte, with no Unicode normalization: a precomposed <code>é</code> and an <code>e</code> followed by a combining accent are different names. A raw identifier must be valid UTF-8 and not empty.</p>
+	<p><code>{ `@"..."` }</code> names anything, including keywords and any Unicode text: <code>{ `const @"😀" = 1;` }</code>. Escapes decode first, so <code>{ `@"\u{1F600}"` }</code> is the same name. Names compare byte for byte, with no Unicode normalization: a precomposed <code>é</code> and an <code>e</code> followed by a combining accent are different names. A raw identifier must be valid UTF-8 and not empty.</p>
 }

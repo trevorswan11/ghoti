@@ -17,9 +17,9 @@ templ SyntaxDeclarationsPage() {
 			</ul>
 		</li>
 		<li>
-			The walrus operator <code>:=</code> can be used to declare a value who's type is inferred based on the assigned value
+			Leaving out the type annotation (<code>const x = value;</code>) infers the type from the assigned value
 			<ul>
-				<li>The walrus operator can only be used with value-initialized declarations</li>
+				<li>An unannotated declaration must be initialized with a value</li>
 			</ul>
 		</li>
 		<li>
@@ -31,57 +31,83 @@ templ SyntaxDeclarationsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := 2;           // Type deduced to be i32
-const b := "str";       // Type deduced to be a constant size array of bytes (non-null terminated)
-const c: u8 = 's';    // Explicitly typed, so value must agree
-const d :=;             // Illegal, walrus needs a value!
-var e: []u8;         // Allowed, e is forward declared and future assignments must be a slice of bytes` }
+			{ `const a = 2;          // Type deduced to be i32
+let b = "str";        // Type deduced to be a constant size array of bytes (non-null terminated)
+let c: u8 = 's';      // Explicitly typed, so value must agree
+let d;                // Illegal, an unannotated declaration needs a value!
+let mut e: []u8 = undefined; // Allowed, e is uninitialized and future assignments must be a slice of bytes` }
 		</code>
 	</pre>
-	<h2>Runtime Constants</h2>
+	<h2>Binding Forms</h2>
 	<ul>
-		<li>Constants are declared with the <code>const</code> keyword</li>
-		<li>
-			A constant must be initialized with a value
-			<ul>
-				<li>This is true unless it is a value that is marked <code>extern</code></li>
-			</ul>
-		</li>
-		<li>A constant's value does not have to be compile-time known</li>
-		<li>Constness cannot be casted away</li>
-		<li>A mutable reference cannot be taken from a constant</li>
+		<li>Every declaration uses exactly one of <code>const</code>, <code>let</code>, or <code>let mut</code></li>
+		<li>A declaration must be initialized with a value, unless it is <code>extern</code>; use <code>= undefined</code> to leave it uninitialized</li>
 	</ul>
+	<table>
+		<thead>
+			<tr><th>Form</th><th>Known</th><th>Mutable</th><th>Storage</th></tr>
+		</thead>
+		<tbody>
+			<tr><td><code>const x</code></td><td>at compile time</td><td>no</td><td>only when its address is taken</td></tr>
+			<tr><td><code>let x</code></td><td>at runtime</td><td>no</td><td>yes</td></tr>
+			<tr><td><code>let mut x</code></td><td>at runtime</td><td>yes</td><td>yes</td></tr>
+			<tr><td><code>comptime let mut x</code></td><td>at compile time</td><td>yes, while compiling</td><td>no</td></tr>
+		</tbody>
+	</table>
 	<h2>Compile-time Constants</h2>
 	<ul>
-		<li>Compile-time-known constants are declared with the <code>constexpr</code> keyword</li>
+		<li><code>const</code> values must be computable at compile time; anything else is an error that suggests <code>let</code></li>
+		<li>Types, functions, <code>undefined</code> aliases, and values that hold <code>type</code>s are always declared with <code>const</code></li>
+		<li>Taking the address of a <code>const</code> (<code>^TABLE</code>) gives a pointer to one read-only copy</li>
+		<li><code>comptime let mut</code> declares a local that changes while compiling, such as a cursor in a <code>{ "for comptime" }</code> loop; it has no address</li>
 		<li>
-			In most cases, <code>constexpr</code> values behave identically to <code>const</code> constants with a few key differences
+			A <code>comptime let mut</code> can hold a type: each use names the type it holds at that point, and only another type can be assigned to it
 			<ul>
-				<li><code>constexpr</code> values must be computable at compile time</li>
-				<li><code>constexpr</code> functions must be callable at compile time (it is safe to call them at runtime as well)</li>
+				<li>A <code>{ "for comptime" }</code> or <code>{ "while comptime" }</code> loop can build a type up one iteration at a time</li>
 			</ul>
 		</li>
-		<li>A <code>constexpr</code> declaration can not be declared <code>extern</code></li>
-	</ul>
-	<h2>Variables</h2>
-	<ul>
-		<li>Variables are declared with the <code>var</code> keyword</li>
-		<li>
-			A variable can be initialized with or without a value
-			<ul>
-				<li>Variables without an initial value must be initialized with an explicit type</li>
-				<li>Variables declared without an initial value are necessarily uninitialized, and reading from them in this state is illegal behavior</li>
-				<li>Variables can be explicitly marked as uninitialized with the <code>undefined</code> keyword. Using this as the right hand side of a declaration is equivalent to not using a value at all</li>
-			</ul>
-		</li>
-		<li>A variable's value does not have to be compile-time known</li>
-		<li>A variable may be assigned to a constant</li>
+		<li><code>comptime let</code> without <code>mut</code> is an error: that is spelled <code>const</code></li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := 1;       // Allowed, see above
-var b := a;         // Allowed, a is copied by value
-var c := &mut a;    // Illegal, cannot take mutable reference of constant` }
+			{ `comptime let mut T: type = u8;
+for comptime (0..3) |_| { T = Wrap(T); }
+let nested: T = undefined;   // Wrap(Wrap(Wrap(u8)))` }
+		</code>
+	</pre>
+	<h2>Runtime Values</h2>
+	<ul>
+		<li><code>let</code> declares a value that cannot be reassigned, and <code>let mut</code> one that can</li>
+		<li>Neither has to be compile-time known, though a <code>let</code> whose value is still folds where a compile-time value is needed (<code>let n = 4; let a: [n]u8 = ...;</code>); a <code>let mut</code> never does</li>
+		<li>A mutable reference cannot be taken from a <code>const</code> or a <code>let</code></li>
+		<li>A closure that captures runtime state is declared with <code>let</code></li>
+		<li>Reading a <code>let mut</code> that has not been assigned since <code>= undefined</code> is illegal behavior</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const a = 1;       // Compile-time constant
+let b = read();    // Runtime value, fixed once set
+let mut c = b;     // Runtime value that can change
+let d = &mut b;    // Illegal, cannot take mutable reference of an immutable value` }
+		</code>
+	</pre>
+	<h2>Compile-time Parameters</h2>
+	<ul>
+		<li>A parameter written <code>comptime n: usize</code> must be passed a compile-time value, and the function is instantiated once per value</li>
+		<li>
+			A function declared with <code>const</code> also infers this: a parameter its body reads at compile time is compile-time at each call
+			<ul>
+				<li>The function stays callable at runtime as long as those parameters receive compile-time values</li>
+				<li>Closures declared with <code>let</code> do not infer; mark their parameters <code>comptime</code> instead</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const min = fn(a: i32, b: i32): i32 {
+    return if comptime (a < b) a else b; // a and b are inferred to be compile-time
+};
+const three = min(3, 9);` }
 		</code>
 	</pre>
 	<h2>Modifiers</h2>
@@ -92,15 +118,24 @@ var c := &mut a;    // Illegal, cannot take mutable reference of constant` }
 				<li><code>pub</code>: When used inside of a struct, this opens access to non-struct-local functions (i.e. member functions). When used on a top-level declaration, this lets importing files access the declaration. The presence of this keyword correctly implies that all declarations are <em>private</em> unless explicitly stated otherwise.</li>
 				<li><code>extern</code>: Denotes a declaration as relating to a symbol yet-to-be defined (i.e. external linkage). This currently supports only C symbols. This keyword cannot be combined with the <code>export</code> modifier.</li>
 				<li><code>export</code>: Forwards the declaration to the 'outside world'. This means that the symbol is treated as a C symbol. This keyword cannot be combined with the <code>extern</code> modifier.</li>
+				<li><code>weak</code> and <code>threadlocal</code>: a weak symbol may be overridden at link time; a thread-local one has a copy per thread</li>
+			</ul>
+		</li>
+		<li>
+			Linkage needs a symbol to attach to
+			<ul>
+				<li>Data with <code>extern</code>, <code>export</code>, <code>weak</code>, or <code>threadlocal</code> is declared with <code>let</code> or <code>let mut</code>, since a <code>const</code> has no storage</li>
+				<li>A function with linkage is declared with <code>const</code>; the linkage applies to the function itself</li>
 			</ul>
 		</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub var c := 2;          // Allowed, symbol can be imported
-extern const a: i32;     // Allowed, externs must be explicitly typed without values
-export var b := 1;       // Allowed
-extern constexpr a: i32; // Illegal, inherently contradictory` }
+			{ `pub let mut c = 2;                     // Allowed, symbol can be imported
+extern let errno: i32;                   // Allowed, externs must be explicitly typed without values
+extern const puts: fn(s: ^u8): i32;      // Allowed, an extern function
+export("counter") let mut counter = 1;  // Allowed
+export const x = 1;                     // Illegal, a const has no symbol to export` }
 		</code>
 	</pre>
 	<h2>Attributes</h2>
@@ -122,8 +157,8 @@ extern constexpr a: i32; // Illegal, inherently contradictory` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `@[visibility(.hidden)] export weak const __addtf3 := fn(a: f128, b: f128): f128 { ... };
-@[inline(.always), align(16)] const fast := fn(x: i32): i32 { return x; };` }
+			{ `@[visibility(.hidden)] export weak const __addtf3 = fn(a: f128, b: f128): f128 { ... };
+@[inline(.always), align(16)] const fast = fn(x: i32): i32 { return x; };` }
 		</code>
 	</pre>
 	<h2>Testing Statements</h2>
@@ -139,25 +174,25 @@ extern constexpr a: i32; // Illegal, inherently contradictory` }
 	<pre>
 		<code class="language-ghoti">
 			{ `test "addition logic" {
-    const x := 1 + 1;
+    let x = 1 + 1;
     _ = x;
 }
 
 test {
-    const y := 2 + 2;
+    let y = 2 + 2;
     _ = y;
 }` }
 		</code>
 	</pre>
 	<h2>Assignment</h2>
 	<ul>
-		<li>Non-const declarations can be reassigned</li>
+		<li><code>let mut</code> declarations can be reassigned</li>
 		<li>Re-assignment is right associative, meaning that you can chain assignment expressions:</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: i32 = 2;
-var b: i32 = 5;
+			{ `let mut a: i32 = 2;
+let mut b: i32 = 5;
 a = (b = 6);` }
 		</code>
 	</pre>
@@ -167,28 +202,28 @@ a = (b = 6);` }
 	<h2>Type Aliasing</h2>
 	<ul>
 		<li>A type alias is an ordinary <code>const</code> declaration whose value is a type</li>
-		<li>Aliases are resolved entirely at compile time and never occupy storage, so <code>constexpr</code> may be used in place of <code>const</code> with no change in meaning</li>
+		<li>Aliases are resolved entirely at compile time and never occupy storage</li>
 		<li>An alias can be marked public in order to expose it to the outside world when the enclosing file is imported</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const MyBool := bool;               // Private to this file
-pub const MyPublicBool := bool;     // Publicly accessible via namespacing when imported
-const BytePtr := ^mut u8;           // Pointer, reference, array, and slice types work as values
-const Callback := fn(status: i32): void;
-const AnyWriter := &dyn Writer;
-const IntList := List(i32);         // As does the result of a type constructor` }
+			{ `const MyBool = bool;               // Private to this file
+pub const MyPublicBool = bool;     // Publicly accessible via namespacing when imported
+const BytePtr = ^mut u8;           // Pointer, reference, array, and slice types work as values
+const Callback = fn(status: i32): void;
+const AnyWriter = &dyn Writer;
+const IntList = List(i32);         // As does the result of a type constructor` }
 		</code>
 	</pre>
 	<ul>
 		<li>Note that this is an <em>alias</em>, so there is no difference between using the aliased type and handwriting the entire raw type</li>
-		<li>Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes: <code>const T := ^i32;</code> is a type, while <code>const p := ^x;</code> is a pointer to the variable <code>x</code></li>
-		<li>A type alias cannot be stored in a <code>var</code>, and naming a type where a value is expected is an error:</li>
+		<li>Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes: <code>const T = ^i32;</code> is a type, while <code>const p = ^x;</code> is a pointer to the variable <code>x</code></li>
+		<li>A type alias cannot be stored in a <code>let</code> or <code>let mut</code>, and naming a type where a value is expected is an error:</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const P := ^i32;
-var Q := ^i32;                      // Illegal: a type cannot live in a mutable binding
+			{ `const P = ^i32;
+let Q = ^i32;                      // Illegal: a type only exists at compile time
 const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' value` }
 		</code>
 	</pre>
@@ -197,7 +232,7 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 			The most common use cases for this are for saving keystrokes for long types and for passing complex types to functions at the call site
 			<ul>
 				<li>Since function calls prioritize expressions over types, an attempt to pass <code>&amp;mut P</code> will always be parsed as a mutable reference to an object P</li>
-				<li>Declaring the type with <code>const T := &amp;mut P;</code> allows you to then pass the identifier to the function</li>
+				<li>Declaring the type with <code>const T = &amp;mut P;</code> allows you to then pass the identifier to the function</li>
 				<li>This is more explicit than having to go to the function definition to see what is being expected at the call site</li>
 			</ul>
 		</li>
@@ -210,9 +245,9 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const S := &struct { ... };        // Illegal
-const S := ^union { ... };         // Illegal
-const S := enum { ... };           // Legal` }
+			{ `const S = &struct { ... };        // Illegal
+const S = ^union { ... };         // Illegal
+const S = enum { ... };           // Legal` }
 		</code>
 	</pre>
 }

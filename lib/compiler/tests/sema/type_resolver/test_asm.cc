@@ -13,7 +13,7 @@ namespace {
 
 // Resolves `body` inside a trivial function and returns the first sema diagnostic's code
 [[nodiscard]] auto resolve_asm_error(std::string_view body) -> stdx::option<sema::error> {
-    const auto src{fmt::format("pub const f := fn(n: i64, fd: i64): void {{ {} }};", body)};
+    const auto src{fmt::format("pub const f = fn(n: i64, fd: i64): void {{ {} }};", body)};
     auto [codes, _]{helpers::resolve_diags(src)};
     if (codes.empty()) { return stdx::none; }
     return codes[0];

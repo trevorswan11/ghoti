@@ -152,7 +152,7 @@ auto type_checker::is_value_assignable(const gir::value&             val,
     if (is_assignable(val_t, dest_t)) { return true; }
     if (is_integer(val_t.get_kind()) && is_integer(dest_t.get_kind())) {
         if (const auto folded{folded_int(val)}) {
-            if (constexpr_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
+            if (comptime_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
             emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
                                         *folded,
                                         ctx_.type_display_name(dest_t)),
@@ -175,7 +175,7 @@ auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&
         // An untyped float the emitter coerced into an integer slot is still a float, which no
         // integer destination accepts
         if (val.data.is<f128>() && is_integer(val.type->get_kind())) {
-            return ctx_.get_builtin_resolved_type(type_kind::CONSTEXPR_FLOAT);
+            return ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         }
         return ctx_.default_concrete(*val.type);
     }
@@ -665,7 +665,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
-                const bool src_is_int{is_integer(src_k) || src_k == type_kind::CONSTEXPR_INT ||
+                const bool src_is_int{is_integer(src_k) || src_k == type_kind::COMPTIME_INT ||
                                       src_k == type_kind::BOOL};
                 const bool dest_is_int{is_integer(dest_k)};
                 if (!src_is_int || !dest_is_int) {
@@ -725,7 +725,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     if (is_implicit_widenable(*src_t, *dest_t)) {
                         allowed = true;
                     } else if (const auto folded{folded_int(inst.operands[0])}) {
-                        allowed = constexpr_int_fits(*folded, *dest_t, target_ptr_bits_);
+                        allowed = comptime_int_fits(*folded, *dest_t, target_ptr_bits_);
                     }
                 } else if (is_enum_repr_cast || is_float_cast) {
                     allowed = true;
@@ -800,7 +800,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     it != locals_.end() && it->second.is_const && it->second.is_alloca &&
                     it->second.type &&
                     it->second.type->get_kind() !=
-                        type_kind::CLOSURE // closure's `const` binding only pins the binding, not
+                        type_kind::CLOSURE // closure's `let` binding only pins the binding, not
                                            // its captured env
                 ) {
                     emit_diagnostic(

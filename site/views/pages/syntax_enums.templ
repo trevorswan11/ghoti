@@ -30,8 +30,8 @@ templ SyntaxEnumsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Colors := enum { red, blue = 3, green };
-const Shapes := enum : u64 { circle, square, _ };` }
+			{ `const Colors = enum { red, blue = 3, green };
+const Shapes = enum : u64 { circle, square, _ };` }
 		</code>
 	</pre>
 	<ul>
@@ -40,7 +40,7 @@ const Shapes := enum : u64 { circle, square, _ };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := Colors.red;
+			{ `const a = Colors.red;
 const a: Colors = .red; // Equivalent` }
 		</code>
 	</pre>

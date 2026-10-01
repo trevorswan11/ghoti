@@ -397,7 +397,7 @@ namespace {
 // Parses the explicit type if present and checks for an upcoming assignment for init
 [[nodiscard]] auto parse_type_and_initializer(syntax::parser& parser)
     -> stdx::result<std::pair<stdx::option<explicit_type_id>, bool>, syntax::diagnostic> {
-    if (parser.peek_token_is(syntax::token_type_t::WALRUS)) {
+    if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
         parser.advance();
         return std::pair{stdx::none, true};
     }

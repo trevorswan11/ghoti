@@ -1,17 +1,17 @@
 import std;
 
-pub const AllocError := enum : u8 {
+pub const AllocError = enum : u8 {
     out_of_memory,
 };
 
-const Alignment := std.mem.Alignment;
+const Alignment = std.mem.Alignment;
 
-pub const AllocatorVTable := interface {
+pub const AllocatorVTable = interface {
     /// Return a pointer to `len` bytes with specified `alignment`, or return
     /// `none` indicating the allocation failed.
     ///
     /// `new_len` must be greater than zero.
-    pub const alloc := fn(
+    pub const alloc = fn(
         &mut self,
         len: usize,
         alignment: Alignment,
@@ -30,7 +30,7 @@ pub const AllocatorVTable := interface {
     /// allocation to a different address.
     ///
     /// `new_len` must be greater than zero.
-    pub const resize := fn(
+    pub const resize = fn(
         &mut self,
         memory: []mut u8,
         alignment: Alignment,
@@ -52,7 +52,7 @@ pub const AllocatorVTable := interface {
     /// In such case, it is more efficient for the caller to perform the copy.
     ///
     /// `new_len` must be greater than zero.
-    pub const remap := fn(
+    pub const remap = fn(
         &mut self,
         memory: []mut u8,
         alignment: Alignment,
@@ -65,19 +65,19 @@ pub const AllocatorVTable := interface {
     /// successful call to `alloc`, `resize`, or `remap`. `alignment` must
     /// equal the same value that was passed as the `alignment` parameter to
     /// the original `alloc` call.
-    pub const free := fn(
+    pub const free = fn(
         &mut self,
         memory: []mut u8,
         alignment: Alignment,
     ): void;
 };
 
-pub const Allocator := struct {
+pub const Allocator = struct {
     pub vtable: ^dyn AllocatorVTable,
 
     /// Returns a pointer to undefined memory.
     /// Call `destroy` with the result to free the memory.
-    pub const create := fn(self, T: type): std.Result(^mut T, AllocError) {
+    pub const create = fn(self, T: type): std.Result(^mut T, AllocError) {
         return match (self.vtable.alloc(@sizeOf(T), .of(T))) {
             .some => |raw| .of(@ptrCast(^mut T, raw)),
             .none => .fail(.out_of_memory),
@@ -86,9 +86,9 @@ pub const Allocator := struct {
 
     /// `ptr` should be the return value of `create`, or otherwise
     /// have the same address and alignment property.
-    pub const destroy := fn(self, ptr: auto): void {
-        const T := @TypeOf(ptr);
-        const raw := @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
+    pub const destroy = fn(self, ptr: auto): void {
+        const T = @TypeOf(ptr);
+        let raw = @sliceFromPtr(@ptrCast(^mut u8, ptr), @sizeOf(T));
         return self.vtable.free(raw, .of(T));
     };
 
@@ -100,9 +100,9 @@ pub const Allocator := struct {
     /// call `free` when done.
     ///
     /// For allocating a single item, see `create`.
-    pub const alloc := fn(self, T: type, len: usize): std.Result([]mut T, AllocError) {
+    pub const alloc = fn(self, T: type, len: usize): std.Result([]mut T, AllocError) {
         // Guard the byte-count multiply against overflow before it reaches the allocator.
-        var size: usize = undefined;
+        let mut size: usize = undefined;
         if (@mulWithOverflow(@sizeOf(T), len, ^mut size)) {
             return .fail(.out_of_memory);
         }
@@ -115,18 +115,18 @@ pub const Allocator := struct {
     /// Free an array allocated with `alloc`.
     /// If memory has length 0, free is a no-op.
     /// To free a single item, see `destroy`.
-    pub const free := fn(self, T: type, mem: []mut T): void {
-        var size: usize = undefined;
-        const overflowed := @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
+    pub const free = fn(self, T: type, mem: []mut T): void {
+        let mut size: usize = undefined;
+        let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
         @assert(!overflowed, "Attempt to free overflowed allocation");
-        const raw := @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
+        let raw = @sliceFromPtr(@ptrCast(^mut u8, mem.ptr), size);
         return self.vtable.free(raw, .of(T));
     };
 
     /// Copies `slice` to newly allocated memory. Caller owns the memory.
-    pub const dupe := fn(self, T: type, slice: []T): std.Result([]mut T, AllocError) {
+    pub const dupe = fn(self, T: type, slice: []T): std.Result([]mut T, AllocError) {
         // TODO(tcs): Also implement dupeZ for null temrination
-        const new_buf := self.alloc(T, slice.len)?;
+        let new_buf = self.alloc(T, slice.len)?;
         @memcpy(new_buf, slice);
         return new_buf;
     };

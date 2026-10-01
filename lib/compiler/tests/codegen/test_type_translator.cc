@@ -134,13 +134,13 @@ TEST_CASE("Type translate struct and enum types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum {
+        const Color = enum {
             RED,
             GREEN,
             BLUE,
         };
 
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
             color: Color,
@@ -169,7 +169,7 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Value := union {
+        const Value = union {
             none: void,
             small: i32,
             big: f64,
@@ -195,7 +195,7 @@ TEST_CASE("Type translate untagged extern union types") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const RawUnion := extern union {
+        const RawUnion = extern union {
             i: i32,
             f: f64,
         };
@@ -217,7 +217,7 @@ TEST_CASE("Untagged union payload size follows the module's target data layout")
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const RawUnion := extern union {
+        const RawUnion = extern union {
             p: ^i32,
         };
     )")};
@@ -256,7 +256,7 @@ TEST_CASE("Type translate packed struct types") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const PackedHeader := packed struct {
+        const PackedHeader = packed struct {
             flag: u8,
             val: u32,
         };

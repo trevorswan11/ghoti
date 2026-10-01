@@ -222,7 +222,7 @@ auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if
     if (active_body_diff) {
         if (const auto br{active_body_diff->find_if_branch(node_idx)}) { return br; }
     }
-    if (const auto it{if_constexpr_results.find(node_idx)}; it != if_constexpr_results.end()) {
+    if (const auto it{if_comptime_results.find(node_idx)}; it != if_comptime_results.end()) {
         return it->second;
     }
     return stdx::none;

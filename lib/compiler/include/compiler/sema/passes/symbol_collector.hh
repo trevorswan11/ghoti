@@ -74,6 +74,7 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::reference_expr&) -> void;
     auto                                visit(ast::node_id, const ast::address_of_expr&) -> void;
     auto                                visit(ast::node_id, const ast::dereference_expr&) -> void;
+    auto                                visit(ast::node_id, const ast::comptime_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unary_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unwrap_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;

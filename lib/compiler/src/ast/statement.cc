@@ -25,17 +25,17 @@
 
 namespace ghoti::ast {
 
-auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
+auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
     -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    if (is_constexpr && parser.current_token_is(syntax::token_type_t::CONSTEXPR)) {
+    if (is_comptime && parser.current_token_is(syntax::token_type_t::COMPTIME)) {
         TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     }
 
     statements_t                             statements;
-    const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr};
+    const syntax::parser::compile_time_scope cx_scope{parser, is_comptime};
     while (!parser.peek_token_is(syntax::token_type_t::RBRACE) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -43,7 +43,7 @@ auto block_stmt::parse(syntax::parser& parser, bool is_constexpr)
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
-    return parser.add_stmt<block_stmt>(start_token, std::move(statements), is_constexpr);
+    return parser.add_stmt<block_stmt>(start_token, std::move(statements), is_comptime);
 }
 
 auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
@@ -176,9 +176,9 @@ using modifier_mapping = std::pair<syntax::token_type_t, decl_modifiers>;
 constexpr auto LEGAL_MODIFIERS{
     stdx::fixed::enum_map<syntax::token_type_t, stdx::option<decl_modifiers>>::from(
         stdx::none,
-        modifier_mapping{syntax::token_type_t::VAR, decl_modifiers::VARIABLE},
-        modifier_mapping{syntax::token_type_t::CONSTANT, decl_modifiers::CONSTANT},
-        modifier_mapping{syntax::token_type_t::CONSTEXPR, decl_modifiers::CONSTEXPR},
+        modifier_mapping{syntax::token_type_t::LET, decl_modifiers::LET},
+        modifier_mapping{syntax::token_type_t::CONSTANT, decl_modifiers::COMPTIME},
+        modifier_mapping{syntax::token_type_t::COMPTIME, decl_modifiers::COMPTIME},
         modifier_mapping{syntax::token_type_t::PUBLIC, decl_modifiers::PUBLIC},
         modifier_mapping{syntax::token_type_t::EXTERN, decl_modifiers::EXTERN},
         modifier_mapping{syntax::token_type_t::EXPORT, decl_modifiers::EXPORT},
@@ -187,34 +187,20 @@ constexpr auto LEGAL_MODIFIERS{
 
 [[nodiscard]] constexpr auto validate_modifiers(decl_modifiers modifiers) noexcept
     -> stdx::option<std::string> {
-    const auto mut_bits{modifiers & (decl_modifiers::VARIABLE | decl_modifiers::CONSTANT |
-                                     decl_modifiers::CONSTEXPR)};
-    const auto mut_count{std::popcount(std::to_underlying(mut_bits))};
-    // `constexpr var` is the one legal pair: a mutable constexpr local.
-    const auto is_constexpr_var{mut_bits == (decl_modifiers::VARIABLE | decl_modifiers::CONSTEXPR)};
-    if (mut_count != 1 && !is_constexpr_var) {
-        return fmt::format("Exactly one mutability modifier may be used; found {}", mut_count);
+    const auto binding_bits{modifiers &
+                            (decl_modifiers::MUT | decl_modifiers::LET | decl_modifiers::COMPTIME)};
+    const auto binding_count{std::popcount(std::to_underlying(binding_bits))};
+    // `comptime let mut` is the one legal pair: a mutable compile-time local
+    const auto is_comptime_mut{binding_bits == (decl_modifiers::MUT | decl_modifiers::COMPTIME)};
+    if (binding_count != 1 && !is_comptime_mut) {
+        return fmt::format("Exactly one of 'const', 'let' or 'let mut' may be used; found {}",
+                           binding_count);
     }
-
-    const auto valid_constexpr{
-        std::popcount(std::to_underlying(
-            modifiers & (decl_modifiers::EXTERN | decl_modifiers::CONSTEXPR))) <= 1};
-    if (!valid_constexpr) { return "Extern values cannot be known at compile time"; }
 
     const auto abi_count{std::popcount(
         std::to_underlying(modifiers & (decl_modifiers::EXTERN | decl_modifiers::EXPORT)))};
     if (abi_count > 1) {
         return fmt::format("At most one ABI-related modifier may be used; found {}", abi_count);
-    }
-
-    const auto tls_constexpr{decl_modifiers::THREADLOCAL | decl_modifiers::CONSTEXPR};
-    if ((modifiers & tls_constexpr) == tls_constexpr) {
-        return "A 'threadlocal' declaration cannot also be 'constexpr'";
-    }
-
-    const auto weak_constexpr{decl_modifiers::WEAK | decl_modifiers::CONSTEXPR};
-    if ((modifiers & weak_constexpr) == weak_constexpr) {
-        return "A 'weak' declaration cannot also be 'constexpr'";
     }
     return stdx::none;
 }
@@ -254,6 +240,12 @@ struct binding_args {
 
 } // namespace
 
+auto decl_stmt::evaluates_at_compile_time() const noexcept -> bool {
+    if (!has_modifier(decl_modifiers::COMPTIME)) { return false; }
+    return !value ||
+           !value->any<function_expr, struct_expr, union_expr, enum_expr, interface_expr>();
+}
+
 auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto                   span_start{parser.get_current_token()};
@@ -286,12 +278,45 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         return {};
     }};
 
+    // `let mut` is one binding form, and `comptime` only ever introduces `let mut`
+    const auto parse_binding_form{[&](decl_modifiers& m) -> stdx::result<void, syntax::diagnostic> {
+        if (parser.current_token_is(syntax::token_type_t::LET) &&
+            parser.peek_token_is(syntax::token_type_t::MUT)) {
+            parser.advance();
+            m = decl_modifiers::MUT;
+        } else if (parser.current_token_is(syntax::token_type_t::COMPTIME)) {
+            const auto comptime_token{parser.get_current_token()};
+            TRY(parser.expect_peek(syntax::token_type_t::LET));
+            if (!parser.peek_token_is(syntax::token_type_t::MUT)) {
+                return make_syntax_err("A 'comptime let' is spelled 'const'",
+                                       syntax::error::ILLEGAL_DECL_MODIFIERS,
+                                       comptime_token);
+            }
+            parser.advance();
+            m = decl_modifiers::COMPTIME | decl_modifiers::MUT;
+        }
+        return {};
+    }};
+
+    TRY(parse_binding_form(modifiers));
     TRY(parse_binding_for(modifiers));
 
     stdx::option<decl_modifiers> current_modifier;
     while ((current_modifier = LEGAL_MODIFIERS[parser.get_peek_token().type])) {
         parser.advance();
-        if (modifiers_has(modifiers, *current_modifier)) {
+        const auto modifier_token{parser.get_current_token()};
+        TRY(parse_binding_form(*current_modifier));
+        constexpr auto binding_bits{decl_modifiers::MUT | decl_modifiers::LET |
+                                    decl_modifiers::COMPTIME};
+        const bool     second_binding{(modifiers & binding_bits) != decl_modifiers{} &&
+                                  (*current_modifier & binding_bits) != decl_modifiers{}};
+        if (second_binding) {
+            return make_syntax_err(
+                "Exactly one of 'const', 'let' or 'let mut' may be used; found 2",
+                syntax::error::ILLEGAL_DECL_MODIFIERS,
+                modifier_token);
+        }
+        if ((modifiers & *current_modifier) != decl_modifiers{}) {
             return make_syntax_err("Declaration modifiers may only be used once in any order",
                                    syntax::error::DUPLICATE_DECL_MODIFIER,
                                    parser.get_current_token());
@@ -312,11 +337,11 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
     stdx::option<expr_handle> decl_value;
     if (value_initialized) {
-        const bool is_constexpr_decl{modifiers_has(modifiers, decl_modifiers::CONSTEXPR)};
-        if (is_constexpr_decl && parser.current_token_is(syntax::token_type_t::FUNCTION)) {
-            parser.arm_constexpr_param_inference();
+        const bool is_comptime_decl{modifiers_has(modifiers, decl_modifiers::COMPTIME)};
+        if (is_comptime_decl && parser.current_token_is(syntax::token_type_t::FUNCTION)) {
+            parser.arm_comptime_param_inference();
         }
-        const syntax::parser::compile_time_scope cx_scope{parser, is_constexpr_decl};
+        const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl};
         decl_value.emplace(TRY(parser.parse_expression()));
 
         // If there is a value, then there cannot be an extern due to a contradiction
@@ -328,7 +353,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     } else if (!modifiers_has(modifiers, decl_modifiers::EXTERN)) {
         return make_syntax_err(
             "Non-extern declarations must be value-initialized; use '= undefined' to leave a "
-            "'var' unspecified",
+            "'let mut' unspecified",
             syntax::error::DECL_MISSING_VALUE,
             start_token);
     }
@@ -587,7 +612,7 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
 
 namespace {
 
-// Parses an optional `(P: type, constexpr n: usize, ...)` parameter list after `impl`.
+// Parses an optional `(P: type, comptime n: usize, ...)` parameter list after `impl`.
 [[nodiscard]] auto parse_impl_params(syntax::parser& parser, bool& force_break)
     -> stdx::result<std::vector<function_expr::parameter>, syntax::diagnostic> {
     using tt = syntax::token_type_t;
@@ -598,9 +623,9 @@ namespace {
     while (!parser.peek_token_is(tt::RPAREN) && !parser.peek_token_is(tt::END)) {
         parser.advance(); // current == first token of the parameter
 
-        bool is_constexpr{false};
-        if (parser.current_token_is(tt::CONSTEXPR)) {
-            is_constexpr = true;
+        bool is_comptime{false};
+        if (parser.current_token_is(tt::COMPTIME)) {
+            is_comptime = true;
             parser.advance();
         }
 
@@ -613,7 +638,7 @@ namespace {
                                    parser.get_current_token());
         }
 
-        params.emplace_back(name, *param_type, is_constexpr, false, is_constexpr);
+        params.emplace_back(name, *param_type, is_comptime, false, is_comptime);
         if (!parser.peek_token_is(tt::RPAREN)) {
             TRY(parser.expect_peek(tt::COMMA));
             force_break = parser.peek_token_is(tt::RPAREN); // trailing comma before `)`
