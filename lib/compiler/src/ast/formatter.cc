@@ -1106,8 +1106,8 @@ auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
     inits.reserve(node.initializers.size());
     for (const auto& init : node.initializers) {
         if (init.member) {
-            inits.emplace_back(doc_manager_.concat(
-                {format(*init.member), doc_manager_.text(" = "), format(init.value)}));
+            inits.emplace_back(
+                doc_manager_.concat({format(*init.member), assigned_value(init.value)}));
         } else {
             inits.emplace_back(format(init.value));
         }
@@ -1235,6 +1235,20 @@ auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_
         -> syntax::doc_id {                                                               \
         return doc_manager_.text(txt);                                                    \
     }
+
+auto formatter::assigned_value(node_id value) -> syntax::doc_id {
+    const auto value_doc{format(value)};
+    if (value.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
+        return doc_manager_.concat({doc_manager_.text(" = "), value_doc});
+    }
+    // What follows the string (`;`, `,`) goes back to the outer indent on the next line
+    return doc_manager_.concat({
+        doc_manager_.text(" ="),
+        doc_manager_.nest(doc_manager_.concat(
+            {doc_manager_.hard_line(), doc_manager_.without_trailing_hard_line(value_doc)})),
+        doc_manager_.hard_line(),
+    });
+}
 
 auto formatter::visit(node_id id, const string_expr& node) -> syntax::doc_id {
     if (id.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
@@ -1478,8 +1492,7 @@ auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),
-        node.value ? doc_manager_.concat({doc_manager_.text(" = "), format(*node.value)})
-                   : doc_manager_.nil(),
+        node.value ? assigned_value(*node.value) : doc_manager_.nil(),
         doc_manager_.text(";"),
     });
 }

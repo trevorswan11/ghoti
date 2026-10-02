@@ -111,6 +111,8 @@ class formatter {
     [[nodiscard]] auto with_attributes(const stdx::option<attribute_list>& attributes,
                                        syntax::doc_id                      head) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
+    // ` = value`, with a multiline string value starting its own line so its lines align
+    [[nodiscard]] auto assigned_value(node_id value) -> syntax::doc_id;
     // `|v|` / `|&mut v|`, with a trailing space when a body follows on the same line
     [[nodiscard]] auto format_capture(const capture_t& capture, bool trailing_space = false)
         -> syntax::doc_id;

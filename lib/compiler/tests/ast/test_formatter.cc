@@ -1053,10 +1053,23 @@ TEST_CASE("formatter formats errdefer statements") {
 }
 
 TEST_CASE("formatter round-trips multiline string literals") {
+    // After `=` the string starts its own line, so every line of it aligns
     CHECK(format_source("const a = \\\\Hello\n\\\\World\n;\n") ==
-          "const a = \\\\Hello\n\\\\World\n;\n");
-    CHECK(format_source("const a = \\\\Hello, World!\n;\n") == "const a = \\\\Hello, World!\n;\n");
+          "const a =\n    \\\\Hello\n    \\\\World\n;\n");
+    CHECK(format_source("const a = \\\\Hello, World!\n;\n") ==
+          "const a =\n    \\\\Hello, World!\n;\n");
     round_trips("const a = \\\\First line\n    \\\\Second line\n    \\\\    still indented\n;\n");
+}
+
+TEST_CASE("formatter leaves no lone trailing comma after a multiline string") {
+    CHECK(format_source("const f = fn(): void { g(\n\\\\a\n\\\\b\n,); };\n") ==
+          "const f = fn(): void {\n    g(\n        \\\\a\n        \\\\b\n    );\n};\n");
+    CHECK(format_source("const x: S = .{ .n = 1, .s =\n\\\\tail\n};\n") ==
+          "const x: S = .{\n    .n = 1,\n    .s =\n        \\\\tail\n};\n");
+    // Before the last item, the separator comma has to start the next line
+    CHECK(format_source("const f = fn(): void { g(\n\\\\a\n, 2); };\n") ==
+          "const f = fn(): void {\n    g(\n        \\\\a\n        ,\n        2,\n    );\n};\n");
+    round_trips("const f = fn(): void { g(\n\\\\a\n\\\\b\n); };\n");
 }
 
 constexpr std::string_view corpus{

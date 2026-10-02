@@ -642,6 +642,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
     - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
     - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- `\\` multiline strings format like Zig's: after `=` they start their own indented line, and a list never gets a trailing comma alone on the line after one
 - Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
 - A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it
 - A generic function can call itself with the same arguments (`fact(T, n - 1)`); one with an inferred `auto` return type that does is reported instead of exceeding the instantiation limit
