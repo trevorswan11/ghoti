@@ -16,6 +16,7 @@
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
@@ -118,7 +119,7 @@ class dumper {
         }
     }
 
-    auto dump_capture(std::string_view label, const stdx::option<capture>& capture) -> void {
+    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture) -> void {
         if (!capture) { return; }
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}{}: ", indent_.current_branch(), label);

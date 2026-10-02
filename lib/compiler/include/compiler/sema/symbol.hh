@@ -97,7 +97,7 @@ using union_field      = ast::union_expr::field;
 using enumeration      = ast::enum_expr::enumeration;
 using self_parameter   = ast::self_parameter;
 using parameter        = ast::function_expr::parameter;
-using for_loop_capture = ast::for_loop_expr::capture;
+using for_loop_capture = ast::for_loop_expr::capture_t;
 
 } // namespace symbols
 

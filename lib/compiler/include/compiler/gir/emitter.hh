@@ -339,9 +339,9 @@ class emitter {
     };
     auto emit_flow(ast::expr_handle operand) -> flow_result;
     // Binds an `if`/`while` payload capture to what the `continue` reference points at
-    auto bind_unwrap_payload(const ast::capture& capture, const flow_result& flow) -> void;
+    auto bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void;
     // Binds an `else |e|` capture to the `break` residual
-    auto bind_unwrap_residual(const ast::capture& capture, const flow_result& flow) -> void;
+    auto bind_unwrap_residual(const ast::capture_t& capture, const flow_result& flow) -> void;
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value                    operand_addr,
                                  const sema::unwrap_info& shape,

@@ -4020,8 +4020,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
                 const auto             outer_hint{implicit_type_stack_.peek()};
                 const structural_guard g{implicit_type_stack_,
-                                         literal_hint ? &*literal_hint
-                                         : outer_hint ? &*outer_hint
+                                         literal_hint ? literal_hint.get()
+                                         : outer_hint ? outer_hint.get()
                                                       : nullptr};
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
@@ -4032,7 +4032,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
                 }
                 const structural_guard g{implicit_type_stack_,
-                                         operand_hint ? &*operand_hint : nullptr};
+                                         operand_hint ? operand_hint.get() : nullptr};
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
@@ -5674,18 +5674,18 @@ auto type_resolver::in_dead_arm() -> bool {
     });
 }
 
-auto type_resolver::capture_scope(const stdx::option<ast::capture>& capture) const
+auto type_resolver::capture_scope(const stdx::option<ast::capture_t>& capture) const
     -> stdx::opt_size {
     if (!capture || !capture->payload.is<ast::identifier_expr>()) { return stdx::none; }
     return resolving_.sema_side_tables.capture_scopes[*capture->payload];
 }
 
-auto type_resolver::resolve_unwrap_captures(ast::node_id                      id,
-                                            ast::expr_handle                  condition,
-                                            const stdx::option<ast::capture>& payload,
-                                            const stdx::option<ast::capture>& residual,
-                                            stdx::opt_size                    payload_scope,
-                                            std::string_view                  construct,
+auto type_resolver::resolve_unwrap_captures(ast::node_id                        id,
+                                            ast::expr_handle                    condition,
+                                            const stdx::option<ast::capture_t>& payload,
+                                            const stdx::option<ast::capture_t>& residual,
+                                            stdx::opt_size                      payload_scope,
+                                            std::string_view                    construct,
                                             bool comptime) -> stdx::option<type&> {
     const auto cond_type{resolving_.get_sema_type_opt(condition)};
     if (!cond_type || cond_type->is_poison()) { return stdx::none; }
@@ -7601,11 +7601,12 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
         const scope arm_scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
 
         if (arm.capture) {
-            return last_type_.emplace(ctx_.poison_node(resolving_,
-                                                       id,
-                                                       "A 'match' on a type cannot bind a capture",
-                                                       error::ILLEGAL_MATCH_PATTERN,
-                                                       resolving_.ast.location_of(*arm.capture)));
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "A 'match' on a type cannot bind a capture",
+                                 error::ILLEGAL_MATCH_PATTERN,
+                                 resolving_.ast.location_of(*arm.capture->payload)));
         }
         if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
 
@@ -7714,22 +7715,22 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
 
         comptime_frame frame;
-        if (live.capture && live.capture->is<ast::identifier_expr>()) {
+        if (live.capture && live.capture->payload.is<ast::identifier_expr>()) {
             if (scrutinee->is<stdx::option<sema::type&>>()) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
                                      id,
                                      "'match comptime' on a type value cannot bind a capture",
                                      error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(*live.capture)));
+                                     resolving_.ast.location_of(*live.capture->payload)));
             }
-            if (!live.modifier.is_value()) {
+            if (!live.capture->modifier.is_value()) {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
                     id,
                     "'match comptime' captures cannot use a reference or pointer modifier",
                     error::ILLEGAL_MATCH_PATTERN,
-                    resolving_.ast.location_of(*live.capture)));
+                    resolving_.ast.location_of(*live.capture->payload)));
             }
 
             auto& effective_matcher{denoted_type(matcher_type)};
@@ -7742,12 +7743,13 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
                     cap_type = &ud->type_at(table.get_proxy(pident.name).index);
                 }
             }
-            resolving_.set_sema_type(*live.capture, *cap_type);
-            resolve_symbol_info(*live.capture, symbol_kind::VALUE);
+            resolving_.set_sema_type(*live.capture->payload, *cap_type);
+            resolve_symbol_info(live.capture->payload, symbol_kind::VALUE);
 
             // Give the capture the same `comptime_frame` binding a `for`/`while comptime`
             // capture already gets
-            const auto& cap_ident{resolving_.ast.get_as<ast::identifier_expr>(*live.capture)};
+            const auto& cap_ident{
+                resolving_.ast.get_as<ast::identifier_expr>(*live.capture->payload)};
             if (const auto un{scrutinee->as_opt<gir::const_union>()}) {
                 frame.insert_or_assign(cap_ident.name,
                                        !un->payload.empty() ? un->payload.front() : *scrutinee);
@@ -8021,7 +8023,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         auto&       arm_table_type{resolving_.get_sema_type(arm)};
         const scope scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
 
-        if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
+        if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
             // Unions implicitly unpack the value since the field is guaranteed to be valid
             stdx::option<type&> base_type;
             if (const auto union_data{matcher_data.as_opt<types::union_t>()}) {
@@ -8042,7 +8044,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                             "A capture on a multi-variant match arm requires every listed "
                             "variant to carry the same payload type",
                             error::ILLEGAL_MATCH_PATTERN,
-                            resolving_.ast.location_of(*arm.capture)));
+                            resolving_.ast.location_of(*arm.capture->payload)));
                     }
                 }
             } else {
@@ -8051,19 +8053,19 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
             auto cap_result{
                 resolve_capture_modifier(ctx_,
-                                         arm.modifier,
+                                         arm.capture->modifier,
                                          *base_type,
                                          matcher_is_const,
                                          matcher_is_addressable,
                                          "value",
-                                         resolving_.ast.location_of(*arm.capture),
+                                         resolving_.ast.location_of(*arm.capture->payload),
                                          place_mutability(match.matcher) == types::mut::POLY)};
             if (!cap_result) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
             }
-            resolving_.set_sema_type(*arm.capture, **cap_result);
-            resolve_symbol_info(*arm.capture, symbol_kind::VALUE);
+            resolving_.set_sema_type(*arm.capture->payload, **cap_result);
+            resolve_symbol_info(arm.capture->payload, symbol_kind::VALUE);
         }
 
         // Each pattern is resolved against the matcher's type
@@ -11211,7 +11213,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
 
     // Exporting a function as `main` makes it the program's entry point
     if (*name == "main") {
-        if (!decl || &*owner != &resolving_) {
+        if (!decl || owner != resolving_) {
             return diagnostic{"A function exported as 'main' must be declared in the module that "
                               "exports it, and named directly",
                               error::TYPE_MISMATCH,
@@ -11232,7 +11234,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
 
     if (const auto earlier{ctx_.exports.named(*name)}) {
         // Resolving the same `@export` again (a generic body, a re-resolution) is no conflict
-        const bool same{earlier->owner && &*earlier->owner == &*owner &&
+        const bool same{earlier->owner && earlier->owner == owner &&
                         earlier->fn_node.get_index() == fn_node->get_index()};
         if (same) { return stdx::none; }
         return diagnostic{fmt::format("The symbol '{}' is already exported at {}:{}",

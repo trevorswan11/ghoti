@@ -6805,7 +6805,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         // `match comptime`'s capture: bind it into the comptime_frame
         if (match.is_comptime) {
             if (const auto scrutinee{const_eval_.try_eval(match.matcher)}) {
-                const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*chosen.capture)};
+                const auto& cap_ident{
+                    active_ast().get_as<ast::identifier_expr>(*chosen.capture->payload)};
                 sema::comptime_frame cx_frame;
                 if (const auto un{scrutinee->as_opt<const_union>()}) {
                     cx_frame.insert_or_assign(
@@ -6936,14 +6937,17 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         {
             const scope_guard arm_guard{scopes_};
             // `|_|` is an anonymous capture: it consumes the arm's payload slot but binds nothing.
-            if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
-                const auto& cap_ident{active_ast().get_as<ast::identifier_expr>(*arm.capture)};
-                auto&       cap_type{
-                    active_mod().get_sema_type_opt(*arm.capture).value_or(ctx_.get_int(32, true))};
+            if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
+                const auto& cap_ident{
+                    active_ast().get_as<ast::identifier_expr>(*arm.capture->payload)};
+                auto& cap_type{active_mod()
+                                   .get_sema_type_opt(*arm.capture->payload)
+                                   .value_or(ctx_.get_int(32, true))};
                 ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
 
                 // Only a `|&v|` / `|^v|` binding aliases the field's storage
-                const bool alias_capture{arm.modifier.is_ref() || arm.modifier.is_ptr()};
+                const bool alias_capture{arm.capture->modifier.is_ref() ||
+                                         arm.capture->modifier.is_ptr()};
 
                 // For an aliasing capture, unwrap the ref/ptr to the type addressing the storage.
                 auto* underlying{&cap_type};
@@ -7278,7 +7282,7 @@ auto emitter::emit_flow(ast::expr_handle operand) -> flow_result {
     };
 }
 
-auto emitter::bind_unwrap_payload(const ast::capture& capture, const flow_result& flow) -> void {
+auto emitter::bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void {
     const auto ident{active_ast().get_as_opt<ast::identifier_expr>(capture.payload)};
     if (!ident) { return; }
     auto& cap_type{active_mod().get_sema_type(*capture.payload)};
@@ -7310,7 +7314,7 @@ auto emitter::bind_unwrap_payload(const ast::capture& capture, const flow_result
                                     });
 }
 
-auto emitter::bind_unwrap_residual(const ast::capture& capture, const flow_result& flow) -> void {
+auto emitter::bind_unwrap_residual(const ast::capture_t& capture, const flow_result& flow) -> void {
     const auto ident{active_ast().get_as_opt<ast::identifier_expr>(capture.payload)};
     if (!ident) { return; }
     auto&      residual_type{*flow.shape.residual_type};

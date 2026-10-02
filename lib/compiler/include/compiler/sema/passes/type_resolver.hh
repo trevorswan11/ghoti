@@ -632,15 +632,15 @@ class type_resolver {
     // Types an `if`/`while` condition's payload and `else` captures from its `Unwrappable`
     // shape, rejecting a capture it can't take or a missing one it needs. `payload_scope` is the
     // scope the payload capture is declared in
-    [[nodiscard]] auto resolve_unwrap_captures(ast::node_id                      id,
-                                               ast::expr_handle                  condition,
-                                               const stdx::option<ast::capture>& payload,
-                                               const stdx::option<ast::capture>& residual,
-                                               stdx::opt_size                    payload_scope,
-                                               std::string_view                  construct,
+    [[nodiscard]] auto resolve_unwrap_captures(ast::node_id                        id,
+                                               ast::expr_handle                    condition,
+                                               const stdx::option<ast::capture_t>& payload,
+                                               const stdx::option<ast::capture_t>& residual,
+                                               stdx::opt_size                      payload_scope,
+                                               std::string_view                    construct,
                                                bool comptime) -> stdx::option<type&>;
     // The scope an `if`/`while` capture is declared in, when it names a binding
-    [[nodiscard]] auto capture_scope(const stdx::option<ast::capture>& capture) const
+    [[nodiscard]] auto capture_scope(const stdx::option<ast::capture_t>& capture) const
         -> stdx::opt_size;
 
     [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;

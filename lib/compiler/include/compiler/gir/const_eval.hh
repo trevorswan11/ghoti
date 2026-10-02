@@ -1,6 +1,5 @@
 #pragma once
 
-#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -408,8 +407,9 @@ class const_eval {
     [[nodiscard]] auto eval_flow(ast::expr_handle operand, ast::node_id at)
         -> stdx::option<flow_eval>;
     // Binds an `if`/`while` capture from a folded `Flow` in the current frame
-    [[nodiscard]] auto
-    bind_flow_capture(const ast::capture& capture, const flow_eval& flow, ast::node_id at) -> bool;
+    [[nodiscard]] auto bind_flow_capture(const ast::capture_t& capture,
+                                         const flow_eval&      flow,
+                                         ast::node_id          at) -> bool;
     auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
         -> bool;
 
@@ -448,7 +448,7 @@ class const_eval {
     std::vector<call_frame>                        call_stack_;
     u64                                            next_frame_id_{1};
     // Stable names for the hidden slots `ref_to_temporary` binds
-    std::deque<std::string> temporary_names_;
+    std::vector<std::string_view> temporary_names_;
     // The return type of each compile-time call being evaluated, innermost last
     std::vector<stdx::option<sema::type&>> return_types_;
     default_counter                        recursion_depth_;

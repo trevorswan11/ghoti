@@ -258,7 +258,7 @@ auto dumper::visit(node_id, const for_loop_expr& for_loop) -> void {
     {
         const indent::guard g{indent_, false};
         fmt::println(out_, "{}Captures:", indent_.current_branch());
-        dump_container(for_loop.captures, [this](const for_loop_expr::capture& capture) -> void {
+        dump_container(for_loop.captures, [this](const for_loop_expr::capture_t& capture) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             if (capture.payload.is<ast::discarded>()) {
                 fmt::println(out_, "<discarded>");
@@ -595,11 +595,11 @@ auto dumper::visit(node_id, const match_expr& match) -> void {
             if (arm.capture) {
                 const indent::guard g_inner{indent_, false};
                 fmt::print(out_, "{}Capture: ", indent_.current_branch());
-                if (arm.capture->is<ast::discarded>()) {
+                if (arm.capture->payload.is<ast::discarded>()) {
                     fmt::println(out_, "<discarded>");
                 } else {
-                    const auto& ident{ast_.get_as<identifier_expr>(*arm.capture)};
-                    fmt::println(out_, "{} (modifier: {})", ident, arm.modifier);
+                    const auto& ident{ast_.get_as<identifier_expr>(*arm.capture->payload)};
+                    fmt::println(out_, "{} (modifier: {})", ident, arm.capture->modifier);
                 }
             }
 

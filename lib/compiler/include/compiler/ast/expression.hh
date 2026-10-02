@@ -130,16 +130,17 @@ struct enum_expr {
 };
 
 // `|v|`, `|&mut v|`, or `|_|`: a name a construct binds the value it hands to its body
-struct capture {
+struct capture_t {
+    // Only meaningful when `capture` holds a real (non-discarded) identifier
     type_modifier            modifier;
     discardable_ident_handle payload;
 };
 
 struct for_loop_expr {
-    using capture = ast::capture;
+    using capture_t = ast::capture_t;
 
     std::vector<expr_handle>  iterables;
-    std::vector<capture>      captures;
+    std::vector<capture_t>    captures;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
     bool                      iterables_force_break{false}; // trailing comma before `)`
@@ -248,8 +249,8 @@ struct if_expr {
     stdx::option<expr_handle> condition; // absent only for `if comptime { ... }`
     stmt_handle               consequence;
     stdx::option<stmt_handle> alternate;
-    stdx::option<capture>     payload_capture{}; // `if (x) |v|`: an unwrapped payload
-    stdx::option<capture>     else_capture{};    // `else |e|`: the residual
+    stdx::option<capture_t>   payload_capture{}; // `if (x) |v|`: an unwrapped payload
+    stdx::option<capture_t>   else_capture{};    // `else |e|`: the residual
 
     // `if comptime a else b`: `a` under compile-time evaluation, `b` at runtime
     [[nodiscard]] auto is_evaluation_context_branch() const noexcept -> bool {
@@ -367,12 +368,10 @@ struct label_expr {
 struct match_expr {
     struct arm {
         // One arm may list several patterns (`a, b, 1..8 => ...`) or a single discard
-        std::vector<match_pattern_handle>      patterns;
-        stdx::option<discardable_ident_handle> capture;
-        // Only meaningful when `capture` holds a real (non-discarded) identifier
-        type_modifier modifier;
-        stmt_handle   dispatch;
-        bool          force_break{false};
+        std::vector<match_pattern_handle> patterns;
+        stdx::option<capture_t>           capture;
+        stmt_handle                       dispatch;
+        bool                              force_break{false};
 
         // The canonical pattern used for side-table keying and diagnostic locations.
         [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {
@@ -541,8 +540,8 @@ struct while_loop_expr {
     block_handle              block;
     stdx::option<stmt_handle> non_break;
     bool                      is_comptime{false}; // `while comptime (...)`
-    stdx::option<capture>     payload_capture{};  // `while (x) |v|`: an unwrapped payload
-    stdx::option<capture>     else_capture{};     // `else |e|`: the residual that ended it
+    stdx::option<capture_t>   payload_capture{};  // `while (x) |v|`: an unwrapped payload
+    stdx::option<capture_t>   else_capture{};     // `else |e|`: the residual that ended it
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

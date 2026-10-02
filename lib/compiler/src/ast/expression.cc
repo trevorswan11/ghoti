@@ -756,8 +756,8 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     }
 
     // Captures take on something similar to zig's capture syntax
-    std::vector<capture> captures;
-    bool                 captures_force_break{false};
+    std::vector<capture_t> captures;
+    bool                   captures_force_break{false};
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
     while (!parser.peek_token_is(syntax::token_type_t::BW_OR) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
@@ -1141,7 +1141,7 @@ namespace {
 
 // `|v|`, `|&mut v|`, or `|_|` after the current token, or none when no `|` follows
 auto try_parse_capture(syntax::parser& parser)
-    -> stdx::result<stdx::option<capture>, syntax::diagnostic> {
+    -> stdx::result<stdx::option<capture_t>, syntax::diagnostic> {
     if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) { return stdx::none; }
     parser.advance(); // current == |
 
@@ -1151,7 +1151,7 @@ auto try_parse_capture(syntax::parser& parser)
         const auto discarded{
             parser.add_node<discardable_ident_handle, ast::discarded>(parser.get_current_token())};
         TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
-        return capture{.modifier = modifier, .payload = discarded};
+        return capture_t{.modifier = modifier, .payload = discarded};
     }
 
     parser.advance();
@@ -1166,12 +1166,12 @@ auto try_parse_capture(syntax::parser& parser)
     }
     const discardable_ident_handle payload{TRY(identifier_expr::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
-    return capture{.modifier = modifier, .payload = payload};
+    return capture_t{.modifier = modifier, .payload = payload};
 }
 
 struct capturing_alternate {
     stdx::option<stmt_handle> body;
-    stdx::option<capture>     capture;
+    stdx::option<capture_t>   capture;
 };
 
 // `else B` / `else |e| B`; an `else` capture needs a payload capture to pair with
@@ -1736,38 +1736,43 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         TRY(parser.expect_peek(syntax::token_type_t::FAT_ARROW));
 
         // There is an optional capture for every arm
-        stdx::option<discardable_ident_handle> capture;
-        type_modifier                          modifier;
+        stdx::option<capture_t> cap;
         if (parser.peek_token_is(syntax::token_type_t::BW_OR)) {
             parser.advance();
 
             // An underscore is equivalent to a lack of capture; no modifier is allowed on it
             if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
                 parser.advance();
-                capture.emplace(parser.add_node<discardable_ident_handle, ast::discarded>(
-                    parser.get_current_token()));
+                cap.emplace<capture_t>({
+                    .modifier = {},
+                    .payload  = parser.add_node<discardable_ident_handle, ast::discarded>(
+                        parser.get_current_token()),
+                });
             } else {
                 // Always check for a modifier and advance past it if present
                 parser.advance();
-                modifier = type_modifier{parser.get_current_token()};
+                const type_modifier modifier{parser.get_current_token()};
                 if (!modifier.is_value()) { parser.advance(); }
 
-                capture.emplace(TRY(identifier_expr::parse(parser)));
+                cap.emplace<capture_t>({
+                    .modifier = modifier,
+                    .payload  = TRY(identifier_expr::parse(parser)),
+                });
             }
             TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
         }
 
-        if (catch_all_idx == arm_idx && capture) {
+        if (catch_all_idx == arm_idx && cap) {
             return make_syntax_err("Catch-all match arms may not have a capture clause",
                                    syntax::error::ILLEGAL_MATCH_CATCH_ALL,
-                                   parser.get_location_of(*capture));
+                                   parser.get_location_of(*cap->payload));
         }
 
         // The resulting statement must be restricted like an if branch
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(std::move(patterns), capture, modifier, consequence, trailing_comma);
+        arms.emplace_back(std::move(patterns), cap, consequence, trailing_comma);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list

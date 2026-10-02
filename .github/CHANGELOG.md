@@ -607,7 +607,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
     - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
     - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
-- Fixed: two more compiler crashes on invalid code, which are now errors: match patterns missing a comma (`.a .b => x`, which parsed as a member of `.a`), and a `@[deprecated(...)]` message that isn't a string literal
+- Fixed: match patterns missing a comma (`.a .b => x`, which parsed as a member of `.a`)
 - `mut?` lets one function serve both mutable and immutable callers: `&mut? T`, `^mut? T`, `[]mut? T`, and `[N]mut? T` take their mutability from the call
     - `pub const at = fn(&mut? self, i: usize): &mut? T { return &mut? self.items[i]; };` returns `&mut T` through a `let mut` receiver and `&T` through a `let` one; a call is mutable only when every argument bound to a `mut?` parameter is
     - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through

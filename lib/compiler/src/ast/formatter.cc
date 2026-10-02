@@ -848,7 +848,7 @@ auto formatter::visit(node_id, const enum_expr& node) -> syntax::doc_id {
     return format_enum(node);
 }
 
-auto formatter::format_capture(const capture& capture, bool trailing_space) -> syntax::doc_id {
+auto formatter::format_capture(const capture_t& capture, bool trailing_space) -> syntax::doc_id {
     return doc_manager_.concat({
         doc_manager_.text("|"),
         doc_manager_.text(modifier_prefix(capture.modifier)),
@@ -1156,8 +1156,8 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         }
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
-            parts.emplace_back(doc_manager_.text(modifier_prefix(arm.modifier)));
-            parts.emplace_back(format(*arm.capture));
+            parts.emplace_back(doc_manager_.text(modifier_prefix(arm.capture->modifier)));
+            parts.emplace_back(format(*arm.capture->payload));
             parts.emplace_back(doc_manager_.text("| "));
         }
         parts.emplace_back(tail_clause(arm.dispatch));

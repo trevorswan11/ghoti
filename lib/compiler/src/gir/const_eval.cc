@@ -4,7 +4,9 @@
 #include <array>
 #include <bit>
 #include <concepts>
+#include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <ranges>
 #include <string>
@@ -13,11 +15,14 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/base.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <gsl/util>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
+#include <stdx/fixed/vector.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/string.hh>
@@ -1215,7 +1220,7 @@ auto const_eval::eval_place(ast::node_id id) -> stdx::option<const_ref> {
                                                                    : eval_place(dot->object)};
         if (!base || base->window) { return stdx::none; }
 
-        const sema::type* aggregate{&*obj_type};
+        gsl::not_null<const sema::type*> aggregate{obj_type.get()};
         if (const auto ptr{aggregate->get_data().as_opt<sema::types::pointer>()}) {
             aggregate = &ptr->underlying;
         } else if (const auto ref{aggregate->get_data().as_opt<sema::types::reference>()}) {
@@ -1272,14 +1277,14 @@ auto const_eval::load_ref(const const_ref& ref, ast::node_id at) -> stdx::option
         return const_value::make_poison();
     }
 
-    const const_value* cur{&*root};
+    gsl::not_null<const const_value*> cur{root.get()};
     for (const auto& step : ref.path) {
         switch (step.step) {
         case ref_step::kind::FIELD: {
             const auto st{cur->as_opt<const_struct>()};
             const auto field{st ? st->get_field_opt(step.name) : stdx::none};
             if (!field) { return stdx::none; }
-            cur = &*field;
+            cur = field.get();
             break;
         }
         case ref_step::kind::PAYLOAD: {
@@ -1339,7 +1344,7 @@ auto const_eval::store_ref(const const_ref& ref, const_value val) -> bool {
         return v.as_opt<const_array>();
     }};
 
-    const_value* cur{&*root};
+    gsl::not_null<const_value*> cur{root.get()};
     for (usize i{0}; i < ref.path.size(); ++i) {
         const auto& step{ref.path[i]};
         const bool  last{i + 1 == ref.path.size()};
@@ -1393,11 +1398,16 @@ auto const_eval::store_ref(const const_ref& ref, const_value val) -> bool {
 }
 
 auto const_eval::ref_to_temporary(const_value val) -> const_ref {
-    auto&       frame{call_stack_.back()};
-    const usize slot{frame.temporaries++};
+    auto&                         frame{call_stack_.back()};
+    const usize                   slot{frame.temporaries++};
+    stdx::fixed::vector<char, 64> buf;
     while (temporary_names_.size() <= slot) {
         // Not an identifier, so no binding of the program can collide with it
-        temporary_names_.emplace_back(fmt::format("#tmp{}", temporary_names_.size()));
+        fmt::format_to(std::back_inserter(buf), "#tmp{}", temporary_names_.size());
+        auto raw{ctx_.arena.make_span<char>(buf.size())};
+        std::memcpy(raw.data(), buf.data(), buf.size());
+        temporary_names_.emplace_back(raw.data(), raw.size());
+        buf.clear();
     }
     const std::string_view name{temporary_names_[slot]};
     frame.bindings.insert_or_assign(name, std::move(val));
@@ -2954,11 +2964,11 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
             return match_pattern(pattern, *matcher_val);
         })};
         if (arm_matches) {
-            const bool by_ref{arm.modifier.is_ref() || arm.modifier.is_ptr()};
-            if (arm.capture && arm.capture->is<ast::identifier_expr>() && by_ref &&
+            if (arm.capture && arm.capture->payload.is<ast::identifier_expr>() &&
+                (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr()) &&
                 !call_stack_.empty()) {
                 // `|&mut v|` refers to the matched place's payload; a temporary gets a slot
-                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture)};
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
                 auto        place{eval_place(match.matcher)};
                 if (!place) { place = ref_to_temporary(*matcher_val); }
                 if (const auto un{matcher_val->as_opt<const_union>()}; un && !un->payload.empty()) {
@@ -2966,9 +2976,10 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
                 }
                 call_stack_.back().bindings.insert_or_assign(
                     ident.name,
-                    const_value{std::move(*place), module_->get_sema_type_opt(*arm.capture)});
-            } else if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
-                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture)};
+                    const_value{std::move(*place),
+                                module_->get_sema_type_opt(*arm.capture->payload)});
+            } else if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
                 if (!call_stack_.empty()) {
                     if (const auto un{matcher_val->as_opt<const_union>()}) {
                         if (!un->payload.empty()) {
@@ -3064,9 +3075,9 @@ auto const_eval::try_eval_flow(ast::expr_handle operand, ast::node_id at)
     return flow;
 }
 
-auto const_eval::bind_flow_capture(const ast::capture& capture,
-                                   const flow_eval&    flow,
-                                   ast::node_id        at) -> bool {
+auto const_eval::bind_flow_capture(const ast::capture_t& capture,
+                                   const flow_eval&      flow,
+                                   ast::node_id          at) -> bool {
     const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(capture.payload)};
     if (!ident || call_stack_.empty()) { return true; }
     auto value{flow.payload};

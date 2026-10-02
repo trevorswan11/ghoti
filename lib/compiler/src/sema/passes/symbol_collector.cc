@@ -295,14 +295,14 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     collecting_.set_sema_type(id, *last_type_);
 }
 
-auto symbol_collector::declare_capture(const ast::capture& capture) -> void {
+auto symbol_collector::declare_capture(const ast::capture_t& capture) -> void {
     if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
         collecting_.add_identifier_position(*capture.payload);
         try_declare<symbols::match_capture>(ident->name, capture.payload);
     }
 }
 
-auto symbol_collector::collect_captured(const ast::capture& capture, const ast::stmt_handle& body)
+auto symbol_collector::collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body)
     -> void {
     const auto  new_idx{ctx_.registry.create()};
     const scope s{table_stack_, new_idx, table_idx_};
@@ -422,9 +422,9 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
         const scope s{table_stack_, new_idx, table_idx_};
 
         for (const auto& pattern : arm.patterns) { collect(pattern); }
-        if (arm.capture && (*arm.capture)->get_kind() == ast::node_kind::IDENTIFIER_EXPRESSION) {
-            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture)};
-            try_declare<symbols::match_capture>(ident.name, *arm.capture);
+        if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
+            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
+            try_declare<symbols::match_capture>(ident.name, *arm.capture->payload);
         }
         collect(arm.dispatch);
 

@@ -150,9 +150,9 @@ class symbol_collector {
     }
 
     // Declares a named capture into the current scope
-    auto declare_capture(const ast::capture& capture) -> void;
+    auto declare_capture(const ast::capture_t& capture) -> void;
     // Collects `body` inside a scope of its own that declares `capture`
-    auto collect_captured(const ast::capture& capture, const ast::stmt_handle& body) -> void;
+    auto collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body) -> void;
 
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {

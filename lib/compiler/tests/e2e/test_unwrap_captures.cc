@@ -1,13 +1,12 @@
 #include <algorithm>
-#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
-#include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {

@@ -377,7 +377,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
 
     // `@export(f, .{ .name = "main" })` picks the entry point, and needn't be `pub`
     const auto exported_main{ctx_.exports.named("main")};
-    if (exported_main && exported_main->owner && &*exported_main->owner != &root_module) {
+    if (exported_main && exported_main->owner && exported_main->owner != root_module) {
         return make_sema_err("Only the root module can export a function as 'main'",
                              error::TYPE_MISMATCH);
     }
