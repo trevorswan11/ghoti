@@ -1,6 +1,9 @@
+#include <string>
 #include <string_view>
+#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -478,6 +481,50 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
         };
     )")};
     CHECK(exit_code == 42);
+}
+
+TEST_CASE("E2E: a parameterized impl only expands for its own module's type constructor") {
+    // `Option`'s ctor node can share its index with the prelude's `Flow`; the padding moves it
+    // across that index, and `Result(i32, i32)` instantiates `Flow` from inside an impl body
+    constexpr std::string_view source{R"(
+        const Result = fn(T: type, E: type): type {{ return union {{ ok: T, err: E }}; }};
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {{
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {{
+                return match (self) {{
+                    .ok => |&mut? v| builtin.Flow(&mut? T, E){{ .@"continue" = v }},
+                    .err => |e| builtin.Flow(&mut? T, E){{ .@"break" = e }},
+                }};
+            }};
+        }}
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {{
+            const From = E;
+            pub const from_residual = fn(r: E): @This() {{ return .{{ .err = r }}; }};
+        }}
+        {}
+        const Option = fn(T: type): type {{ return union {{ some: T, none: void }}; }};
+        impl(T: type) builtin.Unwrappable for Option(T) {{
+            const Output = T;
+            const Residual = void;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {{
+                return match (self) {{
+                    .some => |&mut? v| .{{ .@"continue" = v }},
+                    .none => .{{ .@"break" = {{}} }},
+                }};
+            }};
+        }}
+        const R = Result(i32, i32);
+        const h = fn(r: R): R {{ let v = r?; return R{{ .ok = v * 2 }}; }};
+    )"};
+    std::string                padding;
+    for (usize i{0}; i < 24; ++i) {
+        DYNAMIC_SECTION("padding " << i) {
+            std::ignore =
+                helpers::type_check_and_verify(fmt::format(fmt::runtime(source), padding));
+        }
+        padding += fmt::format("const pad{} = {};\n", i, i);
+    }
 }
 
 } // namespace ghoti::tests

@@ -12112,6 +12112,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
         .site              = root,
         .interface_type    = iface_type,
         .base_ctor_fn      = *base_ctor_fn,
+        .base_mod          = &*base_mod,
         .enclosing         = here,
         .body_scope_idx    = impl_type.get_symbol_table_idx(),
         .param_to_ctor_arg = std::move(mapping),
@@ -12128,7 +12129,9 @@ auto type_resolver::instantiate_impls_for(
     std::string_view                                          ctor_mangled) -> void {
     PROFILE_FUNCTION();
     for (auto* pimpl : ctx_.impls.param_records()) {
-        if (pimpl->base_ctor_fn.get_index() != base_ctor_fn.get_index() ||
+        // Node indices are per module, so the ctor's module has to match too
+        if (pimpl->base_mod.get() != &base_mod ||
+            pimpl->base_ctor_fn.get_index() != base_ctor_fn.get_index() ||
             pimpl->base_ctor_fn.get_kind() != base_ctor_fn.get_kind()) {
             continue;
         }
