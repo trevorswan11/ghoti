@@ -613,6 +613,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
     - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
 - **Breaking:** `builtin.Unwrappable.branch` is now `fn(&mut? self): Flow(&mut? Output, Residual)`, so it hands back a reference into the operand instead of a copy of its payload; an impl writes its success arm as `.some => |&mut? v| .{ .continue = v }`. `?` and `!` read through that reference and are otherwise unchanged
+- `if` and `while` unwrap any `builtin.Unwrappable` (`Option`, `Result`, ...) with a capture after the condition: `if (opt) |v| { ... } else { ... }`, `if (res) |v| v else |e| fallback(e)`, `while (it.next()) |item| : (i += 1) { ... } else |err| { ... }`
+    - The capture takes the same forms as a `match` arm: `|v|`, `|&v|`, `|&mut v|`, `|^v|`, `|^mut v|`, `|&mut? v|`, and `|_|`; `|&mut v|` writes into the operand, which must be a mutable place
+    - `else |e|` captures the residual by value; it is an error when the residual is `void` (an `Option`), and needs a capture after the condition
+    - An `Unwrappable` condition without a capture is an error (write `|_|` to ignore the payload), and a capture on any other condition (a `bool`, a pointer) is an error
+    - `while` calls `branch` before every iteration and runs its `else` when it breaks; a `break` statement skips the `else`, as before
+    - Everything works at compile time, including `if comptime (x) |v|`, `while comptime (x) |v|` (by-value captures), and constants such as `const X = if (OPT) |v| v else 0;`
 - Fixed: at compile time, a `?` that returned early from inside a `let` initializer, an expression statement, or a `return` made the whole call fail to evaluate
 - Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
 - Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:

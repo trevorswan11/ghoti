@@ -171,6 +171,19 @@ class const_eval {
 
     auto set_comptime_context(bool enabled) noexcept -> void { comptime_context_ = enabled; }
 
+    // What `branch(&operand)` of an `Unwrappable` operand returned: whether it was the `break`
+    // variant, its payload (a reference for `continue`, the residual for `break`), and the
+    // operand's own value
+    struct flow_eval {
+        bool        is_break{false};
+        const_value payload;
+        const_value operand;
+    };
+
+    // `eval_flow` from outside any evaluation, with a `continue` payload read by value
+    [[nodiscard]] auto try_eval_flow(ast::expr_handle operand, ast::node_id at)
+        -> stdx::option<flow_eval>;
+
     // The arm a folded matcher selects; none when the matcher does not fold or nothing matches
     [[nodiscard]] auto selected_match_arm(const ast::match_expr& match) -> stdx::opt_size;
 
@@ -392,6 +405,11 @@ class const_eval {
         -> stdx::option<const_value>;
     auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
     auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
+    [[nodiscard]] auto eval_flow(ast::expr_handle operand, ast::node_id at)
+        -> stdx::option<flow_eval>;
+    // Binds an `if`/`while` capture from a folded `Flow` in the current frame
+    [[nodiscard]] auto
+    bind_flow_capture(const ast::capture& capture, const flow_eval& flow, ast::node_id at) -> bool;
     auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
         -> bool;
 

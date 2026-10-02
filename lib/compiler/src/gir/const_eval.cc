@@ -2079,7 +2079,12 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::implicit_access_expr>(*item.member)};
                 const auto& member_name{
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
-                auto field_val{try_eval(item.value)};
+                // A reference or slice field keeps the view its initializer names
+                const auto field_proxy{table ? table->get_proxy_opt(member_name) : stdx::none};
+                auto       field_val{try_eval_for(
+                    item.value,
+                    field_proxy ? stdx::option<sema::type&>{st->type_at(field_proxy->index)}
+                                      : stdx::none)};
                 if (!field_val) { return stdx::none; }
                 if (table) {
                     if (const auto proxy{table->get_proxy_opt(member_name)}) {
@@ -2149,13 +2154,16 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     module_->ast.get_as<ast::implicit_access_expr>(*item.member)};
                 const auto& member_name{
                     module_->ast.get_as<ast::identifier_expr>(member_ident.member).name};
-                auto field_val{try_eval(item.value)};
-                if (!field_val) { return stdx::none; }
                 const auto proxy{
                     [&]() -> decltype(ctx_.registry.get(*table_idx).get_proxy_opt(member_name)) {
                         if (!table_idx) { return stdx::none; }
                         return ctx_.registry.get(*table_idx).get_proxy_opt(member_name);
                     }()};
+                // A reference or slice payload keeps the view its initializer names
+                auto field_val{try_eval_for(
+                    item.value,
+                    proxy ? stdx::option<sema::type&>{ut->type_at(proxy->index)} : stdx::none)};
+                if (!field_val) { return stdx::none; }
                 if (proxy) {
                     auto&             field_type{ut->type_at(proxy->index)};
                     const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
@@ -2989,71 +2997,117 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     return const_value::make_poison();
 }
 
-auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
-    -> stdx::option<const_value> {
+auto const_eval::eval_flow(ast::expr_handle operand_expr, ast::node_id at)
+    -> stdx::option<flow_eval> {
     PROFILE_FUNCTION();
-    const auto operand{try_eval(unwrap.operand)};
+    const auto operand{try_eval(operand_expr)};
     if (!operand) { return stdx::none; }
-
-    const auto operand_type{module_->get_sema_type_opt(unwrap.operand)};
+    const auto operand_type{module_->get_sema_type_opt(operand_expr)};
     if (!operand_type) { return stdx::none; }
-
     const auto shape{sema::unwrap_shape_of(ctx_, *operand_type)};
     if (!shape) { return stdx::none; }
 
-    // Evaluate `branch(self)` on the operand at compile time to obtain the Flow tagged union.
-    if (const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)}) {
-        auto& decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
-                       : shape->impl->enclosing ? *shape->impl->enclosing
-                                                : *module_};
-        if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(branch_m->decl)}) {
-            if (decl->value) {
-                if (const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
-                    // `branch(&mut? self)` refers to the operand's own place, or to a temporary
-                    auto self{eval_place(unwrap.operand)};
-                    if (!self && !call_stack_.empty()) { self = ref_to_temporary(*operand); }
-                    if (!self) { return stdx::none; }
-                    auto* const prev{module_.get()};
-                    if (&decl_mod != prev) { set_module(decl_mod); }
-                    std::vector<const_value> args{const_value{
-                        *self, ctx_.get_reference(sema::types::mut::POLY, *shape->operand_type)}};
-                    const auto               flow_val{eval_comptime_fn(id, *fn_expr, args)};
-                    if (&decl_mod != prev) { set_module(*prev); }
-                    if (flow_val) {
-                        // Inspect the active variant in the returned `Flow(&Output, Residual)`
-                        // union:
-                        // - @"continue": read the success payload through its reference
-                        // - @"break": produce a compile-time evaluation diagnostic
-                        if (const auto un{flow_val->as_opt<const_union>()}) {
-                            if (un->active_field == sema::builtin_impl::FLOW_CONTINUE) {
-                                if (un->payload.empty()) { return const_value{void_val{}}; }
-                                const auto& out{un->payload.front()};
-                                if (const auto ref{out.as_opt<const_ref>()}) {
-                                    return load_ref(*ref, id);
-                                }
-                                return out;
-                            }
-                            if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
-                                if (id.get_token_type() == syntax::token_type_t::QUESTION) {
-                                    const auto res{un->payload.empty() ? const_value{void_val{}}
-                                                                       : un->payload.front()};
-                                    current_error_val_ = res;
-                                    current_signal_    = eval_signal{
-                                           .kind         = eval_signal_kind::RETURN,
-                                           .target_label = stdx::none,
-                                           .value        = *operand,
-                                    };
-                                    return stdx::none;
-                                }
-                                return stdx::none;
-                            }
-                        }
-                    }
-                }
+    const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)};
+    if (!branch_m) { return stdx::none; }
+    auto&      decl_mod{branch_m->defining_mod   ? *branch_m->defining_mod
+                        : shape->impl->enclosing ? *shape->impl->enclosing
+                                                 : *module_};
+    const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(branch_m->decl)};
+    if (!decl || !decl->value) { return stdx::none; }
+    const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
+    if (!fn_expr) { return stdx::none; }
+
+    // `branch(&mut? self)` refers to the operand's own place, or to a temporary
+    auto self{eval_place(operand_expr)};
+    if (!self && !call_stack_.empty()) { self = ref_to_temporary(*operand); }
+    if (!self) { return stdx::none; }
+    auto* const prev{module_.get()};
+    if (&decl_mod != prev) { set_module(decl_mod); }
+    std::vector<const_value> args{
+        const_value{*self, ctx_.get_reference(sema::types::mut::POLY, *shape->operand_type)}};
+    const auto flow_val{eval_comptime_fn(at, *fn_expr, args)};
+    if (&decl_mod != prev) { set_module(*prev); }
+
+    const auto un{flow_val ? flow_val->as_opt<const_union>() : stdx::none};
+    if (!un) { return stdx::none; }
+    const auto payload{un->payload.empty() ? const_value{void_val{}} : un->payload.front()};
+    if (un->active_field == sema::builtin_impl::FLOW_CONTINUE) {
+        return flow_eval{.is_break = false, .payload = payload, .operand = *operand};
+    }
+    if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
+        return flow_eval{.is_break = true, .payload = payload, .operand = *operand};
+    }
+    return stdx::none;
+}
+
+auto const_eval::try_eval_flow(ast::expr_handle operand, ast::node_id at)
+    -> stdx::option<flow_eval> {
+    // Outside every frame, a frame of its own hosts any temporary the operand needs
+    const bool outermost{call_stack_.empty()};
+    if (outermost) { DISCARD(push_frame()); }
+    auto flow{eval_flow(operand, at)};
+    // A `continue` reference is read now, before the frame it may point into is gone
+    if (flow && !flow->is_break) {
+        if (const auto ref{flow->payload.as_opt<const_ref>()}) {
+            if (auto loaded{load_ref(*ref, at)}) {
+                flow->payload = std::move(*loaded);
+            } else {
+                flow.reset();
             }
         }
     }
+    if (outermost) {
+        call_stack_.pop_back();
+        current_signal_ = eval_signal{};
+        cond_unknown_   = false;
+    }
+    return flow;
+}
 
+auto const_eval::bind_flow_capture(const ast::capture& capture,
+                                   const flow_eval&    flow,
+                                   ast::node_id        at) -> bool {
+    const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(capture.payload)};
+    if (!ident || call_stack_.empty()) { return true; }
+    auto value{flow.payload};
+    if (const auto ref{value.as_opt<const_ref>()}) {
+        if (capture.modifier.is_value()) {
+            auto loaded{load_ref(*ref, at)};
+            if (!loaded) { return false; }
+            value = std::move(*loaded);
+        } else {
+            value = const_value{*ref, module_->get_sema_type_opt(*capture.payload)};
+        }
+    }
+    call_stack_.back().bindings.insert_or_assign(ident->name, std::move(value));
+    return true;
+}
+
+auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    if (const auto flow{eval_flow(unwrap.operand, id)}) {
+        if (!flow->is_break) {
+            if (const auto ref{flow->payload.as_opt<const_ref>()}) { return load_ref(*ref, id); }
+            return flow->payload;
+        }
+        if (id.get_token_type() == syntax::token_type_t::QUESTION) {
+            current_error_val_ = flow->payload;
+            current_signal_    = eval_signal{
+                   .kind         = eval_signal_kind::RETURN,
+                   .target_label = stdx::none,
+                   .value        = flow->operand,
+            };
+        }
+        return stdx::none;
+    }
+
+    const auto operand{try_eval(unwrap.operand)};
+    if (!operand) { return stdx::none; }
+    const auto operand_type{module_->get_sema_type_opt(unwrap.operand)};
+    if (!operand_type || !sema::unwrap_shape_of(ctx_, *operand_type)) { return stdx::none; }
+
+    // A union with no compiled `branch` still unwraps by its variant names
     const auto un{operand->as_opt<const_union>()};
     if (!un) { return stdx::none; }
 
@@ -5671,12 +5725,6 @@ auto const_eval::eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<
 auto const_eval::eval_if(ast::node_id id, const ast::if_expr& if_expr)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const auto cond{eval_if_condition(if_expr)};
-    if (!cond || !cond->is<bool>()) {
-        cond_unknown_ = true;
-        return stdx::none;
-    }
-
     const bool keeps_view{yields_view(id)};
     const auto eval_branch{[&](const ast::stmt_handle& branch) -> stdx::option<const_value> {
         if (const auto es{module_->ast.get_as_opt<ast::expr_stmt>(branch)}) {
@@ -5684,6 +5732,27 @@ auto const_eval::eval_if(ast::node_id id, const ast::if_expr& if_expr)
         }
         return eval_stmt(branch);
     }};
+
+    // `if (x) |v| A else |e| B`: `x.branch()` picks the arm and supplies its capture
+    if (if_expr.payload_capture) {
+        const auto flow{eval_flow(*if_expr.condition, id)};
+        if (!flow) {
+            cond_unknown_ = true;
+            return stdx::none;
+        }
+        if (!flow->is_break) {
+            if (!bind_flow_capture(*if_expr.payload_capture, *flow, id)) { return stdx::none; }
+            return eval_branch(if_expr.consequence);
+        }
+        if (if_expr.else_capture) { DISCARD(bind_flow_capture(*if_expr.else_capture, *flow, id)); }
+        return if_expr.alternate ? eval_branch(*if_expr.alternate) : stdx::none;
+    }
+
+    const auto cond{eval_if_condition(if_expr)};
+    if (!cond || !cond->is<bool>()) {
+        cond_unknown_ = true;
+        return stdx::none;
+    }
 
     if (cond->as<bool>()) {
         return eval_branch(if_expr.consequence);
@@ -5724,16 +5793,32 @@ auto const_eval::consume_loop_signal(stdx::option<std::string_view> own_label) -
     return kind || cond_unknown_ ? loop_step::EXIT : loop_step::NEXT;
 }
 
-auto const_eval::eval_while(ast::node_id, const ast::while_loop_expr& loop)
+auto const_eval::eval_while(ast::node_id id, const ast::while_loop_expr& loop)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
-        const auto cond{eval_loop_condition(loop.condition)};
-        if (!cond) { return stdx::none; }
-        // Running out of iterations (not a `break`) is what reaches the `else` branch
-        if (!*cond) { return loop.non_break ? eval_non_break(*loop.non_break) : stdx::none; }
+        // `while (x) |v|` runs `x.branch()` each iteration; its `break` ends the loop
+        if (loop.payload_capture) {
+            const auto flow{eval_flow(loop.condition, id)};
+            if (!flow) {
+                cond_unknown_ = true;
+                return stdx::none;
+            }
+            if (flow->is_break) {
+                if (loop.else_capture) {
+                    DISCARD(bind_flow_capture(*loop.else_capture, *flow, id));
+                }
+                return loop.non_break ? eval_non_break(*loop.non_break) : stdx::none;
+            }
+            if (!bind_flow_capture(*loop.payload_capture, *flow, id)) { return stdx::none; }
+        } else {
+            const auto cond{eval_loop_condition(loop.condition)};
+            if (!cond) { return stdx::none; }
+            // Running out of iterations (not a `break`) is what reaches the `else` branch
+            if (!*cond) { return loop.non_break ? eval_non_break(*loop.non_break) : stdx::none; }
+        }
 
         DISCARD(eval_stmt(loop.block));
         switch (consume_loop_signal(own_label)) {

@@ -31,12 +31,11 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
-
-namespace ghoti::sema { struct unwrap_info; } // namespace ghoti::sema
 
 namespace ghoti::gir {
 
@@ -331,6 +330,18 @@ class emitter {
                             syntax::token_type_t builtin,
                             bool                 check_lengths = true) -> void;
 
+    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
+    // and whether that is its `break` variant
+    struct flow_result {
+        value             flow_slot;
+        value             is_break;
+        sema::unwrap_info shape;
+    };
+    auto emit_flow(ast::expr_handle operand) -> flow_result;
+    // Binds an `if`/`while` payload capture to what the `continue` reference points at
+    auto bind_unwrap_payload(const ast::capture& capture, const flow_result& flow) -> void;
+    // Binds an `else |e|` capture to the `break` residual
+    auto bind_unwrap_residual(const ast::capture& capture, const flow_result& flow) -> void;
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value                    operand_addr,
                                  const sema::unwrap_info& shape,
