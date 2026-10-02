@@ -116,4 +116,13 @@ TEST_CASE("a negated suffixed literal can be its type's minimum") {
     )") == 0);
 }
 
+TEST_CASE("a comparison between untyped integer and float expressions folds") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            if (0 - 2 != 0.25) { return 1; }
+            return 2;
+        };
+    )") == 1);
+}
+
 } // namespace ghoti::tests

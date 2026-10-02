@@ -2675,9 +2675,16 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     // real type
     if (*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR ||
         sema::is_comptime_numeric(sema_type->get_kind())) {
-        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+        if (const auto cv{const_eval_.try_eval(id)}) {
+            // `0 - 2` peer-typed as an untyped float (`0 - 2 != 0.25`) is that float, not -2
+            if (sema_type->get_kind() == sema::type_kind::COMPTIME_FLOAT) {
+                if (const auto f{cv->int_as_float_opt()}) {
+                    return materialize_const(const_value{*f, *sema_type});
+                }
+            }
+            return materialize_const(*cv);
+        }
     }
-
     if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
         if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};

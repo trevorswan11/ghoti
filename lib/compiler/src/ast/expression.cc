@@ -953,6 +953,11 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
             }
+        } else if (!self_modifier.is_value()) {
+            // `fn(&)` would otherwise lose its modifier along with the missing name
+            return make_syntax_err("A `&` or `^` self parameter needs a name, like `&self`",
+                                   syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
+                                   modifier_start);
         }
 
         // The loop starts either on an LPAREN or COMMA
