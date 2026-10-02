@@ -133,6 +133,7 @@ enum class error : u8 {
     COMPILE_TIME_ONLY_VALUE,
     CALLCONV_REQUIRES_EXTERN_FN,
     ILLEGAL_POLY_MUTABILITY,
+    ILLEGAL_UNWRAP_CAPTURE,
 };
 
 using diagnostic  = diagnostic<error>;

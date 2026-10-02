@@ -5600,6 +5600,15 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     // `if comptime { a } else { b }`: both arms are live, each in its own evaluation context
     if (if_expr.is_evaluation_context_branch()) { return resolve_if_arms(id, if_expr); }
     TRY_RESOLVE(*if_expr.condition);
+    if (const auto poisoned{resolve_unwrap_captures(id,
+                                                    *if_expr.condition,
+                                                    if_expr.payload_capture,
+                                                    if_expr.else_capture,
+                                                    capture_scope(if_expr.payload_capture),
+                                                    "if",
+                                                    if_expr.comptime_condition)}) {
+        return last_type_.emplace(*poisoned);
+    }
 
     // The template pass has no real impl-param values; leave an `if comptime` unresolved here so
     // config-specific dead arms never poison. `resolve_param_impl_bodies` folds it per instance.
@@ -5665,6 +5674,108 @@ auto type_resolver::in_dead_arm() -> bool {
     });
 }
 
+auto type_resolver::capture_scope(const stdx::option<ast::capture>& capture) const
+    -> stdx::opt_size {
+    if (!capture || !capture->payload.is<ast::identifier_expr>()) { return stdx::none; }
+    return resolving_.sema_side_tables.capture_scopes[*capture->payload];
+}
+
+auto type_resolver::resolve_unwrap_captures(ast::node_id                      id,
+                                            ast::expr_handle                  condition,
+                                            const stdx::option<ast::capture>& payload,
+                                            const stdx::option<ast::capture>& residual,
+                                            stdx::opt_size                    payload_scope,
+                                            std::string_view                  construct,
+                                            bool comptime) -> stdx::option<type&> {
+    const auto cond_type{resolving_.get_sema_type_opt(condition)};
+    if (!cond_type || cond_type->is_poison()) { return stdx::none; }
+    const auto shape{unwrap_shape_of(ctx_, *cond_type)};
+    const auto cond_loc{resolving_.ast.location_of(condition)};
+    const auto cond_name{ctx_.type_display_name(*cond_type)};
+
+    if (!payload) {
+        if (!shape) { return stdx::none; }
+        return ctx_.poison_node(resolving_,
+                                id,
+                                fmt::format("`{0}` on a '{1}' unwraps it, so it needs a capture; "
+                                            "write `{0} (...) |_|` to ignore the payload",
+                                            construct,
+                                            cond_name),
+                                error::ILLEGAL_UNWRAP_CAPTURE,
+                                cond_loc);
+    }
+    if (!shape) {
+        return ctx_.poison_node(resolving_,
+                                id,
+                                fmt::format("A capture on `{}` needs a condition that "
+                                            "implements 'builtin.Unwrappable'; '{}' does not",
+                                            construct,
+                                            cond_name),
+                                error::ILLEGAL_UNWRAP_CAPTURE,
+                                cond_loc);
+    }
+
+    // A compile-time construct's capture is a value with no runtime place to refer to
+    if (comptime &&
+        (!payload->modifier.is_value() || (residual && !residual->modifier.is_value()))) {
+        return ctx_.poison_node(resolving_,
+                                id,
+                                fmt::format("A capture on `{} comptime` is a compile-time "
+                                            "value, so it takes no `&` or `^` modifier",
+                                            construct),
+                                error::ILLEGAL_UNWRAP_CAPTURE,
+                                resolving_.ast.location_of(*payload->payload));
+    }
+
+    // The same capture forms as a `match` arm; a temporary condition gets a slot of its own
+    const auto mutability{place_mutability(condition)};
+    auto       payload_type{resolve_capture_modifier(ctx_,
+                                               payload->modifier,
+                                               *shape->output_type,
+                                               mutability != types::mut::MUTABLE,
+                                               true,
+                                               "value",
+                                               resolving_.ast.location_of(*payload->payload),
+                                               mutability == types::mut::POLY)};
+    if (!payload_type) { return ctx_.poison_node(resolving_, id, std::move(payload_type).error()); }
+    if (payload->payload.is<ast::identifier_expr>()) {
+        resolving_.set_sema_type(*payload->payload, **payload_type);
+        if (payload_scope) {
+            const scope s{table_stack_, *payload_scope, table_idx_};
+            resolve_symbol_info(ast::identifier_handle{*payload->payload}, symbol_kind::VALUE);
+        }
+    }
+
+    if (!residual) { return stdx::none; }
+    const auto residual_loc{resolving_.ast.location_of(*residual->payload)};
+    if (shape->residual_is_void) {
+        return ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("'{}' carries nothing when it doesn't unwrap, so its `else` has no value "
+                        "to capture",
+                        cond_name),
+            error::ILLEGAL_UNWRAP_CAPTURE,
+            residual_loc);
+    }
+    if (!residual->modifier.is_value()) {
+        return ctx_.poison_node(resolving_,
+                                id,
+                                "An `else` capture is the residual itself, so it takes no `&` or "
+                                "`^` modifier",
+                                error::ILLEGAL_UNWRAP_CAPTURE,
+                                residual_loc);
+    }
+    if (residual->payload.is<ast::identifier_expr>()) {
+        resolving_.set_sema_type(*residual->payload, *shape->residual_type);
+        if (const auto residual_scope{capture_scope(residual)}) {
+            const scope s{table_stack_, *residual_scope, table_idx_};
+            resolve_symbol_info(ast::identifier_handle{*residual->payload}, symbol_kind::VALUE);
+        }
+    }
+    return stdx::none;
+}
+
 auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void {
     const mutating_context_guard branch_g{in_expr_branch_, true};
     const mutating_context_guard unused_g{arm_of_unused_,
@@ -5676,6 +5787,10 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         if (track_arms) {
             arm_g.emplace(enclosing_arms_,
                           enclosing_arm{.condition = if_expr.condition, .consequence = true});
+        }
+        stdx::option<scope> capture_s;
+        if (const auto idx{capture_scope(if_expr.payload_capture)}) {
+            capture_s.emplace(table_stack_, *idx, table_idx_);
         }
         TRY_RESOLVE(if_expr.consequence);
     }
@@ -5699,6 +5814,10 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         if (track_arms) {
             arm_g.emplace(enclosing_arms_,
                           enclosing_arm{.condition = if_expr.condition, .consequence = false});
+        }
+        stdx::option<scope> capture_s;
+        if (const auto idx{capture_scope(if_expr.else_capture)}) {
+            capture_s.emplace(table_stack_, *idx, table_idx_);
         }
         TRY_RESOLVE(*if_expr.alternate);
         const auto alt_value{arm_value(*if_expr.alternate, *last_type_)};
@@ -9730,6 +9849,15 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     auto& loop_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
+    if (const auto poisoned{resolve_unwrap_captures(id,
+                                                    while_loop.condition,
+                                                    while_loop.payload_capture,
+                                                    while_loop.else_capture,
+                                                    loop_type.get_symbol_table_idx(),
+                                                    "while",
+                                                    while_loop.is_comptime)}) {
+        return last_type_.emplace(*poisoned);
+    }
     {
         const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
@@ -9744,7 +9872,13 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
         }
     }
 
-    if (while_loop.non_break) { TRY_RESOLVE(*while_loop.non_break); }
+    if (while_loop.non_break) {
+        stdx::option<scope> capture_s;
+        if (const auto idx{capture_scope(while_loop.else_capture)}) {
+            capture_s.emplace(table_stack_, *idx, table_idx_);
+        }
+        TRY_RESOLVE(*while_loop.non_break);
+    }
     resolving_.set_sema_type(
         id, loop_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : loop_type);
     last_type_.emplace(resolving_.get_sema_type(id));
