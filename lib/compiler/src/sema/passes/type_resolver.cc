@@ -3373,7 +3373,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         // Only a bare `@builtin(...)` callee is a call of that builtin, not `@builtin.x(...)`
         const mutating_context_guard callee_g{resolving_callee_,
                                               call.function.is<ast::identifier_expr>()};
+        const bool                   dot_callee{call.function.is<ast::dot_expr>() &&
+                              callee_dots_.insert(call.function.get_index()).second};
         resolve(call.function);
+        if (dot_callee) { callee_dots_.erase(call.function.get_index()); }
     }
     auto& callee_type{*last_type_.take()};
     if (callee_type.is_poison()) {
@@ -6914,6 +6917,18 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         resolve_structural_access(object_type, dot.member, resolving_.ast.location_of(dot.object))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
+    }
+
+    // A `dyn` method has no value apart from a call through the vtable
+    if (unwrap_ref(object_type).get_data().template is<types::dyn_t>() &&
+        !callee_dots_.contains(id.get_index())) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("`{}` is a method of a `dyn` value, so it can only be called",
+                        resolving_.ast.get_as<ast::identifier_expr>(dot.member).name),
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(dot.member)));
     }
 
     // An `impl`-attached method: pin the call target so the emitter names it the same way

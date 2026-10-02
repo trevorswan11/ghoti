@@ -2709,6 +2709,14 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
             return fold_compile_time_only(
                 id, "a comparison between types must be known at compile time", *sema_type);
         }
+
+        // `void` has a single value, so its operands are evaluated only for their effects
+        if (lhs_ty && rhs_ty && lhs_ty->get_kind() == sema::type_kind::VOID_ &&
+            rhs_ty->get_kind() == sema::type_kind::VOID_) {
+            DISCARD(emit_expression(binary.lhs));
+            DISCARD(emit_expression(binary.rhs));
+            return value{*kind_opt == instruction_kind::EQ, *sema_type};
+        }
     }
 
     // Two concrete numbers of different types are converted to their peer type first
@@ -4410,7 +4418,14 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         const auto member_ident{active_ast().get_as<ast::identifier_expr>(imp_call->member)};
         callee_name.emplace(std::string{member_ident.name});
     } else if (const auto fn_expr{active_ast().get_as_opt<ast::function_expr>(call.function)}) {
-        callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
+        // A capturing literal called on the spot passes its environment like a closure binding
+        if (const auto fn_ty{active_mod().get_sema_type_opt(call.function)};
+            fn_ty && fn_ty->get_kind() == sema::type_kind::CLOSURE) {
+            is_closure_ident_call = true;
+            callee_name.emplace(fmt::format("closure{}", fn_ty->get_symbol_table_idx()));
+        } else {
+            callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
+        }
     } else {
         const auto callee_val{emit_expression(call.function)};
         if (callee_val.type && (callee_val.type->get_kind() == sema::type_kind::FUNCTION ||

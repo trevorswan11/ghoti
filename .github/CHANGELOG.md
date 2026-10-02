@@ -629,11 +629,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
     - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
 - Fixed: a parameterized `impl` could expand for a type constructor from another module (such as the prelude's `builtin.Flow`) whose declaration happened to sit at the same position as its own, so unrelated edits made errors like "Cannot take a reference to an already-reference-typed value" appear inside the `impl`
-- Fixed four compiler crashes:
+- Fixed seven compiler crashes:
     - an array or struct field of type `void` (`[3]void`, `struct { a: void, ... }`); it now takes no space
     - a module constant referring to a literal (`const N = &22;`, `const P = ^@as(i32, 7);`) when read at runtime
     - an array literal whose element type is `noreturn` (`[3]noreturn{...}`), which is now an error like any other `noreturn` slot
     - a member of a method reference (`let make = S.make; make.item`), which resolved against the method's return type; it is now an error
+    - calling a capturing function literal where it is written (`fn(x: i32): i32 { return x + offset; }(5)`)
+    - comparing two `void` values (`s.a == {}`), which now folds to `true`
+    - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

@@ -783,8 +783,10 @@ class type_resolver {
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
-    bool in_expr_branch_{false};
-    bool arm_of_unused_{false};
+    // `a.b` nodes being resolved as the function of a call, so a `dyn` method is called, not read
+    ankerl::unordered_dense::set<usize> callee_dots_;
+    bool                                in_expr_branch_{false};
+    bool                                arm_of_unused_{false};
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.
     ankerl::unordered_dense::set<usize> unused_value_nodes_;

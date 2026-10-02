@@ -632,4 +632,15 @@ TEST_CASE("a member of a method reference is an error, not its return type's mem
                           sema::error::TYPE_MISMATCH));
 }
 
+TEST_CASE("a `dyn` method that isn't called is an error, not a crash") {
+    CHECK(helpers::raised(R"(
+        const Vec = interface { pub const x = fn(&self): i32; };
+        const P = struct { a: i32 };
+        impl Vec for P { pub const x = fn(&self): i32 { return self.a; }; }
+        const norm = fn(v: &dyn Vec): i32 { return v.x + 1; };
+        pub const main = fn(): i32 { let p = P{ .a = 4 }; return norm(&p); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
 } // namespace ghoti::tests

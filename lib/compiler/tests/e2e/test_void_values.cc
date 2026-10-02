@@ -68,4 +68,16 @@ TEST_CASE("arrays and struct fields of void take no space and still compile") {
     )") == 3 + 4 + 3 + 2 + 0 + 4);
 }
 
+TEST_CASE("comparing two void values folds to their single value") {
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { a: void, b: i32 };
+        pub const main = fn(): i32 {
+            let s: S = .{ .a = {}, .b = 3 };
+            let same = s.a == {};
+            let differ = s.a != {};
+            return @as(i32, @intFromBool(same)) * 10 + @as(i32, @intFromBool(differ));
+        };
+    )") == 10);
+}
+
 } // namespace ghoti::tests
