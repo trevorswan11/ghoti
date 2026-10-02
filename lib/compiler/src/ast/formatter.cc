@@ -848,6 +848,15 @@ auto formatter::visit(node_id, const enum_expr& node) -> syntax::doc_id {
     return format_enum(node);
 }
 
+auto formatter::format_capture(const capture& capture, bool trailing_space) -> syntax::doc_id {
+    return doc_manager_.concat({
+        doc_manager_.text("|"),
+        doc_manager_.text(modifier_prefix(capture.modifier)),
+        format(capture.payload),
+        doc_manager_.text(trailing_space ? "| " : "|"),
+    });
+}
+
 auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> iterables;
     iterables.reserve(node.iterables.size());
@@ -967,6 +976,7 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
                 ? doc_manager_.concat(
                       {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
                 : doc_manager_.nil(),
+            n.payload_capture ? format_capture(*n.payload_capture, true) : doc_manager_.nil(),
             n.alternate ? format(n.consequence) : tail_clause(n.consequence),
         });
     }};
@@ -997,12 +1007,18 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
         const auto* next{es && ast_.get_as_opt<if_expr>(es->expression)
                              ? &ast_.get_as<if_expr>(es->expression)
                              : nullptr};
-        if (next) {
+        // `else |e| if ...` keeps its capture, so it isn't flattened into an `else if` arm
+        if (next && !cur->else_capture) {
             push_arm(doc_manager_.concat({doc_manager_.text("else "), head_clause(*next)}),
                      next->consequence);
             cur = next;
         } else {
-            push_arm(doc_manager_.concat({doc_manager_.text("else "), tail_clause(alt)}), alt);
+            push_arm(
+                doc_manager_.concat({doc_manager_.text("else "),
+                                     cur->else_capture ? format_capture(*cur->else_capture, true)
+                                                       : doc_manager_.nil(),
+                                     tail_clause(alt)}),
+                alt);
             break;
         }
     }
@@ -1285,6 +1301,9 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
         doc_manager_.text(node.is_comptime ? "while comptime (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
+        node.payload_capture
+            ? doc_manager_.concat({doc_manager_.text(" "), format_capture(*node.payload_capture)})
+            : doc_manager_.nil(),
         node.continuation
             ? doc_manager_.concat(
                   {doc_manager_.text(" : ("), format(*node.continuation), doc_manager_.text(")")})
@@ -1292,7 +1311,10 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
         doc_manager_.text(" "),
         format(node.block),
         node.non_break
-            ? doc_manager_.concat({doc_manager_.text(" else "), tail_clause(*node.non_break)})
+            ? doc_manager_.concat({doc_manager_.text(" else "),
+                                   node.else_capture ? format_capture(*node.else_capture, true)
+                                                     : doc_manager_.nil(),
+                                   tail_clause(*node.non_break)})
             : doc_manager_.nil(),
     });
 }

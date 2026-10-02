@@ -393,6 +393,8 @@ auto dumper::visit(node_id, const if_expr& if_expr) -> void {
         fmt::print(out_, "{}Condition: ", indent_.current_branch());
         dump(*if_expr.condition);
     }
+    dump_capture("Payload Capture", if_expr.payload_capture);
+    dump_capture("Else Capture", if_expr.else_capture);
 
     const auto has_alternate{if_expr.alternate.has_value()};
     {
@@ -884,6 +886,8 @@ auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
         dump(while_expr.condition);
     }
 
+    dump_capture("Payload Capture", while_expr.payload_capture);
+    dump_capture("Else Capture", while_expr.else_capture);
     if (while_expr.continuation) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Continuation: ", indent_.current_branch());

@@ -113,4 +113,21 @@ TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
             "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
 }
 
+TEST_CASE("Malformed `if` / `while` captures") {
+    helpers::test_parser_fail(
+        "if (a) {} else |e| {};",
+        syntax::diagnostic{"An `else` capture needs a payload capture after the condition",
+                           syntax::error::ILLEGAL_CAPTURE,
+                           std::pair{0UZ, 10UZ}});
+    helpers::test_parser_fail(
+        "while (a) {} else |e| {};",
+        syntax::diagnostic{"An `else` capture needs a payload capture after the condition",
+                           syntax::error::ILLEGAL_CAPTURE,
+                           std::pair{0UZ, 13UZ}});
+    helpers::test_parser_fail("if (a) |&mut _| {};",
+                              syntax::diagnostic{"A discarded capture `_` can't take a modifier",
+                                                 syntax::error::ILLEGAL_CAPTURE,
+                                                 std::pair{0UZ, 13UZ}});
+}
+
 } // namespace ghoti::tests

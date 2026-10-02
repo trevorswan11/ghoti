@@ -129,11 +129,14 @@ struct enum_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// `|v|`, `|&mut v|`, or `|_|`: a name a construct binds the value it hands to its body
+struct capture {
+    type_modifier            modifier;
+    discardable_ident_handle payload;
+};
+
 struct for_loop_expr {
-    struct capture {
-        type_modifier            modifier;
-        discardable_ident_handle payload;
-    };
+    using capture = ast::capture;
 
     std::vector<expr_handle>  iterables;
     std::vector<capture>      captures;
@@ -245,6 +248,8 @@ struct if_expr {
     stdx::option<expr_handle> condition; // absent only for `if comptime { ... }`
     stmt_handle               consequence;
     stdx::option<stmt_handle> alternate;
+    stdx::option<capture>     payload_capture{}; // `if (x) |v|`: an unwrapped payload
+    stdx::option<capture>     else_capture{};    // `else |e|`: the residual
 
     // `if comptime a else b`: `a` under compile-time evaluation, `b` at runtime
     [[nodiscard]] auto is_evaluation_context_branch() const noexcept -> bool {
@@ -536,6 +541,8 @@ struct while_loop_expr {
     block_handle              block;
     stdx::option<stmt_handle> non_break;
     bool                      is_comptime{false}; // `while comptime (...)`
+    stdx::option<capture>     payload_capture{};  // `while (x) |v|`: an unwrapped payload
+    stdx::option<capture>     else_capture{};     // `else |e|`: the residual that ended it
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

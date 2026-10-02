@@ -295,12 +295,38 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     collecting_.set_sema_type(id, *last_type_);
 }
 
+auto symbol_collector::declare_capture(const ast::capture& capture) -> void {
+    if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
+        collecting_.add_identifier_position(*capture.payload);
+        try_declare<symbols::match_capture>(ident->name, capture.payload);
+    }
+}
+
+auto symbol_collector::collect_captured(const ast::capture& capture, const ast::stmt_handle& body)
+    -> void {
+    const auto  new_idx{ctx_.registry.create()};
+    const scope s{table_stack_, new_idx, table_idx_};
+    declare_capture(capture);
+    collecting_.sema_side_tables.capture_scopes[*capture.payload].emplace(new_idx);
+    collect(body);
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::if_expr& if_expr) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
     if (if_expr.condition) { collect(*if_expr.condition); }
-    collect(if_expr.consequence);
-    if (if_expr.alternate) { collect(*if_expr.alternate); }
+    if (if_expr.payload_capture) {
+        collect_captured(*if_expr.payload_capture, if_expr.consequence);
+    } else {
+        collect(if_expr.consequence);
+    }
+    if (if_expr.alternate) {
+        if (if_expr.else_capture) {
+            collect_captured(*if_expr.else_capture, *if_expr.alternate);
+        } else {
+            collect(*if_expr.alternate);
+        }
+    }
 }
 
 auto symbol_collector::visit(ast::node_id, const ast::index_expr& index) -> void {
@@ -527,10 +553,18 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
         const scope s{table_stack_, new_idx, table_idx_};
 
         const default_counter::guard g_loop{in_loop_scope_};
+        // The payload capture is the loop body's own, so it lives in the body's scope
+        if (while_expr.payload_capture) { declare_capture(*while_expr.payload_capture); }
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(while_expr.block)};
         for (const auto& stmt : block) { collect(stmt); }
     }
-    if (while_expr.non_break) { collect(*while_expr.non_break); }
+    if (while_expr.non_break) {
+        if (while_expr.else_capture) {
+            collect_captured(*while_expr.else_capture, *while_expr.non_break);
+        } else {
+            collect(*while_expr.non_break);
+        }
+    }
 
     last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
     last_type_->set_symbol_table_idx(new_idx);

@@ -149,6 +149,11 @@ class symbol_collector {
         return !aggregate_table_stack_.empty() && aggregate_table_stack_.back().first == table_idx_;
     }
 
+    // Declares a named capture into the current scope
+    auto declare_capture(const ast::capture& capture) -> void;
+    // Collects `body` inside a scope of its own that declares `capture`
+    auto collect_captured(const ast::capture& capture, const ast::stmt_handle& body) -> void;
+
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};

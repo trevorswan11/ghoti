@@ -111,6 +111,9 @@ class formatter {
     [[nodiscard]] auto with_attributes(const stdx::option<attribute_list>& attributes,
                                        syntax::doc_id                      head) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
+    // `|v|` / `|&mut v|`, with a trailing space when a body follows on the same line
+    [[nodiscard]] auto format_capture(const capture& capture, bool trailing_space = false)
+        -> syntax::doc_id;
 
     auto visit(node_id, const array_expr&) -> syntax::doc_id;
     auto visit(node_id, const asm_expr&) -> syntax::doc_id;

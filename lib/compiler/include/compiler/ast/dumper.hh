@@ -118,6 +118,20 @@ class dumper {
         }
     }
 
+    auto dump_capture(std::string_view label, const stdx::option<capture>& capture) -> void {
+        if (!capture) { return; }
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
+        if (capture->payload.is<ast::discarded>()) {
+            fmt::println(out_, "<discarded>");
+        } else {
+            fmt::println(out_,
+                         "{} (modifier: {})",
+                         ast_.get_as<identifier_expr>(*capture->payload),
+                         capture->modifier);
+        }
+    }
+
     auto dump_attributes(const stdx::option<attribute_list>& attributes) -> void {
         if (!attributes) { return; }
         const indent::guard g{indent_, false};

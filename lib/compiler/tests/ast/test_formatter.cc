@@ -91,6 +91,36 @@ TEST_CASE("formatter round-trips `mut?` types, operators, and captures") {
     }
 }
 
+TEST_CASE("formatter round-trips `if` / `while` unwrap captures") {
+    for (const std::string_view src : {
+             R"(if (opt) |v| {
+    use(v);
+} else {
+    none();
+}
+)",
+             R"(if (res) |&mut v| {
+    ok(v);
+} else |e| {
+    log(e);
+}
+)",
+             R"(const n = if (parse(s)) |v| v else |_| 0;
+)",
+             R"(while (it.next()) |item| : (i += 1) {
+    use(item);
+} else |err| {
+    log(err);
+}
+)",
+             R"(if (a) |x| {} else |e| if (b) |y| {} else {}
+)",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter round-trips postfix unwrap operators") {
     CHECK(format_source("a?;") == "a?;\n");
     CHECK(format_source("a!;") == "a!;\n");
