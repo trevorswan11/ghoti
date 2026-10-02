@@ -115,17 +115,54 @@ a.b;   // Syntactic sugar
 			You can get a pointer to an object using the <code>^</code> prefix operator
 			<ul>
 				<li><code>^</code>: Returns a constant pointer to the object</li>
-				<li><code>^mut</code>: Returns a constant pointer to the object</li>
+				<li><code>^mut</code>: Returns a mutable pointer to the object</li>
 			</ul>
 		</li>
 		<li>
 			You can get a reference to an object using the <code>&amp;</code> prefix operator
 			<ul>
 				<li><code>&amp;</code>: Returns a constant reference to the object</li>
-				<li><code>&amp;mut</code>: Returns a constant reference to the object</li>
+				<li><code>&amp;mut</code>: Returns a mutable reference to the object</li>
 			</ul>
 		</li>
 	</ul>
+	<h2>Caller-chosen Mutability: <code>mut?</code></h2>
+	<ul>
+		<li>
+			<code>&amp;mut?</code>, <code>^mut?</code>, <code>[]mut?</code>, and <code>[N]mut?</code> take their mutability from each call, so one function serves both mutable and immutable callers
+			<ul>
+				<li>A call is mutable only when every argument bound to a <code>mut?</code> parameter is mutable; its <code>mut?</code> result follows</li>
+			</ul>
+		</li>
+		<li>
+			Inside the function a <code>mut?</code> view can be read, narrowed (<code>&amp;mut? self.items[i]</code>), or passed on to another <code>mut?</code> function, but never written through
+			<ul>
+				<li><code>&amp;mut? x</code> needs a place reached through a <code>mut?</code> parameter, so a result can't point at the function's own locals</li>
+			</ul>
+		</li>
+		<li>
+			Only a function's parameters, result, and locals can use <code>mut?</code>, and its result needs a <code>mut?</code> parameter to take its mutability from
+			<ul>
+				<li>An interface's <code>mut?</code> method must be implemented with the same <code>mut?</code> signature, and can't be called through <code>dyn</code></li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const List = struct {
+    items: [4]mut i32,
+    pub const at = fn(&mut? self, i: usize): &mut? i32 {
+        return &mut? self.items[i];
+    };
+};
+
+let mut a: List = ...;
+a.at(0) = 5;            // a is mutable, so at returns &mut i32
+
+let b: List = ...;
+let x = b.at(0);        // b is not, so at returns &i32` }
+		</code>
+	</pre>
 	<h2>Type Introspection</h2>
 	<ul>
 		<li>You can get the type of a value by using the <code>{ "@TypeOf" }</code> builtin</li>

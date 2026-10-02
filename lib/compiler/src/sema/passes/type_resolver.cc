@@ -8080,6 +8080,18 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                     resolving_.ast.location_of(*pattern)));
             }
 
+            // `.a .b` (a missing comma) parses as a member of the variant `.a`
+            if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(*pattern)};
+                dot && resolving_.ast.get_as_opt<ast::implicit_access_expr>(dot->object)) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "A variant pattern has no members; separate patterns with a "
+                                     "comma (`.a, .b`)",
+                                     error::ILLEGAL_MATCH_PATTERN,
+                                     resolving_.ast.location_of(*pattern)));
+            }
+
             if (range && (!range->lhs || !range->rhs)) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_,
@@ -11045,9 +11057,11 @@ auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const
     if (!ctx_.reported_deprecations.insert(site).second) { return; }
 
     std::string message{fmt::format("'{}' is deprecated", sym.get_name())};
-    if (!deprecation->args.empty()) {
-        message += fmt::format(": {}",
-                               owner.ast.get_as<ast::string_expr>(deprecation->args.front()).value);
+    // A message that isn't a string literal was already reported at the attribute itself
+    if (const auto note{deprecation->args.empty()
+                            ? stdx::none
+                            : owner.ast.get_as_opt<ast::string_expr>(deprecation->args.front())}) {
+        message += fmt::format(": {}", note->value);
     }
     if (ctx_.deprecated_policy == deprecation_policy::DENY) {
         ctx_.diags.emplace_back(std::move(message), error::DEPRECATED_USE, loc);

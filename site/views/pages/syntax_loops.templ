@@ -62,11 +62,20 @@ for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures 
 			</ul>
 		</li>
 		<li>The loop's body cannot be empty unless there is a continuation clause</li>
+		<li>
+			A condition that implements <code>builtin.Unwrappable</code> is unwrapped by a capture after its parentheses, like an <code>if</code>
+			<ul>
+				<li>The condition is evaluated and unwrapped before every iteration, and the loop ends when it doesn't unwrap</li>
+				<li><code>{ "else |e|" }</code> binds the residual that ended the loop; a <code>break</code> skips the <code>else</code> as usual</li>
+			</ul>
+		</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
 			{ `while (true) : (i += 1) {a;}; // (i += 1) is evaluated evaluated in between loop iterations
-while (true) {a;} else return b; // The return statement only runs if the loop body does not break` }
+while (true) {a;} else return b; // The return statement only runs if the loop body does not break
+while (it.next()) |item| : (i += 1) { use(item); } // Runs until next() returns .none
+while (reader.read(buf)) |n| { consume(buf[0..n]); } else |err| { log(err); }` }
 		</code>
 	</pre>
 	<h2>Important Considerations</h2>

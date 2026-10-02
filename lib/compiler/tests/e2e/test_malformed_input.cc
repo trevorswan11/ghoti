@@ -600,4 +600,20 @@ TEST_CASE("a generic function cannot be C-variadic") {
                           sema::error::MALFORMED_PACK_USE));
 }
 
+TEST_CASE("match patterns missing a comma are an error, not a member access") {
+    CHECK(helpers::raised(R"(
+        const E = enum { a, b };
+        pub const main = fn(): i32 { let e: E = .a; return match (e) { .a .b => 1, _ => 2 }; };
+    )",
+                          sema::error::ILLEGAL_MATCH_PATTERN));
+}
+
+TEST_CASE("a `deprecated` message that isn't a string is reported, not a crash at its use") {
+    CHECK(helpers::raised(R"(
+        @[deprecated(-1)] const stale = fn(): i32 { return 1; };
+        pub const main = fn(): i32 { return stale(); };
+    )",
+                          sema::error::ILLEGAL_ATTRIBUTE));
+}
+
 } // namespace ghoti::tests

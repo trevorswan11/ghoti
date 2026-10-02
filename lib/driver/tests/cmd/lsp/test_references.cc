@@ -182,4 +182,41 @@ TEST_CASE("definition_location_at returns none off any identifier") {
     CHECK_FALSE(lsp::definition_location_at(*module, {0, 0})); // `pub`, not an identifier
 }
 
+TEST_CASE("definition_location_at resolves `if` / `while` unwrap captures to their declarations") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_unwrap_captures.gh"};
+    CHECK(loader.add(path, R"(const R = union { ok: i32, err: u8 };
+impl builtin.Unwrappable for R {
+    const Output = i32;
+    const Residual = u8;
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
+        return match (self) { .ok => |&mut? v| .{ .@"continue" = v }, .err => |e| .{ .@"break" = e } };
+    };
+}
+pub const f = fn(r: R): i32 {
+    if (r) |val| { return val; } else |bad| { return @as(i32, bad); }
+};
+pub const g = fn(r: R): i32 {
+    while (r) |item| { return item; }
+    return 0;
+};
+)"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    // `val` is declared at column 12 of line 9 and used at column 27
+    const auto val_def{UNWRAP(lsp::definition_location_at(*module, {9, 27}))};
+    CHECK(val_def.span.start.line == 9);
+    CHECK(val_def.span.start.column == 12);
+    // `bad` is declared at column 39 and used at column 63
+    const auto bad_def{UNWRAP(lsp::definition_location_at(*module, {9, 63}))};
+    CHECK(bad_def.span.start.line == 9);
+    CHECK(bad_def.span.start.column == 39);
+    // `item` is declared at column 15 of line 12 and used at column 31
+    const auto item_def{UNWRAP(lsp::definition_location_at(*module, {12, 31}))};
+    CHECK(item_def.span.start.line == 12);
+    CHECK(item_def.span.start.column == 15);
+}
+
 } // namespace ghoti::tests
