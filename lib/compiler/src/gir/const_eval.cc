@@ -1009,8 +1009,9 @@ auto const_eval::resolve_deferred_array(const sema::types::deferred_array& defer
     if (underlying.get_data().is<sema::types::deferred_array>()) { return stdx::none; }
 
     const auto len{cv->as_uint_opt().value_or(0)};
-    const auto mutability{array.mut_elements ? sema::types::mut::MUTABLE
-                                             : sema::types::mut::CONSTANT};
+    const auto mutability{array.poly_elements  ? sema::types::mut::POLY
+                          : array.mut_elements ? sema::types::mut::MUTABLE
+                                               : sema::types::mut::CONSTANT};
     return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), underlying);
 }
 
@@ -1160,6 +1161,12 @@ namespace {
 } // namespace
 
 auto const_eval::push_frame() -> call_frame& { return push_frame(call_frame{}); }
+
+auto const_eval::yields_view(ast::node_id id) const -> bool {
+    const auto type{module_->get_sema_type_opt(id)};
+    return type && (type->get_kind() == sema::type_kind::REFERENCE ||
+                    type->get_kind() == sema::type_kind::SLICE);
+}
 
 auto const_eval::push_frame(call_frame frame) -> call_frame& {
     frame.id = next_frame_id_++;
@@ -1472,6 +1479,11 @@ auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
     if (const auto place{eval_place(target)}) { return store_ref(*place, std::move(val)); }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(target)}) {
+        // A reference that isn't a known place can't be followed; rebinding it would be wrong
+        if (const auto type{module_->get_sema_type_opt(target)};
+            type && type->get_kind() == sema::type_kind::REFERENCE) {
+            return false;
+        }
         return set_local_binding(ident->name, std::move(val));
     }
 
@@ -1688,11 +1700,15 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
         const auto& t_opt{rhs_val->as<stdx::option<sema::type&>>()};
         if (t_opt) {
             using syntax::token_type_t;
-            const bool is_mut{id.get_token_type() == token_type_t::CARET_MUT ||
-                              id.get_token_type() == token_type_t::AND_MUT};
-            const bool is_ptr{id.get_token_type() == token_type_t::CARET ||
-                              id.get_token_type() == token_type_t::CARET_MUT};
-            const auto mutability{is_mut ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
+            const auto token{id.get_token_type()};
+            const bool is_mut{token == token_type_t::CARET_MUT || token == token_type_t::AND_MUT};
+            const bool is_poly{token == token_type_t::CARET_MUT_POLY ||
+                               token == token_type_t::AND_MUT_POLY};
+            const bool is_ptr{token == token_type_t::CARET || token == token_type_t::CARET_MUT ||
+                              token == token_type_t::CARET_MUT_POLY};
+            const auto mutability{is_poly  ? sema::types::mut::POLY
+                                  : is_mut ? sema::types::mut::MUTABLE
+                                           : sema::types::mut::CONSTANT};
             auto&      constructed{is_ptr ? ctx_.get_pointer(mutability, *t_opt)
                                           : ctx_.get_reference(mutability, *t_opt)};
             return const_value{constructed};
@@ -1745,6 +1761,13 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                             val_data.is<ast::union_expr>()) {
                             return stdx::none;
                         }
+                    }
+                    // A runtime `let mut` changes after its initializer, so its address can't
+                    // carry that value
+                    if (decl->has_modifier(ast::decl_modifiers::MUT) &&
+                        !decl->has_modifier(ast::decl_modifiers::COMPTIME) &&
+                        owner_table != module_->root_table_idx) {
+                        return stdx::none;
                     }
                     // A plain scalar/aggregate `const` (module-scope or local): carry its own
                     // folded value as the pointee. A module-scope decl also gets a real
@@ -2907,11 +2930,12 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
         return stdx::none;
     }
 
+    const bool keeps_view{yields_view(id)};
     const auto eval_dispatch = [&](const ast::stmt_handle& dispatch) -> stdx::option<const_value> {
         return module_->ast[*dispatch].visit(
             [&](const auto&) -> stdx::option<const_value> { return eval_stmt(dispatch); },
             [&](const ast::expr_stmt& data) -> stdx::option<const_value> {
-                return try_eval(data.expression);
+                return keeps_view ? try_eval_raw(data.expression) : try_eval(data.expression);
             });
     };
 
@@ -3958,12 +3982,13 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     obj_val        = try_eval(dot->object);
                     obj_is_type_ns = obj_val && obj_val->is<stdx::option<sema::type&>>();
                 }
-                const auto callee_type{module_->get_sema_type_opt(call.function)};
-                const auto callee_fn{callee_type
-                                         ? callee_type->get_data().as_opt<sema::types::function>()
-                                         : stdx::none};
-                const bool receiver_bound{method_fn->self && dot && !obj_is_type_ns};
-                const auto param_type{[&](usize i) -> stdx::option<sema::type&> {
+                const auto              callee_type{module_->get_sema_type_opt(call.function)};
+                const auto              callee_fn{callee_type
+                                                      ? callee_type->get_data().as_opt<sema::types::function>()
+                                                      : stdx::none};
+                const bool              receiver_bound{method_fn->self && dot && !obj_is_type_ns};
+                stdx::option<const_ref> self_temporary;
+                const auto              param_type{[&](usize i) -> stdx::option<sema::type&> {
                     if (!callee_fn || !callee_fn->has_self) { return stdx::none; }
                     const usize at{i + 1};
                     if (at >= callee_fn->params.size()) { return stdx::none; }
@@ -3991,6 +4016,10 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                             }
                         } else if (auto place{eval_place(dot->object)}) {
                             args.back() = const_value{std::move(*place), *self_type};
+                        } else {
+                            // A receiver with no place here works on a copy written back after
+                            self_temporary = ref_to_temporary(*obj_val);
+                            args.back()    = const_value{*self_temporary, *self_type};
                         }
                     }
                 }
@@ -4031,6 +4060,12 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 if (dot && method_fn->self && method_fn->self->modifier.is_mutable_ref() &&
                     !args.empty() && !args[0].is<const_ref>()) {
                     DISCARD(write_target(dot->object, args[0]));
+                }
+                if (self_temporary) {
+                    if (auto written{load_ref(*self_temporary, dot->object)};
+                        written && !written->is_poison()) {
+                        DISCARD(write_target(dot->object, std::move(*written)));
+                    }
                 }
                 const usize arg_offset{method_fn->self && dot && !obj_is_type_ns ? 1UZ : 0UZ};
                 for (usize a{0}; a < call.arguments.size() && a < method_fn->parameters.size();
@@ -5622,7 +5657,8 @@ auto const_eval::eval_if_condition(const ast::if_expr& if_expr) -> stdx::option<
                        ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
 }
 
-auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::option<const_value> {
+auto const_eval::eval_if(ast::node_id id, const ast::if_expr& if_expr)
+    -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto cond{eval_if_condition(if_expr)};
     if (!cond || !cond->is<bool>()) {
@@ -5630,9 +5666,10 @@ auto const_eval::eval_if(ast::node_id, const ast::if_expr& if_expr) -> stdx::opt
         return stdx::none;
     }
 
+    const bool keeps_view{yields_view(id)};
     const auto eval_branch{[&](const ast::stmt_handle& branch) -> stdx::option<const_value> {
         if (const auto es{module_->ast.get_as_opt<ast::expr_stmt>(branch)}) {
-            return try_eval(es->expression);
+            return keeps_view ? try_eval_raw(es->expression) : try_eval(es->expression);
         }
         return eval_stmt(branch);
     }};

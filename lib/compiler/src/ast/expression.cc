@@ -61,9 +61,16 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
     auto mut_elements{false};
+    auto poly_elements{false};
     if (parser.peek_token_is(syntax::token_type_t::MUT)) {
         parser.advance();
         mut_elements = true;
+        // `[]mut? T`
+        if (parser.peek_token_is(syntax::token_type_t::QUESTION)) {
+            parser.advance();
+            mut_elements  = false;
+            poly_elements = true;
+        }
     }
 
     const auto item_type{TRY(explicit_type::parse(parser, true))};
@@ -86,7 +93,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                            true,
                                            false,
                                            item_type,
-                                           std::vector<expr_handle>{});
+                                           std::vector<expr_handle>{},
+                                           poly_elements);
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -113,7 +121,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                        false,
                                        force_break,
                                        item_type,
-                                       std::move(items));
+                                       std::move(items),
+                                       poly_elements);
 }
 
 namespace {

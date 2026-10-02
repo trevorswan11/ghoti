@@ -115,6 +115,8 @@ enum class token_type_t : u8 {
     UNDERSCORE,
     AND_MUT,
     CARET_MUT,
+    AND_MUT_POLY,
+    CARET_MUT_POLY,
 
     FUNCTION,
     LET,

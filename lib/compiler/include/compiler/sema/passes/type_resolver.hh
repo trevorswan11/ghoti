@@ -122,6 +122,24 @@ class type_resolver {
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
     auto names_comptime_mut(ast::expr_handle expr) -> bool;
+    // The mutability of the place `expr` names: a `let mut` binding is mutable, a place reached
+    // through a pointer, reference, slice, or array has that container's mutability (`mut?`
+    // included), and anything else is constant
+    [[nodiscard]] auto place_mutability(ast::node_id expr) -> types::mutability_modifiers;
+    // A call's `mut?`: mutable only when every argument bound to a `mut?` parameter is
+    [[nodiscard]] auto call_mutability(const ast::call_expr&           call,
+                                       const types::function&          fn,
+                                       bool                            implicit_self,
+                                       gsl::span<const usize>          source_index,
+                                       gsl::span<const stdx::opt_size> pack_k)
+        -> types::mutability_modifiers;
+    // `t` with each `mut?` replaced by `m`
+    [[nodiscard]] auto substitute_poly(type& t, types::mutability_modifiers m) -> type&;
+    // A field or global annotated with `mut?`, which has no function to take its mutability from
+    auto reject_poly_storage(ast::explicit_type_id at) -> bool;
+    // `&mut? x` / `^mut? x` of a place that isn't reached through a `mut?` parameter
+    [[nodiscard]] auto reject_unrooted_poly(ast::node_id id, ast::expr_handle operand)
+        -> stdx::option<type&>;
 
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one

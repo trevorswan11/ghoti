@@ -67,6 +67,30 @@ TEST_CASE("formatter round-trips operator expressions") {
     CHECK(format_source("i += 1;") == "i += 1;\n");
 }
 
+TEST_CASE("formatter round-trips `mut?` types, operators, and captures") {
+    for (const std::string_view src : {
+             R"(const at = fn(&mut? self, i: usize): &mut? T {
+    return &mut? self.items[i];
+};
+)",
+             R"(const f = fn(s: []mut? u8, a: [4]mut? u8): ^mut? u8 {
+    return ^mut? s[0];
+};
+)",
+             R"(const F = fn(x: &mut? i32): &mut? i32;
+)",
+             R"(const g = fn(s: []mut? i32): void {
+    for (s) |&mut? e| {
+        _ = e;
+    }
+};
+)",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter round-trips postfix unwrap operators") {
     CHECK(format_source("a?;") == "a?;\n");
     CHECK(format_source("a!;") == "a!;\n");

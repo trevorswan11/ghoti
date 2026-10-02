@@ -142,6 +142,21 @@ TEST_CASE("a reference parameter returned from a call still names the caller's p
                30);
 }
 
+TEST_CASE("`&mut` of a runtime `let mut` doesn't fold to a copy of its initializer") {
+    CHECK(helpers::compile_and_run(R"(
+        const U = union { a: i32, b: void };
+        const payload = fn(u: &mut U): &mut i32 {
+            return match (u) { .a => |&mut v| v, .b => unreachable };
+        };
+        pub const main = fn(): i32 {
+            let mut u: U = .{ .a = 1 };
+            let p = payload(&mut u);
+            p = 41;
+            return match (u) { .a => |v| v + 1, .b => 0 };
+        };
+    )") == 42);
+}
+
 TEST_CASE("a compile-time reference to a callee's own local is an error") {
     helpers::expect_compile_error(R"(
         const leak = fn(): &i32 { let x: i32 = 1; return &x; };

@@ -216,10 +216,17 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
 
     // Try extending from length 1 up to the max operator size
     for (usize len{1}; len <= max_operator_length() && pos_ + len <= input_.size(); ++len) {
-        if (const auto op{get_operator_opt(stdx::string::substr(input_, pos_, len))}) {
-            matched_type = *op;
-            max_len      = len;
+        const auto candidate{stdx::string::substr(input_, pos_, len)};
+        const auto op{get_operator_opt(candidate)};
+        if (!op) { continue; }
+        // An operator ending in a word (`&mut`) can't cut a name short: `&mutex` is `&` `mutex`
+        const auto last{candidate.back()};
+        if ((is_alpha(last) || last == '_') && pos_ + len < input_.size()) {
+            const auto next{input_[pos_ + len]};
+            if (is_alnum(next) || next == '_') { continue; }
         }
+        matched_type = *op;
+        max_len      = len;
     }
 
     // We cannot greedily consume the lexer here since the next token instruction handles that

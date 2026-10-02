@@ -31,6 +31,7 @@ struct array_expr {
     bool                      items_force_break{false}; // trailing comma before `}`
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
+    bool                      poly_elements{false}; // `[]mut? T`: the function's `mut?`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

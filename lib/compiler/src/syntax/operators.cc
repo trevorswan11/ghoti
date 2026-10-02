@@ -45,6 +45,8 @@ constexpr auto ALL_OPERATORS{
                                                    operators::QUESTION,
                                                    operators::AND_MUT,
                                                    operators::CARET_MUT,
+                                                   operators::AND_MUT_POLY,
+                                                   operators::CARET_MUT_POLY,
                                                    operators::BW_AND,
                                                    operators::BW_AND_ASSIGN,
                                                    operators::BW_OR,

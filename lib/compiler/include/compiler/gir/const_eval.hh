@@ -259,6 +259,8 @@ class const_eval {
     [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
         -> stdx::option<sema::type&>;
 
+    // Whether `id`'s value is a reference or slice, which a branch hands on without reading
+    [[nodiscard]] auto yields_view(ast::node_id id) const -> bool;
     // `try_eval` without reading through a reference or slice to a compile-time place
     [[nodiscard]] auto try_eval_raw(ast::node_id id) -> stdx::option<const_value>;
     // The value `id` passes to a destination of type `dest`: a reference or slice destination

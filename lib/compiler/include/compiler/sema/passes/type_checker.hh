@@ -63,6 +63,11 @@ class type_checker {
                                            const type&                   val_t,
                                            const type&                   dest_t,
                                            stdx::option<source_location> loc) -> bool;
+    // As above for an argument bound to a parameter, which a `mut?` parameter relaxes
+    [[nodiscard]] auto is_arg_value_assignable(const gir::value&             val,
+                                               const type&                   val_t,
+                                               const type&                   param_t,
+                                               stdx::option<source_location> loc) -> bool;
 
   private:
     gir::module&                                            gir_mod_;

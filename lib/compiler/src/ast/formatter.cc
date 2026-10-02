@@ -67,6 +67,8 @@ auto modifier_prefix(type_modifier mod) -> std::string_view {
     case m::MUT_PTR:      return "^mut ";
     case m::VOLATILE:     return "volatile ";
     case m::MUT_VOLATILE: return "mut volatile ";
+    case m::POLY_REF:     return "&mut? ";
+    case m::POLY_PTR:     return "^mut? ";
     default:              UNREACHABLE("Unrecognized type modifier");
     }
 }
@@ -82,7 +84,9 @@ auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
     }
 }
 
+// A word operator (`&mut`, and `&mut?`) is spaced off its operand like a keyword
 [[nodiscard]] auto prefix_needs_gap(std::string_view op) -> bool {
+    if (op.ends_with("mut?")) { return true; }
     return !op.empty() && (std::isalnum(static_cast<u8>(op.back())) != 0);
 }
 
@@ -728,6 +732,7 @@ auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     if (node.null_terminated) { head.emplace_back(doc_manager_.text(":0")); }
     head.emplace_back(doc_manager_.text("]"));
     if (node.mut_elements) { head.emplace_back(doc_manager_.text("mut ")); }
+    if (node.poly_elements) { head.emplace_back(doc_manager_.text("mut? ")); }
     head.emplace_back(format(node.item_explicit_type));
     if (node.is_type_expr) { return doc_manager_.concat(std::move(head)); }
 
@@ -1655,7 +1660,9 @@ auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> s
                              node.dimension ? format(*node.dimension) : doc_manager_.nil(),
                              node.null_terminated ? doc_manager_.text(":0") : doc_manager_.nil(),
                              doc_manager_.text("]"),
-                             node.mut_elements ? doc_manager_.text("mut ") : doc_manager_.nil(),
+                             node.mut_elements    ? doc_manager_.text("mut ")
+                             : node.poly_elements ? doc_manager_.text("mut? ")
+                                                  : doc_manager_.nil(),
                              format(node.inner_explicit_type),
                          }));
 }

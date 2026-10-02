@@ -132,6 +132,7 @@ enum class error : u8 {
     TYPE_USED_AS_VALUE,
     COMPILE_TIME_ONLY_VALUE,
     CALLCONV_REQUIRES_EXTERN_FN,
+    ILLEGAL_POLY_MUTABILITY,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -607,11 +607,18 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
     - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
     - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
+- `mut?` lets one function serve both mutable and immutable callers: `&mut? T`, `^mut? T`, `[]mut? T`, and `[N]mut? T` take their mutability from the call
+    - `pub const at = fn(&mut? self, i: usize): &mut? T { return &mut? self.items[i]; };` returns `&mut T` through a `let mut` receiver and `&T` through a `let` one; a call is mutable only when every argument bound to a `mut?` parameter is
+    - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through
+    - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
+    - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
+- Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
 - Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:
     - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
     - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
     - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
     - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
+    - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

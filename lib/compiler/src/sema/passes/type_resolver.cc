@@ -147,15 +147,18 @@ template <typename ID> [[nodiscard]] auto is_range(const ID& id) -> bool {
         "Array elements cannot have an incomplete type", error::CYCLIC_DEPENDENCY, location};
 }
 
-[[nodiscard]] constexpr auto array_element_mutability(bool mut_elements) noexcept
+[[nodiscard]] constexpr auto array_element_mutability(bool mut_elements,
+                                                      bool poly_elements) noexcept
     -> types::mutability_modifiers {
+    if (poly_elements) { return types::mut::POLY; }
     return mut_elements ? types::mut::MUTABLE : types::mut::CONSTANT;
 }
 
 [[nodiscard]] auto container_element_mutability(const type& t) -> types::mutability_modifiers {
     if (const auto def{t.get_data().as_opt<types::deferred_array>()}) {
-        return array_element_mutability(def->array.mut_elements);
+        return array_element_mutability(def->array.mut_elements, def->array.poly_elements);
     }
+    if (t.is_poly()) { return types::mut::POLY; }
     return t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
 }
 
@@ -192,6 +195,8 @@ template <typename T>
     const bool req_ref{required.get_data().is<types::reference>()};
     const bool got_ptr{provided.get_data().is<types::pointer>()};
     const bool got_ref{provided.get_data().is<types::reference>()};
+    // A `mut?` method serves both mutabilities, so only a `mut?` method can implement one
+    if (required.is_poly() != provided.is_poly()) { return false; }
 
     // `&mut`/`^mut` requirement needs a mutable impl; pointer vs reference must agree; by-value
     // needs by-value.
@@ -207,6 +212,36 @@ template <typename T>
            module.ast.get_as_opt<ast::dot_expr>(expr) ||
            module.ast.get_as_opt<ast::index_expr>(expr) ||
            module.ast.get_as_opt<ast::dereference_expr>(expr);
+}
+
+// Whether an annotation spells `mut?` itself (`&mut? T`, `^mut? T`, `[]mut? T`), as opposed to
+// naming a type that merely contains one
+[[nodiscard]] auto spells_poly(const ast::AST& tree, ast::explicit_type_id t) -> bool {
+    if (!t.is_valid()) { return false; }
+    if (t.get_modifier().is_poly()) { return true; }
+    switch (t.get_kind()) {
+    case ast::explicit_type_kind::RECURSIVE:
+        return spells_poly(tree, tree.get_as<ast::explicit_type_id>(t));
+    case ast::explicit_type_kind::ARRAY: {
+        const auto& array{tree.get_as<ast::explicit_array_type>(t)};
+        return array.poly_elements || spells_poly(tree, array.inner_explicit_type);
+    }
+    default: return false;
+    }
+}
+
+// A view's own mutability: `mut?`, constant, or mutable
+[[nodiscard]] auto view_mutability(const type& view) noexcept
+    -> stdx::option<types::mutability_modifiers> {
+    switch (view.get_kind()) {
+    case type_kind::POINTER:
+    case type_kind::REFERENCE:
+    case type_kind::SLICE:
+    case type_kind::ARRAY:
+        if (view.is_poly()) { return types::mut::POLY; }
+        return view.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
+    default: return stdx::none;
+    }
 }
 
 [[nodiscard]] auto is_lvalue_expression(const mod::module& module, ast::expr_handle expr) noexcept
@@ -264,7 +299,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
                 incomplete_array_item(resolving_.ast.location_of(array.item_explicit_type))));
         }
 
-        const auto mutability{array_element_mutability(array.mut_elements)};
+        const auto mutability{array_element_mutability(array.mut_elements, array.poly_elements)};
         if (array.size) {
             // Install simulated comptime_frame so array sizes can depend on preceding
             // `comptime let mut` mutations.
@@ -321,10 +356,11 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
             incomplete_array_item(resolving_.ast.location_of(array.item_explicit_type))));
     }
 
-    last_type_.emplace(ctx_.get_array(array_element_mutability(array.mut_elements),
-                                      array.null_terminated,
-                                      array.items.size(),
-                                      item_type));
+    last_type_.emplace(
+        ctx_.get_array(array_element_mutability(array.mut_elements, array.poly_elements),
+                       array.null_terminated,
+                       array.items.size(),
+                       item_type));
     resolving_.set_sema_type(id, *last_type_);
 }
 
@@ -3860,6 +3896,15 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         auto* return_type{&function_type->return_type};
         if (returns_deferred_array) { return_type = &concrete_array_type(*return_type); }
+        // A `mut?` result takes the call's own mutability, worked out from its arguments
+        if (contains_poly(*return_type)) {
+            return_type = &substitute_poly(*return_type,
+                                           call_mutability(call,
+                                                           *function_type,
+                                                           has_implicit_self,
+                                                           expanded.source_index,
+                                                           expanded.pack_k));
+        }
 
         // Only arity is checked since the type checker will handle the rest
         resolving_.set_sema_type(id, *return_type);
@@ -4181,7 +4226,8 @@ namespace {
                                             bool               container_is_const,
                                             bool               container_is_addressable,
                                             std::string_view   what,
-                                            source_location    loc) noexcept
+                                            source_location    loc,
+                                            bool               container_is_poly = false) noexcept
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
     const bool wants_address{modifier.is_ref() || modifier.is_ptr()};
     if (wants_address && !container_is_addressable) {
@@ -4203,14 +4249,18 @@ namespace {
                              loc);
     }
 
-    if (modifier.is_ref()) {
-        return gsl::not_null{&ctx.get_reference(
-            modifier.is_mutable_ref() ? types::mut::MUTABLE : types::mut::CONSTANT, base_type)};
+    if (modifier.is_poly() && !container_is_poly) {
+        return make_sema_err(fmt::format("A `{}` capture needs its {} reached through a "
+                                         "`mut?` parameter",
+                                         modifier.is_poly_ref() ? "&mut?" : "^mut?",
+                                         what),
+                             error::ILLEGAL_POLY_MUTABILITY,
+                             loc);
     }
-    if (modifier.is_ptr()) {
-        return gsl::not_null{&ctx.get_pointer(
-            modifier.is_mutable_ptr() ? types::mut::MUTABLE : types::mut::CONSTANT, base_type)};
-    }
+
+    const auto mutability{types::mut::from_type_modifier(modifier)};
+    if (modifier.is_ref()) { return gsl::not_null{&ctx.get_reference(*mutability, base_type)}; }
+    if (modifier.is_ptr()) { return gsl::not_null{&ctx.get_pointer(*mutability, base_type)}; }
     return gsl::not_null{&base_type};
 }
 
@@ -4560,13 +4610,15 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                     resolving_.ast.location_of(iterable)));
             }
 
-            auto cap_result{resolve_capture_modifier(ctx_,
-                                                     capture.modifier,
-                                                     *elem_type,
-                                                     iterable_type.is_constant(),
-                                                     is_lvalue_shape(resolving_, iterable),
-                                                     "array or slice",
-                                                     resolving_.ast.location_of(capture.payload))};
+            auto cap_result{resolve_capture_modifier(
+                ctx_,
+                capture.modifier,
+                *elem_type,
+                iterable_type.is_constant(),
+                is_lvalue_shape(resolving_, iterable),
+                "array or slice",
+                resolving_.ast.location_of(capture.payload),
+                iterable_type.is_poly() || place_mutability(iterable) == types::mut::POLY)};
             if (!cap_result) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
@@ -4800,6 +4852,16 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto& return_type{denoted_type(*last_type_.take())};
     if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
+    // A `mut?` result is the call's mutability, which only `mut?` parameters can supply
+    if (spells_poly(resolving_.ast, fn.explicit_return_type) &&
+        std::ranges::none_of(param_types, [](const type* p) { return contains_poly(*p); })) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "A `mut?` result needs a `mut?` parameter to take its mutability from",
+                             error::ILLEGAL_POLY_MUTABILITY,
+                             resolving_.ast.location_of(fn.explicit_return_type)));
     }
     ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
 
@@ -6415,6 +6477,18 @@ auto type_resolver::resolve_structural_access(type&                  object_type
                     resolving_.ast.location_of(member));
             }
             auto& sig{resolve_dyn_method_signature(*dyn, iface, i)};
+            // The vtable holds one entry per method, but a `mut?` method has one per mutability
+            if (const auto fn{sig.get_data().as_opt<types::function>()};
+                fn &&
+                std::ranges::any_of(fn->params, [](const type* p) { return contains_poly(*p); })) {
+                return make_sema_err(
+                    fmt::format("`{}` takes a `mut?` parameter, so it can't be called through "
+                                "`dyn {}`",
+                                member_ident.name,
+                                ctx_.type_display_name(dyn->interface)),
+                    error::ILLEGAL_POLY_MUTABILITY,
+                    resolving_.ast.location_of(member));
+            }
             return gsl::not_null<type*>{&sig};
         }
         return make_sema_err(fmt::format("`dyn {}` has no method `{}`",
@@ -7856,13 +7930,15 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 base_type.emplace(*effective_matcher_type);
             }
 
-            auto cap_result{resolve_capture_modifier(ctx_,
-                                                     arm.modifier,
-                                                     *base_type,
-                                                     matcher_is_const,
-                                                     matcher_is_addressable,
-                                                     "value",
-                                                     resolving_.ast.location_of(*arm.capture))};
+            auto cap_result{
+                resolve_capture_modifier(ctx_,
+                                         arm.modifier,
+                                         *base_type,
+                                         matcher_is_const,
+                                         matcher_is_addressable,
+                                         "value",
+                                         resolving_.ast.location_of(*arm.capture),
+                                         place_mutability(match.matcher) == types::mut::POLY)};
             if (!cap_result) {
                 return last_type_.emplace(
                     ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
@@ -8074,11 +8150,13 @@ namespace {
 [[nodiscard]] auto ref_addr_of_is_mutable(ast::node_id id) noexcept -> types::mutability_modifiers {
     using syntax::token_type_t;
     switch (id.get_token_type()) {
-    case token_type_t::BW_AND:    return types::mut::CONSTANT;
-    case token_type_t::AND_MUT:   return types::mut::MUTABLE;
-    case token_type_t::CARET:     return types::mut::CONSTANT;
-    case token_type_t::CARET_MUT: return types::mut::MUTABLE;
-    default:                      UNREACHABLE("Invalid token types should be pruned prior to this function");
+    case token_type_t::BW_AND:         return types::mut::CONSTANT;
+    case token_type_t::AND_MUT:        return types::mut::MUTABLE;
+    case token_type_t::CARET:          return types::mut::CONSTANT;
+    case token_type_t::CARET_MUT:      return types::mut::MUTABLE;
+    case token_type_t::AND_MUT_POLY:
+    case token_type_t::CARET_MUT_POLY: return types::mut::POLY;
+    default:                           UNREACHABLE("Invalid token types should be pruned prior to this function");
     }
 }
 
@@ -8378,6 +8456,144 @@ auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& exp
     return true;
 }
 
+auto type_resolver::place_mutability(ast::node_id expr) -> types::mutability_modifiers {
+    const auto type{resolving_.get_sema_type_opt(expr)};
+    // A reference stands for its referent
+    if (type && type->get_kind() == type_kind::REFERENCE) { return *view_mutability(*type); }
+
+    const auto through{[&](ast::node_id object) -> types::mutability_modifiers {
+        const auto object_type{resolving_.get_sema_type_opt(object)};
+        if (object_type && object_type->get_kind() != type_kind::ARRAY) {
+            if (const auto m{view_mutability(*object_type)}) { return *m; }
+        }
+        // An array's `mut` / `mut?` elements are writable on their own; otherwise its binding
+        // decides
+        if (object_type && object_type->get_kind() == type_kind::ARRAY) {
+            if (object_type->is_poly()) { return types::mut::POLY; }
+            if (!object_type->is_constant()) { return types::mut::MUTABLE; }
+        }
+        return place_mutability(object);
+    }};
+
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)}) {
+        const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+        const auto node{sym ? sym->get_data().as_opt<symbols::node_t>() : stdx::none};
+        const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (decl && decl->has_modifier(ast::decl_modifiers::MUT) &&
+            !decl->has_modifier(ast::decl_modifiers::COMPTIME)) {
+            return types::mut::MUTABLE;
+        }
+        return types::mut::CONSTANT;
+    }
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(expr)}) {
+        return through(dot->object);
+    }
+    if (const auto idx{resolving_.ast.get_as_opt<ast::index_expr>(expr)}) {
+        return through(idx->array);
+    }
+    if (const auto deref{resolving_.ast.get_as_opt<ast::dereference_expr>(expr)}) {
+        if (const auto rhs_type{resolving_.get_sema_type_opt(deref->rhs)}) {
+            if (const auto m{view_mutability(*rhs_type)}) { return *m; }
+        }
+    }
+    return types::mut::CONSTANT;
+}
+
+auto type_resolver::call_mutability(const ast::call_expr&           call,
+                                    const types::function&          fn,
+                                    bool                            implicit_self,
+                                    gsl::span<const usize>          source_index,
+                                    gsl::span<const stdx::opt_size> pack_k)
+    -> types::mutability_modifiers {
+    auto       mutability{types::mut::MUTABLE};
+    const auto combine{[&](types::mutability_modifiers arg) {
+        if (mutability == types::mut::CONSTANT || arg == types::mut::CONSTANT) {
+            mutability = types::mut::CONSTANT;
+        } else if (arg == types::mut::POLY) {
+            mutability = types::mut::POLY;
+        }
+    }};
+    // A view argument has its own mutability; an array (or a receiver) is the place passed
+    const auto arg_mutability{[&](ast::node_id arg) -> types::mutability_modifiers {
+        const auto arg_type{resolving_.get_sema_type_opt(arg)};
+        if (arg_type && arg_type->get_kind() != type_kind::ARRAY) {
+            if (const auto m{view_mutability(*arg_type)}) { return *m; }
+        }
+        // An array's `mut` / `mut?` elements are writable on their own; otherwise its binding
+        // decides
+        if (arg_type && arg_type->get_kind() == type_kind::ARRAY &&
+            (arg_type->is_poly() || !arg_type->is_constant())) {
+            return *view_mutability(*arg_type);
+        }
+        return place_mutability(arg);
+    }};
+
+    for (usize p{0}; p < fn.params.size(); ++p) {
+        if (!fn.params[p]->is_poly()) { continue; }
+        if (implicit_self && p == 0) {
+            if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)}) {
+                combine(arg_mutability(dot->object));
+            }
+            continue;
+        }
+        const usize slot{p - (implicit_self ? 1UZ : 0UZ)};
+        if (slot >= source_index.size() || (slot < pack_k.size() && pack_k[slot])) { continue; }
+        if (const auto arg{call.arguments[source_index[slot]].as_opt<ast::expr_handle>()}) {
+            combine(arg_mutability(*arg));
+        }
+    }
+    return mutability;
+}
+
+auto type_resolver::substitute_poly(type& t, types::mutability_modifiers m) -> type& {
+    if (!contains_poly(t)) { return t; }
+    const auto  own{t.is_poly() ? m : t.get_key().get_mut()};
+    const auto& data{t.get_data()};
+    if (const auto p{data.as_opt<types::pointer>()}) {
+        return ctx_.get_pointer(own, substitute_poly(p->underlying, m));
+    }
+    if (const auto r{data.as_opt<types::reference>()}) {
+        return ctx_.get_reference(own, substitute_poly(r->underlying, m));
+    }
+    if (const auto sl{data.as_opt<types::slice>()}) {
+        return ctx_.get_slice(own, sl->null_terminated, substitute_poly(sl->underlying, m));
+    }
+    if (const auto ar{data.as_opt<types::array>()}) {
+        return ctx_.get_array(
+            own, ar->null_terminated, ar->len, substitute_poly(ar->underlying, m));
+    }
+    return t;
+}
+
+auto type_resolver::reject_poly_storage(ast::explicit_type_id at) -> bool {
+    if (!spells_poly(resolving_.ast, at)) { return false; }
+    ctx_.diags.emplace_back("`mut?` takes its mutability from a function's `mut?` parameter, so "
+                            "only a function's parameters, result, and locals can use it",
+                            error::ILLEGAL_POLY_MUTABILITY,
+                            resolving_.ast.location_of(at));
+    return true;
+}
+
+auto type_resolver::reject_unrooted_poly(ast::node_id id, ast::expr_handle operand)
+    -> stdx::option<type&> {
+    const auto token{id.get_token_type()};
+    if (token != syntax::token_type_t::AND_MUT_POLY &&
+        token != syntax::token_type_t::CARET_MUT_POLY) {
+        return stdx::none;
+    }
+    // `&mut? T` in a type position names a type, not a place
+    if (is_type_denoting_expr(ctx_, resolving_, operand, &table_stack_)) { return stdx::none; }
+    if (place_mutability(operand) == types::mut::POLY) { return stdx::none; }
+    return ctx_.poison_node(
+        resolving_,
+        id,
+        fmt::format("`{}` needs a place reached through a `mut?` parameter, which is where its "
+                    "mutability comes from",
+                    token == syntax::token_type_t::AND_MUT_POLY ? "&mut?" : "^mut?"),
+        error::ILLEGAL_POLY_MUTABILITY,
+        resolving_.ast.location_of(id));
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
     {
@@ -8429,6 +8645,8 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
                              error::ILLEGAL_REFERENCE_TO_REFERENCE,
                              resolving_.ast.location_of(id)));
     }
+
+    if (auto poisoned{reject_unrooted_poly(id, ref.rhs)}) { return last_type_.emplace(*poisoned); }
 
     auto& referent{denoted_type(rhs_type)};
     auto& new_type{ctx_.get_reference(ref_addr_of_is_mutable(id), referent)};
@@ -8507,6 +8725,10 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
             "cannot take the address of a field of a 'packed struct'; copy it into a local first",
             error::ILLEGAL_PACKED_FIELD_ADDRESS,
             resolving_.ast.location_of(id)));
+    }
+
+    if (auto poisoned{reject_unrooted_poly(id, adr_of.rhs)}) {
+        return last_type_.emplace(*poisoned);
     }
 
     // `^@TypeOf(x)` / `^fn(...): T` point at the type the operand denotes, never at a `type` value
@@ -9060,7 +9282,8 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                               .annotation = field.explicit_type});
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
         auto* field_type{&denoted_type(*last_type_.take())};
-        if (reject_storage_slot(field.explicit_type, *field_type)) {
+        if (reject_storage_slot(field.explicit_type, *field_type) ||
+            reject_poly_storage(field.explicit_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -9221,7 +9444,8 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
         auto& field_type{denoted_type(*last_type_.take())};
-        if (reject_storage_slot(field.explicit_type, field_type)) {
+        if (reject_storage_slot(field.explicit_type, field_type) ||
+            reject_poly_storage(field.explicit_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -9869,8 +10093,10 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
             auto&      explicit_type{*explicit_type_p};
             const bool aliases_undefined{explicit_type.get_kind() == type_kind::UNDEFINED};
-            if (aliases_undefined ? reject_unsized_slot(*decl.explicit_type, explicit_type)
-                                  : reject_storage_slot(*decl.explicit_type, explicit_type)) {
+            const bool global{function_boundaries_.empty()};
+            if ((aliases_undefined ? reject_unsized_slot(*decl.explicit_type, explicit_type)
+                                   : reject_storage_slot(*decl.explicit_type, explicit_type)) ||
+                (global && reject_poly_storage(*decl.explicit_type))) {
                 ctx_.poison_symbol(sym);
                 resolving_.set_sema_type(decl.name, ctx_.get_poison());
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -10551,7 +10777,7 @@ auto type_resolver::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> 
     }
 
     if (errdef.modifier.is_mutable_ref() || errdef.modifier.is_mutable_ptr() ||
-        errdef.modifier.is_volatile()) {
+        errdef.modifier.is_volatile() || errdef.modifier.is_poly()) {
         ctx_.diags.emplace_back("errdefer capture cannot have a mutable modifier",
                                 error::ERRDEFER_MUTABLE_CAPTURE,
                                 resolving_.ast.location_of(id));
@@ -12524,7 +12750,8 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                            ? remap_type(ctx_, want_base, *rec.interface_type, *rec.target_type)
                            : want_base};
             auto& have{*got->params[p]};
-            if (!types_match_with_assoc(rec, iface, want, have)) {
+            if (!types_match_with_assoc(rec, iface, want, have) ||
+                contains_poly(want) != contains_poly(have)) {
                 ctx_.diags.emplace_back(
                     fmt::format(
                         "method `{}`: parameter {} type does not match the requirement in `{}`",
@@ -12540,7 +12767,8 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
             rec.interface_type && rec.target_type
                 ? remap_type(ctx_, expected->return_type, *rec.interface_type, *rec.target_type)
                 : expected->return_type};
-        if (!types_match_with_assoc(rec, iface, expected_ret, got->return_type)) {
+        if (!types_match_with_assoc(rec, iface, expected_ret, got->return_type) ||
+            contains_poly(expected_ret) != contains_poly(got->return_type)) {
             ctx_.diags.emplace_back(
                 fmt::format("method `{}`: return type does not match the requirement in `{}`",
                             name,
@@ -13217,8 +13445,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
         last_type_.emplace(ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &array, &item_type}]);
         last_type_->resolve_if<types::deferred_array>(array, item_type, resolving_);
     } else {
-        last_type_.emplace(ctx_.get_slice(
-            array_element_mutability(array.mut_elements), null_terminated, item_type));
+        last_type_.emplace(
+            ctx_.get_slice(array_element_mutability(array.mut_elements, array.poly_elements),
+                           null_terminated,
+                           item_type));
     }
 
     auto& final_type{apply_explicit_modifiers(id, *last_type_.take())};
