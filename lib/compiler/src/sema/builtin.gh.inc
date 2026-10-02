@@ -86,7 +86,7 @@ pub const Flow = fn(C: type, R: type): type {
 pub const Unwrappable = interface {
     Output: type;
     Residual: type;
-    pub const branch = fn(self): Flow(Output, Residual);
+    pub const branch = fn(&mut? self): Flow(&mut? Output, Residual);
 };
 
 /// Interface implemented by enclosing function return types to construct an early-return

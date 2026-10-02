@@ -16,10 +16,10 @@ const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
-    pub const branch = fn(self): builtin.Flow(T, E) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
         return match (self) {
-            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+            .ok => |&mut? v| .{ .@"continue" = v },
+            .err => |e| .{ .@"break" = e },
         };
     };
 }
@@ -31,10 +31,10 @@ const Option = fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
-    pub const branch = fn(self): builtin.Flow(T, void) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
         return match (self) {
-            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-            .none => builtin.Flow(T, void){ .@"break" = {} },
+            .some => |&mut? v| .{ .@"continue" = v },
+            .none => .{ .@"break" = {} },
         };
     };
 }
@@ -165,10 +165,10 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         impl builtin.Unwrappable for MyRes {
             const Output = i32;
             const Residual = u8;
-            pub const branch = fn(self): builtin.Flow(i32, u8) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .fail => |f| builtin.Flow(i32, u8){ .@"break" = f },
+                    .val => |&mut? v| .{ .@"continue" = v },
+                    .fail => |f| .{ .@"break" = f },
                 };
             };
         }
@@ -192,10 +192,10 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
         impl builtin.Unwrappable for MyRes {
             const Output = i32;
             const Residual = u8;
-            pub const branch = fn(self): builtin.Flow(i32, u8) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .val => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .fail => |f| builtin.Flow(i32, u8){ .@"break" = f },
+                    .val => |&mut? v| .{ .@"continue" = v },
+                    .fail => |f| .{ .@"break" = f },
                 };
             };
         }
@@ -218,10 +218,10 @@ const BigRes = union { val: i32, fail: u32 };
 impl builtin.Unwrappable for BigRes {
     const Output = i32;
     const Residual = u32;
-    pub const branch = fn(self): builtin.Flow(i32, u32) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u32) {
         return match (self) {
-            .val => |v| builtin.Flow(i32, u32){ .@"continue" = v },
-            .fail => |f| builtin.Flow(i32, u32){ .@"break" = f },
+            .val => |&mut? v| .{ .@"continue" = v },
+            .fail => |f| .{ .@"break" = f },
         };
     };
 }

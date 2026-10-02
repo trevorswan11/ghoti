@@ -132,10 +132,10 @@ const R = union { ok: i32, err: i32 };
 impl builtin.Unwrappable for R {
     const Output = i32;
     const Residual = i32;
-    pub const branch = fn(self): builtin.Flow(i32, i32) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, i32) {
         return match (self) {
-            .ok => |v| builtin.Flow(i32, i32){ .@"continue" = v },
-            .err => |e| builtin.Flow(i32, i32){ .@"break" = e },
+            .ok => |&mut? v| .{ .@"continue" = v },
+            .err => |e| .{ .@"break" = e },
         };
     };
 }

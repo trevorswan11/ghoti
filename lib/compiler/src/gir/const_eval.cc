@@ -3009,20 +3009,29 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
         if (const auto decl{decl_mod.ast.get_as_opt<ast::decl_stmt>(branch_m->decl)}) {
             if (decl->value) {
                 if (const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+                    // `branch(&mut? self)` refers to the operand's own place, or to a temporary
+                    auto self{eval_place(unwrap.operand)};
+                    if (!self && !call_stack_.empty()) { self = ref_to_temporary(*operand); }
+                    if (!self) { return stdx::none; }
                     auto* const prev{module_.get()};
                     if (&decl_mod != prev) { set_module(decl_mod); }
-                    std::vector<const_value> args{*operand};
+                    std::vector<const_value> args{const_value{
+                        *self, ctx_.get_reference(sema::types::mut::POLY, *shape->operand_type)}};
                     const auto               flow_val{eval_comptime_fn(id, *fn_expr, args)};
                     if (&decl_mod != prev) { set_module(*prev); }
                     if (flow_val) {
-                        // Inspect the active variant in the returned `Flow(Output, Residual)`
+                        // Inspect the active variant in the returned `Flow(&Output, Residual)`
                         // union:
-                        // - @"continue": extract and return the success payload
+                        // - @"continue": read the success payload through its reference
                         // - @"break": produce a compile-time evaluation diagnostic
                         if (const auto un{flow_val->as_opt<const_union>()}) {
                             if (un->active_field == sema::builtin_impl::FLOW_CONTINUE) {
-                                return un->payload.empty() ? const_value{void_val{}}
-                                                           : un->payload.front();
+                                if (un->payload.empty()) { return const_value{void_val{}}; }
+                                const auto& out{un->payload.front()};
+                                if (const auto ref{out.as_opt<const_ref>()}) {
+                                    return load_ref(*ref, id);
+                                }
+                                return out;
                             }
                             if (un->active_field == sema::builtin_impl::FLOW_BREAK) {
                                 if (id.get_token_type() == syntax::token_type_t::QUESTION) {
@@ -5425,7 +5434,8 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                                  : const_value{void_val{},
                                          ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
             if (data.expression && !val) {
-                cond_unknown_ = true;
+                // A `?` that breaks has already raised its return signal
+                if (!current_signal_.kind) { cond_unknown_ = true; }
                 return stdx::none;
             }
             current_signal_ = eval_signal{
@@ -5499,7 +5509,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                 return try_eval(data.discarded);
             }
             if (!try_eval(data.discarded)) {
-                cond_unknown_ = true;
+                if (!current_signal_.kind) { cond_unknown_ = true; }
                 return stdx::none;
             }
             return stdx::none;
@@ -5516,7 +5526,7 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                 return try_eval(expr_id);
             }
             if (!try_eval(expr_id)) {
-                cond_unknown_ = true;
+                if (!current_signal_.kind) { cond_unknown_ = true; }
                 return stdx::none;
             }
             return stdx::none;
@@ -5643,7 +5653,8 @@ auto const_eval::eval_decl(ast::node_id, const ast::decl_stmt& decl) -> stdx::op
                 ctx_.comptime_binding_frames.back().insert_or_assign(ident.name, *val);
             }
         } else {
-            cond_unknown_ = true;
+            // A `?` that breaks has already raised its return signal
+            if (!current_signal_.kind) { cond_unknown_ = true; }
             return stdx::none;
         }
     }

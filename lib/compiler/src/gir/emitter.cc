@@ -7157,24 +7157,27 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                                active_ast().get_as_opt<ast::dot_expr>(unwrap.operand) ||
                                active_ast().get_as_opt<ast::index_expr>(unwrap.operand) ||
                                active_ast().get_as_opt<ast::dereference_expr>(unwrap.operand)};
-    const auto operand_addr{is_lvalue_shape ? emit_lvalue(unwrap.operand)
-                                            : spill_to_temporary(emit_expression(unwrap.operand),
-                                                                 operand_type,
-                                                                 operand_type.is_constant())};
+    // A reference operand already holds the address of what it refers to
+    const bool is_reference{operand_type.get_kind() == sema::type_kind::REFERENCE};
+    const auto operand_addr{is_reference      ? emit_expression_id_raw(unwrap.operand)
+                            : is_lvalue_shape ? emit_lvalue(unwrap.operand)
+                                              : spill_to_temporary(emit_expression(unwrap.operand),
+                                                                   operand_type,
+                                                                   operand_type.is_constant())};
 
     const bool is_propagation{id.get_token_type() == syntax::token_type_t::QUESTION};
 
-    auto&      base_operand{*shape->operand_type};
-    const auto loaded_self{builder_.emit_load(operand_addr, base_operand)};
+    auto& base_operand{*shape->operand_type};
 
-    // Call `branch(self)` which maps the unwrap operand into a `Flow(Output, Residual)` union:
-    // `@"continue": Output` or `@"break": Residual`.
+    // Call `branch(&self)` which maps the unwrap operand into a `Flow(&Output, Residual)` union:
+    // `@"continue": &Output` or `@"break": Residual`. Only reading the payload, `mut?` is constant
     const auto branch_name{shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_)};
     ASSERT(shape->flow_type, "Unwrappable must have a flow type for branch()");
     auto& flow_type{const_eval_.force_deferred_call(*shape->flow_type)};
+    auto& self_ref{ctx_.get_reference(sema::types::mut::POLY, base_operand)};
 
     const auto flow_dest{
-        builder_.emit_call(branch_name, {value{loaded_self, base_operand}}, flow_type)};
+        builder_.emit_call(branch_name, {value{operand_addr.data, self_ref}}, flow_type)};
     ASSERT(flow_dest, "branch() must return a Flow union value");
     // Spill the Flow result to a stack slot so we can inspect its tag and extract payloads.
     const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
@@ -7218,12 +7221,14 @@ auto emitter::emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> va
                         id);
     }
 
-    // Continue path: load the `@"continue"` output payload from the Flow union.
+    // Continue path: read the output through the `@"continue"` reference in the Flow union.
     builder_.set_segment(payload_seg);
     auto&      out_type{*shape->output_type};
+    auto&      out_ref{ctx_.get_reference(sema::types::mut::POLY, out_type)};
     const auto payload_ptr{builder_.emit_get_element_ptr(
-        flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_type)};
-    const auto payload_val{builder_.emit_load(value{payload_ptr, out_type}, out_type)};
+        flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, out_ref)};
+    const auto out_addr{builder_.emit_load(value{payload_ptr, out_ref}, out_ref)};
+    const auto payload_val{builder_.emit_load(value{out_addr, out_ref}, out_type)};
     return value{payload_val, out_type};
 }
 

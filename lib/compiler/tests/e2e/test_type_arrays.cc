@@ -112,10 +112,10 @@ TEST_CASE("E2E: a generic signature's placeholder target never emits parameteriz
         impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }

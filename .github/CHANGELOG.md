@@ -612,6 +612,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through
     - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
     - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
+- **Breaking:** `builtin.Unwrappable.branch` is now `fn(&mut? self): Flow(&mut? Output, Residual)`, so it hands back a reference into the operand instead of a copy of its payload; an impl writes its success arm as `.some => |&mut? v| .{ .continue = v }`. `?` and `!` read through that reference and are otherwise unchanged
+- Fixed: at compile time, a `?` that returned early from inside a `let` initializer, an expression statement, or a `return` made the whole call fail to evaluate
 - Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
 - Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:
     - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through

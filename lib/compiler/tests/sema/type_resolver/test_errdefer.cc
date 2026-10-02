@@ -16,10 +16,10 @@ const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
-    pub const branch = fn(self): builtin.Flow(T, E) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
         return match (self) {
-            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+            .ok => |&mut? v| .{ .@"continue" = v },
+            .err => |e| .{ .@"break" = e },
         };
     };
 }
@@ -31,10 +31,10 @@ const Option = fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
-    pub const branch = fn(self): builtin.Flow(T, void) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
         return match (self) {
-            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-            .none => builtin.Flow(T, void){ .@"break" = {} },
+            .some => |&mut? v| .{ .@"continue" = v },
+            .none => .{ .@"break" = {} },
         };
     };
 }

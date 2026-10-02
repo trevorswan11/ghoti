@@ -75,10 +75,10 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }

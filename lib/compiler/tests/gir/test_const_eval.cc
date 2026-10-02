@@ -913,10 +913,10 @@ TEST_CASE("`errdefer` in `const_eval`") {
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
@@ -958,10 +958,10 @@ TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }

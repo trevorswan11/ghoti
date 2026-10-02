@@ -81,10 +81,10 @@ TEST_CASE("the `?` operator works inside a generic function body") {
         impl builtin.Unwrappable for R {
             const Output = i32;
             const Residual = u8;
-            pub const branch = fn(self): builtin.Flow(i32, u8) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .err => |e| builtin.Flow(i32, u8){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
