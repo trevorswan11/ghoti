@@ -86,14 +86,15 @@ constexpr auto ALL_OPERATORS_TT{[] -> auto {
     return operators;
 }()};
 
+// The lexer asks for this on every operator it reads, so it is computed once
+constexpr auto MAX_OPERATOR_LENGTH{
+    std::ranges::max_element(ALL_OPERATORS, [](auto a, auto b) -> bool {
+        return a.first.size() < b.first.size();
+    })->first.size()};
+
 } // namespace
 
-auto max_operator_length() noexcept -> usize {
-    return std::ranges::max_element(
-               ALL_OPERATORS,
-               [](auto a, auto b) -> bool { return a.first.size() < b.first.size(); })
-        ->first.size();
-}
+auto max_operator_length() noexcept -> usize { return MAX_OPERATOR_LENGTH; }
 
 auto get_operator_opt(std::string_view sv) noexcept -> stdx::option<token_type_t> {
     return ALL_OPERATORS.get_opt(sv).materialize();

@@ -636,6 +636,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
+- Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`
