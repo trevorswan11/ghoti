@@ -183,7 +183,7 @@ TEST_CASE("Call resolution edge cases") {
 }
 
 TEST_CASE("Loop resolution") {
-    helpers::resolve_and_check("const a = loop { let foo = 42; };");
+    helpers::resolve_and_check("const a = l: loop { let foo = 42; };");
     helpers::test_resolver_fail(
         "for (23) |_| { let mut a: i32 = undefined; }",
         sema::diagnostic{"Iterables may only be arrays or slices; found 'comptime_int'",

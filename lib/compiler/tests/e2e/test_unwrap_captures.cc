@@ -197,4 +197,16 @@ TEST_CASE("misused `if` / `while` captures are errors") {
                  sema::error::ASSIGNMENT_TO_CONST);
 }
 
+TEST_CASE("a `while` continuation sees the payload capture") {
+    check_both(R"(
+        const t = fn(): i32 {
+            let mut c: Counter = .{ .n = 0, .limit = 3 };
+            let mut s: i32 = 0;
+            while (c.next()) |x| : (s += x) { if (x == 2) { continue; } }
+            return s;
+        };
+    )",
+               6);
+}
+
 } // namespace ghoti::tests

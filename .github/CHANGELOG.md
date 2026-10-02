@@ -613,12 +613,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through
     - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
     - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
+    - Generic functions work the same way: `fn(T: type, s: []mut? T): &mut? T` returns `&mut T` for a mutable slice
 - **Breaking:** `builtin.Unwrappable.branch` is now `fn(&mut? self): Flow(&mut? Output, Residual)`, so it hands back a reference into the operand instead of a copy of its payload; an impl writes its success arm as `.some => |&mut? v| .{ .continue = v }`. `?` and `!` read through that reference and are otherwise unchanged
 - `if` and `while` unwrap any `builtin.Unwrappable` (`Option`, `Result`, ...) with a capture after the condition: `if (opt) |v| { ... } else { ... }`, `if (res) |v| v else |e| fallback(e)`, `while (it.next()) |item| : (i += 1) { ... } else |err| { ... }`
     - The capture takes the same forms as a `match` arm: `|v|`, `|&v|`, `|&mut v|`, `|^v|`, `|^mut v|`, `|&mut? v|`, and `|_|`; `|&mut v|` writes into the operand, which must be a mutable place
     - `else |e|` captures the residual by value; it is an error when the residual is `void` (an `Option`), and needs a capture after the condition
     - An `Unwrappable` condition without a capture is an error (write `|_|` to ignore the payload), and a capture on any other condition (a `bool`, a pointer) is an error
     - `while` calls `branch` before every iteration and runs its `else` when it breaks; a `break` statement skips the `else`, as before
+    - The payload capture is also in scope in the continuation: `while (it.next()) |x| : (sum += x)`
     - Everything works at compile time, including `if comptime (x) |v|`, `while comptime (x) |v|` (by-value captures), and constants such as `const X = if (OPT) |v| v else 0;`
 - Fixed: at compile time, a `?` that returned early from inside a `let` initializer, an expression statement, or a `return` made the whole call fail to evaluate
 - Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
@@ -626,6 +628,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
     - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
     - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
+    - a pointer into an array steps through its elements: `let p: ^mut i32 = @ptrFromArray(a); p[2] = 4;`
     - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
     - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
 - Fixed: a parameterized `impl` could expand for a type constructor from another module (such as the prelude's `builtin.Flow`) whose declaration happened to sit at the same position as its own, so unrelated edits made errors like "Cannot take a reference to an already-reference-typed value" appear inside the `impl`
@@ -639,6 +642,20 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
     - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
     - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
+- A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it
+- A generic function can call itself with the same arguments (`fact(T, n - 1)`); one with an inferred `auto` return type that does is reported instead of exceeding the instantiation limit
+- Fixed: `.{ ... }` couldn't initialize a `[n]T` parameter sized by a `comptime` argument (`sum(3, .{ 1, 2, 3 })`)
+- Fixed: `let p: ^T = nullptr;` read as the untyped `nullptr` rather than a `^T`, so `if (p)` and `!p` were rejected
+- Fixed: an implicit `.field` naming a struct field (not a constant or function) resolved to the field's type; assigning it to a packed struct compiled silently. It is now an error
+- Fixed seven more compiler crashes, now errors or working code:
+    - a `fn(...): type` constructor taking an untyped value pack (`fn(c...): type`)
+    - `@bitCast` of an untyped float to a type that isn't 8 bytes (it has `f64`'s bit pattern)
+    - a closure assigning a binding declared after it
+    - a type used as an `if` or `while` condition (`if (bool)`)
+    - `_` as an `asm` input operand
+    - calling a static member that holds a function pointer (`const open = ^g;`, `S.open(7)`)
+    - a type written where a value argument goes (`f(impl a)`)
 - Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
 
 ## Standard Library

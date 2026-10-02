@@ -66,9 +66,10 @@ TEST_CASE("While loop collection") {
     auto ctx{test_loop("const a = while (blk: { let foo = bar; }) : (i += blk: { const foo "
                        "= bar; }) { let foo = bar; } else { const foo = bar; };",
                        7,
-                       5)};
+                       3)};
+    // The continuation is collected inside the loop's own table, after it
     ctx->test_common_decl_collection(2);
-    ctx->test_common_decl_collection(4);
+    ctx->test_common_decl_collection(3);
     ctx->test_common_decl_collection(5);
     ctx->test_common_decl_collection(6);
 }

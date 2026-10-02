@@ -545,7 +545,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
     // The guard shouldn't enclose the else clause or condition
     const default_counter::guard g_expr{in_expr_scope_};
     collect(while_expr.condition);
-    if (while_expr.continuation) { collect(*while_expr.continuation); }
 
     usize new_idx;
     {
@@ -555,6 +554,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
         const default_counter::guard g_loop{in_loop_scope_};
         // The payload capture is the loop body's own, so it lives in the body's scope
         if (while_expr.payload_capture) { declare_capture(*while_expr.payload_capture); }
+        // The continuation runs after each iteration's body, so it sees the payload capture too
+        if (while_expr.continuation) { collect(*while_expr.continuation); }
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(while_expr.block)};
         for (const auto& stmt : block) { collect(stmt); }
     }

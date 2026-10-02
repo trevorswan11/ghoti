@@ -1,4 +1,5 @@
 #include <string_view>
+#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -611,6 +612,33 @@ TEST_CASE("an argument for a `@TypeOf(x)` parameter converts to, and must fit, t
         pub const main = fn(): i32 { return 0; };
     )",
                           sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a generic can call itself with the same arguments") {
+    CHECK(helpers::compile_and_run(R"(
+        const fact = fn(T: type, n: T): T { return if (n <= 1) 1 else n * fact(T, n - 1); };
+        const even = fn(T: type, n: T): bool { return if (n == 0) true else odd(T, n - 1); };
+        const odd = fn(T: type, n: T): bool { return if (n == 0) false else even(T, n - 1); };
+        const X = fact(i32, 4);
+        pub const main = fn(): i32 { return fact(i32, 5) + X + @as(i32, @intFromBool(even(i32, 6))); };
+    )") == 120 + 24 + 1);
+    CHECK(helpers::raised(R"(
+        const f = fn(n: auto): auto { return if (n <= 1) 1 else f(n - 1); };
+        pub const main = fn(): i32 { let x: i32 = 3; return f(x); };
+    )",
+                          sema::error::COMPTIME_RECURSION_LIMIT_EXCEEDED));
+}
+
+TEST_CASE("an initializer fills a `[n]T` parameter sized by a compile-time argument") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { let mut s: i32 = 0; for (a) |x| { s += x; } return s; };
+        pub const main = fn(): i32 { return sum(3, .{ 1, 2, 3 }) + sum(2, .{ 4, 4 }); };
+    )") == 14);
+    // The length mismatch is reported once the call is checked against the monomorph
+    std::ignore = helpers::expect_compile_error(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { return a[0]; };
+        pub const main = fn(): i32 { return sum(4, .{ 1, 2, 3 }); };
+    )");
 }
 
 } // namespace ghoti::tests

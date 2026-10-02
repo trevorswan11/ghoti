@@ -156,4 +156,12 @@ TEST_CASE("an interface's `mut?` method needs a `mut?` impl and can't be called 
                                                iface)) == 9);
 }
 
+TEST_CASE("a generic function's `mut?` result takes the call's mutability") {
+    check_both(R"(
+        const first = fn(T: type, s: []mut? T): &mut? T { return &mut? s[0]; };
+        const t = fn(): i32 { let mut a = [2]mut i32{ 1, 1 }; first(i32, a[0..]) = 2; return a[0]; };
+    )",
+               2);
+}
+
 } // namespace ghoti::tests

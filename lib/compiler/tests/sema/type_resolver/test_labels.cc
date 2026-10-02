@@ -51,7 +51,7 @@ TEST_CASE("Labeled for loop resolution") {
 }
 
 TEST_CASE("Complex label resolution") {
-    helpers::resolve_and_check("const a = do { let foo = 42; } while (blk: { break :blk 42; });");
+    helpers::resolve_and_check("const a = l: do { let foo = 42; } while (blk: { break :blk 42; });");
     helpers::resolve_and_check(R"(
         let mut i: i32 = undefined;
         const a = outer: while (blk: { break :blk 42; }) : (i += blk: {

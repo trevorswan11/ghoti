@@ -1242,13 +1242,24 @@ auto const_eval::eval_place(ast::node_id id) -> stdx::option<const_ref> {
         if (module_->ast.get_as_opt<ast::range_expr>(idx->index)) { return stdx::none; }
         const auto obj_type{module_->get_sema_type_opt(idx->array)};
         if (!obj_type) { return stdx::none; }
-        auto base{obj_type->get_kind() == sema::type_kind::SLICE ? raw_ref_of(idx->array)
-                                                                 : eval_place(idx->array)};
+        const auto obj_kind{obj_type->get_kind()};
+        auto       base{obj_kind == sema::type_kind::SLICE || obj_kind == sema::type_kind::POINTER
+                            ? raw_ref_of(idx->array)
+                            : eval_place(idx->array)};
         if (!base) { return stdx::none; }
         const auto k_val{try_eval(idx->index)};
         const auto k{k_val ? k_val->as_uint_opt() : stdx::none};
         if (!k) { return stdx::none; }
         auto element{static_cast<usize>(*k)};
+        // `p[i]` steps from the element `p` points at; a pointer to a lone value only has `p[0]`
+        if (obj_kind == sema::type_kind::POINTER) {
+            if (!base->path.empty() && base->path.back().step == ref_step::kind::INDEX) {
+                base->path.back().index += element;
+                return base;
+            }
+            if (element != 0) { return stdx::none; }
+            return base;
+        }
         if (base->window) {
             if (element >= base->window->len) { return stdx::none; }
             element += base->window->lo;
@@ -1979,6 +1990,11 @@ auto const_eval::eval_slice_index(ast::node_id            id,
 auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // `p[i]` through a pointer into a compile-time place reads that element
+    if (const auto ptr_type{module_->get_sema_type_opt(index_expr.array)};
+        ptr_type && ptr_type->get_kind() == sema::type_kind::POINTER && !call_stack_.empty()) {
+        if (const auto place{eval_place(id)}) { return load_ref(*place, id); }
+    }
     const auto target_val{try_eval(index_expr.array)};
     if (!target_val) { return stdx::none; }
 
@@ -4896,6 +4912,23 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+    case syntax::token_type_t::BUILTIN_PTR_FROM_ARRAY: {
+        // `@ptrFromArray(a)` points at `a`'s first element, as a place `p[i]` can step through
+        if (call.arguments.empty() || call_stack_.empty()) { return stdx::none; }
+        const auto arr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (!arr_h) { return stdx::none; }
+        const auto arr_type{module_->get_sema_type_opt(*arr_h)};
+        auto place{arr_type && arr_type->get_kind() == sema::type_kind::SLICE ? raw_ref_of(*arr_h)
+                                                                              : eval_place(*arr_h)};
+        if (!place) { return stdx::none; }
+        usize first{0};
+        if (place->window) {
+            first = place->window->lo;
+            place->window.reset();
+        }
+        place->path.emplace_back(ref_step::kind::INDEX, std::string{}, first);
+        return const_value{std::move(*place), module_->get_sema_type_opt(id)};
     }
     case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
         // `@ptrFromInt(T, n)` -> the pointer whose address bits are the constant `n`.

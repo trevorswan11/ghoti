@@ -2173,6 +2173,11 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                     if (decl.explicit_type && scalar.is<f128>()) {
                         scalar = value{scalar.data, *sema_type, scalar.origin};
                     }
+                    // `let p: ^T = nullptr` reads as a `^T`, not as the untyped `nullptr`
+                    if (scalar.is<nullptr_val>() &&
+                        sema_type->get_kind() != sema::type_kind::NULLPTR) {
+                        scalar = value{scalar.data, *sema_type, scalar.origin};
+                    }
 
                     bound = scalar;
                 }
@@ -5095,6 +5100,8 @@ auto emitter::emit_while(ast::node_id                   id,
         // Continuation segment
         if (continuation_seg) {
             builder_.set_segment(*continuation_seg);
+            const scope_guard capture_guard{scopes_};
+            if (flow) { bind_unwrap_payload(*while_loop.payload_capture, *flow); }
             emit_expression(*while_loop.continuation);
             if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
                 builder_.emit_goto(cond_seg.get_id());
@@ -7763,7 +7770,13 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
                 return materialize_const(*cv);
             }
         }
-        if (sema_type && sema_type->get_kind() == sema::type_kind::FUNCTION) {
+        // `const f = fn(...)` or `const f = ^fn(...)` both name the member's own function
+        const auto is_fn_pointer{[](const sema::type& t) {
+            const auto p{t.get_data().as_opt<sema::types::pointer>()};
+            return p && p->underlying.get_kind() == sema::type_kind::FUNCTION;
+        }};
+        if (sema_type &&
+            (sema_type->get_kind() == sema::type_kind::FUNCTION || is_fn_pointer(*sema_type))) {
             return value{ref_symbol_name(id, member_ident.name), sema_type};
         }
         UNREACHABLE("Type namespace member access did not resolve to a static member, function, or "

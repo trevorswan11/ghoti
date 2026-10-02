@@ -164,4 +164,18 @@ TEST_CASE("a compile-time reference to a callee's own local is an error") {
     )");
 }
 
+TEST_CASE("compile-time pointers step through array elements") {
+    check_both(R"(
+        const t = fn(): i32 {
+            let mut a = [3]mut i32{ 1, 2, 3 };
+            let p: ^mut i32 = @ptrFromArray(a);
+            p[2] = 4;
+            let q = ^mut a[1];
+            q[1] += 1;
+            return a[0] + a[1] + a[2] + p[1] * 10;
+        };
+    )",
+               28);
+}
+
 } // namespace ghoti::tests

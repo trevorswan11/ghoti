@@ -618,6 +618,13 @@ class type_resolver {
     // returns whether it did
     auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
         -> bool;
+    // The local a returned `&x` / `^x.field` points into, when it dies with this frame
+    [[nodiscard]] auto frame_local_root(ast::expr_handle returned)
+        -> stdx::option<std::string_view>;
+    // Reports a type used as an `if` / `while` condition
+    auto reject_type_condition(ast::expr_handle condition) -> bool;
+    // Reports an unlabeled loop used where a value is needed
+    auto reject_loop_as_value(ast::expr_handle value) -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     // Records which declaration `id` names, for LSP features like hover
@@ -787,6 +794,8 @@ class type_resolver {
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
     bool resolving_callee_{false};
+    // Set while resolving an initializer's `.field` accessor, which names a field by design
+    bool resolving_init_accessor_{false};
     // `a.b` nodes being resolved as the function of a call, so a `dyn` method is called, not read
     ankerl::unordered_dense::set<usize> callee_dots_;
     bool                                in_expr_branch_{false};

@@ -378,7 +378,15 @@ auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
     for (const auto& op : node.inputs) { resolve(op.constraint); }
     for (const auto& clobber : node.clobbers) { resolve(clobber); }
     for (const auto& op : node.inputs) {
-        if (!op.value) { continue; }
+        // Only an output may be discarded; an input has to pass something in
+        if (!op.value) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "An asm input operand needs a value; only outputs may be `_`",
+                                 error::ILLEGAL_INLINE_ASM,
+                                 resolving_.ast.location_of(op.constraint)));
+        }
         TRY_RESOLVE(*op.value);
         if (operand_nature(*op.value) == operand_nature_t::TYPE) {
             return last_type_.emplace(
@@ -719,7 +727,12 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto* src_p{get_resolved_call_arg_type(*args_res->operand).get()};
+        // An untyped float folds as an `f64`, so that is the bit pattern it has to give
+        if (src_p->get_kind() == type_kind::COMPTIME_FLOAT) {
+            src_p = &ctx_.get_builtin_resolved_type(type_kind::F64);
+        }
+        auto& src{*src_p};
         // An aggregate only has a bit pattern to reinterpret when it is bit-packed
         const auto is_aggregate{[](const type& t) {
             return t.get_data().is<types::struct_t>() || t.get_data().is<types::union_t>();
@@ -3505,7 +3518,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         const auto expanded_opt{expand_pack_call_args(call)};
         if (!expanded_opt) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
         const auto& expanded{*expanded_opt};
-        const auto  effective_arity{expanded.source_index.size()};
+        // A monomorph's `mut?` result takes this call's mutability, as a plain function's does
+        const auto poly_call_result{[&](type& result) -> type& {
+            if (!contains_poly(result)) { return result; }
+            return substitute_poly(result,
+                                   call_mutability(call,
+                                                   *function_type,
+                                                   has_implicit_self,
+                                                   expanded.source_index,
+                                                   expanded.pack_k));
+        }};
+        const auto effective_arity{expanded.source_index.size()};
 
         const auto expected_arity{params.size() - param_offset - (has_pack_param ? 1UZ : 0UZ)};
         if (function_type->is_variadic || has_pack_param) {
@@ -3849,8 +3872,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
                 }
                 resolving_.set_generic_call_target(id, cached->mangled_name);
-                resolving_.set_sema_type(id, *cached->return_type);
-                return last_type_.emplace(*cached->return_type);
+                auto& call_type{poly_call_result(*cached->return_type)};
+                resolving_.set_sema_type(id, call_type);
+                return last_type_.emplace(call_type);
             }
 
             // Copy out of the registry before instantiating: resolving the generic's body may
@@ -3901,8 +3925,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 ctx_.instantiation_cache.insert(std::move(key), return_type, mangled_name);
             }
             resolving_.set_generic_call_target(id, mangled_name);
-            resolving_.set_sema_type(id, return_type);
-            return last_type_.emplace(return_type);
+            auto& call_type{poly_call_result(return_type)};
+            resolving_.set_sema_type(id, call_type);
+            return last_type_.emplace(call_type);
         }
 
         bool any_arg_poison{false};
@@ -3921,6 +3946,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if constexpr (std::same_as<decltype(arg_id), ast::expr_handle>) {
                     if (i < expected_arity && !last_type_->is_poison() &&
                         reject_type_as_value(arg_id, *function_type->params[i + param_offset])) {
+                        return true;
+                    }
+                } else {
+                    // A type written in argument position (`f(impl x)`) for a value parameter
+                    const auto& param{*function_type->params[i + param_offset]};
+                    if (i < expected_arity && !last_type_->is_poison() &&
+                        param.get_kind() != type_kind::TYPE && !is_generic_type(param)) {
+                        last_type_.emplace(ctx_.poison_node(
+                            resolving_,
+                            id,
+                            fmt::format("Argument {} is a type, but its parameter expects a "
+                                        "value of type '{}'",
+                                        i + 1,
+                                        ctx_.type_display_name(param)),
+                            error::TYPE_USED_AS_VALUE,
+                            resolving_.ast.location_of(arg_id)));
                         return true;
                     }
                 }
@@ -5585,7 +5626,9 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
             const auto closure{
                 resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
             const bool immutable{!is_mutable_local(lookup->symbol)};
-            if (usage == capture_usage::MUTATED && immutable) {
+            // A binding declared later has no type yet; using it is reported on its own
+            if (usage == capture_usage::MUTATED && immutable &&
+                lookup->symbol.get_status() == symbol_status::RESOLVED) {
                 const auto kind{get_resolved_symbol_type(lookup->symbol.get_data()).get_kind()};
                 if (kind == type_kind::SLICE || kind == type_kind::POINTER ||
                     kind == type_kind::REFERENCE) {
@@ -5649,6 +5692,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
     // `if comptime { a } else { b }`: both arms are live, each in its own evaluation context
     if (if_expr.is_evaluation_context_branch()) { return resolve_if_arms(id, if_expr); }
     TRY_RESOLVE(*if_expr.condition);
+    if (reject_type_condition(*if_expr.condition)) { return; }
     if (const auto poisoned{resolve_unwrap_captures(id,
                                                     *if_expr.condition,
                                                     if_expr.payload_capture,
@@ -7296,8 +7340,16 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
     // `RowAlias{ a, b, c }` / `.{ a, b }` in an array-typed context
     type* array_object{&object_type};
-    if (object_data.is<types::deferred_array>()) {
+    if (const auto deferred{object_data.as_opt<types::deferred_array>()}) {
         array_object = &concrete_array_type(object_type);
+        // `[n]T` sized by a parameter of the call being resolved: the values give the length,
+        // which the instantiation then checks against `n`
+        if (array_object->get_data().is<types::deferred_array>()) {
+            array_object = &ctx_.get_array(object_type.get_key().get_mut(),
+                                           deferred->array.null_terminated,
+                                           num_initializers,
+                                           deferred->underlying);
+        }
     }
     if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
         for (const auto& entry : init.initializers) {
@@ -7381,7 +7433,8 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
 
         // The accessor is always a lookup into the stack
         {
-            const structural_guard g{implicit_type_stack_, object_type};
+            const structural_guard       g{implicit_type_stack_, object_type};
+            const mutating_context_guard accessor_g{resolving_init_accessor_, true};
             TRY_RESOLVE(accessor);
         }
 
@@ -7431,6 +7484,26 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
         auto sym{resolve_symbol_info(*label.name, stdx::none)};
         if (!sym) { return; }
         auto& label_data{symbols::label::from(*sym)};
+
+        // A labeled loop also yields its `else` value when it runs out without a `break`
+        const auto loop_else{[&]() -> stdx::option<ast::stmt_handle> {
+            if (const auto w{resolving_.ast.get_as_opt<ast::while_loop_expr>(*label.body)}) {
+                return w->non_break;
+            }
+            if (const auto f{resolving_.ast.get_as_opt<ast::for_loop_expr>(*label.body)}) {
+                return f->non_break;
+            }
+            return stdx::none;
+        }()};
+        if (loop_else) {
+            if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(*loop_else)}) {
+                if (const auto t{resolving_.get_sema_type_opt(es->expression)};
+                    t && t->get_kind() != type_kind::NORETURN &&
+                    t->get_kind() != type_kind::VOID_) {
+                    label_data.add_yield_type(*t);
+                }
+            }
+        }
 
         // Labels may not be used outside of continues which don't push void
         if (!label_data.has_yield_types()) {
@@ -8612,6 +8685,84 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
     return true;
 }
 
+auto type_resolver::frame_local_root(ast::expr_handle returned) -> stdx::option<std::string_view> {
+    if (return_trackers_.empty()) { return stdx::none; }
+    stdx::option<ast::node_id> place;
+    if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(returned)}) {
+        place.emplace(*ref->rhs);
+    } else if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(returned)}) {
+        place.emplace(*addr->rhs);
+    }
+    if (!place) { return stdx::none; }
+
+    // Fields and array elements live in their object; a slice, pointer, or reference doesn't
+    const auto is_indirect{[&](ast::node_id n) {
+        const auto t{resolving_.get_sema_type_opt(n)};
+        if (!t) { return true; }
+        const auto k{t->get_kind()};
+        return k == type_kind::POINTER || k == type_kind::REFERENCE || k == type_kind::SLICE;
+    }};
+    while (true) {
+        if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(*place)}) {
+            if (is_indirect(dot->object)) { return stdx::none; }
+            place.emplace(dot->object);
+        } else if (const auto index{resolving_.ast.get_as_opt<ast::index_expr>(*place)}) {
+            if (is_indirect(index->array)) { return stdx::none; }
+            place.emplace(index->array);
+        } else {
+            break;
+        }
+    }
+
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(*place)};
+    if (!ident || is_indirect(*place)) { return stdx::none; }
+    const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+    if (!sym) { return stdx::none; }
+    const bool is_local{sym->get_data().visit(
+        [](const symbols::parameter& p) { return !p.is_comptime; },
+        [](const symbols::self_parameter& s) { return s.modifier.is_value(); },
+        [&](const symbols::node_t& node) {
+            // A `const` folds into read-only storage of its own; only runtime locals die here
+            const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(node)};
+            if (!decl || !decl->has_modifier(ast::decl_modifiers::LET) ||
+                decl->has_modifier(ast::decl_modifiers::COMPTIME)) {
+                return false;
+            }
+            const auto root{resolving_.root_table_idx};
+            const auto global{root ? ctx_.registry.get_from_opt(*root, ident->name) : stdx::none};
+            return !global || global.get() != sym.get();
+        },
+        [](const auto&) { return false; })};
+    if (!is_local) { return stdx::none; }
+    return ident->name;
+}
+
+auto type_resolver::reject_type_condition(ast::expr_handle condition) -> bool {
+    if (operand_nature(condition) != operand_nature_t::TYPE) { return false; }
+    last_type_.emplace(ctx_.poison_node(
+        resolving_,
+        condition,
+        fmt::format("A condition must be a value, but '{}' is a type",
+                    ctx_.type_display_name(denoted_type(resolving_.get_sema_type(condition)))),
+        error::TYPE_USED_AS_VALUE,
+        resolving_.ast.location_of(condition)));
+    return true;
+}
+
+auto type_resolver::reject_loop_as_value(ast::expr_handle value) -> bool {
+    // Only a labeled loop yields a value, through `break :label v`
+    const bool is_loop{value.is<ast::while_loop_expr>() || value.is<ast::for_loop_expr>() ||
+                       value.is<ast::infinite_loop_expr>() || value.is<ast::do_while_loop_expr>()};
+    if (!is_loop) { return false; }
+    last_type_.emplace(ctx_.poison_node(
+        resolving_,
+        value,
+        "A loop without a label has no value; label it and leave it with `break :label value`",
+        error::TYPE_MISMATCH,
+        resolving_.ast.location_of(value)));
+    return true;
+}
+
 auto type_resolver::reject_type_as_value(ast::expr_handle value, const type& expected) -> bool {
     // A `type`, `auto`, or bare generic slot legitimately takes a type, and a not-yet-folded
     // `[N]T` slot shares the `type` kind. A generic `[]T`, `^T`, or `&T` slot is still a value.
@@ -9169,6 +9320,24 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     }
 
     auto& member_type{*result.value()};
+    // A struct's field only exists inside a value of it, so `.field` alone names nothing; an
+    // initializer's `.field = v` names the field it sets instead
+    if (const auto st{member_owner->get_data().as_opt<types::struct_t>()};
+        st && !std::exchange(resolving_init_accessor_, false)) {
+        const auto& name{resolving_.ast.get_as<ast::identifier_expr>(implicit_access.member).name};
+        const auto& table{ctx_.registry.get(member_owner->get_symbol_table_idx())};
+        if (const auto proxy{table.get_proxy_opt(name)};
+            proxy && proxy->index < st->ast_fields.size()) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'.{}' is a field of '{}', so it needs a value of it to read from",
+                            name,
+                            ctx_.type_display_name(*member_owner)),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
+    }
     if (!member_type.is_poison()) {
         record_member_owner(id, *implicit_type, implicit_access.member);
     }
@@ -9919,7 +10088,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     // condition/body once
     if (while_loop.is_comptime) { check_comptime_loop_jumps(while_loop.block); }
     TRY_RESOLVE(while_loop.condition);
-    if (while_loop.continuation) { TRY_RESOLVE(*while_loop.continuation); }
+    if (reject_type_condition(while_loop.condition)) { return; }
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
@@ -9935,6 +10104,11 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     }
     {
         const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
+        // The continuation shares the loop's scope, where a payload capture lives
+        if (while_loop.continuation) {
+            resolve(*while_loop.continuation);
+            if (!last_type_ || last_type_->is_poison()) { return fail_scoped_body(); }
+        }
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
         const mutating_context_guard cx_loop_g{in_comptime_loop_,
                                                while_loop.is_comptime || in_comptime_loop_};
@@ -10338,6 +10512,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 resolve(*decl.value);
             }
             if (last_type_->is_poison()) { return poison_out(); }
+            if (reject_loop_as_value(*decl.value)) { return poison_out(); }
             if (annotation_typed_decl &&
                 reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
                 return poison_out();
@@ -11811,11 +11986,25 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
         }
 
         TRY_RESOLVE(*return_stmt.expression);
+        if (reject_loop_as_value(*return_stmt.expression)) {
+            return resolving_.set_sema_type(id, *last_type_);
+        }
         if (!return_trackers_.empty() && return_trackers_.back().expected_type &&
             reject_type_as_value(*return_stmt.expression, *return_trackers_.back().expected_type)) {
             return resolving_.set_sema_type(id, *last_type_);
         }
         auto& return_expr_type{*last_type_.take()};
+
+        if (const auto local{frame_local_root(*return_stmt.expression)}) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("Returning a reference into '{}', which ends with this function's "
+                            "frame",
+                            *local),
+                error::ESCAPING_LOCAL_REFERENCE,
+                resolving_.ast.location_of(*return_stmt.expression)));
+        }
 
         // Only these two shapes are checked; the AST can't tell origin from pass-through.
         const auto constructs_closure_literal = [&] {
@@ -13847,6 +14036,24 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Distinct `comptime` argument values must produce distinct symbols.
     for (const auto& cx : comptime_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
 
+    // A recursive call with the same arguments names the monomorph its body is still resolving
+    if (!building_param_template_) {
+        if (const auto it{ctx_.instantiations_in_progress.find(mangled_name)};
+            it != ctx_.instantiations_in_progress.end()) {
+            if (!it->second) {
+                ctx_.diags.emplace_back(
+                    fmt::format("'{}' calls itself with the same arguments, so its return type "
+                                "must be written out instead of inferred",
+                                fn_info.name.value_or("<generic function>")),
+                    error::COMPTIME_RECURSION_LIMIT_EXCEEDED,
+                    fn_mod.ast.location_of(fn_info.node_id));
+                return stdx::none;
+            }
+            return generic_instantiation_entry{.return_type  = it->second,
+                                               .mangled_name = mangled_name};
+        }
+    }
+
     // Snapshot the shared side tables so this instantiation's typing is captured as a replayable
     // diff
     ctx_.advance_epoch();
@@ -14177,6 +14384,16 @@ auto type_resolver::instantiate_generic(type&                             callee
     // Taken after the return type since folding the arguments overwrites `last_type_`
     inst_resolver.resolve_fn_literal_attributes(fn_mod.fn_literal_node(fn_info.node_id), fn_expr);
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
+    // Only a declared result is known before the body is, which a recursive call needs. An
+    // inferred one isn't, so a recursive call is reported rather than instantiated forever
+    const bool track_in_progress{!building_param_template_ &&
+                                 return_type.get_kind() != type_kind::TYPE &&
+                                 ctx_.instantiations_in_progress
+                                     .emplace(mangled_name, is_auto_return ? nullptr : &return_type)
+                                     .second};
+    const auto in_progress_restore{gsl::finally([&] {
+        if (track_in_progress) { ctx_.instantiations_in_progress.erase(mangled_name); }
+    })};
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},
         .is_auto_return = is_auto_return,
@@ -14260,8 +14477,11 @@ auto type_resolver::instantiate_generic(type&                             callee
         tracker.has_returns() && !all_params_are_types) {
         for (const auto& param : fn_expr.parameters) {
             if (param.is_comptime) { continue; }
-            const auto pty{fn_mod.get_sema_type_opt(param.explicit_type)};
-            if (pty && pty->get_kind() != type_kind::TYPE) {
+            // An untyped pack (`rest...`) has no annotation, and its elements are values
+            const bool untyped_pack{!param.explicit_type.is_valid()};
+            const auto pty{untyped_pack ? stdx::none
+                                        : fn_mod.get_sema_type_opt(param.explicit_type)};
+            if (untyped_pack || (pty && pty->get_kind() != type_kind::TYPE)) {
                 std::string_view pn{ast::parameter_name(fn_mod.ast, param)};
                 if (pn.empty()) { pn = "_"; }
                 ctx_.diags.emplace_back(

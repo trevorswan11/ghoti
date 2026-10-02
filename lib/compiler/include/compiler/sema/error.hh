@@ -134,6 +134,7 @@ enum class error : u8 {
     CALLCONV_REQUIRES_EXTERN_FN,
     ILLEGAL_POLY_MUTABILITY,
     ILLEGAL_UNWRAP_CAPTURE,
+    ESCAPING_LOCAL_REFERENCE,
 };
 
 using diagnostic  = diagnostic<error>;
