@@ -337,6 +337,10 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
     // rather than `type`
     item_slot = &concrete_array_type(*item_slot);
     auto& item_type{*item_slot};
+    if (item_type.is_resolved() && reject_storage_slot(array.item_explicit_type, item_type)) {
+        for (const auto& item : array.items) { resolve(item); }
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
     if (item_type.is_resolved() && item_type.get_kind() != type_kind::AUTO) {
         const structural_guard g{implicit_type_stack_, item_type};
         for (const auto& item : array.items) {
@@ -6559,11 +6563,6 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         target_type = &ref_data->underlying;
     }
 
-    // e.g. `const f: fn(): T = .init;` fall through to the return type for its members
-    if (const auto fn_data{target_type->get_data().as_opt<types::function>()}) {
-        target_type = &fn_data->return_type;
-    }
-
     target_type = &concrete_array_type(*target_type);
 
     auto&      object_data{target_type->get_data()};
@@ -9101,8 +9100,13 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
                              resolving_.ast.location_of(id)));
     }
 
+    // `const f: fn(): T = .init;` finds its member through the function's return type
+    auto* member_owner{implicit_type.get()};
+    if (const auto fn_data{member_owner->get_data().as_opt<types::function>()}) {
+        member_owner = &fn_data->return_type;
+    }
     auto result{resolve_structural_access(
-        *implicit_type, implicit_access.member, resolving_.ast.location_of(id))};
+        *member_owner, implicit_access.member, resolving_.ast.location_of(id))};
     if (!result) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }

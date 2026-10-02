@@ -237,4 +237,20 @@ TEST_CASE("E2E WS-6: pointer-to-bool coercion in @assert and @verify") {
     )") == 123);
 }
 
+TEST_CASE("a module constant referring to a literal reads through to it") {
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { a: i32 };
+        const N = &22;
+        const R = &@as(i32, 5);
+        const P = ^@as(i32, 7);
+        const T = &S{ .a = 9 };
+        const read = fn(r: &i32): i32 { return r; };
+        const ptr = fn(): ^i32 { return P; };
+        pub const main = fn(): i32 {
+            let same = ptr() == ptr();
+            return 20 + N + read(R) + *ptr() + T.a + @as(i32, @intFromBool(same));
+        };
+    )") == 20 + 22 + 5 + 7 + 9 + 1);
+}
+
 } // namespace ghoti::tests

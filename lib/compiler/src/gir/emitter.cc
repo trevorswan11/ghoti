@@ -5898,6 +5898,29 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     if (const auto addr{cv.as_opt<const_addr>()}) {
         const auto type_opt{cv.get_type()};
         ASSERT(type_opt, "const_addr must carry a resolved sema type");
+        // `&22` names no symbol: its folded pointee is hoisted into a hidden read-only global,
+        // or a slot when it has no runtime type of its own
+        if (addr->symbol.empty() && !addr->pointee.empty()) {
+            const auto& pointee_cv{addr->pointee.front()};
+            const auto  pointee_type{pointee_cv.get_type()};
+            const auto  pointee_kind{pointee_type ? pointee_type->get_kind()
+                                                  : sema::type_kind::COMPTIME_INT};
+            if (pointee_kind != sema::type_kind::COMPTIME_INT &&
+                pointee_kind != sema::type_kind::COMPTIME_FLOAT) {
+                const auto global_name{fmt::format(".ref_lit.{}", anon_slice_lit_counter_++)};
+                auto&      g{gir_module_.add_global(
+                    global_name, *pointee_type, true, stdx::none, gir::linkage::INTERNAL)};
+                g.const_init.emplace(pointee_cv);
+                return value{builder_.emit_global_addr(global_name, *pointee_type, true),
+                             *type_opt};
+            }
+            const auto pointee{materialize_const(pointee_cv)};
+            ASSERT(pointee.type, "a materialized pointee must carry a type");
+            const auto slot{builder_.emit_alloca(*pointee.type)};
+            builder_.emit_store(value{slot, *pointee.type}, pointee).is_initializer = true;
+            return value{builder_.emit_address_of(value{slot, *pointee.type}, *type_opt),
+                         *type_opt};
+        }
         const auto val{builder_.emit_global_addr(addr->symbol, *type_opt, true)};
         return value{val, *type_opt};
     }

@@ -49,4 +49,23 @@ TEST_CASE("a generic union constructor taking T compiles when T is void") {
     )") == 53);
 }
 
+TEST_CASE("arrays and struct fields of void take no space and still compile") {
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { a: void, b: i32 };
+        const G: S = .{ .a = {}, .b = 4 };
+        const A: [2]void = .{ {}, {} };
+        let mut M: [2]mut void = undefined;
+        pub const main = fn(): i32 {
+            let mut s: S = .{ .a = {}, .b = 3 };
+            s.a = {};
+            let mut arr = [3]mut void{ {}, {}, {} };
+            let i: usize = 2;
+            arr[i] = {};
+            M[0] = {};
+            _ = arr[i];
+            return s.b + G.b + @intCast(i32, arr.len + A.len + @sizeOf([3]void) + @sizeOf(S));
+        };
+    )") == 3 + 4 + 3 + 2 + 0 + 4);
+}
+
 } // namespace ghoti::tests

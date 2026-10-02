@@ -616,4 +616,20 @@ TEST_CASE("a `deprecated` message that isn't a string is reported, not a crash a
                           sema::error::ILLEGAL_ATTRIBUTE));
 }
 
+TEST_CASE("an array literal of `noreturn` elements is an error, not a crash") {
+    CHECK(helpers::raised(R"(
+        const ARR = [3]noreturn{7, 8, 9};
+        pub const main = fn(): i32 { let i: usize = 2; _ = ARR[i]; return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a member of a method reference is an error, not its return type's member") {
+    CHECK(helpers::raised(R"(
+        const S = struct { item: i32, const make = fn(v: i32): S { return .{ .item = v }; }; };
+        pub const main = fn(): i32 { let a = S.make; return a.item + 1; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
 } // namespace ghoti::tests
