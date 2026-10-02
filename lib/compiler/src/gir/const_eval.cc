@@ -450,13 +450,15 @@ template <typename T>
 
 auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
+    const auto sema_ty{module_->get_sema_type_opt(id)};
+    if (sema_ty) {
         if (sema_ty->is_volatile()) { return stdx::none; }
         // Resolution already reported why; evaluating a malformed node would trip its invariants
         if (sema_ty->is_poison()) { return const_value::make_poison(); }
     }
     const memo_key key{id.get_index(), ctx_.env_epoch, in_evaluation_context()};
     const bool     is_outermost{call_stack_.empty()};
+    u64            synthetic_frame{0};
     if (is_outermost) {
         current_signal_ = eval_signal{};
         cond_unknown_   = false;
@@ -464,17 +466,75 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
             return cached->second;
         }
         // A top-level const initializer has no call frame; push a synthetic one to bind into.
-        call_stack_.emplace_back();
+        synthetic_frame = push_frame().id;
     }
 
     auto res{eval_node(id)};
-    if (res && is_outermost) { memo_cache_.emplace(key, *res); }
+    // A reference or slice viewing a compile-time place reads through it, as runtime loads it
+    if (res && res->is<const_ref>() && sema_ty &&
+        (sema_ty->get_kind() == sema::type_kind::REFERENCE ||
+         sema_ty->get_kind() == sema::type_kind::SLICE)) {
+        const auto ref{res->as<const_ref>()};
+        res = load_ref(ref, id);
+        if (res && ref.window) { res->set_type(*sema_ty); }
+    }
     if (is_outermost) {
+        if (res && reject_escaping_ref(*res, synthetic_frame, id)) {
+            res = const_value::make_poison();
+        }
+        if (res) { memo_cache_.emplace(key, *res); }
         call_stack_.pop_back();
         current_signal_ = eval_signal{};
         cond_unknown_   = false;
     }
     return res;
+}
+
+auto const_eval::try_eval_raw(ast::node_id id) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    // Outside every frame there is no place a reference could still name
+    if (call_stack_.empty()) { return try_eval(id); }
+    if (const auto sema_ty{module_->get_sema_type_opt(id)}) {
+        if (sema_ty->is_volatile()) { return stdx::none; }
+        if (sema_ty->is_poison()) { return const_value::make_poison(); }
+    }
+    return eval_node(id);
+}
+
+auto const_eval::try_eval_for(ast::node_id id, stdx::option<sema::type&> dest)
+    -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    if (!dest || call_stack_.empty()) { return try_eval(id); }
+    const auto src{module_->get_sema_type_opt(id)};
+    if (!src) { return try_eval(id); }
+    switch (dest->get_kind()) {
+    case sema::type_kind::REFERENCE: {
+        if (src->get_kind() == sema::type_kind::REFERENCE) { return try_eval_raw(id); }
+        // A place bound to a reference without an explicit `&` (a `self` receiver)
+        if (const auto place{eval_place(id)}) { return const_value{*place, *dest}; }
+        return try_eval(id);
+    }
+    case sema::type_kind::SLICE: {
+        if (src->get_kind() == sema::type_kind::SLICE) { return try_eval_raw(id); }
+        // An array decays to a slice of its own storage
+        const auto ref{src->get_data().as_opt<sema::types::reference>()};
+        const bool from_array{src->get_kind() == sema::type_kind::ARRAY ||
+                              (ref && ref->underlying.get_kind() == sema::type_kind::ARRAY)};
+        if (!from_array) { return try_eval(id); }
+        auto place{eval_place(id)};
+        if (!place) { return try_eval(id); }
+        const auto viewed{load_ref(*place, id)};
+        const auto arr{viewed ? viewed->as_opt<const_array>() : stdx::none};
+        const auto str{viewed ? viewed->as_opt<std::string>() : stdx::none};
+        if (!arr && !str) { return try_eval(id); }
+        place->window = const_ref::window_t{
+            .lo  = 0,
+            .len = arr ? arr->elements.size() : str->size(),
+        };
+        return const_value{std::move(*place), *dest};
+    }
+    default: return try_eval(id);
+    }
 }
 
 auto const_eval::eval(ast::node_id id) -> const_value {
@@ -1063,7 +1123,294 @@ namespace {
     return arr;
 }
 
+// The binding of a `const_ref` inside `v` into a frame with id `first` or later
+[[nodiscard]] auto ref_into_frames(const const_value& v, u64 first) -> stdx::option<std::string> {
+    return v.get_data().visit(
+        [first](const const_ref& r) -> stdx::option<std::string> {
+            if (r.frame >= first) { return r.binding; }
+            return stdx::none;
+        },
+        [first](const const_array& a) -> stdx::option<std::string> {
+            for (const auto& e : a.elements) {
+                if (auto hit{ref_into_frames(e, first)}) { return hit; }
+            }
+            return stdx::none;
+        },
+        [first](const const_struct& st) -> stdx::option<std::string> {
+            for (const auto& [_, f] : st.fields) {
+                if (auto hit{ref_into_frames(f, first)}) { return hit; }
+            }
+            return stdx::none;
+        },
+        [first](const const_union& un) -> stdx::option<std::string> {
+            for (const auto& e : un.payload) {
+                if (auto hit{ref_into_frames(e, first)}) { return hit; }
+            }
+            return stdx::none;
+        },
+        [first](const const_closure& cl) -> stdx::option<std::string> {
+            for (const auto& [_, f] : cl.captures.fields) {
+                if (auto hit{ref_into_frames(f, first)}) { return hit; }
+            }
+            return stdx::none;
+        },
+        [](const auto&) -> stdx::option<std::string> { return stdx::none; });
+}
+
 } // namespace
+
+auto const_eval::push_frame() -> call_frame& { return push_frame(call_frame{}); }
+
+auto const_eval::push_frame(call_frame frame) -> call_frame& {
+    frame.id = next_frame_id_++;
+    return call_stack_.emplace_back(std::move(frame));
+}
+
+auto const_eval::ref_root(const const_ref& ref) -> stdx::option<const_value&> {
+    for (auto& frame : call_stack_ | std::views::reverse) {
+        if (frame.id != ref.frame) { continue; }
+        if (auto it{frame.bindings.find(ref.binding)}; it != frame.bindings.end()) {
+            return it->second;
+        }
+        return stdx::none;
+    }
+    return stdx::none;
+}
+
+auto const_eval::raw_ref_of(ast::node_id id) -> stdx::option<const_ref> {
+    if (call_stack_.empty()) { return stdx::none; }
+    const auto val{try_eval_raw(id)};
+    if (!val) { return stdx::none; }
+    return val->as_opt<const_ref>().materialize();
+}
+
+auto const_eval::eval_place(ast::node_id id) -> stdx::option<const_ref> {
+    PROFILE_FUNCTION();
+    if (!id.is_valid() || call_stack_.empty()) { return stdx::none; }
+    const auto type{module_->get_sema_type_opt(id)};
+    // A reference stands for the place it refers to
+    if (type && type->get_kind() == sema::type_kind::REFERENCE) { return raw_ref_of(id); }
+
+    if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(id)}) {
+        for (const auto& frame : call_stack_ | std::views::reverse) {
+            if (frame.bindings.contains(ident->name)) {
+                return const_ref{
+                    .frame = frame.id, .binding = std::string{ident->name}, .path = {}};
+            }
+        }
+        return stdx::none;
+    }
+
+    if (const auto dot{module_->ast.get_as_opt<ast::dot_expr>(id)}) {
+        const auto obj_type{module_->get_sema_type_opt(dot->object)};
+        if (!obj_type) { return stdx::none; }
+        auto base{obj_type->get_kind() == sema::type_kind::POINTER ? raw_ref_of(dot->object)
+                                                                   : eval_place(dot->object)};
+        if (!base || base->window) { return stdx::none; }
+
+        const sema::type* aggregate{&*obj_type};
+        if (const auto ptr{aggregate->get_data().as_opt<sema::types::pointer>()}) {
+            aggregate = &ptr->underlying;
+        } else if (const auto ref{aggregate->get_data().as_opt<sema::types::reference>()}) {
+            aggregate = &ref->underlying;
+        }
+        const auto& member{module_->ast.get_as<ast::identifier_expr>(dot->member).name};
+        switch (aggregate->get_kind()) {
+        case sema::type_kind::STRUCT:
+            base->path.emplace_back(ref_step::kind::FIELD, std::string{member});
+            return base;
+        case sema::type_kind::UNION:
+            base->path.emplace_back(ref_step::kind::PAYLOAD, std::string{member});
+            return base;
+        default: return stdx::none;
+        }
+    }
+
+    if (const auto idx{module_->ast.get_as_opt<ast::index_expr>(id)}) {
+        if (module_->ast.get_as_opt<ast::range_expr>(idx->index)) { return stdx::none; }
+        const auto obj_type{module_->get_sema_type_opt(idx->array)};
+        if (!obj_type) { return stdx::none; }
+        auto base{obj_type->get_kind() == sema::type_kind::SLICE ? raw_ref_of(idx->array)
+                                                                 : eval_place(idx->array)};
+        if (!base) { return stdx::none; }
+        const auto k_val{try_eval(idx->index)};
+        const auto k{k_val ? k_val->as_uint_opt() : stdx::none};
+        if (!k) { return stdx::none; }
+        auto element{static_cast<usize>(*k)};
+        if (base->window) {
+            if (element >= base->window->len) { return stdx::none; }
+            element += base->window->lo;
+            base->window.reset();
+        }
+        base->path.emplace_back(ref_step::kind::INDEX, std::string{}, element);
+        return base;
+    }
+
+    // `*p` names what `p` points at, and `*s` the elements `s` views
+    if (const auto deref{module_->ast.get_as_opt<ast::dereference_expr>(id)}) {
+        return raw_ref_of(deref->rhs);
+    }
+    return stdx::none;
+}
+
+auto const_eval::load_ref(const const_ref& ref, ast::node_id at) -> stdx::option<const_value> {
+    PROFILE_FUNCTION();
+    const auto root{ref_root(ref)};
+    if (!root) {
+        ctx_.diags.emplace_back(fmt::format("A reference to the compile-time local '{}' was used "
+                                            "after the scope that owns it ended",
+                                            ref.binding),
+                                sema::error::COMPTIME_EVALUATION_FAILED,
+                                module_->ast.location_of(at));
+        return const_value::make_poison();
+    }
+
+    const const_value* cur{&*root};
+    for (const auto& step : ref.path) {
+        switch (step.step) {
+        case ref_step::kind::FIELD: {
+            const auto st{cur->as_opt<const_struct>()};
+            const auto field{st ? st->get_field_opt(step.name) : stdx::none};
+            if (!field) { return stdx::none; }
+            cur = &*field;
+            break;
+        }
+        case ref_step::kind::PAYLOAD: {
+            const auto un{cur->as_opt<const_union>()};
+            if (!un) { return stdx::none; }
+            if (un->active_field != step.name || un->payload.empty()) {
+                ctx_.diags.emplace_back(
+                    fmt::format("Attempted to access inactive union field '{}' (active field is "
+                                "'{}')",
+                                step.name,
+                                un->active_field),
+                    sema::error::COMPTIME_EVALUATION_FAILED,
+                    module_->ast.location_of(at));
+                return const_value::make_poison();
+            }
+            cur = &un->payload.front();
+            break;
+        }
+        case ref_step::kind::INDEX: {
+            if (const auto str{cur->as_opt<std::string>()}) {
+                if (step.index >= str->size()) { return stdx::none; }
+                return const_value{static_cast<u64>(static_cast<u8>((*str)[step.index])),
+                                   ctx_.get_int(8, false)};
+            }
+            const auto arr{cur->as_opt<const_array>()};
+            if (!arr || step.index >= arr->elements.size()) { return stdx::none; }
+            cur = &arr->elements[step.index];
+            break;
+        }
+        }
+    }
+
+    if (!ref.window) { return *cur; }
+    const auto [lo, len]{*ref.window};
+    if (const auto str{cur->as_opt<std::string>()}) {
+        if (lo + len > str->size()) { return stdx::none; }
+        return const_value{str->substr(lo, len), cur->get_type()};
+    }
+    const auto arr{cur->as_opt<const_array>()};
+    if (!arr || lo + len > arr->elements.size()) { return stdx::none; }
+    const_array viewed;
+    viewed.elements.assign(arr->elements.begin() + static_cast<idiff>(lo),
+                           arr->elements.begin() + static_cast<idiff>(lo + len));
+    return const_value{std::move(viewed), cur->get_type()};
+}
+
+auto const_eval::store_ref(const const_ref& ref, const_value val) -> bool {
+    PROFILE_FUNCTION();
+    const auto root{ref_root(ref)};
+    if (!root) { return false; }
+
+    auto&      u8_type{ctx_.get_int(8, false)};
+    const auto as_elements{[&](const_value& v) -> stdx::option<const_array&> {
+        if (const auto str{v.as_opt<std::string>()}) {
+            v = const_value{string_to_byte_array(*str, u8_type), v.get_type()};
+        }
+        return v.as_opt<const_array>();
+    }};
+
+    const_value* cur{&*root};
+    for (usize i{0}; i < ref.path.size(); ++i) {
+        const auto& step{ref.path[i]};
+        const bool  last{i + 1 == ref.path.size()};
+        switch (step.step) {
+        case ref_step::kind::FIELD: {
+            const auto st{cur->as_opt<const_struct>()};
+            if (!st) { return false; }
+            auto it{st->fields.find(step.name)};
+            if (it == st->fields.end()) {
+                // A defaulted field the initializer left out is only known once written
+                if (!last) { return false; }
+                it = st->fields.try_emplace(step.name, const_value{undefined_val{}}).first;
+            }
+            cur = &it->second;
+            break;
+        }
+        case ref_step::kind::PAYLOAD: {
+            const auto un{cur->as_opt<const_union>()};
+            if (!un) { return false; }
+            // Writing a whole payload switches the active variant; writing into one can't
+            if (un->active_field != step.name) {
+                if (!last) { return false; }
+                un->active_field = step.name;
+                un->payload.clear();
+            }
+            if (un->payload.empty()) { un->payload.emplace_back(undefined_val{}); }
+            cur = &un->payload.front();
+            break;
+        }
+        case ref_step::kind::INDEX: {
+            const auto arr{as_elements(*cur)};
+            if (!arr || step.index >= arr->elements.size()) { return false; }
+            cur = &arr->elements[step.index];
+            break;
+        }
+        }
+    }
+
+    if (!ref.window) {
+        *cur = std::move(val);
+        return true;
+    }
+    const auto dest{as_elements(*cur)};
+    const auto src{as_elements(val)};
+    if (!dest || !src || src->elements.size() != ref.window->len ||
+        ref.window->lo + ref.window->len > dest->elements.size()) {
+        return false;
+    }
+    std::ranges::copy(src->elements, dest->elements.begin() + static_cast<idiff>(ref.window->lo));
+    return true;
+}
+
+auto const_eval::ref_to_temporary(const_value val) -> const_ref {
+    auto&       frame{call_stack_.back()};
+    const usize slot{frame.temporaries++};
+    while (temporary_names_.size() <= slot) {
+        // Not an identifier, so no binding of the program can collide with it
+        temporary_names_.emplace_back(fmt::format("#tmp{}", temporary_names_.size()));
+    }
+    const std::string_view name{temporary_names_[slot]};
+    frame.bindings.insert_or_assign(name, std::move(val));
+    return const_ref{.frame = frame.id, .binding = std::string{name}, .path = {}};
+}
+
+auto const_eval::reject_escaping_ref(const const_value& val, u64 first_dead, ast::node_id at)
+    -> bool {
+    const auto hit{ref_into_frames(val, first_dead)};
+    if (!hit) { return false; }
+    ctx_.diags.emplace_back(
+        hit->starts_with('#')
+            ? std::string{"A reference to a compile-time temporary outlives the scope that owns it"}
+            : fmt::format("A reference to the compile-time local '{}' outlives the scope that "
+                          "owns it",
+                          *hit),
+        sema::error::COMPTIME_EVALUATION_FAILED,
+        module_->ast.location_of(at));
+    return true;
+}
 
 // `*slice`: the slice's elements as an array value of the dereference's own type
 auto const_eval::eval_slice_copy(ast::node_id id, ast::node_id slice_expr)
@@ -1120,6 +1467,9 @@ auto const_eval::write_range_target(const ast::index_expr& target,
 auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
     PROFILE_FUNCTION();
     if (!target.is_valid()) { return false; }
+
+    // A place this evaluation owns, possibly reached through a reference or pointer
+    if (const auto place{eval_place(target)}) { return store_ref(*place, std::move(val)); }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(target)}) {
         return set_local_binding(ident->name, std::move(val));
@@ -1300,7 +1650,11 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             if (rhs_type && rhs_type->get_data().is<sema::types::slice>()) {
                 return eval_slice_copy(id, data.rhs);
             }
-            return try_eval(data.rhs);
+            auto pointer{try_eval(data.rhs)};
+            if (pointer && pointer->is<const_ref>()) {
+                return load_ref(pointer->as<const_ref>(), id);
+            }
+            return pointer;
         },
         [&](const ast::reference_expr& data) -> stdx::option<const_value> {
             return eval_address_of(id, *data.rhs);
@@ -1343,6 +1697,11 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
                                           : ctx_.get_reference(mutability, *t_opt)};
             return const_value{constructed};
         }
+    }
+
+    // A binding of this evaluation, or a part of one, is referred to rather than copied
+    if (rhs_val && !rhs_val->is_poison()) {
+        if (const auto place{eval_place(rhs)}) { return const_value{*place, *sema_type}; }
     }
 
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(rhs)}) {
@@ -1531,10 +1890,11 @@ auto const_eval::eval_array(ast::node_id id, const ast::array_expr& array)
     return const_value{std::move(arr), sema_type};
 }
 
-auto const_eval::eval_slice_index(ast::node_id           id,
-                                  const const_value&     target_val,
-                                  ast::node_id           range_id,
-                                  const ast::range_expr& range) -> stdx::option<const_value> {
+auto const_eval::eval_slice_index(ast::node_id            id,
+                                  const const_value&      target_val,
+                                  ast::node_id            range_id,
+                                  const ast::range_expr&  range,
+                                  stdx::option<const_ref> base) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
@@ -1569,6 +1929,11 @@ auto const_eval::eval_slice_index(ast::node_id           id,
 
     const auto lo_u{static_cast<usize>(lo)};
     const auto hi_u{static_cast<usize>(hi)};
+    if (base) {
+        const usize offset{base->window ? base->window->lo : 0UZ};
+        base->window = const_ref::window_t{.lo = offset + lo_u, .len = hi_u - lo_u};
+        return const_value{std::move(*base), module_->get_sema_type_opt(id)};
+    }
     if (arr) {
         const_array sub;
         sub.elements.assign(arr->elements.begin() + static_cast<idiff>(lo_u),
@@ -1586,7 +1951,18 @@ auto const_eval::eval_index(ast::node_id id, const ast::index_expr& index_expr)
 
     const auto index_id{*index_expr.index};
     if (const auto range{module_->ast.get_as_opt<ast::range_expr>(index_id)}) {
-        return eval_slice_index(id, *target_val, index_id, *range);
+        // A slice of a compile-time place views it, so writes through the slice reach it
+        stdx::option<const_ref> base;
+        const auto              result_type{module_->get_sema_type_opt(id)};
+        if (result_type && result_type->get_kind() == sema::type_kind::SLICE) {
+            const auto obj_type{module_->get_sema_type_opt(index_expr.array)};
+            if (obj_type && obj_type->get_kind() == sema::type_kind::SLICE) {
+                base = raw_ref_of(index_expr.array);
+            } else {
+                base = eval_place(index_expr.array);
+            }
+        }
+        return eval_slice_index(id, *target_val, index_id, *range, std::move(base));
     }
 
     const auto idx_val{try_eval(index_expr.index)};
@@ -1822,8 +2198,13 @@ auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::optio
         return eval_module_member(*target_mod, member_name);
     }
 
-    const auto target_val{try_eval(dot.object)};
+    auto target_val{try_eval(dot.object)};
     if (!target_val) { return stdx::none; }
+    // `p.field` reads through a compile-time pointer
+    if (target_val->is<const_ref>()) {
+        target_val = load_ref(target_val->as<const_ref>(), dot.object);
+        if (!target_val || target_val->is_poison()) { return target_val; }
+    }
 
     if (const auto st{target_val->as_opt<const_struct>()}) {
         if (const auto f{st->get_field_opt(member_name)}) { return *f; }
@@ -2541,7 +2922,20 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
             return match_pattern(pattern, *matcher_val);
         })};
         if (arm_matches) {
-            if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
+            const bool by_ref{arm.modifier.is_ref() || arm.modifier.is_ptr()};
+            if (arm.capture && arm.capture->is<ast::identifier_expr>() && by_ref &&
+                !call_stack_.empty()) {
+                // `|&mut v|` refers to the matched place's payload; a temporary gets a slot
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture)};
+                auto        place{eval_place(match.matcher)};
+                if (!place) { place = ref_to_temporary(*matcher_val); }
+                if (const auto un{matcher_val->as_opt<const_union>()}; un && !un->payload.empty()) {
+                    place->path.emplace_back(ref_step::kind::PAYLOAD, un->active_field);
+                }
+                call_stack_.back().bindings.insert_or_assign(
+                    ident.name,
+                    const_value{std::move(*place), module_->get_sema_type_opt(*arm.capture)});
+            } else if (arm.capture && arm.capture->is<ast::identifier_expr>()) {
                 const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture)};
                 if (!call_stack_.empty()) {
                     if (const auto un{matcher_val->as_opt<const_union>()}) {
@@ -2723,7 +3117,9 @@ auto const_eval::eval_assignment(ast::node_id                id,
                                  syntax::token_type_t        op_type) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (op_type == syntax::token_type_t::ASSIGN) {
-        const auto rhs{try_eval(assign.rhs)};
+        const auto lhs_type{module_->get_sema_type_opt(assign.lhs)};
+        const bool rebinds_view{lhs_type && lhs_type->get_kind() == sema::type_kind::SLICE};
+        const auto rhs{rebinds_view ? try_eval_for(assign.rhs, lhs_type) : try_eval(assign.rhs)};
         if (!rhs) { return stdx::none; }
         if (!write_target(assign.lhs, *rhs)) { return stdx::none; }
         return rhs;
@@ -3422,7 +3818,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 if (callee_mod != prev) { set_module(*prev); }
                 for (usize a{0}; a < call.arguments.size() && a < fn_expr->parameters.size(); ++a) {
                     if (fn_expr->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
-                        a < args.size()) {
+                        a < args.size() && !args[a].is<const_ref>()) {
                         if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
                             DISCARD(write_target(*expr_h, args[a]));
                         }
@@ -3562,13 +3958,46 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     obj_val        = try_eval(dot->object);
                     obj_is_type_ns = obj_val && obj_val->is<stdx::option<sema::type&>>();
                 }
-                if (method_fn->self && dot && !obj_is_type_ns) {
+                const auto callee_type{module_->get_sema_type_opt(call.function)};
+                const auto callee_fn{callee_type
+                                         ? callee_type->get_data().as_opt<sema::types::function>()
+                                         : stdx::none};
+                const bool receiver_bound{method_fn->self && dot && !obj_is_type_ns};
+                const auto param_type{[&](usize i) -> stdx::option<sema::type&> {
+                    if (!callee_fn || !callee_fn->has_self) { return stdx::none; }
+                    const usize at{i + 1};
+                    if (at >= callee_fn->params.size()) { return stdx::none; }
+                    return *callee_fn->params[at];
+                }};
+                if (receiver_bound) {
                     if (!obj_val) { return stdx::none; }
                     args.emplace_back(*obj_val);
+                    // A `&self` / `^self` receiver refers to the object's own place
+                    const auto self_type{callee_fn && callee_fn->has_self &&
+                                                 !callee_fn->params.empty()
+                                             ? stdx::option<sema::type&>{*callee_fn->params[0]}
+                                             : stdx::none};
+                    const bool self_indirect{self_type &&
+                                             (self_type->get_kind() == sema::type_kind::REFERENCE ||
+                                              self_type->get_kind() == sema::type_kind::POINTER)};
+                    const auto obj_type{module_->get_sema_type_opt(dot->object)};
+                    const bool obj_indirect{obj_type &&
+                                            (obj_type->get_kind() == sema::type_kind::REFERENCE ||
+                                             obj_type->get_kind() == sema::type_kind::POINTER)};
+                    if (self_indirect && !call_stack_.empty()) {
+                        if (obj_indirect) {
+                            if (auto ref{raw_ref_of(dot->object)}) {
+                                args.back() = const_value{std::move(*ref), *self_type};
+                            }
+                        } else if (auto place{eval_place(dot->object)}) {
+                            args.back() = const_value{std::move(*place), *self_type};
+                        }
+                    }
                 }
+                usize param_idx{0};
                 for (const auto& arg : call.arguments) {
                     if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                        const auto arg_val{try_eval(*expr_h)};
+                        const auto arg_val{try_eval_for(*expr_h, param_type(param_idx++))};
                         if (!arg_val) { return stdx::none; }
                         args.emplace_back(*arg_val);
                     }
@@ -3600,14 +4029,14 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 auto res{eval_comptime_fn(id, *method_fn, args)};
                 if (method_mod != prev) { set_module(*prev); }
                 if (dot && method_fn->self && method_fn->self->modifier.is_mutable_ref() &&
-                    !args.empty()) {
+                    !args.empty() && !args[0].is<const_ref>()) {
                     DISCARD(write_target(dot->object, args[0]));
                 }
                 const usize arg_offset{method_fn->self && dot && !obj_is_type_ns ? 1UZ : 0UZ};
                 for (usize a{0}; a < call.arguments.size() && a < method_fn->parameters.size();
                      ++a) {
                     if (method_fn->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
-                        (arg_offset + a) < args.size()) {
+                        (arg_offset + a) < args.size() && !args[arg_offset + a].is<const_ref>()) {
                         if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
                             DISCARD(write_target(*expr_h, args[arg_offset + a]));
                         }
@@ -4737,7 +5166,9 @@ auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
 auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<const_value> {
     ASSERT(decl.value, "Only a declaration with an initializer has a value to fold");
     const sema::comptime_evaluation_scope scope{ctx_, decl.evaluates_at_compile_time()};
-    auto                                  value{try_eval(*decl.value)};
+    const auto binding_type{decl.explicit_type ? module_->get_sema_type_opt(*decl.explicit_type)
+                                               : module_->get_sema_type_opt(*decl.value)};
+    auto       value{try_eval_for(*decl.value, binding_type)};
     // Only real compile-time evaluation builds out an undefined aggregate's shape
     const bool expand_undefined{value && value->is<undefined_val>() && in_evaluation_context()};
     if (value && decl.explicit_type) {
@@ -4763,16 +5194,29 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
     return value;
 }
 
+auto const_eval::callee_params(const ast::call_expr& call) -> gsl::span<sema::type*> {
+    const auto callee{module_->get_sema_type_opt(call.function)};
+    const auto fn{callee ? callee->get_data().as_opt<sema::types::function>() : stdx::none};
+    if (!fn || fn->has_self) { return {}; }
+    return fn->params;
+}
+
 auto const_eval::eval_call_args(const ast::call_expr& call)
     -> stdx::option<std::vector<const_value>> {
     std::vector<const_value> args;
+    const auto               params{callee_params(call)};
+    bool                     params_aligned{true};
     for (usize i{0}; i < call.arguments.size(); ++i) {
         const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
         if (!expr_h) { continue; }
-        const auto val{try_eval(*expr_h)};
+        const bool is_expansion{i < call.pack_expansions.size() && call.pack_expansions[i]};
+        // Past a pack expansion, argument positions no longer line up with parameters
+        params_aligned = params_aligned && !is_expansion;
+        const auto dest{params_aligned && i < params.size() ? stdx::option<sema::type&>{*params[i]}
+                                                            : stdx::none};
+        const auto val{try_eval_for(*expr_h, dest)};
         if (!val) { return stdx::none; }
 
-        const bool is_expansion{i < call.pack_expansions.size() && call.pack_expansions[i]};
         if (!is_expansion) {
             args.emplace_back(*val);
             continue;
@@ -4871,7 +5315,11 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
     }
 
     const usize prev_stack_size{recursion_limit_stack_.size()};
-    call_stack_.emplace_back(std::move(frame));
+    const u64   fn_frame{push_frame(std::move(frame)).id};
+    return_types_.emplace_back(fn_expr.explicit_return_type.is_valid()
+                                   ? module_->get_sema_type_opt(fn_expr.explicit_return_type)
+                                   : stdx::none);
+    const auto                   pop_return_type{gsl::finally([&] { return_types_.pop_back(); })};
     const default_counter::guard g{recursion_depth_};
     const bool                   prev_cond_unknown{std::exchange(cond_unknown_, false)};
     const auto                   prev_signal{std::exchange(current_signal_, eval_signal{})};
@@ -4915,6 +5363,11 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
     }
 
     call_stack_.pop_back();
+    // A reference into the callee's own frames would dangle once it returns
+    if (fn_result &&
+        reject_escaping_ref(*fn_result, fn_frame, call_id.is_valid() ? call_id : *fn_expr.body)) {
+        fn_result = const_value::make_poison();
+    }
     while (recursion_limit_stack_.size() > prev_stack_size) {
         max_recursion_depth_ = recursion_limit_stack_.back();
         recursion_limit_stack_.pop_back();
@@ -4931,9 +5384,10 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         [&](const ast::block_stmt& data) { return eval_block(*stmt, data); },
         [&](const ast::decl_stmt& data) { return eval_decl(*stmt, data); },
         [&](const ast::return_stmt& data) -> stdx::option<const_value> {
-            auto val = data.expression
-                           ? try_eval(*data.expression)
-                           : const_value{void_val{},
+            const auto ret_type{return_types_.empty() ? stdx::none : return_types_.back()};
+            auto       val = data.expression
+                                 ? try_eval_for(*data.expression, ret_type)
+                                 : const_value{void_val{},
                                          ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
             if (data.expression && !val) {
                 cond_unknown_ = true;
@@ -5044,12 +5498,12 @@ auto const_eval::eval_non_break(const ast::stmt_handle& stmt) -> stdx::option<co
     return eval_stmt(stmt);
 }
 
-auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
+auto const_eval::eval_block(ast::node_id block_id, const ast::block_stmt& block)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const comptime_context_guard cx_g{*this, comptime_context_ || block.is_comptime};
-    call_stack_.emplace_back();
-    stdx::option<const_value> result;
+    const u64                    block_frame{push_frame().id};
+    stdx::option<const_value>    result;
     for (usize idx{0}; idx < block.statements.size(); ++idx) {
         const auto& stmt{block.statements[idx]};
         const bool  is_last{idx + 1 == block.statements.size()};
@@ -5088,6 +5542,14 @@ auto const_eval::eval_block(ast::node_id, const ast::block_stmt& block)
         }
         current_signal_ = saved_signal;
         call_stack_.pop_back();
+    }
+    // A value leaving the block can't refer to a local the block owned
+    if (result && reject_escaping_ref(*result, block_frame, block_id)) {
+        result = const_value::make_poison();
+    }
+    if (current_signal_.value &&
+        reject_escaping_ref(*current_signal_.value, block_frame, block_id)) {
+        current_signal_.value = const_value::make_poison();
     }
     return result;
 }
@@ -5345,10 +5807,31 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
     usize iter_count{iterable_sequences.front().size()};
     for (const auto& seq : iterable_sequences) { iter_count = std::min(iter_count, seq.size()); }
 
+    // A `|&mut v|` / `|^mut v|` capture refers to the element of the place being iterated
+    std::vector<stdx::option<const_ref>> element_bases(loop.captures.size());
+    for (usize idx{0}; idx < loop.captures.size() && !call_stack_.empty(); ++idx) {
+        const auto& capture{loop.captures[idx]};
+        if (!capture.modifier.is_ref() && !capture.modifier.is_ptr()) { continue; }
+        const auto iterable{*loop.iterables[idx]};
+        const auto it_type{module_->get_sema_type_opt(iterable)};
+        if (!it_type || module_->ast.get_as_opt<ast::range_expr>(iterable)) { continue; }
+        element_bases[idx] = it_type->get_kind() == sema::type_kind::SLICE ? raw_ref_of(iterable)
+                                                                           : eval_place(iterable);
+    }
+
     for (usize step{0}; step < iter_count; ++step) {
         for (usize idx{0}; idx < loop.captures.size(); ++idx) {
             const auto& capture{loop.captures[idx]};
-            if (capture.payload.is<ast::identifier_expr>()) {
+            if (capture.payload.is<ast::identifier_expr>() && element_bases[idx]) {
+                const auto& ident{module_->ast.get_as<ast::identifier_expr>(capture.payload)};
+                auto        element{*element_bases[idx]};
+                const usize offset{element.window ? element.window->lo : 0UZ};
+                element.window.reset();
+                element.path.emplace_back(ref_step::kind::INDEX, std::string{}, offset + step);
+                call_stack_.back().bindings.insert_or_assign(
+                    ident.name,
+                    const_value{std::move(element), module_->get_sema_type_opt(capture.payload)});
+            } else if (capture.payload.is<ast::identifier_expr>()) {
                 const auto& ident{module_->ast.get_as<ast::identifier_expr>(capture.payload)};
                 if (!call_stack_.empty()) {
                     call_stack_.back().bindings.insert_or_assign(ident.name,
@@ -5398,7 +5881,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
     // Ensure a call frame exists on `call_stack_` to host local bindings during simulation.
     bool pushed_frame{false};
     if (call_stack_.empty()) {
-        call_stack_.emplace_back();
+        DISCARD(push_frame());
         pushed_frame = true;
     }
     const auto cleanup{gsl::finally([&] {
@@ -5437,7 +5920,10 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
     // Export the materialized bindings so the caller can install them into
     // `ctx_.comptime_binding_frames` during isolated subexpression folding.
     if (!cond_unknown_) {
-        for (const auto& [k, v] : call_stack_.back().bindings) { out_frame.insert_or_assign(k, v); }
+        for (const auto& [k, v] : call_stack_.back().bindings) {
+            // A reference into the simulation's own frame can't outlive it
+            if (!ref_into_frames(v, 0)) { out_frame.insert_or_assign(k, v); }
+        }
     }
 }
 
@@ -5844,7 +6330,7 @@ auto const_eval::simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> 
 }
 
 auto const_eval::simulate_block(const ast::block_stmt& block) -> void {
-    call_stack_.emplace_back();
+    DISCARD(push_frame());
     for (const auto& s : block.statements) {
         simulate_stmt(s);
         if (cond_unknown_ || current_signal_.kind) { break; }

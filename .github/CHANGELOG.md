@@ -607,6 +607,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
     - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
     - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
+- Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:
+    - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
+    - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
+    - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
+    - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
