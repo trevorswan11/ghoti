@@ -3715,18 +3715,6 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_PTR_FROM_ARRAY: {
-            if (!call.arguments.empty()) {
-                if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
-                    const auto base_lval{emit_lvalue(*op_expr)};
-                    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                    const auto elem_ptr{builder_.emit_get_element_ptr(
-                        base_lval, {value{static_cast<u64>(0), usize_type}}, ret_type)};
-                    return value{elem_ptr, ret_type};
-                }
-            }
-            break;
-        }
         case syntax::token_type_t::BUILTIN_SLICE_FROM_PTR: {
             if (call.arguments.size() >= 2) {
                 const auto op_ptr{call.arguments[0].as_opt<ast::expr_handle>()};

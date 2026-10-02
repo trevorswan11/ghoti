@@ -33,7 +33,6 @@ constexpr builtin_t DYN_CAST{"@dynCast", token_type_t::BUILTIN_DYN_CAST};
 
 constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
 constexpr builtin_t PTR_FROM_INT{"@ptrFromInt", token_type_t::BUILTIN_PTR_FROM_INT};
-constexpr builtin_t PTR_FROM_ARRAY{"@ptrFromArray", token_type_t::BUILTIN_PTR_FROM_ARRAY};
 constexpr builtin_t SLICE_FROM_PTR{"@sliceFromPtr", token_type_t::BUILTIN_SLICE_FROM_PTR};
 constexpr builtin_t FIELD_PARENT_PTR{"@fieldParentPtr", token_type_t::BUILTIN_FIELD_PARENT_PTR};
 
@@ -172,7 +171,6 @@ constexpr std::array ALL_BUILTINS{
     builtins::FLOAT_CAST,
     builtins::INT_FROM_PTR,
     builtins::PTR_FROM_INT,
-    builtins::PTR_FROM_ARRAY,
     builtins::SLICE_FROM_PTR,
     builtins::FIELD_PARENT_PTR,
     builtins::ALIGN_OF,

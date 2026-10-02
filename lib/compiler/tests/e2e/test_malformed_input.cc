@@ -152,7 +152,7 @@ TEST_CASE("pointer arithmetic steps by whole pointees in either operand order") 
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let a: [3]i32 = .{ 1, 2, 3 };
-            let p: ^i32 = @ptrFromArray(a);
+            let p: ^i32 = a.ptr;
             let mut n: usize = 2;
             let q = n + p;
             return *(p + 2) + *(1 + p) + *(q - 1);

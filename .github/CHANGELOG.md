@@ -628,7 +628,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
     - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
     - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
-    - a pointer into an array steps through its elements: `let p: ^mut i32 = @ptrFromArray(a); p[2] = 4;`
+    - a pointer into an array steps through its elements: `let p: ^mut i32 = a.ptr; p[2] = 4;`
     - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
     - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
 - Fixed: a parameterized `impl` could expand for a type constructor from another module (such as the prelude's `builtin.Flow`) whose declaration happened to sit at the same position as its own, so unrelated edits made errors like "Cannot take a reference to an already-reference-typed value" appear inside the `impl`
@@ -642,6 +642,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
     - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
     - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- **Breaking:** `@ptrFromArray(a)` is removed; `a.ptr` already gives the same pointer to the first element, for arrays and slices alike
 - `\\` multiline strings format like Zig's: after `=` they start their own indented line, and a list never gets a trailing comma alone on the line after one
 - Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
 - A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it

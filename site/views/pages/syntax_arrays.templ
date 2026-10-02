@@ -25,7 +25,7 @@ templ SyntaxArraysPage() {
 	<ul>
 		<li>Arrays do not decay to pointers implicitly as they do in C</li>
 		<li>
-			To call a C function that takes in a pointer that is actually an array, you can use the builtin <code>{ "@ptrFromArray" }</code>
+			To call a C function that takes in a pointer that is actually an array, pass the array's <code>.ptr</code>, a pointer to its first element (<code>[N]mut T</code> gives <code>^mut T</code>)
 			<ul>
 				<li>This erases the underlying size of the array and is not trivially reversible. It is only recommended for use with C interop</li>
 			</ul>

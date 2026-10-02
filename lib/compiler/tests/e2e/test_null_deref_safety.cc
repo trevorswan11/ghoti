@@ -84,7 +84,7 @@ TEST_CASE("Valid pointer dereferences are unaffected by the null-pointer safety 
             let mut p: ^mut Point = ^mut pt;
             p.x = p.x + 1;
             let mut arr: [2uz]mut i32 = [2uz]mut i32{10, 20};
-            let mut ap: ^mut i32 = @ptrFromArray(arr);
+            let mut ap: ^mut i32 = arr.ptr;
             ap[1] = ap[1] + 1;
             return p.x + p.y + arr[1];   // 41 + 2 + 21
         };

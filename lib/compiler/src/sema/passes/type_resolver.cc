@@ -1237,23 +1237,6 @@ template <ast::IndexableID ID>
         }
         return_type = &builtin.return_type;
         break;
-    case token_type_t::BUILTIN_PTR_FROM_ARRAY: {
-        auto& array_type{*get_resolved_call_arg_type(call.arguments[0])};
-        auto& type_data{array_type.get_data()};
-        // The result pointer mirrors the array's element mutability: `[N]mut T` -> `^mut T`.
-        const auto mutability{container_element_mutability(array_type)};
-        if (const auto array_data{type_data.as_opt<types::array>()}) {
-            return_type = &ctx_.get_pointer(mutability, array_data->underlying);
-        } else if (const auto deferred_data{type_data.as_opt<types::deferred_array>()}) {
-            return_type = &ctx_.get_pointer(mutability, deferred_data->underlying);
-        } else {
-            return make_sema_err(fmt::format("Expected an array-yielding expression; found '{}'",
-                                             ctx_.type_display_name(array_type)),
-                                 error::TYPE_MISMATCH,
-                                 get_call_arg_location(call.arguments[0]));
-        }
-        break;
-    }
     case token_type_t::BUILTIN_PTR_FROM_INT: {
         auto& requested_output{*get_resolved_call_arg_type(call.arguments[0])};
         if (requested_output.get_kind() == type_kind::POINTER) {

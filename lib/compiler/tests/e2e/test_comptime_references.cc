@@ -168,7 +168,7 @@ TEST_CASE("compile-time pointers step through array elements") {
     check_both(R"(
         const t = fn(): i32 {
             let mut a = [3]mut i32{ 1, 2, 3 };
-            let p: ^mut i32 = @ptrFromArray(a);
+            let p: ^mut i32 = a.ptr;
             p[2] = 4;
             let q = ^mut a[1];
             q[1] += 1;

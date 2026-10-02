@@ -2223,9 +2223,31 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
     return const_value{std::move(struct_val), sema_type};
 }
 
-auto const_eval::eval_dot(ast::node_id, const ast::dot_expr& dot) -> stdx::option<const_value> {
+auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(dot.member).name};
+
+    // `a.ptr` points at the first element of a compile-time place, which `p[i]` steps through
+    if (member_name == "ptr" && !call_stack_.empty()) {
+        if (const auto obj_type{module_->get_sema_type_opt(dot.object)}) {
+            const auto kind{obj_type->get_kind()};
+            stdx::option<const_ref> place;
+            if (kind == sema::type_kind::SLICE) {
+                place = raw_ref_of(dot.object);
+            } else if (kind == sema::type_kind::ARRAY || kind == sema::type_kind::REFERENCE) {
+                place = eval_place(dot.object);
+            }
+            if (place) {
+                usize first{0};
+                if (place->window) {
+                    first = place->window->lo;
+                    place->window.reset();
+                }
+                place->path.emplace_back(ref_step::kind::INDEX, std::string{}, first);
+                return const_value{std::move(*place), module_->get_sema_type_opt(id)};
+            }
+        }
+    }
 
     if (const auto obj_ident{module_->ast.get_as_opt<ast::identifier_expr>(dot.object)}) {
         if (module_->root_table_idx) {
@@ -4912,23 +4934,6 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
-    }
-    case syntax::token_type_t::BUILTIN_PTR_FROM_ARRAY: {
-        // `@ptrFromArray(a)` points at `a`'s first element, as a place `p[i]` can step through
-        if (call.arguments.empty() || call_stack_.empty()) { return stdx::none; }
-        const auto arr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!arr_h) { return stdx::none; }
-        const auto arr_type{module_->get_sema_type_opt(*arr_h)};
-        auto place{arr_type && arr_type->get_kind() == sema::type_kind::SLICE ? raw_ref_of(*arr_h)
-                                                                              : eval_place(*arr_h)};
-        if (!place) { return stdx::none; }
-        usize first{0};
-        if (place->window) {
-            first = place->window->lo;
-            place->window.reset();
-        }
-        place->path.emplace_back(ref_step::kind::INDEX, std::string{}, first);
-        return const_value{std::move(*place), module_->get_sema_type_opt(id)};
     }
     case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
         // `@ptrFromInt(T, n)` -> the pointer whose address bits are the constant `n`.
