@@ -91,13 +91,12 @@ class label {
     std::vector<gsl::not_null<type*>> yield_types_;
 };
 
-using match_capture    = ast::identifier_handle;
-using struct_field     = ast::struct_expr::field;
-using union_field      = ast::union_expr::field;
-using enumeration      = ast::enum_expr::enumeration;
-using self_parameter   = ast::self_parameter;
-using parameter        = ast::function_expr::parameter;
-using for_loop_capture = ast::for_loop_expr::capture_t;
+using struct_field   = ast::struct_expr::field;
+using union_field    = ast::union_expr::field;
+using enumeration    = ast::enum_expr::enumeration;
+using self_parameter = ast::self_parameter;
+using parameter      = ast::function_expr::parameter;
+using capture        = ast::capture_t; // `match`, `for`, `if`, `while`, and `errdefer` captures
 
 } // namespace symbols
 
@@ -106,13 +105,12 @@ class symbol {
     using data_t = stdx::variant<symbols::builtin,
                                  symbols::node_t,
                                  symbols::label,
-                                 symbols::match_capture,
                                  symbols::struct_field,
                                  symbols::union_field,
                                  symbols::enumeration,
                                  symbols::self_parameter,
                                  symbols::parameter,
-                                 symbols::for_loop_capture>;
+                                 symbols::capture>;
 
   public:
     symbol(std::string_view name, data_t data) noexcept : name_{name}, data_{std::move(data)} {}

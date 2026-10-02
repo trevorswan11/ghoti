@@ -242,7 +242,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::for_loop_expr& for_expr
         for (const auto& capture : for_expr.captures) {
             if (const auto ident{
                     collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
-                try_declare<symbols::for_loop_capture>(ident->name, capture);
+                try_declare<symbols::capture>(ident->name, capture);
             }
         }
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(for_expr.block)};
@@ -298,7 +298,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
 auto symbol_collector::declare_capture(const ast::capture_t& capture) -> void {
     if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
         collecting_.add_identifier_position(*capture.payload);
-        try_declare<symbols::match_capture>(ident->name, capture.payload);
+        try_declare<symbols::capture>(ident->name, capture);
     }
 }
 
@@ -424,7 +424,7 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
         for (const auto& pattern : arm.patterns) { collect(pattern); }
         if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
             const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
-            try_declare<symbols::match_capture>(ident.name, *arm.capture->payload);
+            try_declare<symbols::capture>(ident.name, *arm.capture);
         }
         collect(arm.dispatch);
 
@@ -716,7 +716,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::errdefer_stmt& errdef) 
         const scope s{table_stack_, new_idx, table_idx_};
         const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(**errdef.capture)};
         collecting_.add_identifier_position(**errdef.capture);
-        try_declare<symbols::match_capture>(ident.name, **errdef.capture);
+        try_declare<symbols::capture>(ident.name,
+                                      ast::capture_t{.modifier = {}, .payload = *errdef.capture});
         collect(errdef.deferred);
         last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
         last_type_->set_symbol_table_idx(new_idx);

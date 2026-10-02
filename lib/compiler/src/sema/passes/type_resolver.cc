@@ -5052,9 +5052,9 @@ auto type_resolver::get_resolved_symbol_type(symbol::data_t& symbol_data) -> typ
             ASSERT(resolving_.has_sema_type(sym.name), "Name-only sym was never typed");
             return resolving_.get_sema_type(sym.name);
         },
-        [this](symbols::for_loop_capture& capture) -> type& {
+        [this](symbols::capture& capture) -> type& {
             ASSERT(capture.payload.is<ast::identifier_expr>(), "Capture payload must be an ident");
-            ASSERT(resolving_.has_sema_type(capture.payload), "For loop capture was never typed");
+            ASSERT(resolving_.has_sema_type(capture.payload), "Capture was never typed");
             return resolving_.get_sema_type(capture.payload);
         });
 }

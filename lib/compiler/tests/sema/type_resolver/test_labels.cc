@@ -42,8 +42,8 @@ TEST_CASE("Labeled for loop resolution") {
     }
 
     const auto check_capture = [&](std::string_view name) -> void {
-        const auto [sym, sym_data, type]{ctx->get_type_sym_info<syms::for_loop_capture>(
-            name, 2, stdx::none, &syms::for_loop_capture::payload)};
+        const auto [sym, sym_data, type]{
+            ctx->get_type_sym_info<syms::capture>(name, 2, stdx::none, &syms::capture::payload)};
         CHECK(type == i32_type);
     };
     check_capture("i");
