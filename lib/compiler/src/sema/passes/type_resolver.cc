@@ -3366,6 +3366,42 @@ auto register_type_ctor_members(context&         ctx,
 
 } // namespace
 
+auto type_resolver::reject_type_of_args(const ast::call_expr&     call,
+                                        const ast::function_expr& fn_expr,
+                                        std::string_view          mangled_name) -> bool {
+    // `y: @TypeOf(x)` only has a type in the monomorph, which records it with its request
+    const auto request{std::ranges::find(resolving_.generic_instantiations,
+                                         mangled_name,
+                                         &generic_instantiation_request::mangled_name)};
+    if (request == resolving_.generic_instantiations.end()) { return false; }
+    for (usize i{0}, runtime_idx{0}; i < fn_expr.parameters.size() && i < call.arguments.size();
+         ++i) {
+        const auto& param{fn_expr.parameters[i]};
+        if (param.is_comptime) { continue; }
+        const auto slot{runtime_idx++};
+        if (param.explicit_type.get_token_type() != syntax::token_type_t::BUILTIN_TYPE_OF ||
+            slot >= request->arg_types.size()) {
+            continue;
+        }
+        const auto arg_expr{call.arguments[i].as_opt<ast::expr_handle>()};
+        const auto arg_type{arg_expr ? resolving_.get_sema_type_opt(*arg_expr) : stdx::none};
+        auto&      param_type{*request->arg_types[slot]};
+        if (!arg_type || arg_type->is_poison() || param_type.is_poison() ||
+            is_assignable(*arg_type, param_type)) {
+            continue;
+        }
+        ctx_.diags.emplace_back(
+            fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
+                        i + 1,
+                        ctx_.type_display_name(*arg_type),
+                        ctx_.type_display_name(param_type)),
+            error::TYPE_MISMATCH,
+            get_call_arg_location(call.arguments[i]));
+        return true;
+    }
+    return false;
+}
+
 template <ast::IndexableID ID>
 auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     // The call can only yield a non-poison type if the function is valid
@@ -3809,6 +3845,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             };
 
             if (const auto cached{ctx_.instantiation_cache.find(key)}) {
+                if (reject_type_of_args(call, *fn_info_opt->fn_expr, cached->mangled_name)) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
                 resolving_.set_generic_call_target(id, cached->mangled_name);
                 resolving_.set_sema_type(id, *cached->return_type);
                 return last_type_.emplace(*cached->return_type);
@@ -3855,6 +3894,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             auto& return_type{*inst_res->return_type};
             auto  mangled_name{inst_res->mangled_name};
+            if (reject_type_of_args(call, *fn_info_copy.fn_expr, mangled_name)) {
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
             if (!building_param_template_) {
                 ctx_.instantiation_cache.insert(std::move(key), return_type, mangled_name);
             }

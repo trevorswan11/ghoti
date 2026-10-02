@@ -717,6 +717,10 @@ class type_resolver {
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
         -> stdx::option<symbol&>;
 
+    // Reports an argument a `y: @TypeOf(x)` parameter of the `mangled_name` monomorph can't take
+    auto reject_type_of_args(const ast::call_expr&     call,
+                             const ast::function_expr& fn_expr,
+                             std::string_view          mangled_name) -> bool;
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
                              gsl::span<type*>                  concrete_args,

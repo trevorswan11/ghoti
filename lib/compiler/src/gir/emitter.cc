@@ -4605,6 +4605,24 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             generic_target_fn.emplace(*gi->fn_expr);
         }
     }
+    // A `y: @TypeOf(x)` parameter is only typed in the monomorph, so its argument converts to that
+    const auto instantiated_param{[&](usize i) -> stdx::option<sema::type&> {
+        if (!generic_target_fn || !callee_name || i >= generic_target_fn->parameters.size()) {
+            return stdx::none;
+        }
+        const auto& params{generic_target_fn->parameters};
+        if (params[i].explicit_type.get_token_type() != syntax::token_type_t::BUILTIN_TYPE_OF) {
+            return stdx::none;
+        }
+        const auto runtime_idx{static_cast<usize>(std::ranges::count_if(
+            params | std::views::take(i), [](const auto& p) { return !p.is_comptime; }))};
+        for (const auto& req : active_mod().generic_instantiations) {
+            if (req.mangled_name != *callee_name) { continue; }
+            if (runtime_idx < req.arg_types.size()) { return *req.arg_types[runtime_idx]; }
+            break;
+        }
+        return stdx::none;
+    }};
 
     // Splice every `expr...` pack expansion into place, mirroring the resolver's own
     // `expand_pack_call_args`: one effective slot per argument, or per pack element for a
@@ -4682,6 +4700,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (is_type_arg) {
                 auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
                 args.emplace_back(value{undefined_val{}, type_type});
+            } else if (const auto inst_param{instantiated_param(i)}) {
+                args.emplace_back(emit_coerced_expr(*expr_h, *inst_param));
             } else if (fn_data && param_idx < fn_data->params.size()) {
                 args.emplace_back(emit_coerced_expr(*expr_h, *fn_data->params[param_idx]));
             } else {

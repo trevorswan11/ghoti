@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -587,6 +588,29 @@ TEST_CASE("a `[n]T` parameter or return type of a `T: type` generic is monomorph
             return p[0] + p[1];
         };
     )") == 14);
+}
+
+TEST_CASE("an argument for a `@TypeOf(x)` parameter converts to, and must fit, that type") {
+    CHECK(helpers::compile_and_run(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 {
+            let a: i32 = 4;
+            let f: f32 = 1.0;
+            return echo(1, 5) + echo(a, @as(i16, 2)) + @intFromFloat(i32, echo(1.5, 2)) +
+                   @intFromFloat(i32, echo(f, 3));
+        };
+    )") == 5 + 2 + 2 + 3);
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 { let c = echo(1, true); return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        const c = echo(1, &2);
+        pub const main = fn(): i32 { return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
 }
 
 } // namespace ghoti::tests

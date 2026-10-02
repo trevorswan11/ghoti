@@ -639,6 +639,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
     - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
     - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
