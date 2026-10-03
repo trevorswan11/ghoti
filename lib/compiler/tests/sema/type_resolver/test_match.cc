@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"

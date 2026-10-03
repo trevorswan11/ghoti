@@ -3879,7 +3879,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                  decl->has_modifier(ast::decl_modifiers::LET)) &&
                 decl->value) {
                 // Its own initializer reading it again would never finish folding
-                const void* key{&*decl};
+                const auto key{reinterpret_cast<uptr>(decl.get())};
                 if (!ctx_.globals_in_evaluation.insert(key).second) {
                     ctx_.diags.emplace_back(
                         fmt::format("'{}' depends on its own value", ident.name),

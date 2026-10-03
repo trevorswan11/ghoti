@@ -276,7 +276,7 @@ auto math_functions() -> std::vector<diff::expr_template> {
                                             "@log10",
                                             "@floor",
                                             "@ceil"}) {
-            templates.push_back({
+            templates.emplace_back<diff::expr_template>({
                 .text              = fmt::format("{}({{0}})", name),
                 .operands          = {type},
                 .result            = type,
@@ -314,7 +314,7 @@ auto mixed_type_peers() -> std::vector<diff::expr_template> {
         for (const std::string_view op : {"+", "-", "*"}) {
             // Both operand orders convert the narrow side
             for (const bool narrow_first : {true, false}) {
-                templates.push_back({
+                templates.emplace_back<diff::expr_template>({
                     .text = fmt::format("{{0}} {} {{1}}", op),
                     .operands =
                         narrow_first ? std::vector{narrow, peer} : std::vector{peer, narrow},
@@ -324,21 +324,21 @@ auto mixed_type_peers() -> std::vector<diff::expr_template> {
             }
         }
         for (const std::string_view op : {"==", "<", ">="}) {
-            templates.push_back({
+            templates.emplace_back<diff::expr_template>({
                 .text     = fmt::format("{{0}} {} {{1}}", op),
                 .operands = {narrow, peer},
                 .result   = diff::bool_type(),
             });
         }
         for (const std::string_view builtin : {"@min", "@max"}) {
-            templates.push_back({
+            templates.emplace_back<diff::expr_template>({
                 .text     = fmt::format("{}({{0}}, {{1}})", builtin),
                 .operands = {peer, narrow},
                 .result   = peer,
             });
         }
         if (is_int) {
-            templates.push_back({
+            templates.emplace_back<diff::expr_template>({
                 .text     = "{0} & {1}",
                 .operands = {narrow, peer},
                 .result   = peer,

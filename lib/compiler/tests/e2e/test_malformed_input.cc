@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -737,13 +736,14 @@ TEST_CASE("more fuzz-found crashes are errors") {
         pub const main = fn(): i32 { return apply(1, 32); };
     )",
                           sema::error::TYPE_MISMATCH));
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         const U = union { x: i32, let mut calls: i32 = 0; };
         const E = enum { a, const K = U.calls; };
         pub const main = fn(): i32 { return E.K; };
     )");
+
     // Reading itself twice used to take exponential time before failing
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         const build = fn(): i32 { _ = x; _ = x; return 1; };
         const x = build();
         pub const main = fn(): i32 { return x; };

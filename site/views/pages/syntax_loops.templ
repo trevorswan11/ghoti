@@ -41,7 +41,7 @@ templ SyntaxLoopsPage() {
 			<ul>
 				<li><code>lo..hi</code> counts from <code>lo</code> up to but not including <code>hi</code>, and <code>lo..=hi</code> includes <code>hi</code>, even when <code>hi</code> is its type's maximum</li>
 				<li>Ranges only count up: a range whose start is past its end runs zero times, and one whose constant bounds are the wrong way round (<code>5..3</code>) is an error</li>
-				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>for comptime</code> unrolls into constants of the default integer type instead)</li>
+				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>{ "for" } comptime</code> unrolls into constants of the default integer type instead)</li>
 				<li>When both bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, like an integer literal does</li>
 			</ul>
 		</li>

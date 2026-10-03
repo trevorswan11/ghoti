@@ -1,9 +1,10 @@
 #include <string>
 #include <string_view>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -484,8 +485,6 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
 }
 
 TEST_CASE("E2E: a parameterized impl only expands for its own module's type constructor") {
-    // `Option`'s ctor node can share its index with the prelude's `Flow`; the padding moves it
-    // across that index, and `Result(i32, i32)` instantiates `Flow` from inside an impl body
     constexpr std::string_view source{R"(
         const Result = fn(T: type, E: type): type {{ return union {{ ok: T, err: E }}; }};
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {{
@@ -517,11 +516,11 @@ TEST_CASE("E2E: a parameterized impl only expands for its own module's type cons
         const R = Result(i32, i32);
         const h = fn(r: R): R {{ let v = r?; return R{{ .ok = v * 2 }}; }};
     )"};
-    std::string                padding;
+
+    std::string padding;
     for (usize i{0}; i < 24; ++i) {
         DYNAMIC_SECTION("padding " << i) {
-            std::ignore =
-                helpers::type_check_and_verify(fmt::format(fmt::runtime(source), padding));
+            helpers::type_check_and_verify(fmt::format(fmt::runtime(source), padding));
         }
         padding += fmt::format("const pad{} = {};\n", i, i);
     }

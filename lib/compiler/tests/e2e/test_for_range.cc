@@ -1,8 +1,8 @@
 #include <string_view>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -90,11 +90,11 @@ TEST_CASE("a range over untyped bounds counts in `usize` and converts where ever
     )") == (6 + 9 + 3) + 6 + 20 + 200);
 
     // A counter that can outgrow the target keeps its own type
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         const take8 = fn(x: u8): i32 { return @as(i32, x); };
         pub const main = fn(): i32 { let mut s: i32 = 0; for (0..300) |i| { s += take8(i); } return s; };
     )");
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         pub const main = fn(): i32 { for (0..3) |i| { let x = i; return x; } return 0; };
     )");
 }
@@ -122,7 +122,7 @@ TEST_CASE("a range counter can be matched on, addressed, but not assigned") {
             return s;
         };
     )") == 60 + 3);
-    std::ignore = helpers::expect_compile_error(
+    helpers::expect_compile_error(
         "pub const main = fn(): i32 { for (0..3) |i| { i = 4; } return 0; };");
 }
 

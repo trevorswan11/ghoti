@@ -1,5 +1,4 @@
 #include <string_view>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -634,8 +633,9 @@ TEST_CASE("an initializer fills a `[n]T` parameter sized by a compile-time argum
         const sum = fn(comptime n: usize, a: [n]i32): i32 { let mut s: i32 = 0; for (a) |x| { s += x; } return s; };
         pub const main = fn(): i32 { return sum(3, .{ 1, 2, 3 }) + sum(2, .{ 4, 4 }); };
     )") == 14);
+
     // The length mismatch is reported once the call is checked against the monomorph
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         const sum = fn(comptime n: usize, a: [n]i32): i32 { return a[0]; };
         pub const main = fn(): i32 { return sum(4, .{ 1, 2, 3 }); };
     )");
