@@ -376,4 +376,16 @@ TEST_CASE("A function taking a function pointer executes passed functions direct
     )") == 10 + 25);
 }
 
+TEST_CASE("a capturing function literal can be called where it is written") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let offset: i32 = 10;
+            let mut total: i32 = 1;
+            let read = fn(x: i32): i32 { return x + offset; }(5);
+            let bumped = fn(x: i32): i32 { total += x; return total; }(4);
+            return read + bumped + total;
+        };
+    )") == 15 + 5 + 5);
+}
+
 } // namespace ghoti::tests

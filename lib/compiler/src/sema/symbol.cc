@@ -65,7 +65,7 @@ template <typename Handle>
         [&module](const symbols::parameter& inner) -> source_span {
             return span_of(module, inner.name);
         },
-        [&module](const symbols::for_loop_capture& inner) -> source_span {
+        [&module](const symbols::capture& inner) -> source_span {
             return span_of(module, inner.payload);
         });
 }

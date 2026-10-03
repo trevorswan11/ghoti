@@ -150,11 +150,17 @@ auto type_translator::translate_dyn_fat_ptr() -> llvm::StructType* {
 
 auto type_translator::translate_array(const sema::types::array& a) -> llvm::Type* {
     PROFILE_FUNCTION();
-    // See `translate_struct`'s matching `type`-kind special case
-    auto* elem_ty{a.underlying.get_kind() == sema::type_kind::TYPE ? llvm::StructType::get(context_)
-                                                                   : translate(a.underlying)};
     // A sentinel-terminated array stores one extra element for the terminator
-    return llvm::ArrayType::get(elem_ty, a.len + (a.null_terminated ? 1 : 0));
+    return llvm::ArrayType::get(translate_slot(a.underlying), a.len + (a.null_terminated ? 1 : 0));
+}
+
+auto type_translator::translate_slot(const sema::type& slot) -> llvm::Type* {
+    // `translate` maps both to `void`, which isn't a sized LLVM type
+    const auto kind{slot.get_kind()};
+    if (kind == sema::type_kind::TYPE || kind == sema::type_kind::VOID_) {
+        return llvm::StructType::get(context_);
+    }
+    return translate(slot);
 }
 
 auto type_translator::translate_struct(const sema::types::struct_t& s, const sema::type& original)
@@ -188,15 +194,7 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
-    for (const auto* field : s.fields) {
-        // `translate(TYPE)` maps to `void` which isn't a sized LLVM type, so `field` being
-        // physically present here always needs a real) sized placeholder.
-        if (field->get_kind() == sema::type_kind::TYPE) {
-            element_types.emplace_back(llvm::StructType::get(context_));
-        } else {
-            element_types.emplace_back(translate(*field));
-        }
-    }
+    for (const auto* field : s.fields) { element_types.emplace_back(translate_slot(*field)); }
     set_struct_body(struct_ty, s, element_types);
     return struct_ty;
 }

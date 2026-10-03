@@ -73,8 +73,11 @@ class parser {
     // Per function literal: the names its compile-time positions read, for implicit `comptime`
     // params in a `const`-declared function (a nested literal gets its own frame)
     struct comptime_param_frame {
-        bool                          infer{false};
-        u32                           compile_time_depth{0};
+        bool infer{false};
+        u32  compile_time_depth{0};
+        // Inside an array length, which reads its names at compile time without being a
+        // compile-time position (`comptime` there isn't redundant)
+        u32                           array_length_depth{0};
         std::vector<std::string_view> compile_time_names;
     };
 
@@ -84,6 +87,7 @@ class parser {
             p.comptime_param_frames_.emplace_back(
                 comptime_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
                                      .compile_time_depth = 0,
+                                     .array_length_depth = 0,
                                      .compile_time_names = {}});
         }
         ~function_scope() { parser_.comptime_param_frames_.pop_back(); }
@@ -95,6 +99,25 @@ class parser {
 
       private:
         parser& parser_;
+    };
+
+    // Marks an array length, whose parameter reads make those parameters `comptime`
+    class array_length_scope {
+      public:
+        explicit array_length_scope(parser& p) noexcept : parser_{p} {
+            if (!p.comptime_param_frames_.empty()) {
+                frame_ = p.comptime_param_frames_.size() - 1;
+                ++p.comptime_param_frames_[*frame_].array_length_depth;
+            }
+        }
+        ~array_length_scope() {
+            if (frame_) { --parser_.comptime_param_frames_[*frame_].array_length_depth; }
+        }
+        MAKE_PINNED(array_length_scope);
+
+      private:
+        parser&        parser_;
+        stdx::opt_size frame_;
     };
 
     // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while comptime` header,
@@ -269,7 +292,7 @@ class parser {
     auto note_identifier_reference(std::string_view name) -> void {
         if (comptime_param_frames_.empty() || type_only_depth_) { return; }
         auto& frame{comptime_param_frames_.back()};
-        if (frame.infer && frame.compile_time_depth > 0) {
+        if (frame.infer && (frame.compile_time_depth > 0 || frame.array_length_depth > 0)) {
             frame.compile_time_names.emplace_back(name);
         }
     }

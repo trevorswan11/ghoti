@@ -115,6 +115,8 @@ enum class token_type_t : u8 {
     UNDERSCORE,
     AND_MUT,
     CARET_MUT,
+    AND_MUT_POLY,
+    CARET_MUT_POLY,
 
     FUNCTION,
     LET,
@@ -195,7 +197,6 @@ enum class token_type_t : u8 {
     BUILTIN_FLOAT_CAST,
     BUILTIN_INT_FROM_PTR,
     BUILTIN_PTR_FROM_INT,
-    BUILTIN_PTR_FROM_ARRAY,
     BUILTIN_SLICE_FROM_PTR,
     BUILTIN_FIELD_PARENT_PTR,
     BUILTIN_ALIGN_OF,

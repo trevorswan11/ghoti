@@ -16,6 +16,7 @@
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
@@ -115,6 +116,20 @@ class dumper {
         for (auto it{container.begin()}; it != container.end(); ++it) {
             indent::guard g{indent_, std::next(it) == container.end()};
             std::forward<Func>(func)(*it);
+        }
+    }
+
+    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture) -> void {
+        if (!capture) { return; }
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
+        if (capture->payload.is<ast::discarded>()) {
+            fmt::println(out_, "<discarded>");
+        } else {
+            fmt::println(out_,
+                         "{} (modifier: {})",
+                         ast_.get_as<identifier_expr>(*capture->payload),
+                         capture->modifier);
         }
     }
 

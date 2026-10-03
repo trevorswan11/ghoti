@@ -62,6 +62,8 @@ class type_translator {
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
     auto translate_array(const sema::types::array& a) -> llvm::Type*;
+    // An array element or struct field: a zero-sized `void` / `type` one is an empty struct
+    auto translate_slot(const sema::type& slot) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
     // Lays `element_types` out at the offsets their `@[align(n)]` fields demand, if any differ

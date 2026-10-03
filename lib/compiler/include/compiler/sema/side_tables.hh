@@ -80,6 +80,9 @@ struct side_tables {
     // Indexed by the match arms' pattern
     detail::side_table<ast::node_id, stdx::option<sema::type&>> match_arm_types;
 
+    // An `if`/`while` capture's payload node to the scope it is declared in
+    detail::side_table<ast::node_id, stdx::opt_size> capture_scopes;
+
     // Call expression to monomorphized generic symbol name
     detail::side_table<ast::node_id, stdx::option<std::string>> generic_call_targets;
 
@@ -109,6 +112,7 @@ struct side_tables {
         node_types.values.resize(sizes.nodes_size);
         explicit_types.values.resize(sizes.types_size);
         match_arm_types.values.resize(sizes.nodes_size);
+        capture_scopes.values.resize(sizes.nodes_size);
         generic_call_targets.values.resize(sizes.nodes_size);
         resolved_symbol_owners.values.resize(sizes.nodes_size);
         function_captures.values.resize(sizes.nodes_size);

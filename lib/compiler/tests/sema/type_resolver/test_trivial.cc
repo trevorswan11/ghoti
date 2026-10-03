@@ -132,10 +132,10 @@ const R = union { ok: i32, err: i32 };
 impl builtin.Unwrappable for R {
     const Output = i32;
     const Residual = i32;
-    pub const branch = fn(self): builtin.Flow(i32, i32) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, i32) {
         return match (self) {
-            .ok => |v| builtin.Flow(i32, i32){ .@"continue" = v },
-            .err => |e| builtin.Flow(i32, i32){ .@"break" = e },
+            .ok => |&mut? v| .{ .@"continue" = v },
+            .err => |e| .{ .@"break" = e },
         };
     };
 }
@@ -183,7 +183,7 @@ TEST_CASE("Call resolution edge cases") {
 }
 
 TEST_CASE("Loop resolution") {
-    helpers::resolve_and_check("const a = loop { let foo = 42; };");
+    helpers::resolve_and_check("const a = l: loop { let foo = 42; };");
     helpers::test_resolver_fail(
         "for (23) |_| { let mut a: i32 = undefined; }",
         sema::diagnostic{"Iterables may only be arrays or slices; found 'comptime_int'",

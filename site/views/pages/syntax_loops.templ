@@ -18,7 +18,13 @@ templ SyntaxLoopsPage() {
 		<li>
 			For loops have 4 different clauses:
 			<ul>
-				<li>Iterables: A comma separated list in parenthesis. This is the first clause and is required</li>
+				<li>
+					Iterables: A comma separated list in parenthesis. This is the first clause and is required
+					<ul>
+						<li>Iterables of different lengths are walked in lockstep, and the loop stops at the end of the shortest one</li>
+						<li>An open-ended range like <code>0..</code> has no length of its own, so it needs a sibling array or slice to stop the loop</li>
+					</ul>
+				</li>
 				<li>
 					Captures: A comma separated list enclosed by bitwise or <code>|</code> pipes. The is the second clause and is required. If you would like to discard a capture, use <code>_</code>
 					<ul>
@@ -30,11 +36,22 @@ templ SyntaxLoopsPage() {
 			</ul>
 		</li>
 		<li>The loop's body cannot be empty</li>
+		<li>
+			Ranges:
+			<ul>
+				<li><code>lo..hi</code> counts from <code>lo</code> up to but not including <code>hi</code>, and <code>lo..=hi</code> includes <code>hi</code>, even when <code>hi</code> is its type's maximum</li>
+				<li>Ranges only count up: a range whose start is past its end runs zero times, and one whose constant bounds are the wrong way round (<code>5..3</code>) is an error</li>
+				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>{ "for" } comptime</code> unrolls into constants of the default integer type instead)</li>
+				<li>When both bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, like an integer literal does</li>
+			</ul>
+		</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
 			{ `for (arr, l, p) |i, &mut j, _| { ... }; // Captures can have modifiers or be discarded
 for (0..4) |i| { ... } else return b; // The return statement only runs if the loop body does not break
+for (arr, 0..) |x, i| { ... } // Counts alongside arr; with [3]T and [5]T iterables, the body runs 3 times
+for (0..3) |i| { total += i; take_u8(i); xs[i + 1] = 0; } // i is usize, but every value it takes fits an i32 and a u8
 for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures and iterables must match` }
 		</code>
 	</pre>
@@ -62,11 +79,20 @@ for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures 
 			</ul>
 		</li>
 		<li>The loop's body cannot be empty unless there is a continuation clause</li>
+		<li>
+			A condition that implements <code>builtin.Unwrappable</code> is unwrapped by a capture after its parentheses, like an <code>if</code>
+			<ul>
+				<li>The condition is evaluated and unwrapped before every iteration, and the loop ends when it doesn't unwrap</li>
+				<li><code>{ "else |e|" }</code> binds the residual that ended the loop; a <code>break</code> skips the <code>else</code> as usual</li>
+			</ul>
+		</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
 			{ `while (true) : (i += 1) {a;}; // (i += 1) is evaluated evaluated in between loop iterations
-while (true) {a;} else return b; // The return statement only runs if the loop body does not break` }
+while (true) {a;} else return b; // The return statement only runs if the loop body does not break
+while (it.next()) |item| : (i += 1) { use(item); } // Runs until next() returns .none
+while (reader.read(buf)) |n| { consume(buf[0..n]); } else |err| { log(err); }` }
 		</code>
 	</pre>
 	<h2>Important Considerations</h2>

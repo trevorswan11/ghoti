@@ -572,10 +572,10 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
         impl(T: type) builtin.Unwrappable for Option(T) {
             const Output = T;
             const Residual = void;
-            pub const branch = fn(self): builtin.Flow(T, void) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
                 return match (self) {
-                    .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-                    .none => builtin.Flow(T, void){ .@"break" = {} },
+                    .some => |&mut? v| .{ .@"continue" = v },
+                    .none => .{ .@"break" = {} },
                 };
             };
         }

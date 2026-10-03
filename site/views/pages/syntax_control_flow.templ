@@ -111,6 +111,39 @@ pub const main = fn(args: [][:0]u8): void {
 		<li>If the consequence and alternate statements are both expression statements, then the resulting value is returned</li>
 	</ul>
 	<pre><code class="language-ghoti">{ `a = if (a) b; else c; // Assigns a conditionally` }</code></pre>
+	<h3>Unwrapping with Captures</h3>
+	<ul>
+		<li>A condition that implements <code>builtin.Unwrappable</code> (an <code>Option</code>, a <code>Result</code>, ...) is unwrapped by a capture right after its parentheses: the consequence runs with the payload bound, and the alternate runs otherwise</li>
+		<li>
+			<code>{ "else |e|" }</code> binds the residual, such as a <code>Result</code>'s error, by value
+			<ul>
+				<li>An <code>Option</code> carries nothing when it is empty, so capturing its <code>else</code> is an error</li>
+			</ul>
+		</li>
+		<li>
+			The payload capture takes the same forms as a <code>match</code> arm: <code>{ "|v|" }</code>, <code>{ "|&v|" }</code>, <code>{ "|&mut v|" }</code>, <code>{ "|^v|" }</code>, <code>{ "|^mut v|" }</code>, <code>{ "|&mut? v|" }</code>, and <code>{ "|_|" }</code>
+			<ul>
+				<li><code>{ "|&mut v|" }</code> writes into the condition's own payload, so the condition must be a mutable place</li>
+				<li>A capture is an immutable binding</li>
+			</ul>
+		</li>
+		<li>An <code>Unwrappable</code> condition always needs a capture (write <code>{ "|_|" }</code> to ignore the payload), and a capture on any other condition is an error</li>
+		<li>Captures work at compile time too, including <code>{ "if comptime (x) |v|" }</code>, whose captures are by value</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `if (find(name)) |user| {
+    greet(user);
+} else {
+    signUp(name);
+}
+
+const port = if (parsePort(text)) |p| p else |err| fallback(err);
+
+let mut cached: Option(i32) = .of(1);
+if (cached) |&mut v| { v += 1; } // cached is now .some = 2` }
+		</code>
+	</pre>
 	<ul>
 		<li>Conditionals can be evaluated at compile time with a syntax similar to C++</li>
 	</ul>

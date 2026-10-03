@@ -108,6 +108,8 @@ class type_modifier {
         MUT_PTR,
         VOLATILE,
         MUT_VOLATILE,
+        POLY_REF, // `&mut?`: the enclosing function's `mut?` mutability
+        POLY_PTR, // `^mut?`
     };
 
   public:
@@ -129,14 +131,21 @@ class type_modifier {
 
     MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(mutable_ref, modifier::MUT_REF)
     MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(const_ref, modifier::REF)
+    MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(poly_ref, modifier::POLY_REF)
     [[nodiscard]] constexpr auto is_ref() const noexcept -> bool {
-        return is_mutable_ref() || is_const_ref();
+        return is_mutable_ref() || is_const_ref() || is_poly_ref();
     }
 
     MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(mutable_ptr, modifier::MUT_PTR)
     MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(const_ptr, modifier::PTR)
+    MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(poly_ptr, modifier::POLY_PTR)
     [[nodiscard]] constexpr auto is_ptr() const noexcept -> bool {
-        return is_mutable_ptr() || is_const_ptr();
+        return is_mutable_ptr() || is_const_ptr() || is_poly_ptr();
+    }
+
+    // `&mut?` / `^mut?`
+    [[nodiscard]] constexpr auto is_poly() const noexcept -> bool {
+        return is_poly_ref() || is_poly_ptr();
     }
 
     MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(mutable_volatile, modifier::MUT_VOLATILE)

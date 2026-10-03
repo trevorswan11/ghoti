@@ -1,6 +1,10 @@
+#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
+#include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -246,10 +250,10 @@ TEST_CASE(
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
@@ -311,10 +315,10 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
@@ -379,10 +383,10 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
-            pub const branch = fn(self): builtin.Flow(T, E) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-                    .err => |e| builtin.Flow(T, E){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
@@ -478,6 +482,48 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
         };
     )")};
     CHECK(exit_code == 42);
+}
+
+TEST_CASE("E2E: a parameterized impl only expands for its own module's type constructor") {
+    constexpr std::string_view source{R"(
+        const Result = fn(T: type, E: type): type {{ return union {{ ok: T, err: E }}; }};
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {{
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {{
+                return match (self) {{
+                    .ok => |&mut? v| builtin.Flow(&mut? T, E){{ .@"continue" = v }},
+                    .err => |e| builtin.Flow(&mut? T, E){{ .@"break" = e }},
+                }};
+            }};
+        }}
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {{
+            const From = E;
+            pub const from_residual = fn(r: E): @This() {{ return .{{ .err = r }}; }};
+        }}
+        {}
+        const Option = fn(T: type): type {{ return union {{ some: T, none: void }}; }};
+        impl(T: type) builtin.Unwrappable for Option(T) {{
+            const Output = T;
+            const Residual = void;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {{
+                return match (self) {{
+                    .some => |&mut? v| .{{ .@"continue" = v }},
+                    .none => .{{ .@"break" = {{}} }},
+                }};
+            }};
+        }}
+        const R = Result(i32, i32);
+        const h = fn(r: R): R {{ let v = r?; return R{{ .ok = v * 2 }}; }};
+    )"};
+
+    std::string padding;
+    for (usize i{0}; i < 24; ++i) {
+        DYNAMIC_SECTION("padding " << i) {
+            helpers::type_check_and_verify(fmt::format(fmt::runtime(source), padding));
+        }
+        padding += fmt::format("const pad{} = {};\n", i, i);
+    }
 }
 
 } // namespace ghoti::tests

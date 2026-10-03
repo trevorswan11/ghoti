@@ -48,6 +48,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     } else {
         parser.advance();
         if (!parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
+            // An array's length is fixed at compile time, so a parameter it reads is too
+            const syntax::parser::array_length_scope length_scope{parser};
             size.emplace(TRY(parser.parse_expression()));
         }
 
@@ -61,9 +63,16 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
     auto mut_elements{false};
+    auto poly_elements{false};
     if (parser.peek_token_is(syntax::token_type_t::MUT)) {
         parser.advance();
         mut_elements = true;
+        // `[]mut? T`
+        if (parser.peek_token_is(syntax::token_type_t::QUESTION)) {
+            parser.advance();
+            mut_elements  = false;
+            poly_elements = true;
+        }
     }
 
     const auto item_type{TRY(explicit_type::parse(parser, true))};
@@ -86,7 +95,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                            true,
                                            false,
                                            item_type,
-                                           std::vector<expr_handle>{});
+                                           std::vector<expr_handle>{},
+                                           poly_elements);
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -113,7 +123,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                        false,
                                        force_break,
                                        item_type,
-                                       std::move(items));
+                                       std::move(items),
+                                       poly_elements);
 }
 
 namespace {
@@ -747,8 +758,8 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     }
 
     // Captures take on something similar to zig's capture syntax
-    std::vector<capture> captures;
-    bool                 captures_force_break{false};
+    std::vector<capture_t> captures;
+    bool                   captures_force_break{false};
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
     while (!parser.peek_token_is(syntax::token_type_t::BW_OR) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
@@ -944,6 +955,11 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
             }
+        } else if (!self_modifier.is_value()) {
+            // `fn(&)` would otherwise lose its modifier along with the missing name
+            return make_syntax_err("A `&` or `^` self parameter needs a name, like `&self`",
+                                   syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
+                                   modifier_start);
         }
 
         // The loop starts either on an LPAREN or COMMA
@@ -1128,6 +1144,64 @@ auto identifier_expr::parse(syntax::parser& parser)
                                             parser.get_ast().intern(start_token.slice));
 }
 
+namespace {
+
+// `|v|`, `|&mut v|`, or `|_|` after the current token, or none when no `|` follows
+auto try_parse_capture(syntax::parser& parser)
+    -> stdx::result<stdx::option<capture_t>, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) { return stdx::none; }
+    parser.advance(); // current == |
+
+    type_modifier modifier;
+    if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
+        parser.advance();
+        const auto discarded{
+            parser.add_node<discardable_ident_handle, ast::discarded>(parser.get_current_token())};
+        TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
+        return capture_t{.modifier = modifier, .payload = discarded};
+    }
+
+    parser.advance();
+    modifier = type_modifier{parser.get_current_token()};
+    if (!modifier.is_value()) {
+        parser.advance();
+        if (parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
+            return make_syntax_err("A discarded capture `_` can't take a modifier",
+                                   syntax::error::ILLEGAL_CAPTURE,
+                                   parser.get_current_token());
+        }
+    }
+    const discardable_ident_handle payload{TRY(identifier_expr::parse(parser))};
+    TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
+    return capture_t{.modifier = modifier, .payload = payload};
+}
+
+struct capturing_alternate {
+    stdx::option<stmt_handle> body;
+    stdx::option<capture_t>   capture;
+};
+
+// `else B` / `else |e| B`; an `else` capture needs a payload capture to pair with
+auto try_parse_capturing_alternate(syntax::parser& parser,
+                                   bool            has_payload_capture,
+                                   syntax::error   error)
+    -> stdx::result<capturing_alternate, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::ELSE)) { return capturing_alternate{}; }
+    parser.advance(); // current == else
+    const auto else_token{parser.get_current_token()};
+    auto       else_capture{TRY(try_parse_capture(parser))};
+    if (else_capture && !has_payload_capture) {
+        return make_syntax_err("An `else` capture needs a payload capture after the condition",
+                               syntax::error::ILLEGAL_CAPTURE,
+                               else_token);
+    }
+    parser.advance(); // current == the alternate's first token
+    auto body{TRY(parser.parse_restricted_statement(error, syntax::semicolon_behavior::ALLOWED))};
+    return capturing_alternate{.body = body, .capture = std::move(else_capture)};
+}
+
+} // namespace
+
 auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -1154,16 +1228,22 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
         condition.emplace(TRY(parser.parse_expression()));
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
+    auto payload_capture{condition ? TRY(try_parse_capture(parser)) : stdx::none};
 
     // The consequence and alternate are trivially handled by restricted statement parsers
     parser.advance();
     const auto consequence{TRY(parser.parse_restricted_statement(
         syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
-    const auto alternate{TRY(parser.try_parse_restricted_alternate(
-        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
+    auto       alternate{TRY(try_parse_capturing_alternate(
+        parser, payload_capture.has_value(), syntax::error::ILLEGAL_IF_BRANCH))};
 
-    return parser.add_expr<if_expr>(
-        start_token, comptime_condition, condition, consequence, alternate);
+    return parser.add_expr<if_expr>(start_token,
+                                    comptime_condition,
+                                    condition,
+                                    consequence,
+                                    alternate.body,
+                                    std::move(payload_capture),
+                                    std::move(alternate.capture));
 }
 
 auto index_expr::parse(syntax::parser& parser, expr_handle array)
@@ -1663,38 +1743,43 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
         TRY(parser.expect_peek(syntax::token_type_t::FAT_ARROW));
 
         // There is an optional capture for every arm
-        stdx::option<discardable_ident_handle> capture;
-        type_modifier                          modifier;
+        stdx::option<capture_t> cap;
         if (parser.peek_token_is(syntax::token_type_t::BW_OR)) {
             parser.advance();
 
             // An underscore is equivalent to a lack of capture; no modifier is allowed on it
             if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
                 parser.advance();
-                capture.emplace(parser.add_node<discardable_ident_handle, ast::discarded>(
-                    parser.get_current_token()));
+                cap.emplace<capture_t>({
+                    .modifier = {},
+                    .payload  = parser.add_node<discardable_ident_handle, ast::discarded>(
+                        parser.get_current_token()),
+                });
             } else {
                 // Always check for a modifier and advance past it if present
                 parser.advance();
-                modifier = type_modifier{parser.get_current_token()};
+                const type_modifier modifier{parser.get_current_token()};
                 if (!modifier.is_value()) { parser.advance(); }
 
-                capture.emplace(TRY(identifier_expr::parse(parser)));
+                cap.emplace<capture_t>({
+                    .modifier = modifier,
+                    .payload  = TRY(identifier_expr::parse(parser)),
+                });
             }
             TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
         }
 
-        if (catch_all_idx == arm_idx && capture) {
+        if (catch_all_idx == arm_idx && cap) {
             return make_syntax_err("Catch-all match arms may not have a capture clause",
                                    syntax::error::ILLEGAL_MATCH_CATCH_ALL,
-                                   parser.get_location_of(*capture));
+                                   parser.get_location_of(*cap->payload));
         }
 
         // The resulting statement must be restricted like an if branch
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(std::move(patterns), capture, modifier, consequence, trailing_comma);
+        arms.emplace_back(std::move(patterns), cap, consequence, trailing_comma);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list
@@ -1996,6 +2081,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
 
     const auto condition{TRY(parse_compile_time_expression(parser, is_comptime))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    auto payload_capture{TRY(try_parse_capture(parser))};
 
     // Continuation expression is optional and is handled as in zig
     stdx::option<expr_handle> continuation;
@@ -2018,8 +2104,8 @@ auto while_loop_expr::parse(syntax::parser& parser)
 
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    const block_handle        block{TRY(block_stmt::parse(parser))};
-    stdx::option<stmt_handle> non_break;
+    const block_handle  block{TRY(block_stmt::parse(parser))};
+    capturing_alternate non_break;
     if (is_comptime) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
             return make_syntax_err("`while comptime` cannot have an `else`/non-break clause",
@@ -2027,11 +2113,17 @@ auto while_loop_expr::parse(syntax::parser& parser)
                                    parser.get_peek_token());
         }
     } else {
-        non_break =
-            TRY(parser.try_parse_restricted_alternate(syntax::error::ILLEGAL_LOOP_NON_BREAK));
+        non_break = TRY(try_parse_capturing_alternate(
+            parser, payload_capture.has_value(), syntax::error::ILLEGAL_LOOP_NON_BREAK));
     }
-    return parser.add_expr<while_loop_expr>(
-        start_token, condition, continuation, block, non_break, is_comptime);
+    return parser.add_expr<while_loop_expr>(start_token,
+                                            condition,
+                                            continuation,
+                                            block,
+                                            non_break.body,
+                                            is_comptime,
+                                            std::move(payload_capture),
+                                            std::move(non_break.capture));
 }
 
 auto parse_member_block(syntax::parser& parser) -> stdx::result<member_list, syntax::diagnostic> {

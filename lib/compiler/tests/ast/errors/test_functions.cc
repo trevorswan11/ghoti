@@ -65,6 +65,17 @@ TEST_CASE("Illegal self parameter modifier") {
             std::pair{0UZ, 3UZ}});
 }
 
+TEST_CASE("Self parameter modifier without a name") {
+    using namespace std::string_view_literals;
+    const auto modifier{GENERATE("&"sv, "&mut"sv, "^"sv, "^mut"sv)};
+
+    helpers::test_parser_fail(
+        fmt::format("fn({}): i32;", modifier),
+        syntax::diagnostic{"A `&` or `^` self parameter needs a name, like `&self`",
+                           syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
+                           std::pair{0UZ, 3UZ}});
+}
+
 TEST_CASE("Out-of-place variadic parameter") {
     helpers::test_parser_fail(
         "fn(a: A, ..., b: B): i32;",

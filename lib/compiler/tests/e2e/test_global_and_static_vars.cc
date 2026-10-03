@@ -131,4 +131,12 @@ TEST_CASE("`var` struct global with a function-pointer field") {
     )") == 42);
 }
 
+TEST_CASE("a static member holding a function pointer can be called") {
+    CHECK(helpers::compile_and_run(R"(
+        const g = fn(h: i32): i32 { return h + 1; };
+        const S = struct { pub const open = ^g; };
+        pub const main = fn(): i32 { return S.open(7); };
+    )") == 8);
+}
+
 } // namespace ghoti::tests

@@ -165,8 +165,8 @@ auto peer_type(context& ctx, gsl::span<const peer_operand> operands) -> peer_res
             if (!placeholder) { placeholder.emplace(t); }
             continue;
         }
-        live.push_back(i);
-        live_types.push_back(&t);
+        live.emplace_back(i);
+        live_types.emplace_back(&t);
     }
     if (live.empty()) {
         return gsl::not_null<type*>{placeholder ? placeholder.get() : operands.front().type.get()};

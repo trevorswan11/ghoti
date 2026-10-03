@@ -67,6 +67,8 @@ auto modifier_prefix(type_modifier mod) -> std::string_view {
     case m::MUT_PTR:      return "^mut ";
     case m::VOLATILE:     return "volatile ";
     case m::MUT_VOLATILE: return "mut volatile ";
+    case m::POLY_REF:     return "&mut? ";
+    case m::POLY_PTR:     return "^mut? ";
     default:              UNREACHABLE("Unrecognized type modifier");
     }
 }
@@ -82,7 +84,9 @@ auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
     }
 }
 
+// A word operator (`&mut`, and `&mut?`) is spaced off its operand like a keyword
 [[nodiscard]] auto prefix_needs_gap(std::string_view op) -> bool {
+    if (op.ends_with("mut?")) { return true; }
     return !op.empty() && (std::isalnum(static_cast<u8>(op.back())) != 0);
 }
 
@@ -728,6 +732,7 @@ auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     if (node.null_terminated) { head.emplace_back(doc_manager_.text(":0")); }
     head.emplace_back(doc_manager_.text("]"));
     if (node.mut_elements) { head.emplace_back(doc_manager_.text("mut ")); }
+    if (node.poly_elements) { head.emplace_back(doc_manager_.text("mut? ")); }
     head.emplace_back(format(node.item_explicit_type));
     if (node.is_type_expr) { return doc_manager_.concat(std::move(head)); }
 
@@ -841,6 +846,15 @@ auto formatter::visit(node_id, const do_while_loop_expr& node) -> syntax::doc_id
 
 auto formatter::visit(node_id, const enum_expr& node) -> syntax::doc_id {
     return format_enum(node);
+}
+
+auto formatter::format_capture(const capture_t& capture, bool trailing_space) -> syntax::doc_id {
+    return doc_manager_.concat({
+        doc_manager_.text("|"),
+        doc_manager_.text(modifier_prefix(capture.modifier)),
+        format(capture.payload),
+        doc_manager_.text(trailing_space ? "| " : "|"),
+    });
 }
 
 auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
@@ -962,6 +976,7 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
                 ? doc_manager_.concat(
                       {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
                 : doc_manager_.nil(),
+            n.payload_capture ? format_capture(*n.payload_capture, true) : doc_manager_.nil(),
             n.alternate ? format(n.consequence) : tail_clause(n.consequence),
         });
     }};
@@ -992,12 +1007,18 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
         const auto* next{es && ast_.get_as_opt<if_expr>(es->expression)
                              ? &ast_.get_as<if_expr>(es->expression)
                              : nullptr};
-        if (next) {
+        // `else |e| if ...` keeps its capture, so it isn't flattened into an `else if` arm
+        if (next && !cur->else_capture) {
             push_arm(doc_manager_.concat({doc_manager_.text("else "), head_clause(*next)}),
                      next->consequence);
             cur = next;
         } else {
-            push_arm(doc_manager_.concat({doc_manager_.text("else "), tail_clause(alt)}), alt);
+            push_arm(
+                doc_manager_.concat({doc_manager_.text("else "),
+                                     cur->else_capture ? format_capture(*cur->else_capture, true)
+                                                       : doc_manager_.nil(),
+                                     tail_clause(alt)}),
+                alt);
             break;
         }
     }
@@ -1085,8 +1106,8 @@ auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
     inits.reserve(node.initializers.size());
     for (const auto& init : node.initializers) {
         if (init.member) {
-            inits.emplace_back(doc_manager_.concat(
-                {format(*init.member), doc_manager_.text(" = "), format(init.value)}));
+            inits.emplace_back(
+                doc_manager_.concat({format(*init.member), assigned_value(init.value)}));
         } else {
             inits.emplace_back(format(init.value));
         }
@@ -1135,8 +1156,8 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         }
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
-            parts.emplace_back(doc_manager_.text(modifier_prefix(arm.modifier)));
-            parts.emplace_back(format(*arm.capture));
+            parts.emplace_back(doc_manager_.text(modifier_prefix(arm.capture->modifier)));
+            parts.emplace_back(format(*arm.capture->payload));
             parts.emplace_back(doc_manager_.text("| "));
         }
         parts.emplace_back(tail_clause(arm.dispatch));
@@ -1215,6 +1236,20 @@ auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_
         return doc_manager_.text(txt);                                                    \
     }
 
+auto formatter::assigned_value(node_id value) -> syntax::doc_id {
+    const auto value_doc{format(value)};
+    if (value.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
+        return doc_manager_.concat({doc_manager_.text(" = "), value_doc});
+    }
+    // What follows the string (`;`, `,`) goes back to the outer indent on the next line
+    return doc_manager_.concat({
+        doc_manager_.text(" ="),
+        doc_manager_.nest(doc_manager_.concat(
+            {doc_manager_.hard_line(), doc_manager_.without_trailing_hard_line(value_doc)})),
+        doc_manager_.hard_line(),
+    });
+}
+
 auto formatter::visit(node_id id, const string_expr& node) -> syntax::doc_id {
     if (id.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
         return doc_manager_.text(node.spelling);
@@ -1280,6 +1315,9 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
         doc_manager_.text(node.is_comptime ? "while comptime (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
+        node.payload_capture
+            ? doc_manager_.concat({doc_manager_.text(" "), format_capture(*node.payload_capture)})
+            : doc_manager_.nil(),
         node.continuation
             ? doc_manager_.concat(
                   {doc_manager_.text(" : ("), format(*node.continuation), doc_manager_.text(")")})
@@ -1287,7 +1325,10 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
         doc_manager_.text(" "),
         format(node.block),
         node.non_break
-            ? doc_manager_.concat({doc_manager_.text(" else "), tail_clause(*node.non_break)})
+            ? doc_manager_.concat({doc_manager_.text(" else "),
+                                   node.else_capture ? format_capture(*node.else_capture, true)
+                                                     : doc_manager_.nil(),
+                                   tail_clause(*node.non_break)})
             : doc_manager_.nil(),
     });
 }
@@ -1451,8 +1492,7 @@ auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),
-        node.value ? doc_manager_.concat({doc_manager_.text(" = "), format(*node.value)})
-                   : doc_manager_.nil(),
+        node.value ? assigned_value(*node.value) : doc_manager_.nil(),
         doc_manager_.text(";"),
     });
 }
@@ -1655,7 +1695,9 @@ auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> s
                              node.dimension ? format(*node.dimension) : doc_manager_.nil(),
                              node.null_terminated ? doc_manager_.text(":0") : doc_manager_.nil(),
                              doc_manager_.text("]"),
-                             node.mut_elements ? doc_manager_.text("mut ") : doc_manager_.nil(),
+                             node.mut_elements    ? doc_manager_.text("mut ")
+                             : node.poly_elements ? doc_manager_.text("mut? ")
+                                                  : doc_manager_.nil(),
                              format(node.inner_explicit_type),
                          }));
 }

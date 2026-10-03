@@ -256,6 +256,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
             null_terminated = true;
         } else if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
             parser.advance();
+            // An array's length is fixed at compile time, so a parameter it reads is too
+            const syntax::parser::array_length_scope length_scope{parser};
             dimension.emplace(TRY(parser.parse_expression()));
 
             // The null terminated marker comes after the size for explicitly sized types
@@ -267,15 +269,27 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
         auto mut_elements{false};
+        auto poly_elements{false};
         if (parser.peek_token_is(syntax::token_type_t::MUT)) {
             parser.advance();
             mut_elements = true;
+            // `[]mut? T`
+            if (parser.peek_token_is(syntax::token_type_t::QUESTION)) {
+                parser.advance();
+                mut_elements  = false;
+                poly_elements = true;
+            }
         }
 
         // Arrays are recursively defined
         const auto inner{TRY(explicit_type::parse(parser, allow_trailing_brace))};
-        return parser.add_type<explicit_array_type>(
-            modifier_token, modifier, dimension, null_terminated, mut_elements, inner);
+        return parser.add_type<explicit_array_type>(modifier_token,
+                                                    modifier,
+                                                    dimension,
+                                                    null_terminated,
+                                                    mut_elements,
+                                                    inner,
+                                                    poly_elements);
     }
 
     if (!type_modifier{parser.get_peek_token()}.is_value()) {

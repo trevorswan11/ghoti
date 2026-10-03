@@ -4,15 +4,15 @@
 
 namespace ghoti::tests {
 
-// `@ptrFromArray` and `arr[lo..hi]` on a `[N]mut T` yield writable `^mut T` / `[]mut T`, so raw
+// `arr.ptr` and `arr[lo..hi]` on a `[N]mut T` yield writable `^mut T` / `[]mut T`, so raw
 // buffers can be written through `p[i] = v` and subslice element assignment. The array *binding*
 // being `let` only prevents reseating it, not element writes.
 
-TEST_CASE("`@ptrFromArray` on a `[N]mut T` yields a writable `^mut T`") {
+TEST_CASE("`.ptr` on a `[N]mut T` yields a writable `^mut T`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut a: [4uz]mut i32 = [4uz]mut i32{0, 0, 0, 0};
-            let mut p = @ptrFromArray(a);
+            let mut p = a.ptr;
             p[0] = 40;
             p[3] = 2;
             return a[0] + a[3];
@@ -20,11 +20,11 @@ TEST_CASE("`@ptrFromArray` on a `[N]mut T` yields a writable `^mut T`") {
     )") == 42);
 }
 
-TEST_CASE("`@ptrFromArray` stays writable even from a `const` binding") {
+TEST_CASE("`.ptr` stays writable even from a `const` binding") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let a: [2uz]mut i32 = [2uz]mut i32{0, 0};
-            let p = @ptrFromArray(a);
+            let p = a.ptr;
             p[0] = 21;
             p[1] = 21;
             return a[0] + a[1];
@@ -45,7 +45,7 @@ TEST_CASE("writing a buffer through a `^mut i32` parameter with `p[i] = v`") {
 
         pub const main = fn(): i32 {
             let mut a: [6uz]mut i32 = [6uz]mut i32{0, 0, 0, 0, 0, 0};
-            fill(@ptrFromArray(a), 6uz, 7);
+            fill(a.ptr, 6uz, 7);
             return a[0] + a[5];
         };
     )") == 14);
@@ -68,7 +68,7 @@ TEST_CASE("a `[N]T` (const elements) still yields read-only pointers/subslices")
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut a: [4uz]i32 = [4uz]i32{10, 11, 12, 9};
-            let p = @ptrFromArray(a);
+            let p = a.ptr;
             let s = a[0..4];
             return p[0] + s[3];
         };

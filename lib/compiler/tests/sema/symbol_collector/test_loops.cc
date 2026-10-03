@@ -48,9 +48,9 @@ TEST_CASE("For loop collection") {
 
     const auto& loop_table{ctx->analyzer.get_table(3)};
     const auto& i_symbol{UNWRAP(loop_table.get_opt("i"))};
-    CHECK(i_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
+    CHECK(i_symbol.get_data().as_opt<sema::symbols::capture>());
     const auto& j_symbol{UNWRAP(loop_table.get_opt("i"))};
-    CHECK(j_symbol.get_data().as_opt<sema::symbols::for_loop_capture>());
+    CHECK(j_symbol.get_data().as_opt<sema::symbols::capture>());
 
     ctx->test_common_decl_collection(2);
     ctx->test_common_decl_collection(3);
@@ -66,9 +66,10 @@ TEST_CASE("While loop collection") {
     auto ctx{test_loop("const a = while (blk: { let foo = bar; }) : (i += blk: { const foo "
                        "= bar; }) { let foo = bar; } else { const foo = bar; };",
                        7,
-                       5)};
+                       3)};
+    // The continuation is collected inside the loop's own table, after it
     ctx->test_common_decl_collection(2);
-    ctx->test_common_decl_collection(4);
+    ctx->test_common_decl_collection(3);
     ctx->test_common_decl_collection(5);
     ctx->test_common_decl_collection(6);
 }

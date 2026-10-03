@@ -187,6 +187,11 @@ using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view
 
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
+// An argument bound to a parameter: a `mut?` parameter takes a view of any mutability, which the
+// call's own `mut?` is then worked out from
+[[nodiscard]] auto is_arg_assignable(const type& src, const type& param) noexcept -> bool;
+// Whether `t` mentions `mut?` anywhere in its view or element types
+[[nodiscard]] auto contains_poly(const type& t) noexcept -> bool;
 
 // Same params/return/variadic/conv, ignoring whether either side is an erased callable
 [[nodiscard]] auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool;
@@ -410,6 +415,7 @@ struct deferred_array {
 enum class mutability_modifiers : u8 {
     CONSTANT = 1 << 0,
     VOLATILE = 1 << 1,
+    POLY     = 1 << 2, // `mut?`: the enclosing function's mutability, always with `CONSTANT`
 };
 
 MAKE_ENUM_OPERATORS(mutability_modifiers)
@@ -493,6 +499,8 @@ constexpr auto MUTABLE{static_cast<types::mutability_modifiers>(0)};
 constexpr auto CONSTANT{mutability_modifiers::CONSTANT};
 constexpr auto VOLATILE{mutability_modifiers::VOLATILE};
 constexpr auto CONSTANT_VOLATILE{CONSTANT | VOLATILE};
+// `mut?` reads like a constant inside its function, so every write through one is rejected
+constexpr auto POLY{CONSTANT | mutability_modifiers::POLY};
 
 [[nodiscard]] constexpr auto from_type_modifier(ast::type_modifier modifier) noexcept
     -> stdx::option<types::mutability_modifiers> {
@@ -505,6 +513,8 @@ constexpr auto CONSTANT_VOLATILE{CONSTANT | VOLATILE};
     case modifier_t::MUT_PTR:      return types::mut::MUTABLE;
     case modifier_t::VOLATILE:     return types::mut::CONSTANT_VOLATILE;
     case modifier_t::MUT_VOLATILE: return types::mut::VOLATILE;
+    case modifier_t::POLY_REF:
+    case modifier_t::POLY_PTR:     return types::mut::POLY;
     }
 }
 
@@ -608,6 +618,11 @@ class type {
 
     [[nodiscard]] constexpr auto is_volatile() const noexcept -> bool {
         return static_cast<bool>(key_.get_mut() & types::mut::VOLATILE);
+    }
+
+    // A `&mut?` / `^mut?` / `[]mut?` / `[N]mut?` container
+    [[nodiscard]] constexpr auto is_poly() const noexcept -> bool {
+        return static_cast<bool>(key_.get_mut() & types::mutability_modifiers::POLY);
     }
 
     [[nodiscard]] constexpr auto operator==(const type& other) const noexcept -> bool {

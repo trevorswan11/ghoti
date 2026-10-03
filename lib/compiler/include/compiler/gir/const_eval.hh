@@ -81,7 +81,8 @@ class const_eval {
         ctx_.advance_epoch();
     }
 
-    // Attempt to evaluate node as a compile-time constant. Returns none if non-constant.
+    // Attempt to evaluate node as a compile-time constant. Returns none if non-constant. A
+    // reference or slice that views a compile-time place is read through, as runtime loads it
     [[nodiscard]] auto try_eval(ast::node_id id) -> stdx::option<const_value>;
 
     // Folds two already-evaluated constants under `op_type` (e.g. for a `+=` on a folded local).
@@ -169,6 +170,19 @@ class const_eval {
 
     auto set_comptime_context(bool enabled) noexcept -> void { comptime_context_ = enabled; }
 
+    // What `branch(&operand)` of an `Unwrappable` operand returned: whether it was the `break`
+    // variant, its payload (a reference for `continue`, the residual for `break`), and the
+    // operand's own value
+    struct flow_eval {
+        bool        is_break{false};
+        const_value payload;
+        const_value operand;
+    };
+
+    // `eval_flow` from outside any evaluation, with a `continue` payload read by value
+    [[nodiscard]] auto try_eval_flow(ast::expr_handle operand, ast::node_id at)
+        -> stdx::option<flow_eval>;
+
     // The arm a folded matcher selects; none when the matcher does not fold or nothing matches
     [[nodiscard]] auto selected_match_arm(const ast::match_expr& match) -> stdx::opt_size;
 
@@ -188,6 +202,9 @@ class const_eval {
     struct call_frame {
         ankerl::unordered_dense::map<std::string_view, const_value> bindings;
         std::vector<defer_entry>                                    defers;
+        // Unique per pushed frame, so a `const_ref` into a popped frame is never followed
+        u64   id{0};
+        usize temporaries{0};
     };
 
     // A `comptime` callable (closure or plain function) bound to `name` in scope
@@ -254,6 +271,32 @@ class const_eval {
     [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
         -> stdx::option<sema::type&>;
 
+    // Whether `id`'s value is a reference or slice, which a branch hands on without reading
+    [[nodiscard]] auto yields_view(ast::node_id id) const -> bool;
+    // `try_eval` without reading through a reference or slice to a compile-time place
+    [[nodiscard]] auto try_eval_raw(ast::node_id id) -> stdx::option<const_value>;
+    // The value `id` passes to a destination of type `dest`: a reference or slice destination
+    // keeps (or takes) a reference to the place `id` names
+    [[nodiscard]] auto try_eval_for(ast::node_id id, stdx::option<sema::type&> dest)
+        -> stdx::option<const_value>;
+
+    auto push_frame() -> call_frame&;
+    auto push_frame(call_frame frame) -> call_frame&;
+    // The binding a `const_ref` is rooted at, or none once its frame is gone
+    [[nodiscard]] auto ref_root(const const_ref& ref) -> stdx::option<const_value&>;
+    // A reference to the compile-time place `id` names (a binding, or a field, payload or element
+    // of one), or none when it names no place a frame of this evaluation owns
+    [[nodiscard]] auto eval_place(ast::node_id id) -> stdx::option<const_ref>;
+    // `id`'s value when it is a reference or pointer to a compile-time place
+    [[nodiscard]] auto raw_ref_of(ast::node_id id) -> stdx::option<const_ref>;
+    [[nodiscard]] auto load_ref(const const_ref& ref, ast::node_id at) -> stdx::option<const_value>;
+    [[nodiscard]] auto store_ref(const const_ref& ref, const_value val) -> bool;
+    // A reference into a temporary: binds `val` to a hidden slot of the current frame
+    [[nodiscard]] auto ref_to_temporary(const_value val) -> const_ref;
+    // Reports a reference into a frame at or above `first_dead` that survives that frame's exit
+    [[nodiscard]] auto reject_escaping_ref(const const_value& val, u64 first_dead, ast::node_id at)
+        -> bool;
+
     auto eval_node(ast::node_id id) -> stdx::option<const_value>;
     auto eval_binary(ast::node_id id, const ast::binary_expr& binary) -> stdx::option<const_value>;
     auto eval_assignment(ast::node_id                id,
@@ -300,6 +343,8 @@ class const_eval {
     // `= undefined` for `declared` under compile-time evaluation: an aggregate gets its full
     // shape with every leaf undefined, so elements and fields can be written one at a time
     auto undefined_value_of(sema::type& declared) -> const_value;
+    // A plain call's parameter types, empty when the callee's type isn't a known function
+    [[nodiscard]] auto callee_params(const ast::call_expr& call) -> gsl::span<sema::type*>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
     auto eval_comptime_fn(ast::node_id                      call_id,
@@ -334,10 +379,12 @@ class const_eval {
     auto eval_index(ast::node_id id, const ast::index_expr& index_expr)
         -> stdx::option<const_value>;
     // `arr[lo..hi]` / `arr[lo..=hi]`: a compile-time sub-array/sub-string slice value.
-    auto eval_slice_index(ast::node_id           id,
-                          const const_value&     target_val,
-                          ast::node_id           range_id,
-                          const ast::range_expr& range) -> stdx::option<const_value>;
+    // With `base`, the slice is a view of that compile-time place rather than a copy
+    auto eval_slice_index(ast::node_id            id,
+                          const const_value&      target_val,
+                          ast::node_id            range_id,
+                          const ast::range_expr&  range,
+                          stdx::option<const_ref> base = stdx::none) -> stdx::option<const_value>;
     auto eval_initializer(ast::node_id id, const ast::initializer_expr& init)
         -> stdx::option<const_value>;
     auto eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::option<const_value>;
@@ -357,6 +404,12 @@ class const_eval {
         -> stdx::option<const_value>;
     auto eval_match(ast::node_id id, const ast::match_expr& match) -> stdx::option<const_value>;
     auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
+    [[nodiscard]] auto eval_flow(ast::expr_handle operand, ast::node_id at)
+        -> stdx::option<flow_eval>;
+    // Binds an `if`/`while` capture from a folded `Flow` in the current frame
+    [[nodiscard]] auto bind_flow_capture(const ast::capture_t& capture,
+                                         const flow_eval&      flow,
+                                         ast::node_id          at) -> bool;
     auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
         -> bool;
 
@@ -393,7 +446,12 @@ class const_eval {
     stdx::option<sema::type&>                      enclosing_type_;
     stdx::option<const symbol_scoping&>            symbol_scoping_;
     std::vector<call_frame>                        call_stack_;
-    default_counter                                recursion_depth_;
+    u64                                            next_frame_id_{1};
+    // Stable names for the hidden slots `ref_to_temporary` binds
+    std::vector<std::string_view> temporary_names_;
+    // The return type of each compile-time call being evaluated, innermost last
+    std::vector<stdx::option<sema::type&>> return_types_;
+    default_counter                        recursion_depth_;
 
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
     stdx::option<std::string_view> pending_loop_label_;

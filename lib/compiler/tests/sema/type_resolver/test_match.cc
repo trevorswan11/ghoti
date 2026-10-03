@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
@@ -65,8 +66,8 @@ TEST_CASE("Resolving capturing match arms") {
                                      usize            capture_idx,
                                      auto&&           expected_type_fn) -> void {
         auto [ctx, _]{helpers::resolve_and_check(input)};
-        auto [sym, data, actual_data]{
-            ctx->get_type_sym_info<sema::symbols::match_capture>(capture_name, capture_idx)};
+        auto [sym, data, actual_data]{ctx->get_type_sym_info<sema::symbols::capture>(
+            capture_name, capture_idx, stdx::none, &sema::symbols::capture::payload)};
         CHECK(actual_data == expected_type_fn(*ctx));
     };
 

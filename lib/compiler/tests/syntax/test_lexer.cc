@@ -490,6 +490,28 @@ TEST_CASE("Lexing pointers and references") {
                });
 }
 
+TEST_CASE("Lexing `mut?` references and pointers") {
+    test_lexer("&mut? ^mut? &mut ?",
+               {
+                   {token_type_t::AND_MUT_POLY, "&mut?"},
+                   {token_type_t::CARET_MUT_POLY, "^mut?"},
+                   {token_type_t::AND_MUT, "&mut"},
+                   {token_type_t::QUESTION, "?"},
+               });
+}
+
+TEST_CASE("A word operator doesn't cut a longer name short") {
+    test_lexer("&mutex ^mutable &mut_x",
+               {
+                   {token_type_t::BW_AND, "&"},
+                   {token_type_t::IDENT, "mutex"},
+                   {token_type_t::CARET, "^"},
+                   {token_type_t::IDENT, "mutable"},
+                   {token_type_t::BW_AND, "&"},
+                   {token_type_t::IDENT, "mut_x"},
+               });
+}
+
 TEST_CASE("Lexing compiler builtins & Lexer resetting") {
     std::vector<token_type_t> all_builtins;
     all_builtins.insert(all_builtins.end(),

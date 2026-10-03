@@ -164,6 +164,14 @@ auto type_checker::is_value_assignable(const gir::value&             val,
     return false;
 }
 
+auto type_checker::is_arg_value_assignable(const gir::value&             val,
+                                           const type&                   val_t,
+                                           const type&                   param_t,
+                                           stdx::option<source_location> loc) -> bool {
+    if (param_t.is_poly() && is_arg_assignable(val_t, param_t)) { return true; }
+    return is_value_assignable(val, val_t, param_t, loc);
+}
+
 auto type_checker::emit_diagnostic(std::string_view              message,
                                    error                         err,
                                    stdx::option<source_location> loc) -> void {
@@ -520,7 +528,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
                                 params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                                !is_value_assignable(
+                                !is_arg_value_assignable(
                                     inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                                 emit_diagnostic(
                                     format_arg_mismatch(
@@ -544,7 +552,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         if (arg_t && !arg_t->is_poison() &&
                             arg_t->get_kind() != sema::type_kind::TYPE &&
                             params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                            !is_value_assignable(
+                            !is_arg_value_assignable(
                                 inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                             emit_diagnostic(format_arg_mismatch(
                                                 i + 1, *arg_t, params[i]->type, *inst.callee_name),
@@ -582,10 +590,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 const auto arg_t{get_operand_type(inst.operands[i + 1])};
                                 if (arg_t && !arg_t->is_poison() &&
                                     arg_t->get_kind() != sema::type_kind::TYPE &&
-                                    !is_value_assignable(inst.operands[i + 1],
-                                                         *arg_t,
-                                                         *fn_data->params[i],
-                                                         inst.location)) {
+                                    !is_arg_value_assignable(inst.operands[i + 1],
+                                                             *arg_t,
+                                                             *fn_data->params[i],
+                                                             inst.location)) {
                                     emit_diagnostic(
                                         format_arg_mismatch(
                                             i + 1, *arg_t, *(fn_data->params[i]), stdx::none),
@@ -607,10 +615,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             const auto arg_t{get_operand_type(inst.operands[i + 1])};
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
-                                !is_value_assignable(inst.operands[i + 1],
-                                                     *arg_t,
-                                                     *fn_data->params[i],
-                                                     inst.location)) {
+                                !is_arg_value_assignable(inst.operands[i + 1],
+                                                         *arg_t,
+                                                         *fn_data->params[i],
+                                                         inst.location)) {
                                 emit_diagnostic(
                                     format_arg_mismatch(
                                         i + 1, *arg_t, *(fn_data->params[i]), stdx::none),

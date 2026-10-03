@@ -14,10 +14,10 @@ const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
-    pub const branch = fn(self): builtin.Flow(T, E) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
         return match (self) {
-            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+            .ok => |&mut? v| .{ .@"continue" = v },
+            .err => |e| .{ .@"break" = e },
         };
     };
 }
@@ -29,10 +29,10 @@ const Option = fn(T: type): type { return union { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
-    pub const branch = fn(self): builtin.Flow(T, void) {
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
         return match (self) {
-            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-            .none => builtin.Flow(T, void){ .@"break" = {} },
+            .some => |&mut? v| .{ .@"continue" = v },
+            .none => .{ .@"break" = {} },
         };
     };
 }
@@ -43,6 +43,24 @@ impl(T: type) builtin.Rewrappable for Option(T) {
 )";
 
 } // namespace
+
+TEST_CASE("`?` and `!` fold at compile time through places, temporaries, and references") {
+    const auto defs{std::string{RESULT_PRELUDE} + R"(
+        const R = Result(i32, i32);
+        const half = fn(n: i32): R { return if (n % 2 == 0) R{ .ok = n / 2 } else R{ .err = 7 }; };
+        const chain = fn(n: i32): R { let h = half(n)?; let q = half(h)?; return R{ .ok = q + 100 }; };
+        const value = fn(r: R): i32 { return match (r) { .ok => |v| v, .err => |e| e }; };
+        const t = fn(): i32 {
+            let r = half(10);
+            let by_ref = &r;
+            return value(chain(8)) + value(chain(6)) + r! + by_ref! + half(4)!;
+        };
+    )"};
+    // 102 + 7 + 5 + 5 + 2
+    CHECK(helpers::compile_and_run(defs + "pub const main = fn(): i32 { return t(); };") == 121);
+    CHECK(helpers::compile_and_run(defs + "pub const main = fn(): i32 { return comptime t(); };") ==
+          121);
+}
 
 TEST_CASE("`?` yields the ok payload and lets execution continue") {
     CHECK(helpers::compile_and_run(std::string{RESULT_PRELUDE} + R"(
@@ -163,10 +181,10 @@ TEST_CASE("nominal `?` and `!` work on custom renamed-variant unions") {
         impl builtin.Unwrappable for Custom {
             const Output = i32;
             const Residual = u8;
-            pub const branch = fn(self): builtin.Flow(i32, u8) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .item => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .failure => |e| builtin.Flow(i32, u8){ .@"break" = e },
+                    .item => |&mut? v| .{ .@"continue" = v },
+                    .failure => |e| .{ .@"break" = e },
                 };
             };
         }

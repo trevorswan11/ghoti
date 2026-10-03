@@ -72,11 +72,12 @@ struct extension_method {
 
 // A `impl(P: type, ...) [I for] Ctor(P) { ... }` held un-expanded
 struct parameterized_impl {
-    ast::node_id               site;           // the `impl_stmt`
-    stdx::option<type&>        interface_type; // none for an inherent parameterized impl
-    ast::node_id               base_ctor_fn;   // the generic ctor's `function_expr` node
-    stdx::option<mod::module&> enclosing;      // module the impl body lives in
-    usize                      body_scope_idx; // the impl block's own symbol table
+    ast::node_id                      site;           // the `impl_stmt`
+    stdx::option<type&>               interface_type; // none for an inherent parameterized impl
+    ast::node_id                      base_ctor_fn;   // the generic ctor's `function_expr` node
+    gsl::not_null<const mod::module*> base_mod;       // the module `base_ctor_fn` indexes into
+    stdx::option<mod::module&>        enclosing;      // module the impl body lives in
+    usize                             body_scope_idx; // the impl block's own symbol table
     // none here means the param could not be matched positionally; the impl is skipped
     std::vector<stdx::opt_size> param_to_ctor_arg{};
 };

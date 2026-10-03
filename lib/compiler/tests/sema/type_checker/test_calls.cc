@@ -188,7 +188,7 @@ TEST_CASE("Function call type checking") {
             const f = fn(p: ^i32): void {
                 let p2: ^i32 = @ptrFromInt(^i32, 0x1000UZ);
                 let arr: [3]i32 = [3]i32{1, 2, 3};
-                let p3: ^i32 = @ptrFromArray(arr);
+                let p3: ^i32 = arr.ptr;
                 let s: []i32 = @sliceFromPtr(p, 10UZ);
                 @panic("error");
             };

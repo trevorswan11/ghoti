@@ -67,6 +67,60 @@ TEST_CASE("formatter round-trips operator expressions") {
     CHECK(format_source("i += 1;") == "i += 1;\n");
 }
 
+TEST_CASE("formatter round-trips `mut?` types, operators, and captures") {
+    for (const std::string_view src : {
+             R"(const at = fn(&mut? self, i: usize): &mut? T {
+    return &mut? self.items[i];
+};
+)",
+             R"(const f = fn(s: []mut? u8, a: [4]mut? u8): ^mut? u8 {
+    return ^mut? s[0];
+};
+)",
+             R"(const F = fn(x: &mut? i32): &mut? i32;
+)",
+             R"(const g = fn(s: []mut? i32): void {
+    for (s) |&mut? e| {
+        _ = e;
+    }
+};
+)",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
+TEST_CASE("formatter round-trips `if` / `while` unwrap captures") {
+    for (const std::string_view src : {
+             R"(if (opt) |v| {
+    use(v);
+} else {
+    none();
+}
+)",
+             R"(if (res) |&mut v| {
+    ok(v);
+} else |e| {
+    log(e);
+}
+)",
+             R"(const n = if (parse(s)) |v| v else |_| 0;
+)",
+             R"(while (it.next()) |item| : (i += 1) {
+    use(item);
+} else |err| {
+    log(err);
+}
+)",
+             R"(if (a) |x| {} else |e| if (b) |y| {} else {}
+)",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter round-trips postfix unwrap operators") {
     CHECK(format_source("a?;") == "a?;\n");
     CHECK(format_source("a!;") == "a!;\n");
@@ -999,10 +1053,23 @@ TEST_CASE("formatter formats errdefer statements") {
 }
 
 TEST_CASE("formatter round-trips multiline string literals") {
+    // After `=` the string starts its own line, so every line of it aligns
     CHECK(format_source("const a = \\\\Hello\n\\\\World\n;\n") ==
-          "const a = \\\\Hello\n\\\\World\n;\n");
-    CHECK(format_source("const a = \\\\Hello, World!\n;\n") == "const a = \\\\Hello, World!\n;\n");
+          "const a =\n    \\\\Hello\n    \\\\World\n;\n");
+    CHECK(format_source("const a = \\\\Hello, World!\n;\n") ==
+          "const a =\n    \\\\Hello, World!\n;\n");
     round_trips("const a = \\\\First line\n    \\\\Second line\n    \\\\    still indented\n;\n");
+}
+
+TEST_CASE("formatter leaves no lone trailing comma after a multiline string") {
+    CHECK(format_source("const f = fn(): void { g(\n\\\\a\n\\\\b\n,); };\n") ==
+          "const f = fn(): void {\n    g(\n        \\\\a\n        \\\\b\n    );\n};\n");
+    CHECK(format_source("const x: S = .{ .n = 1, .s =\n\\\\tail\n};\n") ==
+          "const x: S = .{\n    .n = 1,\n    .s =\n        \\\\tail\n};\n");
+    // Before the last item, the separator comma has to start the next line
+    CHECK(format_source("const f = fn(): void { g(\n\\\\a\n, 2); };\n") ==
+          "const f = fn(): void {\n    g(\n        \\\\a\n        ,\n        2,\n    );\n};\n");
+    round_trips("const f = fn(): void { g(\n\\\\a\n\\\\b\n); };\n");
 }
 
 constexpr std::string_view corpus{

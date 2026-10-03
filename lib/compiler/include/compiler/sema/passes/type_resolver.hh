@@ -122,6 +122,24 @@ class type_resolver {
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
     auto names_comptime_mut(ast::expr_handle expr) -> bool;
+    // The mutability of the place `expr` names: a `let mut` binding is mutable, a place reached
+    // through a pointer, reference, slice, or array has that container's mutability (`mut?`
+    // included), and anything else is constant
+    [[nodiscard]] auto place_mutability(ast::node_id expr) -> types::mutability_modifiers;
+    // A call's `mut?`: mutable only when every argument bound to a `mut?` parameter is
+    [[nodiscard]] auto call_mutability(const ast::call_expr&           call,
+                                       const types::function&          fn,
+                                       bool                            implicit_self,
+                                       gsl::span<const usize>          source_index,
+                                       gsl::span<const stdx::opt_size> pack_k)
+        -> types::mutability_modifiers;
+    // `t` with each `mut?` replaced by `m`
+    [[nodiscard]] auto substitute_poly(type& t, types::mutability_modifiers m) -> type&;
+    // A field or global annotated with `mut?`, which has no function to take its mutability from
+    auto reject_poly_storage(ast::explicit_type_id at) -> bool;
+    // `&mut? x` / `^mut? x` of a place that isn't reached through a `mut?` parameter
+    [[nodiscard]] auto reject_unrooted_poly(ast::node_id id, ast::expr_handle operand)
+        -> stdx::option<type&>;
 
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
@@ -464,6 +482,12 @@ class type_resolver {
     // The compile-time-known element count of an array- or slice-valued expression: an array's
     // length, a constant-bounded range index, or a `const` bound to one of those
     [[nodiscard]] auto known_length(ast::node_id expr) -> stdx::option<u64>;
+    // The compile-time-known values a `for` range capture takes, recorded for its loop's scope
+    auto record_range_counter(usize                     loop_table,
+                              const ast::for_loop_expr& for_expr,
+                              usize                     iterable_idx) -> void;
+    // Retypes a bare range-counter read to `target` when every value it takes fits there
+    auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
@@ -600,6 +624,13 @@ class type_resolver {
     // returns whether it did
     auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
         -> bool;
+    // The local a returned `&x` / `^x.field` points into, when it dies with this frame
+    [[nodiscard]] auto frame_local_root(ast::expr_handle returned)
+        -> stdx::option<std::string_view>;
+    // Reports a type used as an `if` / `while` condition
+    auto reject_type_condition(ast::expr_handle condition) -> bool;
+    // Reports an unlabeled loop used where a value is needed
+    auto reject_loop_as_value(ast::expr_handle value) -> bool;
     auto reject_type_as_value(ast::expr_handle value, const type& expected) -> bool;
 
     // Records which declaration `id` names, for LSP features like hover
@@ -611,6 +642,19 @@ class type_resolver {
 
     // Resolves both arms of a runtime (or evaluation-context) `if` and types the whole expression
     auto resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr) -> void;
+    // Types an `if`/`while` condition's payload and `else` captures from its `Unwrappable`
+    // shape, rejecting a capture it can't take or a missing one it needs. `payload_scope` is the
+    // scope the payload capture is declared in
+    [[nodiscard]] auto resolve_unwrap_captures(ast::node_id                        id,
+                                               ast::expr_handle                    condition,
+                                               const stdx::option<ast::capture_t>& payload,
+                                               const stdx::option<ast::capture_t>& residual,
+                                               stdx::opt_size                      payload_scope,
+                                               std::string_view                    construct,
+                                               bool comptime) -> stdx::option<type&>;
+    // The scope an `if`/`while` capture is declared in, when it names a binding
+    [[nodiscard]] auto capture_scope(const stdx::option<ast::capture_t>& capture) const
+        -> stdx::opt_size;
 
     [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;
     [[nodiscard]] auto peer_view(type& t) -> type&;
@@ -686,6 +730,10 @@ class type_resolver {
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
         -> stdx::option<symbol&>;
 
+    // Reports an argument a `y: @TypeOf(x)` parameter of the `mangled_name` monomorph can't take
+    auto reject_type_of_args(const ast::call_expr&     call,
+                             const ast::function_expr& fn_expr,
+                             std::string_view          mangled_name) -> bool;
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
                              gsl::span<type*>                  concrete_args,
@@ -744,6 +792,13 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
     // Member identifiers that resolved to an array's read-only `.len`/`.ptr`
     ankerl::unordered_dense::set<usize> structural_members_;
+    // A range capture's first and last value, by its loop's scope then its name
+    struct range_counter {
+        std::string_view name;
+        i128             first;
+        i128             last;
+    };
+    ankerl::unordered_dense::map<usize, std::vector<range_counter>> range_counters_;
 
     bool in_mutating_context_{false};
     // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
@@ -751,9 +806,15 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
+    // Set while resolving a `for comptime` driver, whose range unrolls into constants
+    bool in_comptime_for_iterable_{false};
     bool resolving_callee_{false};
-    bool in_expr_branch_{false};
-    bool arm_of_unused_{false};
+    // Set while resolving an initializer's `.field` accessor, which names a field by design
+    bool resolving_init_accessor_{false};
+    // `a.b` nodes being resolved as the function of a call, so a `dyn` method is called, not read
+    ankerl::unordered_dense::set<usize> callee_dots_;
+    bool                                in_expr_branch_{false};
+    bool                                arm_of_unused_{false};
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.
     ankerl::unordered_dense::set<usize> unused_value_nodes_;

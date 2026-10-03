@@ -607,6 +607,78 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
     - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
     - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
+- Fixed: match patterns missing a comma (`.a .b => x`, which parsed as a member of `.a`)
+- `mut?` lets one function serve both mutable and immutable callers: `&mut? T`, `^mut? T`, `[]mut? T`, and `[N]mut? T` take their mutability from the call
+    - `pub const at = fn(&mut? self, i: usize): &mut? T { return &mut? self.items[i]; };` returns `&mut T` through a `let mut` receiver and `&T` through a `let` one; a call is mutable only when every argument bound to a `mut?` parameter is
+    - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through
+    - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
+    - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
+    - Generic functions work the same way: `fn(T: type, s: []mut? T): &mut? T` returns `&mut T` for a mutable slice
+- **Breaking:** `builtin.Unwrappable.branch` is now `fn(&mut? self): Flow(&mut? Output, Residual)`, so it hands back a reference into the operand instead of a copy of its payload; an impl writes its success arm as `.some => |&mut? v| .{ .continue = v }`. `?` and `!` read through that reference and are otherwise unchanged
+- `if` and `while` unwrap any `builtin.Unwrappable` (`Option`, `Result`, ...) with a capture after the condition: `if (opt) |v| { ... } else { ... }`, `if (res) |v| v else |e| fallback(e)`, `while (it.next()) |item| : (i += 1) { ... } else |err| { ... }`
+    - The capture takes the same forms as a `match` arm: `|v|`, `|&v|`, `|&mut v|`, `|^v|`, `|^mut v|`, `|&mut? v|`, and `|_|`; `|&mut v|` writes into the operand, which must be a mutable place
+    - `else |e|` captures the residual by value; it is an error when the residual is `void` (an `Option`), and needs a capture after the condition
+    - An `Unwrappable` condition without a capture is an error (write `|_|` to ignore the payload), and a capture on any other condition (a `bool`, a pointer) is an error
+    - `while` calls `branch` before every iteration and runs its `else` when it breaks; a `break` statement skips the `else`, as before
+    - The payload capture is also in scope in the continuation: `while (it.next()) |x| : (sum += x)`
+    - Everything works at compile time, including `if comptime (x) |v|`, `while comptime (x) |v|` (by-value captures), and constants such as `const X = if (OPT) |v| v else 0;`
+- Fixed: at compile time, a `?` that returned early from inside a `let` initializer, an expression statement, or a `return` made the whole call fail to evaluate
+- Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
+- Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:
+    - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
+    - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
+    - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
+    - a pointer into an array steps through its elements: `let p: ^mut i32 = a.ptr; p[2] = 4;`
+    - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
+    - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
+- Fixed: a parameterized `impl` could expand for a type constructor from another module (such as the prelude's `builtin.Flow`) whose declaration happened to sit at the same position as its own, so unrelated edits made errors like "Cannot take a reference to an already-reference-typed value" appear inside the `impl`
+- Fixed nine compiler crashes:
+    - an array or struct field of type `void` (`[3]void`, `struct { a: void, ... }`); it now takes no space
+    - a module constant referring to a literal (`const N = &22;`, `const P = ^@as(i32, 7);`) when read at runtime
+    - an array literal whose element type is `noreturn` (`[3]noreturn{...}`), which is now an error like any other `noreturn` slot
+    - a member of a method reference (`let make = S.make; make.item`), which resolved against the method's return type; it is now an error
+    - calling a capturing function literal where it is written (`fn(x: i32): i32 { return x + offset; }(5)`)
+    - comparing two `void` values (`s.a == {}`), which now folds to `true`
+    - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
+    - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
+    - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- **Breaking:** `@ptrFromArray(a)` is removed; `a.ptr` already gives the same pointer to the first element, for arrays and slices alike
+- **Breaking:** a `for` range over untyped bounds (`for (0..3) |i|`) counts in `usize`, or in `isize` when a bound is negative, instead of `i32`
+    - when the bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, so `s += i` with an `i32` `s` and `take_u8(i)` keep working
+    - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
+    - `for comptime` is unchanged: it unrolls into constants of the default integer type
+- Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
+- A `for` range whose constant bounds are the wrong way round (`for (5..3)`) is an error, since ranges only count up; with runtime bounds it runs zero times
+- Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
+- Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
+- Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler
+- `\\` multiline strings format like Zig's: after `=` they start their own indented line, and a list never gets a trailing comma alone on the line after one
+- Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
+- A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it
+- A generic function can call itself with the same arguments (`fact(T, n - 1)`); one with an inferred `auto` return type that does is reported instead of exceeding the instantiation limit
+- Fixed: `.{ ... }` couldn't initialize a `[n]T` parameter sized by a `comptime` argument (`sum(3, .{ 1, 2, 3 })`)
+- Fixed: `let p: ^T = nullptr;` read as the untyped `nullptr` rather than a `^T`, so `if (p)` and `!p` were rejected
+- Fixed: an implicit `.field` naming a struct field (not a constant or function) resolved to the field's type; assigning it to a packed struct compiled silently. It is now an error
+- Fixed seven more compiler crashes, now errors or working code:
+    - a `fn(...): type` constructor taking an untyped value pack (`fn(c...): type`)
+    - `@bitCast` of an untyped float to a type that isn't 8 bytes (it has `f64`'s bit pattern)
+    - a closure assigning a binding declared after it
+    - a type used as an `if` or `while` condition (`if (bool)`)
+    - `_` as an `asm` input operand
+    - calling a static member that holds a function pointer (`const open = ^g;`, `S.open(7)`)
+    - a type written where a value argument goes (`f(impl a)`)
+- A parameter used as an array length (`let buf: [n]T`) is inferred `comptime` like any other compile-time read
+- Fixed: a `for` loop couldn't capture `|&mut e|` over a `let mut` array whose type was written out (`let mut buf: [3]mut u8 = ...`)
+- Fixed: a module constant whose initializer reads itself is reported as a cycle; reading it more than once used to take exponential time before failing
+- Fixed more crashes on invalid code, now errors:
+    - a type where a value belongs: `@ptrCast(^mut opaque, ^mut u8)`, `if (b) u8 else 1`, a type pattern in a `match` on a value
+    - naming an `impl` method of a primitive without calling it (`val.format`)
+    - a global array initialized with a non-array (`let mut buffer: [4]u8 = true;`)
+    - a non-function passed to a `comptime f: fn(...)` parameter
+    - a `const` static member whose initializer reads a `let mut` one
+- Fixed crashes on valid code: `-2 != 0.25` in a condition, and `@shlWithOverflow(a, 3, &mut out)` with an untyped shift count
+- Fixed: a function literal passed straight to a `comptime f: fn(...)` parameter (`apply(fn(n: i32): i32 { return n + 1; }, 4)`) was rejected as not compile-time
+- Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -614,6 +686,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 
 ## Tooling
+- Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`

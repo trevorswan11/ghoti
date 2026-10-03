@@ -111,6 +111,10 @@ class doc_manager {
         -> syntax::doc_id;
 
     // True if `id` renders across multiple lines regardless of the width it's placed at
+    // Whether `id` always ends in a hard line break, like a `\` multiline string does
+    [[nodiscard]] auto ends_with_hard_line(syntax::doc_id id) const noexcept -> bool;
+    // `id` without that final hard line break, so a caller can end the line at its own indent
+    [[nodiscard]] auto without_trailing_hard_line(syntax::doc_id id) -> syntax::doc_id;
     [[nodiscard]] auto contains_hard_break(syntax::doc_id id, bool nested = false) const noexcept
         -> bool;
 

@@ -205,14 +205,6 @@ TEST_CASE("A later parameter's type may be a type-constructor call over an earli
 
 TEST_CASE("Builtin pointer conversions") {
     test_builtin_resolve(
-        bis::PTR_FROM_ARRAY,
-        "a",
-        [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
-        },
-        "let mut a = [_]i32{0, 1, 2};");
-
-    test_builtin_resolve(
         bis::PTR_FROM_INT, "^i32, 0xc0ffeeu64", [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
         });
@@ -305,12 +297,6 @@ TEST_CASE("Const cast quick type checking") {
 }
 
 TEST_CASE("Other builtin quick type mismatch") {
-    helpers::test_resolver_fail(
-        "const foo = @ptrFromArray(1i32);",
-        sema::diagnostic{"Expected an array-yielding expression; found 'i32'",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 26UZ}});
-
     helpers::test_resolver_fail("const foo = @ptrFromInt(i32, 0xdeadbeefu64);",
                                 sema::diagnostic{"Expected a pointer type; found 'i32'",
                                                  sema::error::TYPE_MISMATCH,

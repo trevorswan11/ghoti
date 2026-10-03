@@ -35,6 +35,7 @@ using type_mapping = std::pair<type_kind, std::string_view>;
 
 // The qualifier a `^`/`&`/`[]` container spells before its element
 auto container_qualifier(const type& container) -> std::string_view {
+    if (container.is_poly()) { return "mut? "; }
     if (container.is_volatile()) { return container.is_constant() ? "volatile " : "mut volatile "; }
     return container.is_constant() ? "" : "mut ";
 }
@@ -811,6 +812,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         }
     }
 
+    // Only a place reached through a `mut?` parameter has the function's `mut?` mutability
+    if (dest.is_poly() && !src.is_poly()) { return false; }
+
     if (src_kind == dest_kind) {
         if (is_numeric(src_kind)) { return is_same_unqualified(src, dest); }
         switch (src_kind) {
@@ -910,6 +914,44 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         }
     }
 
+    return false;
+}
+
+auto is_arg_assignable(const type& src, const type& param) noexcept -> bool {
+    if (!param.is_poly() || src.is_poly()) { return is_assignable(src, param); }
+    const auto view_parts{[](const type& t) -> std::pair<stdx::option<const type&>, bool> {
+        const auto& data{t.get_data()};
+        if (const auto p{data.as_opt<types::pointer>()}) { return {p->underlying, false}; }
+        if (const auto r{data.as_opt<types::reference>()}) { return {r->underlying, false}; }
+        if (const auto sl{data.as_opt<types::slice>()}) {
+            return {sl->underlying, sl->null_terminated};
+        }
+        if (const auto ar{data.as_opt<types::array>()}) {
+            return {ar->underlying, ar->null_terminated};
+        }
+        return {stdx::none, false};
+    }};
+    const auto src_kind{src.get_kind()};
+    const auto param_kind{param.get_kind()};
+    const bool array_to_slice{src_kind == type_kind::ARRAY && param_kind == type_kind::SLICE};
+    if (src_kind != param_kind && !array_to_slice) { return false; }
+    const auto [src_elem, src_nt]{view_parts(src)};
+    const auto [param_elem, param_nt]{view_parts(param)};
+    if (!src_elem || !param_elem || (param_nt && !src_nt)) { return false; }
+    if (src_kind == type_kind::ARRAY && param_kind == type_kind::ARRAY &&
+        src.get_data().as<types::array>().len != param.get_data().as<types::array>().len) {
+        return false;
+    }
+    return is_same_unqualified(*src_elem, *param_elem);
+}
+
+auto contains_poly(const type& t) noexcept -> bool {
+    if (t.is_poly()) { return true; }
+    const auto& data{t.get_data()};
+    if (const auto p{data.as_opt<types::pointer>()}) { return contains_poly(p->underlying); }
+    if (const auto r{data.as_opt<types::reference>()}) { return contains_poly(r->underlying); }
+    if (const auto sl{data.as_opt<types::slice>()}) { return contains_poly(sl->underlying); }
+    if (const auto ar{data.as_opt<types::array>()}) { return contains_poly(ar->underlying); }
     return false;
 }
 

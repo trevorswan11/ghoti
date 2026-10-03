@@ -66,6 +66,7 @@
 (impl_parameter name: (identifier) @variable.parameter)
 (import_statement alias: (identifier) @type)
 (errdefer_statement capture: (identifier) @variable.parameter)
+(capture (identifier) @variable.parameter)
 
 ; Types used in position
 (decl_statement type: (identifier) @type)

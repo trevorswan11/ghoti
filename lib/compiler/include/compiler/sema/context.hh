@@ -161,6 +161,10 @@ struct context {
     // Nesting of in-progress generic instantiations, bounded so runaway recursion is reported
     usize                  generic_instantiation_depth{0};
     static constexpr usize max_generic_instantiation_depth{256};
+    // Monomorphs whose body is being resolved, by mangled name, so a recursive call reuses them
+    ankerl::unordered_dense::map<std::string, type*> instantiations_in_progress;
+    // Module constant pts whose initializers are being folded, so one reading itself is caught
+    ankerl::unordered_dense::set<uptr> globals_in_evaluation;
 
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 

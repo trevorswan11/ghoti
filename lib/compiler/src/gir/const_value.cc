@@ -64,6 +64,7 @@ auto const_value::to_gir_value() const noexcept -> value {
         [this](const const_union&) -> value { return value{void_val{}, type_}; },
         [this](const const_closure&) -> value { return value{void_val{}, type_}; },
         [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
+        [this](const const_ref&) -> value { return value{void_val{}, type_}; },
         [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
         [this](const f128& f) -> value { return value{f, type_, origin_}; },
         [this](const auto& v) -> value { return value{v, type_}; });
@@ -125,6 +126,14 @@ auto const_value::hash() const noexcept -> u64 {
                     }
                 },
                 [&](const const_addr& a) { h.combine<std::string_view>(a.symbol); },
+                [&](const const_ref& r) {
+                    h.combine(r.frame);
+                    h.combine<std::string_view>(r.binding);
+                    for (const auto& step : r.path) {
+                        h.combine<std::string_view>(step.name);
+                        h.combine(static_cast<u64>(step.index));
+                    }
+                },
                 [&](const const_dyn_fat_ptr& d) {
                     h.combine<std::string_view>(d.data_symbol);
                     h.combine<std::string_view>(d.vtable_symbol);
@@ -184,6 +193,7 @@ auto const_value::mangle() const -> std::string {
             return fmt::format("cl.{}.{}", c.fn_node.get_index(), fmt::join(parts, "."));
         },
         [](const const_addr& a) { return fmt::format("addr.{}", a.symbol); },
+        [](const const_ref& r) { return fmt::format("ref.{}.{}", r.frame, r.binding); },
         [](const const_dyn_fat_ptr& d) {
             return fmt::format("dyn.{}.{}", d.data_symbol, d.vtable_symbol);
         },

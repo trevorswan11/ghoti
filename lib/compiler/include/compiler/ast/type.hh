@@ -24,6 +24,7 @@ struct explicit_array_type {
     bool                      null_terminated;
     bool                      mut_elements;
     explicit_type_id          inner_explicit_type;
+    bool                      poly_elements{false}; // `[]mut? T`: the function's `mut?`
 };
 
 struct explicit_function_type {

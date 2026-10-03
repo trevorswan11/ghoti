@@ -152,7 +152,7 @@ TEST_CASE("pointer arithmetic steps by whole pointees in either operand order") 
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let a: [3]i32 = .{ 1, 2, 3 };
-            let p: ^i32 = @ptrFromArray(a);
+            let p: ^i32 = a.ptr;
             let mut n: usize = 2;
             let q = n + p;
             return *(p + 2) + *(1 + p) + *(q - 1);
@@ -598,6 +598,156 @@ TEST_CASE("a generic function cannot be C-variadic") {
         pub const main = fn(): i32 { return first(1, 2, 3); };
     )",
                           sema::error::MALFORMED_PACK_USE));
+}
+
+TEST_CASE("match patterns missing a comma are an error, not a member access") {
+    CHECK(helpers::raised(R"(
+        const E = enum { a, b };
+        pub const main = fn(): i32 { let e: E = .a; return match (e) { .a .b => 1, _ => 2 }; };
+    )",
+                          sema::error::ILLEGAL_MATCH_PATTERN));
+}
+
+TEST_CASE("a `deprecated` message that isn't a string is reported, not a crash at its use") {
+    CHECK(helpers::raised(R"(
+        @[deprecated(-1)] const stale = fn(): i32 { return 1; };
+        pub const main = fn(): i32 { return stale(); };
+    )",
+                          sema::error::ILLEGAL_ATTRIBUTE));
+}
+
+TEST_CASE("an array literal of `noreturn` elements is an error, not a crash") {
+    CHECK(helpers::raised(R"(
+        const ARR = [3]noreturn{7, 8, 9};
+        pub const main = fn(): i32 { let i: usize = 2; _ = ARR[i]; return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a member of a method reference is an error, not its return type's member") {
+    CHECK(helpers::raised(R"(
+        const S = struct { item: i32, const make = fn(v: i32): S { return .{ .item = v }; }; };
+        pub const main = fn(): i32 { let a = S.make; return a.item + 1; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a `dyn` method that isn't called is an error, not a crash") {
+    CHECK(helpers::raised(R"(
+        const Vec = interface { pub const x = fn(&self): i32; };
+        const P = struct { a: i32 };
+        impl Vec for P { pub const x = fn(&self): i32 { return self.a; }; }
+        const norm = fn(v: &dyn Vec): i32 { return v.x + 1; };
+        pub const main = fn(): i32 { let p = P{ .a = 4 }; return norm(&p); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("loops without a label have no value, and a labeled loop yields its `else`") {
+    CHECK(helpers::raised(R"(
+        pub const main = fn(): i32 { let mut i: i32 = 0; let r = while (i < 3) { i += 1; } else 7; return r; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { let mut i: i32 = 0; let r = l: while (i < 3) { i += 1; } else 7; return r; };
+    )") == 7);
+}
+
+TEST_CASE("returning a reference into the function's own frame is an error") {
+    CHECK(helpers::raised("const g = fn(): &i32 { let x: i32 = 1; return &x; };",
+                          sema::error::ESCAPING_LOCAL_REFERENCE));
+    CHECK(helpers::raised("const g = fn(x: i32): ^i32 { return ^x; };",
+                          sema::error::ESCAPING_LOCAL_REFERENCE));
+    CHECK(helpers::raised(R"(
+        const P = struct { a: i32, pub const get = fn(self): &i32 { return &self.a; }; };
+    )",
+                          sema::error::ESCAPING_LOCAL_REFERENCE));
+    CHECK(helpers::compile_and_run(R"(
+        let mut G: i32 = 3;
+        const P = struct { a: i32, pub const get = fn(&self): &i32 { return &self.a; }; };
+        const g = fn(): ^mut i32 { return ^mut G; };
+        const k = fn(): ^i32 { const C: i32 = 4; return ^C; };
+        pub const main = fn(): i32 { let p: P = .{ .a = 2 }; return p.get() + *g() + *k(); };
+    )") == 9);
+}
+
+TEST_CASE("fuzz-found crashes on invalid code are errors") {
+    // A value pack can't size a type
+    CHECK(helpers::raised("const count = fn(c...): type { return c.len; }; const X = count(1, 2);",
+                          sema::error::TYPE_MISMATCH));
+    // An untyped float has `f64`'s bit pattern
+    CHECK(helpers::raised("pub const main = fn(): i32 { return @bitCast(i32, 1.0); };",
+                          sema::error::TYPE_MISMATCH));
+    // A closure assigning a binding declared after it
+    CHECK(helpers::raised(R"(
+        pub const main = fn(): i32 {
+            let o: i32 = 7;
+            let add = fn(x: i32): i32 { return later = x + o; };
+            let later: i32 = 0;
+            return add(5);
+        };
+    )",
+                          sema::error::ASSIGNMENT_TO_CONST));
+    CHECK(helpers::raised("pub const main = fn(): i32 { return if (bool) 1 else 0; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised(R"(
+        pub const f = fn(): void { asm { template: "nop", inputs: ("r" = _), options: (volatile) }; };
+    )",
+                          sema::error::ILLEGAL_INLINE_ASM));
+    CHECK(helpers::raised(R"(
+        const f = fn(s: i32): void {};
+        pub const main = fn(): i32 { let a: i32 = 1; f(impl a); return 0; };
+    )",
+                          sema::error::TYPE_USED_AS_VALUE));
+    // `.field` alone has no value to read the field from
+    CHECK(helpers::raised(R"(
+        const P = packed struct { head: u8, b: u8 };
+        pub const main = fn(): i32 { let mut o: P = .{ .head = 1, .b = 2 }; o = .head; return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a type where a value belongs is an error, not a crash") {
+    CHECK(helpers::raised("pub const main = fn(): i32 { let e: ^mut opaque = @ptrCast(^mut opaque, "
+                          "^mut u8); return 0; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("pub const main = fn(): i32 { let b = true; return if (b) u8 else 1; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("pub const main = fn(): i32 { let n: i32 = 3; return match (n) { 1, i32 "
+                          "=> 20, _ => 0 }; };",
+                          sema::error::ILLEGAL_MATCH_PATTERN));
+    // Choosing between two types is still fine
+    CHECK(helpers::compile_and_run(R"(
+        const T = if (true) u8 else i32;
+        pub const main = fn(): i32 { let x: T = 4; return @as(i32, x); };
+    )") == 4);
+}
+
+TEST_CASE("more fuzz-found crashes are errors") {
+    CHECK(helpers::raised(R"(
+        const F = interface { pub const format = fn(&self): i32; };
+        impl F for i32 { pub const format = fn(&self): i32 { return *self * 2; }; }
+        const g = fn(val: i32): i32 { return val.format; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("let mut buffer: [4]u8 = true;", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const apply = fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
+        pub const main = fn(): i32 { return apply(1, 32); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    helpers::expect_compile_error(R"(
+        const U = union { x: i32, let mut calls: i32 = 0; };
+        const E = enum { a, const K = U.calls; };
+        pub const main = fn(): i32 { return E.K; };
+    )");
+
+    // Reading itself twice used to take exponential time before failing
+    helpers::expect_compile_error(R"(
+        const build = fn(): i32 { _ = x; _ = x; return 1; };
+        const x = build();
+        pub const main = fn(): i32 { return x; };
+    )");
 }
 
 } // namespace ghoti::tests

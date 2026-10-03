@@ -88,6 +88,8 @@ constexpr auto MODIFIERS{stdx::fixed::enum_map<token_type, modifier>::from(
     modifier_mapping{token_type::AND_MUT, modifier::MUT_REF},
     modifier_mapping{token_type::CARET, modifier::PTR},
     modifier_mapping{token_type::CARET_MUT, modifier::MUT_PTR},
+    modifier_mapping{token_type::AND_MUT_POLY, modifier::POLY_REF},
+    modifier_mapping{token_type::CARET_MUT_POLY, modifier::POLY_PTR},
     modifier_mapping{token_type::VOLATILE, modifier::VOLATILE})};
 
 } // namespace

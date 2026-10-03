@@ -97,28 +97,22 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
         [&](types::pointer p) -> type& {
             auto& u{remap_type(ctx, p.underlying, from, to)};
             if (&u == &p.underlying) { return t; }
-            return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
+            return ctx.get_pointer(t.get_key().get_mut(), u);
         },
         [&](types::reference r) -> type& {
             auto& u{remap_type(ctx, r.underlying, from, to)};
             if (&u == &r.underlying) { return t; }
-            return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                     u);
+            return ctx.get_reference(t.get_key().get_mut(), u);
         },
         [&](types::slice sl) -> type& {
             auto& u{remap_type(ctx, sl.underlying, from, to)};
             if (&u == &sl.underlying) { return t; }
-            return ctx.get_slice(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 sl.null_terminated,
-                                 u);
+            return ctx.get_slice(t.get_key().get_mut(), sl.null_terminated, u);
         },
         [&](types::array ar) -> type& {
             auto& u{remap_type(ctx, ar.underlying, from, to)};
             if (&u == &ar.underlying) { return t; }
-            return ctx.get_array(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 ar.null_terminated,
-                                 ar.len,
-                                 u);
+            return ctx.get_array(t.get_key().get_mut(), ar.null_terminated, ar.len, u);
         },
         [&](types::deferred_array da) -> type& {
             auto& u{remap_type(ctx, da.underlying, from, to)};

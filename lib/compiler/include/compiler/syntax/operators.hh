@@ -41,6 +41,9 @@ constexpr operator_t BANG{"!", token_type_t::BANG};
 constexpr operator_t QUESTION{"?", token_type_t::QUESTION};
 constexpr operator_t AND_MUT{"&mut", token_type_t::AND_MUT};
 constexpr operator_t CARET_MUT{"^mut", token_type_t::CARET_MUT};
+// `&mut?` / `^mut?`: a reference or pointer whose mutability is the enclosing function's `mut?`
+constexpr operator_t AND_MUT_POLY{"&mut?", token_type_t::AND_MUT_POLY};
+constexpr operator_t CARET_MUT_POLY{"^mut?", token_type_t::CARET_MUT_POLY};
 
 constexpr operator_t BW_AND{"&", token_type_t::BW_AND};
 constexpr operator_t BW_AND_ASSIGN{"&=", token_type_t::BW_AND_ASSIGN};

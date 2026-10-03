@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -81,10 +82,10 @@ TEST_CASE("the `?` operator works inside a generic function body") {
         impl builtin.Unwrappable for R {
             const Output = i32;
             const Residual = u8;
-            pub const branch = fn(self): builtin.Flow(i32, u8) {
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .err => |e| builtin.Flow(i32, u8){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
@@ -587,6 +588,69 @@ TEST_CASE("a `[n]T` parameter or return type of a `T: type` generic is monomorph
             return p[0] + p[1];
         };
     )") == 14);
+}
+
+TEST_CASE("an argument for a `@TypeOf(x)` parameter converts to, and must fit, that type") {
+    CHECK(helpers::compile_and_run(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 {
+            let a: i32 = 4;
+            let f: f32 = 1.0;
+            return echo(1, 5) + echo(a, @as(i16, 2)) + @intFromFloat(i32, echo(1.5, 2)) +
+                   @intFromFloat(i32, echo(f, 3));
+        };
+    )") == 5 + 2 + 2 + 3);
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 { let c = echo(1, true); return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        const c = echo(1, &2);
+        pub const main = fn(): i32 { return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a generic can call itself with the same arguments") {
+    CHECK(helpers::compile_and_run(R"(
+        const fact = fn(T: type, n: T): T { return if (n <= 1) 1 else n * fact(T, n - 1); };
+        const even = fn(T: type, n: T): bool { return if (n == 0) true else odd(T, n - 1); };
+        const odd = fn(T: type, n: T): bool { return if (n == 0) false else even(T, n - 1); };
+        const X = fact(i32, 4);
+        pub const main = fn(): i32 { return fact(i32, 5) + X + @as(i32, @intFromBool(even(i32, 6))); };
+    )") == 120 + 24 + 1);
+    CHECK(helpers::raised(R"(
+        const f = fn(n: auto): auto { return if (n <= 1) 1 else f(n - 1); };
+        pub const main = fn(): i32 { let x: i32 = 3; return f(x); };
+    )",
+                          sema::error::COMPTIME_RECURSION_LIMIT_EXCEEDED));
+}
+
+TEST_CASE("an initializer fills a `[n]T` parameter sized by a compile-time argument") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { let mut s: i32 = 0; for (a) |x| { s += x; } return s; };
+        pub const main = fn(): i32 { return sum(3, .{ 1, 2, 3 }) + sum(2, .{ 4, 4 }); };
+    )") == 14);
+
+    // The length mismatch is reported once the call is checked against the monomorph
+    helpers::expect_compile_error(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { return a[0]; };
+        pub const main = fn(): i32 { return sum(4, .{ 1, 2, 3 }); };
+    )");
+}
+
+TEST_CASE("an array length makes the parameter it reads compile-time") {
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(n: usize): i32 {
+            let mut buf: [n]mut usize = undefined;
+            for (buf) |&mut e| { e = 2; }
+            let s = buf[1..];
+            return @intCast(s.len + buf[0]);
+        };
+        pub const main = fn(): i32 { return f(3) + f(2); };
+    )") == 4 + 3);
 }
 
 } // namespace ghoti::tests

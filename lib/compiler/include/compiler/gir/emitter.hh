@@ -31,12 +31,11 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
-
-namespace ghoti::sema { struct unwrap_info; } // namespace ghoti::sema
 
 namespace ghoti::gir {
 
@@ -61,6 +60,7 @@ class emitter {
         stdx::option<value> const_val;
         bool                is_const{false};
         bool                is_comptime_mut{false}; // Mutable, but never materializes storage
+        bool                is_range_counter{false};
     };
 
     // Set by `emit_generic_instantiation` for one pack function's body
@@ -331,6 +331,18 @@ class emitter {
                             syntax::token_type_t builtin,
                             bool                 check_lengths = true) -> void;
 
+    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
+    // and whether that is its `break` variant
+    struct flow_result {
+        value             flow_slot;
+        value             is_break;
+        sema::unwrap_info shape;
+    };
+    auto emit_flow(ast::expr_handle operand) -> flow_result;
+    // Binds an `if`/`while` payload capture to what the `continue` reference points at
+    auto bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void;
+    // Binds an `else |e|` capture to the `break` residual
+    auto bind_unwrap_residual(const ast::capture_t& capture, const flow_result& flow) -> void;
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value                    operand_addr,
                                  const sema::unwrap_info& shape,
@@ -409,22 +421,10 @@ class emitter {
     // If `assign` targets a `comptime let mut`, folds it and rebinds in place. `none` otherwise
     auto try_emit_comptime_mut_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // One level of `p.field = ...` / `p.field += ...` into an aggregate `comptime let mut`
-    auto try_emit_comptime_mut_field_assignment(ast::node_id                id,
-                                                const ast::assignment_expr& assign,
-                                                std::string_view            root_name,
-                                                local_binding&              binding,
-                                                const ast::dot_expr& dot) -> stdx::option<value>;
-    // Same shape as the field form, for `arr[k] = ...` into an array-typed `comptime let mut`.
-    auto try_emit_comptime_mut_element_assignment(ast::node_id                id,
-                                                  const ast::assignment_expr& assign,
-                                                  std::string_view            root_name,
-                                                  local_binding&              binding,
-                                                  const ast::index_expr&      idx)
+    // `p.a.b = ...` / `arr[k].field += ...`: any chain of fields and elements into an aggregate
+    // `comptime let mut`
+    auto try_emit_comptime_mut_place_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
-    // that identifier's binding if it names a `comptime let mut`
-    auto comptime_mut_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&>;
     auto update_comptime_mut(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.

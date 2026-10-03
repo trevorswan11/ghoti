@@ -118,6 +118,22 @@ TEST_CASE("comptime parameter: an anonymous capturing closure literal") {
     )") == 42);
 }
 
+TEST_CASE("comptime parameter: a capture-less function literal passed directly") {
+    CHECK(helpers::compile_and_run(R"(
+        const apply = fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
+        const use = fn(comptime f: fn(n: i32): i32, v: i32): i32 {
+            if comptime (f(1) == 10) { return f(v) + 100; }
+            return f(v);
+        };
+
+        pub const main = fn(): i32 {
+            let a = apply(fn(n: i32): i32 { return n + 1; }, 4);
+            let b = apply(fn(n: i32): i32 { return n * 3; }, 4);
+            return a + b + use(fn(n: i32): i32 { return n * 10; }, 2);
+        };
+    )") == 5 + 12 + 120);
+}
+
 TEST_CASE("comptime closure: distinct captured values monomorphize apart") {
     CHECK(helpers::compile_and_run(R"(
         const apply = fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };

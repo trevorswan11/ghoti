@@ -73,6 +73,37 @@ struct const_addr {
     [[nodiscard]] auto       operator==(const const_addr& other) const noexcept -> bool;
 };
 
+// One step from a compile-time place into a part of it
+struct ref_step {
+    enum class kind : u8 {
+        FIELD,   // a struct field
+        PAYLOAD, // a union's payload, as variant `name`
+        INDEX,   // an array element
+    };
+
+    kind               step{kind::FIELD};
+    std::string        name;
+    usize              index{0};
+    [[nodiscard]] auto operator==(const ref_step&) const noexcept -> bool = default;
+};
+
+// A reference or pointer to a binding of a compile-time call frame, or to a part of one. Frames
+// are identified by a unique id, so a reference that outlives its frame is detected, not followed
+struct const_ref {
+    // The elements `[lo, lo + len)` of the array place a slice views
+    struct window_t {
+        usize              lo{0};
+        usize              len{0};
+        [[nodiscard]] auto operator==(const window_t&) const noexcept -> bool = default;
+    };
+
+    u64                    frame{0};
+    std::string            binding;
+    std::vector<ref_step>  path;
+    stdx::option<window_t> window{};
+    [[nodiscard]] auto     operator==(const const_ref&) const noexcept -> bool = default;
+};
+
 struct const_dyn_fat_ptr {
     std::string        data_symbol;
     std::string        vtable_symbol;
@@ -95,6 +126,7 @@ class const_value {
                                  const_union,
                                  const_closure,
                                  const_addr,
+                                 const_ref,
                                  const_dyn_fat_ptr,
                                  void_val,
                                  undefined_val,

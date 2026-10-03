@@ -240,4 +240,15 @@ TEST_CASE("@assert and @verify with comptime nullptr are rejected at compile tim
     )");
 }
 
+TEST_CASE("a `let` pointer initialized to `nullptr` keeps its pointer type") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let p: ^i32 = nullptr;
+            let q = p;
+            if (q) { return 1; }
+            return if (!p) 3 else 2;
+        };
+    )") == 3);
+}
+
 } // namespace ghoti::tests
