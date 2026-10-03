@@ -6844,13 +6844,16 @@ auto type_resolver::names_comptime_mut(ast::expr_handle expr) -> bool {
 //   - `err(AMBIGUOUS_...)` : more than one visible method with this name
 auto type_resolver::register_impl_param_bounds(const ast::function_expr& fn) -> void {
     if (fn.impl_bounds.empty()) { return; }
-    std::vector<context::param_bound> entries;
+    std::vector<param_bound> entries;
     for (const auto& b : fn.impl_bounds) {
         // `impl Fn(...)`: a signature for the argument to match
         if (b.interfaces.size() == 1 &&
             b.interfaces.front().get_kind() == ast::explicit_type_kind::FUNCTION) {
-            entries.emplace_back(context::param_bound{
-                .param_index = b.param_index, .interfaces = {}, .callable = b.interfaces.front()});
+            entries.emplace_back<param_bound>({
+                .param_index = b.param_index,
+                .interfaces  = {},
+                .callable    = b.interfaces.front(),
+            });
             continue;
         }
         std::vector<const type*> ifaces;
@@ -6892,9 +6895,11 @@ auto type_resolver::register_impl_param_bounds(const ast::function_expr& fn) -> 
         }
 
         if (!ifaces.empty()) {
-            entries.emplace_back(context::param_bound{.param_index = b.param_index,
-                                                      .interfaces  = std::move(ifaces),
-                                                      .callable    = stdx::none});
+            entries.emplace_back<param_bound>({
+                .param_index = b.param_index,
+                .interfaces  = std::move(ifaces),
+                .callable    = stdx::none,
+            });
         }
     }
     if (!entries.empty()) { ctx_.param_bounds.insert_or_assign(&fn, std::move(entries)); }

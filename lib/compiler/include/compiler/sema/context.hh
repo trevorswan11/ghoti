@@ -166,18 +166,8 @@ struct context {
     // Module constant pts whose initializers are being folded, so one reading itself is caught
     ankerl::unordered_dense::set<uptr> globals_in_evaluation;
 
-    // What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
-    struct param_bound {
-        u32                      param_index;
-        std::vector<const type*> interfaces;
-        // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
-        // constructor's parameters
-        stdx::option<ast::explicit_type_id> callable;
-    };
-    // Every generic function's parameter bounds, by its function literal so each of a type
-    // constructor's per-instantiation members shares them, for a caller in any module to check
-    using param_bound_map =
-        ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
+    // Generic function's parameter bounds by function literal so each of a type ctor's
+    // per-instantiation members shares them
     param_bound_map& param_bounds;
 
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }

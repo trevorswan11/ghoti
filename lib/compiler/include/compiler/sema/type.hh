@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -177,6 +178,19 @@ class type;
 
 // Declared names of user struct/enum/union types, keyed by their type
 using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+
+// What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
+struct param_bound {
+    u32                      param_index;
+    std::vector<const type*> interfaces;
+    // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
+    // constructor's parameters
+    stdx::option<ast::explicit_type_id> callable;
+};
+
+// Every generic function's parameter bounds for a caller in any module to check
+using param_bound_map =
+    ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
 
 // Why an implicit `from` -> `to` conversion is rejected, naming user types through `names`
 [[nodiscard]] auto cast_rejection_reason(const type&                        from,
