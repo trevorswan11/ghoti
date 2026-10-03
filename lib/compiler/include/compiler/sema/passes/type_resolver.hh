@@ -488,6 +488,13 @@ class type_resolver {
                               usize                     iterable_idx) -> void;
     // Retypes a bare range-counter read to `target` when every value it takes fits there
     auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
+    // Resolves a parameter's declared type, where `auto` may sit inside a slice or array
+    auto resolve_param_type(ast::explicit_type_id param_type) -> void;
+    // Whether `t` is `auto` under pointer, reference, slice, and array levels (`&[]mut auto`)
+    [[nodiscard]] static auto is_auto_pattern(const type& t) -> bool;
+    // The parameter type `pattern` takes for an argument of type `arg`, with `leaf` set to what
+    // `auto` bound to; null when a level doesn't match
+    auto match_auto_pattern(type& pattern, type& arg, type*& leaf) -> type*;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
@@ -806,6 +813,8 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
+    // Set while resolving a function parameter's declared type
+    bool in_param_type_{false};
     // Set while resolving a `for comptime` driver, whose range unrolls into constants
     bool in_comptime_for_iterable_{false};
     bool resolving_callee_{false};

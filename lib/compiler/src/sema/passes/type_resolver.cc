@@ -230,6 +230,20 @@ template <typename T>
     }
 }
 
+// Whether an annotation is `auto` under pointer, reference, slice, and array levels (`&[]auto`)
+[[nodiscard]] auto spells_auto_pattern(const ast::AST& tree, ast::explicit_type_id t) -> bool {
+    if (!t.is_valid()) { return false; }
+    if (t.get_token_type() == syntax::token_type_t::AUTO_TYPE) { return true; }
+    switch (t.get_kind()) {
+    case ast::explicit_type_kind::RECURSIVE:
+        return spells_auto_pattern(tree, tree.get_as<ast::explicit_type_id>(t));
+    case ast::explicit_type_kind::ARRAY:
+        return spells_auto_pattern(tree,
+                                   tree.get_as<ast::explicit_array_type>(t).inner_explicit_type);
+    default: return false;
+    }
+}
+
 // A view's own mutability: `mut?`, constant, or mutable
 [[nodiscard]] auto view_mutability(const type& view) noexcept
     -> stdx::option<types::mutability_modifiers> {
@@ -3014,6 +3028,81 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
     return stdx::none;
 }
 
+auto type_resolver::resolve_param_type(ast::explicit_type_id param_type) -> void {
+    const mutating_context_guard g{in_param_type_, true};
+    resolve(param_type);
+}
+
+auto type_resolver::is_auto_pattern(const type& t) -> bool {
+    const auto& data{t.get_data()};
+    if (t.get_kind() == type_kind::AUTO) { return true; }
+    if (const auto p{data.as_opt<types::pointer>()}) { return is_auto_pattern(p->underlying); }
+    if (const auto r{data.as_opt<types::reference>()}) { return is_auto_pattern(r->underlying); }
+    if (const auto sl{data.as_opt<types::slice>()}) { return is_auto_pattern(sl->underlying); }
+    if (const auto arr{data.as_opt<types::array>()}) { return is_auto_pattern(arr->underlying); }
+    if (const auto d{data.as_opt<types::deferred_array>()}) {
+        return is_auto_pattern(d->underlying);
+    }
+    return false;
+}
+
+auto type_resolver::match_auto_pattern(type& pattern, type& arg, type*& leaf) -> type* {
+    if (pattern.get_kind() == type_kind::AUTO) {
+        leaf = &arg;
+        return &arg;
+    }
+
+    // `mut` needs a mutable argument, a plain level accepts either, and `mut?` takes the argument's
+    const auto mutability{
+        [&](const type& matched) -> stdx::option<types::mut::mutability_modifiers> {
+            if (pattern.is_poly()) {
+                return matched.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
+            }
+            if (!pattern.is_constant() && matched.is_constant()) { return stdx::none; }
+            return pattern.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE;
+        }};
+
+    // `[n]auto`'s length folds before its elements can match
+    if (pattern.get_data().is<types::deferred_array>()) {
+        auto& folded{concrete_array_type(pattern)};
+        return &folded != &pattern ? match_auto_pattern(folded, arg, leaf) : nullptr;
+    }
+
+    const auto& pdata{pattern.get_data()};
+    const auto& adata{arg.get_data()};
+    if (const auto p{pdata.as_opt<types::pointer>()}) {
+        const auto a{adata.as_opt<types::pointer>()};
+        const auto m{a ? mutability(arg) : stdx::none};
+        if (!m) { return nullptr; }
+        auto* inner{match_auto_pattern(p->underlying, a->underlying, leaf)};
+        return inner ? &ctx_.get_pointer(*m, *inner) : nullptr;
+    }
+    if (const auto r{pdata.as_opt<types::reference>()}) {
+        const auto a{adata.as_opt<types::reference>()};
+        const auto m{a ? mutability(arg) : stdx::none};
+        if (!m) { return nullptr; }
+        auto* inner{match_auto_pattern(r->underlying, a->underlying, leaf)};
+        return inner ? &ctx_.get_reference(*m, *inner) : nullptr;
+    }
+    if (const auto sl{pdata.as_opt<types::slice>()}) {
+        const auto a{adata.as_opt<types::slice>()};
+        const auto m{a ? mutability(arg) : stdx::none};
+        if (!m || (sl->null_terminated && !a->null_terminated)) { return nullptr; }
+        auto* inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
+        return inner ? &ctx_.get_slice(*m, sl->null_terminated, *inner) : nullptr;
+    }
+    if (const auto arr{pdata.as_opt<types::array>()}) {
+        const auto a{adata.as_opt<types::array>()};
+        const auto m{a ? mutability(arg) : stdx::none};
+        if (!m || a->len != arr->len || (arr->null_terminated && !a->null_terminated)) {
+            return nullptr;
+        }
+        auto* inner{match_auto_pattern(arr->underlying, a->underlying, leaf)};
+        return inner ? &ctx_.get_array(*m, arr->null_terminated, arr->len, *inner) : nullptr;
+    }
+    return nullptr;
+}
+
 auto type_resolver::record_range_counter(usize                     loop_table,
                                          const ast::for_loop_expr& for_expr,
                                          usize                     iterable_idx) -> void {
@@ -3634,11 +3723,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         if (fn_info_opt && (any_param_generic(params) ||
                             any_param_comptime(*fn_info_opt->fn_expr) || has_pack_param)) {
-            auto        concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
-            bool        any_arg_poison{false};
-            const auto  fixed_params{params.subspan(param_offset)};
-            const auto& fn_params{fn_info_opt->fn_expr->parameters};
-            const auto& fn_ast{fn_info_opt->module->ast};
+            auto concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
+            // What `auto` bound to inside a pattern parameter (`x: &auto`), for interface bounds
+            std::vector<type*> auto_leaves(effective_arity, nullptr);
+            bool               any_arg_poison{false};
+            const auto         fixed_params{params.subspan(param_offset)};
+            const auto&        fn_params{fn_info_opt->fn_expr->parameters};
+            const auto&        fn_ast{fn_info_opt->module->ast};
 
             const auto find_bound_type_param = [&](usize idx) -> stdx::option<usize> {
                 if (idx >= fn_params.size() || !fn_params[idx].explicit_type.is_valid()) {
@@ -3795,6 +3886,27 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         error::TYPE_MISMATCH,
                         get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
+                // `&auto`, `[]mut auto`, ...: each declared level must match the argument's
+                if (!bound_idx && param_type->get_kind() != type_kind::AUTO &&
+                    is_auto_pattern(*param_type)) {
+                    type*      leaf{nullptr};
+                    const auto matched{match_auto_pattern(*param_type, *resolved_type, leaf)};
+                    if (!matched) {
+                        return last_type_.emplace(ctx_.poison_node(
+                            resolving_,
+                            id,
+                            fmt::format("Argument {} of type '{}' does not match parameter type "
+                                        "'{}'",
+                                        i + 1,
+                                        ctx_.type_display_name(*resolved_type),
+                                        ctx_.type_display_name(*param_type)),
+                            error::TYPE_MISMATCH,
+                            get_call_arg_location(call.arguments[expanded.source_index[i]])));
+                    }
+                    concrete_arg_types[i] = matched;
+                    auto_leaves[i]        = leaf;
+                    continue;
+                }
                 concrete_arg_types[i] =
                     bound_idx && concrete_arg_types[*bound_idx] ? param_type : resolved_type;
             }
@@ -3837,7 +3949,9 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                               gsl::span<const type* const> ifaces,
                                               std::string_view pname) -> stdx::option<type&> {
                     gsl::not_null bound_t{&denoted_type(*concrete_arg_types[arg_idx])};
-                    if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
+                    if (auto_leaves[arg_idx]) {
+                        bound_t = auto_leaves[arg_idx];
+                    } else if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
                         bound_t = &p->underlying;
                     } else if (const auto r{bound_t->get_data().as_opt<types::reference>()}) {
                         bound_t = &r->underlying;
@@ -4878,7 +4992,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             fn_param_types[p_idx++] = &ctx_.get_builtin_resolved_type(type_kind::OPAQUE);
         }
         for (const auto& param : fn.parameters) {
-            TRY_RESOLVE(param.explicit_type);
+            resolve_param_type(param.explicit_type);
+            if (!last_type_) { return; }
             auto& param_type{denoted_type(*last_type_.take())};
             if (reject_non_runtime_slot(param.explicit_type, param_type)) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -4996,7 +5111,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         if (param.is_pack && !param.explicit_type.is_valid()) {
             last_type_.emplace(ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]);
         } else {
-            TRY_RESOLVE(param.explicit_type);
+            resolve_param_type(param.explicit_type);
+            if (!last_type_) { return; }
         }
 
         auto& param_type{thin_if_comptime(param, denoted_type(*last_type_.take()))};
@@ -5047,6 +5163,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         if (self_offset && is_generic_type(*param_types[0])) { return true; }
         for (usize i{self_offset}; i < param_types.size(); ++i) {
             const auto& pt{*param_types[i]};
+            if (is_auto_pattern(pt)) { return true; }
             if (pt.get_kind() == type_kind::TYPE) {
                 if (fn.parameters[i - self_offset].explicit_type.get_token_type() ==
                     syntax::token_type_t::TYPE_TYPE) {
@@ -10126,7 +10243,7 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
         params[idx++] = self_ty;
     }
     for (const auto& param : fn.parameters) {
-        resolve(param.explicit_type);
+        resolve_param_type(param.explicit_type);
         params[idx++] = &denoted_type(*last_type_.take());
     }
     resolve(fn.explicit_return_type);
@@ -10530,8 +10647,8 @@ auto type_resolver::declares_generic_params(const ast::function_expr& fn_expr) c
     if (!fn_expr.impl_bounds.empty()) { return true; }
     return std::ranges::any_of(fn_expr.parameters, [&](const ast::function_expr::parameter& p) {
         if (p.is_comptime || p.is_pack || !p.explicit_type.is_valid()) { return true; }
-        const auto tt{p.explicit_type.get_token_type()};
-        return tt == syntax::token_type_t::AUTO_TYPE || tt == syntax::token_type_t::TYPE_TYPE;
+        return p.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE ||
+               spells_auto_pattern(resolving_.ast, p.explicit_type);
     });
 }
 
@@ -12844,7 +12961,7 @@ auto type_resolver::resolve_param_impl_bodies(
 
         bool is_generic_method{any_param_comptime(fn_expr)};
         for (const auto& param : fn_expr.parameters) {
-            inst.resolve(param.explicit_type);
+            inst.resolve_param_type(param.explicit_type);
             if (inst.last_type_ && !inst.last_type_->is_poison()) {
                 auto& pty{denoted_type(*inst.last_type_.take())};
                 if (is_generic_type(pty) || param.is_comptime) { is_generic_method = true; }
@@ -12995,7 +13112,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     comptime_frame cx_dummy;
     for (const auto& p : impl.impl_params) {
         if (p.is_comptime) {
-            resolve(p.explicit_type);
+            resolve_param_type(p.explicit_type);
             auto& pty{last_type_ && !last_type_->is_poison()
                           ? denoted_type(*last_type_)
                           : ctx_.get_builtin_resolved_type(type_kind::USIZE)};
@@ -13519,7 +13636,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         }
 
         for (const auto& param : fn_expr.parameters) {
-            inst.resolve(param.explicit_type);
+            inst.resolve_param_type(param.explicit_type);
             auto& pt{inst.last_type_ && !inst.last_type_->is_poison()
                          ? denoted_type(*inst.last_type_.take())
                          : ctx_.get_poison()};
@@ -13637,7 +13754,7 @@ auto type_resolver::resolve_dyn_method_signature(const types::dyn_t&       dyn,
             fallback_fn && !fallback_fn->params.empty() ? fallback_fn->params[0] : &fallback;
     }
     for (const auto& param : fn_expr.parameters) {
-        inst.resolve(param.explicit_type);
+        inst.resolve_param_type(param.explicit_type);
         auto& pt{inst.last_type_ && !inst.last_type_->is_poison()
                      ? denoted_type(*inst.last_type_.take())
                      : ctx_.get_poison()};
@@ -13912,7 +14029,9 @@ MAKE_MODIFIED_RESOLVER(call_expr, resolve_call)
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function_type& fn) -> void {
     PROFILE_FUNCTION();
-    auto param_types{ctx_.pool.get_many_unsafe(fn.parameter_types.size())};
+    // A function type's own parameters aren't patterns to deduce from
+    const mutating_context_guard not_param{in_param_type_, false};
+    auto                         param_types{ctx_.pool.get_many_unsafe(fn.parameter_types.size())};
 
     if (!fn.is_extern && fn.has_explicit_conv) {
         return last_type_.emplace(ctx_.poison_node(
@@ -14000,15 +14119,16 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     TRY_RESOLVE(array.inner_explicit_type);
     auto& item_type{denoted_type(*last_type_.take())};
 
-    if (item_type.get_kind() == type_kind::AUTO) {
+    if (item_type.get_kind() == type_kind::AUTO && !in_param_type_) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "Array elements cannot have type 'auto'",
+                             "Array elements can only have type 'auto' in a function parameter",
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(array.inner_explicit_type)));
     }
-    if (reject_storage_slot(array.inner_explicit_type, item_type)) {
+    if (item_type.get_kind() != type_kind::AUTO &&
+        reject_storage_slot(array.inner_explicit_type, item_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
 
@@ -14490,25 +14610,15 @@ auto type_resolver::instantiate_generic(type&                             callee
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
         auto*       arg_type{concrete_args[p_idx]};
-        inst_resolver.resolve(param.explicit_type);
+        inst_resolver.resolve_param_type(param.explicit_type);
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
             auto& resolved_param_type{inst_resolver.thin_if_comptime(
                 param,
                 inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take())))};
-            // `&auto` / `^auto` (from `impl I` sugar) has no concrete shape yet
-            const auto strips_to_auto{[](auto&& self, const type& t) -> bool {
-                if (t.get_kind() == type_kind::AUTO) { return true; }
-                if (const auto p{t.get_data().as_opt<types::pointer>()}) {
-                    return self(self, p->underlying);
-                }
-                if (const auto r{t.get_data().as_opt<types::reference>()}) {
-                    return self(self, r->underlying);
-                }
-                return false;
-            }};
-            if (!strips_to_auto(strips_to_auto, resolved_param_type)) {
+            // `&auto` / `[]mut auto` has no concrete shape until its argument matched it
+            if (!is_auto_pattern(resolved_param_type)) {
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;
