@@ -591,4 +591,52 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
     )") == 0);
 }
 
+TEST_CASE("an `if comptime` arm that returns leaves the rest of the body unchecked") {
+    CHECK(helpers::compile_and_run(R"(
+        const child = fn(T: type): type {
+            const info = @typeInfo(T);
+            if comptime (info == .pointer) { return info.pointer.child; }
+            @assert(info == .int, "expects an integer or a pointer to one");
+            return T;
+        };
+        const pick = fn(T: type): i32 {
+            if comptime (T == i32) { return 1; }
+            @assert(T == bool, "nope");
+            return 2;
+        };
+        pub const main = fn(): i32 {
+            return @intCast(@sizeOf(child(^i64)) + @sizeOf(child(u8))) + pick(i32) + pick(bool);
+        };
+    )") == 8 + 1 + 1 + 2);
+    // The assertion still holds where it's reached
+    CHECK(helpers::raised(R"(
+        const pick = fn(T: type): i32 {
+            if comptime (T == i32) { return 1; }
+            @assert(T == bool, "nope");
+            return 2;
+        };
+        pub const main = fn(): i32 { return pick(u8); };
+    )",
+                          sema::error::STATIC_ASSERTION_FAILED));
+}
+
+TEST_CASE("a type constructor reached through an alias or a module folds in a comparison") {
+    CHECK(helpers::compile_and_run_tests(R"(
+            import "boxes.gh" as boxes;
+            const Box = fn(T: type): type { return struct { v: T }; };
+            const Alias = Box;
+            test "compare" {
+                @expect(Alias(u8) == Alias(u8));
+                @expect(boxes.Box(u8) == boxes.Box(u8));
+                @expect(boxes.Alias(u8) == boxes.Alias(u8));
+            }
+        )",
+                                         {helpers::mock_file{"boxes.gh",
+                                                             R"(
+            pub const Box = fn(T: type): type { return struct { v: T }; };
+            pub const Alias = Box;
+        )",
+                                                             "boxes"}}) == 0);
+}
+
 } // namespace ghoti::tests

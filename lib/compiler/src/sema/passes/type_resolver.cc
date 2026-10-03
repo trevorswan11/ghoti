@@ -3715,7 +3715,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         // Check the arity of the function against params before resetting last type
         const auto& params{function_type->params};
         const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
-        const auto  fn_info_opt{ctx_.generic_functions.get_opt(callee_type)};
+        // A copy, since resolving the arguments may register generics and move the registry's
+        stdx::option<generic_function_info> fn_info_opt;
+        if (const auto registered{ctx_.generic_functions.get_opt(callee_type)}) {
+            fn_info_opt.emplace(*registered);
+        }
         // A pack parameter accepts any number of trailing arguments, like a C variadic.
         const bool has_pack_param{fn_info_opt && !fn_info_opt->fn_expr->parameters.empty() &&
                                   fn_info_opt->fn_expr->parameters.back().is_pack};
@@ -5542,14 +5546,48 @@ auto type_resolver::target_supports_callconv(ast::calling_convention conv) const
 
 auto type_resolver::fail_scoped_body() -> void { last_type_.emplace(ctx_.get_poison()); }
 
+namespace {
+
+// Whether `stmt` always leaves its block: a `return`, `break`, or `continue`, or a block ending in
+// one
+[[nodiscard]] auto always_exits(const ast::AST& tree, ast::node_id stmt) -> bool {
+    if (tree.get_as_opt<ast::return_stmt>(stmt) || tree.get_as_opt<ast::break_stmt>(stmt) ||
+        tree.get_as_opt<ast::continue_stmt>(stmt)) {
+        return true;
+    }
+    if (const auto block{tree.get_as_opt<ast::block_stmt>(stmt)}) {
+        return !block->statements.empty() && always_exits(tree, *block->statements.back());
+    }
+    return false;
+}
+
+} // namespace
+
 auto type_resolver::resolve_block_statements(const ast::block_stmt& block) -> bool {
     const active_block_guard guard{active_blocks_, block};
     for (usize idx{0}; idx < block.statements.size(); ++idx) {
         active_blocks_.back().current_stmt_idx = idx;
         resolve(block.statements[idx]);
         if (last_type_->is_poison()) { return true; }
+        // An `if comptime` that took an arm which always leaves makes the rest of the block dead,
+        // just as the emitter stops there
+        if (folded_if_exits(block.statements[idx])) { break; }
     }
     return false;
+}
+
+auto type_resolver::folded_if_exits(ast::node_id stmt) const -> bool {
+    const auto expr_stmt{resolving_.ast.get_as_opt<ast::expr_stmt>(stmt)};
+    if (!expr_stmt) { return false; }
+    const ast::node_id if_id{expr_stmt->expression};
+    const auto         if_expr{resolving_.ast.get_as_opt<ast::if_expr>(if_id)};
+    if (!if_expr || !if_expr->comptime_condition) { return false; }
+    const auto branch{resolving_.get_if_branch_opt(if_id.get_index())};
+    if (!branch) { return false; }
+    if (*branch == mod::if_branch::CONSEQUENCE) {
+        return always_exits(resolving_.ast, if_expr->consequence);
+    }
+    return if_expr->alternate && always_exits(resolving_.ast, *if_expr->alternate);
 }
 
 auto type_resolver::is_declared_later_in_active_block(ast::node_id decl) const -> bool {
@@ -8354,8 +8392,10 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         effective_matcher_type.emplace(ref->underlying);
     }
 
-    stdx::option<type&>            first_type;
-    std::vector<result_value>      arm_values;
+    stdx::option<type&>       first_type;
+    std::vector<result_value> arm_values;
+    // A block arm yields nothing, so a `match` statement with one has no value to keep
+    bool                           block_arm{false};
     stdx::option<ast::expr_handle> type_arm;
     bool                           value_arm{false};
     bool                           matcher_is_const{false};
@@ -8696,6 +8736,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
         // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
         // block's own resolved type is just its scope handle, not a value type, so it's ignored.
+        if (resolving_.ast.get_as_opt<ast::block_stmt>(arm.dispatch)) { block_arm = true; }
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
             if (const auto inner_type{resolving_.get_sema_type_opt(expr_stmt_node->expression)}) {
                 if (!inner_type->is_poison()) {
@@ -8741,7 +8782,10 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         }
     }
 
-    if (!first_type) { first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_)); }
+    if (!first_type || (block_arm && unused_value_nodes_.contains(id.get_index()))) {
+        first_type.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+        arm_values.clear();
+    }
     auto& result_type{arm_values.size() > 1 ? result_peer(id, arm_values) : *first_type};
     resolving_.set_sema_type(id, result_type);
     last_type_.emplace(result_type);
@@ -12485,6 +12529,11 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
         }
     }
 
+    // A test body is a function of its own, so a closure in it captures the test's locals
+    const function_boundary_guard fn_boundary{function_boundaries_, table_stack_.size() - 1};
+    const open_function_guard     fn_node{open_function_nodes_, id};
+    const self_recursion_guard    fn_self_ref{self_recursive_flags_, false};
+
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(test.block)};
     if (resolve_block_statements(block)) { return fail_scoped_body(); }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
@@ -13112,6 +13161,7 @@ auto type_resolver::resolve_param_impl_bodies(
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
             inst.active_blocks_.back().current_stmt_idx = idx;
             inst.resolve(block.statements[idx]);
+            if (inst.folded_if_exits(block.statements[idx])) { break; }
         }
         auto tracker{std::move(inst.return_trackers_.back())};
         inst.return_trackers_.pop_back();
@@ -14819,6 +14869,7 @@ auto type_resolver::instantiate_generic(type&                             callee
             inst_resolver.active_blocks_.back().current_stmt_idx = idx;
             inst_resolver.resolve(block.statements[idx]);
             if (inst_resolver.last_type_->is_poison()) { resolved_poison = true; }
+            if (inst_resolver.folded_if_exits(block.statements[idx])) { break; }
         }
     }
     if (ctx_.diags.size() > diags_before || resolved_poison) {

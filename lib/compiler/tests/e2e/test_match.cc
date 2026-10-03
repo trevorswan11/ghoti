@@ -598,4 +598,20 @@ TEST_CASE("A match with a value arm and a bare `@panic` arm resolves to the valu
     )") == 7);
 }
 
+TEST_CASE("a `match` statement with a block arm next to a value arm has no value") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        const noop = fn(): void {};
+        test "statement" {
+            let x: i32 = 1;
+            match (x) {
+                1 => {
+                    defer noop();
+                    @expect(true);
+                },
+                _ => @expect(false, "unreachable"),
+            }
+        }
+    )") == 0);
+}
+
 } // namespace ghoti::tests

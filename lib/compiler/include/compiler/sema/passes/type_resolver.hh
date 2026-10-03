@@ -484,6 +484,8 @@ class type_resolver {
     auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // Resolves a parameter's declared type, where `auto` may sit inside a slice or array
     auto resolve_param_type(ast::explicit_type_id param_type) -> void;
+    // Whether `stmt` is an `if comptime` whose folded arm always leaves the enclosing block
+    [[nodiscard]] auto folded_if_exits(ast::node_id stmt) const -> bool;
     // Whether `t` is `auto` under pointer, reference, slice, and array levels (`&[]mut auto`)
     [[nodiscard]] static auto is_auto_pattern(const type& t) -> bool;
     // The parameter type `pattern` takes for an argument of type `arg`, with `leaf` set to what

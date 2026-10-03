@@ -388,4 +388,20 @@ TEST_CASE("a capturing function literal can be called where it is written") {
     )") == 15 + 5 + 5);
 }
 
+TEST_CASE("a closure in a test block captures the test's locals") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "reads" {
+            let a: i32 = 2;
+            let c = fn(): i32 { return a; };
+            @expect(c() == 2);
+        }
+        test "writes" {
+            let mut a: i32 = 2;
+            let c = fn(): i32 { a += 1; return a; };
+            @expect(c() == 3);
+            @expect(a == 3);
+        }
+    )") == 0);
+}
+
 } // namespace ghoti::tests
