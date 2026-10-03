@@ -658,6 +658,17 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `_` as an `asm` input operand
     - calling a static member that holds a function pointer (`const open = ^g;`, `S.open(7)`)
     - a type written where a value argument goes (`f(impl a)`)
+- A parameter used as an array length (`let buf: [n]T`) is inferred `comptime` like any other compile-time read
+- Fixed: a `for` loop couldn't capture `|&mut e|` over a `let mut` array whose type was written out (`let mut buf: [3]mut u8 = ...`)
+- Fixed: a module constant whose initializer reads itself is reported as a cycle; reading it more than once used to take exponential time before failing
+- Fixed more crashes on invalid code, now errors:
+    - a type where a value belongs: `@ptrCast(^mut opaque, ^mut u8)`, `if (b) u8 else 1`, a type pattern in a `match` on a value
+    - naming an `impl` method of a primitive without calling it (`val.format`)
+    - a global array initialized with a non-array (`let mut buffer: [4]u8 = true;`)
+    - a non-function passed to a `comptime f: fn(...)` parameter
+    - a `const` static member whose initializer reads a `let mut` one
+- Fixed crashes on valid code: `-2 != 0.25` in a condition, and `@shlWithOverflow(a, 3, &mut out)` with an untyped shift count
+- Fixed: a function literal passed straight to a `comptime f: fn(...)` parameter (`apply(fn(n: i32): i32 { return n + 1; }, 4)`) was rejected as not compile-time
 - Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
 
 ## Standard Library

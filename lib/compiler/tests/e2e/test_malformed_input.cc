@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -705,6 +706,48 @@ TEST_CASE("fuzz-found crashes on invalid code are errors") {
         pub const main = fn(): i32 { let mut o: P = .{ .head = 1, .b = 2 }; o = .head; return 0; };
     )",
                           sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a type where a value belongs is an error, not a crash") {
+    CHECK(helpers::raised("pub const main = fn(): i32 { let e: ^mut opaque = @ptrCast(^mut opaque, "
+                          "^mut u8); return 0; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("pub const main = fn(): i32 { let b = true; return if (b) u8 else 1; };",
+                          sema::error::TYPE_USED_AS_VALUE));
+    CHECK(helpers::raised("pub const main = fn(): i32 { let n: i32 = 3; return match (n) { 1, i32 "
+                          "=> 20, _ => 0 }; };",
+                          sema::error::ILLEGAL_MATCH_PATTERN));
+    // Choosing between two types is still fine
+    CHECK(helpers::compile_and_run(R"(
+        const T = if (true) u8 else i32;
+        pub const main = fn(): i32 { let x: T = 4; return @as(i32, x); };
+    )") == 4);
+}
+
+TEST_CASE("more fuzz-found crashes are errors") {
+    CHECK(helpers::raised(R"(
+        const F = interface { pub const format = fn(&self): i32; };
+        impl F for i32 { pub const format = fn(&self): i32 { return *self * 2; }; }
+        const g = fn(val: i32): i32 { return val.format; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("let mut buffer: [4]u8 = true;", sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const apply = fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
+        pub const main = fn(): i32 { return apply(1, 32); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    std::ignore = helpers::expect_compile_error(R"(
+        const U = union { x: i32, let mut calls: i32 = 0; };
+        const E = enum { a, const K = U.calls; };
+        pub const main = fn(): i32 { return E.K; };
+    )");
+    // Reading itself twice used to take exponential time before failing
+    std::ignore = helpers::expect_compile_error(R"(
+        const build = fn(): i32 { _ = x; _ = x; return 1; };
+        const x = build();
+        pub const main = fn(): i32 { return x; };
+    )");
 }
 
 } // namespace ghoti::tests

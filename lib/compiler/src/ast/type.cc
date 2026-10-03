@@ -256,6 +256,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
             null_terminated = true;
         } else if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
             parser.advance();
+            // An array's length is fixed at compile time, so a parameter it reads is too
+            const syntax::parser::array_length_scope length_scope{parser};
             dimension.emplace(TRY(parser.parse_expression()));
 
             // The null terminated marker comes after the size for explicitly sized types

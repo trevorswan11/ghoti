@@ -641,4 +641,16 @@ TEST_CASE("an initializer fills a `[n]T` parameter sized by a compile-time argum
     )");
 }
 
+TEST_CASE("an array length makes the parameter it reads compile-time") {
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(n: usize): i32 {
+            let mut buf: [n]mut usize = undefined;
+            for (buf) |&mut e| { e = 2; }
+            let s = buf[1..];
+            return @intCast(s.len + buf[0]);
+        };
+        pub const main = fn(): i32 { return f(3) + f(2); };
+    )") == 4 + 3);
+}
+
 } // namespace ghoti::tests

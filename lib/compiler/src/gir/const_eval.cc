@@ -2230,7 +2230,7 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
     // `a.ptr` points at the first element of a compile-time place, which `p[i]` steps through
     if (member_name == "ptr" && !call_stack_.empty()) {
         if (const auto obj_type{module_->get_sema_type_opt(dot.object)}) {
-            const auto kind{obj_type->get_kind()};
+            const auto              kind{obj_type->get_kind()};
             stdx::option<const_ref> place;
             if (kind == sema::type_kind::SLICE) {
                 place = raw_ref_of(dot.object);
@@ -3875,9 +3875,20 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
                                        *fn_type};
                 }
             }
-            if (decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
-                decl->has_modifier(ast::decl_modifiers::LET)) {
-                if (decl->value) { return eval_decl_value(*decl); }
+            if ((decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
+                 decl->has_modifier(ast::decl_modifiers::LET)) &&
+                decl->value) {
+                // Its own initializer reading it again would never finish folding
+                const void* key{&*decl};
+                if (!ctx_.globals_in_evaluation.insert(key).second) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("'{}' depends on its own value", ident.name),
+                        sema::error::CYCLIC_DEPENDENCY,
+                        module_->ast.location_of(id));
+                    return const_value::make_poison();
+                }
+                const auto done{gsl::finally([&] { ctx_.globals_in_evaluation.erase(key); })};
+                return eval_decl_value(*decl);
             }
         }
     }

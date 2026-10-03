@@ -119,4 +119,15 @@ TEST_CASE("comptime_int wrapping operators fold as the plain operator (no wrap)"
     )") == 30);
 }
 
+TEST_CASE("`@shlWithOverflow` takes an untyped shift count") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let a: u8 = 1;
+            let mut out: u8 = 0;
+            _ = @shlWithOverflow(a, 3, &mut out);
+            return @as(i32, out);
+        };
+    )") == 8);
+}
+
 } // namespace ghoti::tests

@@ -701,6 +701,12 @@ template <ast::IndexableID ID>
         const auto name{builtin_id == token_type_t::BUILTIN_ALIGN_CAST ? "@alignCast" : "@ptrCast"};
         auto&      target{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      operand{*get_resolved_call_arg_type(call.arguments[1])};
+        if (call_arg_denotes_type(call.arguments[1])) {
+            return make_sema_err(
+                fmt::format("'{}' expects a pointer value to cast, but was given a type", name),
+                error::TYPE_USED_AS_VALUE,
+                get_call_arg_location(call.arguments[1]));
+        }
         if (!target.is_poison() && target.get_kind() != type_kind::POINTER) {
             return make_sema_err(fmt::format("'{}' target type must be a pointer; found '{}'",
                                              name,
@@ -3035,6 +3041,22 @@ auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::
 }
 
 auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
+    const auto make_ref{[&](ast::node_id fn_node) -> stdx::option<gir::const_value> {
+        const auto fn_type{resolving_.get_sema_type_opt(fn_node)};
+        if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+        // A capture-less closure value gets emitted as a plain function
+        return gir::const_value{gir::const_value::data_t{
+                                    gir::const_closure{
+                                        .fn_node  = fn_node,
+                                        .module   = &resolving_,
+                                        .captures = {},
+                                    },
+                                },
+                                *fn_type};
+    }};
+    // A function literal passed directly
+    if (resolving_.ast.get_as_opt<ast::function_expr>(expr)) { return make_ref(expr); }
+
     const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
     if (!ident) { return stdx::none; }
     const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
@@ -3048,17 +3070,7 @@ auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gi
         return stdx::none;
     }
     if (!resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) { return stdx::none; }
-    const auto fn_type{resolving_.get_sema_type_opt(*decl->value)};
-    if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
-    // A capture-less closure value gets emitted as a plain function
-    return gir::const_value{gir::const_value::data_t{
-                                gir::const_closure{
-                                    .fn_node  = *decl->value,
-                                    .module   = &resolving_,
-                                    .captures = {},
-                                },
-                            },
-                            *fn_type};
+    return make_ref(*decl->value);
 }
 
 auto type_resolver::comptime_closure_value(ast::expr_handle expr)
@@ -3801,6 +3813,25 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                                  make_simulated_frame()};
             for (usize i{0}, cx_i{0}; i < cx_params.size() && i < call.arguments.size(); ++i) {
                 if (!cx_params[i].is_comptime) { continue; }
+                // A `comptime f: fn(...)` is called, so its argument has to be callable
+                if (i + param_offset < params.size() && concrete_arg_types[i]) {
+                    const auto& param_t{*params[i + param_offset]};
+                    const auto  arg_kind{concrete_arg_types[i]->get_kind()};
+                    if (param_t.get_kind() == type_kind::FUNCTION &&
+                        !concrete_arg_types[i]->is_poison() && arg_kind != type_kind::FUNCTION &&
+                        arg_kind != type_kind::CLOSURE && arg_kind != type_kind::POINTER) {
+                        return last_type_.emplace(ctx_.poison_node(
+                            resolving_,
+                            id,
+                            fmt::format("Argument {} of type '{}' is not a function, but its "
+                                        "parameter is '{}'",
+                                        i + 1,
+                                        ctx_.type_display_name(*concrete_arg_types[i]),
+                                        ctx_.type_display_name(param_t)),
+                            error::TYPE_MISMATCH,
+                            get_call_arg_location(call.arguments[i])));
+                    }
+                }
                 stdx::option<gir::const_value> folded;
                 const auto                     diags_before_eval{ctx_.diags.size()};
                 if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
@@ -4687,7 +4718,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
                 ctx_,
                 capture.modifier,
                 *elem_type,
-                iterable_type.is_constant(),
+                container_element_mutability(iterable_type) == types::mut::CONSTANT,
                 is_lvalue_shape(resolving_, iterable),
                 "array or slice",
                 resolving_.ast.location_of(capture.payload),
@@ -5897,6 +5928,22 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         }
         TRY_RESOLVE(*if_expr.alternate);
         const auto alt_value{arm_value(*if_expr.alternate, *last_type_)};
+        // One arm naming a type and the other a value has no single result
+        if (cons_value && alt_value && cons_value->at.is_valid() && alt_value->at.is_valid() &&
+            cons_value->type->get_kind() != type_kind::NORETURN &&
+            alt_value->type->get_kind() != type_kind::NORETURN) {
+            const auto cons_nature{operand_nature(ast::expr_handle{cons_value->at})};
+            const auto alt_nature{operand_nature(ast::expr_handle{alt_value->at})};
+            if ((cons_nature == operand_nature_t::TYPE && alt_nature == operand_nature_t::VALUE) ||
+                (cons_nature == operand_nature_t::VALUE && alt_nature == operand_nature_t::TYPE)) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "One branch of this `if` is a type and the other a value",
+                                     error::TYPE_USED_AS_VALUE,
+                                     resolving_.ast.location_of(id)));
+            }
+        }
         if (cons_value && alt_value && !cons_value->type->is_poison() &&
             !alt_value->type->is_poison() && cons_value->type->get_kind() != type_kind::VOID_) {
             const std::array arms{*cons_value, *alt_value};
@@ -6988,13 +7035,22 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(result).error()));
     }
 
-    // A `dyn` method has no value apart from a call through the vtable
-    if (unwrap_ref(object_type).get_data().template is<types::dyn_t>() &&
+    // A `dyn` method has no value apart from a call through the vtable, and an `impl` method on
+    // a primitive has no bound-method form to take either
+    const auto& receiver{unwrap_ref(object_type)};
+    const auto  method_of_primitive{[&] {
+        const auto fn{(*result)->get_data().template as_opt<types::function>()};
+        const auto k{receiver.get_kind()};
+        return fn && fn->has_self && k != type_kind::STRUCT && k != type_kind::UNION &&
+               k != type_kind::ENUM && k != type_kind::TYPE && k != type_kind::MODULE &&
+               k != type_kind::CLOSURE;
+    }};
+    if ((receiver.get_data().template is<types::dyn_t>() || method_of_primitive()) &&
         !callee_dots_.contains(id.get_index())) {
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            fmt::format("`{}` is a method of a `dyn` value, so it can only be called",
+            fmt::format("`{}` is a method of this value, so it can only be called",
                         resolving_.ast.get_as<ast::identifier_expr>(dot.member).name),
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(dot.member)));
@@ -8226,6 +8282,17 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                 }
             }
 
+            // Matching a value compares it, which a type has nothing to compare with
+            if (!range && operand_nature(ast::expr_handle{*pattern}) == operand_nature_t::TYPE) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     "A `match` on a value expects its patterns to be values, but "
+                                     "this one is a type",
+                                     error::ILLEGAL_MATCH_PATTERN,
+                                     resolving_.ast.location_of(*pattern)));
+            }
+
             // A scalar pattern must be a value the matcher's type can actually hold
             if (scalar_match || effective_matcher_type->get_kind() == type_kind::BOOL) {
                 const auto mismatch{[&](ast::node_id value) -> stdx::option<std::string> {
@@ -8518,6 +8585,14 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
         const auto sym{dot_member_symbol(*dot)};
         return sym && sym->has_kind() && sym->get_kind() == symbol_kind::TYPE;
     }
+
+    // `^mut u8` / `&T` over a type is the pointer or reference type
+    if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(value)}) {
+        return operand_nature(addr->rhs) == operand_nature_t::TYPE;
+    }
+    if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(value)}) {
+        return operand_nature(ref->rhs) == operand_nature_t::TYPE;
+    }
     return false;
 }
 
@@ -8646,7 +8721,10 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
     const auto is_array_like{[](const type& t) {
         return t.get_data().is<types::array>() || t.get_data().is<types::deferred_array>();
     }};
-    if (is_array_like(*value_type) || is_array_like(declared)) { return false; }
+    if (is_array_like(*value_type) ||
+        (is_array_like(declared) && value_type->get_kind() == type_kind::UNDEFINED)) {
+        return false;
+    }
     if (const auto slice{value_type->get_data().as_opt<types::slice>()};
         slice && is_comptime_numeric(slice->underlying.get_kind())) {
         return false;
@@ -13548,6 +13626,13 @@ auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_natur
     // A template placeholder or unfolded `[n]T` is `type`-kinded until instantiated
     if (t->get_kind() == type_kind::TYPE && !t->get_data().is<types::meta_type>()) {
         return operand_nature_t::UNKNOWN;
+    }
+    // `^X` / `&X` is a pointer or reference type exactly when `X` is a type
+    if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(expr)}) {
+        return operand_nature(addr->rhs);
+    }
+    if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(expr)}) {
+        return operand_nature(ref->rhs);
     }
     if (decl_value_denotes_type(expr)) { return operand_nature_t::TYPE; }
     // A bound `T: type` parameter or `@TypeOf(...)` only reveals itself by folding

@@ -48,6 +48,8 @@ auto array_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
     } else {
         parser.advance();
         if (!parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
+            // An array's length is fixed at compile time, so a parameter it reads is too
+            const syntax::parser::array_length_scope length_scope{parser};
             size.emplace(TRY(parser.parse_expression()));
         }
 

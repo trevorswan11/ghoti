@@ -125,4 +125,10 @@ TEST_CASE("a comparison between untyped integer and float expressions folds") {
     )") == 1);
 }
 
+TEST_CASE("a negated untyped integer compared with a float literal folds") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { if (-2 != 0.25) { return 1; } return 2; };
+    )") == 1);
+}
+
 } // namespace ghoti::tests

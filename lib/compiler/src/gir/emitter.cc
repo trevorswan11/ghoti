@@ -2779,7 +2779,15 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
     ASSERT(kind_opt, "Unary operator must be mapped to instruction kind");
     ASSERT(sema_type, "Unary expression must have a resolved sema type");
 
-    if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+    if (const auto cv{const_eval_.try_eval(id)}) {
+        // `-2` peer-typed as an untyped float (`-2 != 0.25`) is that float
+        if (sema_type->get_kind() == sema::type_kind::COMPTIME_FLOAT) {
+            if (const auto f{cv->int_as_float_opt()}) {
+                return materialize_const(const_value{*f, *sema_type});
+            }
+        }
+        return cv->to_gir_value();
+    }
     const auto operand{emit_expression(unary.rhs)};
     if (op_type == syntax::token_type_t::BANG && operand.type &&
         operand.type->get_kind() == sema::type_kind::POINTER) {
@@ -4128,9 +4136,14 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                 return to_slot_type && operand_type ? emit_coerced_expr(expr_h, *operand_type)
                                                     : emit_expression(expr_h);
             }};
+            // An untyped shift count takes the shifted value's type rather than `i32`'s
+            const auto count_type{
+                active_mod().get_sema_type_opt(*call.arguments[1].as_opt<ast::expr_handle>())};
+            const bool         untyped_count{count_type &&
+                                     sema::is_comptime_numeric(count_type->get_kind())};
             std::vector<value> args;
             args.emplace_back(operand(0, true));
-            args.emplace_back(operand(1, !is_shift));
+            args.emplace_back(operand(1, !is_shift || untyped_count));
             args.emplace_back(emit_expression_id_raw(slot_h));
             const auto name{*syntax::get_builtin_opt(fn_token)};
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
@@ -7767,8 +7780,13 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
             (sema_type->get_kind() == sema::type_kind::FUNCTION || is_fn_pointer(*sema_type))) {
             return value{ref_symbol_name(id, member_ident.name), sema_type};
         }
-        UNREACHABLE("Type namespace member access did not resolve to a static member, function, or "
-                    "constant");
+        // e.g. a `const` static member whose initializer reads a `let mut` one
+        ctx_.diags.emplace_back(
+            fmt::format("'{}' is not known at compile time, so it can't be read as a constant",
+                        member_ident.name),
+            sema::error::COMPTIME_EVALUATION_FAILED,
+            active_ast().location_of(id));
+        return value{undefined_val{}, sema_type};
     }
 
     // A directly-held bit-packed struct value has no addressable fields
@@ -7938,6 +7956,8 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
         src_lval.data = value::data_t{builder_.emit_load(src_lval, *src_type)};
         src_type      = &ref_d->underlying;
     }
+    // A local `[n]T` sized by a `comptime` parameter is typed by its unfolded placeholder
+    src_type = &const_eval_.force_deferred_array(*src_type);
 
     value               base_ptr{};
     stdx::option<value> src_len;

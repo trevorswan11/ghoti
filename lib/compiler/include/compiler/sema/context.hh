@@ -163,6 +163,8 @@ struct context {
     static constexpr usize max_generic_instantiation_depth{256};
     // Monomorphs whose body is being resolved, by mangled name, so a recursive call reuses them
     ankerl::unordered_dense::map<std::string, type*> instantiations_in_progress;
+    // Module constants whose initializers are being folded, so one reading itself is caught
+    ankerl::unordered_dense::set<const void*> globals_in_evaluation;
 
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 

@@ -18,7 +18,13 @@ templ SyntaxLoopsPage() {
 		<li>
 			For loops have 4 different clauses:
 			<ul>
-				<li>Iterables: A comma separated list in parenthesis. This is the first clause and is required</li>
+				<li>
+					Iterables: A comma separated list in parenthesis. This is the first clause and is required
+					<ul>
+						<li>Iterables of different lengths are walked in lockstep, and the loop stops at the end of the shortest one</li>
+						<li>An open-ended range like <code>0..</code> has no length of its own, so it needs a sibling array or slice to stop the loop</li>
+					</ul>
+				</li>
 				<li>
 					Captures: A comma separated list enclosed by bitwise or <code>|</code> pipes. The is the second clause and is required. If you would like to discard a capture, use <code>_</code>
 					<ul>
@@ -35,6 +41,7 @@ templ SyntaxLoopsPage() {
 		<code class="language-ghoti">
 			{ `for (arr, l, p) |i, &mut j, _| { ... }; // Captures can have modifiers or be discarded
 for (0..4) |i| { ... } else return b; // The return statement only runs if the loop body does not break
+for (arr, 0..) |x, i| { ... } // Counts alongside arr; with [3]T and [5]T iterables, the body runs 3 times
 for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures and iterables must match` }
 		</code>
 	</pre>
