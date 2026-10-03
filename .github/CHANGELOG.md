@@ -687,11 +687,17 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `auto` in the signature deduces from the callable: `impl Fn(v: T): auto`, `impl Fn(x: auto): bool`
 - Fixed: `impl I` bounds were never checked for a call from another module or from inside another generic's body
 - Fixed: a plain `auto` parameter given a reference (`f(&a)`) failed with a mismatch between the reference and its referent
+- Fixed: a closure in a `test` block that captured one of the test's locals crashed the compiler
+- Fixed: the code after an `if comptime` arm that always returns was still checked, so an `@assert` or a union field read past it failed on a path that never runs
+- Fixed: a `match` statement with a block arm next to a value arm (`1 => { ... }, _ => @expect(false)`) tried to store the block's `void` as the other arm's value
+- Fixed: a type constructor called through an alias (`const A = Box;`) or another module (`m.Box(u8)`) couldn't be compared at compile time (`A(u8) == A(u8)`)
+- Fixed: a crash resolving a generic call whose arguments themselves instantiated another generic
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
+- Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
