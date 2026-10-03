@@ -110,7 +110,7 @@ class type_resolver {
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;
     // Resolves and records the interface bounds of a generic function's `impl I` parameters.
-    auto register_impl_param_bounds(type& fn_type, const ast::function_expr& fn) -> void;
+    auto register_impl_param_bounds(const ast::function_expr& fn) -> void;
 
     // `lhs ++ rhs`: compile-time array/slice concatenation; sets `last_type_`.
     auto
@@ -296,12 +296,6 @@ class type_resolver {
         type& type_;
         bool  committed_{false};
     };
-
-    // `impl I` / `impl (A + B)` parameter bounds, mapping generic fn type to the interface types it
-    // must implement.
-    using impl_param_bound_map_t =
-        ankerl::unordered_dense::map<const type*,
-                                     std::vector<std::pair<u32, std::vector<const type*>>>>;
 
     // A call's arguments after splicing in every `expr...` pack expansion in place
     struct expanded_call_args {
@@ -495,6 +489,8 @@ class type_resolver {
     // The parameter type `pattern` takes for an argument of type `arg`, with `leaf` set to what
     // `auto` bound to; null when a level doesn't match
     auto match_auto_pattern(type& pattern, type& arg, type*& leaf) -> type*;
+    // Why `arg` can't be called as the `impl Fn(...)` signature `pattern`, if it can't
+    auto callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string>;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
@@ -815,6 +811,8 @@ class type_resolver {
     bool in_for_iterable_{false};
     // Set while resolving a function parameter's declared type
     bool in_param_type_{false};
+    // The arguments of the call being instantiated, by parameter, to place a bound's error
+    std::vector<source_location> instantiating_arg_locations_;
     // Set while resolving a `for comptime` driver, whose range unrolls into constants
     bool in_comptime_for_iterable_{false};
     bool resolving_callee_{false};
@@ -849,11 +847,10 @@ class type_resolver {
     // Set by `instantiate_generic` for the duration of resolving one pack function's body
     stdx::option<pack_binding> current_pack_;
 
-    impl_param_bound_map_t impl_param_bounds_;
-    named_test_map_t       named_tests_;
-    structural_validator   struct_validator_;
-    structural_validator   enum_validator_;
-    structural_validator   union_validator_;
+    named_test_map_t     named_tests_;
+    structural_validator struct_validator_;
+    structural_validator enum_validator_;
+    structural_validator union_validator_;
 
     context&                    ctx_;
     stdx::option<type&>         last_type_;

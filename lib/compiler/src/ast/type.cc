@@ -208,8 +208,15 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     // `auto`, stashing the bound for `function_expr::parse` to attach to its parameter.
     if (parser.peek_token_is(syntax::token_type_t::IMPL)) {
         parser.advance(); // current == impl
+        const auto                    impl_token{parser.get_current_token()};
         std::vector<explicit_type_id> interfaces;
-        if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+        // `impl Fn(...): R`: any callable with exactly that signature, `auto` where it deduces
+        if (auto fn_type{TRY(try_parse_dyn_fn(parser, allow_trailing_brace))}) {
+            fn_type->is_dyn_fn  = false;
+            fn_type->is_impl_fn = true;
+            interfaces.emplace_back(parser.add_type<explicit_function_type>(
+                impl_token, type_modifier{impl_token}, std::move(*fn_type)));
+        } else if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
             parser.advance(); // current == (
             while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
                    !parser.peek_token_is(syntax::token_type_t::END)) {

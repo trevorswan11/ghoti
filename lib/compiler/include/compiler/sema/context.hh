@@ -166,6 +166,20 @@ struct context {
     // Module constant pts whose initializers are being folded, so one reading itself is caught
     ankerl::unordered_dense::set<uptr> globals_in_evaluation;
 
+    // What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
+    struct param_bound {
+        u32                      param_index;
+        std::vector<const type*> interfaces;
+        // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
+        // constructor's parameters
+        stdx::option<ast::explicit_type_id> callable;
+    };
+    // Every generic function's parameter bounds, by its function literal so each of a type
+    // constructor's per-instantiation members shares them, for a caller in any module to check
+    using param_bound_map =
+        ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
+    param_bound_map& param_bounds;
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 
     context(mod::module_manager&         modules,
@@ -181,7 +195,8 @@ struct context {
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
           diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
-          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()} {}
+          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()},
+          param_bounds{*arena.make<param_bound_map>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -196,7 +211,8 @@ struct context {
           comptime_binding_frames{other.comptime_binding_frames},
           comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},
-          embed_cache{other.embed_cache}, env_epoch{other.env_epoch} {}
+          embed_cache{other.embed_cache}, env_epoch{other.env_epoch},
+          param_bounds{other.param_bounds} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

@@ -3103,6 +3103,62 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, type*& leaf) ->
     return nullptr;
 }
 
+auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string> {
+    const auto& want{pattern.get_data().as<types::function>()};
+
+    // A function, closure, or erased `fn` value, directly or through `^` / `&`
+    type* callee{&denoted_type(arg)};
+    if (const auto p{callee->get_data().as_opt<types::pointer>()}) {
+        callee = &p->underlying;
+    } else if (const auto r{callee->get_data().as_opt<types::reference>()}) {
+        callee = &r->underlying;
+    }
+    stdx::option<const types::function&> have;
+    if (const auto cl{callee->get_data().as_opt<types::closure_t>()}) {
+        have = cl->signature.get_data().as_opt<types::function>();
+    } else {
+        have = callee->get_data().as_opt<types::function>();
+    }
+    if (!have) { return std::string{"it is not callable"}; }
+    if (ctx_.generic_functions.get_opt(*callee)) {
+        return std::string{"a generic function has no single signature to check"};
+    }
+    if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
+
+    const auto skip{have->has_self ? 1UZ : 0UZ};
+    const auto have_count{have->params.size() - skip};
+    if (have_count != want.params.size()) {
+        return fmt::format("it takes {} parameter{}, not {}",
+                           have_count,
+                           have_count == 1 ? "" : "s",
+                           want.params.size());
+    }
+
+    // An `auto` slot deduces from the argument; anything else must be exactly the same type
+    const auto matches{[&](const type& want_t, type& have_t) {
+        if (is_auto_pattern(want_t)) {
+            type* leaf{nullptr};
+            return match_auto_pattern(const_cast<type&>(want_t), have_t, leaf) != nullptr;
+        }
+        return is_same_unqualified(want_t, have_t);
+    }};
+    for (usize i{0}; i < want.params.size(); ++i) {
+        auto& have_t{*have->params[i + skip]};
+        if (!matches(*want.params[i], have_t)) {
+            return fmt::format("parameter {} is '{}', not '{}'",
+                               i + 1,
+                               ctx_.type_display_name(have_t),
+                               ctx_.type_display_name(*want.params[i]));
+        }
+    }
+    if (!matches(want.return_type, have->return_type)) {
+        return fmt::format("it returns '{}', not '{}'",
+                           ctx_.type_display_name(have->return_type),
+                           ctx_.type_display_name(want.return_type));
+    }
+    return stdx::none;
+}
+
 auto type_resolver::record_range_counter(usize                     loop_table,
                                          const ast::for_loop_expr& for_expr,
                                          usize                     iterable_idx) -> void {
@@ -3943,8 +3999,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             // Enforce `impl I` / `impl (A + B)` parameter bounds now the arguments are concrete.
             // A pack parameter's bound applies to every trailing argument it collects, not just
             // the one at its own AST index.
-            if (const auto it{impl_param_bounds_.find(&callee_type)};
-                it != impl_param_bounds_.end()) {
+            if (const auto it{ctx_.param_bounds.find(fn_info_opt->fn_expr.get())};
+                it != ctx_.param_bounds.end()) {
                 const auto check_bound_at{[&](usize                        arg_idx,
                                               gsl::span<const type* const> ifaces,
                                               std::string_view pname) -> stdx::option<type&> {
@@ -3970,13 +4026,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     }
                     return stdx::none;
                 }};
-                for (const auto& [pidx, ifaces] : it->second) {
+                for (const auto& bound : it->second) {
+                    const auto  pidx{static_cast<usize>(bound.param_index)};
+                    const auto& ifaces{bound.interfaces};
                     if (pidx >= concrete_arg_types.size()) { continue; }
                     const auto& param{fn_info_opt->fn_expr->parameters[pidx]};
+                    // The parameter lives in the callee's own module
                     const auto& pname{
-                        resolving_.ast.get_as<ast::identifier_expr>(*param.name).name};
+                        fn_info_opt->module->ast.get_as<ast::identifier_expr>(*param.name).name};
                     const auto arg_end{param.is_pack ? concrete_arg_types.size() : pidx + 1};
                     for (usize arg_idx{pidx}; arg_idx < arg_end; ++arg_idx) {
+                        if (bound.callable) { continue; }
                         if (auto poison{check_bound_at(arg_idx, ifaces, pname)}) {
                             return last_type_.emplace(*poison);
                         }
@@ -4095,9 +4155,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
             }
 
-            const auto diags_before_inst{ctx_.diags.size()};
-            auto       inst_res{
+            const auto                   diags_before_inst{ctx_.diags.size()};
+            std::vector<source_location> arg_locations;
+            for (const auto& arg : call.arguments) {
+                arg_locations.emplace_back(get_call_arg_location(arg));
+            }
+            const auto prev_locations{
+                std::exchange(instantiating_arg_locations_, std::move(arg_locations))};
+            auto inst_res{
                 instantiate_generic(callee_type, fn_info_copy, concrete_arg_types, comptime_args)};
+            instantiating_arg_locations_ = prev_locations;
             if (!inst_res) {
                 // `instantiate_generic` may have already reported so only report if not
                 if (ctx_.diags.size() == diags_before_inst) {
@@ -5199,7 +5266,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         ctx_.generic_functions.register_function(
             fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic, enclosing_fn_table_idx);
-        register_impl_param_bounds(fn_type, fn);
+        register_impl_param_bounds(fn);
         return last_type_.emplace(fn_type);
     }
 
@@ -6775,11 +6842,17 @@ auto type_resolver::names_comptime_mut(ast::expr_handle expr) -> bool {
 //   - `none`               : no such extension method is visible
 //   - `ok(fn type)`        : exactly one visible method
 //   - `err(AMBIGUOUS_...)` : more than one visible method with this name
-auto type_resolver::register_impl_param_bounds(type& fn_type, const ast::function_expr& fn)
-    -> void {
+auto type_resolver::register_impl_param_bounds(const ast::function_expr& fn) -> void {
     if (fn.impl_bounds.empty()) { return; }
-    std::vector<std::pair<u32, std::vector<const type*>>> entries;
+    std::vector<context::param_bound> entries;
     for (const auto& b : fn.impl_bounds) {
+        // `impl Fn(...)`: a signature for the argument to match
+        if (b.interfaces.size() == 1 &&
+            b.interfaces.front().get_kind() == ast::explicit_type_kind::FUNCTION) {
+            entries.emplace_back(context::param_bound{
+                .param_index = b.param_index, .interfaces = {}, .callable = b.interfaces.front()});
+            continue;
+        }
         std::vector<const type*> ifaces;
         for (const auto tid : b.interfaces) {
             resolve(tid);
@@ -6818,9 +6891,13 @@ auto type_resolver::register_impl_param_bounds(type& fn_type, const ast::functio
             }
         }
 
-        if (!ifaces.empty()) { entries.emplace_back(b.param_index, std::move(ifaces)); }
+        if (!ifaces.empty()) {
+            entries.emplace_back(context::param_bound{.param_index = b.param_index,
+                                                      .interfaces  = std::move(ifaces),
+                                                      .callable    = stdx::none});
+        }
     }
-    if (!entries.empty()) { impl_param_bounds_.emplace(&fn_type, std::move(entries)); }
+    if (!entries.empty()) { ctx_.param_bounds.insert_or_assign(&fn, std::move(entries)); }
 }
 
 auto type_resolver::resolve_impl_method_access(const type&      target,
@@ -14029,8 +14106,8 @@ MAKE_MODIFIED_RESOLVER(call_expr, resolve_call)
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function_type& fn) -> void {
     PROFILE_FUNCTION();
-    // A function type's own parameters aren't patterns to deduce from
-    const mutating_context_guard not_param{in_param_type_, false};
+    // A function type's own parameters aren't patterns to deduce from, unless it's an `impl Fn`
+    const mutating_context_guard not_param{in_param_type_, fn.is_impl_fn};
     auto                         param_types{ctx_.pool.get_many_unsafe(fn.parameter_types.size())};
 
     if (!fn.is_extern && fn.has_explicit_conv) {
@@ -14041,7 +14118,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     for (usize i{0}; const auto& param : fn.parameter_types) {
         TRY_RESOLVE(param);
         auto& param_type{*last_type_.take()};
-        if (param_type.get_kind() == type_kind::AUTO) {
+        if (param_type.get_kind() == type_kind::AUTO && !fn.is_impl_fn) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
                                  id,
@@ -14054,7 +14131,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
 
     TRY_RESOLVE(fn.explicit_return_type);
     auto& return_type{*last_type_.take()};
-    if (return_type.get_kind() == type_kind::AUTO) {
+    if (return_type.get_kind() == type_kind::AUTO && !fn.is_impl_fn) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -14610,6 +14687,29 @@ auto type_resolver::instantiate_generic(type&                             callee
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
         auto*       arg_type{concrete_args[p_idx]};
+        // `impl Fn(...)` resolves here, where the enclosing constructor's parameters are bound
+        if (const auto bounds{ctx_.param_bounds.find(&fn_expr)};
+            bounds != ctx_.param_bounds.end()) {
+            for (const auto& bound : bounds->second) {
+                if (bound.param_index != p_idx || !bound.callable) { continue; }
+                inst_resolver.resolve(*bound.callable);
+                auto& sig{*inst_resolver.last_type_.take()};
+                if (sig.is_poison()) { return stdx::none; }
+                if (const auto why{inst_resolver.callable_mismatch(sig, *arg_type)}) {
+                    const auto& pname{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
+                    ctx_.diags.emplace_back(
+                        fmt::format("`{}` does not match `impl Fn` parameter `{}`: {}",
+                                    ctx_.type_display_name(*arg_type),
+                                    pname,
+                                    *why),
+                        error::UNSATISFIED_BOUND,
+                        p_idx < instantiating_arg_locations_.size()
+                            ? instantiating_arg_locations_[p_idx]
+                            : fn_mod.ast.location_of(fn_info.node_id));
+                    return stdx::none;
+                }
+            }
+        }
         inst_resolver.resolve_param_type(param.explicit_type);
         type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
         type* body_p_type{arg_type}; // contextual type meaning in the function body
