@@ -2506,6 +2506,17 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
             ASSERT(current, "comptime let mut binding must have a live comptime_frame entry");
             return materialize_const(*current);
         }
+        // A range counter reads as whichever integer type its use was given
+        if (binding->is_range_counter) {
+            const value counter{builder_.emit_load(binding->id, binding->type), binding->type};
+            if (const auto read_as{active_mod().get_sema_type_opt(id)};
+                read_as && sema::is_integer(read_as->get_kind()) &&
+                !sema::is_same_unqualified(*read_as, binding->type)) {
+                return value{builder_.emit_cast(instruction_kind::INT_CAST, counter, *read_as),
+                             *read_as};
+            }
+            return counter;
+        }
         if (binding->const_val) { return *binding->const_val; }
         if (binding->is_alloca) {
             const auto loaded{builder_.emit_load(binding->id, binding->type)};
@@ -5405,14 +5416,26 @@ auto emitter::emit_for(ast::node_id                   id,
             const bool inclusive{iter_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
             auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
+            // The counter's type is the range's element type; both bounds convert to it
+            sema::type* counter_type{nullptr};
+            if (const auto range_type{active_mod().get_sema_type_opt(iter_id)}) {
+                if (const auto sl{range_type->get_data().as_opt<sema::types::slice>()}) {
+                    counter_type = &sl->underlying;
+                }
+            }
+            const auto emit_bound{[&](ast::expr_handle bound) {
+                return counter_type ? emit_coerced_expr(bound, *counter_type)
+                                    : emit_expression(bound);
+            }};
+
             // A missing lower bound counts from `0`; a missing upper bound (`for (arr, lo..)`)
             // leans on a sibling iterable to stop the loop.
-            const auto start_val{range->lhs ? emit_expression(*range->lhs)
-                                            : value{u64{0}, usize_type}};
+            const auto start_val{range->lhs ? emit_bound(*range->lhs) : value{u64{0}, usize_type}};
             const bool open_upper{!range->rhs};
-            const auto end_val{open_upper ? value{u64{0}, usize_type}
-                                          : emit_expression(*range->rhs)};
-            auto*      elem_type{start_val.type ? start_val.type.get() : &ctx_.get_int(32, true)};
+            const auto end_val{open_upper ? value{u64{0}, usize_type} : emit_bound(*range->rhs)};
+            auto*      elem_type{counter_type     ? counter_type
+                                 : start_val.type ? start_val.type.get()
+                                                  : &ctx_.get_int(32, true)};
 
             const auto slot{builder_.emit_alloca(*elem_type, cap_name.value_or(""))};
             builder_.emit_store(slot, start_val);
@@ -5579,14 +5602,19 @@ auto emitter::emit_for(ast::node_id                   id,
                     // A range capture shares its address with the loop's own counter, which the
                     // step segment writes to; snapshot it as a read-only value instead of aliasing
                     const auto cur_val{builder_.emit_load(elem_addr, *info.elem_type)};
+                    const auto snapshot{
+                        builder_.emit_alloca(*info.elem_type, *info.capture_name, true)};
+                    builder_.emit_store(snapshot, value{cur_val, *info.elem_type}).is_initializer =
+                        true;
                     scopes_.back().bindings.emplace(
                         *info.capture_name,
                         local_binding{
-                            .id        = local_id{0, local_kind::TEMPORARY},
-                            .type      = *info.elem_type,
-                            .is_alloca = false,
-                            .const_val = value{cur_val, *info.elem_type},
-                            .is_const  = true,
+                            .id               = snapshot,
+                            .type             = *ctx_.pool.with_const(*info.elem_type, true),
+                            .is_alloca        = true,
+                            .const_val        = stdx::none,
+                            .is_const         = true,
+                            .is_range_counter = true,
                         });
                 } else {
                     // A plain capture is read-only regardless of the container's own mutability;
@@ -5609,9 +5637,21 @@ auto emitter::emit_for(ast::node_id                   id,
 
         // Step segment
         builder_.set_segment(step_seg);
+        const auto done_target{non_break_seg ? non_break_seg->get_id() : exit_seg.get_id()};
         for (const auto& info : iter_infos) {
             if (info.is_range) {
                 const auto cur{builder_.emit_load(info.var_slot, *info.elem_type)};
+                // `lo..=hi` ends on `hi` itself, which may be its type's maximum
+                if (info.is_inclusive) {
+                    const auto at_end{builder_.emit_binary(instruction_kind::EQ,
+                                                           value{cur, *info.elem_type},
+                                                           info.end_val,
+                                                           bool_type)};
+                    auto&      step_on{fn.add_segment()};
+                    builder_.emit_cond_goto(
+                        value{at_end, bool_type}, done_target, step_on.get_id());
+                    builder_.set_segment(step_on);
+                }
                 const auto next{builder_.emit_binary(instruction_kind::ADD,
                                                      value{cur, *info.elem_type},
                                                      value{static_cast<i64>(1), *info.elem_type},

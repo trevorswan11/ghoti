@@ -482,6 +482,12 @@ class type_resolver {
     // The compile-time-known element count of an array- or slice-valued expression: an array's
     // length, a constant-bounded range index, or a `const` bound to one of those
     [[nodiscard]] auto known_length(ast::node_id expr) -> stdx::option<u64>;
+    // The compile-time-known values a `for` range capture takes, recorded for its loop's scope
+    auto record_range_counter(usize                     loop_table,
+                              const ast::for_loop_expr& for_expr,
+                              usize                     iterable_idx) -> void;
+    // Retypes a bare range-counter read to `target` when every value it takes fits there
+    auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
@@ -786,6 +792,13 @@ class type_resolver {
     std::vector<active_block_frame> active_blocks_;
     // Member identifiers that resolved to an array's read-only `.len`/`.ptr`
     ankerl::unordered_dense::set<usize> structural_members_;
+    // A range capture's first and last value, by its loop's scope then its name
+    struct range_counter {
+        std::string_view name;
+        i128             first;
+        i128             last;
+    };
+    ankerl::unordered_dense::map<usize, std::vector<range_counter>> range_counters_;
 
     bool in_mutating_context_{false};
     // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
@@ -793,6 +806,8 @@ class type_resolver {
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};
+    // Set while resolving a `for comptime` driver, whose range unrolls into constants
+    bool in_comptime_for_iterable_{false};
     bool resolving_callee_{false};
     // Set while resolving an initializer's `.field` accessor, which names a field by design
     bool resolving_init_accessor_{false};

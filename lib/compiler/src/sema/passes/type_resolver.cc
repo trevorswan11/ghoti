@@ -3014,6 +3014,74 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
     return stdx::none;
 }
 
+auto type_resolver::record_range_counter(usize                     loop_table,
+                                         const ast::for_loop_expr& for_expr,
+                                         usize                     iterable_idx) -> void {
+    const auto& capture{for_expr.captures[iterable_idx]};
+    if (!capture.payload.is<ast::identifier_expr>() || capture.modifier.is_ref() ||
+        capture.modifier.is_ptr()) {
+        return;
+    }
+    const auto iterable{*for_expr.iterables[iterable_idx]};
+    const auto range{resolving_.ast.get_as_opt<ast::range_expr>(iterable)};
+    if (!range) { return; }
+
+    const auto fold_int{[&](ast::expr_handle bound) -> stdx::option<i128> {
+        const auto folded{probe_fold(bound)};
+        return folded ? folded->as_int_opt() : stdx::none;
+    }};
+    const auto first{range->lhs ? fold_int(*range->lhs) : stdx::option<i128>{0}};
+    if (!first) { return; }
+
+    stdx::option<i128> last;
+    if (range->rhs) {
+        const auto end{fold_int(*range->rhs)};
+        if (!end) { return; }
+        const bool inclusive{iterable.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+        last = inclusive ? *end : *end - 1;
+    } else {
+        // An open range stops with its shortest sibling of known length
+        stdx::option<u64> shortest;
+        for (usize i{0}; i < for_expr.iterables.size(); ++i) {
+            if (i == iterable_idx) { continue; }
+            if (const auto len{known_length(*for_expr.iterables[i])}) {
+                shortest = shortest ? std::min(*shortest, *len) : *len;
+            }
+        }
+        if (!shortest) { return; }
+        last = *first + static_cast<i128>(*shortest) - 1;
+    }
+
+    const auto& name{resolving_.ast.get_as<ast::identifier_expr>(capture.payload).name};
+    range_counters_[loop_table].emplace_back(
+        range_counter{.name = name, .first = *first, .last = *last});
+}
+
+auto type_resolver::adopt_counter_type(ast::node_id expr, type& target) -> bool {
+    if (range_counters_.empty() || !is_integer(target.get_kind())) { return false; }
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
+    if (!ident) { return false; }
+    const auto found{ctx_.registry.lookup_with_table(table_stack_, ident->name)};
+    if (!found) { return false; }
+    // A closure holds its own copy of the counter, typed as stored
+    const auto depth{ctx_.registry.lookup_with_depth(table_stack_, ident->name)};
+    if (depth && !function_boundaries_.empty() && depth->depth < function_boundaries_.back()) {
+        return false;
+    }
+    const auto counters{range_counters_.find(found->table_idx)};
+    if (counters == range_counters_.end()) { return false; }
+    const auto counter{std::ranges::find(counters->second, ident->name, &range_counter::name)};
+    if (counter == counters->second.end()) { return false; }
+
+    const auto ptr_bits{target_ptr_bits()};
+    if (!comptime_int_fits(counter->first, target, ptr_bits) ||
+        !comptime_int_fits(counter->last, target, ptr_bits)) {
+        return false;
+    }
+    resolving_.set_sema_type(expr, *ctx_.pool.strip_volatile(target));
+    return true;
+}
+
 auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
     ast::node_id named{expr};
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
@@ -4447,6 +4515,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         } else {
             {
                 const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
+                const mutating_context_guard unrolled_g{in_comptime_for_iterable_, true};
                 TRY_RESOLVE(driver_id);
             }
             // A bare identifier naming a `comptime` array/slice resolves through a `TYPE`-
@@ -4732,6 +4801,10 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
             if (capture.payload.is<ast::identifier_expr>()) {
                 resolve_symbol_info(capture.payload, symbol_kind::VALUE);
             }
+        }
+        range_counters_.erase(loop_type.get_symbol_table_idx());
+        for (usize i{0}; i < for_expr.iterables.size(); ++i) {
+            record_range_counter(loop_type.get_symbol_table_idx(), for_expr, i);
         }
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(for_expr.block)};
         if (resolve_block_statements(block)) { return fail_scoped_body(); }
@@ -5699,6 +5772,13 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
                              resolving_.ast.location_of(id)));
     }
     resolve_ident(id, ident);
+
+    // A range counter reads as any integer type that holds every value it takes
+    if (const auto expected{implicit_type_stack_.peek()};
+        expected && last_type_ && is_integer(last_type_->get_kind()) &&
+        !is_same_unqualified(*last_type_, *expected) && adopt_counter_type(id, *expected)) {
+        last_type_.emplace(resolving_.get_sema_type(id));
+    }
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void {
@@ -6380,6 +6460,14 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
         TRY_RESOLVE(binary.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+
+    // A range counter on the left takes the right side's type when it holds every value
+    const auto shift_token{id.get_token_type()};
+    if (shift_token != syntax::token_type_t::SHL && shift_token != syntax::token_type_t::SHR &&
+        is_integer(lhs_type->get_kind()) && !is_same_unqualified(*lhs_type, rhs_type) &&
+        adopt_counter_type(binary.lhs, rhs_type)) {
+        lhs_type = &resolving_.get_sema_type(binary.lhs);
+    }
 
     // A shift's RHS is a bit count, not a peer value of the LHS being shifted
     const auto op{id.get_token_type()};
@@ -7204,6 +7292,8 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
     }
 
     // An endpoint is an ordinary value, never itself a range
+    const bool                   for_iterable{in_for_iterable_};
+    const bool                   unrolled{std::exchange(in_comptime_for_iterable_, false)};
     const mutating_context_guard subscript_g{in_subscript_index_, false};
     const mutating_context_guard for_iter_g{in_for_iterable_, false};
     type*                        lhs_type{&usize_type};
@@ -7248,6 +7338,37 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
                                                    "Range bounds must be integers",
                                                    error::TYPE_MISMATCH,
                                                    resolving_.ast.location_of(id)));
+    }
+
+    // A loop over untyped bounds counts in `usize`, or in `isize` once a bound is negative
+    const auto rhs_type{range.rhs ? resolving_.get_sema_type_opt(*range.rhs) : stdx::none};
+    if (for_iterable && lhs_type->get_kind() == type_kind::COMPTIME_INT &&
+        (!rhs_type || rhs_type->get_kind() == type_kind::COMPTIME_INT)) {
+        const auto fold_int{[&](stdx::option<ast::expr_handle> bound) -> stdx::option<i128> {
+            if (!bound) { return stdx::none; }
+            const auto folded{probe_fold(*bound)};
+            return folded ? folded->as_int_opt() : stdx::none;
+        }};
+        const auto lo{fold_int(range.lhs)};
+        const auto hi{fold_int(range.rhs)};
+        // Ranges only count up, so constant bounds the wrong way round are a mistake
+        if (lo && hi && *lo > *hi) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("This range starts at {} but ends at {}, so it is empty; ranges only "
+                            "count up",
+                            static_cast<i64>(*lo),
+                            static_cast<i64>(*hi)),
+                error::ILLEGAL_OPEN_RANGE,
+                resolving_.ast.location_of(id)));
+        }
+        // `for comptime` unrolls into constants, which keep the default integer type
+        const bool negative{(lo && *lo < 0) || (hi && *hi < 0)};
+        if (!unrolled) {
+            lhs_type =
+                &ctx_.get_builtin_resolved_type(negative ? type_kind::ISIZE : type_kind::USIZE);
+        }
     }
 
     // A range over unsuffixed literal bounds (`0..5`) iterates concrete integers, not
@@ -7947,7 +8068,11 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
 
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(match.matcher);
+    {
+        // The value being matched has its own type, not the one the `match` result flows into
+        const structural_guard shield{implicit_type_stack_, nullptr};
+        TRY_RESOLVE(match.matcher);
+    }
     auto& matcher_type{*last_type_.take()};
 
     // See `visit(if_expr)`: skip a `match comptime` in the template pass so a config-specific

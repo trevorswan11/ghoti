@@ -643,6 +643,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
     - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
 - **Breaking:** `@ptrFromArray(a)` is removed; `a.ptr` already gives the same pointer to the first element, for arrays and slices alike
+- **Breaking:** a `for` range over untyped bounds (`for (0..3) |i|`) counts in `usize`, or in `isize` when a bound is negative, instead of `i32`
+    - when the bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, so `s += i` with an `i32` `s` and `take_u8(i)` keep working
+    - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
+    - `for comptime` is unchanged: it unrolls into constants of the default integer type
+- A `for` range whose constant bounds are the wrong way round (`for (5..3)`) is an error, since ranges only count up; with runtime bounds it runs zero times
+- Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
+- Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
+- Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler
 - `\\` multiline strings format like Zig's: after `=` they start their own indented line, and a list never gets a trailing comma alone on the line after one
 - Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
 - A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it

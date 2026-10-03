@@ -5957,12 +5957,22 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             const auto end_opt{end_val->as_int_opt()};
             if (!start_opt || !end_opt) { return unknown(); }
 
+            // `..=` includes its end; the counter takes the range's element type
             const auto start{*start_opt};
-            const auto end{*end_opt};
-            const auto target_type{start_val->get_type()};
+            const bool inclusive{iterable_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+            const auto stop{*end_opt + (inclusive ? 1 : 0)};
+            auto       target_type{start_val->get_type()};
+            if (const auto range_type{module_->get_sema_type_opt(iterable_id)}) {
+                if (const auto sl{range_type->get_data().as_opt<sema::types::slice>()}) {
+                    target_type = sl->underlying;
+                }
+            }
+            const bool as_unsigned{target_type && sema::is_integer(target_type->get_kind())
+                                       ? !sema::is_signed_integer(*target_type)
+                                       : start_val->is<u64>()};
 
-            for (auto i{start}; i < end; ++i) {
-                if (start_val->is<u64>()) {
+            for (auto i{start}; i < stop; ++i) {
+                if (as_unsigned) {
                     sequence.emplace_back(static_cast<u64>(i), target_type);
                 } else {
                     sequence.emplace_back(static_cast<i64>(i), target_type);
@@ -6447,12 +6457,22 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
                 return;
             }
 
+            // `..=` includes its end; the counter takes the range's element type
             const auto start{*start_opt};
-            const auto end{*end_opt};
-            const auto target_type{start_val->get_type()};
+            const bool inclusive{iterable_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+            const auto stop{*end_opt + (inclusive ? 1 : 0)};
+            auto       target_type{start_val->get_type()};
+            if (const auto range_type{module_->get_sema_type_opt(iterable_id)}) {
+                if (const auto sl{range_type->get_data().as_opt<sema::types::slice>()}) {
+                    target_type = sl->underlying;
+                }
+            }
+            const bool as_unsigned{target_type && sema::is_integer(target_type->get_kind())
+                                       ? !sema::is_signed_integer(*target_type)
+                                       : start_val->is<u64>()};
 
-            for (auto i{start}; i < end; ++i) {
-                if (start_val->is<u64>()) {
+            for (auto i{start}; i < stop; ++i) {
+                if (as_unsigned) {
                     sequence.emplace_back(static_cast<u64>(i), target_type);
                 } else {
                     sequence.emplace_back(static_cast<i64>(i), target_type);

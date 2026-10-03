@@ -41,17 +41,20 @@ TEST_CASE("Labeled for loop resolution") {
         CHECK(ctx->root_mod.get_sema_type(UNWRAP(node_data.name)) == i32_type);
     }
 
-    const auto check_capture = [&](std::string_view name) -> void {
+    // A range over untyped bounds counts in `usize`
+    const auto& usize_type{ctx->get_type(sema::type_kind::USIZE)};
+    const auto  check_capture = [&](std::string_view name) -> void {
         const auto [sym, sym_data, type]{
             ctx->get_type_sym_info<syms::capture>(name, 2, stdx::none, &syms::capture::payload)};
-        CHECK(type == i32_type);
+        CHECK(type == usize_type);
     };
     check_capture("i");
     check_capture("j");
 }
 
 TEST_CASE("Complex label resolution") {
-    helpers::resolve_and_check("const a = l: do { let foo = 42; } while (blk: { break :blk 42; });");
+    helpers::resolve_and_check(
+        "const a = l: do { let foo = 42; } while (blk: { break :blk 42; });");
     helpers::resolve_and_check(R"(
         let mut i: i32 = undefined;
         const a = outer: while (blk: { break :blk 42; }) : (i += blk: {

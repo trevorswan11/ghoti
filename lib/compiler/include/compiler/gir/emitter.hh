@@ -60,6 +60,7 @@ class emitter {
         stdx::option<value> const_val;
         bool                is_const{false};
         bool                is_comptime_mut{false}; // Mutable, but never materializes storage
+        bool                is_range_counter{false};
     };
 
     // Set by `emit_generic_instantiation` for one pack function's body
