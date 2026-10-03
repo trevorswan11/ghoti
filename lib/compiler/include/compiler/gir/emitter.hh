@@ -421,22 +421,10 @@ class emitter {
     // If `assign` targets a `comptime let mut`, folds it and rebinds in place. `none` otherwise
     auto try_emit_comptime_mut_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // One level of `p.field = ...` / `p.field += ...` into an aggregate `comptime let mut`
-    auto try_emit_comptime_mut_field_assignment(ast::node_id                id,
-                                                const ast::assignment_expr& assign,
-                                                std::string_view            root_name,
-                                                local_binding&              binding,
-                                                const ast::dot_expr& dot) -> stdx::option<value>;
-    // Same shape as the field form, for `arr[k] = ...` into an array-typed `comptime let mut`.
-    auto try_emit_comptime_mut_element_assignment(ast::node_id                id,
-                                                  const ast::assignment_expr& assign,
-                                                  std::string_view            root_name,
-                                                  local_binding&              binding,
-                                                  const ast::index_expr&      idx)
+    // `p.a.b = ...` / `arr[k].field += ...`: any chain of fields and elements into an aggregate
+    // `comptime let mut`
+    auto try_emit_comptime_mut_place_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
-    // that identifier's binding if it names a `comptime let mut`
-    auto comptime_mut_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&>;
     auto update_comptime_mut(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.

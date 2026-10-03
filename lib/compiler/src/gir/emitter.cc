@@ -3134,25 +3134,6 @@ auto emitter::update_comptime_mut(std::string_view name, const_value val) -> voi
     }
 }
 
-auto emitter::comptime_mut_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&> {
-    ast::node_id cur{expr};
-    while (true) {
-        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(cur)}) {
-            const auto binding{lookup_binding<local_binding&>(ident->name)};
-            return (binding && binding->is_comptime_mut) ? binding : stdx::none;
-        }
-        if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(cur)}) {
-            cur = dot->object;
-            continue;
-        }
-        if (const auto idx{active_ast().get_as_opt<ast::index_expr>(cur)}) {
-            cur = idx->array;
-            continue;
-        }
-        return stdx::none;
-    }
-}
-
 auto emitter::try_emit_comptime_mut_assignment(ast::node_id id, const ast::assignment_expr& assign)
     -> stdx::option<value> {
     if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(assign.lhs)}) {
@@ -3185,133 +3166,103 @@ auto emitter::try_emit_comptime_mut_assignment(ast::node_id id, const ast::assig
         return gv;
     }
 
-    if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(assign.lhs)}) {
-        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot->object)}) {
-            const auto binding{lookup_binding<local_binding&>(ident->name)};
-            if (binding && binding->is_comptime_mut) {
-                return try_emit_comptime_mut_field_assignment(
-                    id, assign, ident->name, *binding, *dot);
-            }
-        }
-    }
-    if (const auto idx{active_ast().get_as_opt<ast::index_expr>(assign.lhs)}) {
-        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(idx->array)}) {
-            const auto binding{lookup_binding<local_binding&>(ident->name)};
-            if (binding && binding->is_comptime_mut) {
-                return try_emit_comptime_mut_element_assignment(
-                    id, assign, ident->name, *binding, *idx);
-            }
-        }
-    }
-
-    // A deeper chain rooted at a `comptime let mut` aggregate (`p.a.b = v`, `arr[i].field = v`)
-    // isn't supported yet (TODO(tcs))
-    if (const auto root{comptime_mut_root_binding(assign.lhs)}) {
-        ctx_.diags.emplace_back("assigning more than one level into a `comptime let mut` aggregate "
-                                "is not yet supported",
-                                sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE,
-                                active_ast().location_of(id));
-        return value{undefined_val{}, root->type};
-    }
-    return stdx::none;
+    return try_emit_comptime_mut_place_assignment(id, assign);
 }
 
-auto emitter::try_emit_comptime_mut_field_assignment(ast::node_id                id,
-                                                     const ast::assignment_expr& assign,
-                                                     std::string_view            root_name,
-                                                     local_binding&              binding,
-                                                     const ast::dot_expr&        dot)
+namespace {
+
+// The `.field` / `[k]` steps from the root binding out to the assigned place
+struct place_step {
+    stdx::option<std::string_view> field;
+    ast::node_id                   index{ast::node_id::make_invalid()};
+};
+
+} // namespace
+
+auto emitter::try_emit_comptime_mut_place_assignment(ast::node_id                id,
+                                                     const ast::assignment_expr& assign)
     -> stdx::option<value> {
-    const auto& field_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-    const auto  not_foldable{[&] {
-        ctx_.diags.emplace_back("`comptime let mut` assignment must be known at compile time",
-                                sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE,
-                                active_ast().location_of(id));
-        return value{undefined_val{}, binding.type};
-    }};
-
-    const auto current{ctx_.lookup_comptime_binding(root_name)};
-    if (!current || (!current->is<const_struct>() && !current->is<const_union>())) {
-        return not_foldable();
-    }
-
-    auto base_op{id.get_token_type()};
-    if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
-    const auto rhs_val{const_eval_.try_eval(assign.rhs)};
-
-    stdx::option<const_value> new_field;
-    if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
-        new_field = rhs_val;
-    } else if (rhs_val) {
-        stdx::option<const_value> current_field;
-        if (const auto st{current->as_opt<const_struct>()}) {
-            if (const auto f{st->get_field_opt(field_ident.name)}) { current_field = *f; }
-        } else if (const auto un{current->as_opt<const_union>()};
-                   un && un->active_field == field_ident.name && !un->payload.empty()) {
-            current_field = un->payload.front();
-        }
-        if (current_field) {
-            new_field = const_eval_.fold_binary_values(base_op, *current_field, *rhs_val, id);
-        }
-    }
-    if (!new_field) { return not_foldable(); }
-
-    auto rebuilt{*current};
-    if (auto st{rebuilt.as_opt<const_struct>()}) {
-        st->fields.insert_or_assign(std::string{field_ident.name}, *new_field);
-    } else {
-        auto& un{rebuilt.as<const_union>()};
-        un.active_field = std::string{field_ident.name};
-        if (un.payload.empty()) {
-            un.payload.emplace_back(*new_field);
+    std::vector<place_step> steps;
+    ast::node_id            cur{assign.lhs};
+    while (!active_ast().get_as_opt<ast::identifier_expr>(cur)) {
+        if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(cur)}) {
+            steps.emplace_back<place_step>({
+                .field = active_ast().get_as<ast::identifier_expr>(dot->member).name,
+            });
+            cur = dot->object;
+        } else if (const auto idx{active_ast().get_as_opt<ast::index_expr>(cur)}) {
+            steps.emplace_back<place_step>({
+                .field = stdx::none,
+                .index = idx->index,
+            });
+            cur = idx->array;
         } else {
-            un.payload.front() = *new_field;
+            return stdx::none;
         }
     }
-    update_comptime_mut(root_name, std::move(rebuilt));
-    binding.const_val = stdx::none;
-    return new_field->to_gir_value();
-}
+    if (steps.empty()) { return stdx::none; }
 
-auto emitter::try_emit_comptime_mut_element_assignment(ast::node_id                id,
-                                                       const ast::assignment_expr& assign,
-                                                       std::string_view            root_name,
-                                                       local_binding&              binding,
-                                                       const ast::index_expr&      idx)
-    -> stdx::option<value> {
+    const auto& root_name{active_ast().get_as<ast::identifier_expr>(cur).name};
+    const auto  binding{lookup_binding<local_binding&>(root_name)};
+    if (!binding || !binding->is_comptime_mut) { return stdx::none; }
+
     const auto not_foldable{[&] {
         ctx_.diags.emplace_back("`comptime let mut` assignment must be known at compile time",
                                 sema::error::COMPTIME_MUT_ASSIGN_NOT_FOLDABLE,
                                 active_ast().location_of(id));
-        return value{undefined_val{}, binding.type};
+        return value{undefined_val{}, binding->type};
     }};
 
     const auto current{ctx_.lookup_comptime_binding(root_name)};
-    if (!current || !current->is<const_array>()) { return not_foldable(); }
+    if (!current) { return not_foldable(); }
+    auto rebuilt{*current};
 
-    const auto idx_val{const_eval_.try_eval(idx.index)};
-    const auto idx_v{idx_val ? idx_val->as_uint_opt() : stdx::none};
-    if (!idx_v || *idx_v >= current->as<const_array>().elements.size()) { return not_foldable(); }
-    const auto k{static_cast<usize>(*idx_v)};
+    // Walks to the assigned place; only the last step may switch a union's active field
+    gsl::not_null<const_value*> place{&rebuilt};
+    for (usize i{0}; const auto& step : steps | std::views::reverse) {
+        const bool last{i + 1 == steps.size()};
+        if (step.field) {
+            if (auto st{place->as_opt<const_struct>()}) {
+                // A field not yet given a value (`= undefined`) gets one here
+                place =
+                    &st->fields.try_emplace(std::string{*step.field}, const_value::make_poison())
+                         .first->second;
+            } else if (auto un{place->as_opt<const_union>()}) {
+                const bool active{un->active_field == *step.field && !un->payload.empty()};
+                if (!active && !last) { return not_foldable(); }
+                if (!active) {
+                    un->active_field = std::string{*step.field};
+                    un->payload.assign(1, const_value::make_poison());
+                }
+                place = &un->payload.front();
+            } else {
+                return not_foldable();
+            }
+        } else {
+            auto       arr{place->as_opt<const_array>()};
+            const auto k_val{const_eval_.try_eval(step.index)};
+            const auto k{k_val ? k_val->as_uint_opt() : stdx::none};
+            if (!arr || !k || *k >= arr->elements.size()) { return not_foldable(); }
+            place = &arr->elements[static_cast<usize>(*k)];
+        }
+        i += 1; // Either this or std::next
+    }
 
     auto base_op{id.get_token_type()};
     if (const auto b{syntax::token_type::get_compound_base_op(base_op)}) { base_op = *b; }
-    const auto rhs_val{const_eval_.try_eval(assign.rhs)};
-
-    stdx::option<const_value> new_elem;
+    const auto                rhs_val{const_eval_.try_eval(assign.rhs)};
+    stdx::option<const_value> new_val;
     if (id.get_token_type() == syntax::token_type_t::ASSIGN) {
-        new_elem = rhs_val;
-    } else if (rhs_val) {
-        new_elem = const_eval_.fold_binary_values(
-            base_op, current->as<const_array>().elements[k], *rhs_val, id);
+        new_val = rhs_val;
+    } else if (rhs_val && !place->is_poison()) {
+        new_val = const_eval_.fold_binary_values(base_op, *place, *rhs_val, id);
     }
-    if (!new_elem) { return not_foldable(); }
+    if (!new_val) { return not_foldable(); }
 
-    auto rebuilt{*current};
-    rebuilt.as<const_array>().elements[k] = *new_elem;
+    *place = *new_val;
     update_comptime_mut(root_name, std::move(rebuilt));
-    binding.const_val = stdx::none;
-    return new_elem->to_gir_value();
+    binding->const_val = stdx::none;
+    return new_val->to_gir_value();
 }
 
 auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value {

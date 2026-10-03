@@ -647,6 +647,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - when the bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, so `s += i` with an `i32` `s` and `take_u8(i)` keep working
     - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
     - `for comptime` is unchanged: it unrolls into constants of the default integer type
+- Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
 - A `for` range whose constant bounds are the wrong way round (`for (5..3)`) is an error, since ranges only count up; with runtime bounds it runs zero times
 - Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
 - Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`

@@ -141,14 +141,61 @@ TEST_CASE("`comptime let mut` accumulates across `for comptime` iterations") {
     )") == 3);
 }
 
-TEST_CASE("assigning more than one level into a `comptime let mut` aggregate is a clean error") {
-    helpers::expect_compile_error(R"(
-        const Inner = struct { v: i32 };
+TEST_CASE("assigning through a chain of fields and elements into a `comptime let mut` aggregate") {
+    CHECK(helpers::compile_and_run(R"(
+        const Inner = struct { v: i32, xs: [2]i32 };
         const Outer = struct { inner: Inner };
         pub const main = fn(): i32 {
-            comptime let mut o = Outer{ .inner = Inner{ .v = 1 } };
+            comptime let mut o = Outer{ .inner = Inner{ .v = 1, .xs = .{ 2, 3 } } };
             o.inner.v = 2;
-            return o.inner.v;
+            o.inner.xs[1] += 5;
+            comptime let mut arr: [2]Inner = .{ .{ .v = 1, .xs = .{ 0, 0 } }, .{ .v = 2, .xs = .{ 0, 0 } } };
+            arr[1].v *= 7;
+            arr[0].xs[0] = 3;
+            const k = o.inner.v + o.inner.xs[1] + arr[1].v + arr[0].xs[0];
+            return k;
+        };
+    )") == 2 + 8 + 14 + 3);
+
+    // A union field deeper in the chain, read back at runtime and through a folded call
+    CHECK(helpers::compile_and_run(R"(
+        const U = union { i: i32, f: f64 };
+        const W = struct { u: U, xs: [3]i32 };
+        const build = fn(): i32 {
+            comptime let mut w: W = .{ .u = .{ .i = 1 }, .xs = .{ 1, 2, 3 } };
+            w.u.i += 4;
+            w.xs[2] *= 10;
+            w.u.f = 2.5;
+            return w.xs[2] + @as(i32, @intFromFloat(w.u.f * 2.0));
+        };
+        const AT = build();
+        pub const main = fn(): i32 {
+            comptime let mut w: W = .{ .u = .{ .i = 1 }, .xs = .{ 1, 2, 3 } };
+            w.u.i += 4;
+            w.xs = .{ 7, 8, 9 };
+            w.xs[0] -= 1;
+            let rt: W = w;
+            return rt.xs[0] + rt.u.i + build() + AT;
+        };
+    )") == 6 + 5 + 35 + 35);
+
+    // Places that can't be known at compile time are still clean errors
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            comptime let mut a: [2][2]i32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+            let mut k: usize = 1;
+            k += 0;
+            a[k][0] = 9;
+            return 0;
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        const U = union { i: i32, f: f64 };
+        const S = struct { u: U };
+        pub const main = fn(): i32 {
+            comptime let mut s: S = .{ .u = .{ .i = 1 } };
+            s.u.f += 1.0;
+            return 0;
         };
     )");
 }
