@@ -283,6 +283,7 @@ class type_resolver {
         template <typename... Args>
         explicit committable_resolution(type& type, Args&&... resolvee) : type_{type} {
             type_.resolve<Resolvee>(std::forward<Args>(resolvee)...);
+            data_.emplace(type_.get_data());
         }
 
         ~committable_resolution() {
@@ -290,11 +291,15 @@ class type_resolver {
         }
 
         // This action cannot be undone, defer until the very end!
-        auto commit() noexcept -> void { committed_ = true; }
+        auto commit() noexcept -> void {
+            type_.resolve<type::data_t>(*data_);
+            committed_ = true;
+        }
 
       private:
-        type& type_;
-        bool  committed_{false};
+        type&                      type_;
+        stdx::option<type::data_t> data_;
+        bool                       committed_{false};
     };
 
     // A call's arguments after splicing in every `expr...` pack expansion in place
@@ -559,6 +564,8 @@ class type_resolver {
                                                  source_location        object_location)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
 
+    // Hands an in-progress type-ctor instance its literal's shape once the fields are known
+    auto lend_shape_to_pending_instance(usize literal_idx, const type& literal) -> void;
     // Retrieve's the rightmost identifier name from the accessor
     [[nodiscard]] auto get_rightmost_name(ast::expr_handle) const noexcept
         -> stdx::option<std::string_view>;
@@ -813,6 +820,9 @@ class type_resolver {
     bool in_for_iterable_{false};
     // Set while resolving a function parameter's declared type
     bool in_param_type_{false};
+    // While instantiating a type ctor: its returned literal's node index and the instance's pool
+    // slot, which borrows the literal's shape until the instance is cloned
+    stdx::option<std::pair<usize, type*>> pending_instance_slot_;
     // The arguments of the call being instantiated, by parameter, to place a bound's error
     std::vector<source_location> instantiating_arg_locations_;
     // Set while resolving a `for comptime` driver, whose range unrolls into constants

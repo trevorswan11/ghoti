@@ -3406,10 +3406,11 @@ auto register_type_ctor_members(context&         ctx,
         if (!decl || !decl->value) { continue; }
         const auto fn_expr{fn_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
         if (!fn_expr) { continue; }
-        if (fn_expr->self) {
-            if (const auto fn_type{fn_mod.get_sema_type_opt(*decl->value)}) {
-                if (ctx.generic_functions.get_opt(*fn_type)) { continue; }
-            }
+        // A generic member is monomorphized per call instead, under its own instance name
+        if (const auto fn_type{fn_mod.get_sema_type_opt(*decl->value)}) {
+            if (fn_expr->self && ctx.generic_functions.get_opt(*fn_type)) { continue; }
+            const auto sig{fn_type->get_data().as_opt<types::function>()};
+            if (!fn_expr->self && sig && any_param_generic(sig->params)) { continue; }
         }
         const auto& name{fn_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
         fn_mod.type_ctor_member_emits.emplace_back<type_ctor_member_emit>({
@@ -3458,16 +3459,36 @@ auto register_type_ctor_members(context&         ctx,
     ctx.generic_functions.set_type_ctor_member_prefix(clone, std::string{ctor_mangled});
 }
 
-// Copies an anonymous aggregate `sema::type` into a fresh pool entry, keyed by `disc` so repeated
-// requests for the same instantiation share one type
-[[nodiscard]] auto clone_anonymous_aggregate(context& ctx, type& src, std::string_view disc)
-    -> type& {
+// The pool entry an instantiation's copy of the anonymous aggregate `src` lives in, keyed by
+// `disc`. It carries its identity before its shape is filled in, except for an `abstract`
+// instance (a parameterized impl's template), which stands for any instance.
+[[nodiscard]] auto anonymous_aggregate_slot(context&         ctx,
+                                            const type&      src,
+                                            std::string_view disc,
+                                            bool             abstract = false) -> type& {
     types::key_t key{src.get_kind(), src.get_key().get_mut()};
     key.imprint(disc);
-    auto& fresh{*ctx.pool[key]};
-    if (fresh.is_resolved()) { return fresh; }
-    if (src.has_symbol_table_idx()) { fresh.set_symbol_table_idx(src.get_symbol_table_idx()); }
-    ctx.generic_functions.set_clone_disc(fresh, std::string{disc});
+    auto& slot{*ctx.pool[key]};
+    if (slot.get_instance_id() != 0) { return slot; }
+    if (src.has_symbol_table_idx()) { slot.set_symbol_table_idx(src.get_symbol_table_idx()); }
+    if (abstract) { return slot; }
+    stdx::hasher id_hash{0};
+    id_hash.combine(disc);
+    slot.set_instance_id(id_hash.finalize() | 1); // never the "no instance" zero
+    ctx.generic_functions.set_clone_disc(slot.get_instance_id(), std::string{disc});
+    return slot;
+}
+
+// Copies an anonymous aggregate `sema::type` into its per-instantiation pool entry, so repeated
+// requests for the same instantiation share one type. A `provisional` slot only borrowed the
+// literal's shape while the instance was being built, so it is filled in properly regardless.
+[[nodiscard]] auto clone_anonymous_aggregate(context&         ctx,
+                                             type&            src,
+                                             std::string_view disc,
+                                             bool             provisional = false,
+                                             bool             abstract    = false) -> type& {
+    auto& fresh{anonymous_aggregate_slot(ctx, src, disc, abstract)};
+    if (fresh.is_resolved() && !provisional) { return fresh; }
 
     // Rebind so distinct instantiations of a `fn(T): type` ctor do not alias each other's shape
     const auto rebind{[&](gsl::span<type*> types) -> gsl::span<type*> {
@@ -3505,6 +3526,77 @@ auto register_type_ctor_members(context&         ctx,
     return fresh;
 }
 
+// A type ctor's literal type and its member types are shared by every instance, which each
+// resolve them in place. This is one instance's shape, put back after a nested instance.
+struct shared_literal_shape {
+    type*                                       literal;
+    type::data_t                                data;
+    std::vector<std::pair<type*, type::data_t>> members;
+
+    [[nodiscard]] static auto save(type& literal) -> shared_literal_shape {
+        shared_literal_shape shape{.literal = &literal, .data = literal.get_data(), .members = {}};
+        const auto           save_members{[&](gsl::span<type*> members) {
+            for (auto* m : members) {
+                if (m && m->is_resolved()) { shape.members.emplace_back(m, m->get_data()); }
+            }
+        }};
+        literal.get_data().visit([](const auto&) {},
+                                 [&](const types::struct_t& st) { save_members(st.members); },
+                                 [&](const types::union_t& un) { save_members(un.members); },
+                                 [&](const types::enum_t& en) { save_members(en.members); });
+        return shape;
+    }
+
+    auto restore() const -> void {
+        literal->resolve<type::data_t>(data);
+        for (const auto& [member, member_data] : members) {
+            member->resolve<type::data_t>(member_data);
+        }
+    }
+};
+
+// Whether a ctor's arguments include a stand-in `type` (a parameterized impl's sentinel, an
+// associated-type placeholder, or a still-unbound `type` parameter), making the instance a
+// template for every real one
+[[nodiscard]] auto is_abstract_instance(gsl::span<type*> args) -> bool {
+    return std::ranges::any_of(args, [](type* arg) {
+        const auto& t{denoted_type(*arg)};
+        return t.get_kind() == type_kind::TYPE && t.get_data().is<types::builtin_type>();
+    });
+}
+
+// Whether an instance of the ctor owning `literal`, other than `slot`, is mid-instantiation
+[[nodiscard]] auto
+other_instance_in_progress(const context& ctx, const type& literal, const type& slot) -> bool {
+    return std::ranges::any_of(ctx.instantiations_in_progress, [&](const auto& entry) {
+        const type* other{entry.second};
+        return other && other != &slot && other->get_instance_id() != 0 &&
+               other->get_symbol_table_idx_opt() == literal.get_symbol_table_idx_opt();
+    });
+}
+
+// How diagnostics and `@typeName` spell one instance of a type ctor, e.g. `Box(u8)`
+[[nodiscard]] auto
+ctor_instance_display_name(const context&                                               ctx,
+                           std::string_view                                             ctor,
+                           const std::vector<std::pair<std::string, gir::const_value>>& bindings)
+    -> std::string {
+    const auto show{[&](const gir::const_value& v) -> std::string {
+        if (const auto t{v.as_opt<stdx::option<type&>>()}; t && *t) {
+            return ctx.type_display_name(**t);
+        }
+        if (const auto b{v.as_opt<bool>()}) { return *b ? "true" : "false"; }
+        if (const auto i{v.as_int_opt()}) { return fmt::format("{}", static_cast<i64>(*i)); }
+        return "_";
+    }};
+    return fmt::format("{}({})",
+                       ctor,
+                       fmt::join(bindings | std::views::transform([&](const auto& binding) {
+                                     return show(binding.second);
+                                 }),
+                                 ", "));
+}
+
 // Replaces characters that are meaningful in a discriminator but undesirable in a symbol name.
 [[nodiscard]] auto sanitize_mangled(std::string_view s) -> std::string {
     std::string out;
@@ -3532,7 +3624,7 @@ auto register_type_ctor_members(context&         ctx,
     case type_kind::UNION:
     case type_kind::ENUM:   {
         const auto kind_name{type_kind_display_name(t)};
-        if (const auto disc{reg.get_clone_disc(t)}) {
+        if (const auto disc{reg.get_clone_disc(t.get_instance_id())}) {
             return fmt::format("{}${}", kind_name, sanitize_mangled(*disc));
         }
         if (t.has_symbol_table_idx()) {
@@ -4121,22 +4213,6 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 comptime_args[cx_i++] = std::move(*folded);
             }
 
-            generic_instantiation_key key{
-                .generic_fn_type = &callee_type,
-                .arg_types       = concrete_arg_types,
-                .comptime_args   = comptime_args,
-            };
-
-            if (const auto cached{ctx_.instantiation_cache.find(key)}) {
-                if (reject_type_of_args(call, *fn_info_opt->fn_expr, cached->mangled_name)) {
-                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
-                }
-                resolving_.set_generic_call_target(id, cached->mangled_name);
-                auto& call_type{poly_call_result(*cached->return_type)};
-                resolving_.set_sema_type(id, call_type);
-                return last_type_.emplace(call_type);
-            }
-
             // Copy out of the registry before instantiating: resolving the generic's body may
             // recursively register further generic functions
             generic_function_info fn_info_copy{*fn_info_opt};
@@ -4157,6 +4233,24 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         fn_info_copy.enclosing_type.emplace(denoted);
                     }
                 }
+            }
+
+            generic_instantiation_key key{
+                .generic_fn_type = &callee_type,
+                .arg_types       = concrete_arg_types,
+                .comptime_args   = comptime_args,
+                .enclosing_type =
+                    fn_info_copy.enclosing_type ? &*fn_info_copy.enclosing_type : nullptr,
+            };
+
+            if (const auto cached{ctx_.instantiation_cache.find(key)}) {
+                if (reject_type_of_args(call, *fn_info_opt->fn_expr, cached->mangled_name)) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                resolving_.set_generic_call_target(id, cached->mangled_name);
+                auto& call_type{poly_call_result(*cached->return_type)};
+                resolving_.set_sema_type(id, call_type);
+                return last_type_.emplace(call_type);
             }
 
             const auto                   diags_before_inst{ctx_.diags.size()};
@@ -4564,6 +4658,7 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
                                                      underlying_type,
                                                      member_types,
                                                      resolving_};
+    lend_shape_to_pending_instance(id.get_index(), enum_type);
     if (!resolve_members(member_types, enum_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -5227,8 +5322,9 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              error::ILLEGAL_POLY_MUTABILITY,
                              resolving_.ast.location_of(fn.explicit_return_type)));
     }
-    ASSERT(!fn_type.is_resolved(), "Valued function must not be resolved");
-
+    // A type-ctor member whose signature instantiates its own ctor (`Result(U, E)` inside `Result`)
+    // has this very node resolved by that nested instance meanwhile; this instance's signature
+    // replaces it below.
     const auto self_offset{fn.self.has_value() ? 1UZ : 0UZ};
     const bool any_param_needs_own_instantiation{[&] {
         if (self_offset && is_generic_type(*param_types[0])) { return true; }
@@ -7092,7 +7188,12 @@ auto type_resolver::resolve_structural_access(type&                  object_type
                              resolving_.ast.location_of(member));
     }
 
-    if (!enum_type && !struct_type && !union_type) {
+    // A type-ctor instance still being built (named by its own member's signature) has no shape
+    // yet, only its scope
+    const bool pending_instance{!target_type->is_resolved() &&
+                                target_type->get_instance_id() != 0 &&
+                                target_type->has_symbol_table_idx()};
+    if (!enum_type && !struct_type && !union_type && !pending_instance) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
         if (auto ext{resolve_impl_method_access(
                 *target_type, member_ident.name, resolving_.ast.location_of(member))}) {
@@ -7132,6 +7233,10 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         return result_type;
     }
 
+    if (pending_instance) {
+        resolve_symbol(member, member_symbol);
+        return last_type_.take();
+    }
     if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
     auto member_type{struct_type  ? struct_type->type_at_opt(member_idx)
                      : union_type ? union_type->type_at_opt(member_idx)
@@ -7143,6 +7248,12 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         return last_type_.take();
     }
     return member_type.get();
+}
+
+auto type_resolver::lend_shape_to_pending_instance(usize literal_idx, const type& literal) -> void {
+    if (!pending_instance_slot_ || pending_instance_slot_->first != literal_idx) { return; }
+    auto& slot{*pending_instance_slot_->second};
+    if (!slot.is_resolved()) { slot.resolve<type::data_t>(literal.get_data()); }
 }
 
 auto type_resolver::get_rightmost_name(ast::expr_handle handle) const noexcept
@@ -10195,6 +10306,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                        struct_expr.is_extern,
                                                        struct_expr.is_packed,
                                                        field_alignments};
+    lend_shape_to_pending_instance(id.get_index(), struct_type);
     if (!resolve_members(member_types, struct_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -10343,6 +10455,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                                                       union_expr.is_extern || union_expr.is_packed,
                                                       union_expr.is_extern,
                                                       union_expr.is_packed};
+    lend_shape_to_pending_instance(id.get_index(), union_type);
     if (!resolve_members(member_types, union_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -13970,9 +14083,7 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
         // Volatility is baked into mutability and should not be imprinted
         auto& new_vol_type{*ctx_.pool[new_key]};
         new_vol_type.resolve_if<type::data_t>(inner_type.get_data());
-        if (const auto idx{inner_type.get_symbol_table_idx_opt()}) {
-            new_vol_type.set_symbol_table_idx(*idx);
-        }
+        new_vol_type.copy_identity_from(inner_type);
         return new_vol_type;
     }
     UNREACHABLE("A new type modifier was likely added yet unaccounted for");
@@ -14480,6 +14591,12 @@ auto type_resolver::instantiate_generic(type&                             callee
                               "_"));
     // Distinct `comptime` argument values must produce distinct symbols.
     for (const auto& cx : comptime_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
+    // A generic member is distinct per enclosing type: `Box(u8).apply` vs `Box(i64).apply`, or
+    // same-named members of unrelated types
+    if (fn_info.enclosing_type) {
+        mangled_name +=
+            fmt::format("_in_{}", mangle_arg_type(ctx_.generic_functions, *fn_info.enclosing_type));
+    }
 
     // A recursive call with the same arguments names the monomorph its body is still resolving
     if (!building_param_template_) {
@@ -14849,8 +14966,45 @@ auto type_resolver::instantiate_generic(type&                             callee
                                  ctx_.instantiations_in_progress
                                      .emplace(mangled_name, is_auto_return ? nullptr : &return_type)
                                      .second};
+    // A type constructor's instance is its aggregate's pool slot, known before the body is. A
+    // member signature naming this same instance (`Pair(i64)` inside `Pair(i64)`) resolves to it.
+    const bool abstract_instance{building_param_template_ || is_abstract_instance(concrete_args)};
+    bool       track_ctor_in_progress{false};
+    stdx::option<shared_literal_shape> outer_instance_shape;
+    if (!building_param_template_ && !track_in_progress &&
+        return_type.get_kind() == type_kind::TYPE) {
+        const auto& body{fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+        const auto  agg_node{returned_aggregate_node(fn_mod.ast, body)};
+        const auto  literal{
+            agg_node && agg_node->any<ast::struct_expr, ast::union_expr, ast::enum_expr>()
+                 ? fn_mod.get_sema_type_opt(*agg_node)
+                 : stdx::none};
+        if (literal && !literal->is_poison()) {
+            auto& slot{
+                anonymous_aggregate_slot(ctx_,
+                                         *literal,
+                                         fmt::format("{}#{}", mangled_name, agg_node->get_index()),
+                                         abstract_instance)};
+            // An outer instance of this ctor still resolving its members gets back the shape
+            // this one is about to write over
+            if (literal->is_resolved() && other_instance_in_progress(ctx_, *literal, slot)) {
+                outer_instance_shape.emplace(shared_literal_shape::save(*literal));
+            }
+            track_ctor_in_progress =
+                ctx_.instantiations_in_progress.emplace(mangled_name, &slot).second;
+            if (track_ctor_in_progress && !slot.is_resolved()) {
+                inst_resolver.pending_instance_slot_.emplace(agg_node->get_index(), &slot);
+                // Member calls on the instance target its monomorphized members, as they will
+                // once it is built
+                ctx_.generic_functions.set_type_ctor_member_prefix(slot, mangled_name);
+            }
+        }
+    }
     const auto in_progress_restore{gsl::finally([&] {
-        if (track_in_progress) { ctx_.instantiations_in_progress.erase(mangled_name); }
+        if (track_in_progress || track_ctor_in_progress) {
+            ctx_.instantiations_in_progress.erase(mangled_name);
+        }
+        if (outer_instance_shape) { outer_instance_shape->restore(); }
     })};
     inst_resolver.return_trackers_.emplace_back(return_tracker{
         .return_types   = {},
@@ -14903,6 +15057,32 @@ auto type_resolver::instantiate_generic(type&                             callee
     rollback_poisoned(fn_mod.sema_side_tables.node_types.values, snap.nodes, typing.node_types);
     rollback_poisoned(
         fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
+
+    // Nested in another instantiation of this module (e.g. a type-ctor member's signature naming
+    // its own ctor), this one may have retyped nodes the enclosing one already typed. Hand those
+    // back so the enclosing diff records its own typing.
+    if (prev_write_log) {
+        const auto give_back{[](auto&                     live,
+                                const auto&               snapshot,
+                                const std::vector<usize>& ours,
+                                const std::vector<usize>& enclosing) {
+            const ankerl::unordered_dense::set<usize> enclosing_idxs(enclosing.begin(),
+                                                                     enclosing.end());
+            for (const auto idx : ours) {
+                if (idx < snapshot.size() && enclosing_idxs.contains(idx)) {
+                    live[idx] = snapshot[idx];
+                }
+            }
+        }};
+        give_back(fn_mod.sema_side_tables.node_types.values,
+                  snap.nodes,
+                  write_log.node_idxs,
+                  prev_write_log->node_idxs);
+        give_back(fn_mod.sema_side_tables.explicit_types.values,
+                  snap.types,
+                  write_log.explicit_idxs,
+                  prev_write_log->explicit_idxs);
+    }
     for (const auto& [idx, target] : typing.call_targets) {
         if (idx < snap.calls.size()) {
             fn_mod.sema_side_tables.generic_call_targets.values[idx] = snap.calls[idx];
@@ -14965,7 +15145,11 @@ auto type_resolver::instantiate_generic(type&                             callee
             if (const auto agg_node{returned_aggregate_node(fn_mod.ast, block)}) {
                 auto& src_agg{*deduced_return_type};
                 auto& clone{clone_anonymous_aggregate(
-                    ctx_, src_agg, fmt::format("{}#{}", mangled_name, agg_node->get_index()))};
+                    ctx_,
+                    src_agg,
+                    fmt::format("{}#{}", mangled_name, agg_node->get_index()),
+                    inst_resolver.pending_instance_slot_.has_value(),
+                    abstract_instance)};
                 // Call an abstract instantiation built purely to compute a parameterized impl's
                 // signatures
                 if (!building_param_template_) {
@@ -14997,6 +15181,12 @@ auto type_resolver::instantiate_generic(type&                             callee
                     }
                 }
                 deduced_return_type = &clone;
+                if (ctor_bindings.size() == fn_expr.parameters.size()) {
+                    ctx_.user_type_names.try_emplace(
+                        &clone,
+                        fn_mod.ast.intern(ctor_instance_display_name(
+                            ctx_, fn_info.name.value_or("fn"), ctor_bindings)));
+                }
 
                 // Expand any parameterized `impl(P) [I for] Ctor(P)` onto this instantiation
                 // (before `ctor_bindings` is moved -- the impl needs the ctor's folded values).

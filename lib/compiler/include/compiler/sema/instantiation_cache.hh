@@ -116,10 +116,12 @@ using body_type_diff_map = ankerl::unordered_dense::map<std::string,
 struct generic_instantiation_key {
     gsl::not_null<type*>              generic_fn_type;
     gsl::span<type*>                  arg_types;
-    gsl::span<const gir::const_value> comptime_args; // in parameter order
+    gsl::span<const gir::const_value> comptime_args;           // in parameter order
+    const type*                       enclosing_type{nullptr}; // a member's receiver instance
 
     [[nodiscard]] auto hash() const noexcept -> u64 {
         stdx::hasher h{reinterpret_cast<u64>(generic_fn_type.get())};
+        h.combine(reinterpret_cast<u64>(enclosing_type));
         for (const auto& arg : arg_types) {
             VERIFY(arg, "Null argument leaked from resolution");
             h.combine(reinterpret_cast<u64>(arg));

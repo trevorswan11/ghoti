@@ -15,7 +15,7 @@ pub const Result = fn(T: type, E: type): type {
 
         /// The successful result of a `Result(void, E)`
         pub const done: @This() = .{ .ok = {} };
-        pub const map = fn(&self, func: impl Fn(val: T): auto): auto {
+        pub const map = fn(&self, func: impl Fn(val: T): auto): Result(std.meta.return_type(@TypeOf(func)), E) {
             const NewRes = Result(std.meta.return_type(@TypeOf(func)), E);
             return match (self) {
                 .ok => |happy| NewRes{ .ok = func(happy) },
@@ -23,7 +23,7 @@ pub const Result = fn(T: type, E: type): type {
             };
         };
 
-        pub const map_err = fn(&self, func: impl Fn(err: E): auto): auto {
+        pub const map_err = fn(&self, func: impl Fn(err: E): auto): Result(T, std.meta.return_type(@TypeOf(func))) {
             const NewRes = Result(T, std.meta.return_type(@TypeOf(func)));
             return match (self) {
                 .ok => |happy| NewRes{ .ok = happy },

@@ -588,9 +588,7 @@ auto type_pool::strip_modifiers(const type& old_type, types::mutability_modifier
     // Resolve here since the type information doesn't contain modifier information
     auto new_type{(*this)[key]};
     new_type->resolve_if<type::data_t>(old_type.get_data());
-    if (const auto idx{old_type.get_symbol_table_idx_opt()}) {
-        new_type->set_symbol_table_idx(*idx);
-    }
+    new_type->copy_identity_from(old_type);
     return new_type;
 }
 
@@ -688,8 +686,15 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::STRUCT:
     case type_kind::UNION:
     case type_kind::ENUM:
-    case type_kind::CLOSURE:   return a.get_symbol_table_idx_opt() == b.get_symbol_table_idx_opt();
-    case type_kind::DYN:       {
+    case type_kind::CLOSURE:   {
+        if (a.get_symbol_table_idx_opt() != b.get_symbol_table_idx_opt()) { return false; }
+        // Every instance of one type constructor shares its body's scope; a ctor's own template
+        // (no instance id) still matches any of them
+        const auto id_a{a.get_instance_id()};
+        const auto id_b{b.get_instance_id()};
+        return id_a == 0 || id_b == 0 || id_a == id_b;
+    }
+    case type_kind::DYN: {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};
         const auto d_b{b.get_data().as_opt<types::dyn_t>()};
         if (!d_a || !d_b || &d_a->interface != &d_b->interface) { return false; }

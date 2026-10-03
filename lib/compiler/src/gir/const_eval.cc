@@ -3967,9 +3967,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             (decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
              decl->has_modifier(ast::decl_modifiers::LET))) {
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
-                // Outside any const-evaluated body, a constructor call's own node already holds
-                // this instantiation's aggregate
-                if (id.is_valid() && call_stack_.size() <= 1 &&
+                // Outside any const-evaluated function body (a `comptime` block's own frames are
+                // fine), a constructor call's own node already holds this instantiation's aggregate
+                if (id.is_valid() && return_types_.empty() &&
                     fn_expr->explicit_return_type.get_token_type() ==
                         syntax::token_type_t::TYPE_TYPE) {
                     if (const auto built{module_->get_sema_type_opt(id)}) {

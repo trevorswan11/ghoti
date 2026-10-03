@@ -27,7 +27,7 @@ TEST_CASE("A type alias is rejected where a value of that type is expected") {
                                 type_as_value("^i32", "^i32", 32UZ));
     helpers::test_resolver_fail(
         "const Box = fn(T: type): type { return struct { v: T }; }; const g: bool = Box(i32);",
-        type_as_value("bool", "struct", 78UZ));
+        type_as_value("bool", "Box(i32)", 78UZ));
 }
 
 TEST_CASE("A type is rejected in assignment, argument, and return positions") {

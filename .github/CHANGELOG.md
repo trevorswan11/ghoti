@@ -692,6 +692,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `match` statement with a block arm next to a value arm (`1 => { ... }, _ => @expect(false)`) tried to store the block's `void` as the other arm's value
 - Fixed: a type constructor called through an alias (`const A = Box;`) or another module (`m.Box(u8)`) couldn't be compared at compile time (`A(u8) == A(u8)`)
 - Fixed: a crash resolving a generic call whose arguments themselves instantiated another generic
+- Fixed: distinct instances of one type constructor were treated as the same type: `let b: Box(u16) = a` with `a: Box(u8)` compiled, passing one to the other crashed the compiler, and `Box(u8) != Box(u16)` was false
+- Diagnostics and `@typeName` name a type constructor's instance by its arguments (`Box(u8)`, `Arr(i32, 4)`) instead of `struct`
+- Fixed: a type constructor member whose signature names its own constructor (`fn(&self): Pair(i64)` inside `Pair`, or a dependent `Result(U, E)` return inside `Result`) recursed forever, crashed, or mixed up the instances' field and parameter types
+- Fixed: a generic member called on two instances of one type constructor (`Box(u8).make(f)` and `Box(i64).make(f)`), or same-named generic members of unrelated types, shared one instantiation
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -699,6 +703,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
 - Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
+    - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
 

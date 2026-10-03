@@ -135,10 +135,11 @@ const f = fn(r: R): i32 {
     return r?;
 };
 )",
-            sema::diagnostic{"the '?' operator propagates a 'union' residual ('i32') but 'i32' "
-                             "does not implement 'builtin.Rewrappable'",
-                             sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
-                             std::pair{34UZ, 11UZ}});
+            sema::diagnostic{
+                "the '?' operator propagates a 'Result(i32, i32)' residual ('i32') but 'i32' "
+                "does not implement 'builtin.Rewrappable'",
+                sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
+                std::pair{34UZ, 11UZ}});
     }
 
     SECTION("Optional `?` inside a Result-returning function: From mismatch") {
@@ -150,9 +151,9 @@ const f = fn(o: O): R {
     return o?;
 };
 )",
-            sema::diagnostic{"the '?' operator propagates a 'union' residual ('void') but 'union' "
-                             "is not rebuildable from 'void'; implement 'builtin.Rewrappable for "
-                             "union' with From = 'void'",
+            sema::diagnostic{"the '?' operator propagates a 'Option(i32)' residual ('void') but "
+                             "'Result(i32, i32)' is not rebuildable from 'void'; implement "
+                             "'builtin.Rewrappable for Result(i32, i32)' with From = 'void'",
                              sema::error::UNWRAP_RETURN_TYPE_MISMATCH,
                              std::pair{35UZ, 11UZ}});
     }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -637,6 +638,191 @@ TEST_CASE("a type constructor reached through an alias or a module folds in a co
             pub const Alias = Box;
         )",
                                                              "boxes"}}) == 0);
+}
+
+namespace {
+
+// Whether resolving and type checking `src` reports `code`
+[[nodiscard]] auto type_check_raises(std::string_view src, sema::error code) -> bool {
+    auto [ctx, idx]{helpers::type_check(src)};
+    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
+    return diags &&
+           std::ranges::any_of(*diags, [&](const auto& d) { return d.get_error() == code; });
+}
+
+} // namespace
+
+TEST_CASE("distinct instances of one type constructor are distinct types") {
+    CHECK(type_check_raises(R"(
+        const Box = fn(T: type): type { return struct { v: T }; };
+        pub const main = fn(): i32 {
+            let a: Box(u8) = .{ .v = 1 };
+            let b: Box(u16) = a;
+            return @as(i32, b.v);
+        };
+    )",
+                            sema::error::TYPE_MISMATCH));
+    CHECK(type_check_raises(R"(
+        const Box = fn(T: type): type { return struct { v: T }; };
+        const f = fn(b: Box(u16)): i32 { return @as(i32, b.v); };
+        pub const main = fn(): i32 {
+            let a: Box(u8) = .{ .v = 1 };
+            return f(a);
+        };
+    )",
+                            sema::error::TYPE_MISMATCH));
+    // The same instance reached twice is still one type
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(T: type): type { return struct { v: T }; };
+        const f = fn(b: Box(u16)): i32 { return @as(i32, b.v); };
+        pub const main = fn(): i32 {
+            let a: Box(u16) = .{ .v = 3 };
+            let b: Box(u16) = a;
+            return f(b);
+        };
+    )") == 3);
+}
+
+TEST_CASE("distinct type constructor instances compare unequal") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        const Box = fn(T: type): type { return struct { v: T }; };
+        const A = Box(u8);
+        const B = Box(u16);
+        const differ: bool = Box(u8) != Box(u16);
+        comptime {
+            @assert(Box(u8) != Box(u16));
+            @assert(Box(u8) == Box(u8));
+            @assert(A != B);
+            @assert(differ);
+        }
+        test "compare" {
+            @expect(Box(u8) != Box(u16));
+            @expect(Box(u8) == Box(u8));
+            comptime { @assert(Box(u8) != Box(u16)); }
+            if comptime (Box(u8) == Box(u16)) { @expect(false); }
+        }
+    )") == 0);
+}
+
+TEST_CASE("type constructor instances are named after their arguments") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(T: type): type { return struct { v: T }; };
+        const Arr = fn(T: type, comptime n: usize): type { return struct { items: [n]T }; };
+        pub const main = fn(): i32 {
+            // Box(u8) / Arr(i32, 4) / Box(Box(bool))
+            return @intCast(@typeName(Box(u8)).len + @typeName(Arr(i32, 4)).len +
+                            @typeName(Box(Box(bool))).len);
+        };
+    )") == 7 + 11 + 14);
+}
+
+TEST_CASE("a type constructor member's signature may name its own constructor") {
+    // The member instantiates another instance while this one is still resolving its members
+    CHECK(helpers::compile_and_run(R"(
+        const Pair = fn(T: type): type {
+            return union {
+                one: T,
+                none: void,
+                pub const of = fn(v: T): @This() { return .{ .one = v }; };
+                pub const widen = fn(&self): Pair(i64) {
+                    return match (self) {
+                        .one => |v| Pair(i64).of(@as(i64, v)),
+                        .none => .{ .none = {} },
+                    };
+                };
+            };
+        };
+        pub const main = fn(): i32 {
+            let a: Pair(u8) = .of(200);
+            let b: Pair(i64) = a.widen();
+            let c = Pair(i64).of(5).widen();
+            let x = match (b) { .one => |v| v - 190, .none => 99 };
+            let y = match (c) { .one => |v| v, .none => 99 };
+            return @intCast(x + y);
+        };
+    )") == 15);
+    // A dependent return type naming the constructor with the member's own deduced type
+    CHECK(helpers::compile_and_run(R"(
+        const ret = fn(T: type): type {
+            const info = @typeInfo(T);
+            if comptime (info == .pointer) { return ret(info.pointer.child); }
+            if comptime (info == .reference) { return ret(info.reference.child); }
+            return info.function.return_type;
+        };
+        const Res = fn(T: type, E: type): type {
+            return union {
+                ok: T,
+                err: E,
+                pub const of = fn(val: T): @This() { return .{ .ok = val }; };
+                pub const map = fn(&self, func: impl Fn(val: T): auto)
+                    : Res(ret(@TypeOf(func)), E) {
+                    return match (self) {
+                        .ok => |happy| .{ .ok = func(happy) },
+                        .err => |sad| .{ .err = sad },
+                    };
+                };
+            };
+        };
+        pub const main = fn(): i32 {
+            let first: Res(u32, bool) = .of(4);
+            let a: Res(i32, bool) = .of(3);
+            let b: Res(i64, bool) = a.map(fn(v: i32): i64 { return @as(i64, v) * 2; });
+            let c: Res(u8, bool) = first.map(fn(v: u32): u8 { return @intCast(v + 1); });
+            let x = match (b) { .ok => |v| v, .err => 99 };
+            let y = match (c) { .ok => |v| v, .err => 99 };
+            return @as(i32, @intCast(x)) + @as(i32, y);
+        };
+    )") == 11);
+}
+
+TEST_CASE("a generic type constructor member is instantiated per enclosing instance") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(T: type): type {
+            return struct {
+                v: T,
+                pub const apply = fn(&self, func: impl Fn(x: i32): auto): auto {
+                    return @as(i64, func(7)) + @as(i64, self.v);
+                };
+                pub const make = fn(func: impl Fn(x: i32): auto): @This() {
+                    return .{ .v = @intCast(func(7)) };
+                };
+            };
+        };
+        const twice = fn(x: i32): i32 { return x * 2; };
+        pub const main = fn(): i32 {
+            let a: Box(u8) = .{ .v = 1 };
+            let b: Box(i64) = .{ .v = 100 };
+            let c = Box(u8).make(twice);
+            let d: Box(i64) = Box(i64).make(twice);
+            return @intCast(a.apply(twice) + b.apply(twice) + @as(i64, c.v) + d.v);
+        };
+    )") == 15 + 114 + 14 + 14);
+    // Same-named generic members of unrelated constructors in different modules
+    CHECK(helpers::compile_and_run(R"(
+            import "other.gh" as other;
+            const Box = fn(T: type): type {
+                return struct {
+                    v: T,
+                    pub const map = fn(&self, func: impl Fn(x: T): auto): auto { return func(self.v); };
+                };
+            };
+            const inc = fn(x: i32): i32 { return x + 1; };
+            pub const main = fn(): i32 {
+                let a: Box(i32) = .{ .v = 1 };
+                let b: other.Wrap(i32) = .{ .w = 10 };
+                return a.map(inc) + b.map(inc);
+            };
+        )",
+                                   {helpers::mock_file{"other.gh",
+                                                       R"(
+            pub const Wrap = fn(T: type): type {
+                return struct {
+                    w: T,
+                    pub const map = fn(&self, func: impl Fn(x: T): auto): auto { return func(self.w) * 2; };
+                };
+            };
+        )",
+                                                       "other"}}) == 2 + 22);
 }
 
 } // namespace ghoti::tests
