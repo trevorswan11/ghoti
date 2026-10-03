@@ -59,7 +59,7 @@ test "PageAllocator: alloc/write/free round-trips through the global singleton" 
             buf[63] = 7u8;
             @expect(buf[0] == 42u8);
             @expect(buf[63] == 7u8);
-            std.heap.page_allocator.free(u8, buf);
+            std.heap.page_allocator.free(buf);
         },
         .err => @panic("PageAllocator.alloc failed"),
     }
@@ -71,7 +71,7 @@ test "PageAllocator: a local instance also works, not just the global singleton"
     match (a.alloc(u8, std.os.page_size() * 2uz)) {
         .ok => |buf| {
             buf[0] = 1u8;
-            a.free(u8, buf);
+            a.free(buf);
         },
         .err => @panic("PageAllocator.alloc failed"),
     }

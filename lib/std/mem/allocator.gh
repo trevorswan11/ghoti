@@ -115,7 +115,8 @@ pub const Allocator = struct {
     /// Free an array allocated with `alloc`.
     /// If memory has length 0, free is a no-op.
     /// To free a single item, see `destroy`.
-    pub const free = fn(self, T: type, mem: []mut T): void {
+    pub const free = fn(self, mem: []mut auto): void {
+        const T = @TypeOf(mem[0]);
         let mut size: usize = undefined;
         let overflowed = @mulWithOverflow(@sizeOf(T), mem.len, ^mut size);
         @assert(!overflowed, "Attempt to free overflowed allocation");
