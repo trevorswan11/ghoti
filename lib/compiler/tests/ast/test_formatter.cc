@@ -878,6 +878,12 @@ TEST_CASE("formatter round trip: parameter packs") {
     round_trips("const use = fn(): void { dump(a, rest..., b); };");
 }
 
+TEST_CASE("formatter round trip: `auto` patterns and `impl Fn`") {
+    round_trips("const f = fn(a: &mut auto, b: []auto, c: [3]auto, d: ^^auto): void {};");
+    round_trips("const f = fn(g: impl Fn(n: i32): auto, h: &impl Fn(x: []auto): bool): void {};");
+    round_trips("const f = fn(xs: []impl Area): void {};");
+}
+
 TEST_CASE("formatter round trip: nested module") {
     round_trips(R"(pub const main = fn(): i32 {
     let mut u = U{ .b = 7 };

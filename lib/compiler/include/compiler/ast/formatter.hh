@@ -191,6 +191,8 @@ class formatter {
     auto consume_trailing_comment(usize line) -> syntax::doc_id;
     auto consume_dangling_comments(usize brace_line) -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;
+    // A parameter's type, with an `impl` bound in place of the `auto` it desugared to
+    auto format_param_type(explicit_type_id type, syntax::doc_id bound) -> syntax::doc_id;
 
   private:
     std::ostream&             out_;
@@ -201,6 +203,8 @@ class formatter {
     std::string_view          source_;
     std::vector<comment_item> comments_;
     usize                     comment_idx_{0};
+    // An `impl` parameter's bound, rendered where its desugared `auto` sits (`[]impl I`)
+    stdx::option<syntax::doc_id> auto_replacement_;
 };
 
 } // namespace ghoti::ast

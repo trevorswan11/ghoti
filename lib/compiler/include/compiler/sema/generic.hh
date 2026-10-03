@@ -84,13 +84,15 @@ class generic_function_registry {
     }
 
     // For `mangle_arg_type` to distinguish e.g. `foo(Vec(i32))` from `foo(Vec(i64))`.
-    auto set_clone_disc(const type& clone, std::string disc) -> void {
-        clone_discs_.insert_or_assign(&clone, std::move(disc));
+    // Keyed by instance id so a `const`/`volatile` twin of the clone mangles the same.
+    auto set_clone_disc(u64 instance_id, std::string disc) -> void {
+        clone_discs_.insert_or_assign(instance_id, std::move(disc));
     }
 
-    [[nodiscard]] auto get_clone_disc(const type& clone) const noexcept
+    [[nodiscard]] auto get_clone_disc(u64 instance_id) const noexcept
         -> stdx::option<std::string_view> {
-        if (const auto it{clone_discs_.find(&clone)}; it != clone_discs_.end()) {
+        if (instance_id == 0) { return stdx::none; }
+        if (const auto it{clone_discs_.find(instance_id)}; it != clone_discs_.end()) {
             return std::string_view{it->second};
         }
         return stdx::none;
@@ -99,7 +101,7 @@ class generic_function_registry {
   private:
     ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
     ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
-    ankerl::unordered_dense::map<const type*, std::string>           clone_discs_;
+    ankerl::unordered_dense::map<u64, std::string>                   clone_discs_;
 };
 
 struct generic_instantiation_request {

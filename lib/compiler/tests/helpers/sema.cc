@@ -260,8 +260,9 @@ auto struct_members(std::string_view input, std::string_view name) -> std::vecto
     return out;
 }
 
-auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
-    auto [ctx, idx]{helpers::resolve(src)};
+auto resolver_error_codes(std::string_view src, const std::vector<mock_file>& imports)
+    -> std::vector<sema::error> {
+    auto [ctx, idx]{helpers::resolve(src, imports)};
     std::vector<sema::error> codes;
     if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
@@ -269,8 +270,8 @@ auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
     return codes;
 }
 
-auto raised(std::string_view src, sema::error code) -> bool {
-    const auto codes{resolver_error_codes(src)};
+auto raised(std::string_view src, sema::error code, const std::vector<mock_file>& imports) -> bool {
+    const auto codes{resolver_error_codes(src, imports)};
     return std::ranges::contains(codes, code);
 }
 

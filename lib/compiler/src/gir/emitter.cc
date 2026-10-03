@@ -4573,15 +4573,14 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             generic_target_fn.emplace(*gi->fn_expr);
         }
     }
-    // A `y: @TypeOf(x)` parameter is only typed in the monomorph, so its argument converts to that
+    // A generic's parameter (`x: auto`, `y: @TypeOf(x)`, `p: &auto`) is only typed in the
+    // monomorph, so its argument converts to that
     const auto instantiated_param{[&](usize i) -> stdx::option<sema::type&> {
         if (!generic_target_fn || !callee_name || i >= generic_target_fn->parameters.size()) {
             return stdx::none;
         }
         const auto& params{generic_target_fn->parameters};
-        if (params[i].explicit_type.get_token_type() != syntax::token_type_t::BUILTIN_TYPE_OF) {
-            return stdx::none;
-        }
+        if (params[i].is_pack) { return stdx::none; }
         const auto runtime_idx{static_cast<usize>(std::ranges::count_if(
             params | std::views::take(i), [](const auto& p) { return !p.is_comptime; }))};
         for (const auto& req : active_mod().generic_instantiations) {

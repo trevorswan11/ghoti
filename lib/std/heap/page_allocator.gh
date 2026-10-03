@@ -54,14 +54,14 @@ impl std.mem.AllocatorVTable for PageAllocator {
 test "PageAllocator: alloc/write/free round-trips through the global singleton" {
     match (std.heap.page_allocator.alloc(u8, 64uz)) {
         .ok => |buf| {
+            defer std.heap.page_allocator.free(buf);
             @expect(buf.len == 64uz);
             buf[0] = 42u8;
             buf[63] = 7u8;
             @expect(buf[0] == 42u8);
             @expect(buf[63] == 7u8);
-            std.heap.page_allocator.free(u8, buf);
         },
-        .err => @panic("PageAllocator.alloc failed"),
+        .err => @expect(false, "PageAllocator.alloc failed"),
     }
 }
 
@@ -70,9 +70,22 @@ test "PageAllocator: a local instance also works, not just the global singleton"
     let a = std.mem.Allocator{ .vtable = ^mut local };
     match (a.alloc(u8, std.os.page_size() * 2uz)) {
         .ok => |buf| {
+            defer a.free(buf);
             buf[0] = 1u8;
-            a.free(u8, buf);
         },
-        .err => @panic("PageAllocator.alloc failed"),
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: create/destroy round-trips a single item" {
+    const Pair = struct { a: u64, b: u32 };
+    match (std.heap.page_allocator.create(Pair)) {
+        .ok => |p| {
+            defer std.heap.page_allocator.destroy(p);
+            p.a = 1u64;
+            p.b = 2u32;
+            @expect(p.a + @as(u64, p.b) == 3u64);
+        },
+        .err => @expect(false, "PageAllocator.create failed"),
     }
 }

@@ -136,6 +136,33 @@ const closure = move fn(): i32 { return val; };` }
 };` }
 		</code>
 	</pre>
+	<ul>
+		<li>
+			Writing <code>auto</code> under pointer, reference, slice, and array levels restricts what it deduces from: each level must match the argument, and <code>auto</code> binds what's left
+			<ul>
+				<li><code>{ "x: &auto" }</code> takes a <code>{ "&T" }</code> (or a <code>{ "&mut T" }</code>, viewed as constant) and binds <code>T</code>; a plain <code>T</code> value is an error, like it is for a <code>{ "&T" }</code> parameter</li>
+				<li><code>{ "&mut auto" }</code> and <code>{ "^mut auto" }</code> need a mutable argument, <code>{ "[]mut auto" }</code> mutable elements, and <code>{ "[3]auto" }</code> an array of exactly that length</li>
+				<li><code>{ "mut?" }</code> takes the argument's own mutability, and levels nest (<code>{ "&[]auto" }</code>, <code>{ "^^auto" }</code>)</li>
+				<li><code>impl I</code> works in the same positions, checking <code>I</code> against what <code>auto</code> bound to (<code>{ "xs: []impl Area" }</code>)</li>
+			</ul>
+		</li>
+		<li>
+			<code>impl Fn(...): R</code> is an <code>auto</code> parameter that only accepts a callable with exactly that signature: a function, a closure, an erased <code>fn</code> value, or a <code>^fn</code>
+			<ul>
+				<li>Parameter and return types must match exactly; the parameter names are only documentation</li>
+				<li><code>auto</code> in the signature deduces from the callable instead (<code>{ "impl Fn(v: T): auto" }</code>, <code>{ "impl Fn(x: auto): bool" }</code>)</li>
+				<li>A mismatch is an error at the call, naming the parameter that differs, rather than somewhere inside the generic's body</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const sum = fn(xs: []auto): i64 { ... };      // any slice, read-only
+const fill = fn(xs: []mut auto, v: auto): void { ... };
+const map = fn(&self, f: impl Fn(v: T): auto): auto { ... }; // f(v) gives the new type
+const count = fn(xs: []auto, keep: impl Fn(x: auto): bool): usize { ... };` }
+		</code>
+	</pre>
 	<h2>Builtin Functions &amp; Self Recursion</h2>
 	<ul>
 		<li>Builtin functions are prefixed with the <code>{ "@" }</code> symbol and are always camelCase</li>

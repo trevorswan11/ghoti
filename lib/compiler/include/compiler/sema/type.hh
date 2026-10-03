@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -177,6 +178,19 @@ class type;
 
 // Declared names of user struct/enum/union types, keyed by their type
 using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+
+// What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
+struct param_bound {
+    u32                      param_index;
+    std::vector<const type*> interfaces;
+    // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
+    // constructor's parameters
+    stdx::option<ast::explicit_type_id> callable;
+};
+
+// Every generic function's parameter bounds for a caller in any module to check
+using param_bound_map =
+    ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
 
 // Why an implicit `from` -> `to` conversion is rejected, naming user types through `names`
 [[nodiscard]] auto cast_rejection_reason(const type&                        from,
@@ -586,6 +600,17 @@ class type {
     [[nodiscard]] auto get_symbol_table_idx() const noexcept { return *symbol_table_idx_; }
     [[nodiscard]] auto get_symbol_table_idx_opt() const noexcept { return symbol_table_idx_; }
 
+    // Tells apart the instances of one type constructor, which all share its body's scope. Zero
+    // for a type that is not a constructor instance (or is the ctor's own template).
+    constexpr auto     set_instance_id(u64 id) noexcept -> void { instance_id_ = id; }
+    [[nodiscard]] auto get_instance_id() const noexcept -> u64 { return instance_id_; }
+
+    // A modifier twin (`const`/`volatile`) denotes the same nominal type as `src`
+    constexpr auto copy_identity_from(const type& src) noexcept -> void {
+        if (src.symbol_table_idx_) { symbol_table_idx_.emplace(*src.symbol_table_idx_); }
+        if (src.instance_id_ != 0) { instance_id_ = src.instance_id_; }
+    }
+
     [[nodiscard]] auto is_resolved() const noexcept -> bool {
         return !data_.is<types::unresolved>();
     }
@@ -637,6 +662,7 @@ class type {
   private:
     types::key_t   key_;
     stdx::opt_size symbol_table_idx_;
+    u64            instance_id_{0};
     data_t         data_;
 
     // Initialization is restricted to the pool's arena exclusively
@@ -749,7 +775,7 @@ class type_pool {
         key.set_mut(key.get_mut() | types::mut::CONSTANT);
         auto new_type{(*this)[key]};
         new_type->template resolve_if<type::data_t>(t.get_data());
-        if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
+        new_type->copy_identity_from(t);
         return new_type;
     }
 
@@ -762,7 +788,7 @@ class type_pool {
         key.set_mut(key.get_mut() | types::mut::VOLATILE);
         auto new_type{(*this)[key]};
         new_type->template resolve_if<type::data_t>(t.get_data());
-        if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
+        new_type->copy_identity_from(t);
         return new_type;
     }
 

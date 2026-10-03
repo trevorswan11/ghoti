@@ -134,15 +134,17 @@ TEST_CASE("Illegal auto usage in type aliases and function types") {
     }
 
     SECTION("Array type cannot have auto element type") {
-        helpers::test_resolver_fail("let mut a: [5]auto = undefined;",
-                                    sema::diagnostic{"Array elements cannot have type 'auto'",
-                                                     sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 14UZ}});
+        helpers::test_resolver_fail(
+            "let mut a: [5]auto = undefined;",
+            sema::diagnostic{"Array elements can only have type 'auto' in a function parameter",
+                             sema::error::ILLEGAL_AUTO_USAGE,
+                             std::pair{0UZ, 14UZ}});
 
-        helpers::test_resolver_fail("let mut a: []auto = undefined;",
-                                    sema::diagnostic{"Array elements cannot have type 'auto'",
-                                                     sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 13UZ}});
+        helpers::test_resolver_fail(
+            "let mut a: []auto = undefined;",
+            sema::diagnostic{"Array elements can only have type 'auto' in a function parameter",
+                             sema::error::ILLEGAL_AUTO_USAGE,
+                             std::pair{0UZ, 13UZ}});
     }
 }
 

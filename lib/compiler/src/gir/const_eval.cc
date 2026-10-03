@@ -3934,6 +3934,32 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
         }
     }
 
+    // `const A = Box;` / `pub const Result = result.Result;` name the constructor they alias
+    for (usize hops{0}; callee_mod && callee_sym && hops < 16; ++hops) {
+        const auto node{callee_sym->get_data().as_opt<sema::symbols::node_t>()};
+        const auto decl{node ? callee_mod->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (!decl || !decl->value) { break; }
+        if (const auto alias{callee_mod->ast.get_as_opt<ast::identifier_expr>(*decl->value)}) {
+            if (!callee_mod->root_table_idx) { break; }
+            const auto next{ctx_.registry.get_from_opt(*callee_mod->root_table_idx, alias->name)};
+            if (!next) { break; }
+            callee_sym = next;
+        } else if (const auto alias_dot{callee_mod->ast.get_as_opt<ast::dot_expr>(*decl->value)}) {
+            const auto prev_mod{module_.get()};
+            set_module(*callee_mod);
+            const auto target{resolve_module_chain(alias_dot->object)};
+            set_module(*prev_mod);
+            if (!target || !target->root_table_idx) { break; }
+            const auto& member{callee_mod->ast.get_as<ast::identifier_expr>(alias_dot->member)};
+            const auto  next{ctx_.registry.get_from_opt(*target->root_table_idx, member.name)};
+            if (!next) { break; }
+            callee_mod.emplace(*target);
+            callee_sym = next;
+        } else {
+            break;
+        }
+    }
+
     if (callee_mod && callee_sym) {
         const auto node{callee_sym->get_data().as_opt<sema::symbols::node_t>()};
         const auto decl{node ? callee_mod->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
@@ -3941,9 +3967,9 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             (decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
              decl->has_modifier(ast::decl_modifiers::LET))) {
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
-                // Outside any const-evaluated body, a constructor call's own node already holds
-                // this instantiation's aggregate
-                if (id.is_valid() && call_stack_.size() <= 1 &&
+                // Outside any const-evaluated function body (a `comptime` block's own frames are
+                // fine), a constructor call's own node already holds this instantiation's aggregate
+                if (id.is_valid() && return_types_.empty() &&
                     fn_expr->explicit_return_type.get_token_type() ==
                         syntax::token_type_t::TYPE_TYPE) {
                     if (const auto built{module_->get_sema_type_opt(id)}) {

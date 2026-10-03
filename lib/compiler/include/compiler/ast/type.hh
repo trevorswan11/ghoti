@@ -37,6 +37,7 @@ struct explicit_function_type {
     bool                           has_explicit_conv{false};
     bool                           is_extern{false}; // thin C-ABI code pointer, never erased
     bool                           is_dyn_fn{false}; // spelled `dyn Fn(...)`, sugar for `fn(...)`
+    bool is_impl_fn{false}; // spelled `impl Fn(...)`, a parameter's callable bound
 
     // allow_trailing_brace lets an aggregate literal's own '{' follow without misreading it
     [[nodiscard]] static auto parse(syntax::parser& parser, bool allow_trailing_brace = false)

@@ -166,6 +166,10 @@ struct context {
     // Module constant pts whose initializers are being folded, so one reading itself is caught
     ankerl::unordered_dense::set<uptr> globals_in_evaluation;
 
+    // Generic function's parameter bounds by function literal so each of a type ctor's
+    // per-instantiation members shares them
+    param_bound_map& param_bounds;
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 
     context(mod::module_manager&         modules,
@@ -181,7 +185,8 @@ struct context {
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
           diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
-          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()} {}
+          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()},
+          param_bounds{*arena.make<param_bound_map>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -196,7 +201,8 @@ struct context {
           comptime_binding_frames{other.comptime_binding_frames},
           comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},
-          embed_cache{other.embed_cache}, env_epoch{other.env_epoch} {}
+          embed_cache{other.embed_cache}, env_epoch{other.env_epoch},
+          param_bounds{other.param_bounds} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

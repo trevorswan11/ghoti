@@ -884,11 +884,24 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     });
 }
 
+auto formatter::format_param_type(explicit_type_id type, syntax::doc_id bound) -> syntax::doc_id {
+    if (bound == doc_manager_.nil()) { return format(type); }
+    auto_replacement_ = bound;
+    auto doc{format(type)};
+    auto_replacement_.reset();
+    return doc;
+}
+
 auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
     // `impl I` / `impl (A + B)` parameters are stored desugared to `auto`; re-render the sugar.
     const auto impl_bound_for{[&](usize idx) -> syntax::doc_id {
         for (const auto& b : node.impl_bounds) {
             if (b.param_index != idx) { continue; }
+            // `impl Fn(...)` renders itself
+            if (b.interfaces.size() == 1 &&
+                b.interfaces.front().get_kind() == explicit_type_kind::FUNCTION) {
+                return format(b.interfaces.front());
+            }
             std::vector<syntax::doc_id> parts;
             for (usize i{0}; i < b.interfaces.size(); ++i) {
                 if (i != 0) { parts.emplace_back(doc_manager_.text(" + ")); }
@@ -918,13 +931,12 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
                 doc_manager_.concat({format(param.name), doc_manager_.text("...")}));
             continue;
         }
-        params.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
-             format(param.name),
-             doc_manager_.text(": "),
-             bound == doc_manager_.nil() ? format(param.explicit_type)
-                                         : with_modifier(param.explicit_type, bound),
-             doc_manager_.text(param.is_pack ? "..." : "")}));
+        params.emplace_back(
+            doc_manager_.concat({doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
+                                 format(param.name),
+                                 doc_manager_.text(": "),
+                                 format_param_type(param.explicit_type, bound),
+                                 doc_manager_.text(param.is_pack ? "..." : "")}));
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
@@ -1613,6 +1625,9 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
 auto formatter::visit(node_id, stdx::monostate) -> syntax::doc_id { return doc_manager_.text("_"); }
 
 auto formatter::visit(explicit_type_id id, const identifier_expr& node) -> syntax::doc_id {
+    if (auto_replacement_ && id.get_token_type() == syntax::token_type_t::AUTO_TYPE) {
+        return with_modifier(id, *std::exchange(auto_replacement_, stdx::none));
+    }
     if (id.get_token_type() == syntax::token_type_t::IDENT &&
         syntax::identifier_needs_raw(node.name)) {
         return with_modifier(id, doc_manager_.owned(raw_identifier(node.name)));
@@ -1655,7 +1670,10 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
 
     const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
-    const auto keyword{node.is_dyn_fn ? "dyn Fn" : node.is_extern ? "extern fn" : "fn"};
+    const auto keyword{node.is_dyn_fn    ? "dyn Fn"
+                       : node.is_impl_fn ? "impl Fn"
+                       : node.is_extern  ? "extern fn"
+                                         : "fn"};
     return with_modifier(
         id,
         doc_manager_.concat({
