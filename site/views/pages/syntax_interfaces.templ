@@ -35,7 +35,7 @@ templ SyntaxInterfacesPage() {
 			An interface is <strong>not</strong> a value type
 			<ul>
 				<li>A bare <code>w: Writer</code> binding is rejected</li>
-				<li>An interface may appear in value position only as <code>&amp;dyn I</code> / <code>^dyn I</code>, or through the <code>impl I</code> parameter sugar</li>
+				<li>An interface may appear in value position only as <code>&amp;dyn I</code> / <code>^dyn I</code>, or through the <code>impl I</code> parameter sugar, which may also sit under a pattern like <code>{ "&impl I" }</code> or <code>{ "[]impl I" }</code></li>
 			</ul>
 		</li>
 		<li>Inside an interface body, <code>{ "@this()" }</code> denotes the implementing type</li>

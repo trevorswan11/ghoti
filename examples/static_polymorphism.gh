@@ -14,5 +14,5 @@ const run = fn(d: &impl Doubler, n: i32): i32 {
 
 pub const main = fn(): i32 {
     let mut t = Twice{ .k = 3 };
-    return run(t, 14);
+    return run(&t, 14);
 };

@@ -15,11 +15,8 @@ pub const Result = fn(T: type, E: type): type {
 
         /// The successful result of a `Result(void, E)`
         pub const done: @This() = .{ .ok = {} };
-        pub const map = fn(&self, func: auto): auto {
-            const fn_info = @typeInfo(@TypeOf(func));
-            @assert(fn_info == .function, "map requires a function argument");
-            const NewOk = fn_info.function.return_type;
-            const NewRes = Result(NewOk, E);
+        pub const map = fn(&self, func: impl Fn(val: T): auto): auto {
+            const NewRes = Result(@typeInfo(@TypeOf(func)).function.return_type, E);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = func(happy) },
@@ -27,11 +24,8 @@ pub const Result = fn(T: type, E: type): type {
             };
         };
 
-        pub const map_err = fn(&self, func: auto): auto {
-            const fn_info = @typeInfo(@TypeOf(func));
-            @assert(fn_info == .function, "map_err requires a function argument");
-            const NewErr = fn_info.function.return_type;
-            const NewRes = Result(T, NewErr);
+        pub const map_err = fn(&self, func: impl Fn(err: E): auto): auto {
+            const NewRes = Result(T, @typeInfo(@TypeOf(func)).function.return_type);
 
             return match (self) {
                 .ok => |happy| NewRes{ .ok = happy },
@@ -91,6 +85,16 @@ test "Result.map_err transforms error variant" {
     @expect(match (mapped_u8) {
         .ok => false,
         .err => |e| e == 7,
+    });
+}
+
+test "Result.map takes a capturing closure" {
+    let offset: i64 = 40;
+    let a: Result(i32, bool) = .of(2);
+    let mapped = a.map(fn(val: i32): i64 { return @as(i64, val) + offset; });
+    @expect(match (mapped) {
+        .ok => |o| o == 42,
+        .err => false,
     });
 }
 

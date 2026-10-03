@@ -679,11 +679,21 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed crashes on valid code: `-2 != 0.25` in a condition, and `@shlWithOverflow(a, 3, &mut out)` with an untyped shift count
 - Fixed: a function literal passed straight to a `comptime f: fn(...)` parameter (`apply(fn(n: i32): i32 { return n + 1; }, 4)`) was rejected as not compile-time
 - Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
+- `auto` under pointer, reference, slice, and array levels restricts what it deduces from (#362): `x: &auto`, `p: ^mut auto`, `xs: []auto`, `xs: []mut auto`, `xs: [3]auto`, `x: &mut? auto`, and nestings like `&[]auto` or `^^auto`
+    - each level must match the argument and `auto` binds what's left, so `&auto` given `&mut i64` makes the parameter `&i64`
+    - `impl I` works in the same positions (`xs: []impl Area`, `x: &impl Area`) and checks `I` against what `auto` bound to
+    - **Breaking:** an argument that doesn't match is an error at the call; before, `x: &auto` and `x: ^auto` silently took a plain value and became that value's type
+- `impl Fn(v: T): R` parameters accept any function, closure, erased `fn` value, or `^fn` whose signature is exactly that, and report a mismatch at the call (#362)
+    - `auto` in the signature deduces from the callable: `impl Fn(v: T): auto`, `impl Fn(x: auto): bool`
+- Fixed: `impl I` bounds were never checked for a call from another module or from inside another generic's body
+- Fixed: a plain `auto` parameter given a reference (`f(&a)`) failed with a mismatch between the reference and its referent
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
+- `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
+- Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 
 ## Tooling
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
