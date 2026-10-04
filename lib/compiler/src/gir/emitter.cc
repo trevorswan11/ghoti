@@ -99,7 +99,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
             [&](const ast::impl_stmt& impl) { emit_top_level_impl(id, impl); },
             [&](const ast::test_stmt& test) {
-                if (emit_tests) { emit_top_level_test(id, test); }
+                // Outside a test build the resolver leaves test bodies unchecked
+                if (emit_tests && ctx_.testing) { emit_top_level_test(id, test); }
             },
             [&](const ast::block_stmt& block) {
                 if (block.is_comptime) {

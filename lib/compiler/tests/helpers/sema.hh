@@ -178,16 +178,18 @@ struct sema_test_context {
 using ctx_idx_pair = std::pair<stdx::box<sema_test_context>, usize>;
 
 // Collects the assumed-syntactically-valid input and returns the analyzer and parent table index
-[[nodiscard]] auto collect(std::string_view input, const std::vector<mock_file>& imports = {})
-    -> ctx_idx_pair;
+[[nodiscard]] auto collect(std::string_view              input,
+                           const std::vector<mock_file>& imports = {},
+                           bool                          testing = true) -> ctx_idx_pair;
 
 // Collects the assumed-syntactically-valid input and checks for no errors
 auto collect_and_check(std::string_view input, const std::vector<mock_file>& imports = {})
     -> ctx_idx_pair;
 
 // Resolves the input and returns the parent table index
-[[nodiscard]] auto resolve(std::string_view input, const std::vector<mock_file>& imports = {})
-    -> ctx_idx_pair;
+[[nodiscard]] auto resolve(std::string_view              input,
+                           const std::vector<mock_file>& imports = {},
+                           bool                          testing = true) -> ctx_idx_pair;
 
 // Resolves the input, checks errors, asserts 100% symbol resolution, and returns the parent index
 auto resolve_and_check(std::string_view input, const std::vector<mock_file>& imports = {})
@@ -269,10 +271,14 @@ auto test_resolver_fail(std::string_view failing, Ds&&... expected_diagnostics) 
     return test_resolver_fail(failing, {}, std::forward<Ds>(expected_diagnostics)...);
 }
 
-auto type_check(std::string_view input, const std::vector<mock_file>& imports = {}) -> ctx_idx_pair;
+// `testing` (the default) analyzes as a test executable does: test blocks and `@cfg(testing)`
+auto type_check(std::string_view              input,
+                const std::vector<mock_file>& imports = {},
+                bool                          testing = true) -> ctx_idx_pair;
 
-auto type_check_and_verify(std::string_view input, const std::vector<mock_file>& imports = {})
-    -> ctx_idx_pair;
+auto type_check_and_verify(std::string_view              input,
+                           const std::vector<mock_file>& imports = {},
+                           bool                          testing = true) -> ctx_idx_pair;
 
 // Tests a type-checking failing input against expected diagnostics
 template <std::same_as<sema::diagnostic>... Ds>

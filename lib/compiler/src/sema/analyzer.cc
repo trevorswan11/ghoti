@@ -79,6 +79,29 @@ namespace {
     return roots;
 }
 
+// A library's interface is what it exports; everything else it holds (its copy of `std`, say)
+// stays internal so it can't collide with the program's own. A `panic_handler` / `assert_handler`
+// override stays visible but weak, since the program linking it defines its own that must win
+auto internalize_library(gir::module& mod) -> void {
+    constexpr std::array handlers{std::string_view{"panic_handler"},
+                                  std::string_view{"assert_handler"},
+                                  std::string_view{"expect_handler"},
+                                  std::string_view{"require_handler"},
+                                  std::string_view{"skip_handler"}};
+    for (auto* fn : mod.get_functions()) {
+        if (fn->get_linkage() == gir::linkage::INTERNAL) { continue; }
+        const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
+        if (std::ranges::contains(handlers, symbol)) {
+            fn->set_weak(true);
+        } else if (fn->get_linkage() == gir::linkage::PUBLIC) {
+            fn->set_linkage(gir::linkage::INTERNAL);
+        }
+    }
+    for (auto* g : mod.get_globals()) {
+        if (g->linkage == gir::linkage::PUBLIC) { g->linkage = gir::linkage::INTERNAL; }
+    }
+}
+
 constexpr std::array supported_archs{
     "x86_64",
     "aarch64",
@@ -204,6 +227,7 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_executable)
     -> stdx::result<gir::module, diagnostic> {
     PROFILE_FUNCTION();
+    if (for_test_executable) { ctx_.testing = true; }
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
         return make_sema_err(std::move(module_result.error()).get_message(),
@@ -337,8 +361,11 @@ auto analyzer::lower_artifact(gir::module&                      gir_module,
     case build_artifact::EXECUTABLE: return emit_llvm_ir_executable(gir_module, context, options);
     case build_artifact::TEST_EXECUTABLE:
         return emit_llvm_ir_test_executable(gir_module, context, options);
-    case build_artifact::LIBRARY: gir_module.prune_unreachable(export_roots(gir_module)); break;
-    case build_artifact::OBJECT:  gir_module.prune_unreachable({}); break;
+    case build_artifact::LIBRARY:
+        gir_module.prune_unreachable(export_roots(gir_module));
+        internalize_library(gir_module);
+        break;
+    case build_artifact::OBJECT: gir_module.prune_unreachable({}); break;
     }
     return emit_llvm_ir(gir_module, context, options);
 }

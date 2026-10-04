@@ -696,6 +696,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Diagnostics and `@typeName` name a type constructor's instance by its arguments (`Box(u8)`, `Arr(i32, 4)`) instead of `struct`
 - Fixed: a type constructor member whose signature names its own constructor (`fn(&self): Pair(i64)` inside `Pair`, or a dependent `Result(U, E)` return inside `Result`) recursed forever, crashed, or mixed up the instances' field and parameter types
 - Fixed: a generic member called on two instances of one type constructor (`Box(u8).make(f)` and `Box(i64).make(f)`), or same-named generic members of unrelated types, shared one instantiation
+- `@cfg(testing)` and `@cfgValue(testing)` are true while building a test executable (`ghoti test`), so test-only helpers can sit next to the code they test
+    - **Breaking:** `test` blocks are only checked in a test build; `build-*` and `run` no longer report errors inside them
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -717,7 +719,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `--no-compiler-rt` on `build-exe`, `build-lib`, `run`, and `test` skips it
     - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
+    - `lib/compiler_rt` can `import std;` like any program
 - Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
+- **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
 - LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version

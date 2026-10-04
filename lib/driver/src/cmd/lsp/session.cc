@@ -21,6 +21,8 @@ namespace ghoti::lsp {
 analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& error_stream) noexcept
     : manager_{loader}, analyzer_{manager_, error_stream, false, {}, true} {
     PROFILE_FUNCTION();
+    // The editor checks test blocks too
+    analyzer_.set_testing(true);
     const auto stdlib_path{mod::find_stdlib()};
     if (!stdlib_path) {
         fmt::println(error_stream, "could not locate the ghoti standard library");

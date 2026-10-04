@@ -43,7 +43,8 @@ using syntax::token_type_t;
 
 [[nodiscard]] auto is_cfg_atom(std::string_view name) -> bool {
     return name == "os" || name == "arch" || name == "abi" || name == "family" ||
-           name == "endian" || name == "ptr_bits" || name == "optimize" || name == "safety";
+           name == "endian" || name == "ptr_bits" || name == "optimize" || name == "safety" ||
+           name == "testing";
 }
 
 struct atom_enum_info {
@@ -108,7 +109,7 @@ constexpr std::array<std::string_view, 4>  OPTIMIZE_MEMBERS{
     if (atom == "family") { return atom_enum_info{"Family", FAMILY_MEMBERS}; }
     if (atom == "endian") { return atom_enum_info{"Endian", ENDIAN_MEMBERS}; }
     if (atom == "optimize") { return atom_enum_info{"OptimizeMode", OPTIMIZE_MEMBERS}; }
-    return stdx::none; // `ptr_bits` is integer-typed and `safety` is a bool, not enums
+    return stdx::none; // `ptr_bits` is integer-typed, `safety` and `testing` are bools
 }
 
 // The closest canonical member to `needle`, if one is within a small edit distance.
@@ -275,6 +276,7 @@ auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
     PROFILE_FUNCTION();
     if (atom == "ptr_bits") { return cfg_value{static_cast<i64>(facts_.ptr_bits)}; }
     if (atom == "safety") { return cfg_value{ctx_.runtime_safety}; }
+    if (atom == "testing") { return cfg_value{ctx_.testing}; }
     return cfg_value{cfgval::member{atom_value_str(atom)}};
 }
 

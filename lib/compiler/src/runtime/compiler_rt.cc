@@ -99,6 +99,15 @@ struct archive_memo {
     std::ostringstream  diagnostics;
     mod::file_loader    loader;
     mod::module_manager manager{loader};
+    // The builtins may use `std` like any program does
+    if (const auto stdlib_path{mod::find_stdlib()}) {
+        if (auto registered{manager.add_library_module("std", *stdlib_path)}; !registered) {
+            return stdx::err{build_failed(
+                triple,
+                fmt::format("failed to register the standard library: {}",
+                            registered.error().get_message().value_or("unknown error")))};
+        }
+    }
 
     // Builtins are always optimized and never panic, whatever the program being linked asks for
     auto rt_target{target_opts};

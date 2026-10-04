@@ -100,9 +100,11 @@ auto sema_test_context::get_string_literal_size(ast::expr_handle           handl
     return str_expr.value.size();
 }
 
-auto collect(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
+auto collect(std::string_view input, const std::vector<mock_file>& imports, bool testing)
+    -> ctx_idx_pair {
     auto ctx{stdx::make_box<sema_test_context>(imports, TEST_FILENAME, input)};
     check_errors<syntax::diagnostics>(ctx->root_mod);
+    ctx->analyzer.set_testing(testing);
     ctx->analyzer.collect_symbols(ctx->root_mod);
     usize idx{UNWRAP(ctx->root_mod.root_table_idx)};
     return {std::move(ctx), idx};
@@ -115,8 +117,9 @@ auto collect_and_check(std::string_view input, const std::vector<mock_file>& imp
     return {std::move(ctx), idx};
 }
 
-auto resolve(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
-    auto [ctx, idx]{collect(input, imports)};
+auto resolve(std::string_view input, const std::vector<mock_file>& imports, bool testing)
+    -> ctx_idx_pair {
+    auto [ctx, idx]{collect(input, imports, testing)};
     ctx->analyzer.resolve_types(ctx->root_mod);
     return {std::move(ctx), idx};
 }
@@ -149,8 +152,9 @@ auto type_check_for_target(std::string_view input, std::string_view target_tripl
     return {std::move(ctx), idx};
 }
 
-auto type_check(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
-    auto [ctx, idx]{resolve(input, imports)};
+auto type_check(std::string_view input, const std::vector<mock_file>& imports, bool testing)
+    -> ctx_idx_pair {
+    auto [ctx, idx]{resolve(input, imports, testing)};
     if (!ctx->root_mod.is_poisoned()) {
         auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
         if (!ctx->root_mod.is_poisoned()) { ctx->analyzer.check_types(gir_mod, ctx->root_mod); }
@@ -158,9 +162,10 @@ auto type_check(std::string_view input, const std::vector<mock_file>& imports) -
     return {std::move(ctx), idx};
 }
 
-auto type_check_and_verify(std::string_view input, const std::vector<mock_file>& imports)
-    -> ctx_idx_pair {
-    auto [ctx, idx]{type_check(input, imports)};
+auto type_check_and_verify(std::string_view              input,
+                           const std::vector<mock_file>& imports,
+                           bool                          testing) -> ctx_idx_pair {
+    auto [ctx, idx]{type_check(input, imports, testing)};
     check_errors<sema::diagnostics>(ctx->root_mod);
     return {std::move(ctx), idx};
 }

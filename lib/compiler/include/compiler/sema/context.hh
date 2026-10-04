@@ -130,8 +130,10 @@ struct context {
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
     bool                    runtime_safety{true};
-    optimize_mode           build_mode{optimize_mode::DEBUG};
-    deprecation_policy      deprecated_policy{deprecation_policy::WARN};
+    // Building a test executable, which `@cfg(testing)` reports
+    bool               testing{false};
+    optimize_mode      build_mode{optimize_mode::DEBUG};
+    deprecation_policy deprecated_policy{deprecation_policy::WARN};
 
     // `path:line:column` of every deprecated use already reported, so re-resolution stays quiet
     ankerl::unordered_dense::set<std::string> reported_deprecations;
@@ -197,7 +199,8 @@ struct context {
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
           user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
-          build_mode{other.build_mode}, deprecated_policy{other.deprecated_policy},
+          testing{other.testing}, build_mode{other.build_mode},
+          deprecated_policy{other.deprecated_policy},
           comptime_binding_frames{other.comptime_binding_frames},
           comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},

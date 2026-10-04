@@ -12619,6 +12619,10 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
 
 auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
     PROFILE_FUNCTION();
+    // Only a test build runs tests, so only it checks them (they may use `@cfg(testing)` code)
+    if (!ctx_.testing) {
+        return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
+    }
     auto& test_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
     if (!test_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }

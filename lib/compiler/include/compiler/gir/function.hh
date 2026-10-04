@@ -85,6 +85,7 @@ class function {
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
+    auto set_linkage(gir::linkage linkage) -> void { linkage_ = linkage; }
     auto set_attributes(const sema::resolved_attributes& attributes) -> void {
         attributes_ = attributes;
     }

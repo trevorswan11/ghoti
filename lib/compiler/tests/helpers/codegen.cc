@@ -282,7 +282,7 @@ auto compile_and_run_captured(std::string_view source, const std::vector<mock_fi
 auto compile_and_run_tests(std::string_view                source,
                            const std::vector<mock_file>&   imports,
                            const std::vector<std::string>& extra_args) -> u32 {
-    auto  ctx_idx{type_check_and_verify(source, imports)};
+    auto  ctx_idx{type_check_and_verify(source, imports, true)};
     auto& test_ctx{*ctx_idx.first};
 
     llvm::LLVMContext context;

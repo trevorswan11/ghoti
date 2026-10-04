@@ -234,4 +234,42 @@ TEST_CASE("A link missing compiler builtins names them") {
     CHECK(skipped.contains("no builtins archive was linked"));
 }
 
+TEST_CASE("compiler_rt can use the standard library") {
+    const fixture_root rt{R"(
+        import std;
+        export const __addtf3 = fn(a: f128, b: f128): f128 {
+            let x: [2]u8 = .{ 1, 2 };
+            let y: [2]u8 = .{ 1, 2 };
+            if (std.mem.eql(u8, x[..], y[..])) { return b; }
+            return a;
+        };
+    )"};
+    CHECK(helpers::compile_and_run(f128_program, {}, rt.linker_options()) == 7);
+}
+
+TEST_CASE("compiler_rt's own functions stay internal to it") {
+    // The builtins and the program both define a `pub const twice`; only exports leave the archive
+    fixture_root rt{R"(
+        import "helpers.gh" as helpers;
+        export const __addtf3 = fn(a: f128, b: f128): f128 {
+            _ = a;
+            if (helpers.twice(2) == 4) { return b; }
+            return a;
+        };
+    )"};
+    rt.dir.write("helpers.gh", "pub const twice = fn(x: i32): i32 { return x * 2; };\n");
+    CHECK(helpers::compile_and_run(R"(
+        let mut a: f128 = 1.5;
+        let mut b: f128 = 2.25;
+        pub const twice = fn(x: i32): i32 { return x + x; };
+        pub const main = fn(_: [][:0]u8): i32 {
+            let c = a + b;
+            if (@bitCast(u128, c) == @bitCast(u128, b)) { return twice(3); }
+            return 3;
+        };
+    )",
+                                   {},
+                                   rt.linker_options()) == 6);
+}
+
 } // namespace ghoti::tests
