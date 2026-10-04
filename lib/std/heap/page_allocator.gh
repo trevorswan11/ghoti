@@ -79,6 +79,7 @@ test "PageAllocator: a local instance also works, not just the global singleton"
 
 test "PageAllocator: create/destroy round-trips a single item" {
     const Pair = struct { a: u64, b: u32 };
+
     match (std.heap.page_allocator.create(Pair)) {
         .ok => |p| {
             defer std.heap.page_allocator.destroy(p);

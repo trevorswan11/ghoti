@@ -24,6 +24,7 @@ test "Return type of local functions" {
     let func = fn(): bool {
         return true;
     };
+
     @expect(return_type(@TypeOf(func)) == bool);
 
     let mut a = 2;
@@ -31,6 +32,7 @@ test "Return type of local functions" {
         a += 1;
         return 1.0f32;
     };
+
     @expect(return_type(@TypeOf(closure)) == f32);
 }
 
@@ -45,6 +47,7 @@ test "Return type through erased values and pointers" {
     const twice = fn(x: i32): i32 {
         return x * 2;
     };
+
     let erased: fn(x: i32): i32 = twice;
     @expect(return_type(@TypeOf(erased)) == i32);
     @expect(return_type(@TypeOf(^twice)) == i32);
@@ -58,16 +61,19 @@ test "Return type of methods and aggregate results" {
         pub const of = fn(px: i32, py: i32): @This() {
             return .{ .x = px, .y = py };
         };
+
         pub const sum = fn(&self): i64 {
             return @as(i64, self.x) + @as(i64, self.y);
         };
     };
+
     @expect(return_type(@TypeOf(Point.of)) == Point);
     @expect(return_type(@TypeOf(Point.sum)) == i64);
 
     const parse = fn(s: []u8): std.Result(u32, bool) {
         return .of(@intCast(s.len));
     };
+
     @expect(return_type(@TypeOf(parse)) == std.Result(u32, bool));
 }
 
@@ -75,9 +81,11 @@ test "Return type names a dependent return type" {
     const apply = fn(f: auto): return_type(@TypeOf(f)) {
         return f();
     };
+
     const seven = fn(): u16 {
         return 7;
     };
+
     let got = apply(seven);
     @expect(@TypeOf(got) == u16);
     @expect(got == 7);

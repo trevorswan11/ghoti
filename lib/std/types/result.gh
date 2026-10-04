@@ -15,19 +15,23 @@ pub const Result = fn(T: type, E: type): type {
 
         /// The successful result of a `Result(void, E)`
         pub const done: @This() = .{ .ok = {} };
-        pub const map = fn(&self, func: impl Fn(val: T): auto): Result(std.meta.return_type(@TypeOf(func)), E) {
-            const NewRes = Result(std.meta.return_type(@TypeOf(func)), E);
+        pub const map = fn(&self, func: impl Fn(val: T): auto): Result(
+            std.meta.return_type(@TypeOf(func)),
+            E
+        ) {
             return match (self) {
-                .ok => |happy| NewRes{ .ok = func(happy) },
-                .err => |sad| NewRes{ .err = sad },
+                .ok => |happy| .{ .ok = func(happy) },
+                .err => |sad| .{ .err = sad },
             };
         };
 
-        pub const map_err = fn(&self, func: impl Fn(err: E): auto): Result(T, std.meta.return_type(@TypeOf(func))) {
-            const NewRes = Result(T, std.meta.return_type(@TypeOf(func)));
+        pub const map_err = fn(&self, func: impl Fn(err: E): auto): Result(
+            T,
+            std.meta.return_type(@TypeOf(func))
+        ) {
             return match (self) {
-                .ok => |happy| NewRes{ .ok = happy },
-                .err => |sad| NewRes{ .err = func(sad) },
+                .ok => |happy| .{ .ok = happy },
+                .err => |sad| .{ .err = func(sad) },
             };
         };
     };
@@ -89,7 +93,9 @@ test "Result.map_err transforms error variant" {
 test "Result.map takes a capturing closure" {
     let offset: i64 = 40;
     let a: Result(i32, bool) = .of(2);
-    let mapped = a.map(fn(val: i32): i64 { return @as(i64, val) + offset; });
+    let mapped = a.map(fn(val: i32): i64 {
+        return @as(i64, val) + offset;
+    });
     @expect(match (mapped) {
         .ok => |o| o == 42,
         .err => false,
