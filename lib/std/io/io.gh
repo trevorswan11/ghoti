@@ -1,9 +1,7 @@
 import "error.gh" as error;
-import "file.gh" as file;
 import "reader.gh" as reader;
 import "writer.gh" as writer;
 import "seeker.gh" as seeker;
-import "stdio.gh" as stdio;
 import "fixed_buffer.gh" as fixed_buffer;
 
 test {
@@ -11,17 +9,27 @@ test {
 }
 
 pub const Error = error.Error;
-pub const File = file.File;
 pub const Reader = reader.Reader;
 pub const Writer = writer.Writer;
 pub const Seeker = seeker.Seeker;
 pub const Whence = seeker.Whence;
 pub const FixedBufferStream = fixed_buffer.FixedBufferStream;
 
-pub const stdout = stdio.stdout;
-pub const stdin = stdio.stdin;
-pub const stderr = stdio.stderr;
-pub const print = stdio.print;
-pub const println = stdio.println;
-pub const eprint = stdio.eprint;
-pub const eprintln = stdio.eprintln;
+// Whether std has an OS backend for the target (the same test as `std.os.HAS_BACKEND`)
+const HAS_OS = @cfgValue(os == .macos or os == .windows or
+    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
+
+@cfg (HAS_OS) {
+    import "file.gh" as file;
+    import "stdio.gh" as stdio;
+
+    pub const File = file.File;
+
+    pub const stdout = stdio.stdout;
+    pub const stdin = stdio.stdin;
+    pub const stderr = stdio.stderr;
+    pub const print = stdio.print;
+    pub const println = stdio.println;
+    pub const eprint = stdio.eprint;
+    pub const eprintln = stdio.eprintln;
+}

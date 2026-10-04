@@ -708,6 +708,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
+- `import std;` works on every target, including ones std has no OS backend for (wasm, freestanding, Linux beyond x86_64 and aarch64)
+    - There `std.os` is empty, and the parts built on it are left out: `std.io.File` and the standard streams, `std.heap`'s page allocator, `std.mem.round_up_page`, the test runner, and std's panic and assert handlers (the builtin defaults trap instead)
+    - `std.os.HAS_BACKEND` says whether the target has one
 
 ## Tooling
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be

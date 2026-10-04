@@ -1,14 +1,20 @@
 import std;
 
-import "page_allocator.gh" as page_alloc;
+// Whether std has an OS backend for the target (the same test as `std.os.HAS_BACKEND`)
+const HAS_OS = @cfgValue(os == .macos or os == .windows or
+    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
 
-test {
-    import "page_allocator.gh";
+@cfg (HAS_OS) {
+    import "page_allocator.gh" as page_alloc;
+
+    test {
+        import "page_allocator.gh";
+    }
+
+    pub const PageAllocator = page_alloc.PageAllocator;
+
+    let mut page_alloc_impl: PageAllocator = .{};
+    pub let mut page_allocator: std.mem.Allocator = .{
+        .vtable = ^mut page_alloc_impl,
+    };
 }
-
-pub const PageAllocator = page_alloc.PageAllocator;
-
-let mut page_alloc_impl: PageAllocator = .{};
-pub let mut page_allocator: std.mem.Allocator = .{
-    .vtable = ^mut page_alloc_impl,
-};

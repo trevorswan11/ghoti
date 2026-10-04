@@ -2,6 +2,10 @@ import std;
 
 import "allocator.gh" as allocator;
 
+// Whether std has an OS backend for the target (the same test as `std.os.HAS_BACKEND`)
+const HAS_OS = @cfgValue(os == .macos or os == .windows or
+    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
+
 pub const AllocatorVTable = allocator.AllocatorVTable;
 pub const Allocator = allocator.Allocator;
 pub const AllocError = allocator.AllocError;
@@ -48,10 +52,12 @@ test "Alignment.of" {
     }) == .@"8");
 }
 
-pub const round_up_page = fn(len: usize): usize {
-    let ps = std.os.page_size();
-    return (len + ps - 1uz) & ~(ps - 1uz);
-};
+@cfg (HAS_OS) {
+    pub const round_up_page = fn(len: usize): usize {
+        let ps = std.os.page_size();
+        return (len + ps - 1uz) & ~(ps - 1uz);
+    };
+}
 
 /// Returns true if and only if the slices have the same length and all elements
 /// compare true using equality operator.

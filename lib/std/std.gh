@@ -27,16 +27,22 @@ test {
     import "types/option.gh";
 }
 
-pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
-    _ = io.eprint(loc.file);
-    _ = io.eprint(": ");
-    _ = io.eprintln(msg);
-    @trap();
-};
+// Whether std has an OS backend for the target (the same test as `std.os.HAS_BACKEND`)
+const HAS_OS = @cfgValue(os == .macos or os == .windows or
+    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
 
-pub const assert_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-    _ = io.eprint(loc.file);
-    _ = io.eprint(": ");
-    _ = io.eprintln(msg);
-    @trap();
-};
+@cfg (HAS_OS) {
+    pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+        _ = io.eprint(loc.file);
+        _ = io.eprint(": ");
+        _ = io.eprintln(msg);
+        @trap();
+    };
+
+    pub const assert_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
+        _ = io.eprint(loc.file);
+        _ = io.eprint(": ");
+        _ = io.eprintln(msg);
+        @trap();
+    };
+}

@@ -1,4 +1,12 @@
-//! Raw OS primitives for the target platform
+//! Raw OS primitives for the target platform. A target std has no backend for (wasm,
+//! freestanding, other Linux architectures) gets an empty `std.os`, so the rest of std still
+//! builds there
+
+/// Whether std has an OS backend for the target. Other OS-dependent parts of std repeat this test,
+/// since `@cfg` only reads its own module's values
+pub const HAS_BACKEND = @cfgValue(os == .macos or os == .windows or
+    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
+
 @cfg (os == .macos) {
     pub import "darwin/darwin.gh" as backend;
     test {
@@ -9,41 +17,41 @@
     test {
         import "win32/win32.gh";
     }
-} else @cfg (os == .linux) {
+} else @cfg (HAS_BACKEND and os == .linux) {
     pub import "linux/linux.gh" as backend;
     test {
         import "linux/linux.gh";
     }
-} else {
-    @compileError("std.os: unsupported target OS");
 }
 
-pub const Handle = backend.Handle;
-pub const Errno = backend.Errno;
+@cfg (HAS_BACKEND) {
+    pub const Handle = backend.Handle;
+    pub const Errno = backend.Errno;
 
-pub const open = backend.open;
-pub const read = backend.read;
-pub const write = backend.write;
-pub const close = backend.close;
-pub const lseek = backend.lseek;
+    pub const open = backend.open;
+    pub const read = backend.read;
+    pub const write = backend.write;
+    pub const close = backend.close;
+    pub const lseek = backend.lseek;
 
-pub const stdin = backend.stdin;
-pub const stdout = backend.stdout;
-pub const stderr = backend.stderr;
+    pub const stdin = backend.stdin;
+    pub const stdout = backend.stdout;
+    pub const stderr = backend.stderr;
 
-pub const mkdir = backend.mkdir;
-pub const stat = backend.stat;
-pub const fstat = backend.fstat;
+    pub const mkdir = backend.mkdir;
+    pub const stat = backend.stat;
+    pub const fstat = backend.fstat;
 
-pub const alloc = backend.alloc;
-pub const free = backend.free;
-pub const page_size = backend.page_size;
+    pub const alloc = backend.alloc;
+    pub const free = backend.free;
+    pub const page_size = backend.page_size;
 
-pub const SEEK_SET = backend.SEEK_SET;
-pub const SEEK_CUR = backend.SEEK_CUR;
-pub const SEEK_END = backend.SEEK_END;
+    pub const SEEK_SET = backend.SEEK_SET;
+    pub const SEEK_CUR = backend.SEEK_CUR;
+    pub const SEEK_END = backend.SEEK_END;
+}
 
-@cfg (os == .macos or os == .linux) {
+@cfg (HAS_BACKEND and (os == .macos or os == .linux)) {
     pub const mode_t = backend.mode_t;
     pub const O_RDONLY = backend.O_RDONLY;
     pub const O_WRONLY = backend.O_WRONLY;
@@ -69,6 +77,4 @@ pub const SEEK_END = backend.SEEK_END;
     pub const FILE_SHARE_WRITE = backend.FILE_SHARE_WRITE;
     pub const FILE_SHARE_DELETE = backend.FILE_SHARE_DELETE;
     pub const FILE_ATTRIBUTE_NORMAL = backend.FILE_ATTRIBUTE_NORMAL;
-} else {
-    @compileError("std.os: unsupported target OS");
 }
