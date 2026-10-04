@@ -1,3 +1,4 @@
+import std;
 import "error.gh" as error;
 import "reader.gh" as reader;
 import "writer.gh" as writer;
@@ -15,11 +16,7 @@ pub const Seeker = seeker.Seeker;
 pub const Whence = seeker.Whence;
 pub const FixedBufferStream = fixed_buffer.FixedBufferStream;
 
-// Whether std has an OS backend for the target
-const HAS_OS = @cfgValue(os == .macos or os == .windows or
-    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
-
-@cfg (HAS_OS) {
+@cfg (std.os.HAS_BACKEND) {
     import "file.gh" as file;
     import "stdio.gh" as stdio;
 

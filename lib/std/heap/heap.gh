@@ -1,10 +1,6 @@
 import std;
 
-// Whether std has an OS backend for the target
-const HAS_OS = @cfgValue(os == .macos or os == .windows or
-    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
-
-@cfg (HAS_OS) {
+@cfg (std.os.HAS_BACKEND) {
     import "page_allocator.gh" as page_alloc;
 
     test {

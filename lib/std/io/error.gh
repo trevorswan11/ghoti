@@ -1,10 +1,6 @@
 //! Safe conversion wrapper from target-specific Errno
 import std;
 
-// Whether std has an OS backend for the target
-const HAS_OS = @cfgValue(os == .macos or os == .windows or
-    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
-
 pub const Error = enum : i32 {
     not_found,
     access_denied,
@@ -21,7 +17,7 @@ pub const Error = enum : i32 {
     unexpected,
     _,
 
-    @cfg (HAS_OS) {
+    @cfg (std.os.HAS_BACKEND) {
         pub const from_os = fn(errno: std.os.Errno): @This() {
             @cfg (os == .macos) {
                 return match (errno) {

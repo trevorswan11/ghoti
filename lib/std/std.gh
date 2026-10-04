@@ -27,11 +27,7 @@ test {
     import "types/option.gh";
 }
 
-// Whether std has an OS backend for the target
-const HAS_OS = @cfgValue(os == .macos or os == .windows or
-    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
-
-@cfg (HAS_OS) {
+@cfg (os.HAS_BACKEND) {
     pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
         _ = io.eprint(loc.file);
         _ = io.eprint(": ");

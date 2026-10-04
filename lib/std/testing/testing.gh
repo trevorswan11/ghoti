@@ -4,11 +4,7 @@ const Test = builtin.Test;
 
 extern const __ghoti_test_take_skipped: fn(): bool;
 
-// Whether std has an OS backend for the target
-const HAS_OS = @cfgValue(os == .macos or os == .windows or
-    (os == .linux and (arch == .x86_64 or arch == .aarch64)));
-
-@cfg (HAS_OS) {
+@cfg (std.os.HAS_BACKEND) {
     pub const test_runner = fn(args: [][:0]u8, tests: []Test): i32 {
         let mut failures: i32 = 0;
         let mut skipped: i32 = 0;

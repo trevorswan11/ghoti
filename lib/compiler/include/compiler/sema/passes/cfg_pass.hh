@@ -1,7 +1,5 @@
 #pragma once
 
-#include <map>
-#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -9,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
@@ -80,8 +79,8 @@ class cfg_pass {
     // Shared by a pass and the passes it starts to read other modules' constants
     struct shared_state {
         // `@cfgValue` constants mid-evaluation, by module and node index
-        std::set<std::pair<const mod::module*, usize>> in_progress;
-        bool                                           hit_cycle{false};
+        ankerl::unordered_dense::set<std::pair<const mod::module*, usize>> in_progress;
+        bool                                                               hit_cycle{false};
 
         // `@cfg` statements searched for imports and the arm each takes; `selected` is false
         // while one is still being selected
@@ -89,7 +88,7 @@ class cfg_pass {
             bool           selected{false};
             stdx::opt_size arm;
         };
-        std::map<std::pair<const mod::module*, usize>, arm_choice> arms;
+        ankerl::unordered_dense::map<std::pair<const mod::module*, usize>, arm_choice> arms;
     };
 
   private:
@@ -181,7 +180,7 @@ class cfg_pass {
     ankerl::unordered_dense::map<std::string_view, cfg_decl> cfg_value_decls_;
     ankerl::unordered_dense::map<usize, cfg_value>           cfg_value_cache_;
     shared_state                                             own_shared_;
-    shared_state*                                            shared_{&own_shared_};
+    gsl::not_null<shared_state*>                             shared_{&own_shared_};
 };
 
 } // namespace ghoti::sema

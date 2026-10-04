@@ -1,7 +1,6 @@
 //! Raw OS primitives for the target platform with a defined backend implementation
 
-/// Whether std has an OS backend for the target. Other OS-dependent parts of std repeat this test,
-/// since `@cfg` only reads its own module's values
+/// Whether std has an OS backend for the target; the OS-dependent parts of std are gated on it
 pub const HAS_BACKEND = @cfgValue(os == .macos or os == .windows or
     (os == .linux and (arch == .x86_64 or arch == .aarch64)));
 
