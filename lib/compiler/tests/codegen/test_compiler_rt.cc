@@ -168,6 +168,27 @@ TEST_CASE("The shipped compiler_rt builds for every tier-1 target") {
     }
 }
 
+TEST_CASE("A compiler_rt that uses std builds for every tier-1 target") {
+    // std builds even where it has no OS backend (wasm32, riscv64 Linux)
+    const fixture_root rt{R"(
+        import std;
+        export const __addtf3 = fn(a: f128, b: f128): f128 {
+            if (std.math.max(@as(i32, 1), @as(i32, 2)) == 2) { return b; }
+            return a;
+        };
+    )"};
+    for (const std::string_view triple : tier_one_triples) {
+        INFO(triple);
+        const codegen::target_options target_opts{.triple_str = std::string{triple}};
+        const tempfile                object{"std_compiler_rt.o"};
+        REQUIRE(emit_program_object(f128_program, object.path, target_opts));
+        const auto archive{UNWRAP(runtime::resolve_compiler_rt(
+            target_opts, object.path, codegen::compiler_rt_options{.root = rt.root}))};
+        REQUIRE(archive);
+        CHECK(std::filesystem::exists(*archive));
+    }
+}
+
 TEST_CASE("compiler_rt imports are the runtime libcalls an object leaves undefined") {
     const codegen::target_options target_opts{.triple_str = "x86_64-unknown-linux-gnu"};
     const tempfile                object{"compiler_rt_imports.o"};
