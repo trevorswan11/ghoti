@@ -334,6 +334,7 @@ namespace token_type {
 [[nodiscard]] auto is_int_type_lexeme(std::string_view s) noexcept -> bool;
 // `c_char`, `c_int`, `c_ulonglong`, ...: the C ABI's types, sized for the target
 [[nodiscard]] auto is_c_type_lexeme(std::string_view s) noexcept -> bool;
+inline constexpr std::string_view C_LONGDOUBLE_NAME{"c_longdouble"};
 // Indexed by `sema::c_int_type` (minus its `NONE`)
 inline constexpr std::array<std::string_view, 9> C_TYPE_NAMES{"c_char",
                                                               "c_short",

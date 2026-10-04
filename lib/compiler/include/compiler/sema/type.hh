@@ -688,6 +688,9 @@ static_assert(stdx::TriviallyDestructible<type>);
 
 // `{bits, is_signed}` of a resolved `type_kind::INT`, or none for any other kind.
 [[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
+// The instance id that tells `c_longdouble` apart from the `f64` / `f80` / `f128` it's sized as
+inline constexpr u64 C_LONGDOUBLE_INSTANCE{~u64{0}};
+[[nodiscard]] auto is_c_longdouble(const type& t) noexcept -> bool;
 // `i32`, `u7`, or the C type's own name (`c_int`)
 [[nodiscard]] auto int_display_name(const types::integer& info) -> std::string;
 // Whether every value of `from` is also a value of `to`

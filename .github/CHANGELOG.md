@@ -696,6 +696,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Diagnostics and `@typeName` name a type constructor's instance by its arguments (`Box(u8)`, `Arr(i32, 4)`) instead of `struct`
 - Fixed: a type constructor member whose signature names its own constructor (`fn(&self): Pair(i64)` inside `Pair`, or a dependent `Result(U, E)` return inside `Result`) recursed forever, crashed, or mixed up the instances' field and parameter types
 - Fixed: a generic member called on two instances of one type constructor (`Box(u8).make(f)` and `Box(i64).make(f)`), or same-named generic members of unrelated types, shared one instantiation
+- Add C types for talking to C, sized and signed by the target's C ABI: `c_char`, `c_short`, `c_ushort`, `c_int`, `c_uint`, `c_long`, `c_ulong`, `c_longlong`, `c_ulonglong`, and `c_longdouble`
+    - Each is its own type (`c_int` isn't `i32`, and `^c_int` doesn't convert to `^i32`); a value converts implicitly only where every value fits on the target, so `c_long` to `i32` compiles only where `c_long` is 32-bit
+    - Arithmetic stays ghoti's: no C integer promotions
 - `@cfg(testing)` and `@cfgValue(testing)` are true while building a test executable (`ghoti test`), so test-only helpers can sit next to the code they test
     - **Breaking:** `test` blocks are only checked in a test build; `build-*` and `run` no longer report errors inside them
 

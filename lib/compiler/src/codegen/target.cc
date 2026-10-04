@@ -254,6 +254,29 @@ namespace {
     }
 }
 
+// `long double` is x87's 80-bit format on x86 (but plain `double` under MSVC), `double` on Apple
+// and Windows ARM and 32-bit ARM, and IEEE quad on the other 64-bit ABIs
+[[nodiscard]] auto c_longdouble_width(const llvm::Triple& triple) noexcept -> u32 {
+    switch (triple.getArch()) {
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:      return triple.isWindowsMSVCEnvironment() ? 64U : 80U;
+    case llvm::Triple::aarch64:
+    case llvm::Triple::aarch64_be:  return triple.isOSDarwin() || triple.isOSWindows() ? 64U : 128U;
+    case llvm::Triple::riscv32:
+    case llvm::Triple::riscv64:
+    case llvm::Triple::wasm32:
+    case llvm::Triple::wasm64:
+    case llvm::Triple::loongarch64:
+    case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:
+    case llvm::Triple::ppc64:
+    case llvm::Triple::ppc64le:
+    case llvm::Triple::sparcv9:
+    case llvm::Triple::systemz:     return 128U;
+    default:                        return 64U;
+    }
+}
+
 } // namespace
 
 auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts {
@@ -265,8 +288,9 @@ auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts 
         .endian   = normalized_target_endian(triple),
         .ptr_bits = normalized_target_ptr_bits(triple),
         // `long` is 64-bit only on LP64 (64-bit, non-Windows) targets
-        .c_long_bits   = triple.isOSWindows() || triple.isArch32Bit() ? 32U : 64U,
-        .c_char_signed = c_char_is_signed(triple),
+        .c_long_bits       = triple.isOSWindows() || triple.isArch32Bit() ? 32U : 64U,
+        .c_char_signed     = c_char_is_signed(triple),
+        .c_longdouble_bits = c_longdouble_width(triple),
     };
 }
 

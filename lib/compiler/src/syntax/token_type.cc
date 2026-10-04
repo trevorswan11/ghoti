@@ -108,7 +108,7 @@ auto is_int_type_lexeme(std::string_view s) noexcept -> bool {
 }
 
 auto is_c_type_lexeme(std::string_view s) noexcept -> bool {
-    return std::ranges::contains(C_TYPE_NAMES, s);
+    return s == C_LONGDOUBLE_NAME || std::ranges::contains(C_TYPE_NAMES, s);
 }
 
 auto is_valid_ident(token_type_t type) noexcept -> bool {

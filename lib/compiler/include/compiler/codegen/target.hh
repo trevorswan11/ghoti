@@ -71,6 +71,7 @@ struct target_facts {
     u32              ptr_bits;            // 16 / 32 / 64
     u32              c_long_bits{64};     // 32 on Windows and 32-bit targets
     bool             c_char_signed{true}; // `c_char` is unsigned on most non-x86 ABIs
+    u32              c_longdouble_bits{64}; // 80 on x86, 128 on most 64-bit non-Apple ABIs
 
     [[nodiscard]] static auto resolve(const llvm::Triple& triple) noexcept -> target_facts;
     [[nodiscard]] static auto resolve(stdx::option<std::string_view> triple_str = stdx::none)

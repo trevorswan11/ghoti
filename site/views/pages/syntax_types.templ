@@ -225,6 +225,15 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 		</li>
 		<li><code>isize</code> / <code>usize</code>: Platform-width signed/unsigned integers equivalent to <code>ptrdiff_t</code> / <code>size_t</code> (64-bit on 64-bit targets), written with the <code>z</code> / <code>uz</code> suffix</li>
 		<li>
+			C types, for talking to C: <code>c_char</code>, <code>c_short</code>, <code>c_ushort</code>, <code>c_int</code>, <code>c_uint</code>, <code>c_long</code>, <code>c_ulong</code>, <code>c_longlong</code>, <code>c_ulonglong</code>, and <code>c_longdouble</code>
+			<ul>
+				<li>Each is sized and signed as the target's C ABI says: <code>c_long</code> is 32-bit on Windows and 32-bit targets and 64-bit elsewhere, <code>c_char</code> is unsigned on ARM and RISC-V Linux, and <code>c_longdouble</code> is an <code>f80</code> on x86, an <code>f128</code> on most other 64-bit targets, and an <code>f64</code> on Apple, Windows, and 32-bit ARM</li>
+				<li>Each is its own type: <code>c_int</code> is not <code>i32</code>, and a <code>^c_int</code> doesn't convert to a <code>^i32</code></li>
+				<li>A value converts implicitly between a C type and another integer (or float) type only where every value fits on the target, so <code>c_int</code> to <code>i32</code> works everywhere while <code>c_long</code> to <code>i32</code> works only where <code>c_long</code> is 32-bit</li>
+				<li>Arithmetic follows ghoti's rules, not C's integer promotions</li>
+			</ul>
+		</li>
+		<li>
 			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>comptime_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
 		</li>
 		<li>

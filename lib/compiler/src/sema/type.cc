@@ -132,8 +132,13 @@ auto int_display_name(const types::integer& info) -> std::string {
     return fmt::format("{}{}", info.is_signed ? 'i' : 'u', info.bits);
 }
 
+auto is_c_longdouble(const type& t) noexcept -> bool {
+    return is_float(t.get_kind()) && t.get_instance_id() == C_LONGDOUBLE_INSTANCE;
+}
+
 auto type_kind_display_name(const type& t) -> std::string {
     if (const auto info{as_integer(t)}) { return int_display_name(*info); }
+    if (is_c_longdouble(t)) { return std::string{syntax::token_type::C_LONGDOUBLE_NAME}; }
     return std::string{type_kind_display_name(t.get_kind())};
 }
 
@@ -345,7 +350,12 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
 
     // A float widens to any wider float (`f16 -> f32 -> f64 -> f80 -> f128`).
     if (is_float(from_kind)) {
-        return is_float(to_kind) && float_bits(from_kind) < float_bits(to_kind);
+        if (!is_float(to_kind)) { return false; }
+        // `c_longdouble` and the float it's sized as hold the same values
+        if (is_c_longdouble(from) != is_c_longdouble(to)) {
+            return float_bits(from_kind) <= float_bits(to_kind);
+        }
+        return float_bits(from_kind) < float_bits(to_kind);
     }
 
     const auto from_int{as_integer(from)};
@@ -495,6 +505,9 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
         }
     }
 
+    if (is_c_longdouble(*this)) {
+        return fmt::format("{}{}", leaf_qualifier(*this), syntax::token_type::C_LONGDOUBLE_NAME);
+    }
     // An INT's width lives on the key, so it stringifies even before the payload is resolved.
     if (get_kind() == type_kind::INT) {
         const auto info{as_integer(*this)};
@@ -747,7 +760,10 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         if (!f_a || !f_b) { return a == b; }
         return f_a->erased == f_b->erased && is_same_fn_signature(a, b);
     }
-    default: return is_numeric(kind);
+    default:
+        // `c_longdouble` is its own type, apart from the float it's sized as
+        if (is_float(kind)) { return is_c_longdouble(a) == is_c_longdouble(b); }
+        return is_numeric(kind);
     }
 }
 

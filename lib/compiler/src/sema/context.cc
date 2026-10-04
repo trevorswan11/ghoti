@@ -193,6 +193,23 @@ auto inject_c_types(symbol_table& prelude, type_pool& pool, const codegen::targe
     }
 }
 
+// `c_longdouble` is the target's `long double`: a float of that width, but its own type
+auto inject_c_longdouble(symbol_table& prelude, type_pool& pool, const codegen::target_facts& facts)
+    -> void {
+    const auto kind{facts.c_longdouble_bits == 80    ? type_kind::F80
+                    : facts.c_longdouble_bits == 128 ? type_kind::F128
+                                                     : type_kind::F64};
+    auto&      type{*pool[{kind, types::mut::CONSTANT, C_LONGDOUBLE_INSTANCE}]};
+    type.resolve_if<types::builtin_type>();
+    type.set_instance_id(C_LONGDOUBLE_INSTANCE);
+    const auto name{syntax::token_type::C_LONGDOUBLE_NAME};
+    prelude.insert_unchecked(
+        name, symbols::builtin{syntax::keyword_t{name, syntax::token_type_t::C_TYPE}, type});
+    auto& symbol{prelude.get(name)};
+    symbol.set_kind(symbol_kind::TYPE);
+    symbol.set_status(symbol_status::RESOLVED);
+}
+
 auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
     const auto inject_function = [&](const syntax::builtin_t& builtin,
@@ -401,8 +418,9 @@ auto context::inject_prelude() -> void {
     prelude_index.emplace(registry.create());
 
     inject_types(registry.get(*prelude_index), pool);
-    inject_c_types(
-        registry.get(*prelude_index), pool, codegen::target_facts::resolve(target_opts.triple_str));
+    const auto facts{codegen::target_facts::resolve(target_opts.triple_str)};
+    inject_c_types(registry.get(*prelude_index), pool, facts);
+    inject_c_longdouble(registry.get(*prelude_index), pool, facts);
     inject_functions(registry.get(*prelude_index), pool);
     inject_builtin_module(*this, *prelude_index);
 }
