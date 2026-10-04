@@ -1,6 +1,4 @@
-//! Raw OS primitives for the target platform. A target std has no backend for (wasm,
-//! freestanding, other Linux architectures) gets an empty `std.os`, so the rest of std still
-//! builds there
+//! Raw OS primitives for the target platform with a defined backend implementation
 
 /// Whether std has an OS backend for the target. Other OS-dependent parts of std repeat this test,
 /// since `@cfg` only reads its own module's values

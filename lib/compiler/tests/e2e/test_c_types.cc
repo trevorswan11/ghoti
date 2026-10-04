@@ -1,9 +1,10 @@
 #include <string>
 #include <string_view>
-#include <tuple>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
+#include <stdx/types.hh>
 
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
@@ -64,7 +65,7 @@ TEST_CASE("A C type converts implicitly only where every value fits") {
     )") == 5 + 5 + 5 + 3 + 4);
 
     const auto mismatch{[](std::string_view body) {
-        std::ignore = helpers::expect_compile_error(
+        helpers::expect_compile_error(
             fmt::format("{}\npub const main = fn(): i32 {{ return 0; }};", body));
     }};
     mismatch("const f = fn(a: c_int): c_uint { return a; };");
@@ -83,14 +84,14 @@ TEST_CASE("A C type is its own type, not the fixed-width integer of its size") {
         };
     )") == 8);
     // Pointers to them don't convert, as in C
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         pub const main = fn(): i32 { let a: c_int = 5; let p: ^i32 = ^a; return 0; };
     )");
 }
 
 TEST_CASE("`c_longdouble` is its own type, holding the same values as the float it's sized as") {
     // Checked at compile time, since a runtime `f128` add may need compiler_rt on the host
-    std::ignore = helpers::type_check_and_verify(R"(
+    helpers::type_check_and_verify(R"(
         comptime {
             @assert(c_longdouble != f64 and c_longdouble != f80 and c_longdouble != f128);
             const a: c_longdouble = 2.5;
@@ -100,7 +101,7 @@ TEST_CASE("`c_longdouble` is its own type, holding the same values as the float 
         }
     )");
     // Pointers to it don't convert to pointers to the float it's sized as
-    std::ignore = helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         pub const main = fn(): i32 {
             let a: c_longdouble = 2.5;
             let p: ^f64 = ^a;

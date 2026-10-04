@@ -1,5 +1,6 @@
 #include "compiler/sema/context.hh"
 
+#include <array>
 #include <concepts>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
@@ -157,14 +159,16 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::NORETURN, type_kind::NORETURN);
 }
 
+struct c_type_layout {
+    types::c_int_type kind;
+    u16               bits;
+    bool              is_signed;
+};
+
 // `c_int` & co. are their own integer types, sized and signed as the target's C ABI says
 auto inject_c_types(symbol_table& prelude, type_pool& pool, const codegen::target_facts& facts)
     -> void {
-    struct c_type_layout {
-        types::c_int_type kind;
-        u16               bits;
-        bool              is_signed;
-    };
+
     const auto       long_bits{static_cast<u16>(facts.c_long_bits)};
     const std::array layouts{
         c_type_layout{types::c_int_type::CHAR, 8, facts.c_char_signed},

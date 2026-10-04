@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <ios>
+#include <iostream>
 #include <istream>
 #include <ostream>
 #include <streambuf>
@@ -12,6 +13,7 @@
 
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <gsl/span>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -22,6 +24,7 @@
 #include "support/path_utils.hh"
 
 #if GHOTI_WINDOWS
+#    include <algorithm>
 #    include <iterator>
 #    include <ranges>
 #    include <string_view>
@@ -103,6 +106,49 @@ auto self_exe_path() -> std::filesystem::path {
     return buffer.data();
 }
 
+namespace {
+
+#if GHOTI_WINDOWS
+
+// How many timeouts' worth of wall time a stalled (mostly idle) child gets
+constexpr i64 STALL_GRACE_FACTOR{10};
+
+struct cpu_times {
+    std::chrono::milliseconds user;
+    std::chrono::milliseconds kernel;
+};
+
+auto process_cpu_times(::HANDLE process) -> cpu_times {
+    ::FILETIME created, exited, kernel, user;
+    if (!::GetProcessTimes(process, &created, &exited, &kernel, &user)) { return {}; }
+    const auto to_ms = [](::FILETIME t) {
+        const auto ticks{(static_cast<u64>(t.dwHighDateTime) << 32) | t.dwLowDateTime};
+        return std::chrono::milliseconds{static_cast<i64>(ticks / 10'000)}; // 100 ns ticks
+    };
+    return {to_ms(user), to_ms(kernel)};
+}
+
+// Waits until the child exits, has burned `timeout` of CPU time, or has had
+// `STALL_GRACE_FACTOR` timeouts of wall time
+auto wait_for_child(::HANDLE process, std::chrono::milliseconds timeout, bool no_timeout)
+    -> ::DWORD {
+    if (no_timeout) { return ::WaitForSingleObject(process, INFINITE); }
+    const auto wall_limit{timeout * STALL_GRACE_FACTOR};
+    auto       waited{std::chrono::milliseconds::zero()};
+    while (true) {
+        const auto slice{std::min(timeout, wall_limit - waited)};
+        const auto result{::WaitForSingleObject(process, static_cast<::DWORD>(slice.count()))};
+        if (result != WAIT_TIMEOUT) { return result; }
+        waited += slice;
+        const auto [user, kernel]{process_cpu_times(process)};
+        if (user + kernel >= timeout || waited >= wall_limit) { return WAIT_TIMEOUT; }
+    }
+}
+
+#endif
+
+} // namespace
+
 auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
     // `milliseconds::max()` means "wait forever"
     const bool no_timeout{timeout == std::chrono::milliseconds::max()};
@@ -126,9 +172,16 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
         return stdx::none;
     }
 
-    const auto wait_result{::WaitForSingleObject(
-        pi.hProcess, no_timeout ? INFINITE : static_cast<::DWORD>(timeout.count()))};
+    // A child that hasn't used its budget of CPU time is stalled, not looping, e.g. held by an
+    // antivirus scan of the freshly linked exe, so it gets more time
+    const auto wait_result{wait_for_child(pi.hProcess, timeout, no_timeout)};
     if (wait_result == WAIT_TIMEOUT) {
+        const auto [user, kernel]{process_cpu_times(pi.hProcess)};
+        fmt::println(std::cerr,
+                     "spawn_child: killed `{}` for timing out (CPU: {} ms user, {} ms kernel)",
+                     args[0],
+                     user.count(),
+                     kernel.count());
         ::TerminateProcess(pi.hProcess, spawn_child_timeout_exit_code);
         ::WaitForSingleObject(pi.hProcess, INFINITE);
         ::CloseHandle(pi.hProcess);
@@ -163,6 +216,7 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
         if (reaped < 0) { return stdx::none; }
 
         if (!no_timeout && std::chrono::steady_clock::now() >= deadline) {
+            fmt::println(std::cerr, "spawn_child: killed `{}` for timing out", args[0]);
             ::kill(pid, SIGKILL);
             ::waitpid(pid, &status, 0); // reap to avoid leaving a zombie
             return spawn_child_timeout_exit_code;

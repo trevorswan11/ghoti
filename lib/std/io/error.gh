@@ -1,7 +1,7 @@
 //! Safe conversion wrapper from target-specific Errno
 import std;
 
-// Whether std has an OS backend for the target (the same test as `std.os.HAS_BACKEND`)
+// Whether std has an OS backend for the target
 const HAS_OS = @cfgValue(os == .macos or os == .windows or
     (os == .linux and (arch == .x86_64 or arch == .aarch64)));
 

@@ -169,7 +169,6 @@ TEST_CASE("The shipped compiler_rt builds for every tier-1 target") {
 }
 
 TEST_CASE("A compiler_rt that uses std builds for every tier-1 target") {
-    // std builds even where it has no OS backend (wasm32, riscv64 Linux)
     const fixture_root rt{R"(
         import std;
         export const __addtf3 = fn(a: f128, b: f128): f128 {
@@ -269,7 +268,6 @@ TEST_CASE("compiler_rt can use the standard library") {
 }
 
 TEST_CASE("compiler_rt's own functions stay internal to it") {
-    // The builtins and the program both define a `pub const twice`; only exports leave the archive
     fixture_root rt{R"(
         import "helpers.gh" as helpers;
         export const __addtf3 = fn(a: f128, b: f128): f128 {

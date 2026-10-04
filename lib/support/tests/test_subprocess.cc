@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "ghoti/config.h"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
 #include "support/test.hh"
@@ -37,5 +38,24 @@ TEST_CASE("Windows argument quoting") {
     CHECK(quote_arg_windows(R"(trailing\ with space)") == R"("trailing\ with space")");
     CHECK(quote_arg_windows("") == R"("")");
 }
+
+TEST_CASE("spawn_child kills a child that keeps running past its timeout") {
+    using namespace std::chrono_literals;
+#if GHOTI_WINDOWS
+    const mock_argv busy{"powershell", "-NoProfile", "-Command", "while ($true) {}"};
+#else
+    const mock_argv busy{"sh", "-c", "while :; do :; done"};
+#endif
+    CHECK(spawn_child(busy, 500ms) == spawn_child_timeout_exit_code);
+}
+
+#if GHOTI_WINDOWS
+TEST_CASE("spawn_child gives an idle child more than its timeout on Windows") {
+    using namespace std::chrono_literals;
+    // `ping` waits about a second between its two echoes, using almost no CPU
+    const mock_argv idle{"ping", "-n", "2", "127.0.0.1"};
+    CHECK(spawn_child(idle, 300ms) == 0);
+}
+#endif
 
 } // namespace ghoti::tests

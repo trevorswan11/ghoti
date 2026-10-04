@@ -59,6 +59,8 @@ class mock_argv {
 // Exit code returned by spawn_child when the child is killed for exceeding its timeout
 constexpr u32 spawn_child_timeout_exit_code{124};
 
+// On Windows, `timeout` is CPU time, so a child stalled by a scan or a loaded machine isn't killed
+// as a hang until it has also sat for ten times as long
 [[nodiscard]] auto spawn_child(const mock_argv&          args,
                                std::chrono::milliseconds timeout = std::chrono::seconds{30})
     -> stdx::option<u32>;

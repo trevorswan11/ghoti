@@ -1,5 +1,4 @@
 #include <string_view>
-#include <tuple>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -280,7 +279,6 @@ TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs")
 }
 
 TEST_CASE("E2E cfg: `testing` is true only in a test build") {
-    // Test-only helpers are visible to tests
     CHECK(helpers::compile_and_run_tests(R"(
         const IN_TESTS = @cfgValue(testing);
         @cfg(testing) {
@@ -292,7 +290,6 @@ TEST_CASE("E2E cfg: `testing` is true only in a test build") {
         }
     )") == 0);
 
-    // Outside a test build the helpers are gone and test blocks aren't checked
     constexpr auto program{R"(
         const IN_TESTS = @cfgValue(testing);
         @cfg(testing) {
@@ -302,8 +299,8 @@ TEST_CASE("E2E cfg: `testing` is true only in a test build") {
         test "uses a test-only helper" { @expect(only_in_tests() == 40); }
         test "broken" { let x: i32 = true; }
     )"};
-    std::ignore = helpers::type_check_and_verify(program, {}, false);
-    std::ignore = helpers::expect_compile_error(program);
+    helpers::type_check_and_verify(program, {}, false);
+    helpers::expect_compile_error(program);
 }
 
 } // namespace ghoti::tests
