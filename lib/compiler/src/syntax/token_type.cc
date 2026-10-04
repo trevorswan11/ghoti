@@ -78,6 +78,7 @@ auto describe(token_type_t tt) -> std::string {
     case token_type_t::MULTILINE_STRING:   return "a string literal";
     case token_type_t::CHAR:               return "a character literal";
     case token_type_t::INT_TYPE:           return "an integer type";
+    case token_type_t::C_TYPE:             return "a C type";
     case token_type_t::ILLEGAL:            return "an invalid token";
     case token_type_t::UNDERSCORE:         return "'_'";
     case token_type_t::AT_LBRACKET:        return "'@['";
@@ -104,6 +105,10 @@ auto is_int_type_lexeme(std::string_view s) noexcept -> bool {
     if (s.size() < 2 || (s[0] != 'i' && s[0] != 'u') || s[1] < '1' || s[1] > '9') { return false; }
     return std::ranges::all_of(stdx::string::substr(s, 2),
                                [](char c) { return c >= '0' && c <= '9'; });
+}
+
+auto is_c_type_lexeme(std::string_view s) noexcept -> bool {
+    return std::ranges::contains(C_TYPE_NAMES, s);
 }
 
 auto is_valid_ident(token_type_t type) noexcept -> bool {

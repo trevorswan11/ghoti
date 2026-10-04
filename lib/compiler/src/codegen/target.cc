@@ -231,6 +231,31 @@ auto normalized_target_ptr_bits(const llvm::Triple& triple) -> u32 {
     return 32U;
 }
 
+namespace {
+
+// Plain `char` is unsigned on ARM, RISC-V, PowerPC, and s390x, except where Apple and Windows
+// keep it signed
+[[nodiscard]] auto c_char_is_signed(const llvm::Triple& triple) noexcept -> bool {
+    if (triple.isOSDarwin() || triple.isOSWindows()) { return true; }
+    switch (triple.getArch()) {
+    case llvm::Triple::aarch64:
+    case llvm::Triple::aarch64_be:
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+    case llvm::Triple::riscv32:
+    case llvm::Triple::riscv64:
+    case llvm::Triple::ppc:
+    case llvm::Triple::ppc64:
+    case llvm::Triple::ppc64le:
+    case llvm::Triple::systemz:    return false;
+    default:                       return true;
+    }
+}
+
+} // namespace
+
 auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts {
     return target_facts{
         .os       = normalized_target_os(triple),
@@ -239,6 +264,9 @@ auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts 
         .family   = normalized_target_family(triple),
         .endian   = normalized_target_endian(triple),
         .ptr_bits = normalized_target_ptr_bits(triple),
+        // `long` is 64-bit only on LP64 (64-bit, non-Windows) targets
+        .c_long_bits   = triple.isOSWindows() || triple.isArch32Bit() ? 32U : 64U,
+        .c_char_signed = c_char_is_signed(triple),
     };
 }
 

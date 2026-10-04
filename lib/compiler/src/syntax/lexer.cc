@@ -179,6 +179,7 @@ auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
 
 auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {
     if (token_type::is_int_type_lexeme(ident)) { return token_type_t::INT_TYPE; }
+    if (token_type::is_c_type_lexeme(ident)) { return token_type_t::C_TYPE; }
     return get_keyword_opt(ident).value_or(token_type_t::IDENT);
 }
 

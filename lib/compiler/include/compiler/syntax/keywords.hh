@@ -145,6 +145,7 @@ constexpr std::array ALL_KEYWORDS{
 
 constexpr std::array ALL_PRIMITIVES{
     token_type_t::INT_TYPE,
+    token_type_t::C_TYPE,
     keywords::ISIZE.type,
     keywords::USIZE.type,
     keywords::F16.type,

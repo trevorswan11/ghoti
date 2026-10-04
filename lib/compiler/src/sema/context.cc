@@ -157,6 +157,42 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::NORETURN, type_kind::NORETURN);
 }
 
+// `c_int` & co. are their own integer types, sized and signed as the target's C ABI says
+auto inject_c_types(symbol_table& prelude, type_pool& pool, const codegen::target_facts& facts)
+    -> void {
+    struct c_type_layout {
+        types::c_int_type kind;
+        u16               bits;
+        bool              is_signed;
+    };
+    const auto       long_bits{static_cast<u16>(facts.c_long_bits)};
+    const std::array layouts{
+        c_type_layout{types::c_int_type::CHAR, 8, facts.c_char_signed},
+        c_type_layout{types::c_int_type::SHORT, 16, true},
+        c_type_layout{types::c_int_type::USHORT, 16, false},
+        c_type_layout{types::c_int_type::INT, 32, true},
+        c_type_layout{types::c_int_type::UINT, 32, false},
+        c_type_layout{types::c_int_type::LONG, long_bits, true},
+        c_type_layout{types::c_int_type::ULONG, long_bits, false},
+        c_type_layout{types::c_int_type::LONGLONG, 64, true},
+        c_type_layout{types::c_int_type::ULONGLONG, 64, false},
+    };
+    for (const auto& layout : layouts) {
+        const auto name{syntax::token_type::C_TYPE_NAMES[std::to_underlying(layout.kind) - 1]};
+        auto&      type{*pool[{type_kind::INT,
+                               types::mut::CONSTANT,
+                               layout.bits,
+                               layout.is_signed,
+                               std::to_underlying(layout.kind)}]};
+        type.resolve_if<types::integer>(layout.bits, layout.is_signed, layout.kind);
+        prelude.insert_unchecked(
+            name, symbols::builtin{syntax::keyword_t{name, syntax::token_type_t::C_TYPE}, type});
+        auto& symbol{prelude.get(name)};
+        symbol.set_kind(symbol_kind::TYPE);
+        symbol.set_status(symbol_status::RESOLVED);
+    }
+}
+
 auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
     const auto inject_function = [&](const syntax::builtin_t& builtin,
@@ -365,6 +401,8 @@ auto context::inject_prelude() -> void {
     prelude_index.emplace(registry.create());
 
     inject_types(registry.get(*prelude_index), pool);
+    inject_c_types(
+        registry.get(*prelude_index), pool, codegen::target_facts::resolve(target_opts.triple_str));
     inject_functions(registry.get(*prelude_index), pool);
     inject_builtin_module(*this, *prelude_index);
 }

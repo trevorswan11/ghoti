@@ -125,10 +125,15 @@ auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
     return TYPE_KIND_NAMES[kind];
 }
 
-auto type_kind_display_name(const type& t) -> std::string {
-    if (const auto info{as_integer(t)}) {
-        return fmt::format("{}{}", info->is_signed ? 'i' : 'u', info->bits);
+auto int_display_name(const types::integer& info) -> std::string {
+    if (info.c_type != types::c_int_type::NONE) {
+        return std::string{syntax::token_type::C_TYPE_NAMES[std::to_underlying(info.c_type) - 1]};
     }
+    return fmt::format("{}{}", info.is_signed ? 'i' : 'u', info.bits);
+}
+
+auto type_kind_display_name(const type& t) -> std::string {
+    if (const auto info{as_integer(t)}) { return int_display_name(*info); }
     return std::string{type_kind_display_name(t.get_kind())};
 }
 
@@ -317,6 +322,12 @@ auto is_unsigned_integer(const type& t) noexcept -> bool {
     return t.get_kind() == type_kind::USIZE;
 }
 
+// Whether every value of `from` is also a value of `to`
+auto int_range_fits(const types::integer& from, const types::integer& to) noexcept -> bool {
+    if (from.is_signed) { return to.is_signed && to.bits >= from.bits; }
+    return to.is_signed ? to.bits > from.bits : to.bits >= from.bits;
+}
+
 auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     const auto from_kind{from.get_kind()};
     const auto to_kind{to.get_kind()};
@@ -354,6 +365,9 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
 
     const auto to_int{as_integer(to)};
     if (!to_int) { return false; }
+    if (from_int->c_type != types::c_int_type::NONE || to_int->c_type != types::c_int_type::NONE) {
+        return int_range_fits(*from_int, *to_int);
+    }
     if (to_int->bits <= from_int->bits) { return false; }
     if (from_int->is_signed) { return to_int->is_signed; }
     return true; // uW widens to any wider iV or uV
@@ -484,8 +498,7 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
     // An INT's width lives on the key, so it stringifies even before the payload is resolved.
     if (get_kind() == type_kind::INT) {
         const auto info{as_integer(*this)};
-        return fmt::format(
-            "{}{}{}", leaf_qualifier(*this), info->is_signed ? 'i' : 'u', info->bits);
+        return fmt::format("{}{}", leaf_qualifier(*this), int_display_name(*info));
     }
     return data_.visit(
         [this, names](types::pointer ptr) {

@@ -244,9 +244,24 @@ struct poison {};
 
 using builtin_type = stdx::monostate;
 
+// Which C type an integer is, sized for the target; `NONE` for `iN` / `uN`
+enum class c_int_type : u8 {
+    NONE,
+    CHAR,
+    SHORT,
+    USHORT,
+    INT,
+    UINT,
+    LONG,
+    ULONG,
+    LONGLONG,
+    ULONGLONG,
+};
+
 struct integer {
-    u16  bits;
-    bool is_signed;
+    u16        bits;
+    bool       is_signed;
+    c_int_type c_type{c_int_type::NONE};
 
     [[nodiscard]] constexpr auto operator==(const integer&) const noexcept -> bool = default;
 };
@@ -442,7 +457,7 @@ class key_t {
         (..., markers_.combine(markers));
         // An `INT` key spells its identity as `(bits, is_signed)` markers; mirror them into
         // named fields so width/signedness survive even on an unresolved pooled twin.
-        if constexpr (sizeof...(Markers) == 2 &&
+        if constexpr (sizeof...(Markers) >= 2 &&
                       (std::integral<std::remove_cvref_t<Markers>> && ...)) {
             if (kind == type_kind::INT || kind == type_kind::COMPTIME_INT) {
                 const u64 packed[]{static_cast<u64>(markers)...};
@@ -673,6 +688,11 @@ static_assert(stdx::TriviallyDestructible<type>);
 
 // `{bits, is_signed}` of a resolved `type_kind::INT`, or none for any other kind.
 [[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
+// `i32`, `u7`, or the C type's own name (`c_int`)
+[[nodiscard]] auto int_display_name(const types::integer& info) -> std::string;
+// Whether every value of `from` is also a value of `to`
+[[nodiscard]] auto int_range_fits(const types::integer& from, const types::integer& to) noexcept
+    -> bool;
 
 // Bit width of a resolved `type_kind::INT`; asserts the kind.
 [[nodiscard]] auto int_width(const type& t) noexcept -> u16;

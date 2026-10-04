@@ -154,6 +154,7 @@ enum class token_type_t : u8 {
     DYN,
 
     INT_TYPE, // `iN` / `uN` for N in 1..65535; width and sign carried in the lexeme
+    C_TYPE,   // `c_int`, `c_ulong`, ...: which C type is carried in the lexeme
     ISIZE_TYPE,
     USIZE_TYPE,
     F16_TYPE,
@@ -331,6 +332,18 @@ namespace token_type {
 
 // Whether `s` has the shape of an arbitrary-width integer type: `i`/`u` then `[1-9][0-9]*`
 [[nodiscard]] auto is_int_type_lexeme(std::string_view s) noexcept -> bool;
+// `c_char`, `c_int`, `c_ulonglong`, ...: the C ABI's types, sized for the target
+[[nodiscard]] auto is_c_type_lexeme(std::string_view s) noexcept -> bool;
+// Indexed by `sema::c_int_type` (minus its `NONE`)
+inline constexpr std::array<std::string_view, 9> C_TYPE_NAMES{"c_char",
+                                                              "c_short",
+                                                              "c_ushort",
+                                                              "c_int",
+                                                              "c_uint",
+                                                              "c_long",
+                                                              "c_ulong",
+                                                              "c_longlong",
+                                                              "c_ulonglong"};
 
 // Check whether the token is an ident, primitive type, or builtin function.
 [[nodiscard]] auto is_valid_ident(token_type_t type) noexcept -> bool;
