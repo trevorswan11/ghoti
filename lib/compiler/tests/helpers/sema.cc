@@ -190,8 +190,8 @@ auto find_nested_fn(const mod::module&        module,
     FAIL("Could not find nested function named '" << name << "'");
 }
 
-auto run_cfg(std::string_view input) -> cfg_outcome {
-    auto [ctx, idx]{helpers::collect(input)};
+auto run_cfg(std::string_view input, const std::vector<mock_file>& imports) -> cfg_outcome {
+    auto [ctx, idx]{helpers::collect(input, imports)};
 
     cfg_outcome out;
     if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {

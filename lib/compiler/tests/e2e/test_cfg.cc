@@ -266,6 +266,29 @@ TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a
     CHECK(exit_code == 8);
 }
 
+TEST_CASE("E2E cfg: a predicate reads another module's @cfgValue through its public imports") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "sys.gh" as sys;
+            @cfg(sys.backend.IS_WIDE and !sys.NARROW) { const pick = fn(): i32 { return 8; }; }
+            else                                      { const pick = fn(): i32 { return 1; }; }
+
+            pub const main = fn(): i32 {
+                @cfg(sys.NARROW) { return 2; }
+                return pick();
+            };
+        )",
+        {
+            helpers::mock_file{"sys.gh", R"(
+                @cfg(ptr_bits >= 16) { pub import "wide.gh" as backend; }
+                else                 { pub import "missing.gh" as backend; }
+                pub const NARROW = @cfgValue(!backend.IS_WIDE);
+            )"},
+            helpers::mock_file{"wide.gh", "pub const IS_WIDE = @cfgValue(ptr_bits >= 16);"},
+        })};
+    CHECK(exit_code == 8);
+}
+
 TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs") {
     CHECK(helpers::compile_and_run(R"(
         @cfg(endian == .little) { let MARK = 1; }

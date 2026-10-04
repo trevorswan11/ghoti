@@ -701,6 +701,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Arithmetic stays ghoti's: no C integer promotions
 - `@cfg(testing)` and `@cfgValue(testing)` are true while building a test executable (`ghoti test`), so test-only helpers can sit next to the code they test
     - **Breaking:** `test` blocks are only checked in a test build; `build-*` and `run` no longer report errors inside them
+- A `@cfg` / `@cfgValue` predicate can read another module's `pub` `@cfgValue` constant through its imports (`@cfg (std.os.HAS_BACKEND) { ... }`), so a gate shared across modules is written once
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

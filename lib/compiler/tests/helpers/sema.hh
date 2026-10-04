@@ -320,7 +320,8 @@ struct cfg_outcome {
 };
 
 // Runs the cfg pass over `input` at module scope and collects every emitted diagnostic
-[[nodiscard]] auto run_cfg(std::string_view input) -> cfg_outcome;
+[[nodiscard]] auto run_cfg(std::string_view input, const std::vector<mock_file>& imports = {})
+    -> cfg_outcome;
 [[nodiscard]] auto selected(std::string_view input, std::string_view name) -> bool;
 
 // The post-cfg-pass field names of the first `const <name> = struct { ... }` root.

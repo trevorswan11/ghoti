@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -69,10 +71,35 @@ class cfg_pass {
         bool             boolean{false};
     };
 
+    // A module-scope `@cfgValue` constant
+    struct cfg_decl {
+        ast::node_id decl;
+        ast::node_id value;
+    };
+
+    // Shared by a pass and the passes it starts to read other modules' constants
+    struct shared_state {
+        // `@cfgValue` constants mid-evaluation, by module and node index
+        std::set<std::pair<const mod::module*, usize>> in_progress;
+        bool                                           hit_cycle{false};
+
+        // `@cfg` statements searched for imports and the arm each takes; `selected` is false
+        // while one is still being selected
+        struct arm_choice {
+            bool           selected{false};
+            stdx::opt_size arm;
+        };
+        std::map<std::pair<const mod::module*, usize>, arm_choice> arms;
+    };
+
   private:
     cfg_pass(mod::module& module, context& ctx)
         : module_{module}, ctx_{ctx},
           facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)} {}
+
+    cfg_pass(mod::module& module, context& ctx, shared_state& shared)
+        : module_{module}, ctx_{ctx},
+          facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)}, shared_{&shared} {}
 
     template <typename... Args>
     auto fail(ast::node_id at, error code, fmt::format_string<Args...> spec, Args&&... args)
@@ -84,6 +111,14 @@ class cfg_pass {
 
     auto               gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     auto               resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value>;
+    [[nodiscard]] auto to_operand(const cfg_value& value) -> operand;
+    [[nodiscard]] auto find_import(std::string_view name, bool public_only)
+        -> stdx::option<mod::module&>;
+    [[nodiscard]] auto taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size;
+    [[nodiscard]] auto find_import_in(const std::vector<ast::stmt_handle>& items,
+                                      std::string_view                     name,
+                                      bool public_only) -> stdx::option<mod::module&>;
+    [[nodiscard]] auto resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value>;
     [[nodiscard]] auto is_compile_error_call(ast::expr_handle h) -> bool;
     [[nodiscard]] auto check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr)
         -> bool;
@@ -143,9 +178,10 @@ class cfg_pass {
     codegen::target_facts facts_;
     bool                  ok_{true};
 
-    ankerl::unordered_dense::map<std::string_view, ast::node_id> cfg_value_decls_;
-    ankerl::unordered_dense::map<usize, cfg_value>               cfg_value_cache_;
-    ankerl::unordered_dense::set<usize>                          in_progress_;
+    ankerl::unordered_dense::map<std::string_view, cfg_decl> cfg_value_decls_;
+    ankerl::unordered_dense::map<usize, cfg_value>           cfg_value_cache_;
+    shared_state                                             own_shared_;
+    shared_state*                                            shared_{&own_shared_};
 };
 
 } // namespace ghoti::sema

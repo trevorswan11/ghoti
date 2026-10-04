@@ -97,11 +97,54 @@ TEST_CASE("cfg: an unknown atom names the valid set") {
     CHECK(out.any_message_contains("os, arch, abi, family, endian, ptr_bits"));
 }
 
-TEST_CASE("cfg: an imported identifier in a predicate is rejected with a re-derive hint") {
+TEST_CASE("cfg: a predicate can only reach into a module it imports") {
     constexpr std::string_view src{R"( @cfg(sys.is_windows) { let x = 1; } else { let y = 1; } )"};
     const auto                 out{run_cfg(src)};
     CHECK(out.has_code(sema::error::CFG_ILLEGAL_CFG_VALUE_REFERENCE));
-    CHECK(out.any_message_contains("@cfgValue"));
+    CHECK(out.any_message_contains("'sys' in 'sys.is_windows' isn't a module import"));
+}
+
+TEST_CASE("cfg: another module's @cfgValue constant must be public") {
+    const auto out{
+        run_cfg(R"(
+        import "sys.gh" as sys;
+        @cfg(sys.WIDE) { let x = 1; }
+    )",
+                {helpers::mock_file{"sys.gh", "const WIDE = @cfgValue(ptr_bits >= 32);"}})};
+    CHECK(out.has_code(sema::error::CFG_ILLEGAL_CFG_VALUE_REFERENCE));
+    CHECK(out.any_message_contains("'sys.WIDE' isn't a public `@cfgValue` constant"));
+}
+
+TEST_CASE("cfg: past the first module, a predicate only follows public imports") {
+    const auto out{
+        run_cfg(R"(
+        import "outer.gh" as outer;
+        @cfg(outer.inner.WIDE) { let x = 1; }
+    )",
+                {
+                    helpers::mock_file{"outer.gh", R"(import "inner.gh" as inner;)"},
+                    helpers::mock_file{"inner.gh", "pub const WIDE = @cfgValue(ptr_bits >= 32);"},
+                })};
+    CHECK(out.has_code(sema::error::CFG_ILLEGAL_CFG_VALUE_REFERENCE));
+    CHECK(out.any_message_contains("'inner' in 'outer.inner.WIDE' isn't a public module import"));
+}
+
+TEST_CASE("cfg: @cfgValue constants that depend on each other across modules are a cycle") {
+    const auto out{run_cfg(R"(
+        import "a.gh" as a;
+        @cfg(a.X) { let x = 1; }
+    )",
+                           {
+                               helpers::mock_file{"a.gh", R"(
+                                   import "b.gh" as b;
+                                   pub const X = @cfgValue(b.Y);
+                               )"},
+                               helpers::mock_file{"b.gh", R"(
+                                   import "a.gh" as a;
+                                   pub const Y = @cfgValue(a.X);
+                               )"},
+                           })};
+    CHECK(out.has_code(sema::error::CFG_VALUE_CYCLE));
 }
 
 TEST_CASE("cfg: @cfgValue guard arms must agree in type") {

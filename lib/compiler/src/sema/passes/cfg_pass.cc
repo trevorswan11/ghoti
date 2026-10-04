@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -144,7 +147,7 @@ auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
     PROFILE_FUNCTION();
     cfg_pass pass{module, ctx};
     pass.gather_cfg_values(module.ast.get_roots());
-    for (const auto& [name, node] : pass.cfg_value_decls_) { pass.resolve_cfg_value(node); }
+    for (const auto& [name, decl] : pass.cfg_value_decls_) { pass.resolve_cfg_value(decl.value); }
     pass.rewrite_roots(module.ast.get_roots());
     return pass.ok_;
 }
@@ -156,7 +159,7 @@ auto cfg_pass::gather_cfg_values(const std::vector<ast::node_id>& list) -> void 
         if (!decl || !decl->value) { continue; }
         if (module_.ast.get_as_opt<ast::cfg_value_expr>(*decl->value)) {
             const auto& name{module_.ast.get_as<ast::identifier_expr>(decl->name).name};
-            cfg_value_decls_.try_emplace(name, *decl->value);
+            cfg_value_decls_.try_emplace(name, cfg_decl{id, *decl->value});
         }
     }
 }
@@ -167,7 +170,8 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
     if (const auto done{cfg_value_cache_.find(key)}; done != cfg_value_cache_.end()) {
         return done->second;
     }
-    if (!in_progress_.emplace(key).second) {
+    if (!shared_->in_progress.emplace(&module_, key).second) {
+        shared_->hit_cycle = true;
         fail(node, error::CFG_VALUE_CYCLE, "@cfgValue constant depends on itself");
         return stdx::none;
     }
@@ -214,12 +218,142 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
         }
     }
 
-    in_progress_.erase(key);
+    shared_->in_progress.erase({&module_, key});
     if (result) {
         cfg_value_cache_.emplace(key, *result);
         module_.cfg_value_results.emplace(key, record);
     }
     return result;
+}
+
+auto cfg_pass::to_operand(const cfg_value& value) -> operand {
+    return value.visit(
+        [](bool b) -> operand { return {.tag = operand::kind::BOOL, .boolean = b}; },
+        [](i64 i) -> operand { return {.tag = operand::kind::INT, .integer = i}; },
+        [](cfgval::member m) -> operand { return {.tag = operand::kind::MEMBER, .text = m.name}; },
+        [](cfgval::text) -> operand { return {.tag = operand::kind::STRING}; },
+        [](cfgval::diverges) -> operand { return {}; });
+}
+
+// The module a module-scope import binds to `name`, looking through `@cfg` arms that are taken
+auto cfg_pass::find_import(std::string_view name, bool public_only) -> stdx::option<mod::module&> {
+    std::vector<ast::stmt_handle> roots;
+    for (const auto id : module_.ast.get_roots()) { roots.emplace_back(ast::stmt_handle{id}); }
+    return find_import_in(roots, name, public_only);
+}
+
+// A predicate can't use an import its own gate guards, so a statement still being selected is
+// skipped
+auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size {
+    const std::pair key{static_cast<const mod::module*>(&module_), id.get_index()};
+    if (const auto seen{shared_->arms.find(key)}; seen != shared_->arms.end()) {
+        return seen->second.selected ? seen->second.arm : stdx::opt_size{};
+    }
+    shared_->arms.emplace(key, shared_state::arm_choice{});
+    stdx::opt_size taken;
+    if (const auto arm{select_arm_of(cfg.arms)}) {
+        taken.emplace(static_cast<usize>(&*arm - cfg.arms.data()));
+    }
+    shared_->arms[key] = {.selected = true, .arm = taken};
+    return taken;
+}
+
+auto cfg_pass::find_import_in(const std::vector<ast::stmt_handle>& items,
+                              std::string_view                     name,
+                              bool public_only) -> stdx::option<mod::module&> {
+    for (const auto item : items) {
+        const ast::node_id id{item};
+        if (const auto cfg{module_.ast.get_as_opt<ast::cfg_stmt>(id)}) {
+            const auto arm{taken_arm(id, *cfg)};
+            if (!arm) { continue; }
+            if (auto found{find_import_in(cfg->arms[*arm].items, name, public_only)}) {
+                return found;
+            }
+            continue;
+        }
+        const auto import{module_.ast.get_as_opt<ast::import_stmt>(id)};
+        if (!import) { continue; }
+        const auto named{import->get_name(module_.ast)};
+        if (!named || named->second != name) { continue; }
+        if (public_only && !ast::import_stmt::is_public(id)) { return stdx::none; }
+
+        const auto loaded{[&] {
+            if (const auto path{module_.ast.get_as_opt<ast::string_expr>(import->payload)}) {
+                return ctx_.modules.try_get_file_module(path->value, module_.parent_path);
+            }
+            return ctx_.modules.try_get_library_module(
+                module_.ast.get_as<ast::identifier_expr>(import->payload).name);
+        }()};
+        if (!loaded || (*loaded)->is_errored()) { return stdx::none; }
+        return **loaded;
+    }
+    return stdx::none;
+}
+
+// `mod.NAME` / `mod.sub.NAME`: a `pub` `@cfgValue` constant of an imported module, through
+// `pub import`s after the first step. Its own errors are reported when its module is collected.
+auto cfg_pass::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value> {
+    PROFILE_FUNCTION();
+    std::vector<std::string_view> path;
+    ast::node_id                  at{dot};
+    while (const auto access{module_.ast.get_as_opt<ast::dot_expr>(at)}) {
+        path.emplace_back(module_.ast.get_as<ast::identifier_expr>(access->member).name);
+        at = ast::node_id{access->object};
+    }
+    const auto root{module_.ast.get_as_opt<ast::identifier_expr>(at)};
+    if (!root) {
+        fail(dot,
+             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+             "a cfg predicate can only reference another module's `@cfgValue` constant as "
+             "`module.NAME`");
+        return stdx::none;
+    }
+    path.emplace_back(root->name);
+    std::ranges::reverse(path);
+    const auto spelled{fmt::format("{}", fmt::join(path, "."))};
+
+    // Each step reads the next module with a throwaway pass, whose errors that module reports
+    context      scratch_ctx{ctx_};
+    mod::module* current{&module_};
+    for (usize i{0}; i + 1 < path.size(); ++i) {
+        const bool is_foreign{current != &module_};
+        cfg_pass   step{*current, scratch_ctx, *shared_};
+        const auto next{step.find_import(path[i], is_foreign)};
+        if (!next) {
+            fail(dot,
+                 error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+                 "'{}' in '{}' isn't a{} module import",
+                 path[i],
+                 spelled,
+                 is_foreign ? " public" : "");
+            return stdx::none;
+        }
+        current = &*next;
+    }
+
+    cfg_pass owner{*current, scratch_ctx, *shared_};
+    owner.gather_cfg_values(current->ast.get_roots());
+    const auto decl{owner.cfg_value_decls_.find(path.back())};
+    if (decl == owner.cfg_value_decls_.end() ||
+        !current->ast.get_as<ast::decl_stmt>(decl->second.decl)
+             .has_modifier(ast::decl_modifiers::PUBLIC)) {
+        fail(dot,
+             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+             "'{}' isn't a public `@cfgValue` constant, which is all a cfg predicate can read "
+             "from another module",
+             spelled);
+        return stdx::none;
+    }
+
+    const auto value{owner.resolve_cfg_value(decl->second.value)};
+    if (!value) {
+        if (shared_->hit_cycle) {
+            fail(dot, error::CFG_VALUE_CYCLE, "'{}' depends on itself", spelled);
+        } else {
+            fail(dot, error::CFG_ILLEGAL_CFG_VALUE_REFERENCE, "'{}' has errors", spelled);
+        }
+    }
+    return value;
 }
 
 auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
@@ -296,7 +430,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         const auto& name{module_.ast.get_as<ast::identifier_expr>(id).name};
         if (is_cfg_atom(name)) { return atom_value(name); }
         if (const auto ref{cfg_value_decls_.find(name)}; ref != cfg_value_decls_.end()) {
-            return resolve_cfg_value(ref->second);
+            return resolve_cfg_value(ref->second.value);
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
@@ -311,15 +445,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return cfg_value{
             cfgval::member{module_.ast.get_as<ast::identifier_expr>(access.member).name}};
     }
-    case ast::node_kind::DOT_EXPRESSION: {
-        const auto& dot{module_.ast.get_as<ast::dot_expr>(id)};
-        fail(id,
-             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
-             "a `@cfg` predicate cannot reference another module's '{}'; `@cfg` is evaluated "
-             "before imports resolve; Re-derive the value locally with `@cfgValue`",
-             module_.ast.get_as<ast::identifier_expr>(dot.member).name);
-        return stdx::none;
-    }
+    case ast::node_kind::DOT_EXPRESSION: return resolve_foreign_value(id);
     case ast::node_kind::BOOL_EXPRESSION:
         return cfg_value{id.get_token_type() == token_type_t::BOOLEAN_TRUE};
     case ast::node_kind::STRING_EXPRESSION:
@@ -392,16 +518,9 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
         }
         if (is_cfg_atom(name)) { return {.tag = operand::kind::ATOM, .text = name}; }
         if (const auto ref{cfg_value_decls_.find(name)}; ref != cfg_value_decls_.end()) {
-            const auto value{resolve_cfg_value(ref->second)};
+            const auto value{resolve_cfg_value(ref->second.value)};
             if (!value) { return {}; } // error already reported
-            return value->visit(
-                [](bool b) -> operand { return {.tag = operand::kind::BOOL, .boolean = b}; },
-                [](i64 i) -> operand { return {.tag = operand::kind::INT, .integer = i}; },
-                [](cfgval::member m) -> operand {
-                    return {.tag = operand::kind::MEMBER, .text = m.name};
-                },
-                [](cfgval::text) -> operand { return {.tag = operand::kind::STRING}; },
-                [](cfgval::diverges) -> operand { return {}; });
+            return to_operand(*value);
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
@@ -410,6 +529,11 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
              "(or a @cfgValue constant)",
              name);
         return {};
+    }
+    case ast::node_kind::DOT_EXPRESSION: {
+        const auto value{resolve_foreign_value(id)};
+        if (!value) { return {}; } // error already reported
+        return to_operand(*value);
     }
     case ast::node_kind::IMPLICIT_ACCESS_EXPRESSION: {
         const auto& access{module_.ast.get_as<ast::implicit_access_expr>(id)};
@@ -557,7 +681,7 @@ auto cfg_pass::compile_error_message(const ast::call_expr& call) -> stdx::option
     if (const auto str{module_.ast.get_as_opt<ast::string_expr>(*arg)}) { return str->value; }
     if (const auto ident{module_.ast.get_as_opt<ast::identifier_expr>(*arg)}) {
         if (const auto ref{cfg_value_decls_.find(ident->name)}; ref != cfg_value_decls_.end()) {
-            if (const auto value{resolve_cfg_value(ref->second)}) {
+            if (const auto value{resolve_cfg_value(ref->second.value)}) {
                 if (const auto str{value->as_opt<cfgval::text>()}) { return str->value; }
             }
         }
