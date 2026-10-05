@@ -2,6 +2,8 @@
 
 #include <ostream>
 
+#include <gsl/span>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -33,8 +35,15 @@ class layout_engine {
     auto render(doc_id root, std::ostream& os) -> void;
 
   private:
-    auto fits(u32 current_width, doc_id doc) const noexcept -> bool;
+    // Whether `doc` fits flat in what's left of the line, along with whatever follows it on that
+    // line in `rest` (the commands still to render, innermost last)
+    auto fits(u32 current_width, doc_id doc, gsl::span<const layout_command> rest) const noexcept
+        -> bool;
     auto measure(doc_id doc, i64& width_left) const noexcept -> bool;
+    // Measures `doc` as rendered in `mode` until its first line break: true at a break, false once
+    // the line overflows, none when it ends first
+    auto measure_until_break(doc_id doc, layout_mode mode, i64& width_left) const noexcept
+        -> stdx::option<bool>;
 
   private:
     doc_manager& doc_manager_;

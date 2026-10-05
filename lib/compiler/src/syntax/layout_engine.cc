@@ -61,7 +61,7 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             [&](docs::group g) {
                 auto fit_mode{layout_mode::BREAK};
                 // Test if the group fits horizontally in flat mode
-                if (!g.force_break && fits(current_width, g.child)) {
+                if (!g.force_break && fits(current_width, g.child, stack)) {
                     fit_mode = layout_mode::FLAT;
                 }
                 stack.emplace_back(g.child, indent_cols, fit_mode);
@@ -85,14 +85,60 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             },
             [&](docs::align a) {
                 stack.emplace_back(a.child, static_cast<u16>(current_width + a.columns), mode);
-            });
+            },
+            [&](docs::line_suffix s) { stack.emplace_back(s.child, indent_cols, mode); });
     }
 }
 
-auto layout_engine::fits(u32 current_width, doc_id doc) const noexcept -> bool {
+auto layout_engine::fits(u32                             current_width,
+                         doc_id                          doc,
+                         gsl::span<const layout_command> rest) const noexcept -> bool {
     auto remaining{static_cast<i64>(max_width_) - static_cast<i64>(current_width)};
-    if (remaining < 0) { return false; }
-    return measure(doc, remaining);
+    if (remaining < 0 || !measure(doc, remaining)) { return false; }
+    for (const auto& command : rest | std::views::reverse) {
+        if (const auto done{measure_until_break(command.doc, command.mode, remaining)}) {
+            return *done;
+        }
+    }
+    return true;
+}
+
+auto layout_engine::measure_until_break(doc_id      doc,
+                                        layout_mode mode,
+                                        i64& width_left) const noexcept -> stdx::option<bool> {
+    const auto consumed{[&](i64 width) -> stdx::option<bool> {
+        width_left -= width;
+        if (width_left < 0) { return false; }
+        return stdx::none;
+    }};
+    return doc_manager_[doc].visit(
+        [&](docs::text t) { return consumed(static_cast<i64>(display_width(t.text))); },
+        [&](const docs::concat& c) -> stdx::option<bool> {
+            for (auto child : c.children) {
+                if (const auto done{measure_until_break(child, mode, width_left)}) { return done; }
+            }
+            return stdx::none;
+        },
+        [&](docs::indent i) { return measure_until_break(i.child, mode, width_left); },
+        [&](docs::group g) {
+            return measure_until_break(
+                g.child, g.force_break ? layout_mode::BREAK : mode, width_left);
+        },
+        [&](docs::line_or_space l) -> stdx::option<bool> {
+            if (mode == layout_mode::BREAK) { return true; }
+            return consumed(static_cast<i64>(l.space_text.size()));
+        },
+        [&](docs::hard_line) -> stdx::option<bool> { return true; },
+        [&](docs::soft_line) -> stdx::option<bool> {
+            if (mode == layout_mode::BREAK) { return true; }
+            return stdx::none;
+        },
+        [&](docs::if_break b) {
+            return measure_until_break(
+                mode == layout_mode::BREAK ? b.when_broken : b.when_flat, mode, width_left);
+        },
+        [&](docs::align a) { return measure_until_break(a.child, mode, width_left); },
+        [&](docs::line_suffix) -> stdx::option<bool> { return stdx::none; });
 }
 
 auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool {
@@ -118,7 +164,8 @@ auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool 
         [&](docs::hard_line) { return false; },
         [&](docs::soft_line) { return true; },
         [&](docs::if_break b) { return measure(b.when_flat, width_left); },
-        [&](docs::align a) { return measure(a.child, width_left); });
+        [&](docs::align a) { return measure(a.child, width_left); },
+        [&](docs::line_suffix s) { return measure(s.child, width_left); });
 }
 
 } // namespace ghoti::syntax

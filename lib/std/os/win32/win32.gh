@@ -212,7 +212,13 @@ const to_wide = fn(utf8: [:0]u8, out: ^mut [WIDE_MAX]u16): R(i32) {
 
 /// Open the file at the provided path with the provided, access, share, disposition, and flags.
 /// - https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew
-pub const open = fn(path: [:0]u8, access: u32, share: u32, disposition: u32, flags: u32): R(Handle) {
+pub const open = fn(
+    path: [:0]u8,
+    access: u32,
+    share: u32,
+    disposition: u32,
+    flags: u32,
+): R(Handle) {
     let mut wbuf: [WIDE_MAX]u16 = undefined;
     _ = to_wide(path, ^mut wbuf)?;
     let h = CreateFileW(
