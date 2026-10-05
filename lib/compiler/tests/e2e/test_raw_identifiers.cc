@@ -49,4 +49,25 @@ TEST_CASE("E2E raw identifier: a primitive spelling can name a user binding") {
     )") == 42);
 }
 
+TEST_CASE(
+    "E2E raw identifier: a declared primitive spelling doesn't shadow the primitive keyword") {
+    CHECK(helpers::compile_and_run(R"(
+        const @"u8" = struct {
+            pub const twice = fn(v: u8): u8 { return v * 2; };
+        };
+        const @"i64" = struct { k: i32 };
+
+        const Wrap = struct {
+            const @"i32" = struct { k: i32 };
+            pub const get = fn(v: i32): i32 { return v + 1; };
+        };
+
+        pub const main = fn(): i32 {
+            let s: @"i64" = .{ .k = 20 };
+            let w: i64 = 1;
+            return @"u8".twice(10) + s.k + Wrap.get(0) + @intCast(w);
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

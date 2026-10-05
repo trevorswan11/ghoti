@@ -187,6 +187,9 @@ struct function_expr {
         bool                     is_comptime{false};
         bool                     is_pack{false};             // `rest...` / `rest: impl I...`
         bool                     is_comptime_written{false}; // `is_comptime` may also be inferred
+        // Where the body reads an inferred `comptime` param at compile time
+        ast::node_id comptime_read{ast::node_id::make_invalid()};
+        bool         comptime_read_in_const{false};
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in

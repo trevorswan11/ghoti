@@ -322,6 +322,18 @@ auto parser::get_peek_precedence() const noexcept
         .value_or(std::pair{bind_precedence::LOWEST, stdx::none});
 }
 
+// `extern struct`, `extern union`, and `extern fn` start a type, not an `extern` declaration
+auto parser::starts_extern_type() const noexcept -> bool {
+    if (!current_token_is(token_type_t::EXTERN)) { return false; }
+    switch (peek_token_.type) {
+    case token_type_t::STRUCT:
+    case token_type_t::UNION:
+    case token_type_t::PACKED:
+    case token_type_t::FUNCTION: return true;
+    default:                     return false;
+    }
+}
+
 auto parser::parse_statement(semicolon_behavior behavior)
     -> stdx::result<ast::stmt_handle, diagnostic> {
     PROFILE_FUNCTION();
@@ -348,7 +360,7 @@ auto parser::parse_statement(semicolon_behavior behavior)
         }()};
         if (missing_let) { return ast::decl_stmt::parse(*this); }
         return ast::expr_stmt::parse(*this, behavior);
-    } else if (current_token_.is_decl_token()) {
+    } else if (current_token_.is_decl_token() && !starts_extern_type()) {
         return ast::decl_stmt::parse(*this);
     }
 

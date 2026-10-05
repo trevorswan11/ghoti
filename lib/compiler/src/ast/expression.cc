@@ -844,7 +844,12 @@ auto infer_comptime_params(syntax::parser&                             parser,
             continue;
         }
         const auto name{parser.get_ast().get_as<identifier_expr>(param.name).name};
-        if (std::ranges::contains(frame.compile_time_names, name)) { param.is_comptime = true; }
+        const auto read{std::ranges::find(
+            frame.compile_time_names, name, &syntax::parser::compile_time_read::name)};
+        if (read == frame.compile_time_names.end()) { continue; }
+        param.is_comptime            = true;
+        param.comptime_read          = read->at;
+        param.comptime_read_in_const = read->in_const_initializer;
     }
 }
 
@@ -1116,7 +1121,7 @@ auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, sy
 auto parse_identifier_reference(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     const auto ident{TRY(identifier_expr::parse(parser))};
-    parser.note_identifier_reference(parser.get_ast().get_as<identifier_expr>(ident).name);
+    parser.note_identifier_reference(parser.get_ast().get_as<identifier_expr>(ident).name, ident);
     return ident;
 }
 

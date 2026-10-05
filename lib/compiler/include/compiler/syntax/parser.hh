@@ -72,13 +72,20 @@ class parser {
 
     // Per function literal: the names its compile-time positions read, for implicit `comptime`
     // params in a `const`-declared function (a nested literal gets its own frame)
+    struct compile_time_read {
+        std::string_view name;
+        ast::node_id     at;
+        bool             in_const_initializer;
+    };
+
     struct comptime_param_frame {
         bool infer{false};
         u32  compile_time_depth{0};
         // Inside an array length, which reads its names at compile time without being a
         // compile-time position (`comptime` there isn't redundant)
-        u32                           array_length_depth{0};
-        std::vector<std::string_view> compile_time_names;
+        u32                            array_length_depth{0};
+        u32                            const_initializer_depth{0};
+        std::vector<compile_time_read> compile_time_names;
     };
 
     class function_scope {
@@ -86,9 +93,10 @@ class parser {
         explicit function_scope(parser& p) : parser_{p} {
             p.comptime_param_frames_.emplace_back(
                 comptime_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
-                                     .compile_time_depth = 0,
-                                     .array_length_depth = 0,
-                                     .compile_time_names = {}});
+                                     .compile_time_depth      = 0,
+                                     .array_length_depth      = 0,
+                                     .const_initializer_depth = 0,
+                                     .compile_time_names      = {}});
         }
         ~function_scope() { parser_.comptime_param_frames_.pop_back(); }
         MAKE_PINNED(function_scope);
@@ -124,7 +132,8 @@ class parser {
     // a `comptime` block or label, or a `const` declaration's initializer
     class compile_time_scope {
       public:
-        compile_time_scope(parser& p, bool enabled) noexcept : parser_{p} {
+        compile_time_scope(parser& p, bool enabled, bool const_initializer = false) noexcept
+            : parser_{p}, const_initializer_{const_initializer} {
             if (!enabled) { return; }
             if (p.comptime_param_frames_.empty()) {
                 outside_functions_ = true;
@@ -132,16 +141,25 @@ class parser {
             } else {
                 frame_ = p.comptime_param_frames_.size() - 1;
                 ++p.comptime_param_frames_[*frame_].compile_time_depth;
+                if (const_initializer_) {
+                    ++p.comptime_param_frames_[*frame_].const_initializer_depth;
+                }
             }
         }
         ~compile_time_scope() {
-            if (frame_) { --parser_.comptime_param_frames_[*frame_].compile_time_depth; }
+            if (frame_) {
+                --parser_.comptime_param_frames_[*frame_].compile_time_depth;
+                if (const_initializer_) {
+                    --parser_.comptime_param_frames_[*frame_].const_initializer_depth;
+                }
+            }
             if (outside_functions_) { --parser_.compile_time_depth_outside_functions_; }
         }
         MAKE_PINNED(compile_time_scope);
 
       private:
         parser&        parser_;
+        bool           const_initializer_;
         stdx::opt_size frame_;
         bool           outside_functions_{false};
     };
@@ -289,11 +307,11 @@ class parser {
         return counter<u32>::guard{type_only_depth_};
     }
 
-    auto note_identifier_reference(std::string_view name) -> void {
+    auto note_identifier_reference(std::string_view name, ast::node_id at) -> void {
         if (comptime_param_frames_.empty() || type_only_depth_) { return; }
         auto& frame{comptime_param_frames_.back()};
         if (frame.infer && (frame.compile_time_depth > 0 || frame.array_length_depth > 0)) {
-            frame.compile_time_names.emplace_back(name);
+            frame.compile_time_names.emplace_back(name, at, frame.const_initializer_depth > 0);
         }
     }
 
@@ -332,6 +350,8 @@ class parser {
     };
 
   private:
+    [[nodiscard]] auto starts_extern_type() const noexcept -> bool;
+
     // Reverts the parser to the state from the checkpoint.
     auto rollback(const checkpoint& checkpoint) noexcept -> void {
         lexer_.restore(checkpoint.snapshot_);
