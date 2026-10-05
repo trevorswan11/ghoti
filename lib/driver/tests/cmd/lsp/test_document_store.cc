@@ -227,4 +227,22 @@ TEST_CASE("seed_known_roots discovers cross-file references without ever opening
     CHECK(refs[0].path == std::filesystem::weakly_canonical(main_file.path));
 }
 
+TEST_CASE("a known file that disappears leaves the index and has its diagnostics cleared") {
+    tempdir dir{"vanishing_root"};
+    dir.write("gone.gh", "pub const vanishing: i32 = true;\n");
+    const auto gone{dir.path / "gone.gh"};
+
+    lsp::document_store store{std::cerr};
+    const auto          seeded{store.seed_known_roots({gone})};
+    CHECK(UNWRAP(find(seeded, gone)).size() == 1);
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "vanishing"));
+
+    // As if its drive were unmounted: the next rebuild can't read it
+    std::filesystem::remove_all(dir.path);
+    const auto after{
+        store.update(dir.path.parent_path() / "vanishing_other.gh", "pub const y = 1;\n")};
+    CHECK(UNWRAP(find(after, gone)).empty());
+    CHECK_FALSE(lsp::has_field(store.workspace_symbols(""), "name", "vanishing"));
+}
+
 } // namespace ghoti::tests
