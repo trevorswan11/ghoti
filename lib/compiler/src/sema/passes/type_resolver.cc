@@ -3748,6 +3748,12 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                               call.function.is<ast::identifier_expr>()};
         const bool                   dot_callee{call.function.is<ast::dot_expr>() &&
                               callee_dots_.insert(call.function.get_index()).second};
+        const auto                   prev_callee{direct_callee_};
+        direct_callee_ =
+            call.function.is<ast::dot_expr>()
+                ? resolving_.ast.get_as<ast::dot_expr>(call.function).member.get_index()
+                : call.function.get_index();
+        const auto restore_callee{gsl::finally([&] { direct_callee_ = prev_callee; })};
         resolve(call.function);
         if (dot_callee) { callee_dots_.erase(call.function.get_index()); }
     }
@@ -9160,6 +9166,7 @@ auto type_resolver::record_declaration(ID id, const mod::module& owner, const sy
         [](const auto&) -> stdx::option<declaration_ref> { return stdx::none; })};
     if (ref) { resolving_.set_identifier_declaration(id, *ref); }
     report_deprecated_use(id, owner, sym);
+    check_testing_use(id, owner, sym);
 }
 
 auto type_resolver::thin_if_comptime(const ast::function_expr::parameter& param, type& param_type)
@@ -11890,6 +11897,59 @@ auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const
     resolving_.warnings.emplace_back(warning);
 }
 
+namespace {
+
+// A function declared `@[testing]`, on its declaration or its literal
+[[nodiscard]] auto declares_testing_fn(const mod::module& owner, ast::node_id node) -> bool {
+    auto       decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
+    const auto literal{[&]() -> stdx::option<const ast::function_expr&> {
+        if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(node)}) { return *fn; }
+        if (decl && decl->value) { return owner.ast.get_as_opt<ast::function_expr>(*decl->value); }
+        return stdx::none;
+    }()};
+    if (literal && literal->declaring_decl) {
+        decl = owner.ast.get_as_opt<ast::decl_stmt>(*literal->declaring_decl);
+    }
+    const auto marked{[](const stdx::option<ast::attribute_list>& attributes) {
+        return attributes && attributes->find(ast::attribute_kind::TESTING);
+    }};
+    return (decl && marked(decl->attributes)) || (literal && marked(literal->attributes));
+}
+
+} // namespace
+
+auto type_resolver::in_testing_context() const -> bool {
+    if (open_function_nodes_.empty()) { return instantiating_testing_fn_; }
+    const auto innermost{open_function_nodes_.back()};
+    return innermost.get_kind() == ast::node_kind::TEST_STATEMENT ||
+           declares_testing_fn(resolving_, innermost);
+}
+
+template <ast::IndexableID ID>
+auto type_resolver::check_testing_use(ID id, const mod::module& owner, const symbol& sym) -> void {
+    // A type position can't name a function to call
+    if constexpr (!std::same_as<ID, ast::node_id>) { return; }
+    const auto node{sym.get_data().as_opt<symbols::node_t>()};
+    if (!node || !declares_testing_fn(owner, ast::node_id{*node})) { return; }
+    const auto loc{resolving_.ast.location_of(id)};
+    if (!direct_callee_ || *direct_callee_ != id.get_index()) {
+        ctx_.diags.emplace_back(
+            fmt::format("'{}' is a `@[testing]` function, which can only be called directly",
+                        sym.get_name()),
+            error::TESTING_FN_OUTSIDE_TEST,
+            loc);
+        return;
+    }
+    if (!in_testing_context()) {
+        ctx_.diags.emplace_back(
+            fmt::format("'{}' is a `@[testing]` function, so only a test or another "
+                        "`@[testing]` function may call it",
+                        sym.get_name()),
+            error::TESTING_FN_OUTSIDE_TEST,
+            loc);
+    }
+}
+
 auto type_resolver::fold_alignment(ast::expr_handle arg) -> stdx::option<u64> {
     resolve(arg);
     gir::const_eval evaluator{ctx_, resolving_};
@@ -12179,6 +12239,7 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
             break;
         case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
         case ast::attribute_kind::VISIBILITY: resolved.visibility = fold_visibility(*item); break;
+        case ast::attribute_kind::TESTING:    resolved.testing = true; break;
         }
     }
 
@@ -14892,6 +14953,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     inst_resolver.reresolve_floor_.emplace(fn_table_idx);
     inst_resolver.deprecated_scope_depth_ =
         deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
+    inst_resolver.instantiating_testing_fn_ = declares_testing_fn(fn_mod, fn_info.node_id);
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;

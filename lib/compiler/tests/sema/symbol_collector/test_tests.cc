@@ -1,7 +1,9 @@
 #include <ranges>
+#include <string_view>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -41,22 +43,62 @@ TEST_CASE("Illegal test location") {
 TEST_CASE("Test-only builtins are rejected outside a test block") {
     helpers::test_collector_fail(
         "const a = fn(): void { @expect(true); };",
-        sema::diagnostic{"'@expect' may only be used inside a 'test' block",
-                         sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                         std::pair{0UZ, 23UZ}});
+        sema::diagnostic{
+            "'@expect' may only be used inside a 'test' block or a `@[testing]` function",
+            sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+            std::pair{0UZ, 23UZ}});
     helpers::test_collector_fail(
         "const a = fn(): void { @require(true); };",
-        sema::diagnostic{"'@require' may only be used inside a 'test' block",
-                         sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                         std::pair{0UZ, 23UZ}});
-    helpers::test_collector_fail("const a = fn(): void { @skip(\"x\"); };",
-                                 sema::diagnostic{"'@skip' may only be used inside a 'test' block",
-                                                  sema::error::TEST_BUILTIN_OUTSIDE_TEST,
-                                                  std::pair{0UZ, 23UZ}});
+        sema::diagnostic{
+            "'@require' may only be used inside a 'test' block or a `@[testing]` function",
+            sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+            std::pair{0UZ, 23UZ}});
+    helpers::test_collector_fail(
+        "const a = fn(): void { @skip(\"x\"); };",
+        sema::diagnostic{
+            "'@skip' may only be used inside a 'test' block or a `@[testing]` function",
+            sema::error::TEST_BUILTIN_OUTSIDE_TEST,
+            std::pair{0UZ, 23UZ}});
 }
 
 TEST_CASE("Test-only builtins collect cleanly inside a test block") {
     helpers::collect_and_check(R"(test "t" { @expect(a == b); @require(c); @skip("later"); })");
+}
+
+TEST_CASE("A `@[testing]` function may use the test builtins, but a closure inside it may not") {
+    CHECK_FALSE(helpers::raised(R"(
+        @[testing]
+        const helper = fn(): void {
+            @expect(true);
+            @require(true);
+            @skip();
+        };
+    )",
+                                sema::error::TEST_BUILTIN_OUTSIDE_TEST));
+    CHECK(helpers::raised(R"(
+        @[testing]
+        const helper = fn(): void {
+            let inner = fn(): void { @require(true); };
+            inner();
+        };
+    )",
+                          sema::error::TEST_BUILTIN_OUTSIDE_TEST));
+}
+
+TEST_CASE("A `@[testing]` function is only called directly from a test or another one") {
+    constexpr auto HELPER{R"(
+        @[testing]
+        const helper = fn(): void { @expect(true); };
+    )"};
+    const auto     raised{[&](std::string_view rest) {
+        return helpers::raised(fmt::format("{}{}", HELPER, rest),
+                               sema::error::TESTING_FN_OUTSIDE_TEST);
+    }};
+    CHECK_FALSE(raised(R"(test { helper(); })"));
+    CHECK_FALSE(raised(R"(@[testing] const outer = fn(): void { helper(); };)"));
+    CHECK(raised(R"(const plain = fn(): void { helper(); };)"));
+    CHECK(raised(R"(test { let f = helper; f(); })"));
+    CHECK(raised(R"(test { let c = fn(): void { helper(); }; c(); })"));
 }
 
 } // namespace ghoti::tests

@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
@@ -72,6 +73,14 @@ auto linkage_modifier(const ast::decl_stmt& decl) -> stdx::option<std::string_vi
         if (decl.has_modifier(flag)) { return spelling; }
     }
     return stdx::none;
+}
+
+// A function literal marked `@[testing]`, directly or through the declaration it initializes
+auto is_testing_fn(const mod::module& owner, const ast::function_expr& fn) -> bool {
+    if (fn.attributes && fn.attributes->find(ast::attribute_kind::TESTING)) { return true; }
+    if (!fn.declaring_decl) { return false; }
+    const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*fn.declaring_decl)};
+    return decl && decl->attributes && decl->attributes->find(ast::attribute_kind::TESTING);
 }
 
 // A fn literal, or an `extern` function signature
@@ -161,15 +170,16 @@ auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
 
-    // `@expect`, `@require`, and `@skip` only make sense inside a `test` block body.
+    // `@expect`, `@require`, and `@skip` only make sense in a `test` block or `@[testing]` helper
     switch (const auto fn_tok{call.function->get_token_type()}) {
     case syntax::token_type_t::BUILTIN_EXPECT:
     case syntax::token_type_t::BUILTIN_REQUIRE:
     case syntax::token_type_t::BUILTIN_SKIP:
-        if (!in_test_scope_) {
+        if (!in_test_scope_ && !in_testing_fn_) {
             ctx_.diags.emplace_back(
-                fmt::format("'{}' may only be used inside a 'test' block",
-                            syntax::get_builtin_opt(fn_tok).value_or("<builtin>")),
+                fmt::format(
+                    "'{}' may only be used inside a 'test' block or a `@[testing]` function",
+                    syntax::get_builtin_opt(fn_tok).value_or("<builtin>")),
                 error::TEST_BUILTIN_OUTSIDE_TEST,
                 collecting_.ast.location_of(call.function));
         }
@@ -261,6 +271,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     const scope                  s{table_stack_, new_idx, table_idx_};
     const default_counter::guard g_fn{in_function_scope_};
     const default_counter::guard g_expr{in_expr_scope_};
+    const auto prev_testing{std::exchange(in_testing_fn_, is_testing_fn(collecting_, fn))};
+    const auto restore_testing{gsl::finally([&] { in_testing_fn_ = prev_testing; })};
 
     // Parameters belong to the parent scope
     if (fn.self) {

@@ -38,6 +38,7 @@ enum class attribute_kind : u8 {
     ALIGN,
     DEPRECATED,
     VISIBILITY,
+    TESTING,
 };
 
 // Mirrors `builtin.BranchHint`

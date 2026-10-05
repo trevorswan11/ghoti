@@ -164,4 +164,60 @@ TEST_CASE("@skip in one test does not hide a real failure in another") {
     )") == 1);
 }
 
+TEST_CASE("A `@[testing]` helper's @expect fails its test without stopping it") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const check_eq = fn(a: auto, b: auto): void { @expect(a == b); };
+
+        test "fails, then keeps going" {
+            check_eq(1, 2);
+            check_eq(3u8, 3u8);
+            reached = true;
+        }
+        test "passes" { check_eq(4, 4); }
+        test "kept going" { @expect(reached); }
+    )") == 1);
+}
+
+TEST_CASE("@require in a nested `@[testing]` helper stops its test") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const must = fn(ok: bool): i32 {
+            @require(ok);
+            return 7;
+        };
+        @[testing]
+        const nested = fn(ok: bool): void {
+            let v = must(ok);
+            @expect(v == 7);
+        };
+
+        test "passes" { nested(true); }
+        test "fails at the require" {
+            nested(false);
+            reached = true;
+        }
+        test "stopped" { @expect(!reached); }
+    )") == 1);
+}
+
+TEST_CASE("@skip in a `@[testing]` helper skips its test") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const skip_unless = fn(ready: bool): void {
+            if (!ready) { @skip("not ready"); }
+        };
+
+        test "skipped" {
+            skip_unless(false);
+            reached = true;
+            @require(false);
+        }
+        test "stopped" { @expect(!reached); }
+    )") == 0);
+}
+
 } // namespace ghoti::tests

@@ -705,6 +705,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A runtime argument to a parameter that a `const` function infers `comptime` names where the body reads it at compile time, and suggests `let` when that read is a `const` initializer (#365)
 - Fixed: a statement starting with `extern struct`, `extern union`, or `extern fn`, like a `match` arm yielding `.little => extern struct { ... }`, was parsed as an `extern` declaration (#366)
 - Fixed: a raw identifier spelling a primitive (`const @"f128" = struct { ... }`) took over the primitive's name, so `f128` meant the struct inside its own module, while `@"u8"` named the primitive instead of the declaration
+- `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
+    - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
+    - A helper is only called directly, from a test or another `@[testing]` function
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -714,6 +717,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
+- Fixed: a skipped test printed `Test failed: <file>: (SKIPP ED)<message>`; it prints `Test skipped: <file>: (SKIPPED) <message>`
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
 - `import std;` works on every target, including ones std has no OS backend for (wasm, freestanding, Linux beyond x86_64 and aarch64)
     - There `std.os` is empty, and the parts built on it are left out: `std.io.File` and the standard streams, `std.heap`'s page allocator, `std.mem.round_up_page`, the test runner, and std's panic and assert handlers (the builtin defaults trap instead)
@@ -734,6 +738,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
 - LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
 - Fixed: the LSP kept workspace symbols and diagnostics for files that disappeared, such as ones on an unmounted drive, and logged a failed reanalysis for each of them on every edit
+- Fixed: `ghoti fmt` left a line past 100 columns when what followed a group on that line (like `): void {` after a parameter list) pushed it over; a trailing comment still never forces a break
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)

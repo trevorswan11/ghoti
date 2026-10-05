@@ -96,6 +96,16 @@ constexpr std::array ALL_ATTRIBUTES{
         .doc = "Who outside the linked image sees the symbol: `.default`, `.hidden` (this image "
                "only), or `.protected` (ELF: exported but never preempted)",
     },
+    attribute_spec{
+        .name      = "testing",
+        .kind      = attribute_kind::TESTING,
+        .min_args  = 0,
+        .max_args  = 0,
+        .targets   = attribute_target::FN_DECL | attribute_target::FN,
+        .signature = "testing",
+        .doc = "A test helper: may use `@expect`, `@require`, and `@skip`, and is called only "
+               "from tests and other `@[testing]` functions",
+    },
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)
