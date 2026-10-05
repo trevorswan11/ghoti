@@ -1,7 +1,9 @@
 #include <array>
 #include <filesystem>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/enum.hh>
@@ -17,6 +19,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/path_utils.hh"
+#include "support/subprocess.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -166,6 +169,46 @@ TEST_CASE("a builtins archive fills symbols that nothing else defines") {
     CHECK_FALSE(codegen::link_executable(user_obj, out_file, {}));
     CHECK(codegen::link_executable(user_obj, out_file, {}, {.builtins = archive.path}));
     CHECK(std::filesystem::file_size(out_file) > 0);
+}
+
+TEST_CASE("a builtins archive wins over the platform library's copy of a routine") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    constexpr auto user     = R"(
+        extern("ghoti_unused_lib", "abs") const c_abs: fn(x: c_int): c_int;
+        pub const main = fn(): i32 {
+            return c_abs(-1);
+        };
+    )";
+    constexpr auto builtins = R"(
+        const abs = fn(x: c_int): c_int {
+            _ = x;
+            return 42;
+        };
+        @export(abs, .{ .name = "abs", .linkage = .weak, .visibility = .hidden });
+    )";
+
+    llvm::LLVMContext context;
+    tempfile          user_obj{"test_builtins_precedence_user.o"};
+    tempfile          archive{"test_builtins_precedence.a"};
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(user)};
+        REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+        REQUIRE(helpers::emit_object(*ctx, context, user_obj));
+    }
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(builtins)};
+        REQUIRE(helpers::emit_static_lib(*ctx, context, archive));
+    }
+
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    const tempfile exe{std::in_place,
+                       fmt::format("{}{}",
+                                   tempfile::make_temp_path("test_builtins_precedence").string(),
+                                   extension)};
+    REQUIRE(codegen::link_executable(user_obj, exe.path, {}, {.builtins = archive.path}));
+    CHECK(helpers::portable_exit_code(UNWRAP(spawn_child(mock_argv{exe.path.string()}))) == 42);
 }
 
 TEST_CASE("windows entry point argv link failure includes sysroot hint") {

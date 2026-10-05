@@ -18,6 +18,7 @@
 #include <fmt/ranges.h>
 #include <gsl/span>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/harness/hooks.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -350,6 +351,11 @@ struct run_result {
 
 [[nodiscard]] auto try_run(std::string_view source) -> run_result {
     dump_program(source);
+    if (!codegen::resolve_target_triple().isOSLinux()) {
+        if (auto missing{helpers::missing_builtins(source)}; !missing.empty()) {
+            return {.missing_builtins = std::move(missing)};
+        }
+    }
     auto              ctx_idx{helpers::type_check_and_verify(source)};
     llvm::LLVMContext context;
     const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
