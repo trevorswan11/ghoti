@@ -173,7 +173,8 @@ auto formatter::consume_trailing_comment(usize line) -> syntax::doc_id {
             while (comment_idx_ < comments_.size() && comments_[comment_idx_].consumed) {
                 ++comment_idx_;
             }
-            return doc_manager_.concat({doc_manager_.text(" "), doc_manager_.text(c.text)});
+            return doc_manager_.line_suffix(
+                doc_manager_.concat({doc_manager_.text(" "), doc_manager_.text(c.text)}));
         }
     }
     return doc_manager_.nil();

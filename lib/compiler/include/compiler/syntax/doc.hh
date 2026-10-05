@@ -54,6 +54,12 @@ struct align {
     u16    columns;
 };
 
+// Printed as `child`, but takes no room when deciding whether what precedes it fits on the line,
+// like a trailing comment
+struct line_suffix {
+    doc_id child;
+};
+
 } // namespace docs
 
 using doc_t = stdx::variant<docs::text,
@@ -64,7 +70,8 @@ using doc_t = stdx::variant<docs::text,
                             docs::hard_line,
                             docs::soft_line,
                             docs::if_break,
-                            docs::align>;
+                            docs::align,
+                            docs::line_suffix>;
 
 class doc_manager {
   public:
@@ -107,6 +114,7 @@ class doc_manager {
     // nothing when flat, newline when broken
     [[nodiscard]] auto soft_line() -> syntax::doc_id;
     [[nodiscard]] auto hard_line() -> syntax::doc_id;
+    [[nodiscard]] auto line_suffix(syntax::doc_id child) -> syntax::doc_id;
     [[nodiscard]] auto if_break(syntax::doc_id when_broken, syntax::doc_id when_flat)
         -> syntax::doc_id;
 

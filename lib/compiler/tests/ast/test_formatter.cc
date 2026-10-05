@@ -21,6 +21,36 @@ TEST_CASE("formatter round-trips simple declarations") {
     CHECK(format_source("let mut a = 'a';") == "let mut a = 'a';\n");
 }
 
+TEST_CASE("formatter counts what follows a group on its line when deciding to break it") {
+    // Flat, the parameters fit, but the return type after them would end past column 100
+    CHECK(format_source("pub const open = fn(path: [:0]u8, access: u32, share: u32, disposition: "
+                        "u32, flags: u32): R(Handle) {\n    return;\n};\n") ==
+          "pub const open = fn(\n"
+          "    path: [:0]u8,\n"
+          "    access: u32,\n"
+          "    share: u32,\n"
+          "    disposition: u32,\n"
+          "    flags: u32,\n"
+          "): R(Handle) {\n"
+          "    return;\n"
+          "};\n");
+    // An attribute moves to its own line before the declaration breaks
+    CHECK(format_source("@[testing] const check_fmt_err = fn(value: auto, spec: std.fmt.Spec, "
+                        "expected: std.fmt.Error): void {\n    return;\n};\n") ==
+          "@[testing]\n"
+          "const check_fmt_err = fn(value: auto, spec: std.fmt.Spec, expected: std.fmt.Error): "
+          "void {\n"
+          "    return;\n"
+          "};\n");
+}
+
+TEST_CASE("formatter doesn't break a line just for its trailing comment") {
+    constexpr std::string_view src{
+        "pub const INVALID: Handle = @ptrFromInt(Handle, @bitCast(usize, -1z)); // "
+        "(HANDLE)(LONG_PTR)-1, a comment long enough to pass column 100\n"};
+    CHECK(format_source(src) == src);
+}
+
 TEST_CASE("formatter round-trips type aliases spelled only as types") {
     for (const std::string_view src : {
              "const D = &dyn I;\n",
