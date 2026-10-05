@@ -1,0 +1,42 @@
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const __addtf3 = fn(a: compiler_rt.f128.Abi, b: compiler_rt.f128.Abi) callconv(.c): compiler_rt.f128.Abi {
+    return compiler_rt.f128.to_abi(
+        add_f128(compiler_rt.f128.from_abi(a), compiler_rt.f128.from_abi(b)),
+    );
+};
+
+pub const add_f128 = fn(a: f128, b: f128): f128 {
+    return addf3(f128, a, b);
+};
+
+/// Ported from:
+///
+/// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/addf3.zig
+@[inline(.always)] const addf3 = fn(T: type, a: T, b: T): T {
+    const bits = @typeInfo(T).float.bits;
+    const Z = @Int(.{ .signedness = .unsigned, .bits = bits });
+
+    const type_width = bits;
+    const significand_bits = std.math.float_mantissa_bits(T);
+    const fractional_bits = std.math.float_fractional_bits(T);
+    const exponent_bits = std.math.float_exponent_bits(T);
+
+    const sign_bit = (@as(Z, 1) << (significand_bits + exponent_bits));
+    const max_exponent = ((1 << exponent_bits) - 1);
+
+    const integer_bit = (@as(Z, 1) << fractional_bits);
+    const quiet_bit = integer_bit >> 1;
+    const significand_mask = (@as(Z, 1) << significand_bits) - 1;
+
+    const abs_mask = sign_bit - 1;
+    const qnan_rep = @as(Z, @bitCast(std.math.nan(T))) | quiet_bit;
+
+    let mut a_rep: Z = @bitCast(a);
+    let a_abs = a_rep & abs_mask;
+    let mut b_rep: Z = @bitCast(b);
+    let b_abs = b_rep & abs_mask;
+
+    return 0.0;
+};
