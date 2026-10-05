@@ -1,0 +1,46 @@
+/// Exports `func` with the given name with hidden visitibility and weak linkage
+pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
+    @cfg (!testing) {
+        @export(func, .{ .name = name, .linkage = .weak, .visibility = .hidden });
+    } else {
+        _ = func;
+        _ = name;
+    }
+};
+
+pub const @"f128" = struct {
+    @cfg (endian == .little) { pub const Abi = extern struct { lo: u64, hi: u64 }; } else {
+        pub const Abi = extern struct { hi: u64, lo: u64 };
+    }
+    const Repr = packed struct { lo: u64, hi: u64 };
+
+    pub const to_abi = fn(raw: f128): Abi {
+        const repr: Repr = @bitCast(raw);
+        return .{ .lo = repr.lo, .hi = repr.hi };
+    };
+
+    pub const from_abi = fn(abi: Abi): f128 {
+        const repr: Repr = .{ .lo = abi.lo, .hi = abi.hi };
+        return @bitCast(repr);
+    };
+
+    pub const complex = ComplexAbi(f128, @This());
+};
+
+const ComplexAbi = fn(Float: type, float: type): type {
+    return struct {
+        pub const Abi = extern struct { real: float.Abi, imag: float.Abi };
+
+        pub const to_abi = fn(raw: Complex(Float)): Abi {
+            return .{ .real = float.to_abi(raw.real), .imag = float.to_abi(raw.imag) };
+        };
+
+        pub const from_abi = fn(abi: Abi): Complex(Float) {
+            return .{ .real = float.from_abi(abi.real), .imag = float.from_abi(abi.imag) };
+        };
+    };
+};
+
+pub const Complex = fn(Float: type): type {
+    return struct { real: Float, imag: Float };
+};
