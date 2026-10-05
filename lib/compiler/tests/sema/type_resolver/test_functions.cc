@@ -460,4 +460,16 @@ TEST_CASE("Non-callable expression") {
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 
+TEST_CASE("An error collected in a generic body is reported, not only its failed instantiation") {
+    const auto diags{helpers::resolve_diags(R"(
+        const g = fn(T: type, a: T): T {
+            if (a > 0) { let a = a; }
+            return a;
+        };
+        const x = g(i32, 1);
+    )")};
+    CHECK(diags.message_contains("Attempt to shadow identifier 'a'"));
+    CHECK(diags.message_contains("Failed to instantiate 'g'"));
+}
+
 } // namespace ghoti::tests

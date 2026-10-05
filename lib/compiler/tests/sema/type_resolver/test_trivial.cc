@@ -116,15 +116,15 @@ TEST_CASE("Defer body jump rejection") {
                                                  sema::error::DEFER_BODY_JUMP,
                                                  std::pair{0UZ, 21UZ}});
 
-    helpers::test_resolver_fail("fn(): void { defer { break; } }",
+    helpers::test_resolver_fail("fn(): void { while (true) { defer { break; } } }",
                                 sema::diagnostic{"cannot 'break' from inside a 'defer' body",
                                                  sema::error::DEFER_BODY_JUMP,
-                                                 std::pair{0UZ, 21UZ}});
+                                                 std::pair{0UZ, 36UZ}});
 
-    helpers::test_resolver_fail("fn(): void { defer { continue; } }",
+    helpers::test_resolver_fail("fn(): void { while (true) { defer { continue; } } }",
                                 sema::diagnostic{"cannot 'continue' from inside a 'defer' body",
                                                  sema::error::DEFER_BODY_JUMP,
-                                                 std::pair{0UZ, 21UZ}});
+                                                 std::pair{0UZ, 36UZ}});
 
     helpers::test_resolver_fail(
         R"(
@@ -185,10 +185,10 @@ TEST_CASE("Call resolution edge cases") {
 TEST_CASE("Loop resolution") {
     helpers::resolve_and_check("const a = l: loop { let foo = 42; };");
     helpers::test_resolver_fail(
-        "for (23) |_| { let mut a: i32 = undefined; }",
+        "const f = fn(): void { for (23) |_| { let mut a: i32 = undefined; } };",
         sema::diagnostic{"Iterables may only be arrays or slices; found 'comptime_int'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 5UZ}});
+                         std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("Duplicate test name") {

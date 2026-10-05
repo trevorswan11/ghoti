@@ -653,4 +653,66 @@ TEST_CASE("an array length makes the parameter it reads compile-time") {
     )") == 4 + 3);
 }
 
+TEST_CASE("Same-named private generics in different modules keep their own instances") {
+    CHECK(helpers::compile_and_run(R"(
+        import "one.gh" as one;
+        import "two.gh" as two;
+        pub const main = fn(): i32 { return one.get() * 10 + two.get(); };
+    )",
+                                   {{"one.gh", R"(
+                                        const pick = fn(T: type, a: T): T { return a + 1; };
+                                        pub const get = fn(): i32 { return pick(i32, 1); };
+                                    )"},
+                                    {"two.gh", R"(
+                                        const pick = fn(T: type, a: T): T { return a + 2; };
+                                        pub const get = fn(): i32 { return pick(i32, 1); };
+                                    )"}}) == 23);
+}
+
+TEST_CASE("A parameter type may reflect on an earlier type parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const shift = fn(T: type, bits: ^mut @Int(.{
+            .signedness = .unsigned,
+            .bits = @typeInfo(T).float.bits,
+        })): i32 {
+            *bits = *bits << 1;
+            return @typeInfo(T).float.bits;
+        };
+        const first = fn(T: type, bytes: [@typeInfo(T).float.bits / 8]u8): u8 {
+            return bytes[0] + @as(u8, @intCast(bytes.len));
+        };
+        pub const main = fn(): i32 {
+            let mut s: u32 = 3;
+            let mut d: u64 = 5;
+            let b: [4]u8 = .{ 1, 2, 3, 4 };
+            return shift(f32, ^mut s) + shift(f64, ^mut d) + @as(i32, @intCast(s + d)) +
+                first(f32, b);
+        };
+    )") == 32 + 64 + 16 + 5);
+    helpers::expect_compile_error(R"(
+        const shift = fn(T: type, bits: ^mut @Int(.{
+            .signedness = .unsigned,
+            .bits = @typeInfo(T).float.bits,
+        })): void { _ = bits; };
+        pub const main = fn(): i32 {
+            let mut s: u32 = 3;
+            shift(f64, ^mut s);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("A module only a test block imports is left out of a non-test build") {
+    CHECK(helpers::compile_and_run(R"(
+        test {
+            import "checks.gh";
+        }
+        pub const main = fn(): i32 { return 6; };
+    )",
+                                   {{"checks.gh", R"(
+                                        const check = fn(): i32 { return 1; };
+                                        test "checks" { @expect(check() == 1); }
+                                    )"}}) == 6);
+}
+
 } // namespace ghoti::tests

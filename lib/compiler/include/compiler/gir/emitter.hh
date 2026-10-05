@@ -482,6 +482,9 @@ class emitter {
     // A compile-time number whose type isn't `t`
     [[nodiscard]] static auto is_foreign_constant(const value& v, const sema::type& t) noexcept
         -> bool;
+    // A constant operand reads as the number type its use was given, like a literal written in
+    // its place: `x + n` with `const n = 24;`, or `x & bits(T)`
+    [[nodiscard]] auto constant_as_use_type(value v, ast::node_id at) -> value;
     // A `comptime_int`/`comptime_float` value converted to the float type `target`
     [[nodiscard]] auto untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
         -> value;

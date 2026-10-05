@@ -110,9 +110,12 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
         resolver.pre_register_impls();
         for (const auto& node : module.ast) { resolver.resolve(node); }
 
+        // Appended, so what symbol collection already reported (a shadowing `let` that later fails
+        // an instantiation) isn't replaced by its consequences
         if (!ctx.diags.empty()) {
-            return module.error_out(std::move(ctx.diags),
-                                    mod::module_state::POISONED_TYPE_RESOLVED);
+            module.absorb_sema_diagnostics(std::move(ctx.diags));
+            module.state = mod::module_state::POISONED_TYPE_RESOLVED;
+            return module.state;
         }
         if (module.is_poisoned()) {
             module.state = mod::module_state::POISONED_TYPE_RESOLVED;
@@ -1535,6 +1538,11 @@ template <ast::IndexableID ID>
     case token_type_t::BUILTIN_FN:        {
         const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
+        if (!desc && mentions_unbound_type(call.arguments[0])) {
+            return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
+            return_type->resolve_if<types::deferred_call>(call);
+            break;
+        }
         if (!desc) {
             return make_sema_err(
                 fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
@@ -12267,6 +12275,24 @@ auto type_resolver::resolve_decl_attributes(ast::node_id          id,
     }
 }
 
+auto type_resolver::mentions_unbound_type(const ast::call_expr::argument& arg) const -> bool {
+    const auto expr{arg.as_opt<ast::expr_handle>()};
+    if (!expr) { return false; }
+    const auto& tree{resolving_.ast};
+    const auto position{[](const source_location& loc) { return std::pair{loc.line, loc.column}; }};
+    const auto start{position(tree.location_of(*expr))};
+    const auto end{position(tree.end_location_of(*expr))};
+    for (const auto id : tree.nodes_of<ast::identifier_expr>()) {
+        const auto at{position(tree.location_of(id))};
+        if (at < start || at >= end) { continue; }
+        const auto t{resolving_.get_sema_type_opt(id)};
+        if (t && t->get_kind() == type_kind::TYPE && !t->get_data().is<types::meta_type>()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 auto type_resolver::mentions_fn_param(const ast::attribute&     item,
                                       const ast::function_expr& fn) const -> bool {
     const auto&                   tree{resolving_.ast};
@@ -14683,13 +14709,14 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Computed early so a nested `for`/`while comptime`'s per-iteration typing keys can be scoped
     // to this instantiation before its body is resolved
-    auto mangled_name =
+    auto mangled_name{
         fmt::format("{}__{}",
-                    fn_info.name.value_or("fn"),
+                    ctx_.instantiation_cache.instance_name(
+                        fn_info.name.value_or("fn"), reinterpret_cast<uptr>(fn_info.fn_expr.get())),
                     fmt::join(concrete_args | std::views::transform([&](const auto& arg) {
                                   return mangle_arg_type(ctx_.generic_functions, *arg);
                               }),
-                              "_"));
+                              "_"))};
     // Distinct `comptime` argument values must produce distinct symbols.
     for (const auto& cx : comptime_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
     // A generic member is distinct per enclosing type: `Box(u8).apply` vs `Box(i64).apply`, or

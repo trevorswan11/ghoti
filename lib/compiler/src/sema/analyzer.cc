@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/util>
@@ -204,6 +205,28 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
     });
 }
 
+// Whether an import, at any depth, reaches a module that failed. One reached only through an import
+// cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
+// its own, so lowering it would walk untyped code.
+[[nodiscard]] auto reaches_failed_module(mod::module& root) -> bool {
+    ankerl::unordered_dense::set<const mod::module*> seen{&root};
+    std::vector<mod::module*>                        frontier{&root};
+    while (!frontier.empty()) {
+        auto* current{frontier.back()};
+        frontier.pop_back();
+        for (const auto import_id : current->import_nodes) {
+            const auto import_type{current->get_sema_type_opt(import_id)};
+            if (!import_type) { continue; }
+            const auto data{import_type->get_data().as_opt<types::module>()};
+            if (!data) { continue; }
+            auto& imported{data->imported};
+            if (imported.is_poisoned() || imported.is_errored()) { return true; }
+            if (seen.insert(&imported).second) { frontier.emplace_back(&imported); }
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
                                        const codegen::optimizer_options& options)
     -> stdx::result<void, codegen::diagnostic> {
@@ -251,7 +274,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     resolve_types(*module);
     modules_.print_all_warnings(error_stream_);
 
-    if (module->is_poisoned()) {
+    if (module->is_poisoned() || reaches_failed_module(*module)) {
         modules_.print_all_diagnostics(error_stream_);
         return gir::module{*module, ctx_.arena};
     }

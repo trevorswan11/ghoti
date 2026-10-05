@@ -4302,7 +4302,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
                     target_type = val->as<stdx::option<sema::type&>>();
                 }
             }
-            if (!target_type) { target_type = module_->get_sema_type_opt(*expr_h); }
+            if (!target_type) {
+                target_type = module_->get_sema_type_opt(*expr_h);
+                // A bare `type` names some type not known yet (an unbound `T: type` in a
+                // dependent parameter type), not the type `type` itself
+                if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
+                    !target_type->get_data().is<sema::types::meta_type>()) {
+                    return stdx::none;
+                }
+            }
         }
         if (!target_type) { return stdx::none; }
         if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {

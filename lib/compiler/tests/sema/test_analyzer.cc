@@ -1,3 +1,4 @@
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -191,6 +192,26 @@ TEST_CASE("Full sema pipeline") {
             CHECK(return_type == void_type);
         }
     }
+}
+
+TEST_CASE("A root that reaches a failed module through an import cycle is not lowered") {
+    std::stringstream errors;
+    auto              ctx{helpers::analyze(
+        "a.gh",
+        errors,
+        "import \"lib.gh\" as lib;\npub const a = fn(): i32 { return lib.b.two(); };\n",
+        mock_file{.path = "lib.gh",
+                               .source = "pub import \"b.gh\" as b;\npub import \"bad.gh\" as bad;\n"},
+        mock_file{.path = "b.gh",
+                               .source =
+                      "import \"lib.gh\" as lib;\npub const two = fn(): i32 { return 2; };\n"},
+        mock_file{.path = "bad.gh", .source = "pub const bad: i32 = undeclared;\n"})};
+    CHECK(ctx->root_mod.is_poisoned());
+
+    const auto b_module{UNWRAP(ctx->manager.try_get_file_module("b.gh"))};
+    REQUIRE_FALSE(b_module->is_poisoned());
+    const auto gir{UNWRAP(ctx->analyzer.analyze("b.gh"))};
+    CHECK(gir.get_functions().empty());
 }
 
 } // namespace ghoti::tests

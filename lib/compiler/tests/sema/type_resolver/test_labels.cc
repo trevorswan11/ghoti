@@ -106,15 +106,15 @@ _ = loop {
 TEST_CASE("Unknown labels resolved") {
     const auto test_unknown_label = [](std::string_view name, usize col) -> void {
         helpers::test_resolver_fail(
-            fmt::format("for (0..2) |_| {{ {} :blk; }}", name),
+            fmt::format("const f = fn(): void {{ for (0..2) |_| {{ {} :blk; }} }};", name),
             sema::diagnostic{
                 fmt::format("Labeled {} statements must be used with a known label", name),
                 sema::error::ILLEGAL_CONTROL_FLOW,
                 std::pair{0UZ, col}});
     };
 
-    test_unknown_label("break", 24);
-    test_unknown_label("continue", 27);
+    test_unknown_label("break", 47);
+    test_unknown_label("continue", 50);
 }
 
 } // namespace ghoti::tests
