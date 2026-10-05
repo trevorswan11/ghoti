@@ -204,7 +204,7 @@ class llvm_lowering {
     type_translator                                           types_;
     ankerl::unordered_dense::map<gir::local_id, llvm::Value*> locals_;
     // The GIR function whose body is being lowered
-    const gir::function*                                               lowering_fn_{nullptr};
+    stdx::option<const gir::function&>                                 lowering_fn_;
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;

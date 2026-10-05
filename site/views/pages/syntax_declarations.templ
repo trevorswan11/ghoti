@@ -146,7 +146,12 @@ export const x = 1;                     // Illegal, a const has no symbol to exp
 		<li><code>naked</code>: no prologue or epilogue; the body must be inline assembly</li>
 		<li><code>align(n)</code>: minimum alignment of the storage or code, in bytes</li>
 		<li><code>deprecated</code> or <code>deprecated("why")</code>: uses warn, or fail under <code>--deprecated=error</code></li>
-		<li><code>testing</code>: a test helper that may use <code>@expect</code>, <code>@require</code>, and <code>@skip</code> (see Testing Statements)</li>
+		<li>
+			<code>testing</code>: a test helper that may use 
+			<code>
+				{ "@expect" }
+			</code>, <code>{ "@require" }</code>, and <code>{ "@skip" }</code> (see Testing Statements)
+		</li>
 		<li>
 			<code>visibility(.default | .hidden | .protected)</code>: who outside the linked image sees the symbol
 			<ul>
@@ -171,11 +176,11 @@ export const x = 1;                     // Illegal, a const has no symbol to exp
 			The runner entry point is <code>test_runner(args: [][:0]u8, tests: []Test): i32</code>; it receives the process
 			arguments (as <code>main</code> does) plus the discovered tests. A <code>weak</code> default is provided.
 		</li>
-		<li><code>@expect(cond)</code> fails the test and keeps going, <code>@require(cond)</code> fails it and stops, and <code>@skip()</code> stops it without failing</li>
+		<li><code>{ "@expect" }(cond)</code> fails the test and keeps going, <code>{ "@require" }(cond)</code> fails it and stops, and <code>{ "@skip" }()</code> stops it without failing</li>
 		<li>
 			A function marked <code>{ "@[testing]" }</code> may use them too, so a check too involved for one expression can live in a helper
 			<ul>
-				<li>A <code>@require</code> or <code>@skip</code> in a helper stops the test that called it, through any helpers in between</li>
+				<li>A <code>{ "@require" }</code> or <code>{ "@skip" }</code> in a helper stops the test that called it, through any helpers in between</li>
 				<li>A helper is only called directly, from a test or another <code>{ "@[testing]" }</code> function</li>
 			</ul>
 		</li>

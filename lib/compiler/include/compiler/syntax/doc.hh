@@ -54,8 +54,7 @@ struct align {
     u16    columns;
 };
 
-// Printed as `child`, but takes no room when deciding whether what precedes it fits on the line,
-// like a trailing comment
+// Printed as `child`, but takes no room when deciding whether what precedes it fits on the line
 struct line_suffix {
     doc_id child;
 };
