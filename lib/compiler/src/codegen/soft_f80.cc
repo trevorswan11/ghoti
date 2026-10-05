@@ -488,8 +488,11 @@ class storage_rewriter {
     }
 
   private:
-    static inline const auto flags{llvm::RF_IgnoreMissingLocals | llvm::RF_NoModuleLevelChanges};
+    static constexpr auto flags{
+        static_cast<llvm::RemapFlags>(std::to_underlying(llvm::RF_IgnoreMissingLocals) |
+                                      std::to_underlying(llvm::RF_NoModuleLevelChanges))};
 
+  private:
     // An `f80` array's stride must not move
     [[nodiscard]] auto check_scalar_size() const -> stdx::result<void, diagnostic> {
         const auto& dl{module_.getDataLayout()};
@@ -620,6 +623,7 @@ class storage_rewriter {
         }
     }
 
+  private:
     llvm::Module&                module_;
     llvm::LLVMContext&           context_;
     storage_mapper               mapper_;
