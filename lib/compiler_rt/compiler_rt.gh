@@ -15,12 +15,12 @@ pub const @"f128" = struct {
     const Repr = packed struct { lo: u64, hi: u64 };
 
     pub const to_abi = fn(raw: f128): Abi {
-        const repr: Repr = @bitCast(raw);
+        let repr: Repr = @bitCast(raw);
         return .{ .lo = repr.lo, .hi = repr.hi };
     };
 
     pub const from_abi = fn(abi: Abi): f128 {
-        const repr: Repr = .{ .lo = abi.lo, .hi = abi.hi };
+        let repr: Repr = .{ .lo = abi.lo, .hi = abi.hi };
         return @bitCast(repr);
     };
 
