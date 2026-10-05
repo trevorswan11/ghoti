@@ -248,12 +248,18 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 		<li><code>f16</code>: IEEE-754 binary16 (half), written with the <code>f16</code> suffix</li>
 		<li><code>f32</code>: IEEE-754 binary32 (single), written with the <code>f32</code> suffix</li>
 		<li><code>f64</code>: IEEE-754 binary64 (double), written with the <code>f64</code> suffix or an unsuffixed real literal</li>
-		<li><code>f80</code>: x86 80-bit extended precision &mdash; available on x86 / x86-64 targets only; using it elsewhere is a compile error. Written with the <code>f80</code> suffix</li>
+		<li>
+			<code>f80</code>: x87 80-bit extended precision, written with the <code>f80</code> suffix
+			<ul>
+				<li>Native on x86 / x86-64. Elsewhere it is stored as an 80-bit integer, and its arithmetic, comparisons, and conversions call compiler_rt routines</li>
+				<li>Off x86 it has no C ABI, so <code>extern</code> declarations can't use it</li>
+			</ul>
+		</li>
 		<li><code>f128</code>: IEEE-754 binary128 (quad), written with the <code>f128</code> suffix</li>
 		<li>
 			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>comptime_float</code>, materializing as <code>f64</code> when left un-anchored
 			<ul>
-				<li><code>f80</code> and <code>f128</code> constant expressions are <em>not</em> folded at compile time (folding them at <code>f64</code> would silently lose precision); such expressions must be evaluated at runtime</li>
+				<li><code>f80</code> and <code>f128</code> constant expressions fold at compile time with their full precision, the same on every target</li>
 			</ul>
 		</li>
 	</ul>

@@ -1968,7 +1968,8 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
             }
         }
         if (!extract_indices.empty() && inst.operands[0].type &&
-            inst.operands[0].type->get_kind() == sema::type_kind::STRUCT) {
+            (inst.operands[0].type->get_kind() == sema::type_kind::STRUCT ||
+             inst.operands[0].type->get_kind() == sema::type_kind::CLOSURE)) {
             extract_indices.front() =
                 types_.struct_field_index(base_ptr->getType(), extract_indices.front());
         }
@@ -1994,7 +1995,7 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                     idx = builder_.CreateIntCast(idx, types_.get_int32_ty(), false);
                 }
                 const bool is_field_index{indices.size() == 1 &&
-                                          base_type.get_kind() == sema::type_kind::STRUCT};
+                                          base_type.get_kind() != sema::type_kind::UNION};
                 if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)};
                     ci && is_field_index) {
                     const auto field{static_cast<u32>(ci->getZExtValue())};

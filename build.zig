@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) !void {
     const cdb_gen: *CDBGenerator = .init(b);
 
     var compiler_flags: stdx.ArrayList([]const u8) = .fromSlice(b, &stdx.utils.base_cxx_flags);
-    compiler_flags.appendSlice(&.{ "-DMAGIC_ENUM_RANGE_MAX=255", "-DREPLXX_STATIC" });
+    compiler_flags.appendSlice(&.{ "-DMAGIC_ENUM_RANGE_MAX=255", "-DREPLXX_STATIC", "-fno-rtti" });
     const dist_flags: []const []const u8 = &.{ "-DNDEBUG", "-DGHOTI_DIST" };
 
     var package_flags = compiler_flags.clone();

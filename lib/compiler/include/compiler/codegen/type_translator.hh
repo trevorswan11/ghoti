@@ -66,10 +66,15 @@ class type_translator {
     auto translate_slot(const sema::type& slot) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
-    // Lays `element_types` out at the offsets their `@[align(n)]` fields demand, if any differ
     auto set_struct_body(llvm::StructType*            struct_ty,
                          const sema::types::struct_t& s,
                          gsl::span<llvm::Type* const> element_types) -> void;
+    // Lays `element_types` out at the offsets sema gave them (`wanted_alignments`, `@[align(n)]`
+    // included) wherever LLVM's own alignment would put them elsewhere
+    auto set_padded_body(llvm::StructType*            struct_ty,
+                         gsl::span<llvm::Type* const> element_types,
+                         gsl::span<const u64>         wanted_alignments,
+                         bool                         is_packed) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)

@@ -12,6 +12,7 @@
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/sema/context.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
 #include "driver/cmd/build/executable.hh"
@@ -37,7 +38,7 @@ TEST_CASE("REPL subcommand parser") {
     mock_argv    args{"ghoti", "repl"};
     clap::parser parser{args.argc(), args.argv(), std::cerr, false};
     auto         cmd{UNWRAP(parser.parse())};
-    CHECK(dynamic_cast<cmd::shell*>(cmd.get()));
+    CHECK(cmd->is<cmd::shell>());
 }
 
 TEST_CASE("build-obj subcommand parser") {
@@ -45,7 +46,7 @@ TEST_CASE("build-obj subcommand parser") {
         mock_argv    args{"ghoti", "build-obj", "src/main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/main.gh");
@@ -59,7 +60,7 @@ TEST_CASE("build-obj subcommand parser") {
         mock_argv    args{"ghoti", "build-obj", "-o", "bin/out.o", "main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "main.gh");
@@ -71,7 +72,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "--mode", std::string{mode}, "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             return build_cmd.get_opts().runtime_safety;
         }};
         CHECK(safety_for("debug"));
@@ -92,7 +93,7 @@ TEST_CASE("build-obj subcommand parser") {
                        "main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
         const auto&  target_opts{build_cmd.get_opts().target_opts};
         CHECK(UNWRAP(target_opts.triple_str) == "x86_64-unknown-linux-gnu");
         CHECK(target_opts.cpu == "skylake");
@@ -104,7 +105,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
             CHECK(opts.mode == sema::optimize_mode::DEBUG);
             CHECK(opts.opt_opts.level == codegen::opt_level::O0);
@@ -116,7 +117,7 @@ TEST_CASE("build-obj subcommand parser") {
                     "ghoti", "build-obj", std::string{flag}, std::string{mode}, "main.gh"};
                 clap::parser parser{args.argc(), args.argv(), std::cerr, false};
                 auto         cmd{UNWRAP(parser.parse())};
-                auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+                auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
                 return build_cmd.get_opts().opt_opts.level;
             }};
             CHECK(level_for("--mode", "release_safe") == codegen::opt_level::O2);
@@ -128,7 +129,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "--debug-passes", "--time-passes", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
             CHECK(opts.opt_opts.debug_logging);
             CHECK(opts.opt_opts.time_passes);
@@ -159,7 +160,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             CHECK_FALSE(build_cmd.get_opts().emit_gir_path);
             CHECK_FALSE(build_cmd.get_opts().emit_llvm_ir_path);
             CHECK_FALSE(build_cmd.get_opts().emit_asm_path);
@@ -176,7 +177,7 @@ TEST_CASE("build-obj subcommand parser") {
                            "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
             CHECK(UNWRAP(opts.emit_gir_path) == "a.gir");
             CHECK(UNWRAP(opts.emit_llvm_ir_path) == "b.ll");
@@ -196,7 +197,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "-m", "math,src/math.gh", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 1);
             CHECK(mods[0].name == "math");
@@ -213,7 +214,7 @@ TEST_CASE("build-obj subcommand parser") {
                            "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 2);
             CHECK(mods[0].name == "math");
@@ -237,7 +238,7 @@ TEST_CASE("build-exe subcommand parser") {
         mock_argv    args{"ghoti", "build-exe", "-o", "bin/myprog", "src/main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_exe*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_exe>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/main.gh");
@@ -251,16 +252,10 @@ TEST_CASE("--no-compiler-rt is accepted by every linking subcommand") {
         mock_argv    args{std::move(argv)};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        if (const auto* exe{dynamic_cast<cmd::build_exe*>(cmd.get())}) {
-            return exe->get_opts().compiler_rt;
-        }
-        if (const auto* lib{dynamic_cast<cmd::build_lib*>(cmd.get())}) {
-            return lib->get_opts().compiler_rt;
-        }
-        if (const auto* run{dynamic_cast<cmd::run_cmd*>(cmd.get())}) {
-            return run->get_opts().compiler_rt;
-        }
-        return UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts().compiler_rt;
+        if (const auto exe{cmd->as_opt<cmd::build_exe>()}) { return exe->get_opts().compiler_rt; }
+        if (const auto lib{cmd->as_opt<cmd::build_lib>()}) { return lib->get_opts().compiler_rt; }
+        if (const auto run{cmd->as_opt<cmd::run_cmd>()}) { return run->get_opts().compiler_rt; }
+        return UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts().compiler_rt;
     }};
 
     for (const std::string sub : {"build-exe", "build-lib", "run", "test"}) {
@@ -280,7 +275,7 @@ TEST_CASE("build-lib subcommand parser") {
         mock_argv    args{"ghoti", "build-lib", "src/lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/lib.gh");
@@ -296,7 +291,7 @@ TEST_CASE("build-lib subcommand parser") {
         mock_argv    args{"ghoti", "build-lib", "-o", "lib/mylib.a", "lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "lib.gh");
@@ -307,7 +302,7 @@ TEST_CASE("build-lib subcommand parser") {
         mock_argv    args{"ghoti", "build-lib", "--dynamic", "src/lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/lib.gh");
@@ -326,7 +321,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.input_path == "my_test.gh");
         CHECK(opts.forwarded_args.empty());
         CHECK_FALSE(opts.output_explicit);
@@ -336,7 +331,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh", "--", "alpha", "--beta"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.input_path == "my_test.gh");
         REQUIRE(opts.forwarded_args.size() == 2);
         CHECK(opts.forwarded_args[0] == "alpha");
@@ -347,7 +342,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh", "one", "two"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(std::ranges::equal(opts.forwarded_args, std::array{"one", "two"}));
     }
 
@@ -355,7 +350,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "-o", "built_test.exe", "my_test.gh"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.output_path == "built_test.exe");
         CHECK(opts.output_explicit);
     }

@@ -141,14 +141,4 @@ TEST_CASE("f80 encodings x87 rejects fold to NaN like they run") {
 }
 #endif
 
-TEST_CASE("f80 is rejected on non-x86 targets") {
-    auto [ctx, idx]{
-        helpers::resolve_for_target("let mut x: f80 = undefined;", "aarch64-unknown-linux-gnu")};
-    helpers::check_errors_against<sema::diagnostics>(
-        ctx->root_mod,
-        sema::diagnostic{"the 'f80' type is only available on x86 and x86_64 targets",
-                         sema::error::UNSUPPORTED_TARGET,
-                         std::pair{0UZ, 11UZ}});
-}
-
 } // namespace ghoti::tests

@@ -31,6 +31,9 @@ enum : i32 {
 // https://www.jsonrpc.org/specification
 class lsp_server final : public command {
   public:
+    static constexpr auto KIND{command_kind::LSP_SERVER};
+
+  public:
     explicit lsp_server(
         std::ostream&             error_stream       = std::cerr,
         std::chrono::milliseconds throttle_interval  = lsp::DEFAULT_THROTTLE_INTERVAL,
@@ -41,6 +44,7 @@ class lsp_server final : public command {
           workspace_file_cap_{workspace_file_cap} {}
 
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
 
   private:
     // Dispatches one already-parsed message; returns false once `exit` has been handled

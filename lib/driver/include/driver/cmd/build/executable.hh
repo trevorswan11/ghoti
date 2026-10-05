@@ -14,10 +14,14 @@ namespace ghoti::cmd {
 
 class build_exe final : public command {
   public:
+    static constexpr auto KIND{command_kind::BUILD_EXE};
+
+  public:
     explicit build_exe(build::options opts, std::ostream& error_stream = std::cerr)
         : command{error_stream}, opts_{std::move(opts)} {}
 
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
 
     MAKE_GETTER(opts, const build::options&)
 

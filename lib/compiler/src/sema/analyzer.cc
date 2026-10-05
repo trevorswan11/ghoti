@@ -31,6 +31,7 @@
 #include "compiler/codegen/llvm_optimizer.hh"
 #include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/opt_level.hh"
+#include "compiler/codegen/soft_f80.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/instruction.hh"
@@ -206,6 +207,7 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 [[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
                                        const codegen::optimizer_options& options)
     -> stdx::result<void, codegen::diagnostic> {
+    TRY(codegen::soften_f80(llvm_mod));
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
     if (llvm::verifyModule(llvm_mod, &os)) {

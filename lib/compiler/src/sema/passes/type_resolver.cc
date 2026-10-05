@@ -5745,14 +5745,6 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
         // A `comptime let mut` type is whatever the statements so far left it holding
         auto& resolved{
             comptime_type_var_value(sym).value_or(get_resolved_symbol_type(symbol_data))};
-        if (resolved.get_kind() == type_kind::F80 && !target_has_x86_fp80()) {
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 "the 'f80' type is only available on x86 and x86_64 targets",
-                                 error::UNSUPPORTED_TARGET,
-                                 resolving_.ast.location_of(id)));
-        }
         resolving_.set_sema_type(id, resolved);
         break;
     }
@@ -10001,15 +9993,6 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
     default:  kind = type_kind::F64; break; // 0 (width-less) and 64
     }
 
-    if (kind == type_kind::F80 && !target_has_x86_fp80()) {
-        return last_type_.emplace(
-            ctx_.poison_node(resolving_,
-                             id,
-                             "the 'f80' type is only available on x86 and x86_64 targets",
-                             error::UNSUPPORTED_TARGET,
-                             resolving_.ast.location_of(id)));
-    }
-
     // An unsuffixed real literal is `comptime_float` and coerces freely
     type* resolved{expr.width == 0 ? &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT)
                                    : &ctx_.get_builtin_resolved_type(kind)};
@@ -10114,35 +10097,41 @@ struct cabi_offenders {
     bool has_nonabi_scalar{false};
 };
 
-// A leaf integer/float width with no defined C ABI representation
-[[nodiscard]] auto is_nonabi_scalar(const type& t) noexcept -> bool {
+// A leaf integer/float width with no defined C ABI representation. Off x86, `f80` is software
+// and C has no 80-bit type to match.
+[[nodiscard]] auto is_nonabi_scalar(const type& t, bool native_f80) noexcept -> bool {
     if (t.get_kind() == type_kind::INT) {
         const auto bits{int_width(t)};
         return bits != 8 && bits != 16 && bits != 32 && bits != 64;
     }
+    if (t.get_kind() == type_kind::F80) { return !native_f80; }
     return t.get_kind() == type_kind::F16 || t.get_kind() == type_kind::F128;
 }
 
-[[nodiscard]] auto scan_cabi_offenders(const type& t, cabi_offenders acc = {}) -> cabi_offenders {
-    if (is_nonabi_scalar(t)) { acc.has_nonabi_scalar = true; }
+[[nodiscard]] auto scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {})
+    -> cabi_offenders {
+    if (is_nonabi_scalar(t, native_f80)) { acc.has_nonabi_scalar = true; }
+    const auto scan{[native_f80](const type& inner, cabi_offenders so_far) {
+        return scan_cabi_offenders(inner, native_f80, so_far);
+    }};
     return t.get_data().visit(
         [&acc](types::dyn_t) {
             acc.has_dyn = true;
             return acc;
         },
-        [&acc](types::reference r) {
+        [&acc, &scan](types::reference r) {
             acc.has_ref = true;
-            return scan_cabi_offenders(r.underlying, acc);
+            return scan(r.underlying, acc);
         },
-        [acc](types::pointer p) { return scan_cabi_offenders(p.underlying, acc); },
-        [acc](types::slice sl) { return scan_cabi_offenders(sl.underlying, acc); },
-        [acc](types::array ar) { return scan_cabi_offenders(ar.underlying, acc); },
-        [&acc](types::function fn) {
+        [acc, &scan](types::pointer p) { return scan(p.underlying, acc); },
+        [acc, &scan](types::slice sl) { return scan(sl.underlying, acc); },
+        [acc, &scan](types::array ar) { return scan(ar.underlying, acc); },
+        [&acc, &scan](types::function fn) {
             if (fn.erased) { acc.has_erased_fn = true; }
-            for (const auto* param : fn.params) { acc = scan_cabi_offenders(*param, acc); }
-            return scan_cabi_offenders(fn.return_type, acc);
+            for (const auto* param : fn.params) { acc = scan(*param, acc); }
+            return scan(fn.return_type, acc);
         },
-        [acc](types::deferred_array da) { return scan_cabi_offenders(da.underlying, acc); },
+        [acc, &scan](types::deferred_array da) { return scan(da.underlying, acc); },
         [acc](const auto&) { return acc; });
 }
 
@@ -10177,7 +10166,7 @@ struct cabi_offenders {
     return diagnostic{
         fmt::format("extern {} field '{}' has type '{}', which has no C ABI representation; "
                     "extern signatures accept 8/16/32/64-bit integers, usize/isize, bool, f32, "
-                    "f64, f80",
+                    "f64, and f80 on x86",
                     kind,
                     name,
                     type_name),
@@ -10189,7 +10178,7 @@ struct cabi_offenders {
     -> diagnostic {
     return diagnostic{
         fmt::format("'{}' has no C ABI representation; extern signatures accept 8/16/32/64-bit "
-                    "integers, usize/isize, bool, f32, f64, f80",
+                    "integers, usize/isize, bool, f32, f64, and f80 on x86",
                     type_name),
         error::ILLEGAL_REFERENCE_FIELD,
         location};
@@ -10291,7 +10280,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         }
 
         if (struct_expr.is_extern) {
-            const auto bad{scan_cabi_offenders(*field_type)};
+            const auto bad{scan_cabi_offenders(*field_type, target_has_x86_fp80())};
             const auto loc{resolving_.ast.location_of(field.explicit_type)};
             if (bad.has_dyn) {
                 return last_type_.emplace(
@@ -10414,7 +10403,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         }
 
         if (union_expr.is_extern) {
-            const auto bad{scan_cabi_offenders(field_type)};
+            const auto bad{scan_cabi_offenders(field_type, target_has_x86_fp80())};
             const auto loc{resolving_.ast.location_of(field.explicit_type)};
             if (bad.has_dyn) {
                 return last_type_.emplace(
@@ -11168,7 +11157,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     } else {
         // No field-level path covers `extern` fn signatures / globals themselves; check here.
         if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
-            const auto bad{scan_cabi_offenders(resolved_type)};
+            const auto bad{scan_cabi_offenders(resolved_type, target_has_x86_fp80())};
             if (bad.has_nonabi_scalar) {
                 const auto loc{decl.explicit_type ? resolving_.ast.location_of(*decl.explicit_type)
                                                   : resolving_.ast.location_of(id)};

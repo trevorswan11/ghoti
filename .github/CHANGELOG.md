@@ -708,6 +708,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
     - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
     - A helper is only called directly, from a test or another `@[testing]` function
+- `f80` works on every target, not only x86
+    - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
+    - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
+    - `f80` constants fold at compile time identically on every target
+    - Off x86 it has no C ABI, so `extern` declarations can't use it
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
