@@ -51,10 +51,10 @@ extern const __ghoti_test_take_skipped: fn(): bool;
     };
 
     pub const skip_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        std.io.eprint("Test failed: ")!;
+        std.io.eprint("Test skipped: ")!;
         std.io.eprint(loc.file)!;
         if (msg.len > 0) {
-            std.io.eprint(": (SKIPP ED)")!;
+            std.io.eprint(": (SKIPPED) ")!;
             std.io.eprintln(msg)!;
         } else {
             std.io.eprintln(": (SKIPPED)")!;

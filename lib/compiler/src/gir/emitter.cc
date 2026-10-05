@@ -3984,8 +3984,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
             request_builtin_runtime("skip_handler");
             builder_.emit_builtin_call("@skip", std::move(args), void_type);
-            // A skipped test simply passes: return `true` and stop emitting this path.
-            builder_.emit_return(value{true, bool_type});
+            // A skipped test simply passes: return `true` and stop emitting this path. A
+            // `@[testing]` helper's return is left to lowering, which unwinds to the test.
+            if (const auto current{builder_.get_function()};
+                !current || !current->get_attributes().testing) {
+                builder_.emit_return(value{true, bool_type});
+            }
             return value{void_val{}, ret_type};
         }
         case syntax::token_type_t::BUILTIN_CLZ:

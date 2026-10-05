@@ -187,6 +187,8 @@ class symbol_collector {
     default_counter in_loop_scope_;
     default_counter in_label_scope_;
     default_counter in_test_scope_;
+    // The innermost function is `@[testing]`, so it may use the test builtins
+    bool in_testing_fn_{false};
 
     // The struct/union/enum tables currently being populated (innermost last)
     std::vector<std::pair<usize, std::string_view>> aggregate_table_stack_;

@@ -438,6 +438,10 @@ class type_resolver {
     // Warns (or errors, per `--deprecated`) when `id` names a `@[deprecated]` declaration or field
     template <ast::IndexableID ID>
     auto report_deprecated_use(ID id, const mod::module& owner, const symbol& sym) -> void;
+    // A `@[testing]` function may only be called directly, from a test or another one
+    template <ast::IndexableID ID>
+    auto check_testing_use(ID id, const mod::module& owner, const symbol& sym) -> void;
+    [[nodiscard]] auto in_testing_context() const -> bool;
     // A positive power-of-two byte alignment, reporting anything else
     [[nodiscard]] auto fold_alignment(ast::expr_handle arg) -> stdx::option<u64>;
     // Fields accept only field attributes; returns the field's folded `align`, if any
@@ -852,6 +856,10 @@ class type_resolver {
 
     // Nonzero while resolving a `@[deprecated]` item, whose own uses of deprecated names stay quiet
     u32 deprecated_scope_depth_{0};
+    // An instantiation resolver re-typing a `@[testing]` generic's body, which has no open function
+    bool instantiating_testing_fn_{false};
+    // The node a call names as its callee while it resolves: the identifier, or a dot's member
+    stdx::opt_size direct_callee_;
 
     // Set by `instantiate_generic` to that inst's mangled name for the duration of body resolution
     std::string typing_scope_prefix_{};

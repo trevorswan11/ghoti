@@ -135,6 +135,7 @@ enum class error : u8 {
     ILLEGAL_POLY_MUTABILITY,
     ILLEGAL_UNWRAP_CAPTURE,
     ESCAPING_LOCAL_REFERENCE,
+    TESTING_FN_OUTSIDE_TEST,
 };
 
 using diagnostic  = diagnostic<error>;

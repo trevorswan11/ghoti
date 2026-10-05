@@ -67,6 +67,13 @@ namespace ghoti::codegen {
 
 namespace {
 
+// Marks a `@[testing]` helper so calls to it check whether it aborted its test
+constexpr std::string_view TESTING_FN_ATTRIBUTE{"ghoti-testing"};
+
+} // namespace
+
+namespace {
+
 // Local symbols are invisible to the linker, and LLVM requires them to keep default visibility
 auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibility> visibility)
     -> void {
@@ -930,6 +937,45 @@ auto llvm_lowering::get_or_create_test_skipped_flag() -> llvm::GlobalVariable* {
                                     "__ghoti_test_skipped");
 }
 
+auto llvm_lowering::get_or_create_test_abort_flag() -> llvm::GlobalVariable* {
+    PROFILE_FUNCTION();
+    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_aborted", true)}) { return gvar; }
+    return new llvm::GlobalVariable(*llvm_module_,
+                                    builder_.getInt1Ty(),
+                                    false,
+                                    llvm::GlobalValue::InternalLinkage,
+                                    builder_.getInt1(false),
+                                    "__ghoti_test_aborted");
+}
+
+auto llvm_lowering::emit_testing_abort_return() -> void {
+    auto* ret_ty{builder_.GetInsertBlock()->getParent()->getReturnType()};
+    if (ret_ty->isVoidTy()) {
+        builder_.CreateRetVoid();
+    } else if (lowering_fn_ && lowering_fn_->get_is_test()) {
+        // The test's own result folds in the failed flag, so a skip passes and a require fails
+        builder_.CreateRet(builder_.getInt1(true));
+    } else {
+        // The caller returns too without reading the value
+        builder_.CreateRet(llvm::PoisonValue::get(ret_ty));
+    }
+}
+
+auto llvm_lowering::emit_testing_abort_check(const llvm::Function& callee) -> void {
+    if (!callee.hasFnAttribute(TESTING_FN_ATTRIBUTE) || !lowering_fn_ ||
+        (!lowering_fn_->get_is_test() && !lowering_fn_->get_attributes().testing)) {
+        return;
+    }
+    auto* fn{builder_.GetInsertBlock()->getParent()};
+    auto* aborted{builder_.CreateLoad(builder_.getInt1Ty(), get_or_create_test_abort_flag())};
+    auto* abort_bb{llvm::BasicBlock::Create(context_, "test.abort", fn)};
+    auto* cont_bb{llvm::BasicBlock::Create(context_, "test.continue", fn)};
+    builder_.CreateCondBr(aborted, abort_bb, cont_bb);
+    builder_.SetInsertPoint(abort_bb);
+    emit_testing_abort_return();
+    builder_.SetInsertPoint(cont_bb);
+}
+
 auto llvm_lowering::define_test_take_skipped() -> void {
     PROFILE_FUNCTION();
     auto* i1_ty{builder_.getInt1Ty()};
@@ -1570,6 +1616,8 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
         apply_visibility(*symbol, alias.visibility);
     }
 
+    if (fn.get_attributes().testing) { llvm_fn->addFnAttr(TESTING_FN_ATTRIBUTE); }
+
     globals_[fn.get_name()] = llvm_fn;
     return llvm_fn;
 }
@@ -1584,6 +1632,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         return llvm_fn;
     }
     clear_locals();
+    lowering_fn_ = &fn;
 
     // Pre-allocate basic blocks for all segments
     for (const auto* seg : fn.get_segments()) {
@@ -1616,6 +1665,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     if (fn.get_is_test()) {
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_failed_flag());
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_skipped_flag());
+        builder_.CreateStore(builder_.getInt1(false), get_or_create_test_abort_flag());
     }
 
     // Lower each segment; dead code after a diverging expression was never type checked
@@ -2404,6 +2454,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
             auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
             call_inst->setCallingConv(callee_fn->getCallingConv());
             if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
+            emit_testing_abort_check(*callee_fn);
             return call_inst;
         }
     }
@@ -2657,7 +2708,12 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
             emit_context_handler_call(inst, "require_handler", 4UZ, 1UZ);
-            builder_.CreateRet(builder_.getInt1(false));
+            if (lowering_fn_ && lowering_fn_->get_attributes().testing) {
+                builder_.CreateStore(builder_.getInt1(true), get_or_create_test_abort_flag());
+                emit_testing_abort_return();
+            } else {
+                builder_.CreateRet(builder_.getInt1(false));
+            }
 
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
@@ -2689,6 +2745,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         case syntax::token_type_t::BUILTIN_SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
             emit_context_handler_call(inst, "skip_handler", 0UZ, 1UZ);
+            // A test returns right after; a `@[testing]` helper unwinds to it here
+            if (lowering_fn_ && lowering_fn_->get_attributes().testing) {
+                builder_.CreateStore(builder_.getInt1(true), get_or_create_test_abort_flag());
+                emit_testing_abort_return();
+                builder_.SetInsertPoint(llvm::BasicBlock::Create(
+                    context_, "skip.after", builder_.GetInsertBlock()->getParent()));
+            }
             return nullptr;
         }
         case syntax::token_type_t::BUILTIN_SRC: {

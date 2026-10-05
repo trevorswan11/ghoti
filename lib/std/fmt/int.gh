@@ -139,126 +139,113 @@ pub const format = fn(
     };
 };
 
-/// Formats `value` with `format` and compares the output against `expected`
-const check_fmt = fn(value: auto, spec: std.fmt.Spec, expected: []u8): bool {
-    let mut backing: [64]mut u8 = undefined;
+/// Formats `value` in `base` with `format_radix` and expects `expected`
+@[testing] const check_radix = fn(value: auto, base: u8, case: std.fmt.Case, expected: []u8): void {
+    let mut backing: [32]mut u8 = undefined;
     let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
-    return match (format(&mut stream, value, spec)) {
-        .ok => std.mem.eql(u8, expected, backing[..stream.pos]),
-        .err => false,
-    };
+    _ = format_radix(&mut stream, value, base, case, .{});
+    @expect(std.mem.eql(u8, expected, backing[..stream.pos]));
 };
 
-/// Formats `value` with `format` and checks that it fails with `expected`
-const check_fmt_err = fn(value: auto, spec: std.fmt.Spec, expected: std.fmt.Error): bool {
+/// Formats `value` with `format` and expects `expected`
+@[testing] const check_fmt = fn(value: auto, spec: std.fmt.Spec, expected: []u8): void {
     let mut backing: [64]mut u8 = undefined;
     let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
-    return match (format(&mut stream, value, spec)) {
-        .ok => false,
-        .err => |e| e == expected,
-    };
+    match (format(&mut stream, value, spec)) {
+        .ok => {
+            @expect(std.mem.eql(u8, expected, backing[..stream.pos]));
+        },
+        .err => {
+            @expect(false, "format failed");
+        },
+    }
+};
+
+/// Formats `value` with `format` and expects it to fail with `expected`
+@[testing]
+const check_fmt_err = fn(value: auto, spec: std.fmt.Spec, expected: std.fmt.Error): void {
+    let mut backing: [64]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
+    match (format(&mut stream, value, spec)) {
+        .ok => {
+            @expect(false, "format succeeded");
+        },
+        .err => |e| {
+            @expect(e == expected);
+        },
+    }
 };
 
 test "format_radix base 10" {
-    let mut backing: [32]mut u8 = undefined;
-    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
-    _ = format_radix(&mut stream, 12345u16, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "12345", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, 42u16, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "42", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, -42i32, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "-42", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, 1234567u32, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "1234567", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, 7i8, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "7", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, -128i8, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "-128", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, 18446744073709551615u64, 10, .lower, .{});
-    @expect(std.mem.eql(u8, "18446744073709551615", backing[..stream.pos]));
+    check_radix(12345u16, 10, .lower, "12345");
+    check_radix(42u16, 10, .lower, "42");
+    check_radix(-42i32, 10, .lower, "-42");
+    check_radix(1234567u32, 10, .lower, "1234567");
+    check_radix(7i8, 10, .lower, "7");
+    check_radix(-128i8, 10, .lower, "-128");
+    check_radix(18446744073709551615u64, 10, .lower, "18446744073709551615");
 }
 
 test "format_radix other bases" {
-    let mut backing: [32]mut u8 = undefined;
-    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
-    _ = format_radix(&mut stream, 5u16, 2, .lower, .{});
-    @expect(std.mem.eql(u8, "101", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, 255u32, 16, .upper, .{});
-    @expect(std.mem.eql(u8, "FF", backing[..stream.pos]));
-
-    stream.pos = 0;
-    _ = format_radix(&mut stream, -255i64, 16, .lower, .{});
-    @expect(std.mem.eql(u8, "-ff", backing[..stream.pos]));
+    check_radix(5u16, 2, .lower, "101");
+    check_radix(255u32, 16, .upper, "FF");
+    check_radix(-255i64, 16, .lower, "-ff");
 }
 
 test "format width, fill, and align" {
-    @expect(check_fmt(42u16, .{ .width = .of(5) }, "   42"));
-    @expect(check_fmt(42i32, .{ .width = .of(5) }, "   42"));
-    @expect(check_fmt(42i32, .{ .width = .of(5), .align = .of(.left) }, "42   "));
-    @expect(check_fmt(42i32, .{ .width = .of(6), .align = .of(.center) }, "  42  "));
-    @expect(check_fmt(42i32, .{ .width = .of(6), .fill = '*', .align = .of(.right) }, "****42"));
-    @expect(check_fmt(12345i32, .{ .width = .of(2) }, "12345"));
-    @expect(check_fmt(
+    check_fmt(42u16, .{ .width = .of(5) }, "   42");
+    check_fmt(42i32, .{ .width = .of(5) }, "   42");
+    check_fmt(42i32, .{ .width = .of(5), .align = .of(.left) }, "42   ");
+    check_fmt(42i32, .{ .width = .of(6), .align = .of(.center) }, "  42  ");
+    check_fmt(42i32, .{ .width = .of(6), .fill = '*', .align = .of(.right) }, "****42");
+    check_fmt(12345i32, .{ .width = .of(2) }, "12345");
+    check_fmt(
         255u32,
         .{ .width = .of(8), .fill = '0', .align = .of(.right), .kind = .of(.x) },
         "000000ff",
-    ));
+    );
 }
 
 test "format sign and zero padding" {
-    @expect(check_fmt(-3i32, .{ .width = .of(8), .zero = true }, "-0000003"));
-    @expect(check_fmt(-3i32, .{ .width = .of(8), .zero = true, .align = .of(.left) }, "-0000003"));
-    @expect(check_fmt(5u8, .{ .plus = true }, "+5"));
-    @expect(check_fmt(5i32, .{ .plus = true, .width = .of(8), .zero = true }, "+0000005"));
-    @expect(check_fmt(-128i8, .{ .width = .of(6), .zero = true }, "-00128"));
+    check_fmt(-3i32, .{ .width = .of(8), .zero = true }, "-0000003");
+    check_fmt(-3i32, .{ .width = .of(8), .zero = true, .align = .of(.left) }, "-0000003");
+    check_fmt(5u8, .{ .plus = true }, "+5");
+    check_fmt(5i32, .{ .plus = true, .width = .of(8), .zero = true }, "+0000005");
+    check_fmt(-128i8, .{ .width = .of(6), .zero = true }, "-00128");
 }
 
 test "format kinds and alt prefixes" {
-    @expect(check_fmt(255u32, .{ .kind = .of(.x) }, "ff"));
-    @expect(check_fmt(255u32, .{ .kind = .of(.X) }, "FF"));
-    @expect(check_fmt(5u32, .{ .kind = .of(.b) }, "101"));
-    @expect(check_fmt(8u32, .{ .kind = .of(.o) }, "10"));
-    @expect(check_fmt(-7i32, .{ .kind = .of(.@"?") }, "-7"));
-    @expect(check_fmt(255u32, .{ .alt = true, .kind = .of(.x) }, "0xff"));
-    @expect(check_fmt(255u32, .{ .alt = true, .kind = .of(.X) }, "0xFF"));
-    @expect(check_fmt(
+    check_fmt(255u32, .{ .kind = .of(.x) }, "ff");
+    check_fmt(255u32, .{ .kind = .of(.X) }, "FF");
+    check_fmt(5u32, .{ .kind = .of(.b) }, "101");
+    check_fmt(8u32, .{ .kind = .of(.o) }, "10");
+    check_fmt(-7i32, .{ .kind = .of(.@"?") }, "-7");
+    check_fmt(255u32, .{ .alt = true, .kind = .of(.x) }, "0xff");
+    check_fmt(255u32, .{ .alt = true, .kind = .of(.X) }, "0xFF");
+    check_fmt(
         255u32,
         .{ .alt = true, .zero = true, .width = .of(10), .kind = .of(.x) },
         "0x000000ff",
-    ));
-    @expect(check_fmt(5u32, .{ .alt = true, .kind = .of(.b) }, "0b101"));
-    @expect(check_fmt(8u32, .{ .alt = true, .kind = .of(.o) }, "0o10"));
-    @expect(check_fmt(0u32, .{ .alt = true, .kind = .of(.x) }, "0x0"));
-    @expect(check_fmt(-255i32, .{ .alt = true, .kind = .of(.x) }, "-0xff"));
-    @expect(check_fmt(42u32, .{ .alt = true }, "42"));
-    @expect(check_fmt(5i32, .{ .precision = .of(3) }, "5"));
+    );
+    check_fmt(5u32, .{ .alt = true, .kind = .of(.b) }, "0b101");
+    check_fmt(8u32, .{ .alt = true, .kind = .of(.o) }, "0o10");
+    check_fmt(0u32, .{ .alt = true, .kind = .of(.x) }, "0x0");
+    check_fmt(-255i32, .{ .alt = true, .kind = .of(.x) }, "-0xff");
+    check_fmt(42u32, .{ .alt = true }, "42");
+    check_fmt(5i32, .{ .precision = .of(3) }, "5");
 }
 
 test "format char kind" {
-    @expect(check_fmt(65u8, .{ .kind = .of(.c) }, "A"));
-    @expect(check_fmt(65i32, .{ .kind = .of(.c), .width = .of(3), .align = .of(.right) }, "  A"));
-    @expect(check_fmt(65u8, .{ .kind = .of(.c), .width = .of(3) }, "A  "));
-    @expect(check_fmt_err(300u16, .{ .kind = .of(.c) }, .bad_arg));
-    @expect(check_fmt_err(-1i32, .{ .kind = .of(.c) }, .bad_arg));
+    check_fmt(65u8, .{ .kind = .of(.c) }, "A");
+    check_fmt(65i32, .{ .kind = .of(.c), .width = .of(3), .align = .of(.right) }, "  A");
+    check_fmt(65u8, .{ .kind = .of(.c), .width = .of(3) }, "A  ");
+    check_fmt_err(300u16, .{ .kind = .of(.c) }, .bad_arg);
+    check_fmt_err(-1i32, .{ .kind = .of(.c) }, .bad_arg);
 }
 
 test "format rejects non-integer kinds" {
-    @expect(check_fmt_err(1u32, .{ .kind = .of(.s) }, .bad_spec));
-    @expect(check_fmt_err(1u32, .{ .kind = .of(.f) }, .bad_spec));
-    @expect(check_fmt_err(1u32, .{ .kind = .of(.p) }, .bad_spec));
-    @expect(check_fmt_err(1u32, .{ .kind = .of(.e) }, .unsupported));
+    check_fmt_err(1u32, .{ .kind = .of(.s) }, .bad_spec);
+    check_fmt_err(1u32, .{ .kind = .of(.f) }, .bad_spec);
+    check_fmt_err(1u32, .{ .kind = .of(.p) }, .bad_spec);
+    check_fmt_err(1u32, .{ .kind = .of(.e) }, .unsupported);
 }

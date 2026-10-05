@@ -153,7 +153,13 @@ class llvm_lowering {
 
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
+    // Set by a `@require` or `@skip` in a `@[testing]` helper until its test returns
+    auto get_or_create_test_abort_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
+    // Returns from the function being lowered on a `@[testing]` helper's abort
+    auto emit_testing_abort_return() -> void;
+    // After a call to `callee`, returns too if a `@[testing]` callee aborted
+    auto emit_testing_abort_check(const llvm::Function& callee) -> void;
 
     // Calls a weak `builtin` context handler `handler(msg, loc: SourceLocation)`
     // A pointer or wide integer condition as an `i1` (non-null / non-zero)
@@ -192,11 +198,13 @@ class llvm_lowering {
                                bool                    is_signed) -> llvm::Value*;
 
   private:
-    llvm::LLVMContext&                                                 context_;
-    stdx::box<llvm::Module>                                            llvm_module_;
-    llvm::IRBuilder<>                                                  builder_;
-    type_translator                                                    types_;
-    ankerl::unordered_dense::map<gir::local_id, llvm::Value*>          locals_;
+    llvm::LLVMContext&                                        context_;
+    stdx::box<llvm::Module>                                   llvm_module_;
+    llvm::IRBuilder<>                                         builder_;
+    type_translator                                           types_;
+    ankerl::unordered_dense::map<gir::local_id, llvm::Value*> locals_;
+    // The GIR function whose body is being lowered
+    const gir::function*                                               lowering_fn_{nullptr};
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
