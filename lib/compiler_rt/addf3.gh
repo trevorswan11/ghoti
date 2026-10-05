@@ -4,7 +4,10 @@
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
-const __addtf3 = fn(a: compiler_rt.f128.Abi, b: compiler_rt.f128.Abi) callconv(.c): compiler_rt.f128.Abi {
+const __addtf3 = fn(
+    a: compiler_rt.f128.Abi,
+    b: compiler_rt.f128.Abi,
+) callconv(.c): compiler_rt.f128.Abi {
     return compiler_rt.f128.to_abi(
         add_f128(compiler_rt.f128.from_abi(a), compiler_rt.f128.from_abi(b)),
     );
@@ -31,12 +34,55 @@ pub const add_f128 = fn(a: f128, b: f128): f128 {
     const significand_mask = (@as(Z, 1) << significand_bits) - 1;
 
     const abs_mask = sign_bit - 1;
-    const qnan_rep = @as(Z, @bitCast(std.math.nan(T))) | quiet_bit;
+    const qnan_rep = @bitCast(Z, std.math.nan(T)) | quiet_bit;
 
     let mut a_rep: Z = @bitCast(a);
     let a_abs = a_rep & abs_mask;
     let mut b_rep: Z = @bitCast(b);
     let b_abs = b_rep & abs_mask;
+
+    const inf_rep: Z = @bitCast(std.math.inf(T));
+
+    // Detect if a or b is zero, infinity, or NaN.
+    if (a_abs -% @as(Z, 1) >= inf_rep - @as(Z, 1) or b_abs -% @as(Z, 1) >= inf_rep - @as(Z, 1)) {
+        // NaN + anything = qNaN
+        if (a_abs > inf_rep) return @bitCast(@bitCast(Z, a) | quiet_bit);
+        // anything + NaN = qNaN
+        if (b_abs > inf_rep) return @bitCast(@bitCast(Z, b) | quiet_bit);
+
+        if (a_abs == inf_rep) {
+            // +/-infinity + -/+infinity = qNaN
+            if ((@bitCast(Z, a) ^ @bitCast(Z, b)) == sign_bit) {
+                return @bitCast(qnan_rep);
+            } else {
+                // +/-infinity + anything remaining = +/- infinity
+                return a;
+            }
+        }
+
+        // anything remaining + +/-infinity = +/-infinity
+        if (b_abs == inf_rep) return b;
+
+        // zero + anything = anything
+        if (a_abs == 0) {
+            // but we need to get the sign right for zero + zero
+            if (b_abs == 0) {
+                return @bitCast(@bitCast(Z, a) & @bitCast(Z, b));
+            } else {
+                return b;
+            }
+        }
+
+        // anything + zero = anything
+        if (b_abs == 0) return a;
+    }
+
+    // Swap a and b if necessary so that a has the larger absolute value.
+    if (b_abs > a_abs) {
+        let temp = a_rep;
+        a_rep = b_rep;
+        b_rep = temp;
+    }
 
     return 0.0;
 };
