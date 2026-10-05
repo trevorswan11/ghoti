@@ -14,7 +14,7 @@ TEST_CASE("A non-C-ABI integer width is rejected in an extern struct field") {
         "const S = extern struct { a: u100 };",
         sema::diagnostic{"extern struct field 'a' has type 'u100', which has no C ABI "
                          "representation; extern signatures accept 8/16/32/64-bit integers, "
-                         "usize/isize, bool, f32, f64, f80",
+                         "usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 29UZ}});
 }
@@ -24,7 +24,7 @@ TEST_CASE("A non-C-ABI integer width is rejected in an extern union field") {
         "const U = extern union { b: u7 };",
         sema::diagnostic{"extern union field 'b' has type 'u7', which has no C ABI "
                          "representation; extern signatures accept 8/16/32/64-bit integers, "
-                         "usize/isize, bool, f32, f64, f80",
+                         "usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 28UZ}});
 }
@@ -33,7 +33,7 @@ TEST_CASE("A non-C-ABI parameter width is rejected in an extern fn signature") {
     helpers::test_resolver_fail(
         "extern const foo: fn(x: u3): void;",
         sema::diagnostic{"'fn(u3): void' has no C ABI representation; extern signatures accept "
-                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
+                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 18UZ}});
 }
@@ -42,7 +42,7 @@ TEST_CASE("A non-C-ABI return width is rejected in an extern fn signature") {
     helpers::test_resolver_fail(
         "extern const bar: fn(): i17;",
         sema::diagnostic{"'fn(): i17' has no C ABI representation; extern signatures accept "
-                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
+                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 18UZ}});
 }
@@ -51,7 +51,7 @@ TEST_CASE("f16 is rejected on an extern global") {
     helpers::test_resolver_fail(
         "extern let mut g: f16;",
         sema::diagnostic{"'f16' has no C ABI representation; extern signatures accept "
-                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
+                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 18UZ}});
 }
@@ -60,7 +60,7 @@ TEST_CASE("f128 is rejected on an extern global") {
     helpers::test_resolver_fail(
         "extern let mut g: f128;",
         sema::diagnostic{"'f128' has no C ABI representation; extern signatures accept "
-                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, f80",
+                         "8/16/32/64-bit integers, usize/isize, bool, f32, f64, and f80 on x86",
                          sema::error::ILLEGAL_REFERENCE_FIELD,
                          std::pair{0UZ, 18UZ}});
 }

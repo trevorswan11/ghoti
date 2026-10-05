@@ -12,8 +12,12 @@ namespace ghoti::cmd {
 
 class shell final : public command {
   public:
+    static constexpr auto KIND{command_kind::SHELL};
+
+  public:
     using command::command;
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
 
   private:
     std::string line_;

@@ -19,7 +19,8 @@ namespace ghoti::codegen {
     -> bool;
 
 // The routine a runtime `@sin`-style call on a `format` float reaches: LLVM's libcall name for
-// f32/f64 (and f80 where `long double` is x87), and the C23 name (`sinf128`, `sinf64x`) otherwise
+// f32/f64 (and f80 where `long double` is x87), compiler_rt's `__sinx` for f80 without x87, and
+// the C23 name (`sinf128`, `sinf64x`) otherwise
 [[nodiscard]] auto math_libcall_name(const llvm::Triple& triple,
                                      math_function       function,
                                      float_format        format) -> std::string;

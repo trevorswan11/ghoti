@@ -16,6 +16,7 @@
 #include <stdx/hash.hh>
 #include <stdx/types.hh>
 
+#include "compiler/codegen/soft_f80.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 
@@ -49,6 +50,7 @@ using triple_map = std::map<std::string, name_set, std::less<>>;
 } // namespace
 
 auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> bool {
+    if (needs_soft_f80(triple) && is_soft_f80_routine(symbol)) { return true; }
     return libcall_names(triple).contains(symbol);
 }
 
@@ -93,6 +95,10 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
     // takes the unambiguous C23 name, and so does f80 where `long double` is `double`.
     if (format == float_format::QUAD) {
         return fmt::format("{}f128", math_function_name(function));
+    }
+    // Without x87 hardware, `f80` math is compiler_rt's too
+    if (format == float_format::X87 && needs_soft_f80(triple)) {
+        return fmt::format("__{}x", math_function_name(function));
     }
     if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) {
         return fmt::format("{}f64x", math_function_name(function));

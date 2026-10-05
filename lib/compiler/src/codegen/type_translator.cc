@@ -13,6 +13,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/codegen/soft_f80.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/sema/type.hh"
 
@@ -202,8 +203,21 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
                                       const sema::types::struct_t& s,
                                       gsl::span<llvm::Type* const> element_types) -> void {
+    const auto       ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
+    std::vector<u64> wanted;
+    wanted.reserve(element_types.size());
+    for (usize i{0}; i < element_types.size(); ++i) {
+        wanted.emplace_back(s.is_packed ? s.explicit_field_alignment(i)
+                                        : gir::const_eval::struct_field_align(s, i, ptr_size));
+    }
+    set_padded_body(struct_ty, element_types, wanted, s.is_packed);
+}
+
+auto type_translator::set_padded_body(llvm::StructType*            struct_ty,
+                                      gsl::span<llvm::Type* const> element_types,
+                                      gsl::span<const u64>         wanted_alignments,
+                                      bool                         is_packed) -> void {
     const auto& dl{module_.getDataLayout()};
-    const auto  ptr_size{static_cast<usize>(dl.getPointerSize())};
 
     std::vector<llvm::Type*> padded;
     padded_layout            layout{.field_indices = {}, .alignment = 1};
@@ -218,11 +232,8 @@ auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
 
     for (usize i{0}; i < element_types.size(); ++i) {
         auto*      elem_ty{element_types[i]};
-        const auto natural{s.is_packed ? 1 : dl.getABITypeAlign(elem_ty).value()};
-        const auto wanted{std::max<u64>(natural,
-                                        s.is_packed
-                                            ? s.explicit_field_alignment(i)
-                                            : gir::const_eval::struct_field_align(s, i, ptr_size))};
+        const auto natural{is_packed ? 1 : f80_storage_align(module_, elem_ty)};
+        const auto wanted{std::max<u64>(natural, wanted_alignments[i])};
         const auto offset{llvm::alignTo(end, wanted)};
         if (offset != llvm::alignTo(end, natural)) { pad_to(offset); }
 
@@ -235,17 +246,17 @@ auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
     // LLVM rounds the size up to its own natural alignment; any excess becomes trailing padding
     u64 natural_alignment{1};
     for (auto* elem_ty : element_types) {
-        if (s.is_packed) { break; }
-        natural_alignment = std::max<u64>(natural_alignment, dl.getABITypeAlign(elem_ty).value());
+        if (is_packed) { break; }
+        natural_alignment = std::max<u64>(natural_alignment, f80_storage_align(module_, elem_ty));
     }
     const auto total{llvm::alignTo(end, layout.alignment)};
     if (total != llvm::alignTo(end, natural_alignment)) { pad_to(total); }
 
     if (!inserted_padding) {
-        struct_ty->setBody(element_types, s.is_packed);
+        struct_ty->setBody(element_types, is_packed);
         return;
     }
-    struct_ty->setBody(padded, s.is_packed);
+    struct_ty->setBody(padded, is_packed);
     padded_structs_.insert_or_assign(struct_ty, std::move(layout));
 }
 
@@ -342,12 +353,16 @@ auto type_translator::translate_closure(const sema::types::closure_t& c, const s
     auto* closure_ty{llvm::StructType::create(context_)};
     closure_cache_[&original] = closure_ty;
 
+    const auto               ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
     std::vector<llvm::Type*> element_types;
+    std::vector<u64>         wanted;
     element_types.reserve(c.captures.size());
+    wanted.reserve(c.captures.size());
     for (const auto& capture : c.captures) {
         element_types.emplace_back(translate(*capture.storage_type));
+        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, ptr_size));
     }
-    closure_ty->setBody(element_types);
+    set_padded_body(closure_ty, element_types, wanted, false);
     return closure_ty;
 }
 

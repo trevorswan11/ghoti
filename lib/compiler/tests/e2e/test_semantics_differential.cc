@@ -382,19 +382,13 @@ TEST_CASE("Float casts fold like they run") { expect_agreement(float_casts()); }
 
 TEST_CASE("Math builtins fold like they run") { expect_agreement(math_functions()); }
 
-// Only the host runs code, but every tier-1 target must fold the same operations
+// Only the host runs code, but every tier-1 target must fold the same operations, `f80` included
 TEST_CASE("Every operation folds on the other tier-1 targets") {
-    const auto uses_f80 = [](const diff::expr_template& tmpl) {
-        if (tmpl.result.name == "f80") { return true; }
-        return std::ranges::any_of(tmpl.operands,
-                                   [](const diff::scalar_type& t) { return t.name == "f80"; });
-    };
     std::vector<std::string_view> triples{"aarch64-unknown-linux-gnu"};
     if (get_env("GHOTI_DIFF_FULL")) {
         triples.insert(triples.end(), {"x86_64-unknown-linux-gnu", "aarch64-apple-darwin"});
     }
     for (const auto triple : triples) {
-        const bool  has_f80{triple.starts_with("x86_64")};
         std::vector families{checked_arithmetic(), int_builtins(), float_arithmetic()};
         if (get_env("GHOTI_DIFF_FULL")) {
             families.emplace_back(int_casts());
@@ -403,7 +397,6 @@ TEST_CASE("Every operation folds on the other tier-1 targets") {
             families.emplace_back(math_functions());
         }
         for (auto templates : families) {
-            if (!has_f80) { std::erase_if(templates, uses_f80); }
             INFO(triple);
             expect_agreement(templates, {.run = false, .triple = std::string{triple}});
         }
