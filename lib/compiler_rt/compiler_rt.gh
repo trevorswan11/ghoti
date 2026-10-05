@@ -8,10 +8,13 @@ pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     }
 };
 
+let mut _fltused: c_int = 1;
+
 pub const @"f128" = struct {
-    @cfg (endian == .little) { pub const Abi = extern struct { lo: u64, hi: u64 }; } else {
-        pub const Abi = extern struct { hi: u64, lo: u64 };
-    }
+    pub const Abi = match comptime (@targetEndian()) {
+        .little => extern struct { lo: u64, hi: u64 },
+        .big => extern struct { hi: u64, lo: u64 },
+    };
     const Repr = packed struct { lo: u64, hi: u64 };
 
     pub const to_abi = fn(raw: f128): Abi {
@@ -24,10 +27,10 @@ pub const @"f128" = struct {
         return @bitCast(repr);
     };
 
-    pub const complex = ComplexAbi(f128, @This());
+    pub const ComplexAbi = ComplexAbiFor(f128, @This());
 };
 
-const ComplexAbi = fn(Float: type, float: type): type {
+const ComplexAbiFor = fn(Float: type, float: type): type {
     return struct {
         pub const Abi = extern struct { real: float.Abi, imag: float.Abi };
 
