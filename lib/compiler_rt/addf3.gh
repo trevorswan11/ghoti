@@ -1,3 +1,6 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/addf3.zig
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
@@ -11,9 +14,6 @@ pub const add_f128 = fn(a: f128, b: f128): f128 {
     return addf3(f128, a, b);
 };
 
-/// Ported from:
-///
-/// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/addf3.zig
 @[inline(.always)] const addf3 = fn(T: type, a: T, b: T): T {
     const bits = @typeInfo(T).float.bits;
     const Z = @Int(.{ .signedness = .unsigned, .bits = bits });
