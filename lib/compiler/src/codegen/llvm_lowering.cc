@@ -70,10 +70,6 @@ namespace {
 // Marks a `@[testing]` helper so calls to it check whether it aborted its test
 constexpr std::string_view TESTING_FN_ATTRIBUTE{"ghoti-testing"};
 
-} // namespace
-
-namespace {
-
 // Local symbols are invisible to the linker, and LLVM requires them to keep default visibility
 auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibility> visibility)
     -> void {
@@ -1632,7 +1628,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         return llvm_fn;
     }
     clear_locals();
-    lowering_fn_ = &fn;
+    lowering_fn_.emplace(fn);
 
     // Pre-allocate basic blocks for all segments
     for (const auto* seg : fn.get_segments()) {

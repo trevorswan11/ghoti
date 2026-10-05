@@ -459,15 +459,12 @@ test "pad_number places zeros after the prefix and defers to pad otherwise" {
     @expect(std.mem.eql(u8, "   -42", backing[..stream.pos]));
 
     stream.pos = 0;
-    @expect(
-        pad_number(
-            &mut stream,
-            .{ .width = .of(6), .fill = '*', .align = .of(.center) },
-            "42",
-            0,
-        ) ==
-            .ok,
-    );
+    @expect(pad_number(
+        &mut stream,
+        .{ .width = .of(6), .fill = '*', .align = .of(.center) },
+        "42",
+        0,
+    ) == .ok);
     @expect(std.mem.eql(u8, "**42**", backing[..stream.pos]));
 }
 
