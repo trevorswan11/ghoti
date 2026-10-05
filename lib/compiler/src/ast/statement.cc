@@ -341,7 +341,8 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         if (is_comptime_decl && parser.current_token_is(syntax::token_type_t::FUNCTION)) {
             parser.arm_comptime_param_inference();
         }
-        const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl};
+        const bool is_const{is_comptime_decl && !modifiers_has(modifiers, decl_modifiers::MUT)};
+        const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl, is_const};
         decl_value.emplace(TRY(parser.parse_expression()));
 
         // If there is a value, then there cannot be an extern due to a contradiction

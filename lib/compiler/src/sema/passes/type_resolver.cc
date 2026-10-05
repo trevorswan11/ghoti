@@ -61,6 +61,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
@@ -70,6 +71,29 @@
 #include "support/scope_guard.hh"
 
 namespace ghoti::sema {
+
+namespace {
+
+// Why an unmarked parameter is `comptime`: its function reads it at compile time somewhere
+[[nodiscard]] auto inferred_comptime_reason(const mod::module&                   owner,
+                                            const ast::function_expr::parameter& param)
+    -> std::string {
+    if (!param.comptime_read.is_valid()) {
+        return "; the parameter is compile-time because this function reads it in a "
+               "compile-time position";
+    }
+    const auto name{owner.ast.get_as<ast::identifier_expr>(*param.name).name};
+    return fmt::format("; '{}' is compile-time because the function reads it at compile time at "
+                       "{}:{}{}",
+                       name,
+                       owner.path.string(),
+                       owner.ast.location_of(param.comptime_read),
+                       param.comptime_read_in_const
+                           ? ", in a `const` initializer (use `let` to read it at runtime)"
+                           : "");
+}
+
+} // namespace
 
 auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
@@ -4200,8 +4224,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                                     : "argument to a comptime parameter must be a "
                                                       "compile-time constant"}};
                     if (!cx_params[i].is_comptime_written) {
-                        msg += "; the parameter is compile-time because this "
-                               "function reads it in a compile-time position";
+                        msg += inferred_comptime_reason(*fn_info_opt->module, cx_params[i]);
                     }
                     return last_type_.emplace(
                         ctx_.poison_node(resolving_,
@@ -5948,8 +5971,15 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                              resolving_.ast.location_of(id)));
     }
 
+    // A primitive keyword names the primitive even where a raw identifier (`@"f128"`) declares
+    // the same name; the raw identifier is an ordinary name
+    const auto tok{id.get_token_type()};
+    const bool is_primitive_token{std::ranges::contains(syntax::ALL_PRIMITIVES, tok)};
+
     // `iN` / `uN` are primitive integer types, not looked-up symbols.
-    if (syntax::token_type::is_int_type_lexeme(name)) {
+    if (syntax::token_type::is_int_type_lexeme(name) &&
+        (tok == syntax::token_type_t::INT_TYPE ||
+         !ctx_.registry.lookup_with_depth(table_stack_, name))) {
         u64 width{0};
         for (const char c : stdx::string::substr(name, 1)) {
             width = width * 10 + static_cast<u64>(c - '0');
@@ -5968,7 +5998,15 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         return last_type_.emplace(int_type);
     }
 
-    auto lookup{ctx_.registry.lookup_with_depth(table_stack_, name)};
+    symbol_table_stack prelude_only;
+    const bool         shadowed_primitive{[&] {
+        if (!is_primitive_token) { return false; }
+        const auto found{ctx_.registry.lookup_with_depth(table_stack_, name)};
+        return found && found->depth != 0;
+    }()};
+    if (shadowed_primitive) { prelude_only.push(*ctx_.prelude_index); }
+    auto lookup{
+        ctx_.registry.lookup_with_depth(shadowed_primitive ? prelude_only : table_stack_, name)};
 
     // Check for an undeclared identifier and poison the ident
     if (!lookup) {
@@ -14183,7 +14221,9 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
 
     // `iN` / `uN` resolve straight to a pooled integer type, no symbol lookup.
-    if (syntax::token_type::is_int_type_lexeme(ident.name)) {
+    if (syntax::token_type::is_int_type_lexeme(ident.name) &&
+        (id.get_token_type() == syntax::token_type_t::INT_TYPE ||
+         !ctx_.registry.lookup_with_depth(table_stack_, ident.name))) {
         resolve_ident(id, ident);
         auto& resolved{apply_explicit_modifiers(id, *last_type_.take())};
         resolving_.set_sema_type(id, resolved);
@@ -14196,6 +14236,13 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     if (found) {
         symbol_opt.emplace(found->symbol);
         symbol_table = found->table_idx;
+    }
+    // A primitive keyword names the primitive even where a raw identifier declares its name
+    if (std::ranges::contains(syntax::ALL_PRIMITIVES, id.get_token_type())) {
+        if (const auto primitive{ctx_.registry.get(*ctx_.prelude_index).get_opt(ident.name)}) {
+            symbol_opt.emplace(*primitive);
+            symbol_table = *ctx_.prelude_index;
+        }
     }
     bool overrode_shadow{false};
     if (symbol_opt &&

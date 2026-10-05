@@ -123,4 +123,32 @@ TEST_CASE("params of a `let` closure are never inferred compile-time") {
     )");
 }
 
+TEST_CASE("an inferred comptime parameter's error points at the read, suggesting `let`") {
+    const auto out{helpers::resolve_diags(R"(
+        const Repr = packed struct { lo: u64, hi: u64 };
+        pub const to_lo = fn(raw: f128): u64 {
+            const repr: Repr = @bitCast(raw);
+            return repr.lo;
+        };
+        const run = fn(x: f128): u64 { return to_lo(x); };
+    )")};
+    CHECK(out.message_contains("'raw' is compile-time because the function reads it at compile "
+                               "time at"));
+    CHECK(
+        out.message_contains(":4:41, in a `const` initializer (use `let` to read it at runtime)"));
+
+    CHECK(helpers::compile_and_run(R"(
+        const Repr = packed struct { lo: u64, hi: u64 };
+        const to_lo = fn(raw: u128): u64 {
+            let repr: Repr = @bitCast(raw);
+            return repr.lo;
+        };
+        pub const main = fn(): i32 {
+            let mut x: u128 = 40;
+            x += 2;
+            return @intCast(to_lo(x));
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -702,6 +702,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@cfg(testing)` and `@cfgValue(testing)` are true while building a test executable (`ghoti test`), so test-only helpers can sit next to the code they test
     - **Breaking:** `test` blocks are only checked in a test build; `build-*` and `run` no longer report errors inside them
 - A `@cfg` / `@cfgValue` predicate can read another module's `pub` `@cfgValue` constant through its imports (`@cfg (std.os.HAS_BACKEND) { ... }`), so a gate shared across modules is written once
+- A runtime argument to a parameter that a `const` function infers `comptime` names where the body reads it at compile time, and suggests `let` when that read is a `const` initializer (#365)
+- Fixed: a statement starting with `extern struct`, `extern union`, or `extern fn`, like a `match` arm yielding `.little => extern struct { ... }`, was parsed as an `extern` declaration (#366)
+- Fixed: a raw identifier spelling a primitive (`const @"f128" = struct { ... }`) took over the primitive's name, so `f128` meant the struct inside its own module, while `@"u8"` named the primitive instead of the declaration
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -730,6 +733,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
 - **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
 - LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
+- Fixed: the LSP kept workspace symbols and diagnostics for files that disappeared, such as ones on an unmounted drive, and logged a failed reanalysis for each of them on every edit
 - Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
     - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
 - LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)

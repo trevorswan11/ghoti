@@ -614,4 +614,17 @@ TEST_CASE("a `match` statement with a block arm next to a value arm has no value
     )") == 0);
 }
 
+TEST_CASE("A match arm may yield an `extern struct` type") {
+    CHECK(helpers::compile_and_run(R"(
+        const Abi = match comptime (@targetEndian()) {
+            .little => extern struct { lo: u64, hi: u64 },
+            .big => extern struct { hi: u64, lo: u64 },
+        };
+        pub const main = fn(): i32 {
+            const a: Abi = .{ .lo = 2, .hi = 40 };
+            return @intCast(a.lo + a.hi + @as(u64, @sizeOf(Abi)) - 16);
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests
