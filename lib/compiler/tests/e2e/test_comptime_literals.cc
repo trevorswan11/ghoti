@@ -67,6 +67,24 @@ TEST_CASE("a comptime literal mixed with a concrete operand adopts the concrete 
     )") == 0);
 }
 
+TEST_CASE("an untyped constant bound to a name takes the other operand's type") {
+    CHECK(helpers::compile_and_run(R"(
+        const bits_of = fn(T: type): comptime_int { return @bitSizeOf(T) - 8; };
+        const lit = 4;
+        pub const main = fn(): i32 {
+            const n = bits_of(u16);           // 8
+            const mask = 0xff;
+            let mut x: u64 = 0x1234;
+            let a = (x >> n) & mask;          // 0x12
+            let b = x >> lit;                 // 0x123
+            let c = x + lit;                  // 0x1238
+            let mut f: f32 = 1.5;
+            let d = f * n;                    // 12.0
+            return @intCast(a + (b - 0x123) + (c - 0x1238)) + @intFromFloat(i32, d);
+        };
+    )") == 0x12 + 12);
+}
+
 TEST_CASE("an un-anchored comptime_int materializes as i32 at runtime") {
     CHECK(helpers::compile_and_run(R"(
         const echo = fn(v: auto): auto { return v; };

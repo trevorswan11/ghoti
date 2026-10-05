@@ -713,6 +713,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
     - `f80` constants fold at compile time identically on every target
     - Off x86 it has no C ABI, so `extern` declarations can't use it
+- Fixed: the LSP could crash while a standard library file was mid-edit, when a file reached the broken module only through an import cycle (`std` -> `heap` -> `std`); a root that reaches a failed module is no longer lowered (#368)
+- Fixed: an untyped constant bound to a name (`const n = 24;`, or a call to a function returning `comptime_int`) took a fixed `i32`/`usize` type next to a typed operand, so `x >> n` and `x + n` with `x: u64` were rejected; it now takes the other operand's type like a literal written in its place (#372)
+- Fixed: an error found while collecting a generic's body (a shadowing `let`) was replaced by the `Failed to instantiate` it caused, so only the latter was reported (#370)
+- Fixed: a parameter type reflecting on an earlier type parameter (`bits: ^mut @Int(.{ .bits = @typeInfo(T).float.bits, ... })`, `[@typeInfo(T).float.bits / 8]u8`) was evaluated before `T` was bound and reported an inactive union field (#371)
+- Fixed: a non-test build crashed on a file whose `test` block imports a module (`test { import "x.gh"; }`), since that module is never resolved outside a test build
+- Fixed: same-named generic functions in different modules (two files' private `helper`s) shared one instance per argument list, so a call could run the other module's body
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -741,6 +747,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `lib/compiler_rt` can `import std;` like any program
 - Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
 - **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
+- Fixed: `ghoti fmt` moved a comment between an `if`'s closing brace and its `else` into the `else` block, and one trailing the brace (`} // note`) into the block before it (#369)
 - LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
 - Fixed: the LSP kept workspace symbols and diagnostics for files that disappeared, such as ones on an unmounted drive, and logged a failed reanalysis for each of them on every edit
 - Fixed: `ghoti fmt` left a line past 100 columns when what followed a group on that line (like `): void {` after a parameter list) pushed it over; a trailing comment still never forces a break

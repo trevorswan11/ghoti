@@ -139,7 +139,10 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             if (const auto sema_type{cur.get_sema_type_opt(import_id)}) {
                 if (const auto m_data{sema_type->get_data().as_opt<sema::types::module>()}) {
                     auto& dep{m_data->imported};
-                    if (visited.insert(&dep).second) {
+                    // One imported only by a `test` block outside a test build is never resolved
+                    const bool resolved{dep.state != mod::module_state::PARSED &&
+                                        dep.state != mod::module_state::SYMBOLS_COLLECTED};
+                    if (resolved && visited.insert(&dep).second) {
                         imported_mods.emplace_back(&dep);
                         self(self, dep);
                     }
@@ -782,6 +785,16 @@ auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::n
         return value{f128::from_uint(*as_unsigned), target};
     }
     if (const auto as_signed{folded_int(v)}) { return value{f128::from_int(*as_signed), target}; }
+    return v;
+}
+
+auto emitter::constant_as_use_type(value v, ast::node_id at) -> value {
+    const auto use_type{active_mod().get_sema_type_opt(at)};
+    if (!use_type || !is_foreign_constant(v, *use_type)) { return v; }
+    if (sema::is_float(use_type->get_kind())) { return untyped_number_as_float(v, *use_type, at); }
+    if (sema::is_integer(use_type->get_kind()) && !v.is<f128>()) {
+        return coerce_comptime_int(v, *use_type, at);
+    }
     return v;
 }
 
@@ -2747,8 +2760,17 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     const auto operand_peer{numeric_operand_peer(binary.lhs, binary.rhs)};
     const bool is_shift{*kind_opt == instruction_kind::SHL || *kind_opt == instruction_kind::SHR};
     const bool to_peer{operand_peer && !is_shift};
-    auto lhs{to_peer ? emit_coerced_expr(binary.lhs, *operand_peer) : emit_expression(binary.lhs)};
-    auto rhs{to_peer ? emit_coerced_expr(binary.rhs, *operand_peer) : emit_expression(binary.rhs)};
+    // A shift amount is typed by its value: an untyped one takes the shifted operand's type
+    const auto lhs_sema{active_mod().get_sema_type_opt(binary.lhs)};
+    const auto rhs_sema{active_mod().get_sema_type_opt(binary.rhs)};
+    const bool untyped_amount{is_shift && lhs_sema && rhs_sema &&
+                              sema::is_integer(lhs_sema->get_kind()) &&
+                              rhs_sema->get_kind() == sema::type_kind::COMPTIME_INT};
+    auto       lhs{to_peer ? emit_coerced_expr(binary.lhs, *operand_peer)
+                           : constant_as_use_type(emit_expression(binary.lhs), binary.lhs)};
+    auto       rhs{to_peer          ? emit_coerced_expr(binary.rhs, *operand_peer)
+                   : untyped_amount ? emit_coerced_expr(binary.rhs, *lhs_sema)
+                                    : constant_as_use_type(emit_expression(binary.rhs), binary.rhs)};
     // Float arithmetic converts a constant operand of another type to the result's float type;
     // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
     if (sema::is_float(sema_type->get_kind())) {

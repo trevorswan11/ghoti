@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -7,6 +8,7 @@
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
 #include <gsl/span_ext>
@@ -215,11 +217,22 @@ class generic_instantiation_cache {
         return stdx::none;
     }
 
+    // The name `definition`'s instances are mangled under. Same-named generics declared apart
+    // (two modules' private `helper`s) are numbered so their instances never share a symbol.
+    [[nodiscard]] auto instance_name(std::string_view name, uptr definition) -> std::string {
+        auto&      owners{instance_owners_[std::string{name}]};
+        const auto it{std::ranges::find(owners, definition)};
+        const auto index{static_cast<usize>(it - owners.begin())};
+        if (it == owners.end()) { owners.emplace_back(definition); }
+        return index == 0 ? std::string{name} : fmt::format("{}_v{}", name, index + 1);
+    }
+
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
-    body_type_diff_map    body_type_diffs_;
-    comptime_arg_map      comptime_args_;
-    type_ctor_binding_map type_ctor_bindings_;
+    ankerl::unordered_dense::map<std::string, std::vector<uptr>> instance_owners_;
+    body_type_diff_map                                           body_type_diffs_;
+    comptime_arg_map                                             comptime_args_;
+    type_ctor_binding_map                                        type_ctor_bindings_;
 };
 
 // Every `set_sema_type`/`set_sema_type_if` write `mod::module` makes while this is installed as

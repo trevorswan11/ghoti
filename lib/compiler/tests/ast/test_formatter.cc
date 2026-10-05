@@ -411,6 +411,29 @@ TEST_CASE("formatter keeps a trailing comment on an interior if-chain arm") {
     CHECK(format_source(source) == source);
 }
 
+TEST_CASE("formatter keeps a comment between an if's closing brace and its else") {
+    constexpr std::string_view source{R"(const f = fn(a: i32): i32 {
+    if (a > 0) {
+        return 1;
+    }
+    // the remaining cases
+    // span two lines
+    else if (a < 0) {
+        return 2;
+    } // trailing the brace
+    else {
+        // inside the else
+        return 3;
+    }
+};
+)"};
+    CHECK(format_source(source) == source);
+    CHECK(format_source("const f = fn(a: i32): i32 {\n    if (a > 0) {\n        return 1;\n    }\n"
+                        "    else {\n        return 3;\n    }\n};\n") ==
+          "const f = fn(a: i32): i32 {\n    if (a > 0) {\n        return 1;\n    } else {\n"
+          "        return 3;\n    }\n};\n");
+}
+
 TEST_CASE("formatter preserves comments and blank lines inside a local @cfg block") {
     constexpr std::string_view source{R"(const f = fn(): i32 {
     @cfg (os == .windows) {

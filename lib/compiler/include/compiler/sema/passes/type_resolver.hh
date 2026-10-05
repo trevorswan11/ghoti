@@ -416,9 +416,12 @@ class type_resolver {
 
     // A literal's own list plus the function-only attributes of the declaration it initializes.
     // A generic `is_template` folds only the attributes whose arguments ignore its parameters
-    auto               resolve_fn_literal_attributes(ast::node_id              id,
-                                                     const ast::function_expr& fn,
-                                                     bool                      is_template = false) -> void;
+    auto resolve_fn_literal_attributes(ast::node_id              id,
+                                       const ast::function_expr& fn,
+                                       bool                      is_template = false) -> void;
+    // Whether `arg` names a type parameter not bound yet, so a generic's later parameter type
+    // (`x: @Int(.{ .bits = @typeInfo(T).float.bits })`) waits for its instantiation
+    [[nodiscard]] auto mentions_unbound_type(const ast::call_expr::argument& arg) const -> bool;
     [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
                                          const ast::function_expr& fn) const -> bool;
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)

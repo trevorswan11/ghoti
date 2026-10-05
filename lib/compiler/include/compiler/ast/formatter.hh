@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <ostream>
 #include <string_view>
 #include <utility>
@@ -189,7 +190,8 @@ class formatter {
     auto consume_leading_comments(usize before_line, bool allow_leading_blank = false)
         -> syntax::doc_id;
     auto consume_trailing_comment(usize line) -> syntax::doc_id;
-    auto consume_dangling_comments(usize brace_line) -> syntax::doc_id;
+    // Comments before the closing brace at (`brace_line`, `brace_col`); one after it is trailing
+    auto consume_dangling_comments(usize brace_line, usize brace_col = SIZE_MAX) -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;
     // A parameter's type, with an `impl` bound in place of the `auto` it desugared to
     auto format_param_type(explicit_type_id type, syntax::doc_id bound) -> syntax::doc_id;

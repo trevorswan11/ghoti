@@ -180,13 +180,13 @@ auto formatter::consume_trailing_comment(usize line) -> syntax::doc_id {
     return doc_manager_.nil();
 }
 
-auto formatter::consume_dangling_comments(usize brace_line) -> syntax::doc_id {
+auto formatter::consume_dangling_comments(usize brace_line, usize brace_col) -> syntax::doc_id {
     if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
 
     std::vector<syntax::doc_id> docs;
     while (comment_idx_ < comments_.size()) {
         const auto& c{comments_[comment_idx_]};
-        if (c.line > brace_line) { break; }
+        if (c.line > brace_line || (c.line == brace_line && c.col > brace_col)) { break; }
         if (!c.consumed) {
             comments_[comment_idx_].consumed = true;
             if (!docs.empty()) {
@@ -1013,9 +1013,22 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
         arms.emplace_back(doc);
     }};
 
+    // Comments between an arm and the next `else` stay there instead of moving into its body
+    std::vector<syntax::doc_id> before_else{doc_manager_.nil()};
+    const auto                  comments_before_else{[&](node_id prev_value, node_id alt) {
+        const auto trailing{consume_trailing_comment(ast_.end_location_of(prev_value).line)};
+        const auto leading{consume_leading_comments(ast_.location_of(alt).line, false)};
+        if (trailing == doc_manager_.nil() && leading == doc_manager_.nil()) {
+            return doc_manager_.nil();
+        }
+        force_break = true;
+        return doc_manager_.concat({trailing, doc_manager_.hard_line(), leading});
+    }};
+
     push_arm(head_clause(node), node.consequence);
     for (const if_expr* cur{&node}; cur->alternate;) {
-        const auto  alt{*cur->alternate};
+        const auto alt{*cur->alternate};
+        before_else.emplace_back(comments_before_else(cur->consequence, alt));
         const auto  es{ast_.get_as_opt<expr_stmt>(alt)};
         const auto* next{es && ast_.get_as_opt<if_expr>(es->expression)
                              ? &ast_.get_as<if_expr>(es->expression)
@@ -1041,7 +1054,8 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
     if (block_form) {
         std::vector<syntax::doc_id> parts{arms.front()};
         for (usize i{1}; i < arms.size(); ++i) {
-            parts.emplace_back(doc_manager_.text(" "));
+            parts.emplace_back(before_else[i] == doc_manager_.nil() ? doc_manager_.text(" ")
+                                                                    : before_else[i]);
             parts.emplace_back(arms[i]);
         }
         return doc_manager_.concat(std::move(parts));
@@ -1049,7 +1063,8 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
 
     std::vector<syntax::doc_id> tail;
     for (usize i{1}; i < arms.size(); ++i) {
-        tail.emplace_back(doc_manager_.line());
+        tail.emplace_back(before_else[i] == doc_manager_.nil() ? doc_manager_.line()
+                                                               : before_else[i]);
         tail.emplace_back(arms[i]);
     }
     return doc_manager_.group(
@@ -1450,7 +1465,7 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
         previous = *stmt;
     }
 
-    auto dangling{consume_dangling_comments(block_end.line)};
+    auto dangling{consume_dangling_comments(block_end.line, block_end.column)};
     if (dangling != doc_manager_.nil()) {
         if (!body.empty()) { body.emplace_back(doc_manager_.hard_line()); }
         body.emplace_back(dangling);
