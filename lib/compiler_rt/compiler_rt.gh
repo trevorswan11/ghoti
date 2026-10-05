@@ -1,3 +1,5 @@
+import std;
+
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     @cfg (!testing) {
@@ -47,3 +49,25 @@ const ComplexAbiFor = fn(Float: type, float: type): type {
 pub const Complex = fn(Float: type): type {
     return struct { real: Float, imag: Float };
 };
+
+pub const normalize = fn(T: type, significand: ^mut auto): i32 {
+    const Z = @typeInfo(@TypeOf(significand)).pointer.child;
+    const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
+
+    const shift = @clz(*significand) - @clz(integer_bit);
+    *significand <<= @as(std.math.Log2Int(Z), @intCast(shift));
+    return @as(i32, 1) - shift;
+};
+
+@[inline(.always)] pub const fneg = fn(a: auto): @TypeOf(a) {
+    comptime @assert(@typeInfo(T) == .float);
+    const bits = @typeInfo(@TypeOf(a)).float.bits;
+    const U = @Int(.{ .signedness = .unsigned, .bits = bits });
+    const sign_bit_mask = @as(U, 1) << (bits - 1);
+    const negated = @bitCast(U, a) ^ sign_bit_mask;
+    return @bitCast(negated);
+};
+
+test {
+    import "addf3.gh";
+}
