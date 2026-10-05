@@ -40,7 +40,9 @@ auto document_store::register_known_root(const std::filesystem::path& path) -> b
 auto document_store::rebuild() -> void {
     session_ = stdx::make_box<analysis_session>(loader_, error_stream_);
     for (const auto& root : known_roots_) {
-        if (auto res{session_->analyze(root)}; !res) {
+        // A root whose file is gone (deleted, or its drive unmounted) is kept for when it returns
+        if (auto res{session_->analyze(root)};
+            !res && res.error().get_error() != mod::error::PATH_DOES_NOT_EXIST) {
             fmt::println(error_stream_,
                          "lsp: failed to reanalyze known root '{}': {}",
                          root.string(),
@@ -48,10 +50,17 @@ auto document_store::rebuild() -> void {
         }
     }
 
+    // Only what this analysis reached is indexed; a file that vanished has its diagnostics cleared
     pending_diagnostics_.clear();
+    auto previous{std::exchange(workspace_index_, {})};
     for (const auto& [mod_path, mod] : session_->get_manager()) {
         workspace_index_[mod_path] = module_workspace_symbols(*mod);
         pending_diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod));
+    }
+    for (const auto& [mod_path, entries] : previous) {
+        if (!workspace_index_.contains(mod_path)) {
+            pending_diagnostics_.emplace_back(mod_path, nlohmann::json::array());
+        }
     }
 
     last_rebuild_ = std::chrono::steady_clock::now();
