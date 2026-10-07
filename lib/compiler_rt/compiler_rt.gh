@@ -54,7 +54,7 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
     const Z = @typeInfo(@TypeOf(significand)).pointer.child;
     const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
 
-    const shift = @clz(*significand) - @clz(integer_bit);
+    let shift = @clz(*significand) - @clz(integer_bit);
     *significand <<= @as(std.math.Log2Int(Z), @intCast(shift));
     return @as(i32, 1) - shift;
 };
