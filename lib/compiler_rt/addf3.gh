@@ -4,6 +4,12 @@
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__addtf3, "__addtf3");
+}
+
 const __addtf3 = fn(
     a: compiler_rt.f128.Abi,
     b: compiler_rt.f128.Abi,
@@ -84,5 +90,152 @@ pub const add_f128 = fn(a: f128, b: f128): f128 {
         b_rep = temp;
     }
 
-    return 0.0;
+    // Extract the exponent and significand from the (possibly swapped) a and b.
+    let mut a_exponent: i32 = @intCast((a_rep >> significand_bits) & max_exponent);
+    let mut b_exponent: i32 = @intCast((b_rep >> significand_bits) & max_exponent);
+    let mut a_significand = a_rep & significand_mask;
+    let mut b_significand = b_rep & significand_mask;
+
+    // Normalize any denormals, and adjust the exponent accordingly.
+    if (a_exponent == 0) a_exponent = compiler_rt.normalize(T, ^mut a_significand);
+    if (b_exponent == 0) b_exponent = compiler_rt.normalize(T, ^mut b_significand);
+
+    // The sign of the result is the sign of the larger operand, a. If they
+    // have opposite signs, we are performing a subtraction; otherwise addition.
+    let result_sign = a_rep & sign_bit;
+    let subtraction = (a_rep ^ b_rep) & sign_bit != 0;
+
+    // Shift the significands to give us round, guard and sticky, and or in the
+    // implicit significand bit.  (If we fell through from the denormal path it
+    // was already set by normalize( ), but setting it twice won't hurt
+    // anything.)
+    a_significand = (a_significand | integer_bit) << 3;
+    b_significand = (b_significand | integer_bit) << 3;
+
+    // Shift the significand of b by the difference in exponents, with a sticky
+    // bottom bit to get rounding correct.
+    let align: u32 = @intCast(a_exponent - b_exponent);
+    if (align != 0) {
+        if (align < type_width) {
+            let sticky = if (b_significand << @intCast(type_width - align) != 0) @as(Z, 1) else 0;
+            b_significand = (b_significand >> @as(align)) | sticky;
+        } else {
+            b_significand = 1; // sticky; b is known to be non-zero.
+        }
+    }
+
+    if (subtraction) {
+        a_significand -= b_significand;
+        // If a == -b, return +zero.
+        if (a_significand == 0) return @bitCast(0);
+
+        // If partial cancellation occurred, we need to left-shift the result
+        // and adjust the exponent:
+        if (a_significand < integer_bit << 3) {
+            let shift = @intCast(i32, @clz(a_significand)) - @intCast(i32, @clz(integer_bit << 3));
+            a_significand <<= @intCast(shift);
+            a_exponent -= shift;
+        }
+    } // addition
+    else {
+        a_significand += b_significand;
+
+        // If the addition carried up, we need to right-shift the result and adjust the exponent:
+        if (a_significand & (integer_bit << 4) != 0) {
+            let sticky = a_significand & 1;
+            a_significand = a_significand >> 1 | sticky;
+            a_exponent += 1;
+        }
+    }
+
+    // If we have overflowed the type, return +/- infinity:
+    if (a_exponent >= max_exponent) return @bitCast(inf_rep | result_sign);
+
+    if (a_exponent <= 0) {
+        // Result is denormal; the exponent and round/sticky bits are zero.
+        // All we need to do is shift the significand and apply the correct sign.
+        a_significand >>= @intCast(u128, 4 - a_exponent);
+        return @bitCast(result_sign | a_significand);
+    }
+
+    // Low three bits are round, guard, and sticky.
+    let round_guard_sticky = a_significand & 0x7;
+
+    // Shift the significand into place, and mask off the integer bit, if it's implicit.
+    let mut result = (a_significand >> 3) & significand_mask;
+
+    // Insert the exponent and sign.
+    result |= @intCast(Z, a_exponent) << significand_bits;
+    result |= result_sign;
+
+    // Final rounding.  The result may overflow to infinity, but that is the
+    // correct result in that case.
+    if (round_guard_sticky > 0x4) result += 1;
+    if (round_guard_sticky == 0x4) result += result & 1;
+
+    // Restore any explicit integer bit, if it was rounded off
+    if (significand_bits != fractional_bits) {
+        if ((result >> significand_bits) != 0) result |= integer_bit;
+    }
+    return @bitCast(result);
 };
+
+@[testing] const test__addtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
+    let x = add_f128(a, b);
+
+    let rep: u128 = @bitCast(x);
+    let hi: u64 = @intCast(rep >> 64);
+    let lo: u64 = @truncate(rep);
+
+    if (hi == expected_hi and lo == expected_lo) {
+        return;
+    }
+    // test other possible NaN representation (signal NaN)
+    else if (expected_hi == 0x7fff800000000000 and expected_lo == 0x0) {
+        if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
+            ((hi & 0xffffffffffff) > 0 or lo > 0)) {
+            return;
+        }
+    }
+
+    @expect(false);
+};
+
+const qnan128: f128 = @bitCast(0x7fff800000000000u128 << 64);
+
+test "addtf3" {
+    test__addtf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0);
+
+    // NaN + any = NaN
+    test__addtf3(
+        @bitCast(f128, (0x7fff000000000000u128 << 64) | 0x800030000000u128),
+        0x1.23456789abcdefp+5,
+        0x7fff800000000000,
+        0x0,
+    );
+
+    // inf + inf = inf
+    test__addtf3(std.math.inf(f128), std.math.inf(f128), 0x7fff000000000000, 0x0);
+
+    // inf + any = inf
+    test__addtf3(
+        std.math.inf(f128),
+        0x1.2335653452436234723489432abcdefp+5,
+        0x7fff000000000000,
+        0x0,
+    );
+
+    // any + any
+    test__addtf3(
+        0x1.23456734245345543849abcdefp+5,
+        0x1.edcba52449872455634654321fp-1,
+        0x40042afc95c8b579,
+        0x61e58dd6c51eb77c,
+    );
+    test__addtf3(
+        0x1.edcba52449872455634654321fp-1,
+        0x1.23456734245345543849abcdefp+5,
+        0x40042afc95c8b579,
+        0x61e58dd6c51eb77c,
+    );
+}
