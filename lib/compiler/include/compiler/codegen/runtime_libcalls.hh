@@ -25,6 +25,14 @@ namespace ghoti::codegen {
                                      math_function       function,
                                      float_format        format) -> std::string;
 
+// True when LLVM's own name for `format`'s `floor`/`ceil`/`sqrt`/`fmod` would be ambiguous: f128
+// everywhere (`floorl` is `long double`'s), and f80 on MSVC (where `long double` is `double`)
+[[nodiscard]] auto needs_named_math_call(const llvm::Triple& triple, float_format format) -> bool;
+
+// The `fmod` routine a runtime float `%` reaches, named like `math_libcall_name`
+[[nodiscard]] auto fmod_libcall_name(const llvm::Triple& triple, float_format format)
+    -> std::string;
+
 // Drops the global symbol prefix an object file adds to source-level names
 [[nodiscard]] auto strip_global_prefix(const llvm::Triple& triple, std::string_view symbol)
     -> std::string_view;

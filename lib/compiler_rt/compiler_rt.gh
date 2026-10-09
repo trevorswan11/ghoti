@@ -12,7 +12,10 @@ pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     }
 };
 
-let mut _fltused: c_int = 1;
+/// MSVC's linker looks for this symbol in any object that uses floating point
+@cfg (os == .windows and abi == .msvc) {
+    let mut _fltused: c_int = 1;
+}
 
 pub const @"f128" = struct {
     pub const Abi = match comptime (@targetEndian()) {

@@ -335,6 +335,42 @@ auto get_default_output_extension(output_type type, stdx::option<std::string_vie
     }
 }
 
+namespace {
+
+struct machine_baseline {
+    std::string      cpu;
+    std::string      features;
+    std::string_view abi;
+};
+
+// What `generic` means per target: the baseline its OS ABI already assumes. A requested feature
+// comes after the defaults, so `-cx16` still turns one off
+[[nodiscard]] auto machine_baseline_for(const llvm::Triple& triple, const target_options& options)
+    -> machine_baseline {
+    machine_baseline base{options.cpu, options.features, {}};
+    if (options.cpu != "generic") { return base; }
+    const auto with_defaults{[&](std::string_view defaults) {
+        return options.features.empty() ? std::string{defaults}
+                                        : fmt::format("{},{}", defaults, options.features);
+    }};
+    switch (triple.getArch()) {
+    // Every x86-64 OS ghoti targets requires `cmpxchg16b`, so 128-bit atomics are native
+    case llvm::Triple::x86_64: base.features = with_defaults("+cx16"); break;
+    // RISC-V Linux is RV64GC/RV32GC with the hard-float ABI that its libc is built for
+    case llvm::Triple::riscv64:
+    case llvm::Triple::riscv32:
+        if (!triple.isOSLinux()) { break; }
+        base.cpu      = triple.isRISCV64() ? "generic-rv64" : "generic-rv32";
+        base.features = with_defaults("+m,+a,+f,+d,+c");
+        base.abi      = triple.isRISCV64() ? "lp64d" : "ilp32d";
+        break;
+    default: break;
+    }
+    return base;
+}
+
+} // namespace
+
 auto create_target_machine(const target_options& options)
     -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic> {
     PROFILE_FUNCTION();
@@ -350,7 +386,9 @@ auto create_target_machine(const target_options& options)
             error::TARGET_LOOKUP_FAILED);
     }
 
+    const auto          baseline{machine_baseline_for(triple, options)};
     llvm::TargetOptions target_opts;
+    target_opts.MCOptions.ABIName = baseline.abi;
     // One section per function/global so the linker's dead-strip can work its magic
     target_opts.FunctionSections = true;
     target_opts.DataSections     = true;
@@ -363,7 +401,7 @@ auto create_target_machine(const target_options& options)
     if (options.code) { code.emplace(to_llvm_code_model(*options.code)); }
 
     auto target_machine{target->createTargetMachine(
-        triple, options.cpu, options.features, target_opts, reloc, code, codegen_opt_level)};
+        triple, baseline.cpu, baseline.features, target_opts, reloc, code, codegen_opt_level)};
 
     if (!target_machine) {
         return make_codegen_err(

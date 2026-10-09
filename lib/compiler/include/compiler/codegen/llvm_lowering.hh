@@ -176,6 +176,8 @@ class llvm_lowering {
 
     auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
     // `@sqrt`, `@sin`, ... on a runtime float
+    // A float `%`, by name where LLVM's `fmodl` would be another type's
+    auto emit_frem(llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value*;
     auto emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value*;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
         -> void;

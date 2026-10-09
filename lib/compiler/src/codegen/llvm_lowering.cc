@@ -182,6 +182,14 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 }
 
 // The float constant of `ty` (or its elements) nearest to `value`
+// `half` and vectors read as `f32`, which LLVM's own names already serve
+[[nodiscard]] auto llvm_float_format(const llvm::Type* type) -> float_format {
+    return type->isFP128Ty()      ? float_format::QUAD
+           : type->isX86_FP80Ty() ? float_format::X87
+           : type->isDoubleTy()   ? float_format::DOUBLE
+                                  : float_format::SINGLE;
+}
+
 [[nodiscard]] auto float_constant(f128 value, llvm::Type* ty) -> llvm::Constant* {
     auto* scalar_ty{ty->getScalarType()};
     VERIFY(scalar_ty->isFloatingPointTy(), "A float payload must lower to a float type");
@@ -2183,7 +2191,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
         return is_sgn ? builder_.CreateSDiv(lhs, rhs, "divtmp")
                       : builder_.CreateUDiv(lhs, rhs, "divtmp");
     case gir::instruction_kind::MOD:
-        if (is_flt) { return builder_.CreateFRem(lhs, rhs, "modtmp"); }
+        if (is_flt) { return emit_frem(lhs, rhs); }
         return is_sgn ? builder_.CreateSRem(lhs, rhs, "modtmp")
                       : builder_.CreateURem(lhs, rhs, "modtmp");
     case gir::instruction_kind::AND: return builder_.CreateAnd(lhs, rhs, "andtmp");
@@ -2615,10 +2623,30 @@ auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::
     return res;
 }
 
+auto llvm_lowering::emit_frem(llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* {
+    auto*       type{lhs->getType()};
+    const auto  format{llvm_float_format(type)};
+    const auto& triple{llvm_module_->getTargetTriple()};
+    if (!needs_named_math_call(triple, format)) { return builder_.CreateFRem(lhs, rhs, "modtmp"); }
+    // LLVM would call `fmodl`, which is `long double`'s and not this type's
+    auto* fn_type{llvm::FunctionType::get(type, {type, type}, false)};
+    auto  callee{llvm_module_->getOrInsertFunction(fmod_libcall_name(triple, format), fn_type)};
+    auto* call{builder_.CreateCall(callee, {lhs, rhs}, "modtmp")};
+    call->addFnAttr(llvm::Attribute::NoBuiltin);
+    return call;
+}
+
 auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value* {
-    auto* type{operand->getType()};
-    // Exact operations: LLVM's intrinsics, and its folding of them, give the one right answer
+    auto*      type{operand->getType()};
+    const auto format{llvm_float_format(type)};
+    // Exact operations: LLVM's intrinsics, and its folding of them, give the one right answer,
+    // except where LLVM would call them by a `long double` name that isn't this type's
     const auto exact{[&]() -> stdx::option<llvm::Intrinsic::ID> {
+        // x87's `fsqrt` is exact, so only f80 `floor`/`ceil` need MSVC's named routines
+        const bool native_sqrt{function == math_function::SQRT && format == float_format::X87};
+        if (!native_sqrt && needs_named_math_call(llvm_module_->getTargetTriple(), format)) {
+            return stdx::none;
+        }
         switch (function) {
         case math_function::SQRT:  return llvm::Intrinsic::sqrt;
         case math_function::FLOOR: return llvm::Intrinsic::floor;
@@ -2639,10 +2667,6 @@ auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand)
 
     // A direct, `nobuiltin` call rather than `llvm.sin` and friends: LLVM folds those with the
     // host's libm, which would replace a correctly rounded constant with a host-dependent one
-    const auto format{type->isFloatTy()      ? float_format::SINGLE
-                      : type->isDoubleTy()   ? float_format::DOUBLE
-                      : type->isX86_FP80Ty() ? float_format::X87
-                                             : float_format::QUAD};
     const auto name{math_libcall_name(llvm_module_->getTargetTriple(), function, format)};
     auto*      fn_type{llvm::FunctionType::get(type, {type}, false)};
     auto       callee{llvm_module_->getOrInsertFunction(name, fn_type)};
