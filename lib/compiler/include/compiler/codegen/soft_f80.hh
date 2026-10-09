@@ -21,7 +21,9 @@ namespace ghoti::codegen {
 // `f80` as an `i80`, as Zig does. The routines take and return that `i80`, so compiler_rt can
 // declare them with `f80` or `u80`. Integers wider than 128 bits go through memory:
 // `__floateixf(ptr, bits)` / `__fixxfei(ptr, bits, a)` read or write the integer's in-memory
-// representation. Run once, right after lowering; a no-op on x86.
+// representation, and LLVM can't expand those for any other float format off x86 either, so they
+// become `__floateisf`, `__fixdfei`, ... the same way. Run once, right after lowering; a no-op on
+// x86.
 [[nodiscard]] auto soften_f80(llvm::Module& module) -> stdx::result<void, diagnostic>;
 
 // The ABI alignment `type` has once `soften_f80` stores its `f80`s as `i80`s, so a lowered layout

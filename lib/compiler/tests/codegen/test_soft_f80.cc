@@ -162,6 +162,44 @@ TEST_CASE("f80 compiles to native code on targets without x87") {
     }
 }
 
+TEST_CASE("a conversion between any float and an integer wider than 128 bits compiles off x86") {
+    constexpr std::string_view source{R"(
+        export const from_wide = fn(a: i200, b: u256): f64 {
+            return @floatFromInt(f64, a) + @floatFromInt(f32, b) + @floatFromInt(f16, a) +
+                @floatCast(f64, @floatFromInt(f128, b));
+        };
+        export const to_wide = fn(h: f16, s: f32, d: f64, q: f128): i200 {
+            return @intFromFloat(i200, h) + @intFromFloat(i200, s) + @intFromFloat(i200, d) +
+                @as(i200, @intCast(@intFromFloat(u199, q)));
+        };
+    )"};
+
+    const auto ir{emit_for(source, "aarch64-unknown-linux-gnu", codegen::opt_level::O0, false)};
+    for (const std::string_view call : {
+             "call double @__floateidf(ptr",
+             "call float @__floatuneisf(ptr",
+             "call half @__floateihf(ptr",
+             "call fp128 @__floatuneitf(ptr",
+             "call void @__fixhfei(ptr",
+             "call void @__fixsfei(ptr",
+             "call void @__fixdfei(ptr",
+             "call void @__fixunstfei(ptr",
+         }) {
+        INFO(call);
+        CHECK(ir.contains(call));
+    }
+
+    for (const std::string_view triple : {"aarch64-unknown-linux-gnu",
+                                          "riscv32-unknown-linux-gnu",
+                                          "arm-unknown-linux-gnueabihf",
+                                          "wasm32-unknown-unknown"}) {
+        INFO(triple);
+        CHECK(emit_for(source, triple, codegen::opt_level::O2, true).contains("__fixdfei"));
+    }
+    CHECK(codegen::is_compiler_rt_symbol(
+        codegen::resolve_target_triple("aarch64-unknown-linux-gnu"), "__floateisf"));
+}
+
 TEST_CASE("an aggregate holding an f80 keeps its layout off x86") {
     // 32-bit Arm and RISC-V align an `i80` to 8, but sema laid the `f80` out at 16
     constexpr std::string_view source{R"(

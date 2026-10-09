@@ -719,6 +719,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a parameter type reflecting on an earlier type parameter (`bits: ^mut @Int(.{ .bits = @typeInfo(T).float.bits, ... })`, `[@typeInfo(T).float.bits / 8]u8`) was evaluated before `T` was bound and reported an inactive union field (#371)
 - Fixed: a non-test build crashed on a file whose `test` block imports a module (`test { import "x.gh"; }`), since that module is never resolved outside a test build
 - Fixed: same-named generic functions in different modules (two files' private `helper`s) shared one instance per argument list, so a call could run the other module's body
+- An atomic builtin's order and op arguments take a bare variant, as `@Int` takes an implicit `IntInfo`: `@atomicRmw(u32, p, .add, 1, .seq_cst)`, `@fence(.acquire)`
+- Fixed: an untyped literal passed to `@atomicStore`, `@atomicRmw`, or `@cmpxchg*` was typed by the context the call sat in rather than by the atomic's operand type: `@atomicStore(^mut x, 3, ...)` on a `u64` stored only 4 bytes (and on a `u16`, 4 bytes past it), and `let w: u64 = @atomicRmw(u16, p, .add, 1, ...)` was rejected
+- Fixed: `@floatFromInt`/`@intFromFloat` between `f16`/`f32`/`f64`/`f128` and an integer wider than 128 bits crashed LLVM on every target but x86; they now call compiler_rt's `__floateisf`, `__fixdfei`, ... routines, like `f80` does
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

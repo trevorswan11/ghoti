@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -79,6 +80,55 @@ TEST_CASE("@fence compiles and runs without effect on a single thread") {
             return x;
         };
     )") == 2);
+}
+
+TEST_CASE("An untyped literal operand of an atomic takes the location's type") {
+    CHECK(helpers::compile_and_run(R"(
+        const Pair = extern struct { lo: u16, hi: u16 };
+        pub const main = fn(): i32 {
+            let mut wide: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+            @atomicStore(^mut wide, 3, builtin.MemoryOrder.seq_cst);
+            let mut pair: Pair = .{ .lo = 0, .hi = 9 };
+            @atomicStore(^mut pair.lo, 5, builtin.MemoryOrder.seq_cst);
+            let mut x: u16 = 4;
+            let widened: u64 = @atomicRmw(u16, ^mut x, builtin.AtomicRmwOp.add, 1,
+                                         builtin.MemoryOrder.seq_cst);
+            let mut out: u64 = 0;
+            let swapped: bool = @cmpxchgStrong(u64, ^mut wide, 3, 7, builtin.MemoryOrder.seq_cst,
+                                               builtin.MemoryOrder.seq_cst, ^mut out);
+            if (!swapped) { return 1; }
+            return @as(i32, @intCast(wide + pair.lo + pair.hi + widened + x));
+        };
+    )") == 7 + 5 + 9 + 4 + 5);
+}
+
+TEST_CASE("An atomic's order and op arguments accept an implicit variant") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut x: i32 = 10;
+            @atomicStore(^mut x, 20, .release);
+            let old = @atomicRmw(i32, ^mut x, .add, 5, .acq_rel);
+            let mut out: i32 = 0;
+            let swapped = @cmpxchgStrong(i32, ^mut x, 25, 40, .seq_cst, .relaxed, ^mut out);
+            @fence(.seq_cst);
+            if (old != 20) { return 1; }
+            if (!swapped) { return 2; }
+            return @atomicLoad(i32, ^mut x, .acquire);
+        };
+    )") == 40);
+    // The variant must still exist, and keep the order rules
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            let mut x: i32 = 1;
+            return @atomicRmw(i32, ^mut x, .bogus, 1, .seq_cst);
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            let x: i32 = 1;
+            return @atomicLoad(i32, ^x, .release);
+        };
+    )");
 }
 
 } // namespace ghoti::tests
