@@ -4006,6 +4006,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (idx >= fn_params.size() || !fn_params[idx].explicit_type.is_valid()) {
                     return stdx::none;
                 }
+                // `^T` and `&T` keep their modifier in the id, with `T` as the payload
+                if (!fn_params[idx].explicit_type.get_modifier().is_value()) { return stdx::none; }
                 const auto ident{
                     fn_ast.get_as_opt<ast::identifier_expr>(fn_params[idx].explicit_type)};
                 if (!ident) { return stdx::none; }

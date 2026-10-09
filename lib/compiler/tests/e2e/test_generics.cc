@@ -715,4 +715,19 @@ TEST_CASE("A module only a test block imports is left out of a non-test build") 
                                     )"}}) == 6);
 }
 
+TEST_CASE("A pointer or reference to an earlier type parameter binds through it") {
+    CHECK(helpers::compile_and_run(R"(
+        const set = fn(T: type, p: ^mut T, v: T): void { *p = v; };
+        const get = fn(T: type, p: &T): T { return *p; };
+        const second = fn(T: type, U: type, p: ^U): U { return *p; };
+
+        pub const main = fn(): i32 {
+            let mut a: u8 = 0;
+            set(u8, ^mut a, 5);
+            let b: i32 = 7;
+            return a + @as(i32, get(u8, &a)) + second(u8, i32, ^b);
+        };
+    )") == 17);
+}
+
 } // namespace ghoti::tests
