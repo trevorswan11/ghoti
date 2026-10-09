@@ -56,4 +56,26 @@ TEST_CASE("Function return type restrictions") {
                                                  std::pair{0UZ, 17UZ}});
 }
 
+TEST_CASE("mut on a type without a pointer, reference, or slice") {
+    const syntax::diagnostic bare{
+        "`mut` only qualifies what a `^`, `&`, or `[]` reaches; a value's "
+        "mutability comes from `let mut`",
+        syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+        std::pair{0UZ, 11UZ}};
+    helpers::test_parser_fail("let mut a: mut i32 = 1;", syntax::diagnostic{bare});
+    helpers::test_parser_fail("let mut a: mut mut i32 = 1;", syntax::diagnostic{bare});
+    helpers::test_parser_fail(
+        "let mut a: mut volatile i32 = 1;",
+        syntax::diagnostic{"`mut volatile T` is just `volatile T`: a value's mutability comes from "
+                           "`let mut`, not its type",
+                           syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                           std::pair{0UZ, 11UZ}});
+    helpers::test_parser_fail(
+        "let mut a: []mut mut volatile i32 = undefined;",
+        syntax::diagnostic{"`mut volatile T` is just `volatile T`: a value's mutability comes from "
+                           "`let mut`, not its type",
+                           syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                           std::pair{0UZ, 17UZ}});
+}
+
 } // namespace ghoti::tests

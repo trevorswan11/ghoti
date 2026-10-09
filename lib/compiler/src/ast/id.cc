@@ -99,9 +99,16 @@ type_modifier::type_modifier(const syntax::token_t& tok) noexcept
 
 auto type_modifier::parse(syntax::parser& parser, const syntax::token_t& current)
     -> stdx::result<type_modifier, syntax::diagnostic> {
+    // A value's mutability is its binding's; only what `^`, `&`, or `[]` reaches carries `mut`
     if (current.type == syntax::token_type_t::MUT) {
-        TRY(parser.expect_peek(syntax::token_type_t::VOLATILE));
-        return type_modifier{modifier::MUT_VOLATILE};
+        const bool before_volatile{parser.peek_token_is(syntax::token_type_t::VOLATILE)};
+        return make_syntax_err(before_volatile
+                                   ? "`mut volatile T` is just `volatile T`: a value's mutability "
+                                     "comes from `let mut`, not its type"
+                                   : "`mut` only qualifies what a `^`, `&`, or `[]` reaches; a "
+                                     "value's mutability comes from `let mut`",
+                               syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                               current);
     }
     return type_modifier{current};
 }

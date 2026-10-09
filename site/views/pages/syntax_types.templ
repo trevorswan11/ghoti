@@ -12,8 +12,16 @@ templ SyntaxTypesPage() {
 				<li><code>^mut</code>: Denotes a mutable pointer</li>
 				<li><code>&amp;</code>: Denotes a constant reference</li>
 				<li><code>&amp;mut</code>: Denotes a mutable reference</li>
-				<li><code>volatile</code>: Denotes a <a href="https://en.wikipedia.org/wiki/Volatile_(computer_programming)">volatile</a> value, preventing certain compiler optimizations for the sake of correctness</li>
+				<li>
+					<code>volatile</code>: Denotes a <a href="https://en.wikipedia.org/wiki/Volatile_(computer_programming)">volatile</a> value, preventing certain compiler optimizations for the sake of correctness
+					<ul>
+						<li>It qualifies a value, never a pointer, reference, slice, or array itself: write <code>^volatile T</code>, <code>[]mut volatile T</code>, or <code>[N]volatile T</code> to make what they reach volatile</li>
+					</ul>
+				</li>
 			</ul>
+		</li>
+		<li>
+			<code>mut</code> only qualifies what a <code>^</code>, <code>&amp;</code>, or <code>[]</code> reaches; a value's own mutability comes from its binding (<code>let mut v: volatile i32</code>, not <code>mut volatile i32</code>)
 		</li>
 		<li>
 			Most of these modifiers act in an opposite way to languages like C, C++, and Zig, while behaving similar to Rust

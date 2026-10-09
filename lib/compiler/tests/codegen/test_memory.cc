@@ -67,7 +67,7 @@ TEST_CASE("LLVM lowering volatile load and store") {
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const test_volatile = fn(): i32 {
-            let mut v: mut volatile i32 = 42;
+            let mut v: volatile i32 = 42;
             v = v + 1;
             return v;
         };

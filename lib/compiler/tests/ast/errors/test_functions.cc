@@ -54,15 +54,18 @@ TEST_CASE("Out-of-place self parameter") {
 }
 
 TEST_CASE("Illegal self parameter modifier") {
-    using namespace std::string_view_literals;
-    const auto modifier{GENERATE("volatile"sv, "mut volatile"sv)};
-
     helpers::test_parser_fail(
-        fmt::format("fn({} self): i32 {{}};", modifier),
+        "fn(volatile self): i32 {};",
         syntax::diagnostic{
             "Self parameters cannot be marked volatile; they must be values, refs, or pointers",
             syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
             std::pair{0UZ, 3UZ}});
+    helpers::test_parser_fail(
+        "fn(mut volatile self): i32 {};",
+        syntax::diagnostic{"`mut volatile T` is just `volatile T`: a value's mutability comes from "
+                           "`let mut`, not its type",
+                           syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                           std::pair{0UZ, 3UZ}});
 }
 
 TEST_CASE("Self parameter modifier without a name") {

@@ -107,7 +107,6 @@ class type_modifier {
         PTR,
         MUT_PTR,
         VOLATILE,
-        MUT_VOLATILE,
         POLY_REF, // `&mut?`: the enclosing function's `mut?` mutability
         POLY_PTR, // `^mut?`
     };
@@ -148,11 +147,7 @@ class type_modifier {
         return is_poly_ref() || is_poly_ptr();
     }
 
-    MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(mutable_volatile, modifier::MUT_VOLATILE)
-    MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(const_volatile, modifier::VOLATILE)
-    [[nodiscard]] constexpr auto is_volatile() const noexcept -> bool {
-        return is_mutable_volatile() || is_const_volatile();
-    }
+    MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(volatile, modifier::VOLATILE)
 
     [[nodiscard]] constexpr auto operator==(const type_modifier& other) const noexcept
         -> bool = default;

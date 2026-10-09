@@ -216,10 +216,10 @@ TEST_CASE("Directly writing to a mut array's elements") {
     )") == 5);
 }
 
-TEST_CASE("mut volatile scalar reads and writes") {
+TEST_CASE("volatile scalar reads and writes") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
-            let mut v: mut volatile i32 = 42;
+            let mut v: volatile i32 = 42;
             v = v + 1;
             return v;
         };

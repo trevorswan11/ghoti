@@ -1,7 +1,15 @@
-﻿#include <catch2/catch_test_macros.hpp>
+﻿#include <utility>
+
+#include <catch2/catch_message.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <fmt/format.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -39,7 +47,7 @@ TEST_CASE("Volatile local enum variable with implicit member access compiles and
         };
 
         pub const main = fn(): i32 {
-            let mut s: mut volatile State = .B;
+            let mut s: volatile State = .B;
             if (s != .B) { return 1; }
             s = .C;
             if (s != .C) { return 2; }
@@ -67,10 +75,10 @@ TEST_CASE("Volatile global variable with constant initializer compiles and runs 
 
 TEST_CASE("Volatile local and global variable loads and stores operate correctly at runtime") {
     CHECK(helpers::compile_and_run(R"(
-        let mut g_vol: mut volatile i32 = 10;
+        let mut g_vol: volatile i32 = 10;
 
         pub const main = fn(): i32 {
-            let mut loc_vol: mut volatile i32 = 20;
+            let mut loc_vol: volatile i32 = 20;
             g_vol = g_vol + 5;
             loc_vol = loc_vol + 10;
             g_vol += 2;
@@ -85,7 +93,7 @@ TEST_CASE("Volatile local and global variable loads and stores operate correctly
 TEST_CASE("Volatile pointer load and store operate correctly at runtime") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
-            let mut x: mut volatile i32 = 42;
+            let mut x: volatile i32 = 42;
             let p: ^mut volatile i32 = ^mut x;
             *p = 99;
             if (x != 99) { return 1; }
@@ -103,7 +111,7 @@ TEST_CASE("Volatile struct field access and mutation operate correctly at runtim
             data: i32,
         };
 
-        let mut regs: mut volatile DeviceRegisters = DeviceRegisters{
+        let mut regs: volatile DeviceRegisters = DeviceRegisters{
             .status = 1,
             .control = 2,
             .data = 3,
@@ -124,7 +132,7 @@ TEST_CASE("Volatile struct field access and mutation operate correctly at runtim
 
 TEST_CASE("Volatile array indexing and mutation operate correctly at runtime") {
     CHECK(helpers::compile_and_run(R"(
-        let mut buffer: mut volatile [4uz]mut i32 = [4uz]mut i32{10, 20, 30, 40};
+        let mut buffer: [4uz]mut volatile i32 = [4uz]mut volatile i32{10, 20, 30, 40};
 
         pub const main = fn(): i32 {
             if (buffer[0uz] != 10) { return 1; }
@@ -158,6 +166,49 @@ TEST_CASE("Reading volatile variable is rejected in const eval") {
         const bad_const: i32 = vol_val;
         pub const main = fn(): void {};
     )");
+}
+
+TEST_CASE("volatile qualifies a value, never a pointer, reference, slice, or array itself") {
+    SECTION("Bad direct types") {
+        const auto [type, message]{GENERATE(
+            std::pair{"volatile ^u32", "`volatile` can't qualify '^u32' itself"},
+            std::pair{"volatile &mut i32", "`volatile` can't qualify '&mut i32' itself"},
+            std::pair{"volatile []u8", "`volatile` can't qualify '[]u8' itself"},
+            std::pair{"^volatile ^mut volatile u32",
+                      "`volatile` can't qualify '^mut volatile u32' itself"},
+            std::pair{"volatile [4]i32", "`volatile` on an array qualifies its elements"},
+            std::pair{"[2]volatile [4]i32", "`volatile` on an array qualifies its elements"},
+            std::pair{"volatile volatile u32", "'volatile u32' is already volatile"})};
+
+        const auto result{helpers::resolve_diags(
+            fmt::format("const f = fn(): void {{ let p: {} = undefined; _ = p; }};", type))};
+        CHECK(result.message_contains(message));
+    }
+
+    SECTION("An alias is checked by what it names") {
+        CHECK(helpers::resolve_diags("const P = ^u32; const f = fn(): void { let p: volatile P = "
+                                     "undefined; _ = p; };")
+                  .message_contains("`volatile` can't qualify '^u32' itself"));
+    }
+}
+
+TEST_CASE("Every access to a volatile array or slice element is volatile") {
+    llvm::LLVMContext context;
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        let mut ga: [4]mut volatile i32 = .{1, 2, 3, 4};
+        let mut gs: []mut volatile i32 = undefined;
+        export const f = fn(i: usize): i32 {
+            ga[i] = 5;
+            gs[i] = 6;
+            return ga[i] + gs[i];
+        };
+    )")};
+    auto       llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    const auto ir{helpers::ir_text(*llvm_mod)};
+    CHECK(ir.contains("store volatile i32 5"));
+    CHECK(ir.contains("store volatile i32 6"));
+    CHECK_FALSE(ir.contains("store i32 5"));
+    CHECK_FALSE(ir.contains("store i32 6"));
 }
 
 } // namespace ghoti::tests
