@@ -248,7 +248,14 @@ enum class atomic_rmw_op_t : u8 { // Mirrors builtin.gh.inc
     umin = 10,
 };
 
+// An atomic access's size as its alignment, which is what `atomicrmw`/`cmpxchg` assume
+[[nodiscard]] auto natural_atomic_align(const llvm::Module& module, llvm::Type* type)
+    -> llvm::Align {
+    return llvm::Align{llvm::PowerOf2Ceil(module.getDataLayout().getTypeStoreSize(type))};
+}
+
 // `op` is an `AtomicRmwOp` enum ordinal
+
 [[nodiscard]] auto to_llvm_rmw_op(u8 op) noexcept -> llvm::AtomicRMWInst::BinOp {
     using Op = llvm::AtomicRMWInst::BinOp;
     switch (static_cast<atomic_rmw_op_t>(op)) {
@@ -3129,7 +3136,11 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             if (!ptr || !inst.type) { return nullptr; }
-            auto* load{builder_.CreateLoad(types_.translate(*inst.type), ptr)};
+            auto* type{types_.translate(*inst.type)};
+            auto* load{builder_.CreateLoad(type, ptr)};
+            // Naturally aligned like `atomicrmw`/`cmpxchg`, even where the ABI aligns less
+            // (`u64` on i686 Linux), so it stays an instruction rather than a libcall
+            load->setAlignment(natural_atomic_align(*llvm_module_, type));
             load->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return load;
         }
@@ -3139,6 +3150,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* val{lower_value(inst.operands[1])};
             if (!ptr || !val) { return nullptr; }
             auto* store{builder_.CreateStore(val, ptr)};
+            store->setAlignment(natural_atomic_align(*llvm_module_, val->getType()));
             store->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }

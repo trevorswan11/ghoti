@@ -101,6 +101,23 @@ TEST_CASE("128-bit atomics are native on x86-64") {
     }
 }
 
+TEST_CASE("64-bit atomics on i686 stay instructions where the ABI aligns u64 to 4") {
+    constexpr std::string_view source{R"(
+        export const bump = fn(p: ^mut u64): u64 {
+            @atomicStore(p, 3, .release);
+            return @atomicRmw(u64, p, .add, 1, .seq_cst) + @atomicLoad(u64, p, .acquire);
+        };
+    )"};
+    for (const std::string_view triple : {"i686-unknown-linux-gnu", "i686-pc-windows-msvc"}) {
+        INFO(triple);
+        const auto ir{emit_for(source, triple, codegen::opt_level::O0, false)};
+        CHECK(ir.contains("load atomic i64, ptr %"));
+        CHECK(ir.contains("acquire, align 8"));
+        CHECK(ir.contains("release, align 8"));
+        CHECK_FALSE(emit_for(source, triple, codegen::opt_level::O2, true).contains("__atomic"));
+    }
+}
+
 TEST_CASE("RISC-V Linux defaults to RV64GC with the hard-float ABI") {
     constexpr std::string_view source{R"(
         export const mix = fn(a: f64, b: f64, n: u64, d: u64): f64 {

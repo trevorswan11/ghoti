@@ -182,7 +182,7 @@ pub const AtomicRmwOp = enum {
 };` }
 		</code>
 	</pre>
-	<p><code>{ "ptr" }</code> is the atomic memory location itself (e.g. <code>{ "^mut i32" }</code>), evaluated as a normal expression &mdash; no <code>{ "&" }</code> needed. Every operand's width must be a native atomic width for the target: 8/16/32/64 bits always, 128 only on x86_64/aarch64.</p>
+	<p><code>{ "ptr" }</code> is the atomic memory location itself (e.g. <code>{ "^mut i32" }</code>), evaluated as a normal expression &mdash; no <code>{ "&" }</code> needed. Every operand's width must be a native atomic width for the target: 8/16/32/64 bits always, 128 only on x86_64/aarch64. <code>{ "ptr" }</code> must be aligned to the operand's size, even where the ABI aligns that type less (a <code>{ "u64" }</code> on i686 Linux). A target with no instruction for a width (64 bits on riscv32 or thumb) calls compiler_rt's <code>{ "__atomic_*" }</code> routines instead.</p>
 	<h3>{ "@atomicLoad / @atomicStore" }</h3>
 	<pre>
 		<code class="language-ghoti">
