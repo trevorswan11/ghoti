@@ -2648,7 +2648,7 @@ auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand)
     const auto format{llvm_float_format(type)};
     // Exact operations: LLVM's intrinsics, and its folding of them, give the one right answer,
     // except where LLVM would call them by a `long double` name that isn't this type's
-    const auto exact{[&]() -> stdx::option<llvm::Intrinsic::ID> {
+    const auto exact{[&] -> stdx::option<llvm::Intrinsic::ID> {
         // x87's `fsqrt` is exact, so only f80 `floor`/`ceil` need MSVC's named routines
         const bool native_sqrt{function == math_function::SQRT && format == float_format::X87};
         if (!native_sqrt && needs_named_math_call(llvm_module_->getTargetTriple(), format)) {
