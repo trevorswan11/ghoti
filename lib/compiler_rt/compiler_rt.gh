@@ -1,5 +1,7 @@
 import std;
 
+import "addf3.gh" as _;
+
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     @cfg (!testing) {

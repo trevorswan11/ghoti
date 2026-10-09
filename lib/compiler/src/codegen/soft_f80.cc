@@ -78,6 +78,23 @@ constexpr std::array routines{
     "__fixunsxfdi",
     "__fixunsxfti",
     "__fixunsxfei",
+    // Integers wider than 128 bits to and from the other formats
+    "__floateihf",
+    "__floateisf",
+    "__floateidf",
+    "__floateitf",
+    "__floatuneihf",
+    "__floatuneisf",
+    "__floatuneidf",
+    "__floatuneitf",
+    "__fixhfei",
+    "__fixsfei",
+    "__fixdfei",
+    "__fixtfei",
+    "__fixunshfei",
+    "__fixunssfei",
+    "__fixunsdfei",
+    "__fixunstfei",
     // Math
     "__sqrtx",
     "__floorx",
@@ -138,7 +155,8 @@ constexpr std::array routines{
     return "ei";
 }
 
-// Stage one: every `f80` operation becomes a call, or integer math on its bits
+// Stage one: every `f80` operation becomes a call, or integer math on its bits. So does every
+// conversion between a float and an integer wider than 128 bits, which LLVM expands only on x86
 class operation_softener {
   public:
     explicit operation_softener(llvm::Module& module)
@@ -175,6 +193,15 @@ class operation_softener {
   private:
     [[nodiscard]] auto is_f80(const llvm::Type* type) const -> bool { return type == f80_; }
 
+    [[nodiscard]] static auto is_wide_int(const llvm::Type* type) -> bool {
+        return type->isIntegerTy() && type->getIntegerBitWidth() > 128;
+    }
+
+    // The format part of a conversion routine's name
+    [[nodiscard]] auto format_abbrev(const llvm::Type* type) const -> std::string_view {
+        return is_f80(type) ? "xf" : float_abbrev(type);
+    }
+
     [[nodiscard]] auto needs_rewrite(const llvm::Instruction& inst) const -> bool {
         switch (inst.getOpcode()) {
         case llvm::Instruction::FAdd:
@@ -182,14 +209,16 @@ class operation_softener {
         case llvm::Instruction::FMul:
         case llvm::Instruction::FDiv:
         case llvm::Instruction::FRem:
+        case llvm::Instruction::FNeg:
+        case llvm::Instruction::FCmp: return is_f80(inst.getOperand(0)->getType());
         case llvm::Instruction::FPToSI:
         case llvm::Instruction::FPToUI:
-        case llvm::Instruction::FNeg:
-        case llvm::Instruction::FCmp:   return is_f80(inst.getOperand(0)->getType());
-        case llvm::Instruction::FPExt:
-        case llvm::Instruction::FPTrunc:
+            return is_f80(inst.getOperand(0)->getType()) || is_wide_int(inst.getType());
         case llvm::Instruction::SIToFP:
         case llvm::Instruction::UIToFP:
+            return is_f80(inst.getType()) || is_wide_int(inst.getOperand(0)->getType());
+        case llvm::Instruction::FPExt:
+        case llvm::Instruction::FPTrunc:
             return is_f80(inst.getType()) || is_f80(inst.getOperand(0)->getType());
         case llvm::Instruction::Call:
             if (const auto* intrinsic{llvm::dyn_cast<llvm::IntrinsicInst>(&inst)}) {
@@ -215,8 +244,8 @@ class operation_softener {
         case llvm::Instruction::FPExt:
         case llvm::Instruction::FPTrunc:
             return float_conversion(inst.getOperand(0), inst.getType());
-        case llvm::Instruction::SIToFP: return from_int(inst.getOperand(0), true);
-        case llvm::Instruction::UIToFP: return from_int(inst.getOperand(0), false);
+        case llvm::Instruction::SIToFP: return from_int(inst.getOperand(0), inst.getType(), true);
+        case llvm::Instruction::UIToFP: return from_int(inst.getOperand(0), inst.getType(), false);
         case llvm::Instruction::FPToSI: return to_int(inst.getOperand(0), inst.getType(), true);
         case llvm::Instruction::FPToUI: return to_int(inst.getOperand(0), inst.getType(), false);
         case llvm::Instruction::Call:   return intrinsic(llvm::cast<llvm::IntrinsicInst>(inst));
@@ -298,23 +327,28 @@ class operation_softener {
 
     // `__float*xf` takes the narrowest of i32/i64/i128 holding the operand, or reads a wider
     // integer through memory
-    auto from_int(llvm::Value* value, bool is_signed) -> llvm::Value* {
+    auto from_int(llvm::Value* value, llvm::Type* target, bool is_signed) -> llvm::Value* {
         const auto bits{value->getType()->getIntegerBitWidth()};
         const auto abbrev{int_abbrev(bits)};
-        const auto name{fmt::format("__float{}{}xf", is_signed ? "" : "un", abbrev)};
+        const auto format{format_abbrev(target)};
+        if (format.empty()) { return nullptr; }
+        const auto name{fmt::format("__float{}{}{}", is_signed ? "" : "un", abbrev, format)};
         if (bits > 128) {
             auto* slot{spill(value)};
-            return call(name, f80_, {slot, bit_count(bits)});
+            return call(name, target, {slot, bit_count(bits)});
         }
         auto* wide{builder_.getIntNTy(bits <= 32 ? 32 : bits <= 64 ? 64 : 128)};
         auto* extended{is_signed ? builder_.CreateSExt(value, wide)
                                  : builder_.CreateZExt(value, wide)};
-        return call(name, f80_, {extended});
+        return call(name, target, {extended});
     }
 
     auto to_int(llvm::Value* value, llvm::Type* target, bool is_signed) -> llvm::Value* {
         const auto bits{target->getIntegerBitWidth()};
-        const auto name{fmt::format("__fix{}xf{}", is_signed ? "" : "uns", int_abbrev(bits))};
+        const auto format{format_abbrev(value->getType())};
+        if (format.empty()) { return nullptr; }
+        const auto name{
+            fmt::format("__fix{}{}{}", is_signed ? "" : "uns", format, int_abbrev(bits))};
         if (bits > 128) {
             auto* slot{entry_alloca(target)};
             auto* write{call(name, builder_.getVoidTy(), {slot, bit_count(bits), value})};

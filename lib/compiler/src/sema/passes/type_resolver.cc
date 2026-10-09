@@ -590,6 +590,35 @@ namespace {
     }
 }
 
+// What an atomic builtin's argument is, which decides the type it's resolved against
+enum class atomic_arg : u8 {
+    PLAIN,
+    OPERAND,
+    ORDER,
+    OP,
+};
+
+// The roles of an atomic builtin's arguments, in order; empty for any other builtin
+[[nodiscard]] auto atomic_arg_roles(syntax::token_type_t tok) noexcept
+    -> gsl::span<const atomic_arg> {
+    using enum atomic_arg;
+    using syntax::token_type_t;
+    static constexpr std::array load{PLAIN, PLAIN, ORDER};
+    static constexpr std::array store{PLAIN, OPERAND, ORDER};
+    static constexpr std::array rmw{PLAIN, PLAIN, OP, OPERAND, ORDER};
+    static constexpr std::array cmpxchg{PLAIN, PLAIN, OPERAND, OPERAND, ORDER, ORDER, PLAIN};
+    static constexpr std::array fence{ORDER};
+    switch (tok) {
+    case token_type_t::BUILTIN_ATOMIC_LOAD:    return load;
+    case token_type_t::BUILTIN_ATOMIC_STORE:   return store;
+    case token_type_t::BUILTIN_ATOMIC_RMW:     return rmw;
+    case token_type_t::BUILTIN_CMPXCHG_WEAK:
+    case token_type_t::BUILTIN_CMPXCHG_STRONG: return cmpxchg;
+    case token_type_t::BUILTIN_FENCE:          return fence;
+    default:                                   return {};
+    }
+}
+
 [[nodiscard]] auto is_valid_memory_order_name(std::string_view name) noexcept -> bool {
     return name == "relaxed" || name == "acquire" || name == "release" || name == "acq_rel" ||
            name == "seq_cst";
@@ -2540,6 +2569,45 @@ auto type_resolver::resolve_call_args(gsl::span<const ast::call_expr::argument> 
             resolve(id);
             return last_type_.take()->is_poison();
         });
+    }
+    return any_poison ? resolve_result::POISONED : resolve_result::OK;
+}
+
+auto type_resolver::resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result {
+    const auto tok{call.function->get_token_type()};
+    const auto roles{atomic_arg_roles(tok)};
+    const auto args{gsl::span<const ast::call_expr::argument>{call.arguments}};
+    if (args.size() != roles.size()) { return resolve_call_args(args); }
+
+    // `T` is the leading type argument, or `ptr`'s pointee for `@atomicStore`
+    const bool          has_t_arg{tok != syntax::token_type_t::BUILTIN_ATOMIC_STORE};
+    stdx::option<type&> operand_type;
+    const auto          find_operand_type = [&] {
+        if (has_t_arg && call_arg_denotes_type(args[0])) {
+            operand_type.emplace(denoted_type(*get_resolved_call_arg_type(args[0])));
+        } else if (const auto ptr{get_resolved_call_arg_type(args[has_t_arg ? 1 : 0])
+                                      ->get_data()
+                                      .as_opt<types::pointer>()}) {
+            operand_type.emplace(*ctx_.pool.strip_volatile(ptr->underlying));
+        }
+    };
+
+    bool any_poison{false};
+    bool found_operand_type{false};
+    for (usize i{0}; i < args.size(); ++i) {
+        type* hint{nullptr};
+        switch (roles[i]) {
+        case atomic_arg::PLAIN: break;
+        case atomic_arg::OPERAND:
+            if (!found_operand_type && !any_poison) { find_operand_type(); }
+            found_operand_type = true;
+            if (operand_type) { hint = operand_type.get(); }
+            break;
+        case atomic_arg::ORDER: hint = &ctx_.get_builtin_type("MemoryOrder"); break;
+        case atomic_arg::OP:    hint = &ctx_.get_builtin_type("AtomicRmwOp"); break;
+        }
+        const structural_guard g{implicit_type_stack_, hint};
+        any_poison |= resolve_call_args(args.subspan(i, 1)) == resolve_result::POISONED;
     }
     return any_poison ? resolve_result::POISONED : resolve_result::OK;
 }
@@ -4524,6 +4592,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
+        } else if (!atomic_arg_roles(call.function->get_token_type()).empty()) {
+            args_result = resolve_atomic_call_args(call);
         } else {
             args_result = resolve_call_args(call.arguments);
         }

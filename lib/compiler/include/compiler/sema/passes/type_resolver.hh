@@ -353,6 +353,7 @@ class type_resolver {
         -> stdx::result<void, diagnostic>;
 
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
+    auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 
