@@ -14305,6 +14305,36 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
     }
 
     if (modifier.is_volatile()) {
+        // A container's qualifier bits describe what it reaches, so `volatile` can't be its own
+        const auto reject{[&](std::string message) -> type& {
+            return ctx_.poison_node(resolving_,
+                                    id,
+                                    std::move(message),
+                                    error::ILLEGAL_VOLATILE_QUALIFIER,
+                                    resolving_.ast.location_of(id));
+        }};
+        const auto name{ctx_.type_display_name(inner_type)};
+        switch (inner_type.get_kind()) {
+        case type_kind::POINTER:
+        case type_kind::REFERENCE:
+        case type_kind::SLICE:
+            return reject(fmt::format("`volatile` can't qualify '{}' itself; to make what it "
+                                      "reaches volatile, put `volatile` after its `^`, `&`, or "
+                                      "`[]` (`^volatile T`)",
+                                      name));
+        default: break;
+        }
+        // A sized array is still deferred until its length folds
+        if (inner_type.get_kind() == type_kind::ARRAY ||
+            inner_type.get_data().is<types::deferred_array>()) {
+            return reject(fmt::format("`volatile` on an array qualifies its elements; write "
+                                      "`[N]volatile T` instead of `volatile {}`",
+                                      name));
+        }
+        if (inner_type.is_volatile()) {
+            return reject(fmt::format("'{}' is already volatile", name));
+        }
+
         // Volatility is baked into mutability and should not be imprinted
         auto& new_vol_type{*ctx_.pool[new_key]};
         new_vol_type.resolve_if<type::data_t>(inner_type.get_data());

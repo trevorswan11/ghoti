@@ -60,16 +60,15 @@ auto operator_spelling(syntax::token_type_t tt) -> std::string_view {
 auto modifier_prefix(type_modifier mod) -> std::string_view {
     using m = type_modifier::modifier;
     switch (mod.get_raw()) {
-    case m::VALUE:        return "";
-    case m::REF:          return "&";
-    case m::MUT_REF:      return "&mut ";
-    case m::PTR:          return "^";
-    case m::MUT_PTR:      return "^mut ";
-    case m::VOLATILE:     return "volatile ";
-    case m::MUT_VOLATILE: return "mut volatile ";
-    case m::POLY_REF:     return "&mut? ";
-    case m::POLY_PTR:     return "^mut? ";
-    default:              UNREACHABLE("Unrecognized type modifier");
+    case m::VALUE:    return "";
+    case m::REF:      return "&";
+    case m::MUT_REF:  return "&mut ";
+    case m::PTR:      return "^";
+    case m::MUT_PTR:  return "^mut ";
+    case m::VOLATILE: return "volatile ";
+    case m::POLY_REF: return "&mut? ";
+    case m::POLY_PTR: return "^mut? ";
+    default:          UNREACHABLE("Unrecognized type modifier");
     }
 }
 

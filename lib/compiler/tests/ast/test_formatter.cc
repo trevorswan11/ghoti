@@ -185,8 +185,7 @@ TEST_CASE("formatter round-trips types") {
           "let mut a: std.ArrayList(u8) = undefined;\n");
     CHECK(format_source("let mut a: List(i32) = undefined;") ==
           "let mut a: List(i32) = undefined;\n");
-    CHECK(format_source("let mut v: mut volatile i32 = 42;") ==
-          "let mut v: mut volatile i32 = 42;\n");
+    CHECK(format_source("let mut v: volatile i32 = 42;") == "let mut v: volatile i32 = 42;\n");
     CHECK(format_source("let mut f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;") ==
           "let mut f: ^fn(x: &a, y: ^mut B, ...): ^E = undefined;\n");
     CHECK(format_source("let mut a: [N:0]u8 = undefined;") == "let mut a: [N:0]u8 = undefined;\n");
@@ -578,7 +577,7 @@ TEST_CASE("formatter round trip: declarations and literals") {
     round_trips("const SIZE = 2uz;");
     round_trips("comptime let mut n = 2uz;");
     round_trips("let mut a: i32 = undefined;");
-    round_trips("let mut v: mut volatile i32 = 42;");
+    round_trips("let mut v: volatile i32 = 42;");
     round_trips("const v: volatile i32 = 42;");
     round_trips("let mut a = 0x2Fuz; let mut b = 0b00_11_00_11; let mut c = 1_000; let mut d = "
                 "2.3f32;");

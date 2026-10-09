@@ -758,6 +758,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `lib/compiler_rt` can `import std;` like any program
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
+- **Breaking:** `mut` on a type only qualifies what a `^`, `&`, or `[]` reaches, so `mut volatile T` is rejected: a value's mutability is its binding's (`let mut v: volatile i32`), and the `mut` was ignored before
+- **Breaking:** `volatile` applied directly to a pointer, reference, slice, or array type is rejected, and so is a repeated `volatile`
+    - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
+    - `volatile [N]T` was dropped silently; write `[N]volatile T`
+- Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
 - Fixed: a generic parameter typed as a pointer or reference to an earlier type parameter (`fn(T: type, p: ^mut T)`, `p: &T`) was checked as if it were `T` itself, so every call was rejected with "not assignable to parameter type 'T'"
 - Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
 - **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`

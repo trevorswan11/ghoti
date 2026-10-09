@@ -6824,7 +6824,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
                 auto&      write_elem_type{*ctx_.pool.with_volatile(
                     *ctx_.pool.with_const(elem_type, obj_type->is_constant()),
-                    obj_type->is_volatile() || element_is_volatile)};
+                    elem_type.is_volatile() || obj_type->is_volatile() || element_is_volatile)};
                 const auto elem_ptr{
                     builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
                 return value{elem_ptr, write_elem_type};
@@ -6881,7 +6881,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
                 auto&      write_elem_type{*ctx_.pool.with_volatile(
                     *ctx_.pool.with_const(elem_type, obj_type->is_constant()),
-                    obj_type->is_volatile() || element_is_volatile)};
+                    elem_type.is_volatile() || obj_type->is_volatile() || element_is_volatile)};
                 const auto elem_ptr{builder_.emit_get_element_ptr(
                     value{ptr_val, ptr_type}, {idx_val}, write_elem_type)};
                 return value{elem_ptr, write_elem_type};
