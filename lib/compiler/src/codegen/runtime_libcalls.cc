@@ -47,11 +47,24 @@ using triple_map = std::map<std::string, name_set, std::less<>>;
     return by_triple.emplace(triple.str(), std::move(names)).first->second;
 }
 
+// `sinf128`, `fmodf64x`: the C23 names ghoti calls directly, which LLVM's tables may not list
+[[nodiscard]] auto is_c23_math_name(std::string_view symbol) -> bool {
+    for (const std::string_view suffix : {"f128", "f64x"}) {
+        if (!symbol.ends_with(suffix)) { continue; }
+        const auto base{symbol.substr(0, symbol.size() - suffix.size())};
+        if (base == "fmod") { return true; }
+        for (u8 f{0}; f <= static_cast<u8>(math_function::CEIL); ++f) {
+            if (base == math_function_name(static_cast<math_function>(f))) { return true; }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> bool {
     if (needs_soft_f80(triple) && is_soft_f80_routine(symbol)) { return true; }
-    return libcall_names(triple).contains(symbol);
+    return is_c23_math_name(symbol) || libcall_names(triple).contains(symbol);
 }
 
 auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) -> bool {
@@ -108,6 +121,22 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
 
     constexpr std::array suffixes{"f", "", "l", "f128"};
     return fmt::format("{}{}", math_function_name(function), suffixes[index]);
+}
+
+auto needs_named_math_call(const llvm::Triple& triple, float_format format) -> bool {
+    if (format == float_format::QUAD) { return true; }
+    return format == float_format::X87 && triple.isWindowsMSVCEnvironment();
+}
+
+auto fmod_libcall_name(const llvm::Triple& triple, float_format format) -> std::string {
+    if (format == float_format::QUAD) { return "fmodf128"; }
+    if (format == float_format::X87 && needs_soft_f80(triple)) { return "__fmodx"; }
+    if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) { return "fmodf64x"; }
+    constexpr std::array suffixes{"f", "", "l"};
+    return fmt::format("fmod{}",
+                       suffixes[format == float_format::SINGLE   ? 0UZ
+                                : format == float_format::DOUBLE ? 1UZ
+                                                                 : 2UZ]);
 }
 
 auto strip_global_prefix(const llvm::Triple& triple, std::string_view symbol) -> std::string_view {
