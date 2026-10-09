@@ -311,6 +311,12 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     }
 }
 
+// `v` as an untyped `comptime_int`/`comptime_float`, which holds any payload exactly
+[[nodiscard]] auto retyped(const_value v, sema::type& target) -> const_value {
+    v.set_type(target);
+    return v;
+}
+
 // Truncates `folded`'s integer value to `bits` (two's-complement), rebuilding it at `res_type`
 [[nodiscard]] auto wrap_to_width(const const_value&        folded,
                                  u16                       bits,
@@ -5024,6 +5030,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!src_int) { return stdx::none; }
         auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
+        if (target->get_kind() == sema::type_kind::COMPTIME_INT) {
+            return retyped(*operand, *target);
+        }
         const auto ptr_bits{target_pointer_bits()};
         const auto source_width{operand->get_type()
                                     ? integer_target_width(*operand->get_type(), ptr_bits)
@@ -5158,7 +5167,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
         const auto f{operand->as_opt<f128>()};
         if (!f) { return stdx::none; }
-        const auto width{integer_target_width(*target, ptr_bits)};
+        // An untyped target takes the comptime domain: signed, 128 bits
+        const auto width{target->get_kind() == sema::type_kind::COMPTIME_INT
+                             ? stdx::option<std::pair<u16, bool>>{std::pair{u16{128}, true}}
+                             : integer_target_width(*target, ptr_bits)};
         if (width && width->first <= 128) {
             const semantics::int_domain to{width->first, width->second};
             if (const auto folded{semantics::int_from_float(*f, to)}) {
@@ -5219,6 +5231,10 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
+        if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
+            target->get_kind() == sema::type_kind::COMPTIME_INT) {
+            return retyped(*operand, *target);
+        }
         const auto ptr_bits{target_pointer_bits()};
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
         if (builtin_type == syntax::token_type_t::BUILTIN_AS &&

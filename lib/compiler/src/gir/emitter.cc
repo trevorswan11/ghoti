@@ -763,6 +763,17 @@ auto emitter::check_comptime_float_fits(const value& v, const sema::type& target
                             active_ast().location_of(at));
 }
 
+auto emitter::report_runtime_untyped(const sema::type& src,
+                                     const sema::type& target,
+                                     ast::node_id      at) -> void {
+    ctx_.diags.emplace_back(fmt::format("a runtime '{}' cannot become '{}'; the value must be "
+                                        "known at compile time",
+                                        ctx_.type_display_name(src),
+                                        ctx_.type_display_name(target)),
+                            sema::error::COMPTIME_EVALUATION_FAILED,
+                            active_ast().location_of(at));
+}
+
 auto emitter::is_concrete_float(const value& v) noexcept -> bool {
     return v.type && sema::is_float(v.type->get_kind());
 }
@@ -840,6 +851,13 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
 
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
+    if (sema::is_comptime_numeric(dest_type.get_kind())) {
+        if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
+            src && !src->is_poison() && !sema::is_comptime_numeric(src->get_kind()) &&
+            !const_eval_.try_eval(*expr_id)) {
+            report_runtime_untyped(*src, dest_type, *expr_id);
+        }
+    }
     if (sema::is_fat_callable(dest_type)) {
         if (auto callable{emit_callable_coercion(expr_id, dest_type)}) { return *callable; }
     }
@@ -2715,6 +2733,13 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
             return materialize_const(*cv);
         }
     }
+    // Two untyped operands compare exactly, not after materializing at a fixed width
+    if (const auto lhs_ty{active_mod().get_sema_type_opt(binary.lhs)},
+        rhs_ty{active_mod().get_sema_type_opt(binary.rhs)};
+        lhs_ty && rhs_ty && sema::is_comptime_numeric(lhs_ty->get_kind()) &&
+        sema::is_comptime_numeric(rhs_ty->get_kind())) {
+        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+    }
     if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
         if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
@@ -3552,6 +3577,15 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
         case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
         case syntax::token_type_t::BUILTIN_FLOAT_CAST:     {
+            // An untyped result only exists at compile time
+            if (sema::is_comptime_numeric(ret_type.get_kind())) {
+                if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+                const auto op_expr{call.arguments.back().as_opt<ast::expr_handle>()};
+                if (const auto src{op_expr ? active_mod().get_sema_type_opt(*op_expr) : stdx::none};
+                    src && !src->is_poison()) {
+                    report_runtime_untyped(*src, ret_type, *op_expr);
+                }
+            }
             const bool is_one_arg{call.arguments.size() == 1};
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
@@ -3576,9 +3610,12 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                         check_comptime_float_fits(operand, ret_type, *op_expr);
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
+                    // An untyped operand has no width of its own to reinterpret
                     if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
                         fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT ||
-                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_CAST) {
+                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_CAST ||
+                        (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST &&
+                         is_untyped_number(operand))) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }

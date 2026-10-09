@@ -488,6 +488,9 @@ class emitter {
     // A `comptime_int`/`comptime_float` value converted to the float type `target`
     [[nodiscard]] auto untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
         -> value;
+    // Diagnoses a runtime `src` value headed for the untyped `target`
+    auto report_runtime_untyped(const sema::type& src, const sema::type& target, ast::node_id at)
+        -> void;
     // Diagnoses a compile-time float that rounds to infinity in `target`
     auto check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
         -> void;

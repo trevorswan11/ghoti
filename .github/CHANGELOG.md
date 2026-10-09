@@ -722,6 +722,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - An atomic builtin's order and op arguments take a bare variant, as `@Int` takes an implicit `IntInfo`: `@atomicRmw(u32, p, .add, 1, .seq_cst)`, `@fence(.acquire)`
 - Fixed: an untyped literal passed to `@atomicStore`, `@atomicRmw`, or `@cmpxchg*` was typed by the context the call sat in rather than by the atomic's operand type: `@atomicStore(^mut x, 3, ...)` on a `u64` stored only 4 bytes (and on a `u16`, 4 bytes past it), and `let w: u64 = @atomicRmw(u16, p, .add, 1, ...)` was rejected
 - Fixed: `@floatFromInt`/`@intFromFloat` between `f16`/`f32`/`f64`/`f128` and an integer wider than 128 bits crashed LLVM on every target but x86; they now call compiler_rt's `__floateisf`, `__fixdfei`, ... routines, like `f80` does
+- `@intCast`, `@intFromFloat`, `@floatCast`, and `@floatFromInt` accept `comptime_int` / `comptime_float` as a target when the operand is known at compile time: `@intCast(comptime_int, x)` with `const x: i32 = 5`
+    - A runtime value headed for an untyped type is an error, whether cast (`@as(comptime_int, x)`) or bound (`let y: comptime_int = x`)
+    - `let mut y: comptime_int` is rejected in favor of `comptime let mut`; it was silently stored as a runtime integer
+    - `@truncate` and `@bitCast` to an untyped type explain that it has no width or bit layout
+- Fixed: a 1-argument `@intCast`, `@truncate`, or `@bitCast` passed its inferred target type into its operand, so `s >>= @intCast(4 - e)` with `s: u128` and `e: i32` was rejected as mixing `u128` and `i32`
+- Fixed: `@as(comptime_int, x)` with a compile-time `x: i32` failed to fold, while `@as(comptime_float, ...)` worked
+- Fixed: `@bitCast(f128, 0)` (or a 1-argument `@bitCast(0)` to `f128`) crashed LLVM; an untyped operand now reinterprets at the target's width
+- Fixed: comparing two untyped numbers outside a `const` initializer (`return if (@as(comptime_float, d) == 0.1) ...`) rounded both to `f64` first, so the result could differ from the same comparison in a `const`
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
