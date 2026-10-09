@@ -3,6 +3,7 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <llvm/TargetParser/Triple.h>
 
 #include "compiler/codegen/opt_level.hh"
@@ -45,23 +46,21 @@ constexpr std::string_view exact_math{R"(
 } // namespace
 
 TEST_CASE("f128 floor, ceil, sqrt and % call the f128 routines on every target") {
+    const auto triple{GENERATE("x86_64-unknown-linux-gnu",
+                               "x86_64-pc-windows-msvc",
+                               "x86_64-apple-macos",
+                               "aarch64-apple-macos",
+                               "aarch64-unknown-linux-gnu",
+                               "armv7-unknown-linux-gnueabihf",
+                               "riscv64-unknown-linux-gnu",
+                               "wasm32-unknown-unknown")};
     // `floorl` and friends are `long double`'s, which is f128 on only some of these
-    for (const std::string_view triple : {"x86_64-unknown-linux-gnu",
-                                          "x86_64-pc-windows-msvc",
-                                          "x86_64-apple-macos",
-                                          "aarch64-apple-macos",
-                                          "aarch64-unknown-linux-gnu",
-                                          "armv7-unknown-linux-gnueabihf",
-                                          "riscv64-unknown-linux-gnu",
-                                          "wasm32-unknown-unknown"}) {
-        INFO(triple);
-        const auto asm_text{emit_for(exact_math, triple, codegen::opt_level::O2, true)};
-        for (const std::string_view name : {"floorf128", "ceilf128", "sqrtf128", "fmodf128"}) {
-            INFO(name);
-            CHECK(asm_text.contains(name));
-        }
-        CHECK_FALSE(asm_text.contains("sqrtl"));
+    const auto asm_text{emit_for(exact_math, triple, codegen::opt_level::O2, true)};
+    for (const std::string_view name : {"floorf128", "ceilf128", "sqrtf128", "fmodf128"}) {
+        INFO(name);
+        CHECK(asm_text.contains(name));
     }
+    CHECK_FALSE(asm_text.contains("sqrtl"));
 }
 
 TEST_CASE("f80 floor, ceil and % use their own names where long double is double") {
