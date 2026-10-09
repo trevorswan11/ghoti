@@ -154,7 +154,7 @@ pub const add_f128 = fn(a: f128, b: f128): f128 {
     if (a_exponent <= 0) {
         // Result is denormal; the exponent and round/sticky bits are zero.
         // All we need to do is shift the significand and apply the correct sign.
-        a_significand >>= @intCast(u128, 4 - a_exponent);
+        a_significand >>= @intCast(4 - a_exponent);
         return @bitCast(result_sign | a_significand);
     }
 

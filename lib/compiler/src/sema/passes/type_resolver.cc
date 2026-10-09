@@ -803,6 +803,13 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
+        if (target.get_kind() == type_kind::COMPTIME_INT ||
+            target.get_kind() == type_kind::COMPTIME_FLOAT) {
+            return make_sema_err(fmt::format("`@bitCast` target '{}' has no bit layout; use `@as`",
+                                             ctx_.type_display_name(target)),
+                                 error::TYPE_MISMATCH,
+                                 args_res->target_loc);
+        }
         auto* src_p{get_resolved_call_arg_type(*args_res->operand).get()};
         // An untyped float folds as an `f64`, so that is the bit pattern it has to give
         if (src_p->get_kind() == type_kind::COMPTIME_FLOAT) {
@@ -922,7 +929,7 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        if (!is_integer(target.get_kind())) {
+        if (!is_integer(target.get_kind()) && target.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
                 fmt::format("`@intCast` target must be an integer type; found '{}'",
                             ctx_.type_display_name(target)),
@@ -946,6 +953,12 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
+        if (target.get_kind() == type_kind::COMPTIME_INT) {
+            return make_sema_err(
+                "`@truncate` target 'comptime_int' has no width to truncate to; use `@intCast`",
+                error::TYPE_MISMATCH,
+                args_res->target_loc);
+        }
         if (!is_integer(target.get_kind())) {
             return make_sema_err(
                 fmt::format("`@truncate` target must be an integer type; found '{}'",
@@ -1081,7 +1094,7 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        if (!is_integer(target.get_kind())) {
+        if (!is_integer(target.get_kind()) && target.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
                 fmt::format("`@intFromFloat` target must be an integer type; found '{}'",
                             ctx_.type_display_name(target)),
@@ -1104,7 +1117,7 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        if (!is_float(target.get_kind())) {
+        if (!is_float(target.get_kind()) && target.get_kind() != type_kind::COMPTIME_FLOAT) {
             return make_sema_err(
                 fmt::format("`@floatFromInt` target must be a float type; found '{}'",
                             ctx_.type_display_name(target)),
@@ -1128,7 +1141,7 @@ template <ast::IndexableID ID>
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        if (!is_float(target.get_kind())) {
+        if (!is_float(target.get_kind()) && target.get_kind() != type_kind::COMPTIME_FLOAT) {
             return make_sema_err(fmt::format("`@floatCast` target must be a float type; found '{}'",
                                              ctx_.type_display_name(target)),
                                  error::TYPE_MISMATCH,
@@ -4592,6 +4605,15 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
+        } else if ((tok == token_type_t::BUILTIN_INT_CAST ||
+                    tok == token_type_t::BUILTIN_BIT_CAST ||
+                    tok == token_type_t::BUILTIN_TRUNCATE ||
+                    tok == token_type_t::BUILTIN_INT_FROM_BOOL ||
+                    tok == token_type_t::BUILTIN_FROM_BACKING_INT) &&
+                   call.arguments.size() == 1) {
+            // The inferred target is the cast's result, not its operand's type
+            const structural_guard shield{implicit_type_stack_, nullptr};
+            args_result = resolve_call_args(call.arguments);
         } else if (!atomic_arg_roles(call.function->get_token_type()).empty()) {
             args_result = resolve_atomic_call_args(call);
         } else {
@@ -11220,6 +11242,19 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                                              syntax::token_type_t::AUTO_TYPE)};
         if (wants_concrete) {
             auto& dt{resolving_.get_sema_type(id)};
+            // Spelled out, an untyped annotation asks for what only exists at compile time
+            if (is_comptime_numeric(dt.get_kind()) && annotation_typed_decl &&
+                !decl.has_modifier(ast::decl_modifiers::COMPTIME)) {
+                ctx_.poison_symbol(sym,
+                                   fmt::format("'{}' only exists at compile time, so it cannot be "
+                                               "stored in a 'let mut' binding; use 'comptime let "
+                                               "mut'",
+                                               ctx_.type_display_name(dt)),
+                                   error::COMPILE_TIME_ONLY_VALUE,
+                                   resolving_.ast.location_of(id));
+                resolving_.set_sema_type(decl.name, ctx_.get_poison());
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
             if (is_comptime_numeric(dt.get_kind())) {
                 resolving_.set_sema_type(id, comptime_numeric_view(dt));
             }

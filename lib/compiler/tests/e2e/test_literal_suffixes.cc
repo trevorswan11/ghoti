@@ -66,7 +66,7 @@ TEST_CASE("hex float literals denote exact binary values") {
             if (0xF_F.8p0 != 255.5) { return 5; }
             let tiny: f64 = 0x1p-1074;
             if (tiny == 0.0) { return 6; }
-            if (0x1.fffffffffffffp1023 != 1.7976931348623157e308) { return 7; }
+            if (0x1.fffffffffffffp1023 != @as(f64, 1.7976931348623157e308)) { return 7; }
             return 0;
         };
     )") == 0);
