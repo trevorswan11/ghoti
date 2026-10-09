@@ -758,6 +758,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `lib/compiler_rt` can `import std;` like any program
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
+- Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
 - **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`
 - Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
 - **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
