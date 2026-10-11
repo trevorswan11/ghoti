@@ -825,4 +825,31 @@ TEST_CASE("a generic type constructor member is instantiated per enclosing insta
                                                        "other"}}) == 2 + 22);
 }
 
+TEST_CASE("a folded generic member call sees its own instance's `@This()`") {
+    // Instantiating `eq` for a second instance must not leak into a later folded call
+    CHECK(helpers::compile_and_run(R"(
+        const Opt = fn(T: type): type {
+            return union {
+                some: T,
+                none: void,
+                pub const eq = fn(&self, val: auto): bool {
+                    if comptime (@This() == @TypeOf(val)) {
+                        return true;
+                    } else @compileError("wrong instance");
+                };
+            };
+        };
+        pub const main = fn(): i32 {
+            let mut x: Opt(i32) = .{ .some = 1 };
+            let mut y: Opt(u8) = .{ .some = 1 };
+            _ = x.eq(x);
+            _ = y.eq(y);
+            let a: Opt(i32) = .{ .none = {} };
+            let b: Opt(i32) = .{ .none = {} };
+            if (!a.eq(b)) { return 0; }
+            return 42;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

@@ -2639,19 +2639,34 @@ auto emitter::try_static_member_ref(const sema::type& owner, std::string_view me
 
 auto emitter::try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs)
     -> stdx::option<local_id> {
-    const auto is_untagged_union = [](const stdx::option<sema::type&>& t) -> bool {
+    // A reference (e.g. `&self`) compares through to the union it refers to
+    const auto referent = [](const stdx::option<sema::type&>& t) -> stdx::option<sema::type&> {
+        if (!t) { return stdx::none; }
+        if (const auto ref{t->get_data().as_opt<sema::types::reference>()}) {
+            return ref->underlying;
+        }
+        return t;
+    };
+    const auto is_tagged_union = [](const stdx::option<sema::type&>& t) -> bool {
         const auto ut{t ? t->get_data().as_opt<sema::types::union_t>() : stdx::none};
-        return !ut || ut->is_untagged;
+        return ut && !ut->is_untagged;
+    };
+    const auto union_addr = [&](ast::node_id operand, sema::type& union_type) -> value {
+        const auto operand_type{active_mod().get_sema_type_opt(operand)};
+        if (operand_type && operand_type->get_data().as_opt<sema::types::reference>()) {
+            return value{emit_expression_id_raw(operand).data, union_type};
+        }
+        return emit_lvalue(operand);
     };
 
-    const auto lhs_type{active_mod().get_sema_type_opt(lhs)};
-    if (!is_untagged_union(lhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(rhs)) {
-        return emit_union_tag_eq(emit_lvalue(lhs), rhs);
+    const auto lhs_type{referent(active_mod().get_sema_type_opt(lhs))};
+    if (is_tagged_union(lhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(rhs)) {
+        return emit_union_tag_eq(union_addr(lhs, *lhs_type), rhs);
     }
 
-    const auto rhs_type{active_mod().get_sema_type_opt(rhs)};
-    if (!is_untagged_union(rhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(lhs)) {
-        return emit_union_tag_eq(emit_lvalue(rhs), lhs);
+    const auto rhs_type{referent(active_mod().get_sema_type_opt(rhs))};
+    if (is_tagged_union(rhs_type) && active_ast().get_as_opt<ast::implicit_access_expr>(lhs)) {
+        return emit_union_tag_eq(union_addr(rhs, *rhs_type), lhs);
     }
 
     return stdx::none;

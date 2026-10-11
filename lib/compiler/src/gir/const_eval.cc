@@ -4218,13 +4218,23 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     }
                 }
                 auto* const prev{module_.get()};
+                // A generic method (e.g. an `auto` parameter) is typed per instantiation, so fold
+                // with this call's instance rather than the enclosing type's shared member typing
+                const auto generic_target{id.is_valid() ? prev->get_generic_call_target_opt(id)
+                                                        : stdx::none};
                 if (method_mod != prev) { set_module(*method_mod); }
 
                 const auto prefix{
                     target_ty ? ctx_.generic_functions.get_type_ctor_member_prefix(*target_ty)
                               : stdx::none};
-                const auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
-                                       : method_mod->active_body_diff};
+                auto diff{prefix ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                 : method_mod->active_body_diff};
+                if (generic_target) {
+                    if (const auto own{
+                            ctx_.instantiation_cache.get_body_type_diff(*generic_target)}) {
+                        diff = own;
+                    }
+                }
                 const mod::body_diff_guard diff_guard{*method_mod, diff};
 
                 stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>>
