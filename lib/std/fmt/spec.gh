@@ -153,25 +153,13 @@ test "Spec.parse_body parses all spec inputs at compile time" {
     const end = s.parse_body("*^+08.3f}", 0);
     @expect(end == 8);
     @expect(s.fill == '*');
-    match (s.align) {
-        .some => |a| @expect(a == .center),
-        .none => unreachable,
-    }
+    @expect(s.align.eq(Align.center));
     @expect(s.plus == true);
     @expect(s.alt == false);
     @expect(s.zero == true);
-    match (s.width) {
-        .some => |w| @expect(w == 8),
-        .none => unreachable,
-    }
-    match (s.precision) {
-        .some => |p| @expect(p == 3),
-        .none => unreachable,
-    }
-    match (s.kind) {
-        .some => |k| @expect(k == .f),
-        .none => unreachable,
-    }
+    @expect(s.width.eq(8uz));
+    @expect(s.precision.eq(3uz));
+    @expect(s.kind.eq(Kind.f));
 }
 
 pub const Placeholder = struct {
@@ -208,34 +196,19 @@ test "Placeholder.parse at compile time" {
     @expect(p_empty.spec.plus == false);
     @expect(p_empty.spec.alt == false);
     @expect(p_empty.spec.zero == false);
-    match (p_empty.spec.arg_idx) {
-        .some => unreachable,
-        .none => {},
-    }
+    @expect(p_empty.spec.arg_idx == .none);
 
     const p_idx: Placeholder = .parse("{3}", 0);
     @expect(p_idx.next == 3);
-    match (p_idx.spec.arg_idx) {
-        .some => |idx| @expect(idx == 3),
-        .none => unreachable,
-    }
+    @expect(p_idx.spec.arg_idx.eq(3uz));
 
     const p_spec: Placeholder = .parse("{2:#08x}", 0);
     @expect(p_spec.next == 8);
-    match (p_spec.spec.arg_idx) {
-        .some => |idx| @expect(idx == 2),
-        .none => unreachable,
-    }
+    @expect(p_spec.spec.arg_idx.eq(2uz));
     @expect(p_spec.spec.alt == true);
     @expect(p_spec.spec.zero == true);
-    match (p_spec.spec.width) {
-        .some => |w| @expect(w == 8),
-        .none => unreachable,
-    }
-    match (p_spec.spec.kind) {
-        .some => |k| @expect(k == .x),
-        .none => unreachable,
-    }
+    @expect(p_spec.spec.width.eq(8uz));
+    @expect(p_spec.spec.kind.eq(Kind.x));
 }
 
 pub const is_digit = fn(comptime c: u8): bool {
