@@ -41,7 +41,7 @@ TEST_CASE("a leading `///` block attaches to the following declaration") {
 /// Second line.
 const answer = 42;
 )",
-                            arena)};
+                                    arena)};
     REQUIRE(first_doc(ast));
     CHECK(*first_doc(ast) == "The answer to everything.\nSecond line.");
 }
@@ -58,7 +58,7 @@ TEST_CASE("plain comments carry no doc") {
     auto         ast{helpers::parse(R"(// just a comment
 const answer = 42;
 )",
-                            arena)};
+                                    arena)};
     CHECK(!first_doc(ast));
 }
 
@@ -68,7 +68,7 @@ TEST_CASE("`//!` at the top of the file documents the module") {
 //! And more things.
 const x = 1;
 )",
-                            arena)};
+                                    arena)};
     CHECK(ast.module_doc() == "This module does things.\nAnd more things.");
     CHECK(!first_doc(ast));
 }
@@ -79,7 +79,7 @@ TEST_CASE("a `//!` after real code is not treated as a module doc") {
 //! too late
 const y = 2;
 )",
-                            arena)};
+                                    arena)};
     CHECK(ast.module_doc().empty());
 }
 
@@ -92,7 +92,7 @@ TEST_CASE("a `///` on a nested declaration does not leak to the next top-level d
 };
 const g = 2;
 )",
-                            arena)};
+                                    arena)};
     const auto&  g{ast.get_as<ast::decl_stmt>(ast.get_roots()[1])};
     CHECK(!ast.doc_for({ast.location_of(g.name), ast.end_location_of(g.name)}));
 }
@@ -103,7 +103,7 @@ TEST_CASE("doc attachment survives an intervening plain comment") {
 // noise
 const answer = 1;
 )",
-                            arena)};
+                                    arena)};
     REQUIRE(first_doc(ast));
     CHECK(*first_doc(ast) == "documented");
 }
@@ -116,7 +116,7 @@ TEST_CASE("a leading `///` on a struct field attaches to that field's name") {
     y: i32,
 };
 )",
-                            arena)};
+                                    arena)};
     const auto&  se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.fields.size() == 2);
     REQUIRE(doc_for_name(ast, se.fields[0].name));
@@ -132,7 +132,7 @@ TEST_CASE("a leading `///` on an enum variant attaches to that variant's name") 
     green = 2u32,
 };
 )",
-                            arena)};
+                                    arena)};
     const auto&  ee{first_decl_value<ast::enum_expr>(ast)};
     REQUIRE(ee.enumerations.size() == 2);
     REQUIRE(doc_for_name(ast, ee.enumerations[0].name));
@@ -148,7 +148,7 @@ TEST_CASE("a leading `///` on a union field attaches to that field's name") {
     flag: bool,
 };
 )",
-                            arena)};
+                                    arena)};
     const auto&  ue{first_decl_value<ast::union_expr>(ast)};
     REQUIRE(ue.fields.size() == 2);
     REQUIRE(doc_for_name(ast, ue.fields[0].name));
@@ -163,7 +163,7 @@ TEST_CASE("a leading `///` on a `const` member attaches to that member's name") 
     const PI = 3;
 };
 )",
-                            arena)};
+                                    arena)};
     const auto&  se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.members.size() == 1);
     const auto& member_decl{ast.get_as<ast::decl_stmt>(*se.members[0])};
@@ -180,7 +180,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
     st_mode: u16,
 };
 )",
-                                arena)};
+                                        arena)};
         const auto&  se{first_decl_value<ast::struct_expr>(ast)};
         REQUIRE(se.fields.size() == 2);
         REQUIRE(doc_for_name(ast, se.fields[0].name));
@@ -196,7 +196,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
     _,
 };
 )",
-                                arena)};
+                                        arena)};
         const auto&  ee{first_decl_value<ast::enum_expr>(ast)};
         REQUIRE(ee.enumerations.size() == 2);
         REQUIRE(doc_for_name(ast, ee.enumerations[0].name));
@@ -210,7 +210,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
     b: u16 /// the wide one
 };
 )",
-                                arena)};
+                                        arena)};
         const auto&  ue{first_decl_value<ast::union_expr>(ast)};
         REQUIRE(ue.fields.size() == 2);
         REQUIRE(doc_for_name(ast, ue.fields[1].name));
@@ -225,7 +225,7 @@ const Point = struct {
     x: i32,
 };
 )",
-                            arena)};
+                                    arena)};
     REQUIRE(first_doc(ast));
     CHECK(*first_doc(ast) == "A 2D point.");
     const auto& se{first_decl_value<ast::struct_expr>(ast)};

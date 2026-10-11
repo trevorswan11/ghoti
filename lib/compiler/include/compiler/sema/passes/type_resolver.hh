@@ -99,13 +99,13 @@ class type_resolver {
     // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
     // impl params to concrete types / folded `comptime` values, and diffs the result into `out`.
     auto
-         resolve_param_impl_bodies(mod::module&                                              impl_mod,
-                                   const ast::impl_stmt&                                     impl,
-                                   usize                                                     body_scope,
-                                   type&                                                     concrete,
-                                   gsl::span<type* const>                                    type_bounds,
-                                   gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
-                                   body_type_diff& out) -> void;
+    resolve_param_impl_bodies(mod::module&                                              impl_mod,
+                              const ast::impl_stmt&                                     impl,
+                              usize                                                     body_scope,
+                              type&                                                     concrete,
+                              gsl::span<type* const>                                    type_bounds,
+                              gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
+                              body_type_diff& out) -> void;
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
     auto resolve_impl_method_access(const type& target, std::string_view name, source_location loc)
         -> stdx::option<stdx::result<gsl::not_null<type*>, diagnostic>>;

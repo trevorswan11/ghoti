@@ -18,7 +18,7 @@ TEST_CASE("every node has an end_location_of that is not before its start locati
     ghoti::arena arena;
     auto         ast{helpers::parse("const x = foo(1, 2) + bar.baz;\n"
                                     "const y = struct { a: i32 };\n",
-                            arena)};
+                                    arena)};
 
     REQUIRE(ast.all_nodes().size() > ast.get_roots().size());
     for (const auto id : ast.all_nodes()) {
@@ -62,7 +62,7 @@ TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
                                     "    let mut x = 1;\n"
                                     "    x = 2;\n"
                                     "};\n",
-                            arena)};
+                                    arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
     REQUIRE(decl.value);
     const auto& fn{ast.get_as<ast::function_expr>(*decl.value)};
@@ -101,7 +101,7 @@ TEST_CASE("a block_stmt's span ends just past its closing brace") {
     auto         ast{helpers::parse("const f = fn(): void {\n"
                                     "    return;\n"
                                     "};\n",
-                            arena)};
+                                    arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
@@ -123,7 +123,7 @@ TEST_CASE("interface_expr records associated items and required vs default metho
     pub const writeAll = fn(&mut self, b: []u8): R { return self.write(b); };
 };
 )",
-                            arena)};
+                                    arena)};
 
     const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
     REQUIRE(decl.value);

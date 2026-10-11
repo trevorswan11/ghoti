@@ -22,8 +22,8 @@ TEST_CASE("build_lib command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_lib      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out.a",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out.a",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
@@ -141,8 +141,8 @@ TEST_CASE("build_lib command execution") {
     SECTION("Directory input path reports FILE_NOT_FOUND instead of failing silently") {
         codegen::llvm_scope scope;
         cmd::build_lib      cmd{{
-                 .input_path  = std::filesystem::temp_directory_path(),
-                 .output_path = "out.a",
+            .input_path  = std::filesystem::temp_directory_path(),
+            .output_path = "out.a",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }

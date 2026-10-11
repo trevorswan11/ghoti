@@ -135,7 +135,7 @@ struct float_layout {
 [[nodiscard]] auto float_bits(const scalar_type& type, bool negative, u128 exponent, u128 mantissa)
     -> u128 {
     const auto layout{layout_of(type)};
-    u128       bits{mantissa &
+    u128 bits{mantissa &
               ones(layout.explicit_integer_bit ? layout.mantissa_bits - 1 : layout.mantissa_bits)};
     if (layout.explicit_integer_bit && exponent != 0) {
         bits |= u128{1} << (layout.mantissa_bits - 1);
@@ -849,7 +849,7 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
 
     // What each template needs from compiler_rt, probed at most once
     std::vector<stdx::option<std::vector<std::string>>> probed(templates.size());
-    const auto                                          needs_of = [&](usize                  t,
+    const auto needs_of = [&](usize                  t,
                               const classified_case& sample) -> const std::vector<std::string>& {
         if (!probed[t]) {
             const phase_timer timer{fmt::format("probe compiler_rt for {}", templates[t].text)};

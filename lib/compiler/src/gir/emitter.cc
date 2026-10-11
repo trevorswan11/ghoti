@@ -1282,8 +1282,8 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     const_eval_.clear_memo();
 
     // Overlay this impl's per-target typing onto the shared interface module during emission
-    const auto                 diff{typing_key.empty() ? stdx::none
-                                                       : ctx_.instantiation_cache.get_body_type_diff(typing_key)};
+    const auto diff{typing_key.empty() ? stdx::none
+                                       : ctx_.instantiation_cache.get_body_type_diff(typing_key)};
     const mod::body_diff_guard diff_guard{iface_mod, diff};
 
     auto sema_type{concrete_sig ? concrete_sig : active_mod().get_sema_type_opt(sig_id)};
@@ -2793,9 +2793,9 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
                               rhs_sema->get_kind() == sema::type_kind::COMPTIME_INT};
     auto       lhs{to_peer ? emit_coerced_expr(binary.lhs, *operand_peer)
                            : constant_as_use_type(emit_expression(binary.lhs), binary.lhs)};
-    auto       rhs{to_peer          ? emit_coerced_expr(binary.rhs, *operand_peer)
-                   : untyped_amount ? emit_coerced_expr(binary.rhs, *lhs_sema)
-                                    : constant_as_use_type(emit_expression(binary.rhs), binary.rhs)};
+    auto rhs{to_peer          ? emit_coerced_expr(binary.rhs, *operand_peer)
+             : untyped_amount ? emit_coerced_expr(binary.rhs, *lhs_sema)
+                              : constant_as_use_type(emit_expression(binary.rhs), binary.rhs)};
     // Float arithmetic converts a constant operand of another type to the result's float type;
     // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
     if (sema::is_float(sema_type->get_kind())) {
@@ -3081,8 +3081,8 @@ auto emitter::packed_layout_of(const ast::dot_expr& dot) -> packed_field_layout 
     const auto& table{ctx_.registry.get(obj_ty.get_symbol_table_idx())};
     const auto  field_idx{table.get_proxy(member_ident.name).index};
     auto&       field_type{active_mod()
-                         .get_sema_type_opt(dot.member)
-                         .value_or(*active_mod().get_sema_type_opt(dot.object))};
+                               .get_sema_type_opt(dot.member)
+                               .value_or(*active_mod().get_sema_type_opt(dot.object))};
 
     if (const auto st{obj_ty.get_data().as_opt<sema::types::struct_t>()}) {
         const auto n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
@@ -3662,7 +3662,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             if (!backing) { break; }
             const auto operand{emit_coerced_expr(*op_expr, *backing)};
             value      result{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
-                         ret_type};
+                              ret_type};
             emit_enum_cast_guard(id, result, operand, *op_expr);
             return result;
         }
@@ -4166,7 +4166,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             const auto count_type{
                 active_mod().get_sema_type_opt(*call.arguments[1].as_opt<ast::expr_handle>())};
             const bool         untyped_count{count_type &&
-                                     sema::is_comptime_numeric(count_type->get_kind())};
+                                             sema::is_comptime_numeric(count_type->get_kind())};
             std::vector<value> args;
             args.emplace_back(operand(0, true));
             args.emplace_back(operand(1, !is_shift || untyped_count));
@@ -4587,8 +4587,8 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
 
     std::vector<value> args;
     const bool         has_implicit_self{is_closure_ident_call || is_fn_ctx_self_call ||
-                                 dyn_self_data.has_value() ||
-                                 (fn_data && fn_data->has_self && is_obj_instance)};
+                                         dyn_self_data.has_value() ||
+                                         (fn_data && fn_data->has_self && is_obj_instance)};
     args.reserve(call.arguments.size() + (has_implicit_self ? 1 : 0));
 
     if (dyn_self_data) {
@@ -4797,7 +4797,7 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
         if_expr.consequence->get_kind() == ast::node_kind::EXPRESSION_STATEMENT) {
         const auto& expr_st{active_ast().get_as<ast::expr_stmt>(*if_expr.consequence)};
         const bool  peer_resolved{(*if_expr.alternate)->get_kind() ==
-                                 ast::node_kind::EXPRESSION_STATEMENT};
+                                  ast::node_kind::EXPRESSION_STATEMENT};
         if (const auto expr_type = active_mod().get_sema_type_opt(expr_st.expression);
             expr_type && !peer_resolved) {
             if (expr_type->get_kind() != sema::type_kind::VOID_) { sema_type = expr_type; }
@@ -5537,8 +5537,8 @@ auto emitter::emit_for(ast::node_id                   id,
         for (bool first{true}; const auto& info : iter_infos) {
             // An open-upper range (`for (arr, lo..)`) contributes no stop condition of its own.
             if (info.is_range && info.range_open_upper) { continue; }
-            auto&      var_type{info.is_range ? *info.elem_type
-                                              : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            auto& var_type{info.is_range ? *info.elem_type
+                                         : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             const auto cur_val{builder_.emit_load(info.var_slot, var_type)};
             const auto cmp_kind{info.is_inclusive ? instruction_kind::LE : instruction_kind::LT};
             const auto cmp_res{
@@ -5579,9 +5579,9 @@ auto emitter::emit_for(ast::node_id                   id,
                         const auto& sl_data{
                             info.arr_val->type->get_data().as<sema::types::slice>()};
                         auto&      ptr_type{ctx_.get_pointer(info.arr_val->type->is_constant()
-                                                            ? sema::types::mut::CONSTANT
-                                                            : sema::types::mut::MUTABLE,
-                                                        sl_data.underlying)};
+                                                                 ? sema::types::mut::CONSTANT
+                                                                 : sema::types::mut::MUTABLE,
+                                                             sl_data.underlying)};
                         const auto ptr_slot{builder_.emit_get_element_ptr(
                             *info.arr_val, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
                         const auto ptr_val{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type)};
@@ -6032,8 +6032,8 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     if (const auto dyn{cv.as_opt<const_dyn_fat_ptr>()}) {
         const auto type_opt{cv.get_type()};
         ASSERT(type_opt, "const_dyn_fat_ptr must carry a resolved sema type");
-        auto&      fat_type{*type_opt};
-        auto&      ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
+        auto& fat_type{*type_opt};
+        auto& ptr_ty{ctx_.get_pointer(sema::types::mut::CONSTANT,
                                       ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
         const auto data_val{
             dyn->data_symbol.empty()
@@ -6250,7 +6250,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
 
     const auto get_info{[this](const sema::type& t) -> stdx::option<std::pair<u16, bool>> {
         switch (t.get_kind()) {
-        case sema::type_kind::INT:   return std::pair{sema::int_width(t), sema::is_signed_integer(t)};
+        case sema::type_kind::INT: return std::pair{sema::int_width(t), sema::is_signed_integer(t)};
         case sema::type_kind::ISIZE: return std::pair{static_cast<u16>(target_ptr_bits_), true};
         case sema::type_kind::USIZE: return std::pair{static_cast<u16>(target_ptr_bits_), false};
         default:                     return stdx::none;
@@ -7996,7 +7996,7 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
 
     const auto& range{active_ast().get_as<ast::range_expr>(index.index)};
     const bool  inclusive{ast::node_id{index.index}.get_token_type() ==
-                         syntax::token_type_t::DOT_DOT_EQ};
+                          syntax::token_type_t::DOT_DOT_EQ};
 
     // An omitted lower bound is `0`; an omitted upper bound is the source length, filled in once
     // it is known below.

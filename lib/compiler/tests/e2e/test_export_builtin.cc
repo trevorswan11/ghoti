@@ -46,9 +46,9 @@ TEST_CASE("@export defines a function under another symbol, with linkage and vis
 
 TEST_CASE("@export works on every object format") {
     const auto        triple{GENERATE("x86_64-unknown-linux-gnu",
-                               "x86_64-pc-windows-msvc",
-                               "aarch64-apple-macos",
-                               "wasm32-unknown-unknown")};
+                                      "x86_64-pc-windows-msvc",
+                                      "aarch64-apple-macos",
+                                      "wasm32-unknown-unknown")};
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::type_check_for_target(RUNTIME_STYLE, triple)};
     auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};

@@ -69,10 +69,10 @@ class value_source {
         const auto                         info{format_info(format)};
         std::uniform_int_distribution<i32> exponent{info.min_exponent - 120, info.max_exponent + 1};
         const auto                         text{fmt::format("{}0x{:016x}{:016x}p{}",
-                                    (bits_(engine_) & 1) != 0 ? "-" : "",
-                                    bits_(engine_),
-                                    bits_(engine_),
-                                    exponent(engine_) - 127)};
+                                                            (bits_(engine_) & 1) != 0 ? "-" : "",
+                                                            bits_(engine_),
+                                                            bits_(engine_),
+                                                            exponent(engine_) - 127)};
         return f128::parse(text, format).value;
     }
 
@@ -103,7 +103,7 @@ class value_source {
 };
 
 using apfloat_op  = llvm::APFloat::opStatus (llvm::APFloat::*)(const llvm::APFloat&,
-                                                              llvm::APFloat::roundingMode);
+                                                               llvm::APFloat::roundingMode);
 using float128_op = f128 (*)(f128, f128, float_format);
 
 } // namespace
@@ -196,9 +196,9 @@ TEST_CASE("f128 integer conversions match APFloat") {
         const auto   value{source.next(float_format::QUAD)};
         llvm::APSInt truncated{128, false};
         bool         is_exact{false};
-        const auto   status{to_apfloat(value, float_format::QUAD)
+        const auto status{to_apfloat(value, float_format::QUAD)
                               .convertToInteger(truncated, llvm::APFloat::rmTowardZero, &is_exact)};
-        const auto   actual{value.to_int()};
+        const auto actual{value.to_int()};
         CHECK((status == llvm::APFloat::opInvalidOp) == !actual);
         if (actual) {
             CHECK(truncated.getLoBits(64).getZExtValue() == static_cast<u128>(*actual).low);

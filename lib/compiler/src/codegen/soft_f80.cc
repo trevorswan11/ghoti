@@ -210,7 +210,7 @@ class operation_softener {
         case llvm::Instruction::FDiv:
         case llvm::Instruction::FRem:
         case llvm::Instruction::FNeg:
-        case llvm::Instruction::FCmp: return is_f80(inst.getOperand(0)->getType());
+        case llvm::Instruction::FCmp:   return is_f80(inst.getOperand(0)->getType());
         case llvm::Instruction::FPToSI:
         case llvm::Instruction::FPToUI:
             return is_f80(inst.getOperand(0)->getType()) || is_wide_int(inst.getType());
@@ -234,13 +234,13 @@ class operation_softener {
 
     [[nodiscard]] auto rewrite(llvm::Instruction& inst) -> llvm::Value* {
         switch (inst.getOpcode()) {
-        case llvm::Instruction::FAdd: return binary("__addxf3", inst);
-        case llvm::Instruction::FSub: return binary("__subxf3", inst);
-        case llvm::Instruction::FMul: return binary("__mulxf3", inst);
-        case llvm::Instruction::FDiv: return binary("__divxf3", inst);
-        case llvm::Instruction::FRem: return binary("__fmodx", inst);
-        case llvm::Instruction::FNeg: return flip_sign(inst.getOperand(0));
-        case llvm::Instruction::FCmp: return compare(llvm::cast<llvm::FCmpInst>(inst));
+        case llvm::Instruction::FAdd:  return binary("__addxf3", inst);
+        case llvm::Instruction::FSub:  return binary("__subxf3", inst);
+        case llvm::Instruction::FMul:  return binary("__mulxf3", inst);
+        case llvm::Instruction::FDiv:  return binary("__divxf3", inst);
+        case llvm::Instruction::FRem:  return binary("__fmodx", inst);
+        case llvm::Instruction::FNeg:  return flip_sign(inst.getOperand(0));
+        case llvm::Instruction::FCmp:  return compare(llvm::cast<llvm::FCmpInst>(inst));
         case llvm::Instruction::FPExt:
         case llvm::Instruction::FPTrunc:
             return float_conversion(inst.getOperand(0), inst.getType());
