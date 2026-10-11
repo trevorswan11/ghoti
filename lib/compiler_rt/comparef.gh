@@ -10,43 +10,68 @@ pub const Order = enum : i32 { lt = -1, eq = 0, gt = 1 };
 
 @cfg (compiler_rt.want_aeabi) {
     comptime {
-        symbol(__aeabi_fcmpeq, "__aeabi_fcmpeq");
-        symbol(__aeabi_fcmpge, "__aeabi_fcmpge");
-        symbol(__aeabi_fcmpgt, "__aeabi_fcmpgt");
-        symbol(__aeabi_fcmple, "__aeabi_fcmple");
         symbol(__aeabi_fcmplt, "__aeabi_fcmplt");
+        symbol(__aeabi_fcmple, "__aeabi_fcmple");
+        symbol(__aeabi_fcmpeq, "__aeabi_fcmpeq");
+        symbol(__aeabi_fcmpgt, "__aeabi_fcmpgt");
+        symbol(__aeabi_fcmpge, "__aeabi_fcmpge");
         symbol(__aeabi_fcmpun, "__aeabi_fcmpun");
-        symbol(__aeabi_dcmpeq, "__aeabi_dcmpeq");
-        symbol(__aeabi_dcmpge, "__aeabi_dcmpge");
-        symbol(__aeabi_dcmpgt, "__aeabi_dcmpgt");
-        symbol(__aeabi_dcmple, "__aeabi_dcmple");
+
         symbol(__aeabi_dcmplt, "__aeabi_dcmplt");
+        symbol(__aeabi_dcmple, "__aeabi_dcmple");
+        symbol(__aeabi_dcmpeq, "__aeabi_dcmpeq");
+        symbol(__aeabi_dcmpgt, "__aeabi_dcmpgt");
+        symbol(__aeabi_dcmpge, "__aeabi_dcmpge");
         symbol(__aeabi_dcmpun, "__aeabi_dcmpun");
     }
 
-    const __aeabi_fcmpeq = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmplt = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.lt));
+    };
 
-    const __aeabi_fcmpge = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmple = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f32(a, b).eq(Order.gt));
+    };
 
-    const __aeabi_fcmpgt = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmpeq = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.eq));
+    };
 
-    const __aeabi_fcmple = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmpgt = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.gt));
+    };
 
-    const __aeabi_fcmplt = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmpge = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f32(a, b).eq(Order.lt));
+    };
 
-    const __aeabi_fcmpun = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+    const __aeabi_fcmpun = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(unord_f32(a, b));
+    };
 
-    const __aeabi_dcmpeq = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmplt = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.lt));
+    };
 
-    const __aeabi_dcmpge = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmple = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f64(a, b).eq(Order.gt));
+    };
 
-    const __aeabi_dcmpgt = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmpeq = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.eq));
+    };
 
-    const __aeabi_dcmple = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmpgt = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.gt));
+    };
 
-    const __aeabi_dcmplt = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmpge = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f64(a, b).eq(Order.lt));
+    };
 
-    const __aeabi_dcmpun = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+    const __aeabi_dcmpun = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(unord_f64(a, b));
+    };
 }
 
 pub const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
