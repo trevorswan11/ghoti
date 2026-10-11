@@ -40,7 +40,7 @@ test "is_power_of_two" {
 pub const int_cast = fn(T: type, x: auto): std.Option(T) {
     comptime {
         @assert(@typeInfo(T) == .int);
-        @assert(@typeInfo(@TypeOf(x)) == .int or @typeInfo(@TypeOf(x)) == .comptime_int);
+        @assert(is_integer(@TypeOf(x)));
     }
 
     if comptime (@TypeOf(x) == comptime_int) {
@@ -209,3 +209,32 @@ test "order" {
     @expect(order(1, 0) == .gt);
     @expect(order(-1, 0) == .lt);
 }
+
+/// Whether a `V` compares against a `T` payload by value
+pub const compares_numerically = fn(T: type, V: type): bool {
+    return (is_integer(V) and (@typeInfo(T) == .int or @typeInfo(T) == .float)) or
+        (is_float(V) and @typeInfo(T) == .float);
+};
+
+const is_integer = fn(V: type): bool {
+    return @typeInfo(V) == .int or @typeInfo(V) == .comptime_int;
+};
+
+const is_float = fn(V: type): bool {
+    return @typeInfo(V) == .float or @typeInfo(V) == .comptime_float;
+};
+
+/// Compares `payload` with `val` by value
+///
+/// An integer equals only if it fits `payload`'s type, and a float is rounded first
+pub const numeric_eq = fn(payload: auto, val: auto): bool {
+    const P = @TypeOf(payload);
+    if comptime (@typeInfo(P) == .float) {
+        if comptime (is_float(@TypeOf(val))) return payload == @floatCast(P, val);
+        return payload == @floatFromInt(P, val);
+    }
+    return match (int_cast(P, val)) {
+        .some => |v| payload == v,
+        .none => false,
+    };
+};
