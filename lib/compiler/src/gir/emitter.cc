@@ -3858,7 +3858,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     if (const auto str_expr{active_ast().get_as_opt<ast::string_expr>(*expr_h)}) {
                         message = std::string{str_expr->value};
                     } else if (const auto cv{const_eval_.try_eval(*expr_h)}) {
-                        if (const auto s{cv->as_opt<std::string>()}) { message = *s; }
+                        if (auto s{cv->as_string_opt()}) { message = std::move(*s); }
                     }
                 }
             }
@@ -3872,7 +3872,7 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
                     if (const auto str_expr{active_ast().get_as_opt<ast::string_expr>(*expr_h)}) {
                         message = std::string{str_expr->value};
                     } else if (const auto cv{const_eval_.try_eval(*expr_h)}) {
-                        if (const auto s{cv->as_opt<std::string>()}) { message = *s; }
+                        if (auto s{cv->as_string_opt()}) { message = std::move(*s); }
                     }
                 }
             }

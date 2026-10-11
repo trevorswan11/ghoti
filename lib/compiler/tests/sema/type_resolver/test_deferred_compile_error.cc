@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "compiler/sema/error.hh"
@@ -45,6 +47,33 @@ TEST_CASE("deferred @compileError: only fires for the whole-initializer form") {
     )")};
     REQUIRE_FALSE(res.codes.empty());
     CHECK(res.message_contains("still eager"));
+}
+
+TEST_CASE("@compileError: a message built with `++` is reported in full") {
+    const auto res{helpers::resolve_diags(R"(
+        pub const main = fn(): i32 {
+            comptime { @compileError("expected an int, found " ++ @typeName(bool)); }
+            return 0;
+        };
+    )")};
+    REQUIRE_FALSE(res.codes.empty());
+    CHECK(res.message_contains("expected an int, found bool"));
+}
+
+TEST_CASE("@compileError: a generic's error also points at the call that instantiated it") {
+    const auto res{helpers::resolve_diags(R"(
+        const only_bool = fn(val: auto): bool {
+            const V = @TypeOf(val);
+            if comptime (V == bool) { return val; } else @compileError("not a bool: " ++ @typeName(V));
+        };
+        pub const main = fn(): i32 {
+            _ = only_bool(1.5);
+            return 0;
+        };
+    )")};
+    CHECK(std::ranges::contains(res.codes, sema::error::COMPILE_ERROR_REACHED));
+    CHECK(res.message_contains("not a bool: f64"));
+    CHECK(res.message_contains("Failed to instantiate 'only_bool'"));
 }
 
 } // namespace ghoti::tests

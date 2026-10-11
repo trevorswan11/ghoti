@@ -5330,7 +5330,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!call.arguments.empty()) {
             if (const auto msg_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
                 if (const auto m_val{try_eval(*msg_h)}) {
-                    if (const auto str{m_val->as_opt<std::string>()}) { message = *str; }
+                    if (auto str{m_val->as_string_opt()}) { message = std::move(*str); }
                 }
             }
         }

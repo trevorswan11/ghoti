@@ -731,6 +731,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `@bitCast(f128, 0)` (or a 1-argument `@bitCast(0)` to `f128`) crashed LLVM; an untyped operand now reinterprets at the target's width
 - Fixed: comparing two untyped numbers outside a `const` initializer (`return if (@as(comptime_float, d) == 0.1) ...`) rounded both to `f64` first, so the result could differ from the same comparison in a `const`
 - Fixed: `self == .none` on a `&self` receiver (or any `&` reference to a tagged union) was rejected as comparing aggregate types; it compares the active field like `u == .none` does
+- Fixed: a `@compileError` message built at compile time (`"found " ++ @typeName(T)`) was reported as `compilation aborted by @compileError`
+- Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
