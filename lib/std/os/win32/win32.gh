@@ -325,12 +325,12 @@ test "win32: open / read / lseek / close a known file" {
 
     // Check the DOS/PE magic
     let mut buf: [8]mut u8 = undefined;
-    @expect(match (read(h, buf[0..2])) { .ok => |k| k == 2uz, .err => false });
+    @expect(read(h, buf[0..2]).eq(2uz));
     @expect(buf[0] == 0x4Du8); // 'M'
     @expect(buf[1] == 0x5Au8); // 'Z'
 
     @expect(match (lseek(h, 0i64, SEEK_END)) { .ok => |end| end > 0i64, .err => false });
-    @expect(match (close(h)) { .ok => true, .err => false });
+    @expect(close(h) == .ok);
 }
 
 test "win32: opening a missing file reports not-found" {
@@ -384,7 +384,7 @@ test "win32: mkdir of an existing directory reports it, not a spurious success" 
 test "win32: alloc gives zero-filled, writable memory that free releases" {
     let n: usize = 8192uz;
     let p = match (alloc(n)) { .ok => |q| q, .err => nullptr };
-    defer @expect(match (free(p, n)) { .ok => true, .err => false });
+    defer @expect(free(p, n) == .ok);
     @require(p);
 
     @expect(p[0] == 0u8 and p[n - 1uz] == 0u8); // VirtualAlloc zeroes committed pages

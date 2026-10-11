@@ -730,6 +730,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `@as(comptime_int, x)` with a compile-time `x: i32` failed to fold, while `@as(comptime_float, ...)` worked
 - Fixed: `@bitCast(f128, 0)` (or a 1-argument `@bitCast(0)` to `f128`) crashed LLVM; an untyped operand now reinterprets at the target's width
 - Fixed: comparing two untyped numbers outside a `const` initializer (`return if (@as(comptime_float, d) == 0.1) ...`) rounded both to `f64` first, so the result could differ from the same comparison in a `const`
+- Fixed: `self == .none` on a `&self` receiver (or any `&` reference to a tagged union) was rejected as comparing aggregate types; it compares the active field like `u == .none` does
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -738,6 +739,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
+- Add `eq` to `std.Option(T)` and `std.Result(T, E)`: `opt.eq(3uz)` holds when it is `.some` with that value, and `res.eq(other)` when both hold the same variant with equal payloads
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 - Fixed: a skipped test printed `Test failed: <file>: (SKIPP ED)<message>`; it prints `Test skipped: <file>: (SKIPPED) <message>`
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
@@ -767,6 +769,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `volatile [N]T` was dropped silently; write `[N]volatile T`
 - Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
 - Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
+- Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
 - Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from
 - Fixed: a compile-time-folded `const` let a raw identifier take a primitive's place, so `const @"f80" = f80;` reported that `f80` depends on its own value, `@sizeOf(@"u8")` of a struct named `@"u8"` folded to 1, and a local `@"f32"` replaced `f32`; a primitive keyword always names the primitive, as it already did outside folding
 - Fixed: a generic parameter typed as a pointer or reference to an earlier type parameter (`fn(T: type, p: ^mut T)`, `p: &T`) was checked as if it were `T` itself, so every call was rejected with "not assignable to parameter type 'T'"
