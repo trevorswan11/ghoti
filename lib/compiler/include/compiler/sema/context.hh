@@ -112,6 +112,11 @@ class export_registry {
     std::vector<function_export> exports_;
 };
 
+struct test_queue {
+    std::vector<mod::module*> modules;
+    usize                     resolve_depth{0};
+};
+
 // A contextual wrapper around sematic steps
 //
 // Owns its own diagnostic list
@@ -149,6 +154,8 @@ struct context {
 
     // `@export`ed symbols, shared with every imported module's context
     export_registry& exports;
+
+    test_queue& pending_tests;
 
     // Cache of read embedded files (path string -> optional file contents)
     ankerl::unordered_dense::map<std::string, stdx::option<std::string>> embed_cache;
@@ -188,7 +195,7 @@ struct context {
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
           diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
           user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()},
-          param_bounds{*arena.make<param_bound_map>()} {}
+          pending_tests{*arena.make<test_queue>()}, param_bounds{*arena.make<param_bound_map>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -204,8 +211,8 @@ struct context {
           comptime_binding_frames{other.comptime_binding_frames},
           comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},
-          embed_cache{other.embed_cache}, env_epoch{other.env_epoch},
-          param_bounds{other.param_bounds} {}
+          pending_tests{other.pending_tests}, embed_cache{other.embed_cache},
+          env_epoch{other.env_epoch}, param_bounds{other.param_bounds} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
