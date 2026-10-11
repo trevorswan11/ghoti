@@ -745,7 +745,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
-- Add `eq` to `std.Option(T)` and `std.Result(T, E)`: `opt.eq(3uz)` holds when it is `.some` with that value, and `res.eq(other)` when both hold the same variant with equal payloads
+- Add `eq` to `std.Option(T)` and `std.Result(T, E)`: `opt.eq(3)` holds when it is `.some` with that value, and `res.eq(other)` when both hold the same variant with equal payloads
+    - `Result.eq` also takes an `E`, comparing against `.err`
+    - A number of another numeric type compares by value: an integer that doesn't fit `T` is never equal, and a float is rounded to `T` as a literal would be
 - Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
 - Fixed: a skipped test printed `Test failed: <file>: (SKIPP ED)<message>`; it prints `Test skipped: <file>: (SKIPPED) <message>`
 - **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)

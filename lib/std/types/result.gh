@@ -16,7 +16,7 @@ pub const Result = fn(T: type, E: type): type {
         /// The successful result of a `Result(void, E)`
         pub const done: @This() = .{ .ok = {} };
 
-        /// Checks that the result is equal to the passed T or Result(T, E)
+        /// Checks that the result is equal to the passed T, E, or Result(T, E)
         ///
         /// If T == E, only the comparison for T will be evaluated
         pub const eq = fn(&self, val: auto): bool {
@@ -42,7 +42,19 @@ pub const Result = fn(T: type, E: type): type {
                     .ok => |a| false,
                     .err => |e| e == val,
                 };
-            } else @compileError("Result.eq expects Result(T, E), T, or E, found " ++ @typeName(Val));
+            } else if comptime (std.math.compares_numerically(T, Val)) {
+                return match (self) {
+                    .ok => |a| std.math.numeric_eq(a, val),
+                    .err => false,
+                };
+            } else if comptime (std.math.compares_numerically(E, Val)) {
+                return match (self) {
+                    .ok => false,
+                    .err => |e| std.math.numeric_eq(e, val),
+                };
+            } else @compileError(
+                "Result.eq expects Result(T, E), T, or E, found " ++ @typeName(Val),
+            );
         };
 
         pub const map = fn(&self, func: impl Fn(val: T): auto): Result(
@@ -132,6 +144,26 @@ test "Result.eq on Result(T, E)" {
         let r1: Result(bool, i32) = .fail(1);
         @expect(r1.eq(1i32));
     }
+}
+
+test "Result.eq on an untyped literal" {
+    let r: Result(usize, bool) = .of(3);
+    @expect(r.eq(3));
+    @expect(!r.eq(-3));
+    let f: Result(f32, bool) = .of(0.5);
+    @expect(f.eq(0.5));
+
+    let failed: Result(usize, bool) = .fail(true);
+    @expect(!failed.eq(3));
+    @expect(failed.eq(true));
+}
+
+test "Result.eq prefers an exact E over a numeric T" {
+    let r: Result(usize, i32) = .fail(3);
+    @expect(r.eq(3)); // `3` is an `i32`, so it compares against the error
+    let ok: Result(usize, i32) = .of(3);
+    @expect(!ok.eq(3));
+    @expect(ok.eq(3uz));
 }
 
 test "Result.map transforms ok variant" {
