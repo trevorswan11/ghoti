@@ -38,10 +38,11 @@ using triple_map = std::map<std::string, name_set, std::less<>>;
 
     const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
     name_set                               names;
-    for (const auto impl : info.getLibcallImpls()) {
-        if (impl == llvm::RTLIB::Unsupported) { continue; }
-        if (const auto* name{llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl)}) {
-            names.emplace(name);
+    for (const auto impl : llvm::RTLIB::libcall_impls()) {
+        if (!info.isAvailable(impl)) { continue; }
+        if (const auto name{llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl)};
+            !name.empty()) {
+            names.emplace(name.str());
         }
     }
     return by_triple.emplace(triple.str(), std::move(names)).first->second;
@@ -116,8 +117,14 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
     if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) {
         return fmt::format("{}f64x", math_function_name(function));
     }
+    // LLVM's default lowering takes the first available implementation of the call
     const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
-    if (const auto* name{info.getLibcallName(variants[index])}) { return name; }
+    for (const auto impl : llvm::RTLIB::libcall_impls()) {
+        if (info.isAvailable(impl) &&
+            llvm::RTLIB::RuntimeLibcallsInfo::getLibcallFromImpl(impl) == variants[index]) {
+            return llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl).str();
+        }
+    }
 
     constexpr std::array suffixes{"f", "", "l", "f128"};
     return fmt::format("{}{}", math_function_name(function), suffixes[index]);

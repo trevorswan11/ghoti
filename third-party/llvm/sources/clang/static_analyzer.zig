@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/StaticAnalyzer
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/StaticAnalyzer
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -18,7 +18,6 @@ pub const checkers_sources = [_][]const u8{
     "CStringChecker.cpp",
     "CStringSyntaxChecker.cpp",
     "CallAndMessageChecker.cpp",
-    "CastSizeChecker.cpp",
     "CastToStructChecker.cpp",
     "CastValueChecker.cpp",
     "CheckObjCDealloc.cpp",
@@ -46,7 +45,6 @@ pub const checkers_sources = [_][]const u8{
     "ErrnoModeling.cpp",
     "ErrnoTesterChecker.cpp",
     "ExprInspectionChecker.cpp",
-    "FixedAddressChecker.cpp",
     "FuchsiaHandleChecker.cpp",
     "GCDAntipatternChecker.cpp",
     "GenericTaintChecker.cpp",
@@ -58,6 +56,7 @@ pub const checkers_sources = [_][]const u8{
     "IteratorModeling.cpp",
     "IteratorRangeChecker.cpp",
     "IvarInvalidationChecker.cpp",
+    "LifetimeModeling.cpp",
     "LLVMConventionsChecker.cpp",
     "LocalizationChecker.cpp",
     "MacOSKeychainAPIChecker.cpp",
@@ -88,6 +87,7 @@ pub const checkers_sources = [_][]const u8{
     "ObjCSelfInitChecker.cpp",
     "ObjCSuperDeallocChecker.cpp",
     "ObjCUnusedIVarsChecker.cpp",
+    "OpaqueSTLFunctionsModeling.cpp",
     "OSObjectCStyleCast.cpp",
     "PaddingChecker.cpp",
     "PointerArithChecker.cpp",
@@ -105,6 +105,7 @@ pub const checkers_sources = [_][]const u8{
     "SmartPtrChecker.cpp",
     "SmartPtrModeling.cpp",
     "StackAddrEscapeChecker.cpp",
+    "StoreToImmutableChecker.cpp",
     "StdLibraryFunctionsChecker.cpp",
     "StdVariantChecker.cpp",
     "STLAlgorithmModeling.cpp",
@@ -116,6 +117,7 @@ pub const checkers_sources = [_][]const u8{
     "TraversalChecker.cpp",
     "TrustNonnullChecker.cpp",
     "TrustReturnsNonnullChecker.cpp",
+    "UnconditionalVAArgChecker.cpp",
     "UndefBranchChecker.cpp",
     "UndefCapturedBlockVarChecker.cpp",
     "UndefResultChecker.cpp",
@@ -126,13 +128,16 @@ pub const checkers_sources = [_][]const u8{
     "UninitializedObject/UninitializedPointee.cpp",
     "UnixAPIChecker.cpp",
     "UnreachableCodeChecker.cpp",
+    "UseAfterLifetimeEnd.cpp",
     "VforkChecker.cpp",
     "VLASizeChecker.cpp",
+    "VAListChecker.cpp",
     "ValistChecker.cpp",
     "VirtualCallChecker.cpp",
     "WebKit/ASTUtils.cpp",
     "WebKit/ForwardDeclChecker.cpp",
     "WebKit/MemoryUnsafeCastChecker.cpp",
+    "WebKit/NoDeleteChecker.cpp",
     "WebKit/PtrTypesSemantics.cpp",
     "WebKit/RefCntblBaseVirtualDtorChecker.cpp",
     "WebKit/RetainPtrCtorAdoptChecker.cpp",
@@ -215,4 +220,65 @@ pub const frontend_sources = [_][]const u8{
     "FrontendActions.cpp",
     "ModelConsumer.cpp",
     "ModelInjector.cpp",
+};
+
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/ScalableStaticAnalysis/Core/CMakeLists.txt
+pub const ssa_core_root = "clang/lib/ScalableStaticAnalysis/Core";
+pub const ssa_core_sources = [_][]const u8{
+    "ASTEntityMapping.cpp",
+    "EntityLinker/EntityLinker.cpp",
+    "Model/BuildNamespace.cpp",
+    "Model/EntityId.cpp",
+    "Model/EntityIdTable.cpp",
+    "Model/EntityLinkage.cpp",
+    "Model/EntityName.cpp",
+    "Model/SummaryName.cpp",
+    "Serialization/JSONFormat/Artifact.cpp",
+    "Serialization/JSONFormat/JSONEntitySummaryEncoding.cpp",
+    "Serialization/JSONFormat/JSONFormatImpl.cpp",
+    "Serialization/JSONFormat/LUSummary.cpp",
+    "Serialization/JSONFormat/LUSummaryEncoding.cpp",
+    "Serialization/JSONFormat/MultiArchStaticLibrary.cpp",
+    "Serialization/JSONFormat/MultiArchSharedLibrary.cpp",
+    "Serialization/JSONFormat/StaticLibrary.cpp",
+    "Serialization/JSONFormat/TUSummary.cpp",
+    "Serialization/JSONFormat/TUSummaryEncoding.cpp",
+    "Serialization/JSONFormat/WPASuite.cpp",
+    "Serialization/SerializationFormatRegistry.cpp",
+    "SummaryData/LUSummaryConsumer.cpp",
+    "SummaryData/SummaryDataBuilderRegistry.cpp",
+    "Support/ErrorBuilder.cpp",
+    "TUSummary/ExtractorRegistry.cpp",
+    "TUSummary/TUSummaryBuilder.cpp",
+    "TUSummary/TUSummaryExtractor.cpp",
+    "WholeProgramAnalysis/AnalysisDriver.cpp",
+    "WholeProgramAnalysis/AnalysisName.cpp",
+    "WholeProgramAnalysis/AnalysisRegistry.cpp",
+};
+
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/ScalableStaticAnalysis/Analyses/CMakeLists.txt
+pub const ssa_analyses_root = "clang/lib/ScalableStaticAnalysis/Analyses";
+pub const ssa_analyses_sources = [_][]const u8{
+    "CallGraph/CallGraphExtractor.cpp",
+    "CallGraph/CallGraphJSONFormat.cpp",
+    "EntityPointerLevel/EntityPointerLevel.cpp",
+    "EntityPointerLevel/EntityPointerLevelFormat.cpp",
+    "PointerFlow/PointerFlow.cpp",
+    "PointerFlow/PointerFlowAnalysis.cpp",
+    "PointerFlow/PointerFlowExtractor.cpp",
+    "PointerFlow/PointerFlowFormat.cpp",
+    "SSAFAnalysesCommon.cpp",
+    "TypeConstrainedPointers/TypeConstrainedPointers.cpp",
+    "UnsafeBufferUsage/UnsafeBufferUsage.cpp",
+    "UnsafeBufferUsage/UnsafeBufferUsageAnalysis.cpp",
+    "UnsafeBufferUsage/UnsafeBufferUsageExtractor.cpp",
+    "UnsafeBufferUsage/UnsafeBufferUsageFormat.cpp",
+};
+
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/ScalableStaticAnalysis/SourceTransformation/CMakeLists.txt
+pub const ssa_source_transformation_root = "clang/lib/ScalableStaticAnalysis/SourceTransformation";
+pub const ssa_source_transformation_sources = [_][]const u8{
+    "SARIFTransformationReportFormat.cpp",
+    "TransformationRegistry.cpp",
+    "YAMLSourceEditFormat.cpp",
 };

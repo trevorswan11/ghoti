@@ -8,6 +8,7 @@
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/PassTimingInfo.h>
@@ -36,10 +37,21 @@ namespace {
     case opt_level::O1: return llvm::OptimizationLevel::O1;
     case opt_level::O2: return llvm::OptimizationLevel::O2;
     case opt_level::O3: return llvm::OptimizationLevel::O3;
-    case opt_level::Os: return llvm::OptimizationLevel::Os;
-    case opt_level::Oz: return llvm::OptimizationLevel::Oz;
+    case opt_level::Os: return llvm::OptimizationLevel::O2;
+    case opt_level::Oz: return llvm::OptimizationLevel::O2;
     }
     return llvm::OptimizationLevel::O0;
+}
+
+// What clang does for -Os/-Oz: `optsize`, plus `minsize` for -Oz, on every definition
+auto mark_size_optimized(llvm::Module& module, opt_level level) -> void {
+    if (level != opt_level::Os && level != opt_level::Oz) { return; }
+    for (auto& fn : module) {
+        // `minsize` and `optnone` are incompatible, and optnone already means no optimizing
+        if (fn.isDeclaration() || fn.hasFnAttribute(llvm::Attribute::OptimizeNone)) { continue; }
+        fn.addFnAttr(llvm::Attribute::OptimizeForSize);
+        if (level == opt_level::Oz) { fn.addFnAttr(llvm::Attribute::MinSize); }
+    }
 }
 
 [[nodiscard]] auto verify_mod(llvm::Module& module, std::string_view phase)
@@ -111,6 +123,7 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
     pb.registerLoopAnalyses(lam);
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
+    mark_size_optimized(module, options.level);
     const auto              llvm_level{to_llvm_opt_level(options.level)};
     llvm::ModulePassManager mpm;
 

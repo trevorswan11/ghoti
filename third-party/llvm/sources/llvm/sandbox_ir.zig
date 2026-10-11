@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/SandboxIR/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/SandboxIR/CMakeLists.txt
 pub const root = "llvm/lib/SandboxIR";
 pub const sources = [_][]const u8{
     "Argument.cpp",

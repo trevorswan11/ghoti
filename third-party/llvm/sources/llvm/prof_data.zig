@@ -1,7 +1,8 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/ProfileData/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/ProfileData/CMakeLists.txt
 pub const prof_data_root = "llvm/lib/ProfileData/";
 pub const prof_data_sources = [_][]const u8{
     "DataAccessProf.cpp",
+    "ETMTraceDecoder.cpp",
     "GCOV.cpp",
     "IndexedMemProfData.cpp",
     "InstrProf.cpp",

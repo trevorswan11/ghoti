@@ -1,9 +1,10 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/Object/CMakeLists.txt
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/ObjectYAML/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/Object/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/ObjectYAML/CMakeLists.txt
 pub const root = "llvm/lib/Object";
 pub const sources = [_][]const u8{
     "Archive.cpp",
     "ArchiveWriter.cpp",
+    "BBAddrMap.cpp",
     "Binary.cpp",
     "BuildID.cpp",
     "COFFImportFile.cpp",
@@ -28,6 +29,7 @@ pub const sources = [_][]const u8{
     "OffloadBundle.cpp",
     "RecordStreamer.cpp",
     "RelocationResolver.cpp",
+    "SFrameParser.cpp",
     "SymbolicFile.cpp",
     "SymbolSize.cpp",
     "TapiFile.cpp",
@@ -43,12 +45,14 @@ pub const yaml_root = "llvm/lib/ObjectYAML";
 pub const yaml_sources = [_][]const u8{
     "ArchiveEmitter.cpp",
     "ArchiveYAML.cpp",
+    "BBAddrMapYAML.cpp",
     "CodeViewYAMLDebugSections.cpp",
     "CodeViewYAMLSymbols.cpp",
     "CodeViewYAMLTypeHashing.cpp",
     "CodeViewYAMLTypes.cpp",
     "COFFEmitter.cpp",
     "COFFYAML.cpp",
+    "ContiguousBlobAccumulator.cpp",
     "DWARFEmitter.cpp",
     "DWARFYAML.cpp",
     "DXContainerEmitter.cpp",
@@ -80,6 +84,10 @@ pub const copy_wasm_root = copy_root ++ "wasm";
 pub const copy_xcoff_root = copy_root ++ "XCOFF";
 pub const copy_sources = [_][]const u8{
     "Archive.cpp",
+    "DXContainer/DXContainerObjcopy.cpp",
+    "DXContainer/DXContainerObject.cpp",
+    "DXContainer/DXContainerReader.cpp",
+    "DXContainer/DXContainerWriter.cpp",
     "CommonConfig.cpp",
     "ObjCopy.cpp",
     "ConfigManager.cpp",

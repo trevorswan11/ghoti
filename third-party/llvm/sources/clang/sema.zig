@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Sema/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Sema/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -45,6 +45,7 @@ pub const sources = [_][]const u8{
     "SemaDeclCXX.cpp",
     "SemaDeclObjC.cpp",
     "SemaExceptionSpec.cpp",
+    "SemaExpand.cpp",
     "SemaExpr.cpp",
     "SemaExprCXX.cpp",
     "SemaExprMember.cpp",
@@ -107,6 +108,14 @@ const include_root = "clang/include/clang/Sema";
 const attr_td = basic.attr_td;
 
 pub const attr_synthesize_configs = [_]SynthesizeHeaderConfig{
+    .{
+        .gen_conf = .{
+            .name = "ClangAttrIsTypeDependent",
+            .td_file = attr_td,
+            .instruction = .{ .action = "-gen-clang-attr-is-type-dependent" },
+        },
+        .virtual_path = "clang/Sema/AttrIsTypeDependent.inc",
+    },
     .{
         .gen_conf = .{
             .name = "ClangAttrTemplateInstantiate",

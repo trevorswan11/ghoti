@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/MachO/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MachO/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -17,6 +17,7 @@ pub const sources = [_][]const u8{
     "ICF.cpp",
     "InputFiles.cpp",
     "InputSection.cpp",
+    "LinkerOptimizationHints.cpp",
     "LTO.cpp",
     "MapFile.cpp",
     "MarkLive.cpp",

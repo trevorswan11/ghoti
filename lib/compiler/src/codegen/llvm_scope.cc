@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include <lld/Common/CommonLinkerContext.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -63,10 +64,12 @@ auto llvm_init_warmup() -> void {
                 llvm::IRBuilder<> builder{llvm::BasicBlock::Create(ctx, "entry", fn)};
                 builder.CreateRet(fn->getArg(0));
 
+                // The object writer seeks by stream position, which a null stream never tracks
                 llvm::legacy::PassManager pm;
-                llvm::raw_null_ostream    null_os;
+                llvm::SmallString<0>      object;
+                llvm::raw_svector_ostream object_os{object};
                 if (!tm->addPassesToEmitFile(
-                        pm, null_os, nullptr, llvm::CodeGenFileType::ObjectFile)) {
+                        pm, object_os, nullptr, llvm::CodeGenFileType::ObjectFile)) {
                     pm.run(mod);
                 }
             }

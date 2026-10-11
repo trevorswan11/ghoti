@@ -43,7 +43,7 @@ The following are "standalone" dependencies, required and manually fetched by gh
 1. [stdx](https://github.com/trevorswan11/stdx.git) is a C++ standard library and zig build system extension library that drives multiple dependencies. A full breakdown of dependencies can be found at the library's github repository. All dependencies transitively brought in by this library are open source and those and linked to `ghoti` artifacts  are permissively licensed 
 2. [CLI11](https://github.com/CLIUtils/CLI11) is a command line parser for C++ that provides a rich feature set with a simple and intuitive interface. Is is licensed under the permissive 3-Clause BSD License.
 3. [replxx](https://github.com/AmokHuginnsson/replxx) is a read evaluate print loop (REPL) library that provides a cross platform interactive shell that powers terminal debugging support. Is is licensed under the permissive BSD License.
-4. [LLVM 21.1.8](https://releases.llvm.org/21.1.0/docs/ReleaseNotes.html) is used as ghoti's compilation backend. It is manually compiled and statically linked against ghoti through the build system. It is licensed under the permissive Apache License 2.0, and has the following dependencies:
+4. [LLVM 23.1.3](https://releases.llvm.org/23.1.0/docs/ReleaseNotes.html) is used as ghoti's compilation backend. It is manually compiled and statically linked against ghoti through the build system. It is licensed under the permissive Apache License 2.0, and has the following dependencies:
     - [libxml2](https://gitlab.gnome.org/GNOME/libxml2), licensed under the MIT License
     - [zlib](https://github.com/madler/zlib), licensed under the MIT License
     - [zstd](https://github.com/facebook/zstd), licensed under the BSD License

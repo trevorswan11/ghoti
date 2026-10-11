@@ -787,3 +787,6 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `zig build -Dinstall-tests-only=true` now installs the test binaries instead of doing nothing
     - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM unless `-Dprune-protected=true` (`-Dprune-dry-run=true` to preview)
         - Paths compare case-insensitively only on Windows and macOS, and either separator is accepted on every host
+- LLVM, LLD and the bundled clang-format are now 23.1.3 (from 21.1.8)
+    - Fixed: compiling for riscv64 in `release_fast` crashed the compiler on an add of `0x8000000000000000` to a 128-bit value, an LLVM overflow fixed upstream
+    - `-Os` and `-Oz` run LLVM's O2 pipeline and mark every function `optsize` (plus `minsize` for `-Oz`), as clang does; LLVM 23 removed its size-specific pipelines

@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/Bitcode
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/Bitcode
 const root = "llvm/lib/Bitcode/";
 
 pub const reader_root = root ++ "Reader";

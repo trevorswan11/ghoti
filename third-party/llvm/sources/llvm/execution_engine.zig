@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/ExecutionEngine/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/ExecutionEngine/CMakeLists.txt
 pub const root = "llvm/lib/ExecutionEngine/";
 pub const base_sources = [_][]const u8{
     "ExecutionEngine.cpp",
@@ -23,41 +23,35 @@ pub const jit_link_sources = [_][]const u8{
     "JITLink.cpp",
     "JITLinkGeneric.cpp",
     "JITLinkMemoryManager.cpp",
-
-    // MachO
     "MachO.cpp",
     "MachO_arm64.cpp",
     "MachO_x86_64.cpp",
     "MachOLinkGraphBuilder.cpp",
-
-    // ELF
     "ELF.cpp",
     "ELFLinkGraphBuilder.cpp",
     "ELF_aarch32.cpp",
     "ELF_aarch64.cpp",
+    "ELF_hexagon.cpp",
     "ELF_loongarch.cpp",
     "ELF_ppc64.cpp",
     "ELF_riscv.cpp",
+    "ELF_systemz.cpp",
     "ELF_x86.cpp",
     "ELF_x86_64.cpp",
-
-    // COFF
     "COFF.cpp",
     "COFFDirectiveParser.cpp",
     "COFFLinkGraphBuilder.cpp",
     "COFF_x86_64.cpp",
-
-    // XCOFF
     "XCOFF.cpp",
     "XCOFF_ppc64.cpp",
     "XCOFFLinkGraphBuilder.cpp",
-
-    // Architectures
     "aarch32.cpp",
     "aarch64.cpp",
+    "hexagon.cpp",
     "loongarch.cpp",
     "ppc64.cpp",
     "riscv.cpp",
+    "systemz.cpp",
     "x86.cpp",
     "x86_64.cpp",
 };
@@ -80,25 +74,25 @@ pub const runtime_dyld_sources = [_][]const u8{
 pub const orc_root = root ++ "Orc/";
 pub const orc_base_sources = [_][]const u8{
     "AbsoluteSymbols.cpp",
+    "BacktraceTools.cpp",
     "COFF.cpp",
     "COFFVCRuntimeSupport.cpp",
     "COFFPlatform.cpp",
     "CompileOnDemandLayer.cpp",
     "CompileUtils.cpp",
     "Core.cpp",
-    "DebugObjectManagerPlugin.cpp",
     "DebugUtils.cpp",
     "EHFrameRegistrationPlugin.cpp",
     "EPCDynamicLibrarySearchGenerator.cpp",
-    "EPCDebugObjectRegistrar.cpp",
     "EPCGenericDylibManager.cpp",
     "EPCGenericJITLinkMemoryManager.cpp",
     "EPCGenericRTDyldMemoryManager.cpp",
     "EPCIndirectionUtils.cpp",
     "ExecutionUtils.cpp",
+    "ExecutorResolutionGenerator.cpp",
     "ObjectFileInterface.cpp",
-    "GetDylibInterface.cpp",
     "IndirectionUtils.cpp",
+    "InProcessEPC.cpp",
     "InProcessMemoryAccess.cpp",
     "IRCompileLayer.cpp",
     "IRTransformLayer.cpp",
@@ -127,6 +121,7 @@ pub const orc_base_sources = [_][]const u8{
     "SectCreate.cpp",
     "SelfExecutorProcessControl.cpp",
     "SimpleRemoteEPC.cpp",
+    "SimpleRemoteMemoryMapper.cpp",
     "Speculation.cpp",
     "SpeculateAnalyses.cpp",
     "ExecutorProcessControl.cpp",
@@ -143,6 +138,7 @@ pub const orc_debug_sources = [_][]const u8{
     "DebugInfoSupport.cpp",
     "DebuggerSupport.cpp",
     "DebuggerSupportPlugin.cpp",
+    "ELFDebugObjectPlugin.cpp",
     "LLJITUtilsCBindings.cpp",
     "PerfSupportPlugin.cpp",
     "VTuneSupportPlugin.cpp",
@@ -163,9 +159,12 @@ pub const orc_target_process_root = orc_root ++ "TargetProcess";
 pub const orc_target_process_sources = [_][]const u8{
     "ExecutorSharedMemoryMapperService.cpp",
     "DefaultHostBootstrapValues.cpp",
+    "ExecutorResolver.cpp",
+    "LibraryResolver.cpp",
     "JITLoaderGDB.cpp",
     "JITLoaderPerf.cpp",
     "JITLoaderVTune.cpp",
+    "LibraryScanner.cpp",
     "OrcRTBootstrap.cpp",
     "RegisterEHFrames.cpp",
     "SimpleExecutorDylibManager.cpp",

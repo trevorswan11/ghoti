@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/tree/llvmorg-21.1.8/clang/lib/Tooling
+//! https://github.com/llvm/llvm-project/tree/llvmorg-23.1.3/clang/lib/Tooling
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -8,6 +8,7 @@ pub const sources = [_][]const u8{
     "ArgumentsAdjusters.cpp",
     "CommonOptionsParser.cpp",
     "CompilationDatabase.cpp",
+    "DependencyScanningTool.cpp",
     "Execution.cpp",
     "ExpandResponseFilesCompilationDatabase.cpp",
     "FileMatchTrie.cpp",
@@ -31,12 +32,15 @@ pub const core_sources = [_][]const u8{
     "Replacement.cpp",
 };
 
-pub const dep_scanning_root = root ++ "DependencyScanning";
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/DependencyScanning/CMakeLists.txt
+pub const dep_scanning_root = "clang/lib/DependencyScanning";
 pub const dep_scanning_sources = [_][]const u8{
+    "DependencyGraph.cpp",
     "DependencyScanningFilesystem.cpp",
     "DependencyScanningService.cpp",
     "DependencyScanningWorker.cpp",
-    "DependencyScanningTool.cpp",
+    "DependencyScanningUtils.cpp",
+    "DependencyScannerImpl.cpp",
     "InProcessModuleCache.cpp",
     "ModuleDepCollector.cpp",
 };
