@@ -101,29 +101,59 @@ auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::mod
     // A module already poisoned by symbol collection stays poisoned
     const auto poisoned_collection{module.state == mod::module_state::POISONED_SYMBOL_COLLECTION};
 
-    if (module.is_resolvable()) {
-        module.state = poisoned_collection ? mod::module_state::POISONED_TYPE_RESOLVING
-                                           : mod::module_state::TYPE_RESOLVING;
-        ctx.inject_prelude();
+    if (!module.is_resolvable()) { return module.state; }
 
-        type_resolver resolver{module, ctx};
-        resolver.pre_register_impls();
-        for (const auto& node : module.ast) { resolver.resolve(node); }
+    // Only the outermost resolution resolves the queued tests, once nothing is mid-resolution
+    auto& pending{ctx.pending_tests};
+    ++pending.resolve_depth;
+    const auto depth_restore{gsl::finally([&] { --pending.resolve_depth; })};
 
-        // Appended, so what symbol collection already reported (a shadowing `let` that later fails
-        // an instantiation) isn't replaced by its consequences
-        if (!ctx.diags.empty()) {
-            module.absorb_sema_diagnostics(std::move(ctx.diags));
-            module.state = mod::module_state::POISONED_TYPE_RESOLVED;
-            return module.state;
+    module.state = poisoned_collection ? mod::module_state::POISONED_TYPE_RESOLVING
+                                       : mod::module_state::TYPE_RESOLVING;
+    ctx.inject_prelude();
+
+    type_resolver resolver{module, ctx};
+    resolver.pre_register_impls();
+    for (const auto& node : module.ast) {
+        if (ctx.testing && module.ast.get_as_opt<ast::test_stmt>(node)) {
+            module.deferred_tests.push_back(node);
+            continue;
         }
-        if (module.is_poisoned()) {
-            module.state = mod::module_state::POISONED_TYPE_RESOLVED;
-            return module.state;
-        }
+        resolver.resolve(node);
+    }
+    if (!module.deferred_tests.empty()) { pending.modules.push_back(&module); }
+
+    // Appended, so what symbol collection already reported isn't replaced by its consequences
+    if (!ctx.diags.empty()) {
+        module.absorb_sema_diagnostics(std::move(ctx.diags));
+        module.state = mod::module_state::POISONED_TYPE_RESOLVED;
+    } else if (module.is_poisoned()) {
+        module.state = mod::module_state::POISONED_TYPE_RESOLVED;
+    } else {
         module.state = mod::module_state::TYPE_RESOLVED;
     }
+
+    if (pending.resolve_depth == 1) { resolve_pending_tests(ctx); }
     return module.state;
+}
+
+auto type_resolver::resolve_pending_tests(context& ctx) -> void {
+    PROFILE_FUNCTION();
+    auto& pending{ctx.pending_tests};
+    // A test's own `import` can resolve, and queue, further modules
+    for (usize i{0}; i < pending.modules.size(); ++i) {
+        auto&      module{*pending.modules[i]};
+        const auto tests{std::exchange(module.deferred_tests, {})};
+
+        context       test_ctx{ctx};
+        type_resolver resolver{module, test_ctx};
+        for (const auto& node : tests) { resolver.resolve(node); }
+        if (!test_ctx.diags.empty()) {
+            module.absorb_sema_diagnostics(std::move(test_ctx.diags));
+            module.state = mod::module_state::POISONED_TYPE_RESOLVED;
+        }
+    }
+    pending.modules.clear();
 }
 
 // Performs the resolution and poison check & bubble & return operation

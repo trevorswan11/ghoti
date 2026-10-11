@@ -78,6 +78,8 @@ class type_resolver {
 
   public:
     static auto resolve_types(mod::module& module, context& ctx) -> mod::module_state;
+    // Resolves every queued `test` block, once no module is mid-resolution
+    static auto resolve_pending_tests(context& ctx) -> void;
 
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
         // An untyped parameter pack (`rest...`) has no type node at all; nothing to resolve.

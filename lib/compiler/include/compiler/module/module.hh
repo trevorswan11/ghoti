@@ -134,6 +134,9 @@ struct module {
     // Every `import` node in this module, at any nesting depth
     std::vector<ast::node_id> import_nodes;
 
+    // Root `test` blocks waiting for every module's declarations to resolve (test builds only)
+    std::vector<ast::node_id> deferred_tests;
+
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
     // A permanent copy of the syntax diagnostics found at parse time, if any
