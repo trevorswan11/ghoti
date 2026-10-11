@@ -5,13 +5,16 @@
 #include <string_view>
 #include <utility>
 
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "driver/cmd/lsp/text_edit.hh"
 #include "support/diagnostic.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::lsp {
 
@@ -54,7 +57,23 @@ auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
     const std::string_view text{module.source};
     for (const auto& d : module.parse_diagnostics) { push_diagnostic(out, d, text); }
     if (const auto sema_diags{module.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *sema_diags) { push_diagnostic(out, d, text); }
+        for (const auto& d : *sema_diags) {
+            const auto* origin{d.origin()};
+            if (!origin || origin == &module) {
+                push_diagnostic(out, d, text);
+                continue;
+            }
+            // An error inside another module's code is that file's to show, if it shows it
+            if (origin->reports(d)) { continue; }
+            push_diagnostic(out, d, text);
+            const auto loc{d.to_formattable().location.value_or(source_location{0, 0})};
+            out.back()["range"]   = range_of(source_location{0, 0}, text);
+            out.back()["message"] = fmt::format("{}:{}:{}: {}",
+                                                path_utils::display(origin->path),
+                                                loc.line + 1,
+                                                loc.column + 1,
+                                                out.back()["message"].get<std::string>());
+        }
     }
     for (const auto& warning : module.warnings) {
         push_diagnostic(out, warning, text);

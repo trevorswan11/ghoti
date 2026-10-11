@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -728,6 +729,62 @@ TEST_CASE("A pointer or reference to an earlier type parameter binds through it"
             return a + @as(i32, get(u8, &a)) + second(u8, i32, ^b);
         };
     )") == 17);
+}
+
+TEST_CASE("Folding a generic call uses that instance's typing, not the last one checked") {
+    CHECK(helpers::compile_and_run(R"(
+        const recon = fn(T: type, comptime m: comptime_int): T {
+            const U = @Int(.{ .bits = @bitSizeOf(T), .signedness = .unsigned });
+            return @bitCast(T, @intCast(U, m));
+        };
+        pub const main = fn(): i32 {
+            let a: u128 = @bitCast(recon(f128, 1 << 100));
+            let b: u64 = @bitCast(recon(f64, 5));
+            return if (a == 1 << 100) @intCast(b) else 99;
+        };
+    )") == 5);
+
+    CHECK(helpers::compile_and_run(R"(
+        const fbits = fn(T: type): comptime_int {
+            return match comptime (@bitSizeOf(T)) { 64 => 52, 128 => 112, _ => 0 };
+        };
+        const recon = fn(T: type, comptime m: comptime_int): T {
+            const U = @Int(.{ .bits = @bitSizeOf(T), .signedness = .unsigned });
+            return @bitCast(T, @intCast(U, m));
+        };
+        const quiet = fn(T: type): T { return recon(T, 1 << (fbits(T) - 1)); };
+        pub const main = fn(): i32 {
+            let q: u128 = @bitCast(quiet(f128));
+            let d: u64 = @bitCast(quiet(f64));
+            return if (q == 1 << 111 and d == 1 << 51) 0 else 1;
+        };
+    )") == 0);
+}
+
+TEST_CASE("An error folding another module's function points into that module") {
+    auto [ctx, idx]{helpers::type_check(
+        R"(
+        import "narrow.gh" as narrow;
+        pub const main = fn(): i32 {
+            const x = narrow.to_u8(300);
+            return x;
+        };
+    )",
+        {helpers::mock_file{"narrow.gh",
+                            R"(pub const to_u8 = fn(comptime n: comptime_int): u8 {
+    return @intCast(u8, n);
+};)",
+                            "narrow"}})};
+    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
+    REQUIRE(diags);
+    bool found{false};
+    for (const auto& d : *diags) {
+        if (!d.get_message() || !d.get_message()->contains("out of range")) { continue; }
+        found = true;
+        REQUIRE(d.origin() != nullptr);
+        CHECK(d.origin()->path.filename() == "narrow.gh");
+    }
+    CHECK(found);
 }
 
 } // namespace ghoti::tests

@@ -3991,10 +3991,23 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 if (!args_opt) { return stdx::none; }
                 auto& args{*args_opt};
 
+                // A generic's body is shared by its instances, so fold it with this call's typing
+                // rather than whichever instance the shared side tables were last left holding
+                const auto target{id.is_valid() ? module_->get_generic_call_target_opt(id)
+                                                : stdx::none};
+                const auto diff{target ? ctx_.instantiation_cache.get_body_type_diff(*target)
+                                       : callee_mod->active_body_diff};
+                const mod::body_diff_guard diff_guard{*callee_mod, diff};
+
                 auto* const prev{module_.get()};
+                const auto  diags_before{ctx_.diags.size()};
                 if (callee_mod != prev) { set_module(*callee_mod); }
                 auto res{eval_comptime_fn(id, *fn_expr, args)};
-                if (callee_mod != prev) { set_module(*prev); }
+                if (callee_mod != prev) {
+                    set_module(*prev);
+                    // An error inside the callee points into the callee's source
+                    ctx_.diags.set_origin_from(diags_before, *callee_mod);
+                }
                 for (usize a{0}; a < call.arguments.size() && a < fn_expr->parameters.size(); ++a) {
                     if (fn_expr->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
                         a < args.size() && !args[a].is<const_ref>()) {
@@ -4210,8 +4223,12 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     }
                 }
 
-                auto res{eval_comptime_fn(id, *method_fn, args)};
-                if (method_mod != prev) { set_module(*prev); }
+                const auto diags_before{ctx_.diags.size()};
+                auto       res{eval_comptime_fn(id, *method_fn, args)};
+                if (method_mod != prev) {
+                    set_module(*prev);
+                    ctx_.diags.set_origin_from(diags_before, *method_mod);
+                }
                 if (dot && method_fn->self && method_fn->self->modifier.is_mutable_ref() &&
                     !args.empty() && !args[0].is<const_ref>()) {
                     DISCARD(write_target(dot->object, args[0]));
