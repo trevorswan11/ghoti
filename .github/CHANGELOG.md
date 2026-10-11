@@ -733,6 +733,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `self == .none` on a `&self` receiver (or any `&` reference to a tagged union) was rejected as comparing aggregate types; it compares the active field like `u == .none` does
 - Fixed: a `@compileError` message built at compile time (`"found " ++ @typeName(T)`) was reported as `compilation aborted by @compileError`
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
+- Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

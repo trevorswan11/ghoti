@@ -2756,6 +2756,13 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
         if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
     }
     if (*kind_opt == instruction_kind::EQ || *kind_opt == instruction_kind::NE) {
+        const auto is_comptime_only{[&](ast::expr_handle operand) {
+            const auto t{active_mod().get_sema_type_opt(operand)};
+            return t && sema::is_comptime_aggregate(*t);
+        }};
+        if (is_comptime_only(binary.lhs) || is_comptime_only(binary.rhs)) {
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+        }
         if (const auto tag_eq{try_emit_union_field_eq(binary.lhs, binary.rhs)}) {
             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
             if (*kind_opt == instruction_kind::NE) {
