@@ -852,4 +852,26 @@ TEST_CASE("a folded generic member call sees its own instance's `@This()`") {
     )") == 42);
 }
 
+TEST_CASE("a folded call types an untyped literal argument as the runtime call does") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(T: type): type {
+            return struct {
+                v: T,
+                pub const is_i32 = fn(&self, val: auto): bool {
+                    return @TypeOf(val) == i32;
+                };
+            };
+        };
+        const is_f64 = fn(val: auto): bool { return @TypeOf(val) == f64; };
+        pub const main = fn(): i32 {
+            let b: Box(u8) = .{ .v = 1 };
+            let mut out: i32 = 0;
+            if (!!b.is_i32(3)) { out += 1; }
+            if (b.is_i32(3)) { out += 2; }
+            if comptime (is_f64(0.5)) { out += 4; }
+            return out;
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests

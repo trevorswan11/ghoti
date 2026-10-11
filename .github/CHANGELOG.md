@@ -734,6 +734,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `@compileError` message built at compile time (`"found " ++ @typeName(T)`) was reported as `compilation aborted by @compileError`
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 - Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
+- Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
