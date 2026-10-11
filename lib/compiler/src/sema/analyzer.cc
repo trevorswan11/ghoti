@@ -83,8 +83,9 @@ namespace {
 
 // A library's interface is what it exports; everything else it holds (its copy of `std`, say)
 // stays internal so it can't collide with the program's own. A `panic_handler` / `assert_handler`
-// override stays visible but weak, since the program linking it defines its own that must win
-auto internalize_library(gir::module& mod) -> void {
+// override stays visible but weak, since the program linking it defines its own that must win,
+// unless `keep_handlers` is off
+auto internalize_library(gir::module& mod, bool keep_handlers) -> void {
     constexpr std::array handlers{std::string_view{"panic_handler"},
                                   std::string_view{"assert_handler"},
                                   std::string_view{"expect_handler"},
@@ -93,7 +94,7 @@ auto internalize_library(gir::module& mod) -> void {
     for (auto* fn : mod.get_functions()) {
         if (fn->get_linkage() == gir::linkage::INTERNAL) { continue; }
         const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
-        if (std::ranges::contains(handlers, symbol)) {
+        if (keep_handlers && std::ranges::contains(handlers, symbol)) {
             fn->set_weak(true);
         } else if (fn->get_linkage() == gir::linkage::PUBLIC) {
             fn->set_linkage(gir::linkage::INTERNAL);
@@ -388,7 +389,7 @@ auto analyzer::lower_artifact(gir::module&                      gir_module,
         return emit_llvm_ir_test_executable(gir_module, context, options);
     case build_artifact::LIBRARY:
         gir_module.prune_unreachable(export_roots(gir_module));
-        internalize_library(gir_module);
+        internalize_library(gir_module, library_keeps_handlers_);
         break;
     case build_artifact::OBJECT: gir_module.prune_unreachable({}); break;
     }

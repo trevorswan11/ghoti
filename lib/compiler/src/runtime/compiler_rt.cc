@@ -114,6 +114,7 @@ struct archive_memo {
     rt_target.level = codegen::opt_level::O2;
     sema::analyzer analyzer{manager, diagnostics, false, rt_target, false, false};
     analyzer.set_optimize_mode(sema::optimize_mode::RELEASE_FAST);
+    analyzer.set_library_keeps_handlers(false);
 
     // The analyzer already reported the root module's own errors, as the driver relies on
     auto       gir_mod{analyzer.analyze(root)};
