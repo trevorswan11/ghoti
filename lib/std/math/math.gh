@@ -184,3 +184,28 @@ test "min" {
         @assert(min(-4, -1, 45, 78, 90, -23) == -23);
     }
 }
+
+pub const Order = enum {
+    /// Greater than (`>`)
+    gt,
+
+    /// Less than (`<`)
+    lt,
+
+    /// Equal (`==`)
+    eq,
+};
+
+/// Given two numbers, this function returns the order they are with respect to each other.
+pub const order = fn(a: auto, b: auto): Order {
+    if (a == b) return .eq;
+    if (a < b) return .lt;
+    if (a > b) return .gt;
+    unreachable;
+};
+
+test "order" {
+    @expect(order(0, 0) == .eq);
+    @expect(order(1, 0) == .gt);
+    @expect(order(-1, 0) == .lt);
+}

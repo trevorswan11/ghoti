@@ -1,0 +1,197 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/comparef.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+
+pub const Order = enum : i32 { lt = -1, eq = 0, gt = 1 };
+
+@cfg (compiler_rt.want_aeabi) {
+    comptime {
+        symbol(__aeabi_fcmpeq, "__aeabi_fcmpeq");
+        symbol(__aeabi_fcmpge, "__aeabi_fcmpge");
+        symbol(__aeabi_fcmpgt, "__aeabi_fcmpgt");
+        symbol(__aeabi_fcmple, "__aeabi_fcmple");
+        symbol(__aeabi_fcmplt, "__aeabi_fcmplt");
+        symbol(__aeabi_fcmpun, "__aeabi_fcmpun");
+        symbol(__aeabi_dcmpeq, "__aeabi_dcmpeq");
+        symbol(__aeabi_dcmpge, "__aeabi_dcmpge");
+        symbol(__aeabi_dcmpgt, "__aeabi_dcmpgt");
+        symbol(__aeabi_dcmple, "__aeabi_dcmple");
+        symbol(__aeabi_dcmplt, "__aeabi_dcmplt");
+        symbol(__aeabi_dcmpun, "__aeabi_dcmpun");
+    }
+
+    const __aeabi_fcmpeq = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_fcmpge = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_fcmpgt = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_fcmple = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_fcmplt = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_fcmpun = fn(a: f32, b: f32) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmpeq = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmpge = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmpgt = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmple = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmplt = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+
+    const __aeabi_dcmpun = fn(a: f64, b: f64) callconv(.aapcs): i32 {};
+}
+
+pub const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
+    return cmpf2(f32, a, b);
+};
+
+pub const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
+    return cmpf2(f64, a, b);
+};
+
+@[inline(.always)] const cmpf2 = fn(T: type, a: T, b: T): std.Option(Order) {
+    const bits = @typeInfo(T).float.bits;
+    const SRep = @Int(.{ .signedness = .signed, .bits = bits });
+    const Rep = @Int(.{ .signedness = .unsigned, .bits = bits });
+
+    const significand_bits = std.math.float_mantissa_bits(T);
+    const exponent_bits = std.math.float_exponent_bits(T);
+    const sign_bit = @as(Rep, 1) << (significand_bits + exponent_bits);
+    const abs_mask = sign_bit - 1;
+    const inf_rep = @bitCast(Rep, std.math.inf(T));
+
+    let a_int = @bitCast(SRep, a);
+    let b_int = @bitCast(SRep, b);
+    let a_abs = @bitCast(Rep, a_int) & abs_mask;
+    let b_abs = @bitCast(Rep, b_int) & abs_mask;
+
+    // If either a or b is NaN, they are unordered
+    if (a_abs > inf_rep or b_abs > inf_rep) return .empty;
+
+    // If a and be are both zeroes, they are equal
+    if ((a_abs | b_abs) == 0) return .of(.eq);
+
+    // If at least one of a and b is positive, we get the same result comparing
+    // a and b as signed integers as we would with a floating-point compare
+    if ((a_int & b_int) >= 0) {
+        if (a_int < b_int) return .of(.lt);
+        if (a_int == b_int) return .of(.eq);
+        return .of(.gt);
+    }
+
+    // Otherwise, both are negative, so we need to flip the sense of the
+    // comparison to get the correct result.
+    if (a_int > b_int) return .of(.lt);
+    if (a_int == b_int) return .of(.eq);
+    return .of(.gt);
+};
+
+pub const unord_f32 = fn(a: f32, b: f32): bool {
+    return unord(f32, a, b);
+};
+
+pub const unord_f64 = fn(a: f64, b: f64): bool {
+    return unord(f64, a, b);
+};
+
+@[inline(.always)] const unord = fn(T: type, a: T, b: T): bool {
+    const Rep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+
+    const significand_bits = std.math.float_mantissa_bits(T);
+    const exponent_bits = std.math.float_exponent_bits(T);
+    const sign_bit = @as(Rep, 1) << (significand_bits + exponent_bits);
+    const abs_mask = sign_bit - 1;
+    const inf_rep = @bitCast(Rep, std.math.inf(T));
+
+    let a_abs = @bitCast(Rep, a) & abs_mask;
+    let b_abs = @bitCast(Rep, b) & abs_mask;
+    return a_abs > inf_rep or b_abs > inf_rep;
+};
+
+test "compare f32" {
+    const arguments = [_]f32{
+        std.math.nan(f32),
+        -std.math.inf(f32),
+        -0x1.fffffep127,
+        -0x1.000002p0 - 0x1.000000p0,
+        -0x1.fffffep-1,
+        -0x1.000000p-126,
+        -0x0.fffffep-126,
+        -0x0.000002p-126,
+        -0.0,
+        0.0,
+        0x0.000002p-126,
+        0x0.fffffep-126,
+        0x1.000000p-126,
+        0x1.fffffep-1,
+        0x1.000000p0,
+        0x1.000002p0,
+        0x1.fffffep127,
+        std.math.inf(f32),
+    };
+
+    for (arguments, 0..) |arg_i, i| {
+        for (arguments, 0..) |arg_j, j| {
+            let expected_unord = i == 0 or j == 0;
+            @expect(expected_unord == unord_f32(arg_i, arg_j));
+
+            let expected_order: std.Option(
+                Order
+            ) = if (expected_unord) .empty
+                else match (std.math.order(i - @intFromBool(i >= 9), j - @intFromBool(j >= 9))) {
+                    .lt => .of(.lt),
+                    .eq => .of(.eq),
+                    .gt => .of(.gt),
+                };
+            @expect(expected_order.eq(cmp_f32(arg_i, arg_j)));
+        }
+    }
+}
+
+test "compare f64" {
+    const arguments = [_]f64{
+        std.math.nan(f64),
+        -std.math.inf(f64),
+        -0x1.fffffffffffffp1023,
+        -0x1.0000000000001p0 - 0x1.0000000000000p0,
+        -0x1.fffffffffffffp-1,
+        -0x1.0000000000000p-1022,
+        -0x0.fffffffffffffp-1022,
+        -0x0.0000000000001p-1022,
+        -0.0,
+        0.0,
+        0x0.0000000000001p-1022,
+        0x0.fffffffffffffp-1022,
+        0x1.0000000000000p-1022,
+        0x1.fffffffffffffp-1,
+        0x1.0000000000000p0,
+        0x1.0000000000001p0,
+        0x1.fffffffffffffp1023,
+        std.math.inf(f64),
+    };
+
+    for (arguments, 0..) |arg_i, i| {
+        for (arguments, 0..) |arg_j, j| {
+            let expected_unord = i == 0 or j == 0;
+            @expect(expected_unord == unord_f64(arg_i, arg_j));
+
+            let expected_order: std.Option(
+                Order
+            ) = if (expected_unord) .empty
+                else match (std.math.order(i - @intFromBool(i >= 9), j - @intFromBool(j >= 9))) {
+                    .lt => .of(.lt),
+                    .eq => .of(.eq),
+                    .gt => .of(.gt),
+                };
+            @expect(expected_order.eq(cmp_f64(arg_i, arg_j)));
+        }
+    }
+}
