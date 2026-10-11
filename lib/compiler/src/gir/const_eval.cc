@@ -5499,6 +5499,14 @@ namespace {
     }
 }
 
+// An untyped `comptime_int` / `comptime_float` bound to a parameter of a concrete number type
+[[nodiscard]] auto takes_concrete_number(const sema::type& arg, const sema::type& param) -> bool {
+    const auto a{arg.get_kind()};
+    const auto p{param.get_kind()};
+    return (a == sema::type_kind::COMPTIME_INT && sema::is_integer(p)) ||
+           (a == sema::type_kind::COMPTIME_FLOAT && sema::is_float(p));
+}
+
 } // namespace
 
 auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
@@ -5557,6 +5565,11 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
                     sema::error::TYPE_MISMATCH,
                     at);
                 return const_value::make_poison();
+            }
+            // An untyped number takes the parameter's type, as the instantiation typed it, so
+            // `@TypeOf(val)` agrees with the runtime call
+            if (param_type && arg_type && takes_concrete_number(*arg_type, *param_type)) {
+                args[arg_idx].set_type(*param_type);
             }
             frame.bindings.emplace(ident.name, args[arg_idx++]);
         } else {
