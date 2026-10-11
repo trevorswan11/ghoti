@@ -392,6 +392,42 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
             };
         )") == 42);
     }
+
+    SECTION("Compares through a `&` reference") {
+        CHECK(helpers::compile_and_run(R"(
+            const U = union { a: i32, b: void };
+            const is_b = fn(u: &U): bool { return u == .b; };
+            const not_a = fn(u: &mut U): bool { return u != .a; };
+            pub const main = fn(): i32 {
+                let mut u = U{ .b = {} };
+                if (is_b(&u) and not_a(&mut u)) { return 42; }
+                return 0;
+            };
+        )") == 42);
+    }
+
+    SECTION("Compares a `&self` receiver inside a type constructor") {
+        CHECK(helpers::compile_and_run(R"(
+            const Opt = fn(T: type): type {
+                return union {
+                    some: T,
+                    none: void,
+                    pub const get_or = fn(&self, default: T): T {
+                        if (self == .none) { return default; }
+                        return match (self) {
+                            .some => |s| s,
+                            .none => default,
+                        };
+                    };
+                };
+            };
+            pub const main = fn(): i32 {
+                let a: Opt(i32) = .{ .some = 40 };
+                let b: Opt(i32) = .{ .none = {} };
+                return a.get_or(0) + b.get_or(2);
+            };
+        )") == 42);
+    }
 }
 
 TEST_CASE("an `undefined` value arm/branch takes the surrounding result type, not a poison type") {
