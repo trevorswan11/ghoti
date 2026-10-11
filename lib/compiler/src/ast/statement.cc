@@ -309,7 +309,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         constexpr auto binding_bits{decl_modifiers::MUT | decl_modifiers::LET |
                                     decl_modifiers::COMPTIME};
         const bool     second_binding{(modifiers & binding_bits) != decl_modifiers{} &&
-                                  (*current_modifier & binding_bits) != decl_modifiers{}};
+                                      (*current_modifier & binding_bits) != decl_modifiers{}};
         if (second_binding) {
             return make_syntax_err(
                 "Exactly one of 'const', 'let' or 'let mut' may be used; found 2",

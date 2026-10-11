@@ -409,7 +409,7 @@ class round_trip_interval {
 [[nodiscard]] auto candidates_of(const decimal& exact, usize length) -> std::array<decimal, 2> {
     const auto dropped{exact.digits.substr(length)};
     decimal    floor{exact.digits.substr(0, length),
-                  exact.exponent + static_cast<i64>(exact.digits.size() - length)};
+                     exact.exponent + static_cast<i64>(exact.digits.size() - length)};
     decimal    ceil{increment_digits(floor.digits), floor.exponent};
 
     const auto first_dropped{dropped.front()};
@@ -704,9 +704,9 @@ auto divide(f128 lhs, f128 rhs, float_format format) -> f128 {
     big_uint       numerator{l.significand};
     const big_uint divisor{r.significand};
     const auto     shift{std::max<i64>(0,
-                                   static_cast<i64>(divisor.bit_length()) -
-                                       static_cast<i64>(numerator.bit_length()) +
-                                       format_info(format).precision + 2)};
+                                       static_cast<i64>(divisor.bit_length()) -
+                                           static_cast<i64>(numerator.bit_length()) +
+                                           format_info(format).precision + 2)};
     numerator.shift_left(static_cast<u64>(shift));
     auto quotient{big_uint::divide(numerator, divisor)};
     return round_exact(negative,

@@ -29,8 +29,8 @@ TEST_CASE("build_obj command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_obj      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out.o",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out.o",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
@@ -193,9 +193,9 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"mylib", custom_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
         CHECK(path_utils::exists(obj_file));
@@ -229,9 +229,9 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"mylib", broken_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
         CHECK_FALSE(path_utils::exists(obj_file));
@@ -269,9 +269,9 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"math", custom_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
         CHECK(path_utils::exists(obj_file));
@@ -364,7 +364,7 @@ TEST_CASE("build_obj reports an assembler error in inline asm instead of exiting
 
     codegen::target_options target_opts{.triple_str = "x86_64-unknown-linux-gnu"};
     cmd::build_obj          cmd{
-                 {.input_path = src_file, .output_path = obj_file, .target_opts = target_opts}};
+        {.input_path = src_file, .output_path = obj_file, .target_opts = target_opts}};
     CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
 }
 

@@ -175,8 +175,8 @@ struct module {
 
     module(std::filesystem::path path,
            std::filesystem::path parent_path,
-           source_file           source) noexcept :path{std::move(path)},
-        parent_path{std::move(parent_path)}, source{std::move(source)} {}
+           source_file           source) noexcept
+        : path{std::move(path)}, parent_path{std::move(parent_path)}, source{std::move(source)} {}
 
     ~module() = default;
     MAKE_MOVE_ONLY(module);

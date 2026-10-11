@@ -83,14 +83,14 @@ TEST_CASE("build-obj subcommand parser") {
 
     SECTION("Target options parsing") {
         mock_argv    args{"ghoti",
-                       "build-obj",
-                       "--target",
-                       "x86_64-unknown-linux-gnu",
-                       "--cpu",
-                       "skylake",
-                       "--features",
-                       "+avx2",
-                       "main.gh"};
+                          "build-obj",
+                          "--target",
+                          "x86_64-unknown-linux-gnu",
+                          "--cpu",
+                          "skylake",
+                          "--features",
+                          "+avx2",
+                          "main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
         auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
@@ -167,14 +167,14 @@ TEST_CASE("build-obj subcommand parser") {
         }
         {
             mock_argv    args{"ghoti",
-                           "build-obj",
-                           "--emit-gir",
-                           "a.gir",
-                           "--emit-llvm-ir",
-                           "b.ll",
-                           "--emit-asm",
-                           "c.s",
-                           "main.gh"};
+                              "build-obj",
+                              "--emit-gir",
+                              "a.gir",
+                              "--emit-llvm-ir",
+                              "b.ll",
+                              "--emit-asm",
+                              "c.s",
+                              "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
@@ -206,12 +206,12 @@ TEST_CASE("build-obj subcommand parser") {
 
         SECTION("Multiple module arguments") {
             mock_argv    args{"ghoti",
-                           "build-obj",
-                           "-m",
-                           "math,src/math.gh",
-                           "--module",
-                           "io,src/io.gh",
-                           "main.gh"};
+                              "build-obj",
+                              "-m",
+                              "math,src/math.gh",
+                              "--module",
+                              "io,src/io.gh",
+                              "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
             auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};

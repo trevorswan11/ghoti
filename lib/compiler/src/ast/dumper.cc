@@ -485,12 +485,12 @@ auto dumper::visit(node_id id, const dot_expr& node) -> void {
     fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(token_type));
     {
         const indent::guard g{indent_, false};
-        fmt ::print(out_, "{}Object: ", indent_.current_branch());
+        fmt::print(out_, "{}Object: ", indent_.current_branch());
         dump(node.object);
     }
     {
-        const indent ::guard g{indent_, true};
-        fmt ::print(out_, "{}Member: ", indent_.current_branch());
+        const indent::guard g{indent_, true};
+        fmt::print(out_, "{}Member: ", indent_.current_branch());
         dump(node.member);
     }
 }
@@ -924,13 +924,13 @@ auto dumper::visit(node_id, const break_stmt& break_stmt) -> void {
     fmt::println(out_, "BreakStatement");
     const auto has_expression{break_stmt.expression.has_value()};
     if (break_stmt.label) {
-        const indent ::guard g{indent_, !has_expression};
+        const indent::guard g{indent_, !has_expression};
         fmt::print(out_, "{}Label: ", indent_.current_branch());
         dump(*break_stmt.label);
     }
 
     if (has_expression) {
-        const indent ::guard g{indent_, true};
+        const indent::guard g{indent_, true};
         fmt::print(out_, "{}Value: ", indent_.current_branch());
         dump(*break_stmt.expression);
     }
@@ -960,7 +960,7 @@ auto dumper::visit(node_id, const continue_stmt& continue_stmt) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "ContinueStatement");
     if (continue_stmt.label) {
-        const indent ::guard g{indent_, true};
+        const indent::guard g{indent_, true};
         fmt::print(out_, "{}Label: ", indent_.current_branch());
         dump(*continue_stmt.label);
     }

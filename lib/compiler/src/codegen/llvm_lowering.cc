@@ -694,14 +694,14 @@ auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_arg
             constexpr u32 auto_len{0xFFFFFFFFu}; // cchWideChar = -1: source is null-terminated
             auto*         converted{
                 builder_.CreateCall(wc2mb_fn,
-                                            {builder_.getInt32(cp_utf8),
-                                             builder_.getInt32(0),
-                                             wstr_ptr,
-                                             builder_.getInt32(auto_len),
-                                             buf_ptr,
-                                             builder_.getInt32(max_arg_bytes),
-                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
-                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
+                                    {builder_.getInt32(cp_utf8),
+                                     builder_.getInt32(0),
+                                     wstr_ptr,
+                                     builder_.getInt32(auto_len),
+                                     buf_ptr,
+                                     builder_.getInt32(max_arg_bytes),
+                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
+                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
                                     "converted.len")};
             auto* converted_i64{
                 builder_.CreateSExtOrTrunc(converted, types_.get_usize_ty(), "converted.i64")};
@@ -870,11 +870,11 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
         const auto& desc_name{fn->get_test_desc().empty() ? fn_symbol_name : fn->get_test_desc()};
         auto*       name_str{llvm::ConstantDataArray::getString(context_, desc_name, false)};
         auto*       name_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                 name_str->getType(),
-                                                 true,
-                                                 llvm::GlobalValue::InternalLinkage,
-                                                 name_str,
-                                                 fmt::format("str.test_name.{}", i))};
+                                                       name_str->getType(),
+                                                       true,
+                                                       llvm::GlobalValue::InternalLinkage,
+                                                       name_str,
+                                                       fmt::format("str.test_name.{}", i))};
         auto*       name_slice{llvm::ConstantStruct::get(
             slice_ty,
             {name_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), desc_name.size())})};
@@ -883,11 +883,11 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
                                                          : fn->get_test_file()};
         auto*      file_str{llvm::ConstantDataArray::getString(context_, file_path, false)};
         auto*      file_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                 file_str->getType(),
-                                                 true,
-                                                 llvm::GlobalValue::InternalLinkage,
-                                                 file_str,
-                                                 fmt::format("str.test_file.{}", i))};
+                                                      file_str->getType(),
+                                                      true,
+                                                      llvm::GlobalValue::InternalLinkage,
+                                                      file_str,
+                                                      fmt::format("str.test_file.{}", i))};
         auto*      file_slice{llvm::ConstantStruct::get(
             slice_ty,
             {file_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), file_path.size())})};
@@ -1231,7 +1231,7 @@ auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
                              : llvm::APInt{width + 2, 0}};
     auto*      lo{to_float(min - 1, llvm::APFloat::rmTowardNegative)};
     auto*      hi{to_float(llvm::APInt::getOneBitSet(width + 2, is_signed ? width - 1 : width),
-                      llvm::APFloat::rmNearestTiesToEven)};
+                           llvm::APFloat::rmNearestTiesToEven)};
 
     auto* in_range{
         builder_.CreateAnd(builder_.CreateFCmpOGT(val, lo), builder_.CreateFCmpOLT(val, hi))};
@@ -1318,11 +1318,11 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 const bool add_nul{slice_data && slice_data->null_terminated};
                 auto*      data{llvm::ConstantDataArray::getString(context_, *s, add_nul)};
                 auto*      data_gv{new llvm::GlobalVariable{*llvm_module_,
-                                                       data->getType(),
-                                                       true,
-                                                       llvm::GlobalValue::PrivateLinkage,
-                                                       data,
-                                                       ".str.data"}};
+                                                            data->getType(),
+                                                            true,
+                                                            llvm::GlobalValue::PrivateLinkage,
+                                                            data,
+                                                            ".str.data"}};
                 data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
                 auto* len{llvm::ConstantInt::get(st->getElementType(1), s->size())};
                 return llvm::ConstantStruct::get(st, {data_gv, len});
@@ -1482,8 +1482,8 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     // A `void` global has no storage to emit
     if (g_type->isVoidTy() || g_type->isFunctionTy()) { return nullptr; }
     const bool is_const{g.is_constant};
-    auto       g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
-                                                               : llvm::GlobalValue::ExternalLinkage};
+    auto g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
+                                                         : llvm::GlobalValue::ExternalLinkage};
     if (g.is_weak && g_linkage != llvm::GlobalValue::InternalLinkage) {
         g_linkage = (g.linkage == gir::linkage::EXTERN) ? llvm::GlobalValue::ExternalWeakLinkage
                                                         : llvm::GlobalValue::WeakAnyLinkage;
@@ -1522,11 +1522,11 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         const bool  add_nul{slice_data && slice_data->null_terminated};
         auto*       data{llvm::ConstantDataArray::getString(context_, bytes, add_nul)};
         auto*       data_gv{new llvm::GlobalVariable{*llvm_module_,
-                                               data->getType(),
-                                               true,
-                                               llvm::GlobalValue::PrivateLinkage,
-                                               data,
-                                               ".str.data"}};
+                                                     data->getType(),
+                                                     true,
+                                                     llvm::GlobalValue::PrivateLinkage,
+                                                     data,
+                                                     ".str.data"}};
         data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
         init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
@@ -1756,8 +1756,8 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
-                                           (i < std::numeric_limits<i32>::min() ||
-                                            i > std::numeric_limits<i32>::max())
+                                              (i < std::numeric_limits<i32>::min() ||
+                                               i > std::numeric_limits<i32>::max())
                                           ? types_.get_int64_ty()
                                           : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
@@ -1766,7 +1766,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
-                                           u > std::numeric_limits<u32>::max()
+                                              u > std::numeric_limits<u32>::max()
                                           ? types_.get_int64_ty()
                                           : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
@@ -1789,7 +1789,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
-                                           w > std::numeric_limits<u32>::max()
+                                              w > std::numeric_limits<u32>::max()
                                           ? (w > std::numeric_limits<u64>::max()
                                                  ? llvm::Type::getInt128Ty(context_)
                                                  : types_.get_int64_ty())
@@ -2721,7 +2721,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto*      retaddr_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(),
                                                         llvm::Intrinsic::returnaddress,
-                                                             {builder_.getPtrTy(code_space)})};
+                                                        {builder_.getPtrTy(code_space)})};
             auto* call_val{builder_.CreateCall(retaddr_fn, {builder_.getInt32(0)})};
             auto* target_ty{inst.type ? types_.translate(*inst.type) : nullptr};
             if (!target_ty) { target_ty = builder_.getIntPtrTy(llvm_module_->getDataLayout()); }
@@ -3017,7 +3017,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             const auto& layout{llvm_module_->getDataLayout()};
             const auto  elem_idx{types_.struct_field_index(struct_ty, static_cast<u32>(field_idx))};
             const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
-                                  ->getElementOffset(elem_idx)};
+                                   ->getElementOffset(elem_idx)};
 
             auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_usize_ty(), "fpp.i")};
             auto* parent_int{builder_.CreateSub(field_int, usize_const(offset), "fpp.base")};

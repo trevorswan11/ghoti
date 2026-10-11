@@ -1526,8 +1526,8 @@ auto rename_emoji_columns(const nlohmann::json& client_capabilities) -> std::vec
         {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
 
     constexpr std::string_view uri{"file:///C:/ghoti_e2e_unicode/main.gh"};
-    const std::string          text{"const @\"\xF0\x9F\x98\x80\" = 1;\n"
-                                    "pub const x = @\"\xF0\x9F\x98\x80\" + @\"\xF0\x9F\x98\x80\";\n"};
+    const std::string text{"const @\"\xF0\x9F\x98\x80\" = 1;\n"
+                           "pub const x = @\"\xF0\x9F\x98\x80\" + @\"\xF0\x9F\x98\x80\";\n"};
     lsp::write_message(
         proc.stdin_stream(),
         {{"jsonrpc", "2.0"},

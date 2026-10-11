@@ -22,8 +22,8 @@ TEST_CASE("build_exe command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_exe      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out_exe",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out_exe",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }

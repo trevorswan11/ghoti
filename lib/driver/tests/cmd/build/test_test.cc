@@ -19,7 +19,7 @@ TEST_CASE("test command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::test_cmd       cmd{{
-                  .input_path = "non_existent_file_12345.gh",
+            .input_path = "non_existent_file_12345.gh",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }

@@ -200,10 +200,10 @@ TEST_CASE("A root that reaches a failed module through an import cycle is not lo
         "a.gh",
         errors,
         "import \"lib.gh\" as lib;\npub const a = fn(): i32 { return lib.b.two(); };\n",
-        mock_file{.path = "lib.gh",
-                               .source = "pub import \"b.gh\" as b;\npub import \"bad.gh\" as bad;\n"},
+        mock_file{.path   = "lib.gh",
+                  .source = "pub import \"b.gh\" as b;\npub import \"bad.gh\" as bad;\n"},
         mock_file{.path = "b.gh",
-                               .source =
+                  .source =
                       "import \"lib.gh\" as lib;\npub const two = fn(): i32 { return 2; };\n"},
         mock_file{.path = "bad.gh", .source = "pub const bad: i32 = undeclared;\n"})};
     CHECK(ctx->root_mod.is_poisoned());

@@ -789,7 +789,7 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         const auto        r{type.get_data().as_opt<sema::types::reference>()};
         const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
         const bool        is_fat{(referent && referent->get_kind() == sema::type_kind::DYN) ||
-                          sema::is_fat_callable(type)};
+                                 sema::is_fat_callable(type)};
         return is_fat ? 2 * ptr_size : ptr_size;
     }
     case sema::type_kind::FUNCTION: return sema::is_erased_fn(type) ? 2 * ptr_size : ptr_size;
@@ -2117,7 +2117,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                 auto       field_val{try_eval_for(
                     item.value,
                     field_proxy ? stdx::option<sema::type&>{st->type_at(field_proxy->index)}
-                                      : stdx::none)};
+                                : stdx::none)};
                 if (!field_val) { return stdx::none; }
                 if (table) {
                     if (const auto proxy{table->get_proxy_opt(member_name)}) {
@@ -2305,9 +2305,9 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
                     if (fname == member_name && f.default_value) {
                         const auto prefix{
                             ctx_.generic_functions.get_type_ctor_member_prefix(*sema_type)};
-                        const auto                 diff{prefix
-                                                            ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
-                                                            : st_data->enclosing.active_body_diff};
+                        const auto diff{prefix
+                                            ? ctx_.instantiation_cache.get_body_type_diff(*prefix)
+                                            : st_data->enclosing.active_body_diff};
                         const mod::body_diff_guard diff_guard{st_data->enclosing, diff};
 
                         stdx::option<ghoti::scope_guard<std::vector<sema::comptime_frame>>>
@@ -2691,9 +2691,9 @@ auto const_eval::eval_type_info(sema::type&                                    d
     case sema::type_kind::TYPE:           return tag_only("type");
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:      {
-        const bool   is_ptr{denoted.get_kind() == sema::type_kind::POINTER};
-        auto&        underlying{is_ptr ? denoted.get_data().as<sema::types::pointer>().underlying
-                                       : denoted.get_data().as<sema::types::reference>().underlying};
+        const bool is_ptr{denoted.get_kind() == sema::type_kind::POINTER};
+        auto&      underlying{is_ptr ? denoted.get_data().as<sema::types::pointer>().underlying
+                                     : denoted.get_data().as<sema::types::reference>().underlying};
         const_struct s;
         s.fields.emplace("child", type_value(underlying));
         s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
@@ -3150,9 +3150,9 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
         if (id.get_token_type() == syntax::token_type_t::QUESTION) {
             current_error_val_ = flow->payload;
             current_signal_    = eval_signal{
-                   .kind         = eval_signal_kind::RETURN,
-                   .target_label = stdx::none,
-                   .value        = flow->operand,
+                .kind         = eval_signal_kind::RETURN,
+                .target_label = stdx::none,
+                .value        = flow->operand,
             };
         }
         return stdx::none;
@@ -3191,9 +3191,9 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     if (id.get_token_type() == syntax::token_type_t::QUESTION) {
         current_error_val_ = payload();
         current_signal_    = eval_signal{
-               .kind         = eval_signal_kind::RETURN,
-               .target_label = stdx::none,
-               .value        = *operand,
+            .kind         = eval_signal_kind::RETURN,
+            .target_label = stdx::none,
+            .value        = *operand,
         };
         return stdx::none;
     }
@@ -3346,8 +3346,8 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
         const auto                  lhs_bits{static_cast<u128>(*lhs.as_int_opt())};
         const auto                  folded{
             semantics::is_shift(*int_op)
-                                 ? semantics::fold_int_shift(*int_op, domain, lhs_bits, exact_shift_amount(rhs))
-                                 : semantics::fold_int(
+                ? semantics::fold_int_shift(*int_op, domain, lhs_bits, exact_shift_amount(rhs))
+                : semantics::fold_int(
                       *int_op, domain, lhs_bits, static_cast<u128>(*rhs.as_int_opt()))};
         if (!folded) {
             return on_fold_error(
@@ -4168,11 +4168,11 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     obj_val        = try_eval(dot->object);
                     obj_is_type_ns = obj_val && obj_val->is<stdx::option<sema::type&>>();
                 }
-                const auto              callee_type{module_->get_sema_type_opt(call.function)};
-                const auto              callee_fn{callee_type
-                                                      ? callee_type->get_data().as_opt<sema::types::function>()
-                                                      : stdx::none};
-                const bool              receiver_bound{method_fn->self && dot && !obj_is_type_ns};
+                const auto callee_type{module_->get_sema_type_opt(call.function)};
+                const auto callee_fn{callee_type
+                                         ? callee_type->get_data().as_opt<sema::types::function>()
+                                         : stdx::none};
+                const bool receiver_bound{method_fn->self && dot && !obj_is_type_ns};
                 stdx::option<const_ref> self_temporary;
                 const auto              param_type{[&](usize i) -> stdx::option<sema::type&> {
                     if (!callee_fn || !callee_fn->has_self) { return stdx::none; }
@@ -4775,7 +4775,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             switch (tok) {
             case syntax::token_type_t::BUILTIN_DIV_TRUNC:
                 return const_value{av / bv, a->get_type()};
-            case syntax::token_type_t::BUILTIN_REM:       return const_value{av % bv, a->get_type()};
+            case syntax::token_type_t::BUILTIN_REM: return const_value{av % bv, a->get_type()};
             case syntax::token_type_t::BUILTIN_DIV_FLOOR: {
                 auto q{av / bv};
                 if constexpr (Signed<T>) {
@@ -5628,9 +5628,9 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
         [&](const ast::decl_stmt& data) { return eval_decl(*stmt, data); },
         [&](const ast::return_stmt& data) -> stdx::option<const_value> {
             const auto ret_type{return_types_.empty() ? stdx::none : return_types_.back()};
-            auto       val = data.expression
-                                 ? try_eval_for(*data.expression, ret_type)
-                                 : const_value{void_val{},
+            auto val = data.expression
+                           ? try_eval_for(*data.expression, ret_type)
+                           : const_value{void_val{},
                                          ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
             if (data.expression && !val) {
                 // A `?` that breaks has already raised its return signal

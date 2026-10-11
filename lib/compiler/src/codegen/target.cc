@@ -364,7 +364,7 @@ struct machine_baseline {
     }};
     switch (triple.getArch()) {
     // Every x86-64 OS ghoti targets requires `cmpxchg16b`, so 128-bit atomics are native
-    case llvm::Triple::x86_64: base.features = with_defaults("+cx16"); break;
+    case llvm::Triple::x86_64:  base.features = with_defaults("+cx16"); break;
     // RISC-V Linux is RV64GC/RV32GC with the hard-float ABI that its libc is built for
     case llvm::Triple::riscv64:
     case llvm::Triple::riscv32:
