@@ -176,16 +176,20 @@ auto normalized_target_arch(const llvm::Triple& triple) -> std::string_view {
     switch (triple.getArch()) {
     case llvm::Triple::x86_64:      return "x86_64";
     case llvm::Triple::x86:         return "x86";
-    case llvm::Triple::aarch64:     return "aarch64";
-    case llvm::Triple::arm:         return "arm";
-    case llvm::Triple::thumb:       return "thumb";
+    case llvm::Triple::aarch64:
+    case llvm::Triple::aarch64_be:  return "aarch64";
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:       return "arm";
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:     return "thumb";
     case llvm::Triple::riscv64:     return "riscv64";
     case llvm::Triple::riscv32:     return "riscv32";
     case llvm::Triple::wasm32:      return "wasm32";
     case llvm::Triple::wasm64:      return "wasm64";
     case llvm::Triple::ppc64:
     case llvm::Triple::ppc64le:     return "powerpc64";
-    case llvm::Triple::ppc:         return "powerpc";
+    case llvm::Triple::ppc:
+    case llvm::Triple::ppcle:       return "powerpc";
     case llvm::Triple::mips64:
     case llvm::Triple::mips64el:    return "mips64";
     case llvm::Triple::mips:
@@ -193,13 +197,18 @@ auto normalized_target_arch(const llvm::Triple& triple) -> std::string_view {
     case llvm::Triple::systemz:     return "s390x";
     case llvm::Triple::loongarch64: return "loongarch64";
     case llvm::Triple::sparcv9:     return "sparc64";
+    case llvm::Triple::sparc:
+    case llvm::Triple::sparcel:     return "sparc";
     default:                        return llvm::Triple::getArchTypeName(triple.getArch());
     }
 }
 
 auto normalized_target_abi(const llvm::Triple& triple) -> std::string_view {
-    if (triple.getEnvironment() == llvm::Triple::UnknownEnvironment) { return "none"; }
-    return triple.getEnvironmentName();
+    const auto env{triple.getEnvironment()};
+    if (env == llvm::Triple::UnknownEnvironment) { return "none"; }
+    // The canonical name drops a version suffix (`android24`); normalizing already turned Arm's
+    // `androideabi` into `android`
+    return llvm::Triple::getEnvironmentTypeName(env);
 }
 
 auto normalized_target_family(const llvm::Triple& triple) -> std::string_view {
