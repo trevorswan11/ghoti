@@ -16,6 +16,25 @@ pub const Option = fn(T: type): type {
                 .none => default,
             };
         };
+
+        /// Checks that the option is equal to the passed T or Option(T)
+        pub const eq = fn(&self, val: auto): bool {
+            const Val = @TypeOf(val);
+            if comptime (@This() == Val) {
+                return match (self) {
+                    .some => |s1| match (val) {
+                        .some => |s2| s1 == s2,
+                        .none => false,
+                    },
+                    .none => match (val) { .some => false, .none => true },
+                };
+            } else if comptime (T == Val) {
+                return match (self) {
+                    .some => |s| s == val,
+                    .none => false,
+                };
+            } else @compileError("Option.eq expects Option(T) or T");
+        };
     };
 };
 
@@ -24,6 +43,19 @@ test "Option.unwrap_or returns the default when disengaged" {
     @expect(o.unwrap_or(20) == 1);
     o = .empty;
     @expect(o.unwrap_or(42) == 42);
+}
+
+test "Option.eq on T" {
+    let mut o: Option(i32) = .of(1);
+    @expect(o.eq(1));
+    o = .empty;
+    @expect(!o.eq(1));
+}
+
+test "Option.eq on Option(T)" {
+    let mut o1: Option(i32) = .of(1);
+    let mut o2: Option(i32) = .of(1);
+    @expect(o1.eq(o2));
 }
 
 impl(T: type) builtin.Unwrappable for Option(T) {

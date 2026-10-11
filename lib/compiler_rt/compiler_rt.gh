@@ -1,6 +1,7 @@
 import std;
 
 import "addf3.gh" as _;
+import "comparef.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -53,4 +54,5 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
 
 test {
     import "addf3.gh";
+    import "comparef.gh";
 }
