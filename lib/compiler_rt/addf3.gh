@@ -10,16 +10,8 @@ comptime {
     symbol(__addtf3, "__addtf3");
 }
 
-const __addtf3 = fn(
-    a: compiler_rt.f128.Abi,
-    b: compiler_rt.f128.Abi,
-) callconv(.c): compiler_rt.f128.Abi {
-    return compiler_rt.f128.to_abi(
-        add_f128(compiler_rt.f128.from_abi(a), compiler_rt.f128.from_abi(b)),
-    );
-};
-
-pub const add_f128 = fn(a: f128, b: f128): f128 {
+// `f128` lowers to LLVM's `fp128`, so this matches the libcall's ABI on every target
+const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return addf3(f128, a, b);
 };
 
@@ -181,7 +173,7 @@ pub const add_f128 = fn(a: f128, b: f128): f128 {
 };
 
 @[testing] const test__addtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
-    let x = add_f128(a, b);
+    let x = __addtf3(a, b);
 
     let rep: u128 = @bitCast(x);
     let hi: u64 = @intCast(rep >> 64);

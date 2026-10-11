@@ -20,10 +20,13 @@ namespace ghoti::tests {
 
 namespace {
 
-[[nodiscard]] auto
-emit_for(std::string_view source, std::string_view triple, codegen::opt_level level, bool assembly)
-    -> std::string {
+[[nodiscard]] auto emit_for(std::string_view   source,
+                            std::string_view   triple,
+                            codegen::opt_level level,
+                            bool               assembly,
+                            bool               keep_handlers = true) -> std::string {
     auto [ctx, idx]{helpers::resolve_for_target(source, triple)};
+    ctx->analyzer.set_library_keeps_handlers(keep_handlers);
     helpers::check_errors<sema::diagnostics>(ctx->root_mod);
     auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod, false)};
     REQUIRE_FALSE(ctx->root_mod.is_poisoned());
@@ -149,6 +152,26 @@ TEST_CASE("A big-endian arch is its base arch with a big endian") {
     const auto facts{codegen::target_facts::resolve(std::string_view{triple})};
     CHECK(facts.arch == arch);
     CHECK(facts.endian == "big");
+}
+
+TEST_CASE("A library can leave its panic_handler out, as compiler_rt does") {
+    constexpr std::string_view source{R"(
+        extern("kernel32") const GetStdHandle: extern fn(n: u32): ^opaque;
+        pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
+            _ = GetStdHandle(0);
+            @trap();
+        };
+        export const f = fn(a: i32): i32 { return a +% 1; };
+    )"};
+    constexpr std::string_view triple{"x86_64-w64-windows-gnu"};
+    const auto                 kept{emit_for(source, triple, codegen::opt_level::O2, false)};
+    CHECK(kept.contains("define weak void @panic_handler"));
+    CHECK(kept.contains("GetStdHandle"));
+
+    const auto dropped{emit_for(source, triple, codegen::opt_level::O2, false, false)};
+    CHECK(dropped.contains("define i32 @f("));
+    CHECK_FALSE(dropped.contains("panic_handler"));
+    CHECK_FALSE(dropped.contains("GetStdHandle"));
 }
 
 } // namespace ghoti::tests

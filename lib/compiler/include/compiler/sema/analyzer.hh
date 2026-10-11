@@ -84,6 +84,9 @@ class analyzer {
     auto set_deprecation_policy(deprecation_policy policy) noexcept -> void {
         ctx_.deprecated_policy = policy;
     }
+    // Whether a library keeps its `panic_handler`-style overrides visible (weak) for the program
+    // linking it; compiler_rt's builtins never panic, so theirs would only drag in std's I/O
+    auto set_library_keeps_handlers(bool keep) noexcept -> void { library_keeps_handlers_ = keep; }
 
     // Runs the entire sema pipeline
     auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
@@ -243,6 +246,7 @@ class analyzer {
     std::ostream&               error_stream_;
     stdx::option<bool>          in_terminal_;
     bool                        tolerate_syntax_errors_;
+    bool                        library_keeps_handlers_{true};
 
     context ctx_;
 };
