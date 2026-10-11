@@ -33,6 +33,7 @@ pub const Arch = enum {
     s390x,
     loongarch64,
     sparc64,
+    sparc,
     _,
 };
 
@@ -46,6 +47,7 @@ pub const Abi = enum {
     musleabi,
     musleabihf,
     msvc,
+    android,
     eabi,
     eabihf,
     itanium,

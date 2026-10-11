@@ -1,12 +1,19 @@
+#include <algorithm>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 #include <stdx/option.hh>
 
+#include "compiler/ast/expression.hh"
+#include "compiler/codegen/target.hh"
+#include "compiler/sema/cfg_atoms.hh"
 #include "compiler/sema/error.hh"
 #include "helpers/sema.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -202,6 +209,43 @@ TEST_CASE("cfg: @compileError needs a comptime-known message") {
         else                { let unused = 1; }
     )"};
     CHECK(run_cfg(src).has_code(sema::error::COMPILE_ERROR_NON_CONSTANT_MESSAGE));
+}
+
+TEST_CASE("cfg: each enum atom's members are exactly its builtin enum's") {
+    auto [ctx, idx]{helpers::resolve_and_check("")};
+    auto&      sema_ctx{ctx->analyzer.get_ctx()};
+    const auto members_of = [&](std::string_view enum_name) {
+        const auto& en{
+            UNWRAP(sema_ctx.get_builtin_type(enum_name).get_data().as_opt<sema::types::enum_t>())};
+        std::vector<std::string_view> names;
+        for (const auto& e : en.ast_enumerations) {
+            names.emplace_back(en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name);
+        }
+        return names;
+    };
+    const auto expect = [&](std::string_view enum_name, const auto& atoms) {
+        CHECK(members_of(enum_name) == std::vector<std::string_view>(atoms.begin(), atoms.end()));
+    };
+    expect("Os", sema::cfg_atoms::OS_MEMBERS);
+    expect("Arch", sema::cfg_atoms::ARCH_MEMBERS);
+    expect("Abi", sema::cfg_atoms::ABI_MEMBERS);
+    expect("Family", sema::cfg_atoms::FAMILY_MEMBERS);
+    expect("Endian", sema::cfg_atoms::ENDIAN_MEMBERS);
+    expect("OptimizeMode", sema::cfg_atoms::OPTIMIZE_MEMBERS);
+}
+
+TEST_CASE("cfg: a target's atoms are canonical members") {
+    const auto [triple, arch, abi]{
+        GENERATE(std::tuple{"aarch64-unknown-linux-android24", "aarch64", "android"},
+                 std::tuple{"armv7-unknown-linux-androideabi21", "arm", "android"},
+                 std::tuple{"powerpcle-unknown-linux-gnu", "powerpc", "gnu"},
+                 std::tuple{"sparcel-unknown-linux-gnu", "sparc", "gnu"},
+                 std::tuple{"x86_64-apple-macos14", "x86_64", "none"})};
+    const auto facts{codegen::target_facts::resolve(std::string_view{triple})};
+    CHECK(facts.arch == arch);
+    CHECK(facts.abi == abi);
+    CHECK(std::ranges::contains(sema::cfg_atoms::ARCH_MEMBERS, facts.arch));
+    CHECK(std::ranges::contains(sema::cfg_atoms::ABI_MEMBERS, facts.abi));
 }
 
 } // namespace ghoti::tests

@@ -1,5 +1,6 @@
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -139,6 +140,15 @@ TEST_CASE("RISC-V Linux defaults to RV64GC with the hard-float ABI") {
     // Bare metal keeps the bare `generic` CPU
     const auto elf{emit_for(source, "riscv64-unknown-elf", codegen::opt_level::O2, true)};
     CHECK(elf.contains("__muldf3"));
+}
+
+TEST_CASE("A big-endian arch is its base arch with a big endian") {
+    const auto [triple, arch]{GENERATE(std::pair{"armebv7-unknown-linux-gnueabihf", "arm"},
+                                       std::pair{"thumbeb-none-eabi", "thumb"},
+                                       std::pair{"aarch64_be-unknown-linux-gnu", "aarch64"})};
+    const auto facts{codegen::target_facts::resolve(std::string_view{triple})};
+    CHECK(facts.arch == arch);
+    CHECK(facts.endian == "big");
 }
 
 } // namespace ghoti::tests

@@ -757,6 +757,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
     - `lib/compiler_rt` can `import std;` like any program
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
+- Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
+- Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked
+    - **Breaking:** `abi == .androideabi` is removed; it could never hold, since LLVM normalizes `androideabi` to `android`. Arm Android is `abi == .android and arch == .arm`
 - x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
 - **Breaking:** `mut` on a type only qualifies what a `^`, `&`, or `[]` reaches, so `mut volatile T` is rejected: a value's mutability is its binding's (`let mut v: volatile i32`), and the `mut` was ignored before
 - **Breaking:** `volatile` applied directly to a pointer, reference, slice, or array type is rejected, and so is a repeated `volatile`

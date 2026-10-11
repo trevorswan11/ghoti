@@ -24,6 +24,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/cfg_atoms.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/token_type.hh"
@@ -55,63 +56,13 @@ struct atom_enum_info {
     std::span<const std::string_view> members;
 };
 
-constexpr std::array<std::string_view, 14> OS_MEMBERS{"linux",
-                                                      "macos",
-                                                      "ios",
-                                                      "windows",
-                                                      "freebsd",
-                                                      "openbsd",
-                                                      "netbsd",
-                                                      "dragonfly",
-                                                      "solaris",
-                                                      "haiku",
-                                                      "wasi",
-                                                      "emscripten",
-                                                      "uefi",
-                                                      "freestanding"};
-constexpr std::array<std::string_view, 16> ARCH_MEMBERS{"x86_64",
-                                                        "x86",
-                                                        "aarch64",
-                                                        "arm",
-                                                        "thumb",
-                                                        "riscv64",
-                                                        "riscv32",
-                                                        "wasm32",
-                                                        "wasm64",
-                                                        "powerpc64",
-                                                        "powerpc",
-                                                        "mips64",
-                                                        "mips",
-                                                        "s390x",
-                                                        "loongarch64",
-                                                        "sparc64"};
-constexpr std::array<std::string_view, 15> ABI_MEMBERS{"gnu",
-                                                       "gnueabi",
-                                                       "gnueabihf",
-                                                       "gnux32",
-                                                       "gnuabi64",
-                                                       "musl",
-                                                       "musleabi",
-                                                       "musleabihf",
-                                                       "msvc",
-                                                       "android",
-                                                       "androideabi",
-                                                       "eabi",
-                                                       "eabihf",
-                                                       "itanium",
-                                                       "none"};
-constexpr std::array<std::string_view, 4>  FAMILY_MEMBERS{"unix", "windows", "wasm", "other"};
-constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
-constexpr std::array<std::string_view, 4>  OPTIMIZE_MEMBERS{
-    "debug", "release_safe", "release_fast", "release_small"};
-
 [[nodiscard]] auto atom_enum(std::string_view atom) -> stdx::option<atom_enum_info> {
-    if (atom == "os") { return atom_enum_info{"Os", OS_MEMBERS}; }
-    if (atom == "arch") { return atom_enum_info{"Arch", ARCH_MEMBERS}; }
-    if (atom == "abi") { return atom_enum_info{"Abi", ABI_MEMBERS}; }
-    if (atom == "family") { return atom_enum_info{"Family", FAMILY_MEMBERS}; }
-    if (atom == "endian") { return atom_enum_info{"Endian", ENDIAN_MEMBERS}; }
-    if (atom == "optimize") { return atom_enum_info{"OptimizeMode", OPTIMIZE_MEMBERS}; }
+    if (atom == "os") { return atom_enum_info{"Os", cfg_atoms::OS_MEMBERS}; }
+    if (atom == "arch") { return atom_enum_info{"Arch", cfg_atoms::ARCH_MEMBERS}; }
+    if (atom == "abi") { return atom_enum_info{"Abi", cfg_atoms::ABI_MEMBERS}; }
+    if (atom == "family") { return atom_enum_info{"Family", cfg_atoms::FAMILY_MEMBERS}; }
+    if (atom == "endian") { return atom_enum_info{"Endian", cfg_atoms::ENDIAN_MEMBERS}; }
+    if (atom == "optimize") { return atom_enum_info{"OptimizeMode", cfg_atoms::OPTIMIZE_MEMBERS}; }
     return stdx::none; // `ptr_bits` is integer-typed, `safety` and `testing` are bools
 }
 
