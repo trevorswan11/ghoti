@@ -53,9 +53,23 @@ test "Option.eq on T" {
 }
 
 test "Option.eq on Option(T)" {
-    let mut o1: Option(i32) = .of(1);
-    let mut o2: Option(i32) = .of(1);
-    @expect(o1.eq(o2));
+    {
+        let mut o1: Option(i32) = .of(1);
+        let mut o2: Option(i32) = .of(1);
+        @expect(o1.eq(o2));
+    }
+
+    {
+        let mut o1: Option(bool) = .of(true);
+        let mut o2: Option(bool) = .empty;
+        @expect(!o1.eq(o2));
+    }
+
+    {
+        let mut o1: Option(i9) = .empty;
+        let mut o2: Option(i9) = .of(4);
+        @expect(!o1.eq(o2));
+    }
 }
 
 impl(T: type) builtin.Unwrappable for Option(T) {
