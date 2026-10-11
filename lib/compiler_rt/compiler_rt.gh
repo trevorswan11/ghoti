@@ -12,9 +12,12 @@ pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     }
 };
 
-pub const is_arm = @cfgValue(arch == .arm or arch == .thumb);
-pub const is_thumb = @cfgValue(arch == .thumb);
+pub const want_ppc_abi = @cfgValue(arch == .powerpc or arch == .powerpc64);
 
+pub const want_sparc64_abi = @cfgValue(arch == .sparc64);
+pub const want_sparc32_abi = @cfgValue(arch == .sparc);
+
+const is_arm = @cfgValue(arch == .arm or arch == .thumb);
 pub const want_aeabi = @cfgValue(is_arm and
     (abi == .eabi or abi == .eabihf or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
         abi == .gnueabihf or
