@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <filesystem>
 #include <iostream>
@@ -204,6 +205,14 @@ struct module {
 
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
+
+    // Whether this module's own error list holds a diagnostic equal to `diag`
+    template <Diagnostic D> [[nodiscard]] auto reports(const D& diag) const -> bool {
+        if (is_ok()) { return false; }
+        const auto own{diagnostics.as_opt<diagnostic_list<D>>()};
+        return own && std::ranges::any_of(
+                          *own, [&](const D& d) { return d.identity() == diag.identity(); });
+    }
     auto print_warnings(std::ostream& os) const -> void;
 
     // Errored modules cannot be used in any future compilation step

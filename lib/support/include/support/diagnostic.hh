@@ -137,12 +137,14 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     // Moves the passed diagnostic into a new one with an error code
     diagnostic(diagnostic&& other, E err) noexcept
-        : message_{std::move(other.message_)}, loc_{other.loc_}, error_{err} {}
+        : message_{std::move(other.message_)}, loc_{other.loc_}, error_{err},
+          origin_{other.origin_} {}
 
     // Moves the passed diagnostic into a new one with a specified source location
     template <Locateable T>
     diagnostic(diagnostic&& other, const T& t) noexcept
-        : message_{std::move(other.message_)}, loc_{source_info<T>::get(t)}, error_{other.error_} {}
+        : message_{std::move(other.message_)}, loc_{source_info<T>::get(t)}, error_{other.error_},
+          origin_{other.origin_} {}
 
     [[nodiscard]] auto to_string(const stdx::option<std::string>& source_path = stdx::none,
                                  stdx::option<bool> in_terminal = stdx::none) const -> std::string {
@@ -180,6 +182,11 @@ template <stdx::ScopedEnum E> class diagnostic {
                 level_.value_or(diagnostic_level::ERROR)};
     }
 
+    // The module whose source `location` points into, when it isn't the one whose list holds
+    // this diagnostic (a compile-time call that evaluated another module's function)
+    [[nodiscard]] auto origin() const noexcept -> const mod::module* { return origin_; }
+    auto               set_origin(const mod::module& owner) noexcept -> void { origin_ = &owner; }
+
     // Diagnostics are always ERROR by default, see `unset_level`
     auto set_level(diagnostic_level level) noexcept -> void { level_.emplace(level); }
     auto unset_level() noexcept -> void { level_.reset(); }
@@ -189,6 +196,7 @@ template <stdx::ScopedEnum E> class diagnostic {
     stdx::option<source_location>  loc_;
     E                              error_;
     stdx::option<diagnostic_level> level_{diagnostic_level::ERROR};
+    const mod::module*             origin_{nullptr};
 };
 
 template <typename T> struct is_diagnostic : std::false_type {};
@@ -228,6 +236,13 @@ template <Diagnostic D> class diagnostic_list {
         }
         diagnostics_.erase(diagnostics_.begin() + static_cast<idiff>(from), diagnostics_.end());
         return rest;
+    }
+
+    // Marks every diagnostic at or after `from` that has no origin yet as belonging to `owner`
+    auto set_origin_from(usize from, const mod::module& owner) -> void {
+        for (usize i{from}; i < diagnostics_.size(); ++i) {
+            if (!diagnostics_[i].origin()) { diagnostics_[i].set_origin(owner); }
+        }
     }
 
     // Drops later exact repeats, as when several instantiations report the same body error

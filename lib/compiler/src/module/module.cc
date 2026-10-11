@@ -57,8 +57,11 @@ auto module::print_diagnostics(std::ostream& os) const -> void {
     diagnostics.visit(
         [this, &os](const auto& list) -> void {
             for (const auto& diag : list) {
+                const auto& owner{diag.origin() ? *diag.origin() : *this};
+                // The module the error points into may already report it itself
+                if (&owner != this && owner.reports(diag)) { continue; }
                 format_module_diagnostic(
-                    os, diag.to_formattable(), *this, list.get_terminal_status())
+                    os, diag.to_formattable(), owner, list.get_terminal_status())
                     << "\n";
             }
         },
