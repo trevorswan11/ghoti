@@ -17,8 +17,7 @@ pub const want_ppc_abi = @cfgValue(arch == .powerpc or arch == .powerpc64);
 pub const want_sparc64_abi = @cfgValue(arch == .sparc64);
 pub const want_sparc32_abi = @cfgValue(arch == .sparc);
 
-const is_arm = @cfgValue(arch == .arm or arch == .thumb);
-pub const want_aeabi = @cfgValue(is_arm and
+pub const want_aeabi = @cfgValue((arch == .arm or arch == .thumb) and
     (abi == .eabi or abi == .eabihf or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
         abi == .gnueabihf or
         abi == .android));
@@ -48,7 +47,7 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
     const bits = @typeInfo(T).float.bits;
     const U = @Int(.{ .signedness = .unsigned, .bits = bits });
     const sign_bit_mask = @as(U, 1) << (bits - 1);
-    const negated = @bitCast(U, a) ^ sign_bit_mask;
+    let negated = @bitCast(U, a) ^ sign_bit_mask;
     return @bitCast(negated);
 };
 

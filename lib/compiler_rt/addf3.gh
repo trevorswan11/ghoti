@@ -7,6 +7,7 @@ import "compiler_rt.gh" as compiler_rt;
 const symbol = compiler_rt.symbol;
 
 comptime {
+    // Add exports
     @cfg (compiler_rt.want_aeabi) {
         symbol(__aeabi_fadd, "__aeabi_fadd");
         symbol(__aeabi_dadd, "__aeabi_dadd");
@@ -17,31 +18,99 @@ comptime {
 
     symbol(__addxf3, "__addxf3");
     symbol(__addtf3, "__addtf3");
+
+    // Sub exports
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_fsub, "__aeabi_fsub");
+        symbol(__aeabi_dsub, "__aeabi_dsub");
+    } else {
+        symbol(__subsf3, "__subsf3");
+        symbol(__subdf3, "__subdf3");
+    }
+
+    symbol(__subxf3, "__subxf3");
+    symbol(__subtf3, "__subtf3");
 }
 
-const __addsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+pub const add_f32 = fn(a: f32, b: f32): f32 {
     return addf3(f32, a, b);
 };
 
-const __adddf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+const __addsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return add_f32(a, b);
+};
+
+pub const sub_f32 = fn(a: f32, b: f32): f32 {
+    return add_f32(a, compiler_rt.fneg(b));
+};
+
+const __subsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return sub_f32(a, b);
+};
+
+pub const add_f64 = fn(a: f64, b: f64): f64 {
     return addf3(f64, a, b);
 };
 
+const __adddf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+    return add_f64(a, b);
+};
+
+pub const sub_f64 = fn(a: f64, b: f64): f64 {
+    return add_f64(a, compiler_rt.fneg(b));
+};
+
+const __subdf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+    return sub_f64(a, b);
+};
+
+pub const add_f80 = fn(a: f80, b: f80): f80 {
+    return addf3(f80, a, b);
+};
+
 const __addxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compiler_rt.f80 {
-    return @bitCast(addf3(f80, @bitCast(a), @bitCast(b)));
+    return @bitCast(add_f80(@bitCast(a), @bitCast(b)));
+};
+
+pub const sub_f80 = fn(a: f80, b: f80): f80 {
+    return add_f80(a, compiler_rt.fneg(b));
+};
+
+const __subxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compiler_rt.f80 {
+    return @bitCast(sub_f80(@bitCast(a), @bitCast(b)));
+};
+
+pub const add_f128 = fn(a: f128, b: f128): f128 {
+    return addf3(f128, a, b);
 };
 
 const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
-    return addf3(f128, a, b);
+    return add_f128(a, b);
+};
+
+pub const sub_f128 = fn(a: f128, b: f128): f128 {
+    return add_f128(a, compiler_rt.fneg(b));
+};
+
+const __subtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
+    return sub_f128(a, b);
 };
 
 @cfg (compiler_rt.want_aeabi) {
     const __aeabi_fadd = fn(a: f32, b: f32) callconv(.aapcs): f32 {
-        return addf3(f32, a, b);
+        return add_f32(a, b);
+    };
+
+    const __aeabi_fsub = fn(a: f32, b: f32) callconv(.aapcs): f32 {
+        return sub_f32(a, b);
     };
 
     const __aeabi_dadd = fn(a: f64, b: f64) callconv(.aapcs): f64 {
-        return addf3(f64, a, b);
+        return add_f64(a, b);
+    };
+
+    const __aeabi_dsub = fn(a: f64, b: f64) callconv(.aapcs): f64 {
+        return sub_f64(a, b);
     };
 }
 
