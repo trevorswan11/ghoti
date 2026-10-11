@@ -97,12 +97,8 @@ test "Quiet NaN canonical representation" {
     @expect(qnan_u32 == @bitCast(u32, nan(f32)));
     let qnan_u64 = 0x7FF8000000000000u64;
     @expect(qnan_u64 == @bitCast(u64, nan(f64)));
-
-    @cfg (arch == .x86_64 or arch == .x86) {
-        let qnan_u80 = 0x7FFFC000000000000000u80;
-        @expect(qnan_u80 == @bitCast(u80, nan(f80)));
-    }
-
+    let qnan_u80 = 0x7FFFC000000000000000u80;
+    @expect(qnan_u80 == @bitCast(u80, nan(f80)));
     let qnan_u128 = 0x7FFF8000000000000000000000000000u128;
     @expect(qnan_u128 == @bitCast(u128, nan(f128)));
 }
@@ -129,12 +125,8 @@ test "Signalling NaN canonical representation" {
     @expect(snan_u32 == @bitCast(u32, snan(f32)));
     let snan_u64 = 0x7FF4000000000000u64;
     @expect(snan_u64 == @bitCast(u64, snan(f64)));
-
-    @cfg (arch == .x86_64 or arch == .x86) {
-        let snan_u80 = 0x7FFFA000000000000000u80;
-        @expect(snan_u80 == @bitCast(u80, snan(f80)));
-    }
-
+    let snan_u80 = 0x7FFFA000000000000000u80;
+    @expect(snan_u80 == @bitCast(u80, snan(f80)));
     let snan_u128 = 0x7FFF4000000000000000000000000000u128;
     @expect(snan_u128 == @bitCast(u128, snan(f128)));
 }
