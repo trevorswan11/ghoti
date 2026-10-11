@@ -13,15 +13,15 @@ R"(ExpressionStatement
         ├─ IntLiteralExpression: 3
         └─ StringExpression: 54
 ExpressionStatement
-└─ Expr: BinaryExpression (BOOLEAN_AND)
-    ├─ LHS: BinaryExpression (BOOLEAN_OR)
-    │   ├─ LHS: BinaryExpression (LT_EQ)
-    │   │   ├─ LHS: IdentifierExpression: a
-    │   │   └─ RHS: IdentifierExpression: b
-    │   └─ RHS: BinaryExpression (EQ)
-    │       ├─ LHS: IdentifierExpression: c
-    │       └─ RHS: IdentifierExpression: d
-    └─ RHS: IdentifierExpression: e
+└─ Expr: BinaryExpression (BOOLEAN_OR)
+    ├─ LHS: BinaryExpression (LT_EQ)
+    │   ├─ LHS: IdentifierExpression: a
+    │   └─ RHS: IdentifierExpression: b
+    └─ RHS: BinaryExpression (BOOLEAN_AND)
+        ├─ LHS: BinaryExpression (EQ)
+        │   ├─ LHS: IdentifierExpression: c
+        │   └─ RHS: IdentifierExpression: d
+        └─ RHS: IdentifierExpression: e
 ExpressionStatement
 └─ Expr: BinaryExpression (BOOLEAN_OR)
     ├─ LHS: IdentifierExpression: a
