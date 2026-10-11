@@ -7,8 +7,14 @@ import "compiler_rt.gh" as compiler_rt;
 const symbol = compiler_rt.symbol;
 
 comptime {
-    symbol(__addsf3, "__addsf3");
-    symbol(__adddf3, "__adddf3");
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_fadd, "__aeabi_fadd");
+        symbol(__aeabi_dadd, "__aeabi_dadd");
+    } else {
+        symbol(__addsf3, "__addsf3");
+        symbol(__adddf3, "__adddf3");
+    }
+
     symbol(__addxf3, "__addxf3");
     symbol(__addtf3, "__addtf3");
 }
@@ -28,6 +34,16 @@ const __addxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
 const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return addf3(f128, a, b);
 };
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_fadd = fn(a: f32, b: f32) callconv(.aapcs): f32 {
+        return addf3(f32, a, b);
+    };
+
+    const __aeabi_dadd = fn(a: f64, b: f64) callconv(.aapcs): f64 {
+        return addf3(f64, a, b);
+    };
+}
 
 @[inline(.always)] const addf3 = fn(T: type, a: T, b: T): T {
     const bits = @typeInfo(T).float.bits;
