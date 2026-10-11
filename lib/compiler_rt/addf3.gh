@@ -7,10 +7,24 @@ import "compiler_rt.gh" as compiler_rt;
 const symbol = compiler_rt.symbol;
 
 comptime {
+    symbol(__addsf3, "__addsf3");
+    symbol(__adddf3, "__adddf3");
+    symbol(__addxf3, "__addxf3");
     symbol(__addtf3, "__addtf3");
 }
 
-// `f128` lowers to LLVM's `fp128`, so this matches the libcall's ABI on every target
+const __addsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return addf3(f32, a, b);
+};
+
+const __adddf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+    return addf3(f64, a, b);
+};
+
+const __addxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compiler_rt.f80 {
+    return @bitCast(addf3(f80, @bitCast(a), @bitCast(b)));
+};
+
 const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return addf3(f128, a, b);
 };

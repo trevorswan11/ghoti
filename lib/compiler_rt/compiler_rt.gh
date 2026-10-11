@@ -12,6 +12,19 @@ pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
     }
 };
 
+pub const is_arm = @cfgValue(arch == .arm or arch == .thumb);
+pub const is_thumb = @cfgValue(arch == .thumb);
+
+pub const want_aeabi = @cfgValue(is_arm and
+    (abi == .eabi or abi == .eabihf or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
+        abi == .gnueabihf or
+        abi == .android));
+
+pub const @"f80" = match comptime (@targetArch()) {
+    .x86_64, .x86 => f80,
+    _ => u80,
+};
+
 /// MSVC's linker looks for this symbol in any object that uses floating point
 @cfg (os == .windows and abi == .msvc) {
     let mut _fltused: c_int = 1;
@@ -27,8 +40,9 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
 };
 
 @[inline(.always)] pub const fneg = fn(a: auto): @TypeOf(a) {
+    const T = @TypeOf(a);
     comptime @assert(@typeInfo(T) == .float);
-    const bits = @typeInfo(@TypeOf(a)).float.bits;
+    const bits = @typeInfo(T).float.bits;
     const U = @Int(.{ .signedness = .unsigned, .bits = bits });
     const sign_bit_mask = @as(U, 1) << (bits - 1);
     const negated = @bitCast(U, a) ^ sign_bit_mask;
