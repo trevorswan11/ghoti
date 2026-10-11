@@ -2422,7 +2422,7 @@ template <ast::IndexableID ID>
                 } else {
                     gir::const_eval evaluator{ctx_, resolving_};
                     if (const auto val{evaluator.try_eval(*expr_h)}) {
-                        if (const auto str{val->as_opt<std::string>()}) { message = *str; }
+                        if (auto str{val->as_string_opt()}) { message = std::move(*str); }
                     }
                 }
             }
@@ -4383,6 +4383,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             auto inst_res{
                 instantiate_generic(callee_type, fn_info_copy, concrete_arg_types, comptime_args)};
             instantiating_arg_locations_ = prev_locations;
+            const bool reached_compile_error{std::ranges::any_of(
+                std::views::iota(diags_before_inst, ctx_.diags.size()), [&](usize d) {
+                    return ctx_.diags[d].get_error() == error::COMPILE_ERROR_REACHED;
+                })};
+            if (reached_compile_error) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_,
+                                     id,
+                                     fmt::format("Failed to instantiate '{}'",
+                                                 fn_info_copy.name.value_or("<generic function>")),
+                                     error::COMPTIME_EVALUATION_FAILED,
+                                     resolving_.ast.location_of(call.function)));
+            }
             if (!inst_res) {
                 // `instantiate_generic` may have already reported so only report if not
                 if (ctx_.diags.size() == diags_before_inst) {

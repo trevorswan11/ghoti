@@ -216,6 +216,23 @@ class const_value {
         return stdx::none;
     }
 
+    // A string, or the bytes of a folded byte array
+    [[nodiscard]] auto as_string_opt() const -> stdx::option<std::string> {
+        if (const auto s{as_opt<std::string>()}) { return *s; }
+        const auto arr{as_opt<const_array>()};
+        if (!arr) { return stdx::none; }
+        std::string out;
+        out.reserve(arr->elements.size());
+        for (usize i{0}; i < arr->elements.size(); ++i) {
+            const auto byte{arr->elements[i].as_u64_opt()};
+            if (!byte || *byte > 0xFF) { return stdx::none; }
+            // A `[N:0]u8`'s sentinel isn't part of the text
+            if (*byte == 0 && i + 1 == arr->elements.size()) { break; }
+            out.push_back(static_cast<char>(*byte));
+        }
+        return out;
+    }
+
     MAKE_GETTER(type, stdx::option<sema::type&>);
     MAKE_DEDUCING_GETTER(data);
 
