@@ -724,12 +724,13 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
-    // Only link kernel32/shell32 when the entry wrapper actually needs them to recover argv
+    // Only link kernel32/shell32 when the entry wrapper calls them to recover argv or exit
     auto libraries{merged_libraries(linker_opts, gir_module)};
     auto effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
-    effective_linker_opts.needs_windows_argv_apis =
-        llvm_mod->getFunction("GetCommandLineW") != nullptr;
+    effective_linker_opts.needs_windows_entry_apis =
+        llvm_mod->getFunction("GetCommandLineW") != nullptr ||
+        llvm_mod->getFunction("ExitProcess") != nullptr;
     TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }

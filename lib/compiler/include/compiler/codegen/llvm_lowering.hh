@@ -133,6 +133,9 @@ class llvm_lowering {
     // elements) for an entry function
     auto emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value*;
 
+    // `ret` everywhere but Windows, which calls `ExitProcess`
+    auto emit_entry_exit(llvm::Value* code) -> void;
+
     // Emits a freestanding ELF `_start` (Linux, no crt/libc)
     auto emit_freestanding_start(llvm::Function* main_fn) -> void;
 

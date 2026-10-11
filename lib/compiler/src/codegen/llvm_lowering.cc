@@ -418,15 +418,28 @@ auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> 
         } else {
             builder_.CreateCall(user_fn, {});
         }
-        builder_.CreateRet(builder_.getInt32(0));
+        emit_entry_exit(builder_.getInt32(0));
     } else {
         auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
                                 : builder_.CreateCall(user_fn, {}, "main.res")};
         auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-        builder_.CreateRet(ret_i32);
+        emit_entry_exit(ret_i32);
     }
 
     return main_fn;
+}
+
+auto llvm_lowering::emit_entry_exit(llvm::Value* code) -> void {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows()) {
+        builder_.CreateRet(code);
+        return;
+    }
+
+    auto* exit_ty{llvm::FunctionType::get(types_.get_void_ty(), {types_.get_int32_ty()}, false)};
+    auto  exit_fn{llvm_module_->getOrInsertFunction("ExitProcess", exit_ty)};
+    builder_.CreateCall(exit_fn, {code});
+    builder_.CreateUnreachable();
 }
 
 auto llvm_lowering::emit_x87_precision_init() -> void {
@@ -918,9 +931,9 @@ auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool rec
     auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
     auto* call_res{builder_.CreateCall(runner_fn, {args_slice_val, test_slice_val})};
     if (runner_fn->getReturnType()->isIntegerTy(32)) {
-        builder_.CreateRet(call_res);
+        emit_entry_exit(call_res);
     } else {
-        builder_.CreateRet(builder_.getInt32(0));
+        emit_entry_exit(builder_.getInt32(0));
     }
 
     return main_fn;
