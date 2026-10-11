@@ -483,4 +483,35 @@ TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair fold
     )") == 2);
 }
 
+TEST_CASE("A `const` bound to `@typeInfo` is compared and matched at compile time") {
+    CHECK(helpers::compile_and_run(R"(
+        const both_int = fn(T: type, V: type): bool {
+            const t = @typeInfo(T);
+            const v = @typeInfo(V);
+            return t == .int and v == .int;
+        };
+        const not_float = fn(T: type): bool {
+            const t = @typeInfo(T);
+            return t != .float;
+        };
+        const kind = fn(T: type): i32 {
+            const t = @typeInfo(T);
+            return match (t) {
+                .int => 1,
+                .float => 2,
+                _ => 3,
+            };
+        };
+        pub const main = fn(): i32 {
+            let mut out: i32 = 0;
+            if (both_int(usize, i32)) { out += 1; }
+            if comptime (both_int(u8, i8)) { out += 2; }
+            if (!both_int(u8, bool)) { out += 4; }
+            if (not_float(u8)) { out += 8; }
+            out += kind(f64) * 16;
+            return out;
+        };
+    )") == 1 + 2 + 4 + 8 + 32);
+}
+
 } // namespace ghoti::tests
