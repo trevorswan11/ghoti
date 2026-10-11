@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/Frontend
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/Frontend
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -52,6 +52,7 @@ pub const driver_sources = [_][]const u8{"CodeGenOptions.cpp"};
 pub const hlsl_root = root ++ "HLSL";
 pub const hlsl_sources = [_][]const u8{
     "CBuffer.cpp",
+    "HLSLBinding.cpp",
     "HLSLResource.cpp",
     "HLSLRootSignature.cpp",
     "RootSignatureMetadata.cpp",
@@ -62,6 +63,7 @@ pub const offloading_root = root ++ "Offloading";
 pub const offloading_sources = [_][]const u8{
     "Utility.cpp",
     "OffloadWrapper.cpp",
+    "PropertySet.cpp",
 };
 
 pub const open_mp_root = root ++ "OpenMP";

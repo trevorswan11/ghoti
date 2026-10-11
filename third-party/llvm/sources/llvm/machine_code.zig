@@ -1,8 +1,9 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/MC
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/MCA
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/MC
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/MCA
 pub const mc_root = "llvm/lib/MC/";
 pub const mc_sources = [_][]const u8{
     "ConstantPools.cpp",
+    "DXContainerInfo.cpp",
     "DXContainerPSVInfo.cpp",
     "DXContainerRootSignature.cpp",
     "ELFObjectWriter.cpp",
@@ -34,6 +35,8 @@ pub const mc_sources = [_][]const u8{
     "MCInstrAnalysis.cpp",
     "MCInstrDesc.cpp",
     "MCInstrInfo.cpp",
+    "MCLFI.cpp",
+    "MCLFIRewriter.cpp",
     "MCLabel.cpp",
     "MCLinkerOptimizationHint.cpp",
     "MCMachOStreamer.cpp",
@@ -46,18 +49,14 @@ pub const mc_sources = [_][]const u8{
     "MCRegisterInfo.cpp",
     "MCSchedule.cpp",
     "MCSection.cpp",
-    "MCSectionCOFF.cpp",
-    "MCSectionDXContainer.cpp",
-    "MCSectionELF.cpp",
-    "MCSectionGOFF.cpp",
     "MCSectionMachO.cpp",
-    "MCSectionWasm.cpp",
-    "MCSectionXCOFF.cpp",
     "MCStreamer.cpp",
+    "MCSFrame.cpp",
     "MCSPIRVStreamer.cpp",
     "MCSubtargetInfo.cpp",
     "MCSymbol.cpp",
     "MCSymbolELF.cpp",
+    "MCSymbolGOFF.cpp",
     "MCSymbolXCOFF.cpp",
     "MCTargetOptions.cpp",
     "MCTargetOptionsCommandFlags.cpp",
@@ -87,6 +86,7 @@ pub const parser_sources = [_][]const u8{
     "GOFFAsmParser.cpp",
     "DarwinAsmParser.cpp",
     "ELFAsmParser.cpp",
+    "LFIAsmParser.cpp",
     "MCAsmParser.cpp",
     "MCAsmParserExtension.cpp",
     "MCTargetAsmParser.cpp",

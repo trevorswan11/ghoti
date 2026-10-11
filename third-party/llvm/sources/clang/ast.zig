@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/AST/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/AST/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -51,6 +51,7 @@ pub const sources = [_][]const u8{
     "ExternalASTMerger.cpp",
     "ExternalASTSource.cpp",
     "FormatString.cpp",
+    "InferAlloc.cpp",
     "InheritViz.cpp",
     "ByteCode/BitcastBuffer.cpp",
     "ByteCode/ByteCodeEmitter.cpp",
@@ -60,12 +61,12 @@ pub const sources = [_][]const u8{
     "ByteCode/Disasm.cpp",
     "ByteCode/EvalEmitter.cpp",
     "ByteCode/Function.cpp",
-    "ByteCode/FunctionPointer.cpp",
     "ByteCode/InterpBuiltin.cpp",
     "ByteCode/InterpBuiltinBitCast.cpp",
     "ByteCode/Floating.cpp",
     "ByteCode/EvaluationResult.cpp",
     "ByteCode/DynamicAllocator.cpp",
+    "ByteCode/InitMap.cpp",
     "ByteCode/Interp.cpp",
     "ByteCode/InterpBlock.cpp",
     "ByteCode/InterpFrame.cpp",
@@ -79,6 +80,7 @@ pub const sources = [_][]const u8{
     "ByteCode/State.cpp",
     "ByteCode/MemberPointer.cpp",
     "ByteCode/InterpShared.cpp",
+    "HLSLResource.cpp",
     "ItaniumCXXABI.cpp",
     "ItaniumMangle.cpp",
     "JSONNodeDumper.cpp",
@@ -298,12 +300,11 @@ pub const synthesize_include_configs = [_]SynthesizeHeaderConfig{
     },
 };
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/ASTMatchers
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/ASTMatchers
 pub const matchers_root = "clang/lib/ASTMatchers/";
 pub const matchers_sources = [_][]const u8{
     "ASTMatchFinder.cpp",
     "ASTMatchersInternal.cpp",
-    "GtestMatchers.cpp",
     "LowLevelHelpers.cpp",
 };
 

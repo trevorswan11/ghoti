@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/CodeGen/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/CodeGen/CMakeLists.txt
 pub const root = "clang/lib/CodeGen";
 pub const sources = [_][]const u8{
     "ABIInfo.cpp",
@@ -59,11 +59,14 @@ pub const sources = [_][]const u8{
     "MacroPPCallbacks.cpp",
     "MicrosoftCXXABI.cpp",
     "ModuleBuilder.cpp",
+    "ModuleLinker.cpp",
     "ObjectFilePCHContainerWriter.cpp",
     "PatternInit.cpp",
+    "QualTypeMapper.cpp",
     "SanitizerMetadata.cpp",
     "SwiftCallingConv.cpp",
     "TargetBuiltins/ARM.cpp",
+    "TargetBuiltins/AVR.cpp",
     "TargetBuiltins/AMDGPU.cpp",
     "TargetBuiltins/DirectX.cpp",
     "TargetBuiltins/Hexagon.cpp",
@@ -90,7 +93,6 @@ pub const sources = [_][]const u8{
     "Targets/MSP430.cpp",
     "Targets/Mips.cpp",
     "Targets/NVPTX.cpp",
-    "Targets/PNaCl.cpp",
     "Targets/PPC.cpp",
     "Targets/RISCV.cpp",
     "Targets/SPIR.cpp",
@@ -101,5 +103,6 @@ pub const sources = [_][]const u8{
     "Targets/WebAssembly.cpp",
     "Targets/X86.cpp",
     "Targets/XCore.cpp",
+    "TrapReasonBuilder.cpp",
     "VarBypassDetector.cpp",
 };

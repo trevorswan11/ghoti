@@ -1,7 +1,8 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/utils/TableGen/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/utils/TableGen/CMakeLists.txt
 pub const root = "clang/utils/TableGen";
 pub const sources = [_][]const u8{
     "ASTTableGen.cpp",
+    "CIRLoweringEmitter.cpp",
     "ClangASTNodesEmitter.cpp",
     "ClangASTPropertiesEmitter.cpp",
     "ClangAttrEmitter.cpp",
@@ -18,6 +19,7 @@ pub const sources = [_][]const u8{
     "ClangSACheckersEmitter.cpp",
     "ClangSyntaxEmitter.cpp",
     "ClangTypeNodesEmitter.cpp",
+    "HLSLEmitter.cpp",
     "MveEmitter.cpp",
     "NeonEmitter.cpp",
     "RISCVVEmitter.cpp",

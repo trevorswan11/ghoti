@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Frontend
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Frontend
 pub const root = "clang/lib/Frontend/";
 pub const sources = [_][]const u8{
     "ASTConsumers.cpp",
@@ -8,7 +8,6 @@ pub const sources = [_][]const u8{
     "ChainedIncludesSource.cpp",
     "CompilerInstance.cpp",
     "CompilerInvocation.cpp",
-    "CreateInvocationFromCommandLine.cpp",
     "DependencyFile.cpp",
     "DependencyGraph.cpp",
     "DiagnosticRenderer.cpp",
@@ -27,6 +26,7 @@ pub const sources = [_][]const u8{
     "SARIFDiagnosticPrinter.cpp",
     "SerializedDiagnosticPrinter.cpp",
     "SerializedDiagnosticReader.cpp",
+    "StandaloneDiagnostic.cpp",
     "TestModuleFileExtension.cpp",
     "TextDiagnostic.cpp",
     "TextDiagnosticBuffer.cpp",

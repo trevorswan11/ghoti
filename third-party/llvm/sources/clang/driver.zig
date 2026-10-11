@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Driver/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Driver/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -6,19 +6,21 @@ pub const root = "clang/lib/Driver";
 pub const sources = [_][]const u8{
     "Action.cpp",
     "Compilation.cpp",
+    "CreateASTUnitFromArgs.cpp",
+    "CreateInvocationFromArgs.cpp",
     "Distro.cpp",
     "Driver.cpp",
-    "DriverOptions.cpp",
     "Job.cpp",
+    "ModulesDriver.cpp",
     "Multilib.cpp",
     "MultilibBuilder.cpp",
     "OffloadBundler.cpp",
-    "OptionUtils.cpp",
     "Phases.cpp",
     "SanitizerArgs.cpp",
     "Tool.cpp",
     "ToolChain.cpp",
     "ToolChains/Arch/AArch64.cpp",
+    "ToolChains/Arch/AMDGPU.cpp",
     "ToolChains/Arch/ARM.cpp",
     "ToolChains/Arch/CSKY.cpp",
     "ToolChains/Arch/LoongArch.cpp",
@@ -32,7 +34,6 @@ pub const sources = [_][]const u8{
     "ToolChains/Arch/X86.cpp",
     "ToolChains/AIX.cpp",
     "ToolChains/AMDGPU.cpp",
-    "ToolChains/AMDGPUOpenMP.cpp",
     "ToolChains/AVR.cpp",
     "ToolChains/BareMetal.cpp",
     "ToolChains/Clang.cpp",
@@ -54,17 +55,18 @@ pub const sources = [_][]const u8{
     "ToolChains/Hexagon.cpp",
     "ToolChains/HLSL.cpp",
     "ToolChains/Hurd.cpp",
+    "ToolChains/LFILinux.cpp",
     "ToolChains/Linux.cpp",
     "ToolChains/Managarm.cpp",
     "ToolChains/MipsLinux.cpp",
     "ToolChains/MinGW.cpp",
     "ToolChains/MSP430.cpp",
     "ToolChains/MSVC.cpp",
-    "ToolChains/NaCl.cpp",
     "ToolChains/NetBSD.cpp",
     "ToolChains/OHOS.cpp",
     "ToolChains/OpenBSD.cpp",
     "ToolChains/PS4CPU.cpp",
+    "ToolChains/Serenity.cpp",
     "ToolChains/Solaris.cpp",
     "ToolChains/SPIRV.cpp",
     "ToolChains/SPIRVOpenMP.cpp",
@@ -82,11 +84,19 @@ pub const sources = [_][]const u8{
     "XRayArgs.cpp",
 };
 
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/include/clang/Options/CMakeLists.txt
 pub const synthesize_opts: SynthesizeHeaderConfig = .{
     .gen_conf = .{
         .name = "Options",
-        .td_file = "clang/include/clang/Driver/Options.td",
+        .td_file = "clang/include/clang/Options/Options.td",
         .instruction = .{ .action = "-gen-opt-parser-defs" },
     },
-    .virtual_path = "clang/Driver/Options.inc",
+    .virtual_path = "clang/Options/Options.inc",
+};
+
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Options/CMakeLists.txt
+pub const options_root = "clang/lib/Options";
+pub const options_sources = [_][]const u8{
+    "DriverOptions.cpp",
+    "OptionUtils.cpp",
 };

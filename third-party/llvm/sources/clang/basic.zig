@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Basic/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Basic/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -6,6 +6,7 @@ pub const root = "clang/lib/Basic/";
 pub const sources = [_][]const u8{
     "ASTSourceDescriptor.cpp",
     "Attributes.cpp",
+    "AtomicLineLogger.cpp",
     "Builtins.cpp",
     "CLWarnings.cpp",
     "CharInfo.cpp",
@@ -18,7 +19,6 @@ pub const sources = [_][]const u8{
     "ExpressionTraits.cpp",
     "FileEntry.cpp",
     "FileManager.cpp",
-    "FileSystemStatCache.cpp",
     "IdentifierTable.cpp",
     "LangOptions.cpp",
     "LangStandards.cpp",
@@ -60,7 +60,6 @@ pub const sources = [_][]const u8{
     "Targets/Mips.cpp",
     "Targets/NVPTX.cpp",
     "Targets/OSTargets.cpp",
-    "Targets/PNaCl.cpp",
     "Targets/PPC.cpp",
     "Targets/RISCV.cpp",
     "Targets/SPIR.cpp",
@@ -88,11 +87,11 @@ const diagnostics_td = include_root ++ "Diagnostic.td";
 const diag_components = [_][]const u8{
     "Analysis",      "AST",        "Comment", "Common", "CrossTU",     "Driver",
     "Frontend",      "InstallAPI", "Lex",     "Parse",  "Refactoring", "Sema",
-    "Serialization",
+    "Serialization", "Trap",
 };
 
 pub const diag_synthesize_configs = blk: {
-    var configs: [3 + 4 * diag_components.len]SynthesizeHeaderConfig = undefined;
+    var configs: [4 + 4 * diag_components.len]SynthesizeHeaderConfig = undefined;
     var idx = 0;
 
     // Per-component gen
@@ -165,6 +164,16 @@ pub const diag_synthesize_configs = blk: {
             .instruction = .{ .action = "-gen-clang-diags-index-name" },
         },
         .virtual_path = "clang/Basic/DiagnosticIndexName.inc",
+    };
+    idx += 1;
+
+    configs[idx] = .{
+        .gen_conf = .{
+            .name = "ClangDiagnosticStableIDs",
+            .td_file = diagnostics_td,
+            .instruction = .{ .action = "-gen-clang-diags-stable-ids" },
+        },
+        .virtual_path = "clang/Basic/DiagnosticStableIDs.inc",
     };
     idx += 1;
 
@@ -252,6 +261,22 @@ pub const builtin_synthesize_configs = [_]SynthesizeHeaderConfig{
     },
     .{
         .gen_conf = .{
+            .name = "ClangBuiltinsAArch64",
+            .td_file = include_root ++ "BuiltinsAArch64.td",
+            .instruction = .{ .action = "-gen-clang-builtins" },
+        },
+        .virtual_path = "clang/Basic/BuiltinsAArch64.inc",
+    },
+    .{
+        .gen_conf = .{
+            .name = "ClangBuiltinsAMDGPU",
+            .td_file = include_root ++ "BuiltinsAMDGPU.td",
+            .instruction = .{ .action = "-gen-clang-builtins" },
+        },
+        .virtual_path = "clang/Basic/BuiltinsAMDGPU.inc",
+    },
+    .{
+        .gen_conf = .{
             .name = "ClangBuiltinsBPF",
             .td_file = include_root ++ "BuiltinsBPF.td",
             .instruction = .{ .action = "-gen-clang-builtins" },
@@ -316,6 +341,14 @@ pub const builtin_synthesize_configs = [_]SynthesizeHeaderConfig{
     },
     .{
         .gen_conf = .{
+            .name = "ClangBuiltinsSystemZ",
+            .td_file = include_root ++ "BuiltinsSystemZ.td",
+            .instruction = .{ .action = "-gen-clang-builtins" },
+        },
+        .virtual_path = "clang/Basic/BuiltinsSystemZ.inc",
+    },
+    .{
+        .gen_conf = .{
             .name = "ClangBuiltinsX86",
             .td_file = include_root ++ "BuiltinsX86.td",
             .instruction = .{ .action = "-gen-clang-builtins" },
@@ -329,6 +362,14 @@ pub const builtin_synthesize_configs = [_]SynthesizeHeaderConfig{
             .instruction = .{ .action = "-gen-clang-builtins" },
         },
         .virtual_path = "clang/Basic/BuiltinsX86_64.inc",
+    },
+    .{
+        .gen_conf = .{
+            .name = "ClangBuiltinsZOS",
+            .td_file = include_root ++ "BuiltinsZOS.td",
+            .instruction = .{ .action = "-gen-clang-builtins" },
+        },
+        .virtual_path = "clang/Basic/BuiltinsZOS.inc",
     },
     .{
         .gen_conf = .{

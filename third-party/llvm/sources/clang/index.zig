@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Index/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Index/CMakeLists.txt
 pub const root = "clang/lib/Index";
 pub const sources = [_][]const u8{
     "CommentToXML.cpp",
@@ -9,5 +9,4 @@ pub const sources = [_][]const u8{
     "IndexingContext.cpp",
     "IndexSymbol.cpp",
     "IndexTypeSourceInfo.cpp",
-    "USRGeneration.cpp",
 };

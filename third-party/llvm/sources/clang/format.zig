@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Format/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Format/CMakeLists.txt
 pub const root = "clang/lib/Format";
 pub const sources = [_][]const u8{
     "AffectedRangeManager.cpp",
@@ -13,6 +13,8 @@ pub const sources = [_][]const u8{
     "MacroExpander.cpp",
     "MatchFilePath.cpp",
     "NamespaceEndCommentsFixer.cpp",
+    "NumericLiteralCaseFixer.cpp",
+    "NumericLiteralInfo.cpp",
     "ObjCPropertyAttributeOrderFixer.cpp",
     "QualifierAlignmentFixer.cpp",
     "SortJavaScriptImports.cpp",

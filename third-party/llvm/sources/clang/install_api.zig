@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/InstallAPI/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/InstallAPI/CMakeLists.txt
 pub const root = "clang/lib/InstallAPI";
 pub const sources = [_][]const u8{
     "DiagnosticBuilderWrappers.cpp",

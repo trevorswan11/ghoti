@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Lex/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Lex/CMakeLists.txt
 pub const root = "clang/lib/Lex";
 pub const sources = [_][]const u8{
     "DependencyDirectivesScanner.cpp",
@@ -24,6 +24,7 @@ pub const sources = [_][]const u8{
     "Preprocessor.cpp",
     "PreprocessorLexer.cpp",
     "ScratchBuffer.cpp",
+    "TextEncoding.cpp",
     "TokenConcatenation.cpp",
     "TokenLexer.cpp",
 };

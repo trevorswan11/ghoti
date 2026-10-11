@@ -25,17 +25,17 @@ namespace {
 
 // The first conditional branch in `fn` that carries metadata of `kind`
 [[nodiscard]] auto hinted_branch(const llvm::Function& fn, unsigned kind)
-    -> stdx::option<const llvm::BranchInst&> {
+    -> stdx::option<const llvm::CondBrInst&> {
     for (const auto& bb : fn) {
-        if (const auto* br{llvm::dyn_cast<llvm::BranchInst>(bb.getTerminator())};
-            br && br->isConditional() && br->getMetadata(kind)) {
+        if (const auto* br{llvm::dyn_cast<llvm::CondBrInst>(bb.getTerminator())};
+            br && br->getMetadata(kind)) {
             return *br;
         }
     }
     return stdx::none;
 }
 
-[[nodiscard]] auto weights_of(const llvm::BranchInst& br) -> llvm::SmallVector<u32, 2> {
+[[nodiscard]] auto weights_of(const llvm::CondBrInst& br) -> llvm::SmallVector<u32, 2> {
     llvm::SmallVector<u32, 2> weights;
     CHECK(llvm::extractBranchWeights(br, weights));
     return weights;
