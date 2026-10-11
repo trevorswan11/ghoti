@@ -70,4 +70,36 @@ TEST_CASE(
     )") == 42);
 }
 
+TEST_CASE("E2E raw identifier: a folded const named after a primitive can read the primitive") {
+    CHECK(helpers::compile_and_run(R"(
+        const @"f80" = match comptime (@targetArch()) {
+            .x86_64, .x86 => f80,
+            _ => u80,
+        };
+        const @"f32" = f32;
+        const @"bool" = bool;
+        const @"usize" = usize;
+        const @"c_int" = c_int;
+
+        pub const main = fn(): i32 {
+            let x: @"f80" = @bitCast(@as(u80, 0));
+            return @intCast(@bitSizeOf(@TypeOf(x)) + @sizeOf(@"f32") + @sizeOf(@"bool") +
+                @sizeOf(@"usize") / @sizeOf(usize) + @sizeOf(@"c_int"));
+        };
+    )") == 90);
+}
+
+TEST_CASE("E2E raw identifier: folding reads a raw name as the decl, not the primitive") {
+    CHECK(helpers::compile_and_run(R"(
+        const @"u8" = struct { a: u64, b: u64 };
+        const N: usize = @sizeOf(@"u8");
+        const size = fn(T: type): i32 { return @intCast(@sizeOf(T)); };
+
+        pub const main = fn(): i32 {
+            const @"f32" = u8;
+            return @intCast(N) + size(f32) * 10 + size(@"f32") * 100;
+        };
+    )") == 156);
+}
+
 } // namespace ghoti::tests

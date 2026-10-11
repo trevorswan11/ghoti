@@ -51,6 +51,7 @@
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/float128.hh"
@@ -3764,22 +3765,39 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
 auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // A primitive keyword names the primitive even where a raw identifier (`@"f80"`) declares
+    // the same name, and the raw identifier is an ordinary name
+    const auto int_type_value{[this](std::string_view name) -> stdx::option<const_value> {
+        if (!syntax::token_type::is_int_type_lexeme(name)) { return stdx::none; }
+        u64 width{0};
+        for (const char c : stdx::string::substr(name, 1)) {
+            width = width * 10 + static_cast<u64>(c - '0');
+            if (width > 65'535) { break; }
+        }
+        if (width < 1 || width > 65'535) { return stdx::none; }
+        return const_value{ctx_.get_int(static_cast<u16>(width), name.front() == 'i')};
+    }};
+
+    const auto tok{id.is_valid() ? id.get_token_type() : syntax::token_type_t::IDENT};
+    if (tok == syntax::token_type_t::INT_TYPE) {
+        if (const auto int_type{int_type_value(ident.name)}) { return int_type; }
+    } else if (std::ranges::contains(syntax::ALL_PRIMITIVES, tok) && ctx_.prelude_index) {
+        if (const auto p_sym{ctx_.registry.get(*ctx_.prelude_index).get_opt(ident.name)}) {
+            if (const auto builtin{p_sym->get_data().as_opt<sema::symbols::builtin>()}) {
+                return const_value{builtin->get_type()};
+            }
+        }
+    }
+
     if (auto local_val{lookup_local_binding(ident.name)}) { return local_val; }
     if (const auto cx{ctx_.lookup_comptime_binding(ident.name)}) { return *cx; }
     if (const auto it{global_cx_vars_.find(std::string{ident.name})}; it != global_cx_vars_.end()) {
         return it->second;
     }
 
-    // `iN` / `uN` name a primitive integer type; yield it as a compile-time type value.
-    if (syntax::token_type::is_int_type_lexeme(ident.name)) {
-        u64 width{0};
-        for (const char c : stdx::string::substr(ident.name, 1)) {
-            width = width * 10 + static_cast<u64>(c - '0');
-            if (width > 65'535) { break; }
-        }
-        if (width >= 1 && width <= 65'535) {
-            return const_value{ctx_.get_int(static_cast<u16>(width), ident.name.front() == 'i')};
-        }
+    // A synthesized identifier has no token to tell a raw name from the keyword
+    if (!id.is_valid()) {
+        if (const auto int_type{int_type_value(ident.name)}) { return int_type; }
     }
 
     // A bare identifier inside a member body may name a sibling static `const` member.
