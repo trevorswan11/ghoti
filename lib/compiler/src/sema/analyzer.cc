@@ -170,6 +170,16 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
     return merged;
 }
 
+// What each `extern("lib", ...)` library supplies, for a Windows import library the link writes
+[[nodiscard]] auto library_imports(const gir::module& gir_module)
+    -> std::vector<codegen::library_import> {
+    std::vector<codegen::library_import> imports;
+    for (auto& [library, symbol, data] : gir_module.get_library_imports()) {
+        imports.push_back({std::move(library), std::move(symbol), data});
+    }
+    return imports;
+}
+
 // A DLL exports only what is marked `dllexport`, so mark what an ELF or Mach-O shared library
 // would export: every defined, externally linked symbol that isn't `@[visibility(.hidden)]`
 auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
@@ -788,9 +798,11 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     if (target_machine->getTargetTriple().isOSBinFormatCOFF()) { mark_dll_exports(*llvm_mod); }
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-    auto libraries{merged_libraries(linker_opts, gir_module)};
-    auto effective_linker_opts{linker_opts};
+    auto       libraries{merged_libraries(linker_opts, gir_module)};
+    const auto imports{library_imports(gir_module)};
+    auto       effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
+    effective_linker_opts.imports   = imports;
     TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_dynamic_library(
         temp_obj_path, output_path, target_opts, effective_linker_opts);
@@ -809,9 +821,11 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
-    auto libraries{merged_libraries(linker_opts, gir_module)};
-    auto effective_linker_opts{linker_opts};
+    auto       libraries{merged_libraries(linker_opts, gir_module)};
+    const auto imports{library_imports(gir_module)};
+    auto       effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
+    effective_linker_opts.imports   = imports;
     TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }

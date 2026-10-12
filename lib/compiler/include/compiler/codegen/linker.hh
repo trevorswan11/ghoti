@@ -19,6 +19,13 @@ struct compiler_rt_options {
     stdx::option<std::filesystem::path> root{};
 };
 
+// A symbol a program imports from an `extern("lib", ...)` library
+struct library_import {
+    std::string library;
+    std::string symbol;
+    bool        data{false};
+};
+
 struct extra_linker_options {
     gsl::span<std::filesystem::path> objects{};
     gsl::span<std::filesystem::path> library_paths{};
@@ -27,6 +34,8 @@ struct extra_linker_options {
     stdx::option<std::filesystem::path> builtins{};
     // Builds `builtins` from ghoti sources when the object calls a runtime libcall; unset skips it
     stdx::option<compiler_rt_options> compiler_rt{};
+    // What each library supplies; a Windows import library that can't be found is written from it
+    gsl::span<const library_import> imports{};
 };
 
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,

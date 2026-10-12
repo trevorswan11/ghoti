@@ -733,6 +733,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
 - `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
     - `std` and `lib/start` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
+- Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it
 - compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits

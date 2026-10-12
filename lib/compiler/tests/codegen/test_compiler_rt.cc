@@ -217,6 +217,8 @@ TEST_CASE("Runtime libcall names follow the target") {
     CHECK_FALSE(codegen::is_runtime_libcall(linux_triple, "main"));
     CHECK(codegen::is_compiler_rt_symbol(linux_triple, "memcpy"));
     CHECK(codegen::is_compiler_rt_symbol(macos_triple, "bcmp"));
+    // libSystem's allocator is in LLVM's Darwin libcall table, but it never comes from compiler_rt
+    CHECK_FALSE(codegen::is_compiler_rt_symbol(macos_triple, "malloc"));
     CHECK(codegen::is_compiler_rt_symbol(msvc_triple, "__chkstk"));
     CHECK(codegen::is_compiler_rt_symbol(codegen::resolve_target_triple("x86_64-w64-windows-gnu"),
                                          "___chkstk_ms"));
