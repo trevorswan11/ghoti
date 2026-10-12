@@ -769,6 +769,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
 - Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
+- Fixed: a parameterized `impl` whose target names its constructor through an alias (`impl(T: type) I for alias.Bag(T)` where `alias.gh` has `pub const Bag = bag.Bag;`) never applied, so the type had none of its methods
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

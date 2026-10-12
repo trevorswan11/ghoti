@@ -51,6 +51,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/alias_chain.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -12888,7 +12889,8 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
     stdx::option<const mod::module&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
 
-    for (i32 hops{0}; hops < 16; ++hops) {
+    alias_chain chain;
+    while (chain.step(*home, fn_node)) {
         stdx::option<symbol&> sym;
         if (const auto ident{home->ast.get_as_opt<ast::identifier_expr>(fn_node)}) {
             sym = (home == &resolving_) ? ctx_.registry.lookup(table_stack_, ident->name)
@@ -13378,6 +13380,58 @@ auto type_resolver::assoc_type_placeholder(usize disc) -> type& {
     return s;
 }
 
+namespace {
+
+using decl_value_ref = std::pair<const mod::module*, ast::node_id>;
+
+// The module `name` imports in `owner`, read from the import itself so it needs no resolving
+[[nodiscard]] auto imported_module(const context&     ctx,
+                                   const mod::module& owner,
+                                   std::string_view   name) -> stdx::option<const mod::module&> {
+    if (!owner.root_table_idx) { return stdx::none; }
+    auto sym{ctx.registry.get_from_opt(*owner.root_table_idx, name)};
+    if (!sym && ctx.prelude_index) { sym = ctx.registry.get_from_opt(*ctx.prelude_index, name); }
+    if (!sym || sym->get_kind_opt() != symbol_kind::MODULE) { return stdx::none; }
+
+    stdx::option<type&> module_type;
+    if (const auto builtin{sym->get_data().as_opt<symbols::builtin>()}) {
+        module_type.emplace(builtin->get_type());
+    } else if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
+        module_type = owner.get_sema_type_opt(*node);
+    }
+    const auto data{module_type ? module_type->get_data().as_opt<types::module>() : stdx::none};
+    if (!data) { return stdx::none; }
+    return data->imported;
+}
+
+// The value of the declaration an alias expression (`Name` or `module.Name`) in `owner` names
+[[nodiscard]] auto aliased_decl_value(const context&     ctx,
+                                      const mod::module& owner,
+                                      ast::node_id       alias) -> stdx::option<decl_value_ref> {
+    const auto value_of{
+        [&](const mod::module& mod, std::string_view name) -> stdx::option<decl_value_ref> {
+            if (!mod.root_table_idx) { return stdx::none; }
+            const auto sym{ctx.registry.get_from_opt(*mod.root_table_idx, name)};
+            const auto node{sym ? sym->get_data().as_opt<symbols::node_t>() : stdx::none};
+            const auto decl{node ? mod.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+            if (!decl || !decl->value) { return stdx::none; }
+            return decl_value_ref{&mod, *decl->value};
+        }};
+
+    if (const auto id{owner.ast.get_as_opt<ast::identifier_expr>(alias)}) {
+        return value_of(owner, id->name);
+    }
+    if (const auto dot{owner.ast.get_as_opt<ast::dot_expr>(alias)}) {
+        const auto object{owner.ast.get_as_opt<ast::identifier_expr>(dot->object)};
+        const auto imported{object ? imported_module(ctx, owner, object->name) : stdx::none};
+        if (!imported) { return stdx::none; }
+        return value_of(*imported, owner.ast.get_as<ast::identifier_expr>(dot->member).name);
+    }
+    return stdx::none;
+}
+
+} // namespace
+
 auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl)
     -> void {
     PROFILE_FUNCTION();
@@ -13426,6 +13480,19 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
                 }
             }
         }
+    }
+    // `const Ctor = other.Ctor;` names the same ctor, so anchor at the `fn` it aliases
+    alias_chain chain;
+    while (base_mod && base_ctor_fn && chain.step(*base_mod, *base_ctor_fn)) {
+        const auto& owner{*base_mod};
+        if (owner.ast.get_as_opt<ast::function_expr>(*base_ctor_fn)) { break; }
+        const auto aliased{aliased_decl_value(ctx_, owner, *base_ctor_fn)};
+        if (!aliased) {
+            base_ctor_fn.reset();
+            break;
+        }
+        base_mod.emplace(*aliased->first);
+        base_ctor_fn.emplace(aliased->second);
     }
     if (!base_mod || !base_ctor_fn) { return; } // cannot anchor: skip quietly
 

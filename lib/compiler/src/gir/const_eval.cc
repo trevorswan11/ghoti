@@ -43,6 +43,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/alias_chain.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/peer_type.hh"
@@ -4015,10 +4016,11 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     }
 
     // `const A = Box;` / `pub const Result = result.Result;` name the constructor they alias
-    for (usize hops{0}; callee_mod && callee_sym && hops < 16; ++hops) {
+    sema::alias_chain chain;
+    while (callee_mod && callee_sym) {
         const auto node{callee_sym->get_data().as_opt<sema::symbols::node_t>()};
         const auto decl{node ? callee_mod->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
-        if (!decl || !decl->value) { break; }
+        if (!decl || !decl->value || !chain.step(*callee_mod, ast::node_id{*node})) { break; }
         if (const auto alias{callee_mod->ast.get_as_opt<ast::identifier_expr>(*decl->value)}) {
             if (!callee_mod->root_table_idx) { break; }
             const auto next{ctx_.registry.get_from_opt(*callee_mod->root_table_idx, alias->name)};
