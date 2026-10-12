@@ -52,8 +52,6 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/error.hh"
-#include "support/env.hh"
-#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 
 namespace ghoti::sema {
@@ -175,7 +173,8 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
     -> std::vector<codegen::library_import> {
     std::vector<codegen::library_import> imports;
     for (auto& [library, symbol, data] : gir_module.get_library_imports()) {
-        imports.push_back({std::move(library), std::move(symbol), data});
+        imports.emplace_back<codegen::library_import>(
+            {std::move(library), std::move(symbol), data});
     }
     return imports;
 }

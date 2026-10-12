@@ -20,7 +20,6 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/doc.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/layout_engine.hh"
@@ -828,7 +827,7 @@ auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
     for (usize i{0}; i < node.arguments.size(); ++i) {
         const auto& arg{node.arguments[i]};
         auto        rendered{arg.visit([&](expr_handle h) { return format(h); },
-                                       [&](explicit_type_id t) { return format(t); })};
+                                [&](explicit_type_id t) { return format(t); })};
         // `f(rest...)`: this argument was written with a trailing pack-expansion `...`.
         if (i < node.pack_expansions.size() && node.pack_expansions[i]) {
             rendered = doc_manager_.concat({rendered, doc_manager_.text("...")});
