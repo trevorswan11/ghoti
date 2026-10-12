@@ -583,10 +583,8 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     const auto&            root_table{registry_.get(*root_module.root_table_idx)};
     const auto             main_sym_opt{root_table.get_opt(main_name)};
     if (!main_sym_opt) {
-        return make_sema_err(
-            fmt::format("missing required '{}' function with signature 'fn(args: [][:0]u8): void'",
-                        main_name),
-            error::TYPE_MISMATCH);
+        return make_sema_err(fmt::format("missing required '{}' function", main_name),
+                             error::TYPE_MISMATCH);
     }
 
     const auto& main_sym{*main_sym_opt};
@@ -629,28 +627,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
                              main_sym.get_symbol_location(root_module));
     }
 
-    const auto& fn_data{sema_type.get_data().as<types::function>()};
-    if (fn_data.params.size() == 1) {
-        if (!is_argv_slice_type(fn_data.params.front())) {
-            return make_sema_err("'main' parameter must have type '[][:0]u8'",
-                                 error::TYPE_MISMATCH,
-                                 main_sym.get_symbol_location(root_module));
-        }
-    } else if (fn_data.params.size() > 1) {
-        return make_sema_err(fmt::format("'main' function must have 0 parameters or 1 parameter of "
-                                         "type '[][:0]u8', found {}",
-                                         fn_data.params.size()),
-                             error::TYPE_MISMATCH,
-                             main_sym.get_symbol_location(root_module));
-    }
-
-    const auto ret_kind{fn_data.return_type.get_kind()};
-    if (ret_kind != type_kind::VOID_ && !is_i32(fn_data.return_type)) {
-        return make_sema_err("'main' return type must be 'void' or 'i32'",
-                             error::TYPE_MISMATCH,
-                             main_sym.get_symbol_location(root_module));
-    }
-
+    // Its parameters and return type are the entry code's to check
     return {};
 }
 

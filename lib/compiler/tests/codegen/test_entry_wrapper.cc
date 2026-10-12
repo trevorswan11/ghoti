@@ -79,6 +79,31 @@ struct lowered {
     return UNWRAP_ERR(helpers::emit_llvm_ir_executable(ctx, context, opt_opts)).get_error();
 }
 
+// Analyzes `source` as a program's root, giving the one error reported in it
+struct root_error {
+    usize       line{};
+    std::string message;
+};
+
+[[nodiscard]] auto entry_error(std::string_view source) -> root_error {
+    const tempdir dir{"entry_error"};
+    dir.write("main.gh", source);
+
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    analyzer.set_entry_point(true);
+    const auto analyzed{analyzer.analyze(dir.path / "main.gh")};
+    INFO(errors.str());
+    CHECK(analyzed);
+
+    const auto  root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
+    const auto& diags{UNWRAP(root->diagnostics.as_opt<sema::diagnostics>())};
+    REQUIRE(diags.size() == 1);
+    return {UNWRAP(diags[0].to_formattable().location).line, UNWRAP(diags[0].get_message())};
+}
+
 } // namespace
 
 TEST_CASE("Main function entry validation") {
@@ -127,15 +152,6 @@ TEST_CASE("Main function entry validation") {
         CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
-    SECTION("Main with non-void and non-i32 return returns error") {
-        auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main = fn(args: [][:0]u8): bool {
-                return true;
-            };
-        )")};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-    }
-
     SECTION("Main with i32 return is valid") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             pub const main = fn(args: [][:0]u8): i32 {
@@ -144,16 +160,22 @@ TEST_CASE("Main function entry validation") {
         )")};
         CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
+}
 
-    SECTION("Main with incorrect param type returns error") {
-        constexpr auto input = R"(
-            pub const main = fn(args: []u8): void {
-                return;
-            };
-        )";
-        auto [ctx, idx]{helpers::resolve_and_check(input)};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-    }
+TEST_CASE("lib/start rejects a main it can't call") {
+    const auto [source,
+                message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
+        {"pub const main = fn(args: [][:0]u8): bool { return true; };",
+         "'main' must return 'void' or 'i32'"},
+        {"pub const main = fn(args: []u8): void {};",
+         "'main' must take no parameters or one of type '[][:0]u8'"},
+        {"pub const main = fn(a: [][:0]u8, b: i32): void {};",
+         "'main' must take no parameters or one of type '[][:0]u8'"},
+    }))};
+    CAPTURE(source);
+    const auto error{entry_error(source)};
+    CHECK(error.line == 0);
+    CHECK(error.message.starts_with(message));
 }
 
 TEST_CASE("An executable enters through lib/start, which calls main") {

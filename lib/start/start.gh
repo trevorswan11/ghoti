@@ -23,13 +23,23 @@ const Arg = [:0]u8;
     return @sliceFromPtr(@ptrCast(^mut Arg, slots), argc);
 };
 
+// Whether `main` takes nothing or just its arguments
+const takes_no_args_or_argv = fn(comptime params: []type): bool {
+    if comptime (params.len == 0) { return true; }
+    return params.len == 1 and params[0] == []Arg;
+};
+
 // Runs `main` or the tests, giving the exit code
 const run = fn(args: []Arg): i32 {
     @cfg (testing) {
         return builtin.test_runner(args, @testFunctions());
     } else {
         const info = @typeInfo(@TypeOf(@entryMain())).function;
-        if comptime (info.params.len == 1) {
+        if comptime (!takes_no_args_or_argv(info.params)) {
+            @compileError("'main' must take no parameters or one of type '[][:0]u8'");
+        } else if comptime (info.return_type != void and info.return_type != i32) {
+            @compileError("'main' must return 'void' or 'i32'");
+        } else if comptime (info.params.len == 1) {
             if comptime (info.return_type == void) {
                 @entryMain()(args);
                 return 0;
