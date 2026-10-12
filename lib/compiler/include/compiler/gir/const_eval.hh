@@ -55,6 +55,11 @@ class const_eval {
         module_ = &module;
     }
 
+    // An enum literal (`.name`) as `dest`: the enum's variant, or the tagged union's `void` field
+    // of that name; `none` when `dest` has no such member
+    [[nodiscard]] auto coerce_enum_literal(const const_value& literal, sema::type& dest)
+        -> stdx::option<const_value>;
+
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
         if (enclosing_type_ != type) { clear_memo(); }

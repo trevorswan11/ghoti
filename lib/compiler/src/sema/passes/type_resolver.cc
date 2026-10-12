@@ -1443,6 +1443,7 @@ template <ast::IndexableID ID>
         const auto& operand{*get_resolved_call_arg_type(call.arguments[0])};
         const auto  tagged_union{operand.get_data().as_opt<types::union_t>()};
         const bool  has_tag{operand.get_kind() == type_kind::ENUM ||
+                            operand.get_kind() == type_kind::ENUM_LITERAL ||
                             (tagged_union && !tagged_union->is_untagged)};
         if (!has_tag && !operand.is_poison() && !is_generic_type(operand)) {
             return make_sema_err(
@@ -2512,6 +2513,13 @@ template <ast::IndexableID ID>
 
         return_type = &ctx_.get_array(
             types::mut::CONSTANT, true, content_opt->size(), ctx_.get_int(8, false));
+        break;
+    }
+    case token_type_t::BUILTIN_ENUM_LITERAL: {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        auto  meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, literal}]};
+        meta->resolve_if<types::meta_type>(literal);
+        return_type = meta;
         break;
     }
     case token_type_t::BUILTIN_LLVM_INTRINSIC: {
@@ -4143,7 +4151,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
                 const auto&                    arg{call.arguments[expanded.source_index[i]]};
                 stdx::option<structural_guard> g;
-                if (!is_generic_type(*param_type)) { g.emplace(implicit_type_stack_, *param_type); }
+                if (!is_generic_type(*param_type)) {
+                    g.emplace(implicit_type_stack_, *param_type);
+                } else if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
+                           param_type->get_kind() == type_kind::AUTO && arg_h &&
+                           resolving_.ast.get_as_opt<ast::implicit_access_expr>(*arg_h)) {
+                    // An `auto` slot names nothing, so `.name` there is an enum literal rather
+                    // than a member of whatever context surrounds the call
+                    g.emplace(implicit_type_stack_,
+                              ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL));
+                }
 
                 auto result_arg_type = arg.visit([this,
                                                   param_type](auto arg_id) -> stdx::option<type&> {
@@ -4230,6 +4247,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // A slot bound to a concrete value type (`x: T` with `T = u8`) can't take a type
                 if (arg_expr && reject_type_as_value(*arg_expr, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                // An enum literal has no runtime form for a runtime `auto` parameter to hold
+                if (resolved_type->get_kind() == type_kind::ENUM_LITERAL &&
+                    param_type->get_kind() == type_kind::AUTO && i < fn_params.size() &&
+                    !fn_params[i].is_comptime) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("Argument {} is an enum literal, which only exists at compile "
+                                    "time; make the parameter `comptime`, or pass an enum value",
+                                    i + 1),
+                        error::TYPE_MISMATCH,
+                        get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
                 // ...and a `T: type` slot can't take a value
                 const bool declared_type_param{i < fn_params.size() &&
@@ -7014,24 +7044,32 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
     PROFILE_FUNCTION();
 
-    // Implicit access needs type context established elsewhere; nothing has for a binary LHS.
+    // `.a == x`: the right side names what `.a` is a member of, so it resolves first
+    type* lhs_type{nullptr};
+    type* rhs_first{nullptr};
     if (resolving_.ast.get_as_opt<ast::implicit_access_expr>(binary.lhs)) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            "Implicit access cannot appear on the left side of a binary expression; it "
-            "requires the other operand to establish type context first",
-            error::TYPE_MISMATCH,
-            resolving_.ast.location_of(binary.lhs)));
+        {
+            // Whatever context surrounds the comparison doesn't describe its right side
+            const structural_guard g{implicit_type_stack_,
+                                     ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+            TRY_RESOLVE(binary.rhs);
+        }
+        rhs_first = last_type_.take();
+        {
+            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*rhs_first)};
+            TRY_RESOLVE(binary.lhs);
+        }
+        lhs_type = last_type_.take();
+    } else {
+        TRY_RESOLVE(binary.lhs);
+        lhs_type = last_type_.take();
+        {
+            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
+            TRY_RESOLVE(binary.rhs);
+        }
+        rhs_first = last_type_.take();
     }
-
-    TRY_RESOLVE(binary.lhs);
-    auto* lhs_type{last_type_.take()};
-    {
-        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
-        TRY_RESOLVE(binary.rhs);
-    }
-    auto& rhs_type{*last_type_.take()};
+    auto& rhs_type{*rhs_first};
 
     // A range counter on the left takes the right side's type when it holds every value
     const auto shift_token{id.get_token_type()};
@@ -10094,13 +10132,12 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     -> void {
     PROFILE_FUNCTION();
     const auto implicit_type{implicit_type_stack_.peek()};
-    if (!implicit_type) {
-        return last_type_.emplace(
-            ctx_.poison_node(resolving_,
-                             id,
-                             "Implicit access expression used outside of a typed context",
-                             error::TYPE_MISMATCH,
-                             resolving_.ast.location_of(id)));
+    // With nothing to name a member of, `.name` is an enum literal of its own
+    if (!implicit_type || implicit_type->get_kind() == type_kind::ENUM_LITERAL) {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        resolving_.set_sema_type(implicit_access.member, literal);
+        resolving_.set_sema_type(id, literal);
+        return last_type_.emplace(literal);
     }
 
     // `const f: fn(): T = .init;` finds its member through the function's return type
@@ -10108,6 +10145,15 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     if (const auto fn_data{member_owner->get_data().as_opt<types::function>()}) {
         member_owner = &fn_data->return_type;
     }
+
+    // An `auto` slot takes whatever it's given, so `.name` stays an enum literal there
+    if (member_owner->get_kind() == type_kind::AUTO) {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        resolving_.set_sema_type(implicit_access.member, literal);
+        resolving_.set_sema_type(id, literal);
+        return last_type_.emplace(literal);
+    }
+
     auto result{resolve_structural_access(
         *member_owner, implicit_access.member, resolving_.ast.location_of(id))};
     if (!result) {
@@ -11458,10 +11504,16 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                   is_comptime_aggregate(resolved_type)};
         if (comptime_value && runtime_binding) {
             ctx_.poison_symbol(sym,
-                               fmt::format("a value of type '{}' holds 'type's and only exists at "
-                                           "compile time, so it cannot be stored in a 'let' or "
-                                           "'let mut' binding; use 'const' instead",
-                                           ctx_.type_display_name(resolved_type)),
+                               resolved_type.get_kind() == type_kind::ENUM_LITERAL
+                                   ? std::string{"an enum literal only exists at compile time, so "
+                                                 "it cannot be stored in a 'let' or 'let mut' "
+                                                 "binding; give the binding an enum type "
+                                                 "(`let x: E = .name;`) or use 'const' instead"}
+                                   : fmt::format("a value of type '{}' holds 'type's and only "
+                                                 "exists at compile time, so it cannot be stored "
+                                                 "in a 'let' or 'let mut' binding; use 'const' "
+                                                 "instead",
+                                                 ctx_.type_display_name(resolved_type)),
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());

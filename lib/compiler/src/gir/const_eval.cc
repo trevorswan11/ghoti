@@ -516,6 +516,15 @@ auto const_eval::try_eval_raw(ast::node_id id) -> stdx::option<const_value> {
 auto const_eval::try_eval_for(ast::node_id id, stdx::option<sema::type&> dest)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // An enum literal bound to an enum or tagged union takes that type's member of its name
+    if (dest && dest->get_kind() != sema::type_kind::ENUM_LITERAL) {
+        if (const auto src{module_->get_sema_type_opt(id)};
+            src && src->get_kind() == sema::type_kind::ENUM_LITERAL) {
+            const auto literal{try_eval(id)};
+            if (!literal) { return stdx::none; }
+            return coerce_enum_literal(*literal, *dest);
+        }
+    }
     if (!dest || call_stack_.empty()) { return try_eval(id); }
     const auto src{module_->get_sema_type_opt(id)};
     if (!src) { return try_eval(id); }
@@ -2380,6 +2389,28 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
     return stdx::none;
 }
 
+auto const_eval::coerce_enum_literal(const const_value& literal, sema::type& dest)
+    -> stdx::option<const_value> {
+    const auto lit{literal.as_opt<const_enum>()};
+    if (!lit) { return stdx::none; }
+    if (dest.get_kind() == sema::type_kind::ENUM_LITERAL) { return literal; }
+    if (const auto en{dest.get_data().as_opt<sema::types::enum_t>()}) {
+        const auto val{enum_member_value(*en, lit->name)};
+        if (!val) { return stdx::none; }
+        return const_value{const_enum{lit->name, static_cast<i64>(*val)}, dest};
+    }
+    if (const auto un{dest.get_data().as_opt<sema::types::union_t>()}; un && !un->is_untagged) {
+        for (usize i{0}; i < un->ast_fields.size() && i < un->fields.size(); ++i) {
+            const auto& name{
+                un->enclosing.ast.get_as<ast::identifier_expr>(un->ast_fields[i].name)};
+            if (name.name != lit->name) { continue; }
+            if (un->fields[i]->get_kind() != sema::type_kind::VOID_) { return stdx::none; }
+            return const_value{const_union{lit->name, {}}, dest};
+        }
+    }
+    return stdx::none;
+}
+
 auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view member)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -2684,6 +2715,7 @@ auto const_eval::eval_type_info(sema::type&                                    d
         return wrap("float", std::move(s), ctx_.get_builtin_type("FloatInfo"));
     }
     case sema::type_kind::COMPTIME_FLOAT: return tag_only("comptime_float");
+    case sema::type_kind::ENUM_LITERAL:   return tag_only("enum_literal");
     case sema::type_kind::BOOL:           return tag_only("bool");
     case sema::type_kind::VOID_:          return tag_only("void");
     case sema::type_kind::NORETURN:       return tag_only("noreturn");
@@ -2856,6 +2888,9 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
     PROFILE_FUNCTION();
     const auto& member_name{module_->ast.get_as<ast::identifier_expr>(implicit.member).name};
     if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+        if (sema_type->get_kind() == sema::type_kind::ENUM_LITERAL) {
+            return const_value{const_enum{std::string{member_name}, 0}, *sema_type};
+        }
         return eval_type_member(*sema_type, member_name);
     }
     return stdx::none;
@@ -4521,6 +4556,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (t1->get_kind() != sema::type_kind::INTERFACE) { return const_value{false, bool_type}; }
         return const_value{ctx_.impls.implements(force_deferred_type(*t0), *t1), bool_type};
     }
+    case syntax::token_type_t::BUILTIN_ENUM_LITERAL:
+        return const_value{stdx::option<sema::type&>{
+            ctx_.get_builtin_resolved_type(sema::type_kind::ENUM_LITERAL)}};
     case syntax::token_type_t::BUILTIN_INT:
     case syntax::token_type_t::BUILTIN_FLOAT:
     case syntax::token_type_t::BUILTIN_POINTER:

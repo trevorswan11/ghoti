@@ -66,9 +66,12 @@ TEST_CASE("a `match` arm value is not forced to the matcher type") {
             return match (d) { .x => 0, .y => 1 };
         };
     )",
-        sema::diagnostic{"Implicit access expression used outside of a typed context",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{4UZ, 38UZ}});
+        // The arms are enum literals, which a runtime `let` can't hold
+        sema::diagnostic{"an enum literal only exists at compile time, so it cannot be stored in "
+                         "a 'let' or 'let mut' binding; give the binding an enum type (`let x: "
+                         "E = .name;`) or use 'const' instead",
+                         sema::error::MUTABLE_TYPE_BINDING,
+                         std::pair{4UZ, 12UZ}});
 }
 
 } // namespace ghoti::tests

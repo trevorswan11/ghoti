@@ -299,6 +299,11 @@ class emitter {
     auto concrete_callable_type(sema::type& fat_type, sema::type& src_type) -> sema::type&;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
     auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
+    auto fold_initializer(ast::expr_handle init, sema::type& declared) -> stdx::option<const_value>;
+    auto report_missing_enum_member(const sema::type& dest,
+                                    std::string_view  name,
+                                    ast::expr_handle  at) -> void;
+    auto emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;

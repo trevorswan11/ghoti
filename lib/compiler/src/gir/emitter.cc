@@ -862,8 +862,64 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
     return v;
 }
 
+namespace {
+
+// An enum or tagged union, the types an enum literal turns into a value of
+[[nodiscard]] auto takes_enum_literal(const sema::type& dest) -> bool {
+    if (dest.get_kind() == sema::type_kind::ENUM) { return true; }
+    const auto un{dest.get_data().as_opt<sema::types::union_t>()};
+    return un && !un->is_untagged;
+}
+
+} // namespace
+
+// A declaration's folded initializer; an enum literal becomes the declared enum or union value
+auto emitter::fold_initializer(ast::expr_handle init, sema::type& declared)
+    -> stdx::option<const_value> {
+    auto cv{const_eval_.try_eval(*init)};
+    if (!cv || !cv->get_type() || cv->get_type()->get_kind() != sema::type_kind::ENUM_LITERAL ||
+        !takes_enum_literal(declared) || !cv->is<const_enum>()) {
+        return cv;
+    }
+    if (auto coerced{const_eval_.coerce_enum_literal(*cv, declared)}) { return coerced; }
+    report_missing_enum_member(declared, cv->as<const_enum>().name, init);
+    return stdx::none;
+}
+
+auto emitter::report_missing_enum_member(const sema::type& dest,
+                                         std::string_view  name,
+                                         ast::expr_handle  at) -> void {
+    ctx_.diags.emplace_back(
+        fmt::format("'{}' has no {} named '{}'",
+                    ctx_.type_display_name(dest),
+                    dest.get_kind() == sema::type_kind::ENUM ? "variant" : "`void` field",
+                    name),
+        sema::error::TYPE_MISMATCH,
+        active_ast().location_of(*at));
+}
+
+// `.name` (or a `const` holding one) where an enum or tagged union value is wanted
+auto emitter::emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_type) -> value {
+    const auto literal{const_eval_.try_eval(*expr_id)};
+    if (!literal || !literal->is<const_enum>()) {
+        ctx_.diags.emplace_back("an enum literal must be known at compile time",
+                                sema::error::COMPTIME_EVALUATION_FAILED,
+                                active_ast().location_of(*expr_id));
+        return value{undefined_val{}, dest_type};
+    }
+    if (const auto coerced{const_eval_.coerce_enum_literal(*literal, dest_type)}) {
+        return materialize_const(*coerced);
+    }
+    report_missing_enum_member(dest_type, literal->as<const_enum>().name, expr_id);
+    return value{undefined_val{}, dest_type};
+}
+
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
+    if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
+        src && src->get_kind() == sema::type_kind::ENUM_LITERAL && takes_enum_literal(dest_type)) {
+        return emit_enum_literal_as(expr_id, dest_type);
+    }
     if (sema::is_comptime_numeric(dest_type.get_kind())) {
         if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
             src && !src->is_poison() && !sema::is_comptime_numeric(src->get_kind()) &&
@@ -1145,7 +1201,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
     if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::comptime_context_guard g{const_eval_, true};
         const auto                                    diags_before{ctx_.diags.size()};
-        if (auto cv{const_eval_.try_eval(*decl.value)}) {
+        if (auto cv{fold_initializer(*decl.value, *sema_type)}) {
             if (is_const && cv->is<std::string>() && cv->get_type() &&
                 cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
                 return;
@@ -2177,7 +2233,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         const auto is_comptime{decl.has_modifier(ast::decl_modifiers::COMPTIME)};
         const gir::const_eval::comptime_context_guard g{const_eval_, is_comptime};
         const auto                                    diags_before{ctx_.diags.size()};
-        if (const auto cv{const_eval_.try_eval(*decl.value)}) {
+        if (const auto cv{fold_initializer(*decl.value, *sema_type)}) {
             const auto is_aggregate_cv{cv->is<const_struct>() || cv->is<const_array>() ||
                                        cv->is<const_union>() || cv->is<const_dyn_fat_ptr>() ||
                                        cv->is<const_addr>()};

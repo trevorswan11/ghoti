@@ -257,6 +257,7 @@ pub const TypeInfo = union {
     float: FloatInfo,
     @"comptime_int": void,
     @"comptime_float": void,
+    enum_literal: void,
     @"bool": void,
     @"void": void,
     @"noreturn": void,

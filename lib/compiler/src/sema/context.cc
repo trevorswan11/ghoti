@@ -151,6 +151,8 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::F128, type_kind::F128);
     inject_type(kws::COMPTIME_INT, type_kind::COMPTIME_INT);
     inject_type(kws::COMPTIME_FLOAT, type_kind::COMPTIME_FLOAT);
+    // No keyword spells it; `@EnumLiteral()` names it
+    pool[{type_kind::ENUM_LITERAL, types::mut::CONSTANT}]->resolve<types::builtin_type>();
     inject_type(kws::BOOL, type_kind::BOOL);
     inject_type(kws::VOID, type_kind::VOID_);
 
@@ -361,6 +363,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::RETURN_ADDRESS, params(), t_usize);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
+    inject_function(bis::ENUM_LITERAL, params(), t_type);
     // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
     inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
 

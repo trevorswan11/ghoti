@@ -46,6 +46,8 @@ enum class type_kind : u8 {
     F128,
     COMPTIME_INT,
     COMPTIME_FLOAT,
+    // An uncoerced `.name`: compile-time only, it becomes any enum (or tagged union field) named so
+    ENUM_LITERAL,
     VOID_,
     UNDEFINED,
     NULLPTR,

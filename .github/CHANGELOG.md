@@ -717,6 +717,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@llvmIntrinsic(name, ReturnType, args...)` calls an LLVM intrinsic directly: `@llvmIntrinsic("llvm.x86.sse2.pause", void)`, `@llvmIntrinsic("llvm.ctpop", u32, x)`
     - The name must be one LLVM knows, a target intrinsic must be the target architecture's, the types must fit one of its overloads (a mangled name like `llvm.ctpop.i32` must match the arguments), and arguments it takes as immediates must be known at compile time
     - Untyped literal arguments are `i32` / `f64`, as when they bind an `auto` parameter
+- Enum literals: a `.name` with no type to name a member of has its own compile-time-only type, `@EnumLiteral()`
+    - It becomes any enum with a variant of that name, or any tagged union whose field of that name is `void`, wherever one is expected: `const mode = .fast; let l: Level = mode;`, `takes_level(mode)`, `let o: Option(i32) = nothing;`
+    - `.a == x` works with the literal on either side, two literals compare by name, and `@tagName(.fast)` is `"fast"`
+    - A `comptime` / `auto` parameter can take one (`pick(.small)` with `match comptime (k) { .small => ... }`); a runtime `let` or runtime `auto` parameter can't hold one, and says so
+    - `@typeInfo(@EnumLiteral())` is `.enum_literal`
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
