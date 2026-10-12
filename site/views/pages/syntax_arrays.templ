@@ -94,6 +94,7 @@ let mut a: &[]&^mut T; // Analogous slice type` }
 					<ul>
 						<li>Exclusive range: <code>arr[i..j]</code></li>
 						<li>Inclusive range: <code>arr[i..=j]</code></li>
+						<li>A subscript range never counts down, so constant bounds the wrong way round (<code>arr[3..1]</code>) are an error</li>
 					</ul>
 				</li>
 			</ul>

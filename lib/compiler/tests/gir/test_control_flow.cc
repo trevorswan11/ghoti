@@ -280,11 +280,13 @@ TEST_CASE("GIR for loop over range iterables") {
     const auto& fn1{*gir_mod.get_functions()[1]};
     CHECK(fn1.get_name() == "sum_inclusive");
 
-    // Both should contain comparisons (LT for .. and LE for ..=), step increments, and branch jumps
+    // `..` stops when the counter reaches its end, either range picks its direction up front, and
+    // the step counts up or down
     const auto dump_text{helpers::dump_gir(gir_mod)};
-    CHECK(dump_text.contains("lt bool"));
-    CHECK(dump_text.contains("le bool"));
-    CHECK(dump_text.contains("add i32"));
+    CHECK(dump_text.contains("ne bool"));
+    CHECK(dump_text.contains("gt bool"));
+    CHECK(dump_text.contains("add "));
+    CHECK(dump_text.contains("sub "));
 }
 
 TEST_CASE("Labeled GIR block yielding value via break") {

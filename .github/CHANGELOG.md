@@ -648,7 +648,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
     - `for comptime` is unchanged: it unrolls into constants of the default integer type
 - Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
-- A `for` range whose constant bounds are the wrong way round (`for (5..3)`) is an error, since ranges only count up; with runtime bounds it runs zero times
+- **Breaking:** a `for` range whose start is past its end counts down (`3..0` is 3, 2, 1; `-1..=-8` is -1 through -8), including with runtime bounds, where `for (i..n)` with `i > n` used to run zero times
+    - a subscript range still only counts up, so constant bounds the wrong way round (`a[3..1]`) are an error
 - Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
 - Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
 - Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler

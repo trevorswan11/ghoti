@@ -58,6 +58,7 @@
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/peer_type.hh"
+#include "compiler/sema/range_steps.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -3451,7 +3452,9 @@ auto type_resolver::record_range_counter(usize                     loop_table,
         const auto end{fold_int(*range->rhs)};
         if (!end) { return; }
         const bool inclusive{iterable.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
-        last = inclusive ? *end : *end - 1;
+        const auto steps{range_steps_of(*first, *end, inclusive)};
+        if (steps.count == 0) { return; }
+        last = steps.last();
     } else {
         // An open range stops with its shortest sibling of known length
         stdx::option<u64> shortest;
@@ -5199,12 +5202,15 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                 }
                 const bool inclusive{driver_id.get_token_type() ==
                                      syntax::token_type_t::DOT_DOT_EQ};
-                const i128 raw_count{*hi_i - *lo_i + (inclusive ? 1 : 0)};
-                this_count = raw_count > 0 ? static_cast<usize>(raw_count) : 0UZ;
+                const auto steps{range_steps_of(*lo_i, *hi_i, inclusive)};
+                this_count = static_cast<usize>(steps.count);
                 drv.elem_values.reserve(this_count);
                 for (usize k{0}; k < this_count; ++k) {
                     const auto v{evaluator.fold_binary_values(
-                        syntax::token_type_t::PLUS, *lo, gir::const_value{u64{k}}, driver_id)};
+                        steps.descends() ? syntax::token_type_t::MINUS : syntax::token_type_t::PLUS,
+                        *lo,
+                        gir::const_value{u64{k}},
+                        driver_id)};
                     drv.elem_values.emplace_back(v.value_or(gir::const_value::make_poison()));
                 }
             } else {
@@ -6862,6 +6868,27 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
                                                    resolving_.ast.location_of(index.index)));
     }
 
+    // A subscript range only counts up, unlike a loop's
+    if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};
+        range && range->lhs && range->rhs) {
+        const auto lo_cv{probe_fold(*range->lhs)};
+        const auto hi_cv{probe_fold(*range->rhs)};
+        const auto lo{lo_cv && !lo_cv->is_poison() ? lo_cv->as_int_opt() : stdx::none};
+        const auto hi{hi_cv && !hi_cv->is_poison() ? hi_cv->as_int_opt() : stdx::none};
+        const bool inclusive{(*index.index).get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+        if (lo && hi && *lo > *hi + (inclusive ? 1 : 0)) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("A subscript range cannot count down ({} to {}); only a `for` loop's "
+                            "range may",
+                            static_cast<i64>(*lo),
+                            static_cast<i64>(*hi)),
+                error::ILLEGAL_OPEN_RANGE,
+                resolving_.ast.location_of(index.index)));
+        }
+    }
+
     // A constant range over a container of known length is bounds-checked statically
     if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};
         range && range->rhs) {
@@ -8109,18 +8136,6 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
         }};
         const auto lo{fold_int(range.lhs)};
         const auto hi{fold_int(range.rhs)};
-        // Ranges only count up, so constant bounds the wrong way round are a mistake
-        if (lo && hi && *lo > *hi) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("This range starts at {} but ends at {}, so it is empty; ranges only "
-                            "count up",
-                            static_cast<i64>(*lo),
-                            static_cast<i64>(*hi)),
-                error::ILLEGAL_OPEN_RANGE,
-                resolving_.ast.location_of(id)));
-        }
         // `for comptime` unrolls into constants, which keep the default integer type
         const bool negative{(lo && *lo < 0) || (hi && *hi < 0)};
         if (!unrolled) {

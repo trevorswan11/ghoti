@@ -87,6 +87,7 @@ class emitter {
         local_id                       var_slot;
         stdx::option<sema::type&>      elem_type;
         value                          end_val{};
+        stdx::option<value>            descending{}; // a closed range's runtime direction
         stdx::option<std::string_view> capture_name;
         stdx::option<value>            arr_val{};
         stdx::option<sema::type&>      capture_type;
