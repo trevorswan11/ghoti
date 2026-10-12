@@ -3917,6 +3917,23 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
+        case syntax::token_type_t::BUILTIN_LLVM_INTRINSIC: {
+            // The resolver checked the name and the types; the call carries the name itself
+            std::string name;
+            if (const auto name_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+                if (const auto cv{const_eval_.try_eval(*name_h)}) {
+                    name = cv->as_string_opt().value_or("");
+                }
+            }
+            std::vector<value> args;
+            for (usize i{2}; i < call.arguments.size(); ++i) {
+                args.emplace_back(emit_expression(*call.arguments[i].as_opt<ast::expr_handle>()));
+            }
+            if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
         case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
             if (const auto res{builder_.emit_builtin_call("@returnAddress", {}, ret_type)}) {
                 return value{*res, ret_type};

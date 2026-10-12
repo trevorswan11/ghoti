@@ -361,6 +361,8 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::RETURN_ADDRESS, params(), t_usize);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
+    // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
+    inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
 
     // `@implements(T | value, I)` -> bool (comptime)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);

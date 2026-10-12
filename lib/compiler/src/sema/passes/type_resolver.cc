@@ -44,6 +44,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/ast/visitor.hh"
+#include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
@@ -719,6 +720,14 @@ template <ast::IndexableID ID>
                 fmt::format("Builtin expects 0 or 1 arguments, found {}", call.arguments.size()),
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
+        }
+    } else if (builtin_id == token_type_t::BUILTIN_LLVM_INTRINSIC) {
+        if (call.arguments.size() < 2) {
+            return make_sema_err(fmt::format("'@llvmIntrinsic' expects a name and a return type, "
+                                             "then the arguments; found {} argument(s)",
+                                             call.arguments.size()),
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
         }
     } else if (builtin_id == token_type_t::BUILTIN_TYPE_OF) {
         if (call.arguments.empty()) {
@@ -2503,6 +2512,70 @@ template <ast::IndexableID ID>
 
         return_type = &ctx_.get_array(
             types::mut::CONSTANT, true, content_opt->size(), ctx_.get_int(8, false));
+        break;
+    }
+    case token_type_t::BUILTIN_LLVM_INTRINSIC: {
+        stdx::option<std::string> name;
+        if (const auto name_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            if (const auto val{evaluator.try_eval(*name_h)}) { name = val->as_string_opt(); }
+        }
+        if (!name) {
+            return make_sema_err("'@llvmIntrinsic' needs a compile-time string naming the "
+                                 "intrinsic, like \"llvm.x86.sse2.pause\"",
+                                 error::COMPTIME_EVALUATION_FAILED,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        if (!call_arg_denotes_type(call.arguments[1])) {
+            return make_sema_err("'@llvmIntrinsic' expects the return type as its second argument",
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[1]));
+        }
+        auto& result{denoted_type(*get_resolved_call_arg_type(call.arguments[1]))};
+        if (result.is_poison()) { break; }
+
+        std::vector<const type*> arg_types;
+        bool                     poisoned{false};
+        for (usize i{2}; i < call.arguments.size(); ++i) {
+            const auto& arg{call.arguments[i]};
+            if (call_arg_denotes_type(arg)) {
+                return make_sema_err("'@llvmIntrinsic' arguments are values, not types",
+                                     error::TYPE_USED_AS_VALUE,
+                                     get_call_arg_location(arg));
+            }
+            auto& arg_type{*get_resolved_call_arg_type(arg)};
+            if (arg_type.is_poison()) {
+                poisoned = true;
+                break;
+            }
+            // An untyped literal is an `i32` / `f64`, as when it binds an `auto` parameter
+            arg_types.emplace_back(&ctx_.default_concrete(arg_type));
+        }
+        if (poisoned) { break; }
+        std::vector<usize> immediate_args;
+        if (const auto problem{codegen::check_llvm_intrinsic(
+                *name,
+                result,
+                arg_types,
+                codegen::resolve_target_triple(ctx_.target_opts.triple_str),
+                &immediate_args)}) {
+            return make_sema_err(
+                *problem, error::INVALID_LLVM_INTRINSIC, resolving_.ast.location_of(call.function));
+        }
+        // LLVM takes these as part of the instruction, so they must be known now
+        for (const auto index : immediate_args) {
+            const auto&     arg{call.arguments[index + 2]};
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      arg_h{arg.as_opt<ast::expr_handle>()};
+            if (!arg_h || !evaluator.try_eval(*arg_h)) {
+                return make_sema_err(
+                    fmt::format(
+                        "argument {} of '{}' must be known at compile time", index + 1, *name),
+                    error::COMPTIME_EVALUATION_FAILED,
+                    get_call_arg_location(arg));
+            }
+        }
+        return_type = &result;
         break;
     }
     case token_type_t::BUILTIN_EXPECT:

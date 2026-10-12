@@ -2645,8 +2645,34 @@ auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand)
     return call;
 }
 
+// `@llvmIntrinsic(name, ...)`: sema already matched the types against the intrinsic, so its
+// overloads follow from the lowered operands
+auto llvm_lowering::emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value* {
+    const auto id{llvm::Intrinsic::lookupIntrinsicID(*inst.callee_name)};
+    ASSERT(id != llvm::Intrinsic::not_intrinsic, "@llvmIntrinsic names an intrinsic");
+
+    std::vector<llvm::Value*> args;
+    std::vector<llvm::Type*>  params;
+    for (const auto& operand : inst.operands) {
+        auto* arg{lower_value(operand)};
+        args.emplace_back(arg);
+        params.emplace_back(arg->getType());
+    }
+    auto* ret{inst.type ? types_.translate(*inst.type) : types_.get_void_ty()};
+    auto* fn_type{llvm::FunctionType::get(ret, params, false)};
+
+    llvm::SmallVector<llvm::Type*, 4> overloads;
+    const bool matched{llvm::Intrinsic::isSignatureValid(id, fn_type, overloads)};
+    ASSERT(matched, "@llvmIntrinsic's types were checked against the intrinsic");
+    auto* callee{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, overloads)};
+    return builder_.CreateCall(callee, args);
+}
+
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
+    if (inst.callee_name && inst.callee_name->starts_with("llvm.")) {
+        return emit_llvm_intrinsic_call(inst);
+    }
     stdx::option<syntax::token_type_t> builtin_tok;
     if (inst.callee_name) {
         builtin_tok = syntax::get_builtin_opt(*inst.callee_name);

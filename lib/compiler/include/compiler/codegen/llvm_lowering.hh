@@ -117,6 +117,7 @@ class llvm_lowering {
     [[nodiscard]] auto promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
         -> llvm::Value*;
     auto load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value*;
+    auto emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
 

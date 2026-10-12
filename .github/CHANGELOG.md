@@ -714,6 +714,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@cfg (cpu.has(.avx2)) { ... }` and `@cfgValue(cpu.has(.neon))` test the target CPU; a feature of another architecture is simply absent, so `arch == .x86_64 and cpu.has(.avx2)` works on every target, and a name no architecture has is an error suggesting the closest
     - `builtin.cpu` is the CPU code is generated for (`model` and `features`), and `builtin.cpu.has(.sse4_2)` works at compile time and at runtime
     - `builtin.<arch>.Feature` (`builtin.x86.Feature`, `builtin.aarch64.Feature`, ...) names the target architecture's features as LLVM does, with `-` and `.` as `_`; `builtin.CpuFeature` is the target's, and `builtin.CpuFeatureSet` is a set of them that can be built at runtime
+- `@llvmIntrinsic(name, ReturnType, args...)` calls an LLVM intrinsic directly: `@llvmIntrinsic("llvm.x86.sse2.pause", void)`, `@llvmIntrinsic("llvm.ctpop", u32, x)`
+    - The name must be one LLVM knows, a target intrinsic must be the target architecture's, the types must fit one of its overloads (a mangled name like `llvm.ctpop.i32` must match the arguments), and arguments it takes as immediates must be known at compile time
+    - Untyped literal arguments are `i32` / `f64`, as when they bind an `auto` parameter
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
