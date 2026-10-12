@@ -63,6 +63,7 @@ struct resolved_attributes {
     bool                           naked{false};
     bool                           cold{false};    // `@branchHint(.cold)` opens the body
     bool                           testing{false}; // `@[testing]`: a test helper
+    bool                           no_builtins{false};
     // An attribute whose argument names a parameter so only folds per instantiation
     stdx::option<ast::attribute_kind>    dependent{};
     stdx::option<ast::symbol_visibility> visibility{};

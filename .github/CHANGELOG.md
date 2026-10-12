@@ -708,6 +708,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
     - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
     - A helper is only called directly, from a test or another `@[testing]` function
+- `@[no_builtins]` keeps the optimizer from turning a function's loops into calls to `memcpy`, `memset`, and other library routines, as freestanding code implementing them needs
+    - `@typeInfo(f).function.no_builtins` reflects it
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
@@ -766,6 +768,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
     - `lib/compiler_rt` can `import std;` like any program
+    - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
+    - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
 - Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked

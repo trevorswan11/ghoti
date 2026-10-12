@@ -93,6 +93,38 @@ TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") 
     CHECK(fn.hasFnAttribute(llvm::Attribute::NoInline));
 }
 
+TEST_CASE("Codegen: @[no_builtins] marks the function no-builtins") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const fill = @[no_builtins] fn(p: ^mut u8, n: usize): void {
+            let mut i: usize = 0;
+            while (i < n) : (i += 1) { p[i] = 0; }
+        };
+        pub const plain = fn(): void {};
+        pub const off = @[no_builtins(false)] fn(): void {};
+        pub const main = fn(): void {};
+    )")};
+
+    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir(*ctx, context))};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+    CHECK(UNWRAP(llvm_mod->getFunction("fill")).hasFnAttribute("no-builtins"));
+    CHECK_FALSE(UNWRAP(llvm_mod->getFunction("plain")).hasFnAttribute("no-builtins"));
+    CHECK_FALSE(UNWRAP(llvm_mod->getFunction("off")).hasFnAttribute("no-builtins"));
+}
+
+TEST_CASE("@typeInfo reports @[no_builtins]") {
+    CHECK(helpers::compile_and_run(R"(
+        const fill = @[no_builtins] fn(): void {};
+        const plain = fn(): void {};
+        pub const main = fn(): i32 {
+            const a = @typeInfo(fill).function.no_builtins;
+            const b = @typeInfo(plain).function.no_builtins;
+            return if (a and !b) 42 else 0;
+        };
+    )") == 42);
+}
+
 TEST_CASE("Function-only attributes are validated") {
     SECTION("inline needs a builtin.Inline value") {
         CHECK(has_error("@[inline(1)] const f = fn(): i32 { return 0; };",

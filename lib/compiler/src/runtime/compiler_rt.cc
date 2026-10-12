@@ -228,7 +228,7 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
             continue;
         }
 
-        if (current.empty() || !codegen::is_runtime_libcall(triple, current)) { continue; }
+        if (current.empty() || !codegen::is_compiler_rt_symbol(triple, current)) { continue; }
         const auto first{line.find_first_not_of(" \t")};
         if (first == std::string_view::npos) { continue; }
         const auto body{line.substr(first)};

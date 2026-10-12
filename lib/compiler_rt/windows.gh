@@ -1,0 +1,26 @@
+//! Windows runtime stubs the code generator calls on its own
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+
+@cfg (os == .windows and arch == .x86_64) {
+    comptime {
+        @cfg (abi == .msvc) {
+            symbol(stack_probe, "__chkstk");
+        } else {
+            symbol(stack_probe, "___chkstk_ms");
+        }
+    }
+
+    /// Touches each 4 KiB page of a large stack frame in order, so the guard page grows the stack
+    /// one page at a time. The allocation size arrives in %rax and %rsp is left untouched; every
+    /// register but the saved scratch is preserved. This is libgcc's `___chkstk_ms`, which also
+    /// satisfies MSVC's x64 `__chkstk` contract.
+    @[naked] const stack_probe = fn() callconv(.c): void {
+        asm {
+            template: "push %%rcx\n\tpush %%rax\n\tcmp $0x1000, %%rax\n\tlea 0x18(%%rsp), %%rcx\n\tjb 2f\n1:\n\tsub $0x1000, %%rcx\n\torq $0x0, (%%rcx)\n\tsub $0x1000, %%rax\n\tcmp $0x1000, %%rax\n\tja 1b\n2:\n\tsub %%rax, %%rcx\n\torq $0x0, (%%rcx)\n\tpop %%rax\n\tpop %%rcx\n\tret",
+            clobbers: ("memory"),
+            options: (volatile, noreturn, att),
+        };
+    };
+}

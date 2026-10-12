@@ -14,6 +14,7 @@
 
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/target.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -51,8 +52,8 @@ namespace {
 
 } // namespace
 
-TEST_CASE("objects reference no C runtime, even after the optimizer forms mem* calls") {
-    // At -O2 both loops become `memset`/`memcpy` calls, which ghoti must define itself
+TEST_CASE("objects reference only compiler_rt, even after the optimizer forms mem* calls") {
+    // At -O2 both loops become `memset`/`memcpy` calls, which compiler_rt provides
     constexpr std::string_view source{R"(
         pub const fill = fn(buf: []mut u8, src: []u8): usize {
             let mut i: usize = 0;
@@ -81,7 +82,12 @@ TEST_CASE("objects reference no C runtime, even after the optimizer forms mem* c
             codegen::target_options target_opts{.triple_str = std::string{triple}, .level = level};
             codegen::optimizer_options opt_opts{.level = level};
             REQUIRE(helpers::emit_object(*ctx, context, obj_file, target_opts, opt_opts));
-            CHECK(runtime_dependencies(obj_file.path).empty());
+            const auto triple_obj{codegen::resolve_target_triple(target_opts.triple_str)};
+            for (const auto& name : runtime_dependencies(obj_file.path)) {
+                INFO(name);
+                CHECK(codegen::is_compiler_rt_symbol(
+                    triple_obj, codegen::strip_global_prefix(triple_obj, name)));
+            }
         }
     }
 }

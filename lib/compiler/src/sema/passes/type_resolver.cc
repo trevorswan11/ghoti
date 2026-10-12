@@ -12387,6 +12387,9 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
         case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
         case ast::attribute_kind::VISIBILITY: resolved.visibility = fold_visibility(*item); break;
         case ast::attribute_kind::TESTING:    resolved.testing = true; break;
+        case ast::attribute_kind::NO_BUILTINS:
+            resolved.no_builtins = fold_attribute_bool(*item).value_or(false);
+            break;
         }
     }
 

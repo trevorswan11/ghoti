@@ -106,6 +106,16 @@ constexpr std::array ALL_ATTRIBUTES{
         .doc = "A test helper: may use `@expect`, `@require`, and `@skip`, and is called only "
                "from tests and other `@[testing]` functions",
     },
+    attribute_spec{
+        .name      = "no_builtins",
+        .kind      = attribute_kind::NO_BUILTINS,
+        .min_args  = 0,
+        .max_args  = 1,
+        .targets   = attribute_target::FN,
+        .signature = "no_builtins(bool = true)",
+        .doc       = "The optimizer never turns the body's loops into calls to `memcpy`, `memset`, "
+                     "or other library routines, as freestanding code implementing them needs",
+    },
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)

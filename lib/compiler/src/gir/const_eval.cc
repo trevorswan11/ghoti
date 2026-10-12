@@ -2748,6 +2748,7 @@ auto const_eval::eval_type_info(sema::type&                                    d
                                                 static_cast<i64>(inlining)},
                                      ctx_.get_builtin_type("Inline")});
         s.fields.emplace("naked", const_value{attributes.naked, bool_type});
+        s.fields.emplace("no_builtins", const_value{attributes.no_builtins, bool_type});
         s.fields.emplace("discardable", const_value{attributes.discardable, bool_type});
         s.fields.emplace("cold", const_value{attributes.cold, bool_type});
         s.fields.emplace("alignment", const_value{attributes.alignment.value_or(0), usize_type});

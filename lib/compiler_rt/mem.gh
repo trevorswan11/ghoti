@@ -1,0 +1,204 @@
+//! The C memory routines LLVM calls on its own, for targets without a libc
+//!
+//! Each is `@[no_builtins]`: otherwise the optimizer recognizes the loop and lowers it back into
+//! a call to the routine itself.
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(memcpy, "memcpy");
+    symbol(memmove, "memmove");
+    symbol(memset, "memset");
+    symbol(memcmp, "memcmp");
+    symbol(bcmp, "bcmp");
+}
+
+const word_size = @sizeOf(usize);
+
+/// Whether `a` and `b` sit at the same offset into a machine word
+@[inline(.always)] const co_aligned = fn(a: usize, b: usize): bool {
+    return (a ^ b) & (word_size - 1) == 0;
+};
+
+/// Bytes from `p` up to its next machine word boundary
+@[inline(.always)] const to_word_boundary = fn(p: usize): usize {
+    return (word_size - (p & (word_size - 1))) & (word_size - 1);
+};
+
+pub const memcpy = @[no_builtins] fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+    copy_forward(dst, src, n);
+    return dst;
+};
+
+pub const memmove = @[no_builtins] fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+    // Copying away from the overlap keeps every source byte intact until it is read
+    if (@intFromPtr(dst) <= @intFromPtr(src) or @intFromPtr(dst) >= @intFromPtr(src) + n) {
+        copy_forward(dst, src, n);
+    } else {
+        copy_backward(dst, src, n);
+    }
+    return dst;
+};
+
+pub const memset = @[no_builtins] fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
+    let byte = @truncate(u8, @bitCast(c_uint, c));
+    let mut i: usize = 0;
+    let head = if (n < to_word_boundary(@intFromPtr(dst))) n else to_word_boundary(@intFromPtr(dst));
+    while (i < head) : (i += 1) {
+        dst[i] = byte;
+    }
+
+    // Every byte of the word is `byte`
+    let pattern = @as(usize, byte) *% (~@as(usize, 0) / 0xFF);
+    while (i + word_size <= n) : (i += word_size) {
+        *@ptrCast(^mut usize, dst + i) = pattern;
+    }
+    while (i < n) : (i += 1) {
+        dst[i] = byte;
+    }
+    return dst;
+};
+
+pub const memcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+    let mut i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (a[i] != b[i]) {
+            return @as(c_int, a[i]) - @as(c_int, b[i]);
+        }
+    }
+    return 0;
+};
+
+/// Like `memcmp`, but only says whether the ranges differ
+pub const bcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+    let mut i: usize = 0;
+    if (co_aligned(@intFromPtr(a), @intFromPtr(b))) {
+        let head = if (n < to_word_boundary(@intFromPtr(a))) n else to_word_boundary(@intFromPtr(a));
+        while (i < head) : (i += 1) {
+            if (a[i] != b[i]) return 1;
+        }
+        while (i + word_size <= n) : (i += word_size) {
+            if (*@ptrCast(^usize, a + i) != *@ptrCast(^usize, b + i)) return 1;
+        }
+    }
+    while (i < n) : (i += 1) {
+        if (a[i] != b[i]) return 1;
+    }
+    return 0;
+};
+
+@[no_builtins] const copy_forward = fn(dst: ^mut u8, src: ^u8, n: usize): void {
+    let mut i: usize = 0;
+    if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
+        let head = if (n < to_word_boundary(@intFromPtr(dst))) n else to_word_boundary(@intFromPtr(dst));
+        while (i < head) : (i += 1) {
+            dst[i] = src[i];
+        }
+        while (i + word_size <= n) : (i += word_size) {
+            *@ptrCast(^mut usize, dst + i) = *@ptrCast(^usize, src + i);
+        }
+    }
+    while (i < n) : (i += 1) {
+        dst[i] = src[i];
+    }
+};
+
+@[no_builtins] const copy_backward = fn(dst: ^mut u8, src: ^u8, n: usize): void {
+    let mut i: usize = n;
+    if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
+        // The tail past the last word boundary, then whole words, then the head
+        let tail = (@intFromPtr(dst) + n) & (word_size - 1);
+        let stop = if (n < tail) 0 else n - tail;
+        while (i > stop) {
+            i -= 1;
+            dst[i] = src[i];
+        }
+        while (i >= word_size) {
+            i -= word_size;
+            *@ptrCast(^mut usize, dst + i) = *@ptrCast(^usize, src + i);
+        }
+    }
+    while (i > 0) {
+        i -= 1;
+        dst[i] = src[i];
+    }
+};
+
+test "memcpy copies every byte, aligned or not" {
+    let mut src: [64]mut u8 = undefined;
+    for (0..64) |k| {
+        src[k] = @truncate(u8, k * 7 + 3);
+    }
+    for (0..8) |off| {
+        for (0..40) |len| {
+            let mut dst: [64]mut u8 = undefined;
+            for (0..64) |k| {
+                dst[k] = 0;
+            }
+            _ = memcpy(dst.ptr + off, src.ptr + 1, len);
+            for (0..64) |k| {
+                let expected: u8 = if (k >= off and k < off + len) src[k - off + 1] else 0;
+                @expect(dst[k] == expected);
+            }
+        }
+    }
+}
+
+test "memmove handles overlap in both directions" {
+    for (0..2) |dir| {
+        for (0..24) |len| {
+            let mut buf: [48]mut u8 = undefined;
+            let mut want: [48]mut u8 = undefined;
+            for (0..48) |k| {
+                buf[k] = @truncate(u8, k);
+                want[k] = @truncate(u8, k);
+            }
+            let from: usize = if (dir == 0) 3 else 9;
+            let to: usize = if (dir == 0) 9 else 3;
+            _ = memmove(buf.ptr + to, buf.ptr + from, len);
+            for (0..len) |k| {
+                want[to + k] = @truncate(u8, from + k);
+            }
+            for (0..48) |k| {
+                @expect(buf[k] == want[k]);
+            }
+        }
+    }
+}
+
+test "memset fills with the low byte of its argument" {
+    for (0..8) |off| {
+        for (0..30) |len| {
+            let mut buf: [48]mut u8 = undefined;
+            for (0..48) |k| {
+                buf[k] = 0x11;
+            }
+            _ = memset(buf.ptr + off, 0x1AB, len);
+            for (0..48) |k| {
+                let expected: u8 = if (k >= off and k < off + len) 0xAB else 0x11;
+                @expect(buf[k] == expected);
+            }
+        }
+    }
+}
+
+test "memcmp orders by the first differing byte; bcmp only says whether they differ" {
+    let mut a: [17]mut u8 = undefined;
+    for (0..17) |k| {
+        a[k] = @truncate(u8, k + 1);
+    }
+    let mut b: [17]mut u8 = undefined;
+    for (0..17) |k| {
+        b[k] = a[k];
+    }
+    @expect(memcmp(a.ptr, b.ptr, 17) == 0);
+    @expect(bcmp(a.ptr, b.ptr, 17) == 0);
+    @expect(memcmp(a.ptr, b.ptr, 0) == 0);
+
+    b[13] = 200;
+    @expect(memcmp(a.ptr, b.ptr, 17) < 0);
+    @expect(memcmp(b.ptr, a.ptr, 17) > 0);
+    @expect(bcmp(a.ptr, b.ptr, 17) != 0);
+    @expect(bcmp(a.ptr + 1, b.ptr + 1, 12) == 0);
+}

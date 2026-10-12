@@ -240,6 +240,8 @@ pub const FnInfo = struct {
     /// `@typeInfo`; a bare function type reports these defaults.
     pub inline_mode: Inline = .default,
     pub naked: bool = false,
+    /// The function's `@[no_builtins]`.
+    pub no_builtins: bool = false,
     pub discardable: bool = false,
     /// Opened by `@branchHint(.cold)`.
     pub cold: bool = false,

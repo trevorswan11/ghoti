@@ -30,7 +30,6 @@
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
-#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/soft_f80.hh"
 #include "compiler/codegen/target.hh"
@@ -242,8 +241,6 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
         has_always_inline(llvm_mod)) {
         codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
         TRY(optimizer.optimize(llvm_mod, options));
-        // Optimization may turn loops into `mem*` calls lowering never saw
-        codegen::define_mem_intrinsic_fallbacks(llvm_mod);
     }
     return {};
 }

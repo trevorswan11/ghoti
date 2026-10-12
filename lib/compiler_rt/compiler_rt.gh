@@ -2,6 +2,8 @@ import std;
 
 import "addf3.gh" as _;
 import "comparef.gh" as _;
+import "mem.gh" as _;
+import "windows.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -30,7 +32,7 @@ pub const @"f80" = match comptime (@targetArch()) {
 
 /// MSVC's linker looks for this symbol in any object that uses floating point
 @cfg (os == .windows and abi == .msvc) {
-    let mut _fltused: c_int = 1;
+    export let mut _fltused: c_int = 1;
 }
 
 pub const normalize = fn(T: type, significand: ^mut auto): i32 {
@@ -55,4 +57,5 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
 test {
     import "addf3.gh";
     import "comparef.gh";
+    import "mem.gh";
 }
