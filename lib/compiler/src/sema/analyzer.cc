@@ -124,7 +124,7 @@ constexpr std::array supported_archs{
 auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
-    // `lib/start`'s exports run the tests
+    // `std/start.gh`'s exports run the tests
     for (const auto root : export_roots(gir_module)) { roots.emplace_back(root); }
     roots.emplace_back("test_runner");
     roots.emplace_back("expect_handler");
@@ -368,7 +368,7 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
 
     const auto path{mod::find_start()};
     if (!path) {
-        return make_sema_err("cannot find the program entry code `lib/start/start.gh`; set "
+        return make_sema_err("cannot find the program entry code `lib/std/start.gh`; set "
                              "GHOTI_START to its path",
                              error::MODULE_LOAD_ERROR);
     }
@@ -393,7 +393,7 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
     }
     if (start.is_errored() || start.is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return make_sema_err("the program entry code `lib/start/start.gh` failed to compile",
+        return make_sema_err("the program entry code `lib/std/start.gh` failed to compile",
                              error::MODULE_LOAD_ERROR);
     }
     return {};
@@ -481,7 +481,7 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
                                        ? std::string_view{ctx_.user_main_name}
                                        : user_main_name};
-    // `lib/start`'s exports call `main`
+    // `std/start.gh`'s exports call `main`
     auto roots{export_roots(gir_module)};
     roots.emplace_back(effective_main_name);
     gir_module.prune_unreachable(roots);

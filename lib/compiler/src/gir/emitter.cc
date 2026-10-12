@@ -176,7 +176,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
-    // `lib/start` is attached by the compiler, and emitted last
+    // `std/start.gh` is attached by the compiler, and emitted last
     if (ctx_.start_module && visited.insert(ctx_.start_module.get()).second) {
         imported_mods.emplace_back(ctx_.start_module);
     }

@@ -36,7 +36,7 @@ class llvm_lowering {
     MAKE_PINNED(llvm_lowering);
 
     auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
-    // The program's `main` becomes the internal `_ghoti_main` that `lib/start` calls, leaving
+    // The program's `main` becomes the internal `_ghoti_main` that `std/start.gh` calls, leaving
     // the C `main` symbol to the entry code
     auto lower_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
         -> stdx::box<llvm::Module>;

@@ -348,7 +348,7 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
-        // Linux enters at `lib/start`'s freestanding `_start` (no crt/libc)
+        // Linux enters at `std/start.gh`'s freestanding `_start` (no crt/libc)
         args.emplace_back("-e");
         args.emplace_back(triple.isOSLinux() ? "_start" : "main");
     }

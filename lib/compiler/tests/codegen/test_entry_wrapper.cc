@@ -162,7 +162,7 @@ TEST_CASE("Main function entry validation") {
     }
 }
 
-TEST_CASE("lib/start rejects a main it can't call") {
+TEST_CASE("std/start.gh rejects a main it can't call") {
     const auto [source,
                 message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
         {"pub const main = fn(args: [][:0]u8): bool { return true; };",
@@ -178,7 +178,7 @@ TEST_CASE("lib/start rejects a main it can't call") {
     CHECK(error.message.starts_with(message));
 }
 
-TEST_CASE("An executable enters through lib/start, which calls main") {
+TEST_CASE("An executable enters through std/start.gh, which calls main") {
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
@@ -329,7 +329,7 @@ TEST_CASE("A Linux arch with no freestanding _start is rejected with a diagnosti
                                                 "powerpc64le-unknown-linux-gnu")};
     REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
 
-    // powerpc64le's target is built in, but lib/start has no `_start` for it
+    // powerpc64le's target is built in, but std/start.gh has no `_start` for it
     CHECK(lower_error_for_triple(*ctx, context, "powerpc64le-unknown-linux-gnu") ==
           codegen::error::UNSUPPORTED_TARGET);
     CHECK_FALSE(codegen::can_emit_freestanding_entry(
@@ -421,7 +421,7 @@ TEST_CASE("@export as 'main' picks the entry point") {
     CHECK(llvm_mod->getFunction("main"));
 }
 
-TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
+TEST_CASE("std/start.gh analyzes on its own, as an editor opens it") {
     std::ostringstream  errors;
     mod::file_loader    loader;
     mod::module_manager manager{loader};

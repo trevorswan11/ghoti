@@ -137,7 +137,7 @@ struct module {
     // Every `import` node in this module, at any nesting depth
     std::vector<ast::node_id> import_nodes;
 
-    // `lib/start`, the program's entry code
+    // `std/start.gh`, the program's entry code
     bool is_start{false};
 
     // Root `test` blocks waiting for every module's declarations to resolve (test builds only)
@@ -518,7 +518,7 @@ class module_manager {
         return static_cast<bool>(builtin_module_);
     }
 
-    // Parses `lib/start` from `source` the first time; `path` names it in diagnostics
+    // Parses `std/start.gh` from `source` the first time; `path` names it in diagnostics
     [[nodiscard]] auto get_or_create_start_module(const std::filesystem::path& path,
                                                   std::string_view             source) -> module&;
 
@@ -529,7 +529,7 @@ class module_manager {
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
-    // Whether `path` is `lib/start/start.gh`, opened like any other file (by the LSP, say)
+    // Whether `path` is `lib/std/start.gh`, opened like any other file (by the LSP, say)
     [[nodiscard]] auto is_start_path(const std::filesystem::path& path) -> bool;
 
   private:

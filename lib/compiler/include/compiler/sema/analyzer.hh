@@ -87,7 +87,7 @@ class analyzer {
     // Whether a library keeps its `panic_handler`-style overrides visible (weak) for the program
     // linking it; compiler_rt's builtins never panic, so theirs would only drag in std's I/O
     auto set_library_keeps_handlers(bool keep) noexcept -> void { library_keeps_handlers_ = keep; }
-    // Whether the program is built as an executable, which `lib/start`'s entry code joins
+    // Whether the program is built as an executable, which `std/start.gh`'s entry code joins
     auto set_entry_point(bool entry_point) noexcept -> void { entry_point_ = entry_point; }
 
     // Runs the entire sema pipeline
@@ -221,12 +221,12 @@ class analyzer {
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
-    // Analyzes `lib/start` against `root`, unless `root` has no valid entry to call
+    // Analyzes `std/start.gh` against `root`, unless `root` has no valid entry to call
     [[nodiscard]] auto attach_start_module(mod::module& root, bool for_test_executable)
         -> stdx::result<void, diagnostic>;
 
     // The entry code's `@compileError`s are about the user's entry function, so they're reported
-    // at its declaration in `root` instead of in `lib/start`
+    // at its declaration in `root` instead of in `std/start.gh`
     auto report_entry_errors_at(mod::module& root, mod::module& start, std::string_view entry_name)
         -> void;
 

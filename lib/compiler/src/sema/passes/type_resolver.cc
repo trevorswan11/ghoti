@@ -2520,7 +2520,7 @@ template <ast::IndexableID ID>
         const auto name{syntax::builtin_name(builtin_id)};
         if (!resolving_.is_start) {
             return make_sema_err(fmt::format("'{}()' is only valid in the program's entry code "
-                                             "(`lib/start`)",
+                                             "(`std/start.gh`)",
                                              name),
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));

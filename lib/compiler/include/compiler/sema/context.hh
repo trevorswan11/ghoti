@@ -108,7 +108,7 @@ class export_registry {
         return stdx::none;
     }
 
-    // Like `named`, but skipping the exports of `lib/start`, the program's entry code
+    // Like `named`, but skipping the exports of `std/start.gh`, the program's entry code
     [[nodiscard]] auto named_by_program(std::string_view name) const
         -> stdx::option<const function_export&> {
         for (const auto& entry : exports_) {
@@ -143,7 +143,7 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
-    // The root module and `lib/start`, once an executable's entry code is attached
+    // The root module and `std/start.gh`, once an executable's entry code is attached
     stdx::option<mod::module&> entry_root{};
     stdx::option<mod::module&> start_module{};
     bool                       runtime_safety{true};
