@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
+#include <gsl/util>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InlineAsm.h>
@@ -33,6 +34,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
+#include "support/env.hh"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
@@ -408,6 +410,41 @@ TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
     CHECK(module->is_start);
     CHECK_FALSE(module->is_poisoned());
     CHECK(errors.str().empty());
+}
+
+TEST_CASE("The entry code's @compileError is reported at the program's main") {
+    const tempdir dir{"entry_errors"};
+    dir.write("start.gh", R"(const run = fn(): i32 {
+    if comptime (@typeInfo(@TypeOf(@entryMain())).function.params.len == 0) {
+        @compileError("main must take its arguments");
+    }
+    return 0;
+};
+)");
+    dir.write("main.gh", "\n\npub const main = fn(): void {};\n");
+    set_env("GHOTI_START", (dir.path / "start.gh").string());
+    const auto restore{gsl::finally([] { set_env("GHOTI_START", ""); })};
+
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    analyzer.set_entry_point(true);
+    CHECK(analyzer.analyze(dir.path / "main.gh"));
+
+    const auto  root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
+    const auto& diags{UNWRAP(root->diagnostics.as_opt<sema::diagnostics>())};
+    REQUIRE(diags.size() == 1);
+    const auto& diag{diags[0]};
+    CHECK(diag.get_error() == sema::error::COMPILE_ERROR_REACHED);
+    CHECK(UNWRAP(diag.to_formattable().location).line == 2);
+    const auto message{UNWRAP(diag.get_message())};
+    CHECK(message.starts_with("main must take its arguments (required by "));
+    CHECK(message.ends_with("start.gh:3:9)"));
+
+    const auto start{UNWRAP(manager.try_get_file_module(dir.path / "start.gh"))};
+    CHECK_FALSE(start->is_poisoned());
+    CHECK(errors.str().find("main.gh") != std::string::npos);
 }
 
 } // namespace ghoti::tests

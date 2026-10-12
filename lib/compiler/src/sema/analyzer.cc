@@ -328,6 +328,10 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
 
     if (entry_point_ || for_test_executable) {
         TRY(attach_start_module(*module, for_test_executable));
+        if (module->is_poisoned()) {
+            modules_.print_all_diagnostics(error_stream_);
+            return gir::module{*module, ctx_.arena};
+        }
     }
 
     auto gir_mod{emit_gir(*module, for_test_executable)};
@@ -384,6 +388,8 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
         collect_symbols(start);
         resolve_types(start);
         ctx_.testing = testing;
+        report_entry_errors_at(root, start, for_test_executable ? "test_runner" : "main");
+        if (root.is_poisoned()) { return {}; }
     }
     if (start.is_errored() || start.is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
@@ -393,10 +399,54 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
     return {};
 }
 
+auto analyzer::report_entry_errors_at(mod::module&     root,
+                                      mod::module&     start,
+                                      std::string_view entry_name) -> void {
+    const auto start_diags{start.diagnostics.as_opt<diagnostics>()};
+    if (!start.is_poisoned() || !start_diags) { return; }
+
+    stdx::option<source_location> entry_location;
+    if (root.root_table_idx) {
+        if (const auto sym{registry_.get(*root.root_table_idx).get_opt(entry_name)}) {
+            entry_location = sym->get_symbol_location(root);
+        }
+    }
+
+    auto moved{start_diags->create_new()};
+    auto kept{start_diags->create_new()};
+    for (const auto& diag : *start_diags) {
+        if (diag.get_error() != error::COMPILE_ERROR_REACHED || diag.origin()) {
+            kept.push_back(diag);
+            continue;
+        }
+        const auto at{diag.to_formattable().location};
+        const auto required_by{at ? fmt::format("{}:{}", start.path.generic_string(), *at)
+                                  : start.path.generic_string()};
+        moved.emplace_back(fmt::format("{} (required by {})",
+                                       diag.get_message().value_or("compile error reached"),
+                                       required_by),
+                           error::COMPILE_ERROR_REACHED,
+                           entry_location);
+    }
+    if (moved.empty()) { return; }
+
+    root.absorb_sema_diagnostics(std::move(moved));
+    if (kept.empty()) {
+        start.diagnostics = stdx::monostate{};
+        start.state       = mod::module_state::TYPE_RESOLVED;
+    } else {
+        start.diagnostics.emplace<diagnostics>(std::move(kept));
+    }
+}
+
 auto analyzer::emit_gir(mod::module& module, bool for_test_executable) -> gir::module {
     if ((entry_point_ || for_test_executable) && !ctx_.start_module) {
         if (auto attached{attach_start_module(module, for_test_executable)}; !attached) {
             error_stream_ << attached.error().get_message().value_or("") << '\n';
+        }
+        if (module.is_poisoned()) {
+            modules_.print_all_diagnostics(error_stream_);
+            return gir::module{module, ctx_.arena};
         }
     }
     gir::emitter emitter{ctx_, module};

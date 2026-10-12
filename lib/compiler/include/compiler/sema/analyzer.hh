@@ -225,6 +225,11 @@ class analyzer {
     [[nodiscard]] auto attach_start_module(mod::module& root, bool for_test_executable)
         -> stdx::result<void, diagnostic>;
 
+    // The entry code's `@compileError`s are about the user's entry function, so they're reported
+    // at its declaration in `root` instead of in `lib/start`
+    auto report_entry_errors_at(mod::module& root, mod::module& start, std::string_view entry_name)
+        -> void;
+
     // Prunes, lowers, verifies, and optimizes `gir_module` the way `artifact`'s build requires
     [[nodiscard]] auto lower_artifact(gir::module&                      gir_module,
                                       llvm::LLVMContext&                context,
