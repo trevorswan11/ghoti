@@ -7161,6 +7161,15 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     } else {
         TRY_RESOLVE(binary.lhs);
         lhs_type = last_type_.take();
+        // `false and x` / `true or x` never evaluates `x`, so nothing it would report applies
+        if (lhs_decides_logical_op(id.get_token_type(), binary.lhs)) {
+            const auto diags_before{ctx_.diags.size()};
+            resolve(binary.rhs);
+            DISCARD(ctx_.diags.split_off(diags_before));
+            auto& bool_type{ctx_.get_builtin_resolved_type(type_kind::BOOL)};
+            resolving_.set_sema_type(id, bool_type);
+            return last_type_.emplace(bool_type);
+        }
         {
             const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
             TRY_RESOLVE(binary.rhs);
@@ -14755,6 +14764,16 @@ auto type_resolver::probe_fold(ast::expr_handle expr) const -> stdx::option<gir:
         return stdx::none;
     }
     return folded;
+}
+
+auto type_resolver::lhs_decides_logical_op(syntax::token_type_t op, ast::expr_handle lhs) const
+    -> bool {
+    if (op != syntax::token_type_t::BOOLEAN_AND && op != syntax::token_type_t::BOOLEAN_OR) {
+        return false;
+    }
+    const auto folded{probe_fold(lhs)};
+    return folded && folded->is<bool>() &&
+           folded->as<bool>() == (op == syntax::token_type_t::BOOLEAN_OR);
 }
 
 auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_nature_t {

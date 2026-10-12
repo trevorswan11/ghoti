@@ -5976,9 +5976,21 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
         });
 }
 
+auto emitter::folds_to_bool(ast::expr_handle expr, bool expected) -> bool {
+    const auto diags_before{ctx_.diags.size()};
+    const auto folded{const_eval_.try_eval(expr)};
+    if (ctx_.diags.size() > diags_before) {
+        DISCARD(ctx_.diags.split_off(diags_before));
+        return false;
+    }
+    return folded && folded->is<bool>() && folded->as<bool>() == expected;
+}
+
 auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    // A left side known to be false decides it, and the right side is never evaluated
+    if (folds_to_bool(binary.lhs, false)) { return value{false, bool_type}; }
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{false, bool_type});
     const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
@@ -6006,7 +6018,9 @@ auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> 
 
 auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    // A left side known to be true decides it, and the right side is never evaluated
+    if (folds_to_bool(binary.lhs, true)) { return value{true, bool_type}; }
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{true, bool_type});
 

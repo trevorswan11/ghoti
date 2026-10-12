@@ -418,6 +418,8 @@ class emitter {
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
     auto try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs) -> stdx::option<local_id>;
     auto emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id;
+    // Whether `expr` folds, silently, to the bool `expected`
+    [[nodiscard]] auto folds_to_bool(ast::expr_handle expr, bool expected) -> bool;
     auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
     auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;

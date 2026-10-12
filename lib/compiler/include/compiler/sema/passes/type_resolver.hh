@@ -166,6 +166,9 @@ class type_resolver {
 
     // Whether an operand names a type, holds a value, or cannot tell before instantiation
     [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
+    // Whether `lhs` folds to the value that settles `op` (`false and`, `true or`) by itself
+    [[nodiscard]] auto lhs_decides_logical_op(syntax::token_type_t op, ast::expr_handle lhs) const
+        -> bool;
     [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;
     template <ast::IndexableID ID>
     [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
