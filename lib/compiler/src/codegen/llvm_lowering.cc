@@ -16,6 +16,7 @@
 #include <gsl/pointers>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -125,6 +126,13 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
 }
 
+// A function over compile-time-only values (`Option(type)`'s methods, say) has no runtime form
+[[nodiscard]] auto is_comptime_only(const gir::function& fn) -> bool {
+    const auto fn_data{sema::signature_of(fn.get_type())};
+    return fn.get_linkage() != gir::linkage::EXTERN && fn_data &&
+           is_comptime_only_signature(*fn_data);
+}
+
 // The concrete peer type two operands should lower against, or none if both are
 // `is_untyped_comptime`
 [[nodiscard]] auto concrete_peer_type(stdx::option<sema::type&> op0_ty,
@@ -209,9 +217,12 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return llvm::ConstantFP::get(ty, converted);
 }
 
-[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
-    -> llvm::CallingConv::ID {
+[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv,
+                                    const llvm::Triple& triple) noexcept -> llvm::CallingConv::ID {
     switch (conv) {
+    case ast::calling_convention::X86_WINAPI:
+        return triple.getArch() == llvm::Triple::x86 ? llvm::CallingConv::X86_StdCall
+                                                     : llvm::CallingConv::C;
     case ast::calling_convention::C:            return llvm::CallingConv::C;
     case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
     case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
@@ -299,7 +310,9 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
 // Every function is declared up front so bodies and vtables can reference any of them
 auto llvm_lowering::declare_functions(const gir::module& gir_mod) -> void {
     PROFILE_SCOPE("llvm_lowering: declare functions");
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* fn : gir_mod.get_functions()) {
+        if (!is_comptime_only(*fn)) { declare_function(*fn); }
+    }
 }
 
 auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
@@ -313,7 +326,9 @@ auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+        for (const auto* fn : gir_mod.get_functions()) {
+            if (!is_comptime_only(*fn)) { lower_function(*fn); }
+        }
     }
 }
 
@@ -385,8 +400,14 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
 
 auto llvm_lowering::windows_stack_probe_symbol() const -> stdx::option<std::string_view> {
     const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) { return stdx::none; }
-    return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
+    if (!triple.isOSWindows()) { return stdx::none; }
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
+    }
+    if (triple.getArch() == llvm::Triple::x86) {
+        return triple.isOSCygMing() ? "_alloca" : "_chkstk";
+    }
+    return stdx::none;
 }
 
 auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
@@ -1151,7 +1172,8 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     // Non x86-64 Windows links no runtime that could provide a probe symbol
     if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
     if (fn.get_calling_conv() != ast::calling_convention::C) {
-        llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
+        llvm_fn->setCallingConv(
+            to_llvm_callconv(fn.get_calling_conv(), llvm::Triple{llvm_module_->getTargetTriple()}));
     }
     apply_fn_attributes(*llvm_fn, fn.get_attributes());
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
@@ -1440,12 +1462,12 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
         }
         break;
     }
-    case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
-    case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
-    case gir::instruction_kind::RET:             emit_ret(inst); return;
-    case gir::instruction_kind::GOTO:            emit_goto(inst); return;
-    case gir::instruction_kind::COND_GOTO:       emit_cond_goto(inst); return;
-    case gir::instruction_kind::UNREACHABLE:     emit_unreachable(); return;
+    case gir::instruction_kind::BUILTIN_CALL: result_val = emit_builtin_call(inst); break;
+    case gir::instruction_kind::INLINE_ASM:   result_val = emit_inline_asm(inst); break;
+    case gir::instruction_kind::RET:          emit_ret(inst); return;
+    case gir::instruction_kind::GOTO:         emit_goto(inst); return;
+    case gir::instruction_kind::COND_GOTO:    emit_cond_goto(inst); return;
+    case gir::instruction_kind::UNREACHABLE:  emit_unreachable(); return;
     }
 
     if (result_val && inst.result) { set_local(*inst.result, result_val); }
@@ -2087,8 +2109,10 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
-    call_inst->setCallingConv(is_erased ? llvm::CallingConv::C
-                                        : to_llvm_callconv(ind_fn_data->conv));
+    call_inst->setCallingConv(
+        is_erased
+            ? llvm::CallingConv::C
+            : to_llvm_callconv(ind_fn_data->conv, llvm::Triple{llvm_module_->getTargetTriple()}));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
 }
@@ -2168,7 +2192,7 @@ auto llvm_lowering::get_or_create_fn_trampoline(const sema::types::function& fn)
     std::vector<llvm::Value*> forwarded;
     for (auto& arg : trampoline->args() | std::views::drop(1)) { forwarded.emplace_back(&arg); }
     auto* call{builder_.CreateCall(thin_ty, trampoline->getArg(0), forwarded)};
-    call->setCallingConv(to_llvm_callconv(fn.conv));
+    call->setCallingConv(to_llvm_callconv(fn.conv, llvm::Triple{llvm_module_->getTargetTriple()}));
     call->setTailCall();
     if (thin_ty->getReturnType()->isVoidTy()) {
         builder_.CreateRetVoid();
@@ -2289,26 +2313,26 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
     if (inst.callee_name && inst.callee_name->starts_with("llvm.")) {
         return emit_llvm_intrinsic_call(inst);
     }
-    stdx::option<syntax::token_type_t> builtin_tok;
+    stdx::option<syntax::builtin_t> builtin_tok;
     if (inst.callee_name) {
-        builtin_tok = syntax::get_builtin_opt(*inst.callee_name);
+        builtin_tok = syntax::builtin_from_name(*inst.callee_name);
         if (!builtin_tok && !inst.callee_name->starts_with('@')) {
             const auto at_name{fmt::format("@{}", *inst.callee_name)};
-            builtin_tok = syntax::get_builtin_opt(at_name);
+            builtin_tok = syntax::builtin_from_name(at_name);
         }
     }
 
     if (builtin_tok) {
         switch (*builtin_tok) {
-        case syntax::token_type_t::BUILTIN_PANIC:
-        case syntax::token_type_t::BUILTIN_TRAP:  {
+        case syntax::builtin_t::PANIC:
+        case syntax::builtin_t::TRAP:  {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_TEST_FUNCTIONS: return emit_test_table();
-        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+        case syntax::builtin_t::TEST_FUNCTIONS: return emit_test_table();
+        case syntax::builtin_t::RETURN_ADDRESS: {
             // Overloaded on the code pointer it yields, which lives in the program address space
             const auto code_space{llvm_module_->getDataLayout().getProgramAddressSpace()};
             auto*      retaddr_fn{
@@ -2320,7 +2344,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (!target_ty) { target_ty = builder_.getIntPtrTy(llvm_module_->getDataLayout()); }
             return builder_.CreatePtrToInt(call_val, target_ty, "return_address");
         }
-        case syntax::token_type_t::BUILTIN_EXPECT: {
+        case syntax::builtin_t::EXPECT: {
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
@@ -2336,7 +2360,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.result) { set_local(*inst.result, cond_val); }
             return cond_val;
         }
-        case syntax::token_type_t::BUILTIN_REQUIRE: {
+        case syntax::builtin_t::REQUIRE: {
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
@@ -2356,9 +2380,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ASSERT:
-        case syntax::token_type_t::BUILTIN_VERIFY: {
-            const bool is_verify{*builtin_tok == syntax::token_type_t::BUILTIN_VERIFY};
+        case syntax::builtin_t::ASSERT:
+        case syntax::builtin_t::VERIFY: {
+            const bool is_verify{*builtin_tok == syntax::builtin_t::VERIFY};
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
@@ -2380,7 +2404,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SKIP: {
+        case syntax::builtin_t::SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
             emit_context_handler_call(inst, "skip_handler", 0UZ, 1UZ);
             // A test returns right after; a `@[testing]` helper unwinds to it here
@@ -2392,7 +2416,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SRC: {
+        case syntax::builtin_t::SRC: {
             ASSERT(inst.type, "@src must carry its SourceLocation result type");
             ASSERT(inst.operands.size() >= 3, "@src expects [file, line, column] operands");
             auto* struct_ty{llvm::cast<llvm::StructType>(types_.translate(*inst.type))};
@@ -2418,22 +2442,22 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (col_v) { agg = builder_.CreateInsertValue(agg, col_v, {2U}); }
             return agg;
         }
-        case syntax::token_type_t::BUILTIN_TARGET_OS: {
+        case syntax::builtin_t::TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
+        case syntax::builtin_t::TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{
                 std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        case syntax::builtin_t::TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{triple.str(), inst.type});
         }
 
         // Memory operations
-        case syntax::token_type_t::BUILTIN_MEMCPY: {
+        case syntax::builtin_t::MEMCPY: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2443,7 +2467,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMSET: {
+        case syntax::builtin_t::MEMSET: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -2451,7 +2475,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+        case syntax::builtin_t::MEMMOVE: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2463,7 +2487,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
 
         // C Varargs
-        case syntax::token_type_t::BUILTIN_C_VA_START: {
+        case syntax::builtin_t::C_VA_START: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2472,7 +2496,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_COPY: {
+        case syntax::builtin_t::C_VA_COPY: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2485,7 +2509,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_END: {
+        case syntax::builtin_t::C_VA_END: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2494,7 +2518,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_ARG: {
+        case syntax::builtin_t::C_VA_ARG: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
                 if (auto* ty{types_.translate(*inst.type)}) { return emit_va_arg(list, ty); }
@@ -2502,7 +2526,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_CLZ: {
+        case syntax::builtin_t::CLZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2512,7 +2536,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_CTZ: {
+        case syntax::builtin_t::CTZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2522,7 +2546,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_POPCOUNT: {
+        case syntax::builtin_t::POPCOUNT: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2534,7 +2558,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
 
         // Fused multiply add
-        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+        case syntax::builtin_t::MUL_ADD: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             const usize base_idx{inst.operands.size() >= 4 ? 1u : 0u};
             auto*       a{lower_value(inst.operands[base_idx])};
@@ -2552,24 +2576,24 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_SQRT:
-        case syntax::token_type_t::BUILTIN_SIN:
-        case syntax::token_type_t::BUILTIN_COS:
-        case syntax::token_type_t::BUILTIN_TAN:
-        case syntax::token_type_t::BUILTIN_EXP:
-        case syntax::token_type_t::BUILTIN_EXP2:
-        case syntax::token_type_t::BUILTIN_LOG:
-        case syntax::token_type_t::BUILTIN_LOG2:
-        case syntax::token_type_t::BUILTIN_LOG10:
-        case syntax::token_type_t::BUILTIN_FLOOR:
-        case syntax::token_type_t::BUILTIN_CEIL:  {
+        case syntax::builtin_t::SQRT:
+        case syntax::builtin_t::SIN:
+        case syntax::builtin_t::COS:
+        case syntax::builtin_t::TAN:
+        case syntax::builtin_t::EXP:
+        case syntax::builtin_t::EXP2:
+        case syntax::builtin_t::LOG:
+        case syntax::builtin_t::LOG2:
+        case syntax::builtin_t::LOG10:
+        case syntax::builtin_t::FLOOR:
+        case syntax::builtin_t::CEIL:  {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* operand{lower_value(inst.operands[0])};
             if (!operand || !operand->getType()->isFloatingPointTy()) { return nullptr; }
             return emit_math_call(*gir::semantics::math_function_of(*builtin_tok), operand);
         }
 
-        case syntax::token_type_t::BUILTIN_ABS: {
+        case syntax::builtin_t::ABS: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 if (val->getType()->isFloatingPointTy()) {
@@ -2594,7 +2618,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+        case syntax::builtin_t::FIELD_PARENT_PTR: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* field_ptr{lower_value(inst.operands[0])};
             if (!field_ptr || !inst.type) { return nullptr; }
@@ -2617,13 +2641,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
         }
 
-        case syntax::token_type_t::BUILTIN_MIN:
-        case syntax::token_type_t::BUILTIN_MAX: {
+        case syntax::builtin_t::MIN:
+        case syntax::builtin_t::MAX: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
-            const bool is_max{*builtin_tok == syntax::token_type_t::BUILTIN_MAX};
+            const bool is_max{*builtin_tok == syntax::builtin_t::MAX};
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (a->getType()->isFloatingPointTy()) {
                 // IEEE minimumNumber/maximumNumber, spelled out so every float type lowers on
@@ -2649,30 +2673,30 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return builder_.CreateCall(fn, {a, b});
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_TRUNC:
-        case syntax::token_type_t::BUILTIN_REM:       {
+        case syntax::builtin_t::DIV_TRUNC:
+        case syntax::builtin_t::REM:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
-            const bool is_rem{*builtin_tok == syntax::token_type_t::BUILTIN_REM};
+            const bool is_rem{*builtin_tok == syntax::builtin_t::REM};
             if (is_rem) {
                 return is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b);
             }
             return is_signed ? builder_.CreateSDiv(a, b) : builder_.CreateUDiv(a, b);
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_FLOOR:
-        case syntax::token_type_t::BUILTIN_MOD:       {
+        case syntax::builtin_t::DIV_FLOOR:
+        case syntax::builtin_t::MOD:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
-            const bool is_mod{*builtin_tok == syntax::token_type_t::BUILTIN_MOD};
+            const bool is_mod{*builtin_tok == syntax::builtin_t::MOD};
             if (!is_signed) {
                 return is_mod ? builder_.CreateURem(a, b) : builder_.CreateUDiv(a, b);
             }
@@ -2697,10 +2721,10 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 adjust, builder_.CreateSub(q, llvm::ConstantInt::get(a->getType(), 1)), q);
         }
 
-        case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+        case syntax::builtin_t::ADD_WITH_OVERFLOW:
+        case syntax::builtin_t::SUB_WITH_OVERFLOW:
+        case syntax::builtin_t::MUL_WITH_OVERFLOW:
+        case syntax::builtin_t::SHL_WITH_OVERFLOW: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
@@ -2711,7 +2735,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 
             llvm::Value* result{nullptr};
             llvm::Value* overflow{nullptr};
-            if (*builtin_tok == syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW) {
+            if (*builtin_tok == syntax::builtin_t::SHL_WITH_OVERFLOW) {
                 result = builder_.CreateShl(a, b);
                 auto* back{is_signed ? builder_.CreateAShr(result, b)
                                      : builder_.CreateLShr(result, b)};
@@ -2719,11 +2743,11 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             } else {
                 llvm::Intrinsic::ID id{};
                 switch (*builtin_tok) {
-                case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
+                case syntax::builtin_t::ADD_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::sadd_with_overflow
                                    : llvm::Intrinsic::uadd_with_overflow;
                     break;
-                case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
+                case syntax::builtin_t::SUB_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::ssub_with_overflow
                                    : llvm::Intrinsic::usub_with_overflow;
                     break;
@@ -2742,7 +2766,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return overflow;
         }
 
-        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+        case syntax::builtin_t::ATOMIC_LOAD: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             if (!ptr || !inst.type) { return nullptr; }
@@ -2754,7 +2778,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             load->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return load;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+        case syntax::builtin_t::ATOMIC_STORE: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -2764,7 +2788,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             store->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+        case syntax::builtin_t::ATOMIC_RMW: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -2775,8 +2799,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                             llvm::MaybeAlign(),
                                             to_llvm_ordering(inst.atomic_order.value_or(0)));
         }
-        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
-        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+        case syntax::builtin_t::CMPXCHG_WEAK:
+        case syntax::builtin_t::CMPXCHG_STRONG: {
             VERIFY(inst.operands.size() >= 4, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* expected{lower_value(inst.operands[1])};
@@ -2790,13 +2814,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                              llvm::MaybeAlign(),
                                              to_llvm_ordering(inst.atomic_order.value_or(0)),
                                              to_llvm_ordering(inst.atomic_fail_order.value_or(0)))};
-            cmpxchg->setWeak(*builtin_tok == syntax::token_type_t::BUILTIN_CMPXCHG_WEAK);
+            cmpxchg->setWeak(*builtin_tok == syntax::builtin_t::CMPXCHG_WEAK);
             auto* cx_result{builder_.CreateExtractValue(cmpxchg, {0U})};
             auto* success{builder_.CreateExtractValue(cmpxchg, {1U})};
             builder_.CreateStore(cx_result, out_ptr);
             return success;
         }
-        case syntax::token_type_t::BUILTIN_FENCE: {
+        case syntax::builtin_t::FENCE: {
             builder_.CreateFence(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }

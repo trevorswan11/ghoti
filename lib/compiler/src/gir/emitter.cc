@@ -130,8 +130,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     };
 
     // Traverse all transitively imported modules reachable from ast_module_
-    std::vector<mod::module*>                  imported_mods;
-    ankerl::unordered_dense::set<mod::module*> visited;
+    std::vector<stdx::option<mod::module&>>                   imported_mods;
+    ankerl::unordered_dense::set<gsl::not_null<mod::module*>> visited;
     visited.insert(&ast_module_);
 
     auto collect_imported = [&](auto& self, mod::module& cur) -> void {
@@ -153,7 +153,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     collect_imported(collect_imported, ast_module_);
 
     // Test discovery only follows `test { import "x.gh"...; }`-nested imports, recursively
-    ankerl::unordered_dense::set<mod::module*> test_discovered;
+    ankerl::unordered_dense::set<gsl::not_null<mod::module*>> test_discovered;
     test_discovered.insert(&ast_module_);
     {
         std::vector<mod::module*> frontier{&ast_module_};
@@ -177,7 +177,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     }
 
     // `lib/start` is attached by the compiler, and emitted last
-    if (ctx_.start_module && visited.insert(ctx_.start_module).second) {
+    if (ctx_.start_module && visited.insert(ctx_.start_module.get()).second) {
         imported_mods.emplace_back(ctx_.start_module);
     }
 
@@ -189,7 +189,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 
     {
         PROFILE_SCOPE("emitter: resolve deferred types in imported modules");
-        for (auto* m : imported_mods) {
+        for (auto m : imported_mods) {
             const_eval evaluator{ctx_, *m};
             evaluator.resolve_all_deferred_types();
         }
@@ -226,9 +226,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         return h.finalize();
     };
 
-    std::vector<std::pair<const mod::module*, u64>> pre_emit_checksums;
+    std::vector<std::pair<stdx::option<const mod::module&>, u64>> pre_emit_checksums;
     pre_emit_checksums.emplace_back(&ast_module_, compute_side_table_checksum(ast_module_));
-    for (const auto* m : imported_mods) {
+    for (const auto m : imported_mods) {
         if (m) { pre_emit_checksums.emplace_back(m, compute_side_table_checksum(*m)); }
     }
 #endif
@@ -253,12 +253,12 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
 
     {
         PROFILE_SCOPE("emitter: emit imported modules");
-        for (auto* other_mod : imported_mods) {
+        for (auto other_mod : imported_mods) {
             if (!other_mod || other_mod->is_poisoned() || other_mod->is_errored()) { continue; }
             const auto diags_before{ctx_.diags.size()};
             auto       prev_module{std::exchange(active_module_, other_mod)};
             const_eval_.set_module(*other_mod);
-            const bool emit_tests{test_discovered.contains(other_mod)};
+            const bool emit_tests{test_discovered.contains(other_mod.get())};
             for (const auto root_id : other_mod->ast) {
                 emit_top_level_stmt(*other_mod, root_id, emit_tests);
             }
@@ -591,8 +591,7 @@ auto decl_is_deferred_compile_error(const ast::AST& ast, const ast::decl_stmt& d
     const ast::node_id value_id{*decl.value};
     if (value_id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{ast.get_as<ast::call_expr>(value_id)};
-    return ast::node_id{call.function}.get_token_type() ==
-           syntax::token_type_t::BUILTIN_COMPILE_ERROR;
+    return ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
 }
 
 // Resolves an extern decl's optional `("target")` argument, defaulting to `"c"`.
@@ -1185,6 +1184,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                                       gir::linkage::EXTERN,
                                       get_extern_target(active_ast(), decl))};
             fn.set_link_name(get_link_name(active_ast(), decl));
+            fn.set_calling_conv(fn_data->conv);
             fn.set_weak(decl.has_modifier(ast::decl_modifiers::WEAK));
             // With no literal, the declaration itself holds the attributes, like `visibility`
             apply_fn_attributes(fn, active_mod(), id);
@@ -1473,8 +1473,7 @@ auto emitter::branch_hint_of(const mod::module& owner, ast::node_id stmt)
     const auto first{owner.ast.get_as_opt<ast::expr_stmt>(*block->statements.front())};
     if (!first) { return stdx::none; }
     const auto call{owner.ast.get_as_opt<ast::call_expr>(*first->expression)};
-    if (!call || ast::node_id{call->function}.get_token_type() !=
-                     syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+    if (!call || ast::node_id{call->function}.get_builtin() != syntax::builtin_t::BRANCH_HINT) {
         return stdx::none;
     }
     const auto cv{const_eval_.try_eval(*call->arguments[0].as_opt<ast::expr_handle>())};
@@ -3435,7 +3434,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
 
     // Copying into a slice range moves the source's elements in; the lengths match statically
     if (const auto dest{sema::slice_copy_destination(active_mod(), assign.lhs)}) {
-        emit_mem_intrinsic(id, *dest, assign.rhs, syntax::token_type_t::BUILTIN_MEMMOVE, false);
+        emit_mem_intrinsic(id, *dest, assign.rhs, syntax::builtin_t::MEMMOVE, false);
         return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
 
@@ -3686,19 +3685,19 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
 
     // Builtin call handling
-    const auto fn_token{call.function->get_token_type()};
-    if (syntax::get_builtin_opt(fn_token)) {
+    if (const auto builtin{call.function->get_builtin()}) {
+        const auto fn_token{*builtin};
         switch (fn_token) {
-        case syntax::token_type_t::BUILTIN_AS:
-        case syntax::token_type_t::BUILTIN_INT_CAST:
-        case syntax::token_type_t::BUILTIN_TRUNCATE:
-        case syntax::token_type_t::BUILTIN_INT_FROM_BOOL:
-        case syntax::token_type_t::BUILTIN_BIT_CAST:
-        case syntax::token_type_t::BUILTIN_PTR_CAST:
-        case syntax::token_type_t::BUILTIN_ALIGN_CAST:
-        case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT:
-        case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
-        case syntax::token_type_t::BUILTIN_FLOAT_CAST:     {
+        case syntax::builtin_t::AS:
+        case syntax::builtin_t::INT_CAST:
+        case syntax::builtin_t::TRUNCATE:
+        case syntax::builtin_t::INT_FROM_BOOL:
+        case syntax::builtin_t::BIT_CAST:
+        case syntax::builtin_t::PTR_CAST:
+        case syntax::builtin_t::ALIGN_CAST:
+        case syntax::builtin_t::INT_FROM_FLOAT:
+        case syntax::builtin_t::FLOAT_FROM_INT:
+        case syntax::builtin_t::FLOAT_CAST:     {
             // An untyped result only exists at compile time
             if (sema::is_comptime_numeric(ret_type.get_kind())) {
                 if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
@@ -3715,35 +3714,34 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     const auto operand{emit_expression(*op_expr)};
 
                     auto cast_kind{instruction_kind::WIDEN_CAST};
-                    if (fn_token == syntax::token_type_t::BUILTIN_INT_CAST) {
+                    if (fn_token == syntax::builtin_t::INT_CAST) {
                         cast_kind = instruction_kind::INT_CAST;
                         emit_int_cast_guard(operand, ret_type, *op_expr);
-                    } else if (fn_token == syntax::token_type_t::BUILTIN_TRUNCATE) {
+                    } else if (fn_token == syntax::builtin_t::TRUNCATE) {
                         cast_kind = instruction_kind::TRUNC_CAST;
-                    } else if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_BOOL) {
+                    } else if (fn_token == syntax::builtin_t::INT_FROM_BOOL) {
                         cast_kind = instruction_kind::INT_CAST;
-                    } else if (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST) {
+                    } else if (fn_token == syntax::builtin_t::BIT_CAST) {
                         cast_kind = instruction_kind::BIT_CAST;
-                    } else if (fn_token == syntax::token_type_t::BUILTIN_PTR_CAST ||
-                               fn_token == syntax::token_type_t::BUILTIN_ALIGN_CAST) {
+                    } else if (fn_token == syntax::builtin_t::PTR_CAST ||
+                               fn_token == syntax::builtin_t::ALIGN_CAST) {
                         cast_kind = instruction_kind::PTR_CAST;
                     }
-                    if (fn_token == syntax::token_type_t::BUILTIN_AS) {
+                    if (fn_token == syntax::builtin_t::AS) {
                         check_comptime_float_fits(operand, ret_type, *op_expr);
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
                     // An untyped operand has no width of its own to reinterpret
-                    if (fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT ||
-                        fn_token == syntax::token_type_t::BUILTIN_FLOAT_CAST ||
-                        (fn_token == syntax::token_type_t::BUILTIN_BIT_CAST &&
-                         is_untyped_number(operand))) {
+                    if (fn_token == syntax::builtin_t::INT_FROM_FLOAT ||
+                        fn_token == syntax::builtin_t::FLOAT_FROM_INT ||
+                        fn_token == syntax::builtin_t::FLOAT_CAST ||
+                        (fn_token == syntax::builtin_t::BIT_CAST && is_untyped_number(operand))) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }
                     }
                     const bool checked{safety_enabled() &&
-                                       fn_token == syntax::token_type_t::BUILTIN_INT_FROM_FLOAT};
+                                       fn_token == syntax::builtin_t::INT_FROM_FLOAT};
                     const auto dest{builder_.emit_cast(cast_kind, operand, ret_type, checked)};
                     value      result{dest, ret_type};
                     emit_enum_cast_guard(id, result, operand, *op_expr);
@@ -3752,7 +3750,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_BACKING_INT: {
+        case syntax::builtin_t::BACKING_INT: {
             const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()};
             if (!op_expr) { break; }
             if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
@@ -3775,7 +3773,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             return value{builder_.emit_cast(instruction_kind::BIT_CAST, operand, ret_type),
                          ret_type};
         }
-        case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
+        case syntax::builtin_t::FROM_BACKING_INT: {
             const auto op_expr{call.arguments.back().as_opt<ast::expr_handle>()};
             if (!op_expr) { break; }
             if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
@@ -3788,7 +3786,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             emit_enum_cast_guard(id, result, operand, *op_expr);
             return result;
         }
-        case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
+        case syntax::builtin_t::BOOL_FROM_INT: {
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
@@ -3805,7 +3803,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
+        case syntax::builtin_t::PTR_FROM_INT: {
             if (call.arguments.size() >= 2) {
                 if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
@@ -3816,7 +3814,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_DYN_CAST: {
+        case syntax::builtin_t::DYN_CAST: {
             // `@dynCast(^T, w)` -> `w`'s erased `data` pointer, retyped. No RTTI check.
             if (call.arguments.size() >= 2) {
                 if (const auto op_expr{call.arguments[1].as_opt<ast::expr_handle>()}) {
@@ -3846,7 +3844,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
+        case syntax::builtin_t::INT_FROM_PTR: {
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
@@ -3857,8 +3855,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_CONST_CAST:
-        case syntax::token_type_t::BUILTIN_VOLATILE_CAST: {
+        case syntax::builtin_t::CONST_CAST:
+        case syntax::builtin_t::VOLATILE_CAST: {
             if (!call.arguments.empty()) {
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
                     const auto operand{emit_expression(*op_expr)};
@@ -3867,7 +3865,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_SLICE_FROM_PTR: {
+        case syntax::builtin_t::SLICE_FROM_PTR: {
             if (call.arguments.size() >= 2) {
                 const auto op_ptr{call.arguments[0].as_opt<ast::expr_handle>()};
                 const auto op_len{call.arguments[1].as_opt<ast::expr_handle>()};
@@ -3893,7 +3891,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+        case syntax::builtin_t::FIELD_PARENT_PTR: {
             const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
             const auto ptr_h{call.arguments[2].as_opt<ast::expr_handle>()};
             const auto parent_ptr{ret_type.get_data().as_opt<sema::types::pointer>()};
@@ -3913,7 +3911,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_FIELD: {
+        case syntax::builtin_t::FIELD: {
             if (const auto addr{try_emit_field_builtin_addr(call)}) {
                 return value{builder_.emit_load(*addr, ret_type), ret_type};
             }
@@ -3923,7 +3921,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_FIELD_DEFAULT: {
+        case syntax::builtin_t::FIELD_DEFAULT: {
             // The resolver already validated the field exists and has a default
             const auto t_h{call.arguments[0].as_opt<ast::expr_handle>()};
             const auto name_h{call.arguments[1].as_opt<ast::expr_handle>()};
@@ -3957,7 +3955,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_PANIC: {
+        case syntax::builtin_t::PANIC: {
             // The resolver has already checked the message is a compile-time-constant string.
             std::string message{"panic"};
             if (!call.arguments.empty()) {
@@ -3972,7 +3970,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             emit_panic_call(message, id);
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_COMPILE_ERROR: {
+        case syntax::builtin_t::COMPILE_ERROR: {
             std::string message{"compilation aborted by @compileError"};
             if (!call.arguments.empty()) {
                 if (const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
@@ -3988,8 +3986,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                                     active_ast().location_of(call.function));
             return value{undefined_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return value{void_val{}, ret_type};
-        case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+        case syntax::builtin_t::BRANCH_HINT:        return value{void_val{}, ret_type};
+        case syntax::builtin_t::SET_RUNTIME_SAFETY: {
             const auto arg{*call.arguments[0].as_opt<ast::expr_handle>()};
             if (const auto cv{const_eval_.try_eval(arg)}) {
                 if (const auto enabled{cv->as_opt<bool>()}) {
@@ -3999,12 +3997,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_TRAP: {
+        case syntax::builtin_t::TRAP: {
             builder_.emit_builtin_call("@trap", {}, ret_type);
             builder_.emit_unreachable();
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_LLVM_INTRINSIC: {
+        case syntax::builtin_t::LLVM_INTRINSIC: {
             // The resolver checked the name and the types; the call carries the name itself
             std::string name;
             if (const auto name_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
@@ -4021,24 +4019,24 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_ENTRY_MAIN: {
+        case syntax::builtin_t::ENTRY_MAIN: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             return value{undefined_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_TEST_FUNCTIONS: {
+        case syntax::builtin_t::TEST_FUNCTIONS: {
             // Lowering builds the table once every test function is known
             if (const auto res{builder_.emit_builtin_call("@testFunctions", {}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+        case syntax::builtin_t::RETURN_ADDRESS: {
             if (const auto res{builder_.emit_builtin_call("@returnAddress", {}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_SRC: {
+        case syntax::builtin_t::SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
             const auto         loc{active_ast().location_of(id)};
             auto&              u32_type{ctx_.get_int(32, false)};
@@ -4052,21 +4050,21 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_EMBED:
-        case syntax::token_type_t::BUILTIN_SIZE_OF:
-        case syntax::token_type_t::BUILTIN_BIT_SIZE_OF:
-        case syntax::token_type_t::BUILTIN_ALIGN_OF:
-        case syntax::token_type_t::BUILTIN_TYPE_OF:
-        case syntax::token_type_t::BUILTIN_TYPE_NAME:
-        case syntax::token_type_t::BUILTIN_TARGET_OS:
-        case syntax::token_type_t::BUILTIN_TARGET_ARCH:
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE:
-        case syntax::token_type_t::BUILTIN_OPTIMIZE_MODE:
-        case syntax::token_type_t::BUILTIN_RUNTIME_SAFETY: {
+        case syntax::builtin_t::EMBED:
+        case syntax::builtin_t::SIZE_OF:
+        case syntax::builtin_t::BIT_SIZE_OF:
+        case syntax::builtin_t::ALIGN_OF:
+        case syntax::builtin_t::TYPE_OF:
+        case syntax::builtin_t::TYPE_NAME:
+        case syntax::builtin_t::TARGET_OS:
+        case syntax::builtin_t::TARGET_ARCH:
+        case syntax::builtin_t::TARGET_TRIPLE:
+        case syntax::builtin_t::OPTIMIZE_MODE:
+        case syntax::builtin_t::RUNTIME_SAFETY: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             break;
         }
-        case syntax::token_type_t::BUILTIN_TAG_NAME: {
+        case syntax::builtin_t::TAG_NAME: {
             if (const auto cv{const_eval_.try_eval(id)}) {
                 // A bare string constant's `to_gir_value()` carries only a data pointer
                 if (const auto s{cv->as_opt<std::string>()}) {
@@ -4086,9 +4084,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             break;
         }
-        case syntax::token_type_t::BUILTIN_EXPECT:
-        case syntax::token_type_t::BUILTIN_REQUIRE: {
-            const auto is_expect{fn_token == syntax::token_type_t::BUILTIN_EXPECT};
+        case syntax::builtin_t::EXPECT:
+        case syntax::builtin_t::REQUIRE: {
+            const auto is_expect{fn_token == syntax::builtin_t::EXPECT};
 
             value               cond_val{void_val{}, ret_type};
             stdx::option<value> msg_val;
@@ -4125,9 +4123,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (is_expect && local_res) { return value{*local_res, ret_type}; }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_ASSERT:
-        case syntax::token_type_t::BUILTIN_VERIFY: {
-            const bool is_verify{fn_token == syntax::token_type_t::BUILTIN_VERIFY};
+        case syntax::builtin_t::ASSERT:
+        case syntax::builtin_t::VERIFY: {
+            const bool is_verify{fn_token == syntax::builtin_t::VERIFY};
 
             // A compile-time-known-true condition needs no check
             if (!call.arguments.empty()) {
@@ -4169,7 +4167,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 is_verify ? "@verify" : "@assert", std::move(args), ret_type);
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_SKIP: {
+        case syntax::builtin_t::SKIP: {
             // `@skip(["msg"])` marks the enclosing test as skipped and returns from it.
             stdx::option<value> msg_val;
             for (const auto& arg : call.arguments) {
@@ -4201,16 +4199,16 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_CLZ:
-        case syntax::token_type_t::BUILTIN_CTZ:
-        case syntax::token_type_t::BUILTIN_POPCOUNT:
-        case syntax::token_type_t::BUILTIN_ABS:
-        case syntax::token_type_t::BUILTIN_MIN:
-        case syntax::token_type_t::BUILTIN_MAX:
-        case syntax::token_type_t::BUILTIN_DIV_TRUNC:
-        case syntax::token_type_t::BUILTIN_DIV_FLOOR:
-        case syntax::token_type_t::BUILTIN_REM:
-        case syntax::token_type_t::BUILTIN_MOD:       {
+        case syntax::builtin_t::CLZ:
+        case syntax::builtin_t::CTZ:
+        case syntax::builtin_t::POPCOUNT:
+        case syntax::builtin_t::ABS:
+        case syntax::builtin_t::MIN:
+        case syntax::builtin_t::MAX:
+        case syntax::builtin_t::DIV_TRUNC:
+        case syntax::builtin_t::DIV_FLOOR:
+        case syntax::builtin_t::REM:
+        case syntax::builtin_t::MOD:       {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
 
             // Two operands meet at their peer type, which is the result's
@@ -4233,10 +4231,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const bool                  checked{
                 safety_enabled() && is_int &&
                 ((int_op && semantics::any(semantics::runtime_checks(*int_op, domain))) ||
-                 (fn_token == syntax::token_type_t::BUILTIN_ABS &&
+                 (fn_token == syntax::builtin_t::ABS &&
                   semantics::any(
                       semantics::runtime_checks(semantics::int_unary_op::ABS, domain))))};
-            const auto name{*syntax::get_builtin_opt(fn_token)};
+            const auto name{syntax::builtin_name(fn_token)};
             if (const auto res{builder_.emit_builtin_call(name,
                                                           std::move(args),
                                                           ret_type,
@@ -4248,28 +4246,28 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_SQRT:
-        case syntax::token_type_t::BUILTIN_SIN:
-        case syntax::token_type_t::BUILTIN_COS:
-        case syntax::token_type_t::BUILTIN_TAN:
-        case syntax::token_type_t::BUILTIN_EXP:
-        case syntax::token_type_t::BUILTIN_EXP2:
-        case syntax::token_type_t::BUILTIN_LOG:
-        case syntax::token_type_t::BUILTIN_LOG2:
-        case syntax::token_type_t::BUILTIN_LOG10:
-        case syntax::token_type_t::BUILTIN_FLOOR:
-        case syntax::token_type_t::BUILTIN_CEIL:  {
+        case syntax::builtin_t::SQRT:
+        case syntax::builtin_t::SIN:
+        case syntax::builtin_t::COS:
+        case syntax::builtin_t::TAN:
+        case syntax::builtin_t::EXP:
+        case syntax::builtin_t::EXP2:
+        case syntax::builtin_t::LOG:
+        case syntax::builtin_t::LOG2:
+        case syntax::builtin_t::LOG10:
+        case syntax::builtin_t::FLOOR:
+        case syntax::builtin_t::CEIL:  {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()};
             if (!expr_h) { break; }
-            const auto name{*syntax::get_builtin_opt(fn_token)};
+            const auto name{syntax::builtin_name(fn_token)};
             if (const auto res{builder_.emit_builtin_call(
                     name, {emit_coerced_expr(*expr_h, ret_type)}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+        case syntax::builtin_t::MUL_ADD: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
 
             // `@mulAdd(T, a, b, c)`: each operand is a `T`
@@ -4279,21 +4277,20 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     args.emplace_back(emit_coerced_expr(*expr_h, ret_type));
                 }
             }
-            const auto name{*syntax::get_builtin_opt(fn_token)};
+            const auto name{syntax::builtin_name(fn_token)};
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_C_VA_START:
-        case syntax::token_type_t::BUILTIN_C_VA_COPY:
-        case syntax::token_type_t::BUILTIN_C_VA_END:
-        case syntax::token_type_t::BUILTIN_C_VA_ARG:
-            return emit_c_va_builtin(call, fn_token, ret_type);
-        case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+        case syntax::builtin_t::C_VA_START:
+        case syntax::builtin_t::C_VA_COPY:
+        case syntax::builtin_t::C_VA_END:
+        case syntax::builtin_t::C_VA_ARG:   return emit_c_va_builtin(call, fn_token, ret_type);
+        case syntax::builtin_t::ADD_WITH_OVERFLOW:
+        case syntax::builtin_t::SUB_WITH_OVERFLOW:
+        case syntax::builtin_t::MUL_WITH_OVERFLOW:
+        case syntax::builtin_t::SHL_WITH_OVERFLOW: {
             // args: a, b, and a `&mut T` / `^mut T` result slot passed as its raw address.
             // Both operands are converted to the result slot's type, except a shift's count
             const auto                slot_h{*call.arguments[2].as_opt<ast::expr_handle>()};
@@ -4306,7 +4303,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     operand_type.emplace(ptr->underlying);
                 }
             }
-            const bool is_shift{fn_token == syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW};
+            const bool is_shift{fn_token == syntax::builtin_t::SHL_WITH_OVERFLOW};
             const auto operand{[&](usize index, bool to_slot_type) {
                 const auto expr_h{*call.arguments[index].as_opt<ast::expr_handle>()};
                 return to_slot_type && operand_type ? emit_coerced_expr(expr_h, *operand_type)
@@ -4321,19 +4318,19 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             args.emplace_back(operand(0, true));
             args.emplace_back(operand(1, !is_shift || untyped_count));
             args.emplace_back(emit_expression_id_raw(slot_h));
-            const auto name{*syntax::get_builtin_opt(fn_token)};
+            const auto name{syntax::builtin_name(fn_token)};
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD:
-        case syntax::token_type_t::BUILTIN_ATOMIC_STORE:
-        case syntax::token_type_t::BUILTIN_ATOMIC_RMW:
-        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
-        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG:
-        case syntax::token_type_t::BUILTIN_FENCE:          {
-            const auto name{*syntax::get_builtin_opt(fn_token)};
+        case syntax::builtin_t::ATOMIC_LOAD:
+        case syntax::builtin_t::ATOMIC_STORE:
+        case syntax::builtin_t::ATOMIC_RMW:
+        case syntax::builtin_t::CMPXCHG_WEAK:
+        case syntax::builtin_t::CMPXCHG_STRONG:
+        case syntax::builtin_t::FENCE:          {
+            const auto name{syntax::builtin_name(fn_token)};
 
             // The order/op arguments are compile-time enum constants, sema-verified already
             const auto eval_order = [&](usize arg_idx) -> u8 {
@@ -4344,31 +4341,31 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 return static_cast<u8>(en->value);
             };
 
-            if (fn_token == syntax::token_type_t::BUILTIN_FENCE) {
+            if (fn_token == syntax::builtin_t::FENCE) {
                 builder_.emit_builtin_call(name, {}, ret_type, stdx::none, eval_order(0));
                 return value{void_val{}, ret_type};
             }
 
-            const bool  has_t_arg{fn_token != syntax::token_type_t::BUILTIN_ATOMIC_STORE};
+            const bool  has_t_arg{fn_token != syntax::builtin_t::ATOMIC_STORE};
             const usize ptr_idx{has_t_arg ? 1UZ : 0UZ};
 
             std::vector<value> args;
             args.emplace_back(emit_expression(*call.arguments[ptr_idx].as_opt<ast::expr_handle>()));
 
             switch (fn_token) {
-            case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+            case syntax::builtin_t::ATOMIC_LOAD: {
                 const auto order{eval_order(2)};
                 const auto res{
                     builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order)};
                 return res ? value{*res, ret_type} : value{void_val{}, ret_type};
             }
-            case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+            case syntax::builtin_t::ATOMIC_STORE: {
                 args.emplace_back(emit_expression(*call.arguments[1].as_opt<ast::expr_handle>()));
                 const auto order{eval_order(2)};
                 builder_.emit_builtin_call(name, std::move(args), ret_type, stdx::none, order);
                 return value{void_val{}, ret_type};
             }
-            case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+            case syntax::builtin_t::ATOMIC_RMW: {
                 const auto op{eval_order(2)};
                 args.emplace_back(emit_expression(*call.arguments[3].as_opt<ast::expr_handle>()));
                 const auto order{eval_order(4)};
@@ -4376,8 +4373,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     builder_.emit_builtin_call(name, std::move(args), ret_type, op, order)};
                 return res ? value{*res, ret_type} : value{void_val{}, ret_type};
             }
-            case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
-            case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+            case syntax::builtin_t::CMPXCHG_WEAK:
+            case syntax::builtin_t::CMPXCHG_STRONG: {
                 args.emplace_back(emit_expression(*call.arguments[2].as_opt<ast::expr_handle>()));
                 args.emplace_back(emit_expression(*call.arguments[3].as_opt<ast::expr_handle>()));
                 const auto succ{eval_order(4)};
@@ -4391,9 +4388,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             default: UNREACHABLE("Unhandled atomic builtin");
             }
         }
-        case syntax::token_type_t::BUILTIN_MEMCPY:
-        case syntax::token_type_t::BUILTIN_MEMSET:
-        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+        case syntax::builtin_t::MEMCPY:
+        case syntax::builtin_t::MEMSET:
+        case syntax::builtin_t::MEMMOVE: {
             emit_mem_intrinsic(id,
                                *call.arguments[0].as_opt<ast::expr_handle>(),
                                *call.arguments[1].as_opt<ast::expr_handle>(),
@@ -4437,8 +4434,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // @fnCtx()(args): the inner call is never emitted, its callee names the enclosing function
     const auto fn_ctx_call{active_ast().get_as_opt<ast::call_expr>(call.function)};
-    const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_token_type() ==
-                                                 syntax::token_type_t::BUILTIN_FN_CTX};
+    const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_builtin() ==
+                                                 syntax::builtin_t::FN_CTX};
 
     // The resolver pinned this call's monomorphization (keyed on types *and* comptime values).
     bool resolved_generic_target{false};
@@ -6653,7 +6650,7 @@ auto emitter::request_builtin_runtime(std::string_view name) -> void {
 // call reaches them, since `builtin` itself isn't emitted outside test builds
 auto emitter::request_builtin_type_methods(const sema::type& receiver) -> bool {
     if (!ctx_.modules.has_builtin_module()) { return false; }
-    const auto* t{&receiver};
+    gsl::not_null<const sema::type*> t{&receiver};
     if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
     if (const auto r{t->get_data().as_opt<sema::types::reference>()}) { t = &r->underlying; }
     const auto st{t->get_data().as_opt<sema::types::struct_t>()};
@@ -6784,9 +6781,9 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             return lvalue_of_binding(ident.name);
         },
         [&](const ast::call_expr& call) -> value {
-            const auto fn_token{call.function->get_token_type()};
-            const auto is_transparent_cast{fn_token == syntax::token_type_t::BUILTIN_CONST_CAST ||
-                                           fn_token == syntax::token_type_t::BUILTIN_VOLATILE_CAST};
+            const auto fn_token{call.function->get_builtin()};
+            const auto is_transparent_cast{fn_token == syntax::builtin_t::CONST_CAST ||
+                                           fn_token == syntax::builtin_t::VOLATILE_CAST};
             if (is_transparent_cast) {
                 // Akin to a reinterpret cast in c++, same storage, just trust me...
                 if (const auto op_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
@@ -6797,7 +6794,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             }
             // `@field(v, name) = ...`: the field's own address, not a disposable copy of its
             // current value - same address `emit_call`'s read path loads from.
-            if (fn_token == syntax::token_type_t::BUILTIN_FIELD) {
+            if (fn_token == syntax::builtin_t::FIELD) {
                 if (const auto addr{try_emit_field_builtin_addr(call)}) { return *addr; }
             }
 
@@ -7075,7 +7072,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 return value{elem_ptr, write_elem_type};
             }
 
-            auto&      write_elem_type{*ctx_.pool.with_volatile(
+            auto&       write_elem_type{*ctx_.pool.with_volatile(
                 *ctx_.pool.with_const(elem_type, element_is_const), element_is_volatile)};
             const value base{indexed_ptr_type ? value{base_lval.data, *indexed_ptr_type}
                                               : base_lval};
@@ -7393,10 +7390,10 @@ auto emitter::emit_union_active_field_guard(value            union_addr,
 }
 
 auto emitter::emit_c_va_builtin(const ast::call_expr& call,
-                                syntax::token_type_t  builtin,
+                                syntax::builtin_t     builtin,
                                 sema::type&           ret_type) -> value {
     PROFILE_FUNCTION();
-    if (builtin == syntax::token_type_t::BUILTIN_C_VA_START && !current_function_is_c_variadic()) {
+    if (builtin == syntax::builtin_t::C_VA_START && !current_function_is_c_variadic()) {
         ctx_.diags.emplace_back("'@cVaStart' can only be used inside a C-variadic `fn(..., ...)`",
                                 sema::error::TYPE_MISMATCH,
                                 active_ast().location_of(call.function));
@@ -7404,13 +7401,13 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
     }
 
     // `@cVaArg`'s trailing type argument only shapes the result type
-    const usize list_arg_count{builtin == syntax::token_type_t::BUILTIN_C_VA_COPY ? 2UZ : 1UZ};
+    const usize list_arg_count{builtin == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
     std::vector<value> args;
     args.reserve(list_arg_count);
     for (usize i{0}; i < list_arg_count; ++i) {
         args.emplace_back(emit_expression(*call.arguments[i].as_opt<ast::expr_handle>()));
     }
-    const auto name{*syntax::get_builtin_opt(builtin)};
+    const auto name{syntax::builtin_name(builtin)};
     if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
         return value{*res, ret_type};
     }
@@ -7427,7 +7424,7 @@ auto emitter::current_function_is_c_variadic() -> bool {
 auto emitter::emit_mem_intrinsic(ast::node_id         id,
                                  ast::expr_handle     dest_h,
                                  ast::expr_handle     rhs_h,
-                                 syntax::token_type_t builtin,
+                                 syntax::builtin_t    builtin,
                                  bool                 check_lengths) -> void {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -7436,7 +7433,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id         id,
     auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     auto& byte_ptr_ty{ctx_.get_pointer(sema::types::mut::MUTABLE, u8_type)};
 
-    const bool is_set{builtin == syntax::token_type_t::BUILTIN_MEMSET};
+    const bool is_set{builtin == syntax::builtin_t::MEMSET};
 
     // Peel ref/pointer wrappers off an argument's static type.
     const auto peeled{[&](ast::expr_handle h) {
@@ -7503,7 +7500,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id         id,
 
     auto [dest_ptr, dest_len]{decompose(dest_h)};
     const auto dest_bytes{to_bytes(dest_len, elem_size(dest_h))};
-    const auto name{*syntax::get_builtin_opt(builtin)};
+    const auto name{syntax::builtin_name(builtin)};
 
     if (is_set) {
         const auto fill{emit_coerced_expr(rhs_h, u8_type)};
@@ -7522,7 +7519,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id         id,
         auto& bad_seg{fn_opt->add_segment()};
         builder_.emit_cond_goto(value{eq, bool_type}, ok_seg.get_id(), bad_seg.get_id());
         builder_.set_segment(bad_seg);
-        emit_panic_call(builtin == syntax::token_type_t::BUILTIN_MEMCPY
+        emit_panic_call(builtin == syntax::builtin_t::MEMCPY
                             ? "@memcpy with mismatched slice lengths"
                             : "@memmove with mismatched slice lengths",
                         id);

@@ -1,5 +1,7 @@
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -24,6 +26,10 @@
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/module/file_loader.hh"
+#include "compiler/module/module.hh"
+#include "compiler/module/stdlib.hh"
+#include "compiler/sema/analyzer.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
@@ -389,6 +395,19 @@ TEST_CASE("@export as 'main' picks the entry point") {
     CHECK(ghoti_main_fn.getReturnType()->isIntegerTy(32));
     CHECK(ghoti_main_fn.arg_size() == 0);
     CHECK(llvm_mod->getFunction("main"));
+}
+
+TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    const auto          path{UNWRAP(mod::find_start())};
+    CHECK(analyzer.analyze(path));
+    const auto module{UNWRAP(manager.try_get_file_module(path))};
+    CHECK(module->is_start);
+    CHECK_FALSE(module->is_poisoned());
+    CHECK(errors.str().empty());
 }
 
 } // namespace ghoti::tests

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/span>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -14,6 +15,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/sema/type.hh"
@@ -32,7 +34,7 @@ namespace {
 // `llvm.x86.sse2.pause` -> `x86`; empty for a target-independent intrinsic
 [[nodiscard]] auto target_prefix(std::string_view name) -> std::string_view {
     name.remove_prefix(std::string_view{"llvm."}.size());
-    return name.substr(0, name.find('.'));
+    return stdx::string::substr(name, 0, name.find('.'));
 }
 
 } // namespace

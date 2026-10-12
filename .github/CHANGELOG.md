@@ -731,6 +731,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
     - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
     - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+- `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
+    - `std` and `lib/start` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
+- compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
@@ -759,6 +762,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 - Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
 - Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
+- Fixed: an `extern` function declared with an `extern fn(...) callconv(...)` type was called with the C convention
+- Fixed: on i686 Windows, a function with a stack frame over 4 KiB could skip the guard page and crash, as no stack probe was emitted
+- Fixed: a generic type instantiated with `type` (`Option(type)`) emitted declarations for its compile-time-only methods that failed LLVM verification, so a module using one could not be built on its own
 - Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
 - Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
@@ -783,6 +789,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `std.os.HAS_BACKEND` says whether the target has one
 
 ## Tooling
+- `ghoti fmt` puts a multiline (`\\`) asm template on lines of its own, with the `,` after it on the next
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
 - `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
 - An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it

@@ -3,7 +3,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -62,11 +61,11 @@ TEST_CASE("An enum literal becomes a tagged union's `void` field") {
             return if (o == .none) 42 else 0;
         };
     )") == 42);
-    DISCARD(helpers::expect_compile_error(R"(
+    helpers::expect_compile_error(R"(
         const Opt = fn(T: type): type { return union { some: T, none: void }; };
         const some = .some;
         pub const main = fn(): i32 { let o: Opt(i32) = some; _ = o; return 0; };
-    )"));
+    )");
 }
 
 TEST_CASE("A comptime `auto` parameter takes an enum literal") {
@@ -83,9 +82,9 @@ TEST_CASE("A comptime `auto` parameter takes an enum literal") {
 
 TEST_CASE("Enum literal errors name what went wrong") {
     SECTION("a name the enum lacks") {
-        DISCARD(helpers::expect_compile_error(
+        helpers::expect_compile_error(
             with_level("const slow = .slow; pub const main = fn(): i32 { let l: Level = slow; "
-                       "_ = l; return 0; };")));
+                       "_ = l; return 0; };"));
     }
 
     SECTION("a runtime binding") {

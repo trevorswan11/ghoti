@@ -216,19 +216,10 @@ template <typename T>
     return lhs.get_type() ? lhs.get_type() : rhs.get_type();
 }
 
-// The peer type two concrete numbers of different types meet at; a shift keeps its left type
-[[nodiscard]] auto numeric_operand_peer(sema::context&       ctx,
-                                        const const_value&   lhs,
-                                        const const_value&   rhs,
-                                        syntax::token_type_t op) -> stdx::option<sema::type&> {
-    switch (op) {
-    case syntax::token_type_t::SHL:
-    case syntax::token_type_t::SHR:
-    case syntax::token_type_t::SHL_PERCENT:
-    case syntax::token_type_t::SHL_PIPE:    return stdx::none;
-    default:                                break;
-    }
-
+// The peer type two concrete numbers of different types meet at
+[[nodiscard]] auto numeric_operand_peer(sema::context&     ctx,
+                                        const const_value& lhs,
+                                        const const_value& rhs) -> stdx::option<sema::type&> {
     const auto lhs_type{lhs.get_type()};
     const auto rhs_type{rhs.get_type()};
     const auto is_concrete_number{[](const sema::type& t) {
@@ -243,6 +234,20 @@ template <typename T>
     const auto       peer{sema::peer_type(ctx, operands)};
     if (!peer) { return stdx::none; }
     return **peer;
+}
+
+// As above, but a shift keeps its left operand's type
+[[nodiscard]] auto numeric_operand_peer(sema::context&       ctx,
+                                        const const_value&   lhs,
+                                        const const_value&   rhs,
+                                        syntax::token_type_t op) -> stdx::option<sema::type&> {
+    switch (op) {
+    case syntax::token_type_t::SHL:
+    case syntax::token_type_t::SHR:
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::SHL_PIPE:    return stdx::none;
+    default:                                return numeric_operand_peer(ctx, lhs, rhs);
+    }
 }
 
 // `v` as a value of its peer type; every such conversion is exact
@@ -2586,8 +2591,7 @@ namespace {
                               : owner.ast.get_as_opt<ast::expr_stmt>(*body.statements.front())};
         const auto  call{first ? owner.ast.get_as_opt<ast::call_expr>(*first->expression)
                                : stdx::none};
-        if (call && ast::node_id{call->function}.get_token_type() ==
-                        syntax::token_type_t::BUILTIN_BRANCH_HINT) {
+        if (call && ast::node_id{call->function}.get_builtin() == syntax::builtin_t::BRANCH_HINT) {
             const auto hint{owner.ast.get_as_opt<ast::implicit_access_expr>(
                 *call->arguments[0].as_opt<ast::expr_handle>())};
             resolved.cold =
@@ -3376,20 +3380,8 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
     const auto width{res_type ? integer_target_width(*res_type, ptr_bits) : stdx::none};
 
     // A concrete integer type folds through the rules its generated code follows
-    const auto int_op{semantics::int_op_of(op_type)};
-    if (int_op && width && width->first <= 128) {
-        const semantics::int_domain domain{width->first, width->second};
-        const auto                  lhs_bits{static_cast<u128>(*lhs.as_int_opt())};
-        const auto                  folded{
-            semantics::is_shift(*int_op)
-                ? semantics::fold_int_shift(*int_op, domain, lhs_bits, exact_shift_amount(rhs))
-                : semantics::fold_int(
-                      *int_op, domain, lhs_bits, static_cast<u128>(*rhs.as_int_opt()))};
-        if (!folded) {
-            return on_fold_error(
-                semantics::describe(folded.error(), domain, ctx_.type_display_name(*res_type)));
-        }
-        return domain_value(*folded, domain, res_type);
+    if (const auto int_op{semantics::int_op_of(op_type)}) {
+        if (auto folded{fold_int_in_domain(*int_op, lhs, rhs, id, res_type)}) { return folded; }
     }
 
     // Two's-complement views across the whole 128-bit domain
@@ -3432,9 +3424,36 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
     return folded;
 }
 
-auto const_eval::fold_int_builtin_unary(ast::node_id         id,
-                                        syntax::token_type_t builtin,
-                                        const const_value&   arg) -> stdx::option<const_value> {
+auto const_eval::fold_int_in_domain(semantics::int_op         op,
+                                    const const_value&        lhs,
+                                    const const_value&        rhs,
+                                    ast::node_id              id,
+                                    stdx::option<sema::type&> result_type)
+    -> stdx::option<const_value> {
+    const auto res_type{result_type ? result_type : integer_result_type(lhs, rhs)};
+    const auto width{res_type ? integer_target_width(*res_type, target_pointer_bits())
+                              : stdx::none};
+    if (!width || width->first > 128) { return stdx::none; }
+
+    const semantics::int_domain domain{width->first, width->second};
+    const auto                  lhs_bits{static_cast<u128>(*lhs.as_int_opt())};
+    const auto                  folded{
+        semantics::is_shift(op)
+            ? semantics::fold_int_shift(op, domain, lhs_bits, exact_shift_amount(rhs))
+            : semantics::fold_int(op, domain, lhs_bits, static_cast<u128>(*rhs.as_int_opt()))};
+    if (!folded) {
+        ctx_.diags.emplace_back(
+            semantics::describe(folded.error(), domain, ctx_.type_display_name(*res_type)),
+            sema::error::COMPTIME_EVALUATION_FAILED,
+            module_->ast.location_of(id));
+        return const_value::make_poison();
+    }
+    return domain_value(*folded, domain, res_type);
+}
+
+auto const_eval::fold_int_builtin_unary(ast::node_id       id,
+                                        syntax::builtin_t  builtin,
+                                        const const_value& arg) -> stdx::option<const_value> {
     const auto type{arg.get_type()};
     if (!type || !is_integer_arm(arg)) { return stdx::none; }
     const auto width{integer_target_width(*type, target_pointer_bits())};
@@ -3442,10 +3461,10 @@ auto const_eval::fold_int_builtin_unary(ast::node_id         id,
 
     semantics::int_unary_op op{semantics::int_unary_op::ABS};
     switch (builtin) {
-    case syntax::token_type_t::BUILTIN_CLZ:      op = semantics::int_unary_op::CLZ; break;
-    case syntax::token_type_t::BUILTIN_CTZ:      op = semantics::int_unary_op::CTZ; break;
-    case syntax::token_type_t::BUILTIN_POPCOUNT: op = semantics::int_unary_op::POPCOUNT; break;
-    default:                                     break;
+    case syntax::builtin_t::CLZ:      op = semantics::int_unary_op::CLZ; break;
+    case syntax::builtin_t::CTZ:      op = semantics::int_unary_op::CTZ; break;
+    case syntax::builtin_t::POPCOUNT: op = semantics::int_unary_op::POPCOUNT; break;
+    default:                          break;
     }
     const semantics::int_domain domain{width->first, width->second};
     const auto folded{semantics::fold_int_unary(op, domain, static_cast<u128>(*arg.as_int_opt()))};
@@ -3959,8 +3978,9 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
 auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const auto fn_token{call.function->get_token_type()};
-    if (syntax::get_builtin_opt(fn_token)) { return eval_builtin(id, call, fn_token); }
+    if (const auto builtin{call.function->get_builtin()}) {
+        return eval_builtin(id, call, *builtin);
+    }
 
     // A `comptime` callable (closure or function) parameter invoked inside a monomorphized body.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
@@ -4374,7 +4394,7 @@ auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_e
 
 auto const_eval::eval_builtin(ast::node_id          id,
                               const ast::call_expr& call,
-                              syntax::token_type_t  builtin_type) -> stdx::option<const_value> {
+                              syntax::builtin_t     builtin_type) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
@@ -4431,7 +4451,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
     };
 
     switch (builtin_type) {
-    case syntax::token_type_t::BUILTIN_THIS: {
+    case syntax::builtin_t::THIS: {
         // The call node carries the enclosing structural type
         if (id.is_valid()) {
             if (const auto here{module_->get_sema_type_opt(id)}) { return const_value{here}; }
@@ -4441,7 +4461,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_SIZE_OF: {
+    case syntax::builtin_t::SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) {
@@ -4452,7 +4472,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto sz{type_size_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(sz), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_ALIGN_OF: {
+    case syntax::builtin_t::ALIGN_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) {
@@ -4463,7 +4483,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto al{type_align_of(*target_type, ptr_size)};
         return const_value{static_cast<u64>(al), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: {
+    case syntax::builtin_t::BIT_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_layout_argument(call.arguments.front())};
         if (!target_type) {
@@ -4498,7 +4518,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{static_cast<u64>(type_size_of(*target_type, ptr_size) * 8), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_TYPE_OF: {
+    case syntax::builtin_t::TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         // A local of the call being evaluated has this call's type, which the shared body's
         // own typing can't know
@@ -4546,7 +4566,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{stdx::option<sema::type&>{**peer}};
     }
-    case syntax::token_type_t::BUILTIN_IMPLEMENTS: {
+    case syntax::builtin_t::IMPLEMENTS: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
         auto t0{eval_type_argument(call.arguments[0])};
         auto t1{eval_type_argument(call.arguments[1])};
@@ -4556,16 +4576,16 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (t1->get_kind() != sema::type_kind::INTERFACE) { return const_value{false, bool_type}; }
         return const_value{ctx_.impls.implements(force_deferred_type(*t0), *t1), bool_type};
     }
-    case syntax::token_type_t::BUILTIN_ENUM_LITERAL:
+    case syntax::builtin_t::ENUM_LITERAL:
         return const_value{stdx::option<sema::type&>{
             ctx_.get_builtin_resolved_type(sema::type_kind::ENUM_LITERAL)}};
-    case syntax::token_type_t::BUILTIN_INT:
-    case syntax::token_type_t::BUILTIN_FLOAT:
-    case syntax::token_type_t::BUILTIN_POINTER:
-    case syntax::token_type_t::BUILTIN_REFERENCE:
-    case syntax::token_type_t::BUILTIN_SLICE:
-    case syntax::token_type_t::BUILTIN_ARRAY:
-    case syntax::token_type_t::BUILTIN_FN:        {
+    case syntax::builtin_t::INT:
+    case syntax::builtin_t::FLOAT:
+    case syntax::builtin_t::POINTER:
+    case syntax::builtin_t::REFERENCE:
+    case syntax::builtin_t::SLICE:
+    case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::FN:        {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto desc_h{call.arguments[0].as_opt<ast::expr_handle>()};
         if (!desc_h) { return stdx::none; }
@@ -4574,7 +4594,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!desc) { return stdx::none; }
 
         switch (builtin_type) {
-        case syntax::token_type_t::BUILTIN_INT: {
+        case syntax::builtin_t::INT: {
             const auto bits_v{desc_field<u64>(*desc, "bits")};
             auto       signedness_v{desc_field<const_enum>(*desc, "signedness")};
             if (!signedness_v) { signedness_v = desc_field<const_enum>(*desc, "signed"); }
@@ -4585,7 +4605,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             return const_value{
                 ctx_.get_int(static_cast<u16>(*bits_v), signedness_v->name == "signed")};
         }
-        case syntax::token_type_t::BUILTIN_FLOAT: {
+        case syntax::builtin_t::FLOAT: {
             const auto bits_v{desc_field<u64>(*desc, "bits")};
             if (!bits_v) { return stdx::none; }
             sema::type_kind kind{};
@@ -4599,19 +4619,19 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
             return const_value{ctx_.get_builtin_resolved_type(kind)};
         }
-        case syntax::token_type_t::BUILTIN_POINTER:
-        case syntax::token_type_t::BUILTIN_REFERENCE: {
+        case syntax::builtin_t::POINTER:
+        case syntax::builtin_t::REFERENCE: {
             const auto child_v{desc_field<sema::type&>(*desc, "child")};
             const auto mut_v{desc_field<bool>(*desc, "is_mut")};
             const auto vol_v{desc_field<bool>(*desc, "is_volatile")};
             if (!child_v || !mut_v || !vol_v) { return stdx::none; }
             auto mods{*mut_v ? sema::types::mut::MUTABLE : sema::types::mut::CONSTANT};
             if (*vol_v) { mods |= sema::types::mut::VOLATILE; }
-            return const_value{builtin_type == syntax::token_type_t::BUILTIN_POINTER
+            return const_value{builtin_type == syntax::builtin_t::POINTER
                                    ? ctx_.get_pointer(mods, *child_v)
                                    : ctx_.get_reference(mods, *child_v)};
         }
-        case syntax::token_type_t::BUILTIN_SLICE: {
+        case syntax::builtin_t::SLICE: {
             const auto child_v{desc_field<sema::type&>(*desc, "child")};
             const auto sentinel_v{desc_field<bool>(*desc, "sentinel")};
             const auto mut_v{desc_field<bool>(*desc, "is_mut")};
@@ -4621,7 +4641,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             if (*vol_v) { mods |= sema::types::mut::VOLATILE; }
             return const_value{ctx_.get_slice(mods, *sentinel_v, *child_v)};
         }
-        case syntax::token_type_t::BUILTIN_ARRAY: {
+        case syntax::builtin_t::ARRAY: {
             const auto child_v{desc_field<sema::type&>(*desc, "child")};
             const auto len_v{desc_field<u64>(*desc, "len")};
             const auto sentinel_v{desc_field<bool>(*desc, "sentinel")};
@@ -4633,7 +4653,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             return const_value{
                 ctx_.get_array(mods, *sentinel_v, static_cast<usize>(*len_v), *child_v)};
         }
-        case syntax::token_type_t::BUILTIN_FN: {
+        case syntax::builtin_t::FN: {
             const auto params_arr{desc_field<const_array>(*desc, "params")};
             const auto ret_v{desc_field<sema::type&>(*desc, "return_type")};
             const auto variadic_v{desc_field<bool>(*desc, "variadic")};
@@ -4662,7 +4682,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         default: return stdx::none;
         }
     }
-    case syntax::token_type_t::BUILTIN_ABS: {
+    case syntax::builtin_t::ABS: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -4676,17 +4696,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;
     }
-    case syntax::token_type_t::BUILTIN_SQRT:
-    case syntax::token_type_t::BUILTIN_SIN:
-    case syntax::token_type_t::BUILTIN_COS:
-    case syntax::token_type_t::BUILTIN_TAN:
-    case syntax::token_type_t::BUILTIN_EXP:
-    case syntax::token_type_t::BUILTIN_EXP2:
-    case syntax::token_type_t::BUILTIN_LOG:
-    case syntax::token_type_t::BUILTIN_LOG2:
-    case syntax::token_type_t::BUILTIN_LOG10:
-    case syntax::token_type_t::BUILTIN_FLOOR:
-    case syntax::token_type_t::BUILTIN_CEIL:  {
+    case syntax::builtin_t::SQRT:
+    case syntax::builtin_t::SIN:
+    case syntax::builtin_t::COS:
+    case syntax::builtin_t::TAN:
+    case syntax::builtin_t::EXP:
+    case syntax::builtin_t::EXP2:
+    case syntax::builtin_t::LOG:
+    case syntax::builtin_t::LOG2:
+    case syntax::builtin_t::LOG10:
+    case syntax::builtin_t::FLOOR:
+    case syntax::builtin_t::CEIL:  {
         const auto function{*semantics::math_function_of(builtin_type)};
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -4709,7 +4729,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (result.overflowed) {
             ctx_.diags.emplace_back(
                 fmt::format("'{}' of {} is out of range for type '{}'",
-                            *syntax::get_builtin_opt(builtin_type),
+                            syntax::builtin_name(builtin_type),
                             *input,
                             result_type ? ctx_.type_display_name(*result_type) : "f128"),
                 sema::error::LITERAL_OUT_OF_RANGE,
@@ -4724,7 +4744,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!concrete && !exact_enough) { folded.set_origin({function, *input}); }
         return folded;
     }
-    case syntax::token_type_t::BUILTIN_CLZ: {
+    case syntax::builtin_t::CLZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -4743,7 +4763,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto clz{static_cast<u64>(std::countl_zero(v)) - (64 - static_cast<u64>(bits))};
         return const_value{clz, res_type};
     }
-    case syntax::token_type_t::BUILTIN_CTZ: {
+    case syntax::builtin_t::CTZ: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -4762,7 +4782,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto ctz{std::min(static_cast<u64>(std::countr_zero(v)), static_cast<u64>(bits))};
         return const_value{ctz, res_type};
     }
-    case syntax::token_type_t::BUILTIN_POPCOUNT: {
+    case syntax::builtin_t::POPCOUNT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -4774,12 +4794,12 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
         return const_value{static_cast<u64>(std::popcount(v)), res_type};
     }
-    case syntax::token_type_t::BUILTIN_MIN:
-    case syntax::token_type_t::BUILTIN_MAX:
-    case syntax::token_type_t::BUILTIN_DIV_TRUNC:
-    case syntax::token_type_t::BUILTIN_DIV_FLOOR:
-    case syntax::token_type_t::BUILTIN_REM:
-    case syntax::token_type_t::BUILTIN_MOD:       {
+    case syntax::builtin_t::MIN:
+    case syntax::builtin_t::MAX:
+    case syntax::builtin_t::DIV_TRUNC:
+    case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::REM:
+    case syntax::builtin_t::MOD:       {
         VERIFY(call.arguments.size() >= 2, "Arity mismatch not verified during resolution");
         const auto a_h{call.arguments[0].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[1].as_opt<ast::expr_handle>()};
@@ -4788,7 +4808,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto b{try_eval(*b_h)};
         if (!a || !b) { return stdx::none; }
         // Operands of different concrete number types meet at their peer type
-        if (const auto peer{numeric_operand_peer(ctx_, *a, *b, builtin_type)}) {
+        if (const auto peer{numeric_operand_peer(ctx_, *a, *b)}) {
             a = as_peer(*a, *peer);
             b = as_peer(*b, *peer);
         }
@@ -4797,7 +4817,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
             const auto width{type ? integer_target_width(*type, target_pointer_bits())
                                   : stdx::none};
             if (width && width->first <= 128) {
-                if (auto folded{fold_integer_binary(builtin_type, *a, *b, id)}) { return folded; }
+                const auto op{*semantics::int_op_of(builtin_type)};
+                if (auto folded{fold_int_in_domain(op, *a, *b, id)}) { return folded; }
             }
         }
 
@@ -4805,15 +4826,14 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto fold_int = [&](auto av, auto bv) -> stdx::option<const_value> {
             using T = decltype(av);
             switch (tok) {
-            case syntax::token_type_t::BUILTIN_MIN:
-                return const_value{av < bv ? av : bv, a->get_type()};
-            case syntax::token_type_t::BUILTIN_MAX:
+            case syntax::builtin_t::MIN: return const_value{av < bv ? av : bv, a->get_type()};
+            case syntax::builtin_t::MAX:
                 return const_value{av > bv ? av : bv, a->get_type()};
             default: break;
             }
             if (bv == T{0}) {
-                const bool is_rem{tok == syntax::token_type_t::BUILTIN_REM ||
-                                  tok == syntax::token_type_t::BUILTIN_MOD};
+                const bool is_rem{tok == syntax::builtin_t::REM ||
+                                  tok == syntax::builtin_t::MOD};
                 ctx_.diags.emplace_back(
                     fmt::format("{} by zero in compile-time constant expression",
                                 is_rem ? "Modulo" : "Division"),
@@ -4822,17 +4842,17 @@ auto const_eval::eval_builtin(ast::node_id          id,
                 return const_value::make_poison();
             }
             switch (tok) {
-            case syntax::token_type_t::BUILTIN_DIV_TRUNC:
+            case syntax::builtin_t::DIV_TRUNC:
                 return const_value{av / bv, a->get_type()};
-            case syntax::token_type_t::BUILTIN_REM: return const_value{av % bv, a->get_type()};
-            case syntax::token_type_t::BUILTIN_DIV_FLOOR: {
+            case syntax::builtin_t::REM:       return const_value{av % bv, a->get_type()};
+            case syntax::builtin_t::DIV_FLOOR: {
                 auto q{av / bv};
                 if constexpr (Signed<T>) {
                     if ((av % bv != 0) && ((av < 0) != (bv < 0))) { --q; }
                 }
                 return const_value{q, a->get_type()};
             }
-            case syntax::token_type_t::BUILTIN_MOD: {
+            case syntax::builtin_t::MOD: {
                 auto r{av % bv};
                 if constexpr (Signed<T>) {
                     if ((r != 0) && ((r < 0) != (bv < 0))) { r += bv; }
@@ -4845,9 +4865,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
         if (a->is<i64>() && b->is<i64>()) { return fold_int(a->as<i64>(), b->as<i64>()); }
         if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
-        if ((tok == syntax::token_type_t::BUILTIN_MIN ||
-             tok == syntax::token_type_t::BUILTIN_MAX) &&
-            a->is<f128>() && b->is<f128>()) {
+        if ((tok == syntax::builtin_t::MIN || tok == syntax::builtin_t::MAX) && a->is<f128>() &&
+            b->is<f128>()) {
             const auto type{module_->get_sema_type_opt(id)};
             const auto format{type ? sema::float_format_of(*type).value_or(float_format::QUAD)
                                    : float_format::QUAD};
@@ -4858,7 +4877,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_MUL_ADD: {
+    case syntax::builtin_t::MUL_ADD: {
         VERIFY(call.arguments.size() >= 4, "Arity mismatch not verified during resolution");
         const auto a_h{call.arguments[1].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[2].as_opt<ast::expr_handle>()};
@@ -4895,7 +4914,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!product || product->is_poison()) { return product; }
         return fold_integer_binary(syntax::token_type_t::PLUS, *product, c, id);
     }
-    case syntax::token_type_t::BUILTIN_TAG_NAME: {
+    case syntax::builtin_t::TAG_NAME: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
             if (const auto val{try_eval(*expr_h)}) {
@@ -4909,7 +4928,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_TYPE_NAME: {
+    case syntax::builtin_t::TYPE_NAME: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
@@ -4920,7 +4939,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto& arr_type{ctx_.get_array(sema::types::mut::CONSTANT, true, name.size(), t_u8)};
         return const_value{std::move(name), arr_type};
     }
-    case syntax::token_type_t::BUILTIN_TYPE_INFO: {
+    case syntax::builtin_t::TYPE_INFO: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto target_type{eval_type_argument(call.arguments.front())};
         if (!target_type) { return stdx::none; }
@@ -4935,8 +4954,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
                               declared ? stdx::option<const sema::resolved_attributes&>{*declared}
                                        : stdx::none);
     }
-    case syntax::token_type_t::BUILTIN_HAS_FIELD:
-    case syntax::token_type_t::BUILTIN_FIELD_TYPE: {
+    case syntax::builtin_t::HAS_FIELD:
+    case syntax::builtin_t::FIELD_TYPE: {
         VERIFY(call.arguments.size() == 2, "Arity mismatch not verified during resolution");
         const auto target_type{eval_type_argument(call.arguments[0])};
         if (!target_type) { return stdx::none; }
@@ -4947,54 +4966,54 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!name) { return stdx::none; }
 
         const auto found{sema::find_aggregate_field(*target_type, *name)};
-        if (builtin_type == syntax::token_type_t::BUILTIN_HAS_FIELD) {
+        if (builtin_type == syntax::builtin_t::HAS_FIELD) {
             auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
             return const_value{found.has_value(), bool_type};
         }
         if (!found) { return stdx::none; }
         return const_value{stdx::option<sema::type&>{found->field_type}};
     }
-    case syntax::token_type_t::BUILTIN_TARGET_OS: {
+    case syntax::builtin_t::TARGET_OS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Os", facts.os);
     }
-    case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
+    case syntax::builtin_t::TARGET_ARCH: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Arch", facts.arch);
     }
-    case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+    case syntax::builtin_t::TARGET_TRIPLE: {
         const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
         return const_value::make_string(ctx_, triple.str());
     }
-    case syntax::token_type_t::BUILTIN_TARGET_ABI: {
+    case syntax::builtin_t::TARGET_ABI: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Abi", facts.abi);
     }
-    case syntax::token_type_t::BUILTIN_TARGET_FAMILY: {
+    case syntax::builtin_t::TARGET_FAMILY: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Family", facts.family);
     }
-    case syntax::token_type_t::BUILTIN_OPTIMIZE_MODE:
+    case syntax::builtin_t::OPTIMIZE_MODE:
         return target_enum_value("OptimizeMode", sema::optimize_mode_name(ctx_.build_mode));
-    case syntax::token_type_t::BUILTIN_RUNTIME_SAFETY: {
+    case syntax::builtin_t::RUNTIME_SAFETY: {
         const auto scoped{module_->scoped_runtime_safety.find(id.get_index())};
         const bool enabled{scoped != module_->scoped_runtime_safety.end() ? scoped->second
                                                                           : ctx_.runtime_safety};
         return const_value{enabled, ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     }
-    case syntax::token_type_t::BUILTIN_SET_RUNTIME_SAFETY:
-    case syntax::token_type_t::BUILTIN_BRANCH_HINT:        return const_value{void_val{}};
-    case syntax::token_type_t::BUILTIN_TARGET_ENDIAN:      {
+    case syntax::builtin_t::SET_RUNTIME_SAFETY:
+    case syntax::builtin_t::BRANCH_HINT:        return const_value{void_val{}};
+    case syntax::builtin_t::TARGET_ENDIAN:      {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return target_enum_value("Endian", facts.endian);
     }
-    case syntax::token_type_t::BUILTIN_TARGET_PTR_BITS: {
+    case syntax::builtin_t::TARGET_PTR_BITS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
         return const_value{u64{facts.ptr_bits},
                            ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     }
-    case syntax::token_type_t::BUILTIN_ENTRY_MAIN: {
-        auto* root{ctx_.entry_root};
+    case syntax::builtin_t::ENTRY_MAIN: {
+        auto root{ctx_.entry_root};
         if (!root || !root->root_table_idx) { return stdx::none; }
         const auto sym{ctx_.registry.get_from_opt(*root->root_table_idx, ctx_.user_main_name)};
         const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
@@ -5005,7 +5024,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return const_value{scoped_symbol_name(*root->root_table_idx, ctx_.user_main_name),
                            *fn_type};
     }
-    case syntax::token_type_t::BUILTIN_SRC: {
+    case syntax::builtin_t::SRC: {
         const auto   loc{id.is_valid() ? module_->ast.location_of(id)
                                        : module_->ast.location_of(call.function)};
         const_struct src_struct;
@@ -5015,7 +5034,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         src_struct.fields["column"] = const_value{static_cast<u64>(loc.column), t_u32};
         return const_value{std::move(src_struct), ctx_.get_builtin_type("SourceLocation")};
     }
-    case syntax::token_type_t::BUILTIN_EMBED: {
+    case syntax::builtin_t::EMBED: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -5031,8 +5050,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
             ctx_.get_array(sema::types::mut::CONSTANT, true, content_opt->size(), u8_type)};
         return const_value{*content_opt, array_type};
     }
-    case syntax::token_type_t::BUILTIN_ASSERT:
-    case syntax::token_type_t::BUILTIN_VERIFY: {
+    case syntax::builtin_t::ASSERT:
+    case syntax::builtin_t::VERIFY: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (!expr_h) { return stdx::none; }
@@ -5055,7 +5074,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
-    case syntax::token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
+    case syntax::builtin_t::SET_EVAL_RECURSION_LIMIT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (expr_h) {
@@ -5070,7 +5089,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
-    case syntax::token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT: {
+    case syntax::builtin_t::SET_EVAL_UNROLL_LIMIT: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
         if (expr_h) {
@@ -5082,7 +5101,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
-    case syntax::token_type_t::BUILTIN_PTR_FROM_INT: {
+    case syntax::builtin_t::PTR_FROM_INT: {
         // `@ptrFromInt(T, n)` -> the pointer whose address bits are the constant `n`.
         if (call.arguments.size() < 2) { return stdx::none; }
         const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
@@ -5094,7 +5113,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto target{builtin_result_type(id, call)};
         return const_value{static_cast<u64>(static_cast<u128>(*bits)), target};
     }
-    case syntax::token_type_t::BUILTIN_INT_FROM_PTR: {
+    case syntax::builtin_t::INT_FROM_PTR: {
         // `@intFromPtr(p)` folds only when `p` is itself a folded pointer constant.
         if (call.arguments.empty()) { return stdx::none; }
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
@@ -5106,7 +5125,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!bits) { return stdx::none; }
         return const_value{static_cast<u64>(*bits), usize_type};
     }
-    case syntax::token_type_t::BUILTIN_PTR_CAST: {
+    case syntax::builtin_t::PTR_CAST: {
         // `@ptrCast(T, p)` reinterprets the same address
         if (call.arguments.size() < 2) { return stdx::none; }
         const auto op_h{call.arguments[1].as_opt<ast::expr_handle>()};
@@ -5117,7 +5136,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (target) { operand->set_type(*target); }
         return operand;
     }
-    case syntax::token_type_t::BUILTIN_INT_CAST: {
+    case syntax::builtin_t::INT_CAST: {
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
@@ -5159,7 +5178,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_TRUNCATE: {
+    case syntax::builtin_t::TRUNCATE: {
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
@@ -5174,7 +5193,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_BOOL_FROM_INT: {
+    case syntax::builtin_t::BOOL_FROM_INT: {
         if (call.arguments.empty()) { return stdx::none; }
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
@@ -5189,7 +5208,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return stdx::none;
     }
-    case syntax::token_type_t::BUILTIN_INT_FROM_BOOL: {
+    case syntax::builtin_t::INT_FROM_BOOL: {
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
@@ -5201,7 +5220,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
     }
-    case syntax::token_type_t::BUILTIN_FLOAT_CAST: {
+    case syntax::builtin_t::FLOAT_CAST: {
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
@@ -5226,8 +5245,8 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         return const_value{f->round_to(*format), target};
     }
-    case syntax::token_type_t::BUILTIN_FLOAT_FROM_INT:
-    case syntax::token_type_t::BUILTIN_INT_FROM_FLOAT: {
+    case syntax::builtin_t::FLOAT_FROM_INT:
+    case syntax::builtin_t::INT_FROM_FLOAT: {
         const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
@@ -5235,7 +5254,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand || !target) { return stdx::none; }
 
         const auto ptr_bits{target_pointer_bits()};
-        if (builtin_type == syntax::token_type_t::BUILTIN_FLOAT_FROM_INT) {
+        if (builtin_type == syntax::builtin_t::FLOAT_FROM_INT) {
             const auto format{sema::float_format_of(*target)};
             const auto source_width{operand->get_type()
                                         ? integer_target_width(*operand->get_type(), ptr_bits)
@@ -5283,7 +5302,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             module_->ast.location_of(*op_h));
         return const_value::make_poison();
     }
-    case syntax::token_type_t::BUILTIN_BACKING_INT: {
+    case syntax::builtin_t::BACKING_INT: {
         // Only an enum folds; packed aggregates and tagged unions are read by the emitter
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
@@ -5293,15 +5312,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target) { return stdx::none; }
         return make_scalar_const(operand->as<const_enum>().value, target);
     }
-    case syntax::token_type_t::BUILTIN_AS:
-    case syntax::token_type_t::BUILTIN_BIT_CAST:
-    case syntax::token_type_t::BUILTIN_FROM_BACKING_INT: {
+    case syntax::builtin_t::AS:
+    case syntax::builtin_t::BIT_CAST:
+    case syntax::builtin_t::FROM_BACKING_INT: {
         // Fold the numeric/pointer subset; leave enums and aggregates to the emitter.
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
-        if (builtin_type == syntax::token_type_t::BUILTIN_BIT_CAST) {
+        if (builtin_type == syntax::builtin_t::BIT_CAST) {
             if (auto reinterpreted{fold_float_bit_cast(*operand, builtin_result_type(id, call))}) {
                 return reinterpreted;
             }
@@ -5310,7 +5329,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!target) { return stdx::none; }
         // A float `@as` rounds once into the target, like the runtime conversion
         if (const auto f{operand->as_opt<f128>()};
-            f && builtin_type == syntax::token_type_t::BUILTIN_AS) {
+            f && builtin_type == syntax::builtin_t::AS) {
             if (const auto format{sema::float_format_of(*target)}) {
                 if (!sema::comptime_float_fits(*f, *target)) {
                     ctx_.diags.emplace_back(
@@ -5327,13 +5346,13 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
+        if (builtin_type == syntax::builtin_t::AS &&
             target->get_kind() == sema::type_kind::COMPTIME_INT) {
             return retyped(*operand, *target);
         }
         const auto ptr_bits{target_pointer_bits()};
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
-        if (builtin_type == syntax::token_type_t::BUILTIN_AS &&
+        if (builtin_type == syntax::builtin_t::AS &&
             sema::is_integer(target->get_kind()) &&
             !sema::comptime_int_fits(*src_int, *target, ptr_bits)) {
             auto operand_node{*op_h};
@@ -5374,9 +5393,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return stdx::none;
     }
     // Recorded by the resolver; the call itself has no value
-    case syntax::token_type_t::BUILTIN_EXPORT:
+    case syntax::builtin_t::EXPORT:
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
-    case syntax::token_type_t::BUILTIN_COMPILE_ERROR: {
+    case syntax::builtin_t::COMPILE_ERROR: {
         std::string message{"compilation aborted by @compileError"};
         if (!call.arguments.empty()) {
             if (const auto msg_h{call.arguments[0].as_opt<ast::expr_handle>()}) {

@@ -325,17 +325,17 @@ class emitter {
                               const mod::module&        owner) -> void;
     auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
-                           syntax::token_type_t  builtin,
+                           syntax::builtin_t     builtin,
                            sema::type&           ret_type) -> value;
     [[nodiscard]] auto current_function_is_c_variadic() -> bool;
 
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
     // needed when the operands' lengths were not already proven equal statically.
-    auto emit_mem_intrinsic(ast::node_id         id,
-                            ast::expr_handle     dest_h,
-                            ast::expr_handle     rhs_h,
-                            syntax::token_type_t builtin,
-                            bool                 check_lengths = true) -> void;
+    auto emit_mem_intrinsic(ast::node_id      id,
+                            ast::expr_handle  dest_h,
+                            ast::expr_handle  rhs_h,
+                            syntax::builtin_t builtin,
+                            bool              check_lengths = true) -> void;
 
     // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
     // and whether that is its `break` variant

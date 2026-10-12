@@ -1,7 +1,4 @@
 //! Program entry: what runs before `main` and after it returns.
-//!
-//! The compiler adds this module to every executable and test executable. `@entryMain()` is the
-//! root module's `main` and `@testFunctions()` a test build's tests; neither is valid elsewhere.
 
 // A `[:0]u8` as its two words, for building argument slices from raw pointers
 const RawArg = extern struct {
@@ -31,22 +28,21 @@ const run = fn(args: []Arg): i32 {
     @cfg (testing) {
         return builtin.test_runner(args, @testFunctions());
     } else {
-        const main = @entryMain();
-        const info = @typeInfo(@TypeOf(main)).function;
+        const info = @typeInfo(@TypeOf(@entryMain())).function;
         if comptime (info.params.len == 1) {
             if comptime (info.return_type == void) {
-                main(args);
+                @entryMain()(args);
                 return 0;
             } else {
-                return main(args);
+                return @entryMain()(args);
             }
         } else {
             _ = args;
             if comptime (info.return_type == void) {
-                main();
+                @entryMain()();
                 return 0;
             } else {
-                return main();
+                return @entryMain()();
             }
         }
     }
@@ -70,43 +66,121 @@ const no_args = fn(): []Arg {
         @export(linux_main, .{ .name = "__ghoti_linux_main" });
     }
 
-    /// The process entry: the kernel leaves `argc` at the stack pointer and `argv` after it. Room
+    /// The kernel leaves `argc` at the stack pointer and `argv` after it. Room
     /// for the argument slices is taken from the stack below them, and `main`'s result becomes
     /// the `exit_group` status.
     @[naked] const linux_start = fn() callconv(.c): void {
         @cfg (arch == .x86_64) {
             asm {
-                template: "xorl %%ebp, %%ebp\n\tmovq (%%rsp), %%rdi\n\tleaq 8(%%rsp), %%rsi\n\tmovq %%rdi, %%rax\n\tshlq $4, %%rax\n\tsubq %%rax, %%rsp\n\tandq $-16, %%rsp\n\tmovq %%rsp, %%rdx\n\tcall __ghoti_linux_main\n\tmovl %%eax, %%edi\n\tmovl $231, %%eax\n\tsyscall\n\tud2",
+                template:
+                    \\xorl %%ebp, %%ebp
+                    \\movq (%%rsp), %%rdi
+                    \\leaq 8(%%rsp), %%rsi
+                    \\movq %%rdi, %%rax
+                    \\shlq $4, %%rax
+                    \\subq %%rax, %%rsp
+                    \\andq $-16, %%rsp
+                    \\movq %%rsp, %%rdx
+                    \\call __ghoti_linux_main
+                    \\movl %%eax, %%edi
+                    \\movl $231, %%eax
+                    \\syscall
+                    \\ud2
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn, att),
             };
         } else @cfg (arch == .aarch64) {
             asm {
-                template: "mov x29, xzr\n\tmov x30, xzr\n\tldr x0, [sp]\n\tadd x1, sp, #8\n\tlsl x2, x0, #4\n\tmov x3, sp\n\tsub x3, x3, x2\n\tand x3, x3, #-16\n\tmov sp, x3\n\tmov x2, sp\n\tbl __ghoti_linux_main\n\tmov w8, #94\n\tsvc #0\n\tbrk #0",
+                template:
+                    \\mov x29, xzr
+                    \\mov x30, xzr
+                    \\ldr x0, [sp]
+                    \\add x1, sp, #8
+                    \\lsl x2, x0, #4
+                    \\mov x3, sp
+                    \\sub x3, x3, x2
+                    \\and x3, x3, #-16
+                    \\mov sp, x3
+                    \\mov x2, sp
+                    \\bl __ghoti_linux_main
+                    \\mov w8, #94
+                    \\svc #0
+                    \\brk #0
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn),
             };
         } else @cfg (arch == .riscv64) {
             asm {
-                template: "li s0, 0\n\tld a0, 0(sp)\n\taddi a1, sp, 8\n\tslli t0, a0, 4\n\tsub t1, sp, t0\n\tandi sp, t1, -16\n\tmv a2, sp\n\tcall __ghoti_linux_main\n\tli a7, 94\n\tecall\n\tunimp",
+                template:
+                    \\li s0, 0
+                    \\ld a0, 0(sp)
+                    \\addi a1, sp, 8
+                    \\slli t0, a0, 4
+                    \\sub t1, sp, t0
+                    \\andi sp, t1, -16
+                    \\mv a2, sp
+                    \\call __ghoti_linux_main
+                    \\li a7, 94
+                    \\ecall
+                    \\unimp
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn),
             };
         } else @cfg (arch == .riscv32) {
             asm {
-                template: "li s0, 0\n\tlw a0, 0(sp)\n\taddi a1, sp, 4\n\tslli t0, a0, 3\n\tsub t1, sp, t0\n\tandi sp, t1, -16\n\tmv a2, sp\n\tcall __ghoti_linux_main\n\tli a7, 94\n\tecall\n\tunimp",
+                template:
+                    \\li s0, 0
+                    \\lw a0, 0(sp)
+                    \\addi a1, sp, 4
+                    \\slli t0, a0, 3
+                    \\sub t1, sp, t0
+                    \\andi sp, t1, -16
+                    \\mv a2, sp
+                    \\call __ghoti_linux_main
+                    \\li a7, 94
+                    \\ecall
+                    \\unimp
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn),
             };
         } else @cfg (arch == .arm or arch == .thumb) {
             asm {
-                template: "ldr r0, [sp]\n\tadd r1, sp, #4\n\tlsl r3, r0, #3\n\tmov r2, sp\n\tsub r2, r2, r3\n\tbic r2, r2, #15\n\tmov sp, r2\n\tbl __ghoti_linux_main\n\tmovs r7, #248\n\tsvc #0\n\tudf #0",
+                template:
+                    \\ldr r0, [sp]
+                    \\add r1, sp, #4
+                    \\lsl r3, r0, #3
+                    \\mov r2, sp
+                    \\sub r2, r2, r3
+                    \\bic r2, r2, #15
+                    \\mov sp, r2
+                    \\bl __ghoti_linux_main
+                    \\movs r7, #248
+                    \\svc #0
+                    \\udf #0
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn),
             };
         } else @cfg (arch == .loongarch64) {
             asm {
-                template: "move $fp, $zero\n\tld.d $a0, $sp, 0\n\taddi.d $a1, $sp, 8\n\tslli.d $t0, $a0, 4\n\tsub.d $t1, $sp, $t0\n\tbstrins.d $t1, $zero, 3, 0\n\tmove $sp, $t1\n\tmove $a2, $sp\n\tbl __ghoti_linux_main\n\tori $a7, $zero, 94\n\tsyscall 0\n\tbreak 0",
+                template:
+                    \\move $fp, $zero
+                    \\ld.d $a0, $sp, 0
+                    \\addi.d $a1, $sp, 8
+                    \\slli.d $t0, $a0, 4
+                    \\sub.d $t1, $sp, $t0
+                    \\bstrins.d $t1, $zero, 3, 0
+                    \\move $sp, $t1
+                    \\move $a2, $sp
+                    \\bl __ghoti_linux_main
+                    \\ori $a7, $zero, 94
+                    \\syscall 0
+                    \\break 0
+                ,
                 clobbers: ("memory"),
                 options: (volatile, noreturn),
             };
@@ -117,8 +191,8 @@ const no_args = fn(): []Arg {
         return run(args_from_argv(@intCast(usize, argc), argv, slots));
     };
 } else @cfg (os == .windows) {
-    extern("kernel32", "GetCommandLineW") const GetCommandLineW: fn(): ^u16;
-    extern("kernel32", "WideCharToMultiByte") const WideCharToMultiByte: fn(
+    extern("kernel32", "GetCommandLineW") const GetCommandLineW: extern fn() callconv(.winapi): ^u16;
+    extern("kernel32", "WideCharToMultiByte") const WideCharToMultiByte: extern fn(
         code_page: u32,
         flags: u32,
         wide: ^u16,
@@ -127,14 +201,14 @@ const no_args = fn(): []Arg {
         out_len: i32,
         default_char: ^u8,
         used_default: ^mut i32,
-    ): i32;
-    extern("kernel32", "VirtualAlloc") const VirtualAlloc: fn(
+    ) callconv(.winapi): i32;
+    extern("kernel32", "VirtualAlloc") const VirtualAlloc: extern fn(
         address: ^mut opaque,
         size: usize,
         allocation_type: u32,
         protect: u32,
-    ): ^mut opaque;
-    extern("kernel32", "ExitProcess") const ExitProcess: fn(code: u32): noreturn;
+    ) callconv(.winapi): ^mut opaque;
+    extern("kernel32", "ExitProcess") const ExitProcess: extern fn(code: u32) callconv(.winapi): noreturn;
 
     comptime {
         @export(windows_main, .{ .name = "main" });
@@ -195,7 +269,10 @@ const no_args = fn(): []Arg {
             }
             if (write) {
                 slots[count] =
-                    .{ .ptr = @ptrFromInt(^u8, @intFromPtr(out) + start), .len = written - start };
+                    .{
+                        .ptr = @ptrFromInt(^u8, @intFromPtr(out) + start),
+                        .len = written - start,
+                    };
             }
             written += 1;
             count += 1;
@@ -276,14 +353,18 @@ const no_args = fn(): []Arg {
             return no_args();
         }
         let bytes = @intCast(usize, len);
-        let line = alloc(bytes);
+        // One block for the program's lifetime, sized for the most arguments a line this long
+        // holds: blanks separate them, so at most `bytes / 2 + 1`, each at most its own text
+        // plus a NUL. The slices come first, where the block's page alignment suits them
+        let max_args = bytes / 2 + 1;
+        let slots_size = max_args * @sizeOf(RawArg);
+        let block = alloc(slots_size + bytes + bytes + max_args);
+        let slots = @ptrCast(^mut RawArg, block);
+        let line = @ptrFromInt(^mut u8, @intFromPtr(block) + slots_size);
+        let out = @ptrFromInt(^mut u8, @intFromPtr(line) + bytes);
         _ = WideCharToMultiByte(CP_UTF8, 0, wide, -1, line, len, nullptr, nullptr);
-        // Without its NUL, the line splits into at most `bytes` arguments of `bytes` bytes total
         let text = @sliceFromPtr(@ptrCast(^u8, line), bytes - 1);
-        let count = split_command_line(text, false, line, @ptrCast(^mut RawArg, line));
-        let out = alloc(2 * bytes);
-        let slots = @ptrCast(^mut RawArg, alloc(count * @sizeOf(RawArg)));
-        _ = split_command_line(text, true, out, slots);
+        let count = split_command_line(text, true, out, slots);
         return @sliceFromPtr(@ptrCast(^mut Arg, slots), count);
     };
 

@@ -130,7 +130,7 @@ pub weak const require_handler = fn(_: []u8, _: SourceLocation): void {};
 pub weak const skip_handler = fn(_: []u8, _: SourceLocation): void {};
 
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
-pub const CallConv = enum { c, sysv, win64, stdcall, fastcall, aapcs };
+pub const CallConv = enum { c, sysv, win64, stdcall, fastcall, aapcs, winapi };
 
 /// How likely a branch is to run, for `@branchHint`
 pub const BranchHint = enum { none, likely, unlikely, cold, unpredictable };

@@ -767,10 +767,21 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
     };
 
     std::vector<syntax::doc_id> clauses;
-    clauses.emplace_back(doc_manager_.concat({
-        doc_manager_.text("template: "),
-        format(node.tmpl),
-    }));
+    // A multiline template starts on its own line, and the `,` after it on the next
+    if (node.tmpl->get_token_type() == syntax::token_type_t::MULTILINE_STRING) {
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("template:"),
+            doc_manager_.nest(
+                doc_manager_.concat({doc_manager_.hard_line(),
+                                     doc_manager_.without_trailing_hard_line(format(node.tmpl))})),
+            doc_manager_.hard_line(),
+        }));
+    } else {
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("template: "),
+            format(node.tmpl),
+        }));
+    }
     if (!node.outputs.empty()) { clauses.emplace_back(operand_list("outputs", node.outputs)); }
     if (!node.inputs.empty()) { clauses.emplace_back(operand_list("inputs", node.inputs)); }
     if (!node.clobbers.empty()) {
@@ -975,7 +986,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id id, const identifier_expr& node) -> syntax::doc_id {
-    if (syntax::get_builtin_opt(id.get_token_type()) && !node.name.starts_with('@')) {
+    if (id.get_token_type() == syntax::token_type_t::BUILTIN && !node.name.starts_with('@')) {
         return doc_manager_.owned(fmt::format("@{}", node.name));
     }
     if (id.get_token_type() == syntax::token_type_t::IDENT &&

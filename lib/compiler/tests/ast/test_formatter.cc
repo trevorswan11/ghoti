@@ -1132,6 +1132,21 @@ TEST_CASE("formatter leaves no lone trailing comma after a multiline string") {
     round_trips("const f = fn(): void { g(\n\\\\a\n\\\\b\n); };\n");
 }
 
+TEST_CASE("formatter puts a multiline asm template on lines of its own") {
+    constexpr std::string_view formatted{"const f = fn(): void {\n"
+                                         "    asm {\n"
+                                         "        template:\n"
+                                         "            \\\\mov %1, %0\n"
+                                         "            \\\\add %2, %0\n"
+                                         "        ,\n"
+                                         "        options: (volatile),\n"
+                                         "    };\n"
+                                         "};\n"};
+    CHECK(format_source("const f = fn(): void { asm { template: \\\\mov %1, %0\n"
+                        "\\\\add %2, %0\n, options: (volatile) }; };\n") == formatted);
+    round_trips(formatted);
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };

@@ -25,9 +25,7 @@ namespace ghoti::codegen {
 [[nodiscard]] auto
 intrinsic_value_type(llvm::LLVMContext& context, const sema::type& t, u32 ptr_bits) -> llvm::Type*;
 
-// Why `@llvmIntrinsic(name, ret, args...)` can't call the intrinsic on `triple`, or `none` when it
-// can: the name must be an intrinsic, a target intrinsic must be the target's, and the types must
-// fit its signature. When it can, `immediate_args` gets the arguments that must be constants
+// Why `@llvmIntrinsic(name, ret, args...)` can't call the intrinsic on `triple` (`none` if it can)
 [[nodiscard]] auto check_llvm_intrinsic(std::string_view                   name,
                                         const sema::type&                  return_type,
                                         gsl::span<const sema::type* const> arg_types,

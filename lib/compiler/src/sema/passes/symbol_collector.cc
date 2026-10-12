@@ -171,20 +171,17 @@ auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     const default_counter::guard g{in_expr_scope_};
 
     // `@expect`, `@require`, and `@skip` only make sense in a `test` block or `@[testing]` helper
-    switch (const auto fn_tok{call.function->get_token_type()}) {
-    case syntax::token_type_t::BUILTIN_EXPECT:
-    case syntax::token_type_t::BUILTIN_REQUIRE:
-    case syntax::token_type_t::BUILTIN_SKIP:
-        if (!in_test_scope_ && !in_testing_fn_) {
-            ctx_.diags.emplace_back(
-                fmt::format(
-                    "'{}' may only be used inside a 'test' block or a `@[testing]` function",
-                    syntax::get_builtin_opt(fn_tok).value_or("<builtin>")),
-                error::TEST_BUILTIN_OUTSIDE_TEST,
-                collecting_.ast.location_of(call.function));
-        }
-        break;
-    default: break;
+    using syntax::builtin_t;
+    const auto builtin{call.function->get_builtin()};
+    const bool test_only{builtin == syntax::builtin_t::EXPECT ||
+                         builtin == syntax::builtin_t::REQUIRE ||
+                         builtin == syntax::builtin_t::SKIP};
+    if (test_only && !in_test_scope_ && !in_testing_fn_) {
+        ctx_.diags.emplace_back(
+            fmt::format("'{}' may only be used inside a 'test' block or a `@[testing]` function",
+                        syntax::builtin_name(*builtin)),
+            error::TEST_BUILTIN_OUTSIDE_TEST,
+            collecting_.ast.location_of(call.function));
     }
 
     if (call.modifier) { collect(*call.modifier); }

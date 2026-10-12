@@ -4,6 +4,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <fmt/color.h>
@@ -21,6 +22,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/module/error.hh"
+#include "compiler/module/stdlib.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/syntax/parser.hh"
@@ -165,6 +167,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
     for (const auto& d : diagnostics) { mod->parse_diagnostics.emplace_back(d.snapshot()); }
     mod->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
     mod->diagnostics = std::move(diagnostics);
+    mod->is_start    = is_start_path(path);
 
     auto* ptr = mod.get();
     modules_.emplace(path, std::move(mod));
@@ -185,6 +188,13 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
     builtin_module_->state = module_state::PARSED;
     return *builtin_module_;
+}
+
+auto module_manager::is_start_path(const std::filesystem::path& path) -> bool {
+    if (!start_path_) { start_path_.emplace(find_start()); }
+    if (!*start_path_) { return false; }
+    std::error_code ec;
+    return std::filesystem::equivalent(path, **start_path_, ec) && !ec;
 }
 
 auto module_manager::get_or_create_start_module(const std::filesystem::path& path,

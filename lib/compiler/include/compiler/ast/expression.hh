@@ -12,6 +12,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token_type.hh"
 

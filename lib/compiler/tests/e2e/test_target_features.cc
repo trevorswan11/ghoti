@@ -6,8 +6,6 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
-#include "compiler/sema/error.hh"
-#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/test.hh"

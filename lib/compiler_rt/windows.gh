@@ -12,13 +12,70 @@ const symbol = compiler_rt.symbol;
         }
     }
 
-    /// Touches each 4 KiB page of a large stack frame in order, so the guard page grows the stack
-    /// one page at a time. The allocation size arrives in %rax and %rsp is left untouched; every
-    /// register but the saved scratch is preserved. This is libgcc's `___chkstk_ms`, which also
-    /// satisfies MSVC's x64 `__chkstk` contract.
+    /// This is libgcc's `___chkstk_ms`, which also satisfies MSVC's x64 `__chkstk` contract.
+    ///
+    /// https://github.com/gcc-mirror/gcc/blob/7644f2a3f009da4c32f7acc66c10f947bb455ae6/libgcc/config/i386/cygwin.S#L109
     @[naked] const stack_probe = fn() callconv(.c): void {
         asm {
-            template: "push %%rcx\n\tpush %%rax\n\tcmp $0x1000, %%rax\n\tlea 0x18(%%rsp), %%rcx\n\tjb 2f\n1:\n\tsub $0x1000, %%rcx\n\torq $0x0, (%%rcx)\n\tsub $0x1000, %%rax\n\tcmp $0x1000, %%rax\n\tja 1b\n2:\n\tsub %%rax, %%rcx\n\torq $0x0, (%%rcx)\n\tpop %%rax\n\tpop %%rcx\n\tret",
+            template:
+                \\push %%rcx
+                \\push %%rax
+                \\cmp $0x1000, %%rax
+                \\lea 0x18(%%rsp), %%rcx
+                \\jb 2f
+                \\1:
+                \\sub $0x1000, %%rcx
+                \\orq $0x0, (%%rcx)
+                \\sub $0x1000, %%rax
+                \\cmp $0x1000, %%rax
+                \\ja 1b
+                \\2:
+                \\sub %%rax, %%rcx
+                \\orq $0x0, (%%rcx)
+                \\pop %%rax
+                \\pop %%rcx
+                \\ret
+            ,
+            clobbers: ("memory"),
+            options: (volatile, noreturn, att),
+        };
+    };
+}
+
+@cfg (os == .windows and arch == .x86) {
+    comptime {
+        @cfg (abi == .msvc) {
+            symbol(stack_probe_x86, "_chkstk");
+        } else {
+            symbol(stack_probe_x86, "_alloca");
+        }
+    }
+
+    /// The 32-bit probe allocates as well: it touches each 4 KiB page from %esp down by %eax
+    /// bytes, then moves %esp there itself. Every register but %esp and the flags is preserved.
+    @[naked] const stack_probe_x86 = fn() callconv(.c): void {
+        asm {
+            template:
+                \\push %%ecx
+                \\cmp $0x1000, %%eax
+                \\lea 8(%%esp), %%ecx
+                \\jb 1f
+                \\2:
+                \\sub $0x1000, %%ecx
+                \\test %%ecx, (%%ecx)
+                \\sub $0x1000, %%eax
+                \\cmp $0x1000, %%eax
+                \\ja 2b
+                \\1:
+                \\sub %%eax, %%ecx
+                \\test %%ecx, (%%ecx)
+                \\lea 4(%%esp), %%eax
+                \\mov %%ecx, %%esp
+                \\mov -4(%%eax), %%ecx
+                \\push (%%eax)
+                \\sub %%esp, %%eax
+                \\ret
+            ,
             clobbers: ("memory"),
             options: (volatile, noreturn, att),
         };

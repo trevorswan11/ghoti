@@ -144,9 +144,9 @@ struct context {
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
     // The root module and `lib/start`, once an executable's entry code is attached
-    mod::module*            entry_root{nullptr};
-    mod::module*            start_module{nullptr};
-    bool                    runtime_safety{true};
+    stdx::option<mod::module&> entry_root{};
+    stdx::option<mod::module&> start_module{};
+    bool                       runtime_safety{true};
     // Building a test executable, which `@cfg(testing)` reports
     bool               testing{false};
     optimize_mode      build_mode{optimize_mode::DEBUG};

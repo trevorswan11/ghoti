@@ -3,13 +3,16 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"

@@ -405,7 +405,6 @@ TEST_CASE("a closure in a test block captures the test's locals") {
 }
 
 TEST_CASE("a type first used inside a function doesn't make its methods closures") {
-    // `X` resolves from inside `run`, and its methods' sibling calls aren't captures of `run`
     CHECK(helpers::compile_and_run(R"(
         const S = struct { v: i32 };
         const run = fn(): i32 {

@@ -26,12 +26,12 @@ const word_size = @sizeOf(usize);
     return (word_size - (p & (word_size - 1))) & (word_size - 1);
 };
 
-pub const memcpy = @[no_builtins] fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] pub const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     copy_forward(dst, src, n);
     return dst;
 };
 
-pub const memmove = @[no_builtins] fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] pub const memmove = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     // Copying away from the overlap keeps every source byte intact until it is read
     if (@intFromPtr(dst) <= @intFromPtr(src) or @intFromPtr(dst) >= @intFromPtr(src) + n) {
         copy_forward(dst, src, n);
@@ -41,10 +41,11 @@ pub const memmove = @[no_builtins] fn(dst: ^mut u8, src: ^u8, n: usize) callconv
     return dst;
 };
 
-pub const memset = @[no_builtins] fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] pub const memset = fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
     let byte = @truncate(u8, @bitCast(c_uint, c));
     let mut i: usize = 0;
-    let head = if (n < to_word_boundary(@intFromPtr(dst))) n else to_word_boundary(@intFromPtr(dst));
+    let head = if (n < to_word_boundary(@intFromPtr(dst))) n
+        else to_word_boundary(@intFromPtr(dst));
     while (i < head) : (i += 1) {
         dst[i] = byte;
     }
@@ -60,7 +61,7 @@ pub const memset = @[no_builtins] fn(dst: ^mut u8, c: c_int, n: usize) callconv(
     return dst;
 };
 
-pub const memcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] pub const memcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
     while (i < n) : (i += 1) {
         if (a[i] != b[i]) {
@@ -71,10 +72,11 @@ pub const memcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_i
 };
 
 /// Like `memcmp`, but only says whether the ranges differ
-pub const bcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] pub const bcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
     if (co_aligned(@intFromPtr(a), @intFromPtr(b))) {
-        let head = if (n < to_word_boundary(@intFromPtr(a))) n else to_word_boundary(@intFromPtr(a));
+        let head = if (n < to_word_boundary(@intFromPtr(a))) n
+            else to_word_boundary(@intFromPtr(a));
         while (i < head) : (i += 1) {
             if (a[i] != b[i]) return 1;
         }
@@ -91,7 +93,8 @@ pub const bcmp = @[no_builtins] fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int
 @[no_builtins] const copy_forward = fn(dst: ^mut u8, src: ^u8, n: usize): void {
     let mut i: usize = 0;
     if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
-        let head = if (n < to_word_boundary(@intFromPtr(dst))) n else to_word_boundary(@intFromPtr(dst));
+        let head = if (n < to_word_boundary(@intFromPtr(dst))) n
+            else to_word_boundary(@intFromPtr(dst));
         while (i < head) : (i += 1) {
             dst[i] = src[i];
         }

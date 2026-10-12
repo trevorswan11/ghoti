@@ -17,6 +17,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"

@@ -4,6 +4,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -17,9 +18,11 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
@@ -350,13 +353,7 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
     const auto valid{for_test_executable ? validate_test_entry(root) : validate_main_entry(root)};
     if (!valid) { return {}; }
 
-    const auto path{[] -> stdx::option<std::filesystem::path> {
-        if (const auto env{get_env("GHOTI_START")}) {
-            std::filesystem::path env_path{*env};
-            if (path_utils::is_file(env_path)) { return env_path; }
-        }
-        return mod::find_lib_path("start/start.gh");
-    }()};
+    const auto path{mod::find_start()};
     if (!path) {
         return make_sema_err("cannot find the program entry code `lib/start/start.gh`; set "
                              "GHOTI_START to its path",

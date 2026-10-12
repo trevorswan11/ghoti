@@ -18,6 +18,7 @@
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"

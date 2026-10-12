@@ -377,7 +377,7 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
 auto dumper::visit(node_id id, const identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
     fmt::print(out_, "IdentifierExpression: {}", syntax::ascii_spelling(ident.name));
-    if (syntax::get_builtin_opt(id.get_token_type())) {
+    if (id.get_token_type() == syntax::token_type_t::BUILTIN) {
         fmt::print(out_, " (builtin)");
     } else if (syntax::token_type::is_primitive(id.get_token_type())) {
         fmt::print(out_, " (primitive)");
@@ -1175,7 +1175,7 @@ auto dumper::visit(explicit_type_id id, const identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
     fmt::print(out_, "{}", indent_.current_branch());
     fmt::print(out_, "IdentifierExpression: {}", syntax::ascii_spelling(ident.name));
-    if (syntax::get_builtin_opt(id.get_token_type())) {
+    if (id.get_token_type() == syntax::token_type_t::BUILTIN) {
         fmt::print(out_, " (builtin)");
     } else if (syntax::token_type::is_primitive(id.get_token_type())) {
         fmt::print(out_, " (primitive)");

@@ -2,6 +2,7 @@ import std;
 
 import "addf3.gh" as _;
 import "comparef.gh" as _;
+import "divdi3.gh" as _;
 import "mem.gh" as _;
 import "windows.gh" as _;
 
@@ -31,7 +32,7 @@ pub const @"f80" = match comptime (@targetArch()) {
 };
 
 /// MSVC's linker looks for this symbol in any object that uses floating point
-@cfg (os == .windows and abi == .msvc) {
+@cfg (os == .windows and abi == .msvc and !testing) {
     export let mut _fltused: c_int = 1;
 }
 
@@ -57,5 +58,6 @@ pub const normalize = fn(T: type, significand: ^mut auto): i32 {
 test {
     import "addf3.gh";
     import "comparef.gh";
+    import "divdi3.gh";
     import "mem.gh";
 }

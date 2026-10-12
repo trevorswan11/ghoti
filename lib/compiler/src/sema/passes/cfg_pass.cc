@@ -312,7 +312,7 @@ auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
     const ast::node_id id{h};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-    return ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR;
+    return ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
 }
 
 // Every guard arm (and the `_ =>` fallback) must yield the same `comptime` type
@@ -375,8 +375,7 @@ auto cfg_pass::is_cpu_has(const ast::call_expr& call) const -> bool {
 }
 
 // True for an enabled feature of the target's architecture, false for a disabled one or one of
-// another architecture (so `arch == .x86_64 and cpu.has(.avx2)` works everywhere); a name no
-// architecture has is an error
+// another architecture; a name no architecture has is an error
 auto cfg_pass::cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::option<cfg_value> {
     const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
     const auto access{arg ? module_.ast.get_as_opt<ast::implicit_access_expr>(*arg) : stdx::none};
@@ -401,9 +400,9 @@ auto cfg_pass::cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::opt
 
     std::string_view closest;
     usize            closest_dist{3}; // suggest only for distance <= 2
-    for (const auto& family : codegen::cpu_feature_families()) {
-        if (std::ranges::contains(family.ghoti_names, name)) { return cfg_value{false}; }
-        for (const auto& candidate : family.ghoti_names) {
+    for (const auto family : codegen::cpu_feature_families()) {
+        if (std::ranges::contains(family->ghoti_names, name)) { return cfg_value{false}; }
+        for (const auto& candidate : family->ghoti_names) {
             const auto dist{string_utils::edit_distance(name, candidate)};
             if (dist < closest_dist) {
                 closest_dist = dist;
@@ -465,7 +464,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return stdx::none;
     case ast::node_kind::CALL_EXPRESSION: {
         const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-        if (ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR) {
+        if (ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
             fire_compile_error(id, call);
             return cfg_value{cfgval::diverges{}};
         }
@@ -721,7 +720,7 @@ auto cfg_pass::fire_eager_compile_errors(const std::vector<ast::stmt_handle>& it
         if (!expr_stmt) { continue; }
         const auto call{module_.ast.get_as_opt<ast::call_expr>(expr_stmt->expression)};
         if (call &&
-            ast::node_id{call->function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR) {
+            ast::node_id{call->function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
             fire_compile_error(ast::node_id{expr_stmt->expression}, *call);
         }
     }

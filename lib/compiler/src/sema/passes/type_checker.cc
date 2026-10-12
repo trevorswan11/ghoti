@@ -13,6 +13,8 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"

@@ -1,11 +1,12 @@
 #pragma once
 
-#include <stdx/hash.hh>
 #include <string>
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/span>
+#include <stdx/hash.hh>
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 namespace ghoti::mod { struct module; } // namespace ghoti::mod
@@ -27,9 +28,9 @@ class symbol_scoping {
     symbol_scoping() = default;
 
     // Builds the policy from `entry_mod` plus every transitively imported module in `deps`.
-    [[nodiscard]] static auto build(const sema::context&          ctx,
-                                    const mod::module&            entry_mod,
-                                    gsl::span<mod::module* const> deps) -> symbol_scoping;
+    [[nodiscard]] static auto build(const sema::context&                  ctx,
+                                    const mod::module&                    entry_mod,
+                                    gsl::span<stdx::option<mod::module&>> deps) -> symbol_scoping;
 
     // The GIR symbol name to use for a declaration named `name` owned by the given table
     [[nodiscard]] auto name_for(usize owner_table_idx, std::string_view name) const -> std::string;

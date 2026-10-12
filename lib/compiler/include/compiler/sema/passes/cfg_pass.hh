@@ -111,7 +111,8 @@ class cfg_pass {
     auto               gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     auto               resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value>;
     [[nodiscard]] auto is_cpu_has(const ast::call_expr& call) const -> bool;
-    auto cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::option<cfg_value>;
+    [[nodiscard]] auto cpu_has(ast::node_id at, const ast::call_expr& call)
+        -> stdx::option<cfg_value>;
     [[nodiscard]] auto to_operand(const cfg_value& value) -> operand;
     [[nodiscard]] auto find_import(std::string_view name, bool public_only)
         -> stdx::option<mod::module&>;

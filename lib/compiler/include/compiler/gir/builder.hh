@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"

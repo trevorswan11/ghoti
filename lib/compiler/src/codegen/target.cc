@@ -11,6 +11,8 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/DiagnosticInfo.h>
@@ -31,6 +33,7 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/SubtargetFeature.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/fixed/vector.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -545,9 +548,11 @@ namespace {
     for (const auto& kv : info->getAllProcessorFeatures()) { llvm_names.emplace_back(kv.key()); }
     if (llvm_names.empty()) { return stdx::none; }
     auto ghoti_names{ghoti_feature_names(llvm_names)};
-    return cpu_feature_family{.name        = spec.name,
-                              .llvm_names  = std::move(llvm_names),
-                              .ghoti_names = std::move(ghoti_names)};
+    return cpu_feature_family{
+        .name        = spec.name,
+        .llvm_names  = std::move(llvm_names),
+        .ghoti_names = std::move(ghoti_names),
+    };
 }
 
 struct family_cache {
@@ -566,15 +571,13 @@ struct family_cache {
 
 } // namespace
 
-auto cpu_feature_families() -> const std::vector<cpu_feature_family>& {
-    static const std::vector<cpu_feature_family> families{[] {
-        std::vector<cpu_feature_family> out;
-        for (usize i{0}; i < family_specs.size(); ++i) {
-            if (const auto family{cached_family(i)}) { out.emplace_back(*family); }
-        }
-        return out;
-    }()};
-    return families;
+auto cpu_feature_families()
+    -> stdx::fixed::vector<gsl::not_null<const cpu_feature_family*>, family_specs.size()> {
+    stdx::fixed::vector<gsl::not_null<const cpu_feature_family*>, family_specs.size()> out;
+    for (usize i{0}; i < family_specs.size(); ++i) {
+        if (const auto family{cached_family(i)}) { out.emplace_back(family.get()); }
+    }
+    return out;
 }
 
 auto cpu_feature_family_of(const llvm::Triple& triple) -> stdx::option<const cpu_feature_family&> {

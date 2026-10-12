@@ -12,6 +12,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/kind.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
@@ -53,6 +54,17 @@ class node_id {
         return static_cast<syntax::token_type_t>((raw_ & TOKEN_TYPE_MASK) >> TOKEN_TYPE_OFFSET);
     }
 
+    // Which builtin a `token_type_t::BUILTIN` node names, carried beside its token type
+    constexpr auto set_builtin(syntax::builtin_t builtin) noexcept -> void {
+        raw_ &= ~BUILTIN_MASK;
+        raw_ |= static_cast<u64>(builtin) << BUILTIN_OFFSET;
+    }
+
+    [[nodiscard]] constexpr auto get_builtin() const noexcept -> stdx::option<syntax::builtin_t> {
+        if (get_token_type() != syntax::token_type_t::BUILTIN) { return stdx::none; }
+        return static_cast<syntax::builtin_t>((raw_ & BUILTIN_MASK) >> BUILTIN_OFFSET);
+    }
+
     [[nodiscard]] constexpr auto get_index() const noexcept -> usize {
         return static_cast<usize>(raw_ & INDEX_MASK);
     }
@@ -82,8 +94,10 @@ class node_id {
   private:
     static constexpr u64 KIND_MASK{0xFF00000000000000ULL};
     static constexpr u64 KIND_OFFSET{std::countr_zero(KIND_MASK)};
-    static constexpr u64 TOKEN_TYPE_MASK{0x00FFFF0000000000ULL};
+    static constexpr u64 TOKEN_TYPE_MASK{0x00FF000000000000ULL};
     static constexpr u64 TOKEN_TYPE_OFFSET{std::countr_zero(TOKEN_TYPE_MASK)};
+    static constexpr u64 BUILTIN_MASK{0x0000FF0000000000ULL};
+    static constexpr u64 BUILTIN_OFFSET{std::countr_zero(BUILTIN_MASK)};
     static constexpr u64 INDEX_MASK{0x000000FFFFFFFFFFULL};
 
   private:
@@ -194,6 +208,17 @@ class explicit_type_id {
         return static_cast<syntax::token_type_t>((raw_ & TOKEN_TYPE_MASK) >> TOKEN_TYPE_OFFSET);
     }
 
+    // Which builtin a type spelled with one (`@TypeOf(x)`) starts with
+    constexpr auto set_builtin(syntax::builtin_t builtin) noexcept -> void {
+        raw_ &= ~BUILTIN_MASK;
+        raw_ |= static_cast<u64>(builtin) << BUILTIN_OFFSET;
+    }
+
+    [[nodiscard]] constexpr auto get_builtin() const noexcept -> stdx::option<syntax::builtin_t> {
+        if (get_token_type() != syntax::token_type_t::BUILTIN) { return stdx::none; }
+        return static_cast<syntax::builtin_t>((raw_ & BUILTIN_MASK) >> BUILTIN_OFFSET);
+    }
+
     [[nodiscard]] constexpr auto get_index() const noexcept -> usize {
         return static_cast<usize>(raw_ & INDEX_MASK);
     }
@@ -223,8 +248,10 @@ class explicit_type_id {
     static constexpr u64 KIND_OFFSET{std::countr_zero(KIND_MASK)};
     static constexpr u64 MODIFIER_MASK{0x0F00000000000000ULL};
     static constexpr u64 MODIFIER_OFFSET{std::countr_zero(MODIFIER_MASK)};
-    static constexpr u64 TOKEN_TYPE_MASK{0x00FFFF0000000000ULL};
+    static constexpr u64 TOKEN_TYPE_MASK{0x00FF000000000000ULL};
     static constexpr u64 TOKEN_TYPE_OFFSET{std::countr_zero(TOKEN_TYPE_MASK)};
+    static constexpr u64 BUILTIN_MASK{0x0000FF0000000000ULL};
+    static constexpr u64 BUILTIN_OFFSET{std::countr_zero(BUILTIN_MASK)};
     static constexpr u64 INDEX_MASK{0x000000FFFFFFFFFFULL};
 
   private:

@@ -25,6 +25,8 @@ enum class calling_convention : u8 {
     X86_STDCALL,
     X86_FASTCALL,
     AAPCS,
+    // The Win32 API's: `stdcall` on 32-bit x86, the C convention everywhere else
+    X86_WINAPI,
 };
 
 [[nodiscard]] auto calling_convention_from_name(std::string_view name) noexcept

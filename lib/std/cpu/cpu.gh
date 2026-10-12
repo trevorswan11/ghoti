@@ -2,7 +2,6 @@
 //!
 //! `builtin.cpu` is the CPU code is compiled for; `detect` asks the machine itself, so a
 //! `@[target_features(...)]` function can be called only where it is safe to.
-
 import std;
 
 /// The CPU features of the machine running this code: the compiled-for features of
@@ -383,9 +382,9 @@ const bit = fn(word: u64, n: u6): bool {
 }
 
 @cfg (arch == .aarch64 and os == .windows) {
-    extern("kernel32", "IsProcessorFeaturePresent") const IsProcessorFeaturePresent: fn(
+    extern("kernel32", "IsProcessorFeaturePresent") const IsProcessorFeaturePresent: extern fn(
         feature: u32,
-    ): i32;
+    ) callconv(.winapi): i32;
 
     const aarch64_windows = struct {
         const on = fn(set: &mut builtin.CpuFeatureSet, feature: builtin.CpuFeature, pf: u32): void {
@@ -421,7 +420,7 @@ test "detect finds every feature the code was compiled for" {
 }
 
 @cfg (arch == .x86_64) {
-    const sum_avx2 = @[target_features(.avx2)] fn(xs: []i32): i32 {
+    @[target_features(.avx2)] const sum_avx2 = fn(xs: []i32): i32 {
         let mut total: i32 = 0;
         for (xs) |x| {
             total += x;

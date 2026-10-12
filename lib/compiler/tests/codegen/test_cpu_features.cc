@@ -1,11 +1,13 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
 
+#include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/target.hh"
 #include "support/test.hh"
@@ -25,13 +27,14 @@ namespace {
 } // namespace
 
 TEST_CASE("CPU feature families come from LLVM's tables, named as ghoti spells them") {
-    const auto& families{codegen::cpu_feature_families()};
+    const auto families{codegen::cpu_feature_families()};
     for (const std::string_view name : {"x86", "aarch64", "arm", "riscv", "wasm"}) {
         INFO(name);
-        CHECK(std::ranges::any_of(families, [&](const auto& f) { return f.name == name; }));
+        CHECK(std::ranges::any_of(families, [&](const auto f) { return f->name == name; }));
     }
 
-    const auto& x86{*std::ranges::find(families, "x86", &codegen::cpu_feature_family::name)};
+    const auto& x86{
+        **std::ranges::find_if(families, [](const auto f) { return f->name == "x86"; })};
     CHECK(x86.llvm_names.size() == x86.ghoti_names.size());
     CHECK(has(x86.ghoti_names, "avx2"));
     CHECK(has(x86.ghoti_names, "sse4_2"));

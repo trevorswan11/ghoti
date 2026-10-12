@@ -78,6 +78,9 @@ auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) 
     if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86_64) {
         if (symbol == (triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk")) { return true; }
     }
+    if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86) {
+        if (symbol == (triple.isOSCygMing() ? "_alloca" : "_chkstk")) { return true; }
+    }
     return is_runtime_libcall(triple, symbol);
 }
 

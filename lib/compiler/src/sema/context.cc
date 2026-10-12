@@ -222,15 +222,16 @@ auto inject_c_longdouble(symbol_table& prelude, type_pool& pool, const codegen::
 
 auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
-    const auto inject_function = [&](const syntax::builtin_t& builtin,
-                                     types::builtin_params&&  param_types,
-                                     type&                    return_type) -> void {
+    const auto inject_function = [&](const syntax::builtin_def& def,
+                                     types::builtin_params&&    param_types,
+                                     type&                      return_type) -> void {
         for (const auto& param_type : param_types) {
             ASSERT(param_type->is_resolved(), "Builtins must be fully resolved");
         }
         ASSERT(return_type.is_resolved(), "Builtins must be fully resolved");
 
-        types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+        const syntax::typed_identifier builtin{def.name, syntax::token_type_t::BUILTIN};
+        types::key_t                   key{type_kind::FUNCTION, types::mut::CONSTANT};
         key.imprint(builtin);
         auto& type{*pool[key]};
         ASSERT(!type.is_resolved(), "Builtin functions should only be resolved once");

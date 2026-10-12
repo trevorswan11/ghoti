@@ -325,8 +325,8 @@ auto call_modifier_name(call_modifier modifier) noexcept -> std::string_view {
     case call_modifier::ALWAYS_TAIL:   return "always_tail";
     case call_modifier::ALWAYS_INLINE: return "always_inline";
     case call_modifier::COMPILE_TIME:  return "compile_time";
+    default:                           return "auto";
     }
-    return "auto";
 }
 
 auto call_expr::parse(syntax::parser& parser, expr_handle function)
@@ -335,12 +335,14 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
     const auto            start_token{parser.get_current_token()};
     std::vector<argument> arguments;
     std::vector<bool>     pack_expansions;
+    const auto            builtin{function->get_builtin()};
     const auto            type_only_scope{[&] -> stdx::option<counter<u32>::guard> {
-        switch (function->get_token_type()) {
-        case syntax::token_type_t::BUILTIN_TYPE_OF:
-        case syntax::token_type_t::BUILTIN_SIZE_OF:
-        case syntax::token_type_t::BUILTIN_ALIGN_OF:
-        case syntax::token_type_t::BUILTIN_BIT_SIZE_OF: return parser.enter_type_only_operand();
+        if (!builtin) { return stdx::none; }
+        switch (*builtin) {
+        case syntax::builtin_t::TYPE_OF:
+        case syntax::builtin_t::SIZE_OF:
+        case syntax::builtin_t::ALIGN_OF:
+        case syntax::builtin_t::BIT_SIZE_OF:            return parser.enter_type_only_operand();
         default:                                        return stdx::none;
         }
     }()};
@@ -388,7 +390,7 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
 
     // `@call(modifier, f, args...)` is a call of `f`; everything else about calls applies to it
-    if (function->get_token_type() == syntax::token_type_t::BUILTIN_CALL) {
+    if (builtin == syntax::builtin_t::CALL) {
         const auto modifier{arguments.size() >= 2 ? arguments[0].as_opt<expr_handle>()
                                                   : stdx::none};
         const auto callee{arguments.size() >= 2 ? arguments[1].as_opt<expr_handle>() : stdx::none};
