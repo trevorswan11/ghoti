@@ -21,7 +21,7 @@
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
-namespace ghoti::mod { struct module; }   // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::gir {
 
@@ -60,7 +60,7 @@ struct const_union {
 
 struct const_closure {
     ast::node_id               fn_node;
-    stdx::option<mod::module&> module{};
+    stdx::option<mod::module_t&> module{};
     const_struct               captures;
     [[nodiscard]] auto         operator==(const const_closure& other) const noexcept -> bool;
 };

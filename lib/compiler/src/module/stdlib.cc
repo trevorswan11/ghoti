@@ -28,7 +28,7 @@ auto find_start() -> stdx::option<std::filesystem::path> {
         std::filesystem::path env_path{*env_var};
         if (path_utils::is_file(env_path)) { return env_path; }
     }
-    return find_lib_path("start/start.gh");
+    return find_lib_path("std/start.gh");
 }
 
 auto find_lib_path(const std::filesystem::path& relative) -> stdx::option<std::filesystem::path> {

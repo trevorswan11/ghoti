@@ -13,7 +13,7 @@
 
 namespace ghoti::lsp {
 
-auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> symbol_kind {
+auto symbol_kind_of(const mod::module_t& module, const ast::decl_stmt& decl) -> symbol_kind {
     if (decl.value) {
         if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) {
             return symbol_kind::FUNCTION;
@@ -28,7 +28,7 @@ auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> sy
                                                        : symbol_kind::CONSTANT;
 }
 
-auto document_symbols(const mod::module& module) -> nlohmann::json {
+auto document_symbols(const mod::module_t& module) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     for (const auto root_id : module.ast) {

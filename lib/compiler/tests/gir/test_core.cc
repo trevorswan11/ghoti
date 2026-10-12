@@ -168,7 +168,7 @@ TEST_CASE("GIR module container and arena allocation") {
     using namespace gir;
 
     auto [ctx, idx]{helpers::resolve_and_check("const a: i32 = 42;")};
-    gir::module gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
+    gir::module_t gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
 
     auto& i32_type{
         *ctx->analyzer

@@ -35,13 +35,13 @@ class llvm_lowering {
     ~llvm_lowering() = default;
     MAKE_PINNED(llvm_lowering);
 
-    auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
-    // The program's `main` becomes the internal `_ghoti_main` that `lib/start` calls, leaving
+    auto lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module>;
+    // The program's `main` becomes the internal `_ghoti_main` that `std/start.gh` calls, leaving
     // the C `main` symbol to the entry code
-    auto lower_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
+    auto lower_executable(const gir::module_t& gir_mod, std::string_view user_main_name = "main")
         -> stdx::box<llvm::Module>;
-    auto lower_test_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
-        -> stdx::box<llvm::Module>;
+    auto lower_test_executable(const gir::module_t& gir_mod,
+                               std::string_view user_main_name = "main") -> stdx::box<llvm::Module>;
 
     [[nodiscard]] static auto to_ir_string(const llvm::Module& mod) -> std::string;
 
@@ -71,7 +71,7 @@ class llvm_lowering {
     auto lower_function(const gir::function& fn) -> llvm::Function*;
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
     // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
-    auto lower_dyn_vtables(const gir::module& gir_mod) -> void;
+    auto lower_dyn_vtables(const gir::module_t& gir_mod) -> void;
     auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
     // `{fn, trampoline}` when a thin function constant initializes an erased `fn(...)` slot
     auto const_callable(std::string_view          fn_symbol,
@@ -134,8 +134,8 @@ class llvm_lowering {
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
     // target (compiler_rt provides it), or `none` where nothing could
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
-    auto               declare_functions(const gir::module& gir_mod) -> void;
-    auto               lower_definitions(const gir::module& gir_mod) -> void;
+    auto               declare_functions(const gir::module_t& gir_mod) -> void;
+    auto               lower_definitions(const gir::module_t& gir_mod) -> void;
     auto               finalize_runtime_support() -> void;
     auto               maybe_emit_mingw_main_stub() -> void;
 
@@ -201,7 +201,7 @@ class llvm_lowering {
     ankerl::unordered_dense::map<llvm::FunctionType*, llvm::Function*> fn_trampolines_;
     bool                             reserved_symbols_built_{false};
     bool                             is_executable_{false};
-    stdx::option<const gir::module&> gir_module_;
+    stdx::option<const gir::module_t&> gir_module_;
     std::string                      user_main_name_{"main"};
 };
 

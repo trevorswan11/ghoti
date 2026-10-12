@@ -241,4 +241,27 @@ TEST_CASE("comptime parameter: an all-comptime signature still works") {
     )") == 42);
 }
 
+TEST_CASE("a compile-time `false and` / `true or` never evaluates its right side") {
+    CHECK(helpers::compile_and_run(R"(
+        const takes_i32 = fn(comptime params: []type): bool {
+            return params.len == 1 and params[0] == i32;
+        };
+        const no_args_or_i32 = fn(comptime params: []type): bool {
+            return params.len == 0 or params[0] == i32;
+        };
+        const none = fn(): void {};
+        const one = fn(_: i32): void {};
+
+        pub const main = fn(): i32 {
+            const empty = @typeInfo(@TypeOf(none)).function.params;
+            const ints = @typeInfo(@TypeOf(one)).function.params;
+            let mut out: i32 = 0;
+            if (!takes_i32(empty)) { out += 1; }
+            if (no_args_or_i32(empty)) { out += 2; }
+            if (no_args_or_i32(ints)) { out += 4; }
+            return out;
+        };
+    )") == 7);
+}
+
 } // namespace ghoti::tests

@@ -83,7 +83,7 @@ struct options {
     // Writes the GIR / LLVM IR / assembly dumps requested via
     // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
     [[nodiscard]] auto emit_debug_artifacts(sema::analyzer&      analyzer,
-                                            gir::module&         gir_mod,
+                                            gir::module_t&       gir_mod,
                                             std::ostream&        error_stream,
                                             sema::build_artifact artifact) const
         -> stdx::result<void, clap::error>;
@@ -94,7 +94,7 @@ struct options {
     auto make_output_path_absolute() -> void;
 };
 
-using analyzed_module = std::pair<gsl::not_null<mod::module*>, gir::module>;
+using analyzed_module = std::pair<gsl::not_null<mod::module_t*>, gir::module_t>;
 
 // Owns the loader, module manager, and analyzer every compiling subcommand drives.
 class compilation {

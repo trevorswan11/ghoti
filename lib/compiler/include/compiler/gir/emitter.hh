@@ -41,7 +41,7 @@ namespace ghoti::gir {
 
 class emitter {
   public:
-    explicit emitter(sema::context& ctx, mod::module& ast_mod) noexcept
+    explicit emitter(sema::context& ctx, mod::module_t& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
           gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
           target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {
@@ -50,7 +50,7 @@ class emitter {
     ~emitter() = default;
     MAKE_PINNED(emitter);
 
-    [[nodiscard]] auto emit(bool include_builtin_test_runtime = false) -> module;
+    [[nodiscard]] auto emit(bool include_builtin_test_runtime = false) -> module_t;
 
   private:
     struct local_binding {
@@ -139,7 +139,7 @@ class emitter {
     // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
-                                  mod::module&              iface_mod,
+                                  mod::module_t&            iface_mod,
                                   ast::node_id              sig_id,
                                   const ast::function_expr& fn_expr,
                                   stdx::option<sema::type&> concrete_sig,
@@ -152,7 +152,7 @@ class emitter {
 
     // Emits one member function of a `fn(...): type` constructor's result as a method of its
     // per-instantiation aggregate type. Registered by the resolver in `type_ctor_member_emits`.
-    auto emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
+    auto emit_type_ctor_member(mod::module_t& owner_mod, const sema::type_ctor_member_emit& tcm)
         -> void;
     auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
     // Like emit_anonymous_function, but pre-binds `name` to itself so the body can self-recurse
@@ -169,11 +169,11 @@ class emitter {
                                sema::type&                   closure_type) -> void;
 
     // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
-    auto apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
+    auto apply_fn_attributes(gir::function& fn, const mod::module_t& owner, ast::node_id fn_node)
         -> void;
 
     // The `@branchHint` opening `stmt`, if it is a block that starts with one
-    [[nodiscard]] auto branch_hint_of(const mod::module& owner, ast::node_id stmt)
+    [[nodiscard]] auto branch_hint_of(const mod::module_t& owner, ast::node_id stmt)
         -> stdx::option<ast::branch_hint>;
     // Weights a two-way branch from the hints on its true and false sides
     static auto apply_branch_hints(gir::instruction&              branch,
@@ -181,14 +181,14 @@ class emitter {
                                    stdx::option<ast::branch_hint> on_false) -> void;
 
     // The `@[align(n)]` of a declaration's own storage
-    [[nodiscard]] static auto decl_alignment(const mod::module& owner, ast::node_id decl)
+    [[nodiscard]] static auto decl_alignment(const mod::module_t& owner, ast::node_id decl)
         -> stdx::option<u64> {
         const auto resolved{owner.attributes_of(decl)};
         return resolved ? resolved->alignment : stdx::none;
     }
 
     // The `@[visibility(...)]` of a declaration's own symbol
-    [[nodiscard]] static auto decl_visibility(const mod::module& owner, ast::node_id decl)
+    [[nodiscard]] static auto decl_visibility(const mod::module_t& owner, ast::node_id decl)
         -> stdx::option<ast::symbol_visibility> {
         const auto resolved{owner.attributes_of(decl)};
         return resolved ? resolved->visibility : stdx::none;
@@ -260,6 +260,8 @@ class emitter {
     auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
     auto request_builtin_type_methods(const sema::type& receiver) -> bool;
+    // Queues the `builtin` impl block that gives `receiver` its `method`, if one does
+    auto request_builtin_impl_method(const sema::type& receiver, std::string_view method) -> void;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
@@ -322,7 +324,7 @@ class emitter {
          fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;
     auto bind_declared_params(gir::function&            fn,
                               const ast::function_expr& fn_expr,
-                              const mod::module&        owner) -> void;
+                              const mod::module_t&      owner) -> void;
     auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
                            syntax::builtin_t     builtin,
@@ -360,7 +362,7 @@ class emitter {
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
     // Emits a struct field's `= default` expression, coerced to `field_type`
     auto               emit_field_default(ast::expr_handle default_expr,
-                                          mod::module&     owner,
+                                          mod::module_t&   owner,
                                           sema::type&      field_type) -> value;
     auto               emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     [[nodiscard]] auto dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool;
@@ -418,9 +420,11 @@ class emitter {
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
     auto try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs) -> stdx::option<local_id>;
     auto emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id;
-    auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
-    auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
-    auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
+    // Whether `expr` folds, silently, to the bool `expected`
+    [[nodiscard]] auto folds_to_bool(ast::expr_handle expr, bool expected) -> bool;
+    auto               emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto               emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto               emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
     // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
@@ -594,7 +598,7 @@ class emitter {
 
     // Moves diagnostics reported since `diags_before` onto `owner` when it is a foreign module,
     // so they print against the file their locations point into
-    auto attribute_diags(mod::module& owner, usize diags_before) -> void;
+    auto attribute_diags(mod::module_t& owner, usize diags_before) -> void;
 
     // The symbol table that owns a definition currently being emitted: the enclosing aggregate
     // literal's table for a member, otherwise the active module's root table.
@@ -619,12 +623,12 @@ class emitter {
 
   private:
     sema::context&             ctx_;
-    mod::module&               ast_module_;
-    stdx::option<mod::module&> active_module_{ast_module_};
+    mod::module_t&               ast_module_;
+    stdx::option<mod::module_t&> active_module_{ast_module_};
     bool                       attributed_foreign_diags_{false};
     const_eval                 const_eval_;
     builder                    builder_;
-    module                     gir_module_;
+    module_t                     gir_module_;
     std::vector<scope_frame>   scopes_;
     std::vector<loop_context>  loop_stack_;
     bool                       comptime_loop_continue_{false};
@@ -642,6 +646,7 @@ class emitter {
     std::vector<bool>                                       open_fn_is_closure_;
     std::vector<sema::type*>                                user_type_stack_;
     std::vector<std::string_view>                           pending_builtin_runtime_;
+    std::vector<ast::node_id>                               pending_builtin_impls_;
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};

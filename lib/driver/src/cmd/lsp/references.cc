@@ -10,7 +10,7 @@
 
 namespace ghoti::lsp {
 
-auto definition_location_at(const mod::module& module, source_location target)
+auto definition_location_at(const mod::module_t& module, source_location target)
     -> stdx::option<located_span> {
     const auto id{identifier_at(module, target)};
     if (!id) { return stdx::none; }

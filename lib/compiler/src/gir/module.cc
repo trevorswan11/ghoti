@@ -21,16 +21,16 @@
 
 namespace ghoti::gir {
 
-auto module::add_type(std::string name, sema::type& type) -> type_decl& {
+auto module_t::add_type(std::string name, sema::type& type) -> type_decl& {
     return *types_.emplace_back(arena_.make<type_decl>(std::move(name), type));
 }
 
-auto module::add_global(std::string         name,
-                        sema::type&         type,
-                        bool                is_const,
-                        stdx::option<value> init,
-                        gir::linkage        linkage,
-                        std::string         abi_name) -> global_decl& {
+auto module_t::add_global(std::string         name,
+                          sema::type&         type,
+                          bool                is_const,
+                          stdx::option<value> init,
+                          gir::linkage        linkage,
+                          std::string         abi_name) -> global_decl& {
     return *globals_.emplace_back(arena_.make<global_decl>(std::move(name),
                                                            type,
                                                            std::move(init),
@@ -43,13 +43,13 @@ auto module::add_global(std::string         name,
                                                            false));
 }
 
-auto module::add_function(std::string  name,
-                          sema::type&  type,
-                          bool         is_test,
-                          bool         is_comptime,
-                          bool         is_variadic,
-                          gir::linkage linkage,
-                          std::string  abi_name) -> function& {
+auto module_t::add_function(std::string  name,
+                            sema::type&  type,
+                            bool         is_test,
+                            bool         is_comptime,
+                            bool         is_variadic,
+                            gir::linkage linkage,
+                            std::string  abi_name) -> function& {
     const auto idx{functions_.size()};
     functions_.emplace_back(arena_.make<function>(arena_,
                                                   std::move(name),
@@ -63,7 +63,7 @@ auto module::add_function(std::string  name,
     return *functions_.back();
 }
 
-auto module::get_required_libraries() const -> std::vector<std::string> {
+auto module_t::get_required_libraries() const -> std::vector<std::string> {
     std::vector<std::string> libraries;
     const auto               add_if_required{[&](gir::linkage linkage, std::string_view abi_name) {
         if (linkage != gir::linkage::EXTERN || abi_name == "c") { return; }
@@ -75,7 +75,7 @@ auto module::get_required_libraries() const -> std::vector<std::string> {
     return libraries;
 }
 
-auto module::get_library_imports() const -> std::vector<extern_import> {
+auto module_t::get_library_imports() const -> std::vector<extern_import> {
     std::vector<extern_import> imports;
     for (const auto* fn : functions_) {
         if (fn->get_linkage() != gir::linkage::EXTERN || fn->get_abi_name() == "c") { continue; }
@@ -91,7 +91,7 @@ auto module::get_library_imports() const -> std::vector<extern_import> {
     return imports;
 }
 
-auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void {
+auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> void {
     PROFILE_FUNCTION();
     if (!import_boundary_marked_) { return; }
 
@@ -200,7 +200,7 @@ auto module::prune_unreachable(gsl::span<const std::string_view> roots) -> void 
     }
 }
 
-auto module::to_string() const -> std::string {
+auto module_t::to_string() const -> std::string {
     std::ostringstream out;
     dumper             d{out};
     d.dump(*this);

@@ -14,7 +14,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
 
@@ -22,7 +22,7 @@ class type;
 
 // A template when it has an `auto`/`type` parameter or a `comptime` parameter
 struct generic_function_info {
-    gsl::not_null<mod::module*>              module;
+    gsl::not_null<mod::module_t*>            module;
     ast::node_id                             node_id;
     gsl::not_null<const ast::function_expr*> fn_expr;
     gsl::not_null<type*>                     fn_type;
@@ -40,7 +40,7 @@ class generic_function_registry {
     MAKE_MOVE_CONSTRUCTABLE_ONLY(generic_function_registry);
 
     auto register_function(type&                          fn_type,
-                           mod::module&                   module,
+                           mod::module_t&                 module,
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
                            stdx::option<std::string_view> name           = stdx::none,
@@ -110,7 +110,7 @@ struct generic_instantiation_request {
     gsl::not_null<type*>        return_type;
     std::string                 mangled_name;
     ast::node_id                fn_node_id;
-    gsl::not_null<mod::module*> module;
+    gsl::not_null<mod::module_t*> module;
 };
 
 // One `const m = fn ...` member of an aggregate returned by a `fn(...): type` constructor

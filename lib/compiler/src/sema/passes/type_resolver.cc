@@ -51,6 +51,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/semantics.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/alias_chain.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -76,7 +77,7 @@ namespace ghoti::sema {
 namespace {
 
 // Why an unmarked parameter is `comptime`: its function reads it at compile time somewhere
-[[nodiscard]] auto inferred_comptime_reason(const mod::module&                   owner,
+[[nodiscard]] auto inferred_comptime_reason(const mod::module_t&                 owner,
                                             const ast::function_expr::parameter& param)
     -> std::string {
     if (!param.comptime_read.is_valid()) {
@@ -96,7 +97,7 @@ namespace {
 
 } // namespace
 
-auto type_resolver::resolve_types(mod::module& module, context& ctx) -> mod::module_state {
+auto type_resolver::resolve_types(mod::module_t& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
 
     // A module already poisoned by symbol collection stays poisoned
@@ -237,7 +238,7 @@ template <typename T>
 }
 
 // The module a user-defined type was declared in, or null for a builtin / structural type.
-[[nodiscard]] auto declaring_module_of(const type& t) -> stdx::option<const mod::module&> {
+[[nodiscard]] auto declaring_module_of(const type& t) -> stdx::option<const mod::module_t&> {
     const auto& d{t.get_data()};
     if (const auto s{d.as_opt<types::struct_t>()}) { return s->enclosing; }
     if (const auto u{d.as_opt<types::union_t>()}) { return u->enclosing; }
@@ -263,7 +264,7 @@ template <typename T>
 }
 
 // Identifiers, fields, elements, or deref off one have real storage; anything else is an rvalue.
-[[nodiscard]] auto is_lvalue_shape(const mod::module& module, ast::expr_handle expr) noexcept
+[[nodiscard]] auto is_lvalue_shape(const mod::module_t& module, ast::expr_handle expr) noexcept
     -> bool {
     return module.ast.get_as_opt<ast::identifier_expr>(expr) ||
            module.ast.get_as_opt<ast::dot_expr>(expr) ||
@@ -315,7 +316,7 @@ template <typename T>
     }
 }
 
-[[nodiscard]] auto is_lvalue_expression(const mod::module& module, ast::expr_handle expr) noexcept
+[[nodiscard]] auto is_lvalue_expression(const mod::module_t& module, ast::expr_handle expr) noexcept
     -> bool {
     if (const auto ty{module.get_sema_type_opt(expr)}) {
         if (ty->get_kind() == type_kind::REFERENCE) { return true; }
@@ -2515,11 +2516,12 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::ENTRY_MAIN:
+    case syntax::builtin_t::ENTRY_TEST_RUNNER:
     case syntax::builtin_t::TEST_FUNCTIONS: {
         const auto name{syntax::builtin_name(builtin_id)};
         if (!resolving_.is_start) {
             return make_sema_err(fmt::format("'{}()' is only valid in the program's entry code "
-                                             "(`lib/start`)",
+                                             "(`std/start.gh`)",
                                              name),
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
@@ -2527,6 +2529,16 @@ template <ast::IndexableID ID>
         if (builtin_id == syntax::builtin_t::TEST_FUNCTIONS) {
             auto& test{ctx_.get_builtin_type("Test")};
             return_type = &ctx_.get_slice(types::mut::CONSTANT, false, denoted_type(test));
+            break;
+        }
+        if (builtin_id == syntax::builtin_t::ENTRY_TEST_RUNNER) {
+            const auto runner_type{entry_test_runner_type()};
+            if (!runner_type) {
+                return make_sema_err(fmt::format("'{}()': the program has no 'test_runner'", name),
+                                     error::TYPE_MISMATCH,
+                                     resolving_.ast.location_of(call.function));
+            }
+            return_type = &*runner_type;
             break;
         }
         if (!ctx_.entry_root) {
@@ -3488,7 +3500,7 @@ auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
     const auto declared{resolving_.get_identifier_declaration(named)};
     if (!declared || !declared->owner || !declared->decl) { return stdx::none; }
-    auto&      owner{const_cast<mod::module&>(*declared->owner)};
+    auto&      owner{const_cast<mod::module_t&>(*declared->owner)};
     const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
     if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::MUT) ||
         !owner.ast.get_as_opt<ast::function_expr>(*decl->value)) {
@@ -3646,7 +3658,7 @@ namespace {
 // Records one `context::type_ctor_member_emit` per `const m = fn ...` member of the aggregate
 // returned by a `fn(...): type` constructor.
 auto register_type_ctor_members(context&         ctx,
-                                mod::module&     fn_mod,
+                                mod::module_t&   fn_mod,
                                 ast::node_id     agg_node,
                                 type&            src_agg,
                                 type&            clone,
@@ -4041,7 +4053,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
             } else if (const auto inner_dot{resolving_.ast.get_as_opt<ast::dot_expr>(target_obj)}) {
                 if (const auto mod_type{resolving_.get_sema_type_opt(inner_dot->object)}) {
-                    if (const auto m_data{mod_type->get_data().as_opt<types::module>()}) {
+                    if (const auto m_data{mod_type->get_data().as_opt<types::module_t>()}) {
                         const auto& inner_mod{m_data->imported};
                         if (inner_mod.root_table_idx) {
                             const auto& inner_ident{
@@ -5809,7 +5821,7 @@ concept HasBothNameAndType = HasName<T> && HasType<T>;
 namespace {
 
 // Forwards an incomplete aggregate type to safely break cycles if possible
-[[nodiscard]] auto forward_type(const mod::module&               target_mod,
+[[nodiscard]] auto forward_type(const mod::module_t&             target_mod,
                                 stdx::option<ast::type_modifier> mod,
                                 symbol& sym) noexcept -> stdx::option<type&> {
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
@@ -6143,10 +6155,10 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
 
 VISITOR_TEMPLATE_INIT(type_resolver, resolve_symbol, symbol&)
 
-auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
-                                        usize              owner_table_idx,
-                                        const mod::module& target_mod,
-                                        const symbol&      sym) -> void {
+auto type_resolver::record_symbol_owner(ast::node_id         ref_id,
+                                        usize                owner_table_idx,
+                                        const mod::module_t& target_mod,
+                                        const symbol&        sym) -> void {
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
     if (!node) { return; }
     const auto decl{target_mod.ast.get_as_opt<ast::decl_stmt>(*node)};
@@ -6163,7 +6175,7 @@ auto type_resolver::record_symbol_owner(ast::node_id       ref_id,
     // not this alias.
     if (const auto dot{target_mod.ast.get_as_opt<ast::dot_expr>(*decl->value)}) {
         if (const auto outer_ty{target_mod.get_sema_type_opt(dot->object)}) {
-            if (const auto md{outer_ty->get_data().as_opt<types::module>()}) {
+            if (const auto md{outer_ty->get_data().as_opt<types::module_t>()}) {
                 const auto& inner_mod{md->imported};
                 if (inner_mod.root_table_idx) {
                     const auto& inner_ident{
@@ -6193,10 +6205,10 @@ auto type_resolver::record_member_owner(ast::node_id           ref_id,
     if (const auto fn{target->get_data().as_opt<types::function>()}) { target = &fn->return_type; }
 
     const auto enclosing{target->get_data().visit(
-        [](const types::struct_t& s) -> stdx::option<const mod::module&> { return s.enclosing; },
-        [](const types::union_t& u) -> stdx::option<const mod::module&> { return u.enclosing; },
-        [](const types::enum_t& e) -> stdx::option<const mod::module&> { return e.enclosing; },
-        [](const auto&) -> stdx::option<const mod::module&> { return stdx::none; })};
+        [](const types::struct_t& s) -> stdx::option<const mod::module_t&> { return s.enclosing; },
+        [](const types::union_t& u) -> stdx::option<const mod::module_t&> { return u.enclosing; },
+        [](const types::enum_t& e) -> stdx::option<const mod::module_t&> { return e.enclosing; },
+        [](const auto&) -> stdx::option<const mod::module_t&> { return stdx::none; })};
     if (!enclosing || !target->has_symbol_table_idx()) { return; }
 
     const auto  table_idx{target->get_symbol_table_idx()};
@@ -6239,7 +6251,7 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
     if (ctx_.generic_functions.get_type_ctor_member_prefix(result)) { return; }
 
     // Resolve the constructor's declaration and its owning module from `Ctor()` or `mod.Ctor()`.
-    mod::module*          owner_mod{nullptr};
+    mod::module_t*        owner_mod{nullptr};
     stdx::option<symbol&> ctor_sym;
     if (const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)}) {
         if (!resolving_.root_table_idx) { return; }
@@ -6247,7 +6259,7 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
         ctor_sym  = ctx_.registry.get_from_opt(*resolving_.root_table_idx, fn_ident->name);
     } else if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(ctor_call.function)}) {
         const auto mod_type{resolving_.get_sema_type_opt(dot->object)};
-        const auto m_data{mod_type ? mod_type->get_data().as_opt<types::module>() : stdx::none};
+        const auto m_data{mod_type ? mod_type->get_data().as_opt<types::module_t>() : stdx::none};
         if (!m_data || !m_data->imported.root_table_idx) { return; }
         owner_mod = &m_data->imported;
         const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(dot->member)};
@@ -7160,6 +7172,15 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     } else {
         TRY_RESOLVE(binary.lhs);
         lhs_type = last_type_.take();
+        // `false and x` / `true or x` never evaluates `x`, so nothing it would report applies
+        if (lhs_decides_logical_op(id.get_token_type(), binary.lhs)) {
+            const auto diags_before{ctx_.diags.size()};
+            resolve(binary.rhs);
+            DISCARD(ctx_.diags.split_off(diags_before));
+            auto& bool_type{ctx_.get_builtin_resolved_type(type_kind::BOOL)};
+            resolving_.set_sema_type(id, bool_type);
+            return last_type_.emplace(bool_type);
+        }
         {
             const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
             TRY_RESOLVE(binary.rhs);
@@ -7718,7 +7739,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(placeholder);
     }
 
-    if (const auto module{object_type.get_data().as_opt<types::module>()}) {
+    if (const auto module{object_type.get_data().as_opt<types::module_t>()}) {
         // The module may not have been resolved yet due to order independence
         auto& inner_mod{module->imported};
         if (inner_mod.is_resolvable()) {
@@ -7908,10 +7929,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(member_type);
     }
 
-    const auto check_access = [&](const mod::module& enclosing,
-                                  std::string_view   type_name,
-                                  usize              field_count,
-                                  auto&&             is_field_pub) -> bool {
+    const auto check_access = [&](const mod::module_t& enclosing,
+                                  std::string_view     type_name,
+                                  usize                field_count,
+                                  auto&&               is_field_pub) -> bool {
         const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
         const auto  proxy{table.get_proxy_opt(member_ident.name)};
@@ -8432,7 +8453,7 @@ namespace {
 
 // Collects potential duplicate implicit access match arms for the structural type
 auto gather_arm_duplicates(gsl::span<const ast::match_expr::arm> arms,
-                           mod::module&                          resolving,
+                           mod::module_t&                        resolving,
                            type_resolver::structural_validator&  validator,
                            bool require_implicit_access) -> stdx::option<diagnostic> {
     for (const auto& arm : arms) {
@@ -9345,7 +9366,7 @@ namespace {
 namespace {
 
 // `&p.field` / `^p.field` is rejected on packed aggregates as they are just integers
-[[nodiscard]] auto rhs_is_packed_field(const mod::module& mod, auto rhs) -> bool {
+[[nodiscard]] auto rhs_is_packed_field(const mod::module_t& mod, auto rhs) -> bool {
     const auto dot{mod.ast.template get_as_opt<ast::dot_expr>(rhs)};
     if (!dot) { return false; }
     const auto obj_t{mod.get_sema_type_opt(dot->object)};
@@ -9366,7 +9387,7 @@ namespace {
 // `ILLEGAL_RVALUE_CAPTURE` errors when mutable pointer/reference syntax appears in type
 // expressions.
 [[nodiscard]] auto is_type_denoting_expr(const context&            ctx,
-                                         const mod::module&        mod,
+                                         const mod::module_t&      mod,
                                          ast::node_id              id,
                                          const symbol_table_stack* tables = nullptr) -> bool {
     // 1. Explicit sema type denoting a compile-time type
@@ -9476,7 +9497,8 @@ auto type_resolver::record_scoped_declaration(ID id, usize table_idx, const symb
 }
 
 template <ast::IndexableID ID>
-auto type_resolver::record_declaration(ID id, const mod::module& owner, const symbol& sym) -> void {
+auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const symbol& sym)
+    -> void {
     const auto ref{sym.get_data().visit(
         [&](const symbols::node_t& node) -> stdx::option<declaration_ref> {
             if (!owner.ast.get_as_opt<ast::decl_stmt>(node)) { return stdx::none; }
@@ -10410,7 +10432,7 @@ auto type_resolver::dot_member_symbol(const ast::dot_expr& dot) const
     const auto obj_type{resolving_.get_sema_type_opt(dot.object)};
     if (!obj_type) { return stdx::none; }
     const auto& member{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
-    if (const auto mod_data{obj_type->get_data().as_opt<types::module>()}) {
+    if (const auto mod_data{obj_type->get_data().as_opt<types::module_t>()}) {
         if (!mod_data->imported.root_table_idx) { return stdx::none; }
         const auto sym{ctx_.registry.get_from_opt(*mod_data->imported.root_table_idx, member.name)};
         return sym;
@@ -11619,7 +11641,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         // `reresolve_local` re-derives this decl's kind fresh even if a stale pass over this same
         // generic instantiation already set it
-        if (binds_type && !type_data.is<types::module>()) {
+        if (binds_type && !type_data.is<types::module_t>()) {
             // A type alias is a type even when its value is spelled like a callable (`fn(...): T`)
             sym.set_kind(symbol_kind::TYPE);
         } else if (!sym.has_kind() || reresolve_local) {
@@ -11627,7 +11649,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 sym.set_kind(symbol_kind::CALLABLE);
             } else if (resolved_type == ctx_.get_builtin_resolved_type(type_kind::TYPE)) {
                 sym.set_kind(symbol_kind::TYPE);
-            } else if (type_data.is<types::module>()) {
+            } else if (type_data.is<types::module_t>()) {
                 sym.set_kind(symbol_kind::MODULE);
             } else {
                 sym.set_kind(symbol_kind::VALUE);
@@ -11638,7 +11660,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         // their own member emission path
         using storageless_kind = mod::storageless_kind;
         const auto storageless{[&] -> stdx::option<storageless_kind> {
-            if ((binds_type && !aggregate_literal) || type_data.is<types::module>()) {
+            if ((binds_type && !aggregate_literal) || type_data.is<types::module_t>()) {
                 return storageless_kind::ALIAS;
             }
             if ((comptime_value || binds_undefined) &&
@@ -12219,7 +12241,7 @@ auto type_resolver::check_deprecation_message(const ast::attribute& item) -> voi
 namespace {
 
 // The `deprecated` entry of whatever `sym` declares, with the module whose AST holds it
-[[nodiscard]] auto deprecation_of(const mod::module& owner, const symbol& sym)
+[[nodiscard]] auto deprecation_of(const mod::module_t& owner, const symbol& sym)
     -> stdx::option<const ast::attribute&> {
     const auto find{[](const stdx::option<ast::attribute_list>& attributes)
                         -> stdx::option<const ast::attribute&> {
@@ -12238,7 +12260,7 @@ namespace {
 } // namespace
 
 template <ast::IndexableID ID>
-auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const symbol& sym)
+auto type_resolver::report_deprecated_use(ID id, const mod::module_t& owner, const symbol& sym)
     -> void {
     if (deprecated_scope_depth_ > 0 || ctx_.deprecated_policy == deprecation_policy::ALLOW) {
         return;
@@ -12269,7 +12291,7 @@ auto type_resolver::report_deprecated_use(ID id, const mod::module& owner, const
 namespace {
 
 // A function declared `@[testing]`, on its declaration or its literal
-[[nodiscard]] auto declares_testing_fn(const mod::module& owner, ast::node_id node) -> bool {
+[[nodiscard]] auto declares_testing_fn(const mod::module_t& owner, ast::node_id node) -> bool {
     auto       decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
     const auto literal{[&]() -> stdx::option<const ast::function_expr&> {
         if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(node)}) { return *fn; }
@@ -12295,7 +12317,8 @@ auto type_resolver::in_testing_context() const -> bool {
 }
 
 template <ast::IndexableID ID>
-auto type_resolver::check_testing_use(ID id, const mod::module& owner, const symbol& sym) -> void {
+auto type_resolver::check_testing_use(ID id, const mod::module_t& owner, const symbol& sym)
+    -> void {
     // A type position can't name a function to call
     if constexpr (!std::same_as<ID, ast::node_id>) { return; }
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
@@ -12370,7 +12393,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
 
     // The function the argument names: a declaration written out, or a function passed to a
     // `comptime` parameter (a helper in the style of Zig's `symbol`)
-    stdx::option<const mod::module&>    owner;
+    stdx::option<const mod::module_t&>    owner;
     stdx::option<ast::node_id>          fn_node;
     stdx::option<const ast::decl_stmt&> decl;
     ast::node_id                        named{*target_expr};
@@ -12551,6 +12574,17 @@ auto type_resolver::entry_main_type() const -> stdx::option<type&> {
     const auto fn_type{ctx_.entry_root->get_sema_type_opt(*decl->value)};
     if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
     return *fn_type;
+}
+
+auto type_resolver::entry_test_runner_type() const -> stdx::option<type&> {
+    const auto owner{ctx_.entry_test_runner_module()};
+    if (!owner || !owner->root_table_idx) { return stdx::none; }
+    const auto sym{ctx_.registry.get_from_opt(*owner->root_table_idx, "test_runner")};
+    if (!sym || sym->get_status() != symbol_status::RESOLVED) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    const auto runner_type{node ? owner->get_sema_type_opt(*node) : stdx::none};
+    if (!runner_type || runner_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+    return *runner_type;
 }
 
 // Each `builtin.CpuFeature` argument, as the `+name` LLVM enables it by
@@ -12811,7 +12845,7 @@ auto type_resolver::resolve_fn_literal_attributes(ast::node_id              id,
     resolving_.set_node_attributes(id, resolved);
 }
 
-auto type_resolver::discardable_holds(const mod::module&                       home,
+auto type_resolver::discardable_holds(const mod::module_t&                       home,
                                       ast::node_id                             owner,
                                       const stdx::option<ast::attribute_list>& attributes,
                                       ast::node_id call_id) const -> stdx::option<bool> {
@@ -12885,10 +12919,11 @@ auto type_resolver::impl_method_discardable(const type&      target,
 
 auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_expr& call) const
     -> bool {
-    stdx::option<const mod::module&> home{resolving_};
+    stdx::option<const mod::module_t&> home{resolving_};
     ast::node_id                     fn_node{*call.function};
 
-    for (i32 hops{0}; hops < 16; ++hops) {
+    alias_chain chain;
+    while (chain.step(*home, fn_node)) {
         stdx::option<symbol&> sym;
         if (const auto ident{home->ast.get_as_opt<ast::identifier_expr>(fn_node)}) {
             sym = (home == &resolving_) ? ctx_.registry.lookup(table_stack_, ident->name)
@@ -12899,7 +12934,7 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
         } else if (const auto dot{home->ast.get_as_opt<ast::dot_expr>(fn_node)}) {
             const auto outer_type{home->get_sema_type_opt(dot->object)};
             if (!outer_type) { return false; }
-            if (const auto m_data{outer_type->get_data().as_opt<types::module>()}) {
+            if (const auto m_data{outer_type->get_data().as_opt<types::module_t>()}) {
                 if (!m_data->imported.root_table_idx) { return false; }
                 const auto& inner_ident{home->ast.get_as<ast::identifier_expr>(dot->member)};
                 sym =
@@ -12926,16 +12961,16 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
                         .value_or(false);
                 }
                 const auto enclosing{target.get_data().visit(
-                    [](const types::struct_t& s) -> stdx::option<const mod::module&> {
+                    [](const types::struct_t& s) -> stdx::option<const mod::module_t&> {
                         return s.enclosing;
                     },
-                    [](const types::union_t& u) -> stdx::option<const mod::module&> {
+                    [](const types::union_t& u) -> stdx::option<const mod::module_t&> {
                         return u.enclosing;
                     },
-                    [](const types::enum_t& e) -> stdx::option<const mod::module&> {
+                    [](const types::enum_t& e) -> stdx::option<const mod::module_t&> {
                         return e.enclosing;
                     },
-                    [](const auto&) -> stdx::option<const mod::module&> { return stdx::none; })};
+                    [](const auto&) -> stdx::option<const mod::module_t&> { return stdx::none; })};
                 if (!enclosing || !target.has_symbol_table_idx()) { return false; }
                 sym = ctx_.registry.get_from_opt(target.get_symbol_table_idx(), member_name);
                 if (!sym) { return impl_method_discardable(target, member_name, call_id); }
@@ -13024,7 +13059,7 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
     // An unaliased test-block import exists only to pull the target module's tests into discovery
     if (!named) {
         auto& import_type{resolving_.get_sema_type(id)};
-        if (const auto mod_opt{import_type.get_data().as_opt<types::module>()}) {
+        if (const auto mod_opt{import_type.get_data().as_opt<types::module_t>()}) {
             context new_ctx{ctx_};
             resolve_types(mod_opt->imported, new_ctx);
         }
@@ -13050,7 +13085,7 @@ auto type_resolver::visit(ast::node_id id, const ast::import_stmt& import_stmt) 
     auto& import_type{resolving_.get_sema_type(id)};
     if (import_type.is_poison()) { return poison_out(); }
     ASSERT(import_type.is_resolved(), "Import types should be resolved on pass 1");
-    const auto mod_opt{import_type.get_data().as_opt<types::module>()};
+    const auto mod_opt{import_type.get_data().as_opt<types::module_t>()};
     if (!mod_opt) { return poison_out(); }
     auto& module{*mod_opt};
 
@@ -13266,7 +13301,7 @@ auto type_resolver::pre_register_impls() -> void {
         if (target.is_poison()) { continue; }
 
         // A trait impl is legal in the module that declares `I` or `T`
-        stdx::option<mod::module&> here{resolving_};
+        stdx::option<mod::module_t&> here{resolving_};
         const auto iface_mod{interface_type ? declaring_module_of(*interface_type) : stdx::none};
         const auto target_mod{declaring_module_of(target)};
         if (interface_type) {
@@ -13343,7 +13378,7 @@ auto type_resolver::pre_register_impls() -> void {
 namespace {
 
 // The bare identifier naming a `call_expr` argument, if it is one (`Ctor(T)` → "T" at slot 0).
-[[nodiscard]] auto ctor_arg_ident(const mod::module& mod, const ast::call_expr::argument& arg)
+[[nodiscard]] auto ctor_arg_ident(const mod::module_t& mod, const ast::call_expr::argument& arg)
     -> stdx::option<std::string_view> {
     return arg.visit(
         [&](ast::expr_handle h) -> stdx::option<std::string_view> {
@@ -13378,6 +13413,58 @@ auto type_resolver::assoc_type_placeholder(usize disc) -> type& {
     return s;
 }
 
+namespace {
+
+using decl_value_ref = std::pair<const mod::module_t*, ast::node_id>;
+
+// The module `name` imports in `owner`, read from the import itself so it needs no resolving
+[[nodiscard]] auto imported_module(const context&       ctx,
+                                   const mod::module_t& owner,
+                                   std::string_view name) -> stdx::option<const mod::module_t&> {
+    if (!owner.root_table_idx) { return stdx::none; }
+    auto sym{ctx.registry.get_from_opt(*owner.root_table_idx, name)};
+    if (!sym && ctx.prelude_index) { sym = ctx.registry.get_from_opt(*ctx.prelude_index, name); }
+    if (!sym || sym->get_kind_opt() != symbol_kind::MODULE) { return stdx::none; }
+
+    stdx::option<type&> module_type;
+    if (const auto builtin{sym->get_data().as_opt<symbols::builtin>()}) {
+        module_type.emplace(builtin->get_type());
+    } else if (const auto node{sym->get_data().as_opt<symbols::node_t>()}) {
+        module_type = owner.get_sema_type_opt(*node);
+    }
+    const auto data{module_type ? module_type->get_data().as_opt<types::module_t>() : stdx::none};
+    if (!data) { return stdx::none; }
+    return data->imported;
+}
+
+// The value of the declaration an alias expression (`Name` or `module.Name`) in `owner` names
+[[nodiscard]] auto aliased_decl_value(const context&       ctx,
+                                      const mod::module_t& owner,
+                                      ast::node_id         alias) -> stdx::option<decl_value_ref> {
+    const auto value_of{
+        [&](const mod::module_t& mod, std::string_view name) -> stdx::option<decl_value_ref> {
+            if (!mod.root_table_idx) { return stdx::none; }
+            const auto sym{ctx.registry.get_from_opt(*mod.root_table_idx, name)};
+            const auto node{sym ? sym->get_data().as_opt<symbols::node_t>() : stdx::none};
+            const auto decl{node ? mod.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+            if (!decl || !decl->value) { return stdx::none; }
+            return decl_value_ref{&mod, *decl->value};
+        }};
+
+    if (const auto id{owner.ast.get_as_opt<ast::identifier_expr>(alias)}) {
+        return value_of(owner, id->name);
+    }
+    if (const auto dot{owner.ast.get_as_opt<ast::dot_expr>(alias)}) {
+        const auto object{owner.ast.get_as_opt<ast::identifier_expr>(dot->object)};
+        const auto imported{object ? imported_module(ctx, owner, object->name) : stdx::none};
+        if (!imported) { return stdx::none; }
+        return value_of(*imported, owner.ast.get_as<ast::identifier_expr>(dot->member).name);
+    }
+    return stdx::none;
+}
+
+} // namespace
+
 auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::impl_stmt& impl)
     -> void {
     PROFILE_FUNCTION();
@@ -13394,7 +13481,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
     }
 
     // Resolve the base ctor identifier to its generic `function_expr` node + declaring module.
-    stdx::option<const mod::module&> base_mod;
+    stdx::option<const mod::module_t&> base_mod;
     stdx::option<ast::node_id>       base_ctor_fn;
     if (tgt_call) {
         if (const auto id{resolving_.ast.get_as_opt<ast::identifier_expr>(*tgt_call->function)}) {
@@ -13410,7 +13497,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
         } else if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(*tgt_call->function)}) {
             resolve(dot->object); // the module alias is not otherwise typed this early
             if (const auto mod_type{resolving_.get_sema_type_opt(dot->object)}) {
-                if (const auto md{mod_type->get_data().as_opt<types::module>()};
+                if (const auto md{mod_type->get_data().as_opt<types::module_t>()};
                     md && md->imported.root_table_idx) {
                     const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(dot->member)};
                     if (const auto sym{
@@ -13426,6 +13513,19 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
                 }
             }
         }
+    }
+    // `const Ctor = other.Ctor;` names the same ctor, so anchor at the `fn` it aliases
+    alias_chain chain;
+    while (base_mod && base_ctor_fn && chain.step(*base_mod, *base_ctor_fn)) {
+        const auto& owner{*base_mod};
+        if (owner.ast.get_as_opt<ast::function_expr>(*base_ctor_fn)) { break; }
+        const auto aliased{aliased_decl_value(ctx_, owner, *base_ctor_fn)};
+        if (!aliased) {
+            base_ctor_fn.reset();
+            break;
+        }
+        base_mod.emplace(*aliased->first);
+        base_ctor_fn.emplace(aliased->second);
     }
     if (!base_mod || !base_ctor_fn) { return; } // cannot anchor: skip quietly
 
@@ -13462,7 +13562,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
         mapping.emplace_back(slot);
     }
 
-    stdx::option<mod::module&> here{resolving_};
+    stdx::option<mod::module_t&> here{resolving_};
     ctx_.impls.record_parameterized(parameterized_impl{
         .site              = root,
         .interface_type    = iface_type,
@@ -13476,7 +13576,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
 
 auto type_resolver::instantiate_impls_for(
     type&                                                     concrete,
-    const mod::module&                                        base_mod,
+    const mod::module_t&                                      base_mod,
     ast::node_id                                              base_ctor_fn,
     gsl::span<type* const>                                    ctor_args,
     gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
@@ -13688,7 +13788,7 @@ auto type_resolver::instantiate_impls_for(
 }
 
 auto type_resolver::resolve_param_impl_bodies(
-    mod::module&                                              impl_mod,
+    mod::module_t&                                              impl_mod,
     const ast::impl_stmt&                                     impl,
     usize                                                     body_scope,
     type&                                                     concrete,
@@ -14078,7 +14178,7 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
     }
 
     const auto get_arg_type{
-        [](const mod::module& m, const ast::call_expr::argument& arg) -> stdx::option<type&> {
+        [](const mod::module_t& m, const ast::call_expr::argument& arg) -> stdx::option<type&> {
             if (const auto tid{arg.as_opt<ast::explicit_type_id>()}) {
                 return m.get_sema_type_opt(*tid);
             }
@@ -14690,6 +14790,16 @@ auto type_resolver::probe_fold(ast::expr_handle expr) const -> stdx::option<gir:
     return folded;
 }
 
+auto type_resolver::lhs_decides_logical_op(syntax::token_type_t op, ast::expr_handle lhs) const
+    -> bool {
+    if (op != syntax::token_type_t::BOOLEAN_AND && op != syntax::token_type_t::BOOLEAN_OR) {
+        return false;
+    }
+    const auto folded{probe_fold(lhs)};
+    return folded && folded->is<bool>() &&
+           folded->as<bool>() == (op == syntax::token_type_t::BOOLEAN_OR);
+}
+
 auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_nature_t {
     const auto t{resolving_.get_sema_type_opt(expr)};
     if (!t || t->is_poison()) { return operand_nature_t::UNKNOWN; }
@@ -15145,7 +15255,7 @@ auto type_resolver::concrete_array_type(type& maybe_deferred) -> type& {
 namespace {
 
 // A generic whose declaration is `@[deprecated]`, so its monomorphs' bodies stay quiet too
-[[nodiscard]] auto declares_deprecated_fn(const mod::module& owner, ast::node_id node) -> bool {
+[[nodiscard]] auto declares_deprecated_fn(const mod::module_t& owner, ast::node_id node) -> bool {
     auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
     if (const auto fn{owner.ast.get_as_opt<ast::function_expr>(node)}; fn && fn->declaring_decl) {
         decl = owner.ast.get_as_opt<ast::decl_stmt>(*fn->declaring_decl);
@@ -15160,7 +15270,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                                         gsl::span<type*>                  concrete_args,
                                         gsl::span<const gir::const_value> comptime_args)
     -> stdx::option<generic_instantiation_entry> {
-    mod::module& fn_mod{*fn_info.module};
+    mod::module_t& fn_mod{*fn_info.module};
     const auto&  fn_expr{*fn_info.fn_expr};
     if (ctx_.generic_instantiation_depth >= context::max_generic_instantiation_depth) {
         ctx_.diags.emplace_back(

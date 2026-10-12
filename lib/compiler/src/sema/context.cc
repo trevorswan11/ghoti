@@ -367,8 +367,9 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::ENUM_LITERAL, params(), t_type);
     // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
     inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
-    // Only `lib/start` may name the program's `main` and its tests
+    // Only `std/start.gh` may name the program's `main` and its tests
     inject_function(bis::ENTRY_MAIN, params(), t_auto);
+    inject_function(bis::ENTRY_TEST_RUNNER, params(), t_auto);
     inject_function(bis::TEST_FUNCTIONS, params(), t_auto);
 
     // `@implements(T | value, I)` -> bool (comptime)
@@ -516,7 +517,7 @@ auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     // Expose the module under one prelude name, reusing the ordinary module-access machinery
     auto& mod_type{
         *ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *builtin_mod.root_table_idx}]};
-    mod_type.resolve_if<types::module>(builtin_mod);
+    mod_type.resolve_if<types::module_t>(builtin_mod);
 
     auto& prelude{ctx.registry.get(prelude_idx)};
     prelude.insert_unchecked(
@@ -571,6 +572,29 @@ auto context::lookup_comptime_binding(std::string_view name) const
     -> stdx::option<const gir::const_value&> {
     for (const auto& frame : comptime_binding_frames | std::views::reverse) {
         if (const auto it{frame.find(name)}; it != frame.end()) { return it->second; }
+    }
+    return stdx::none;
+}
+
+auto context::entry_test_runner_module() -> stdx::option<mod::module_t&> {
+    const auto declares_runner{[&](const mod::module_t& m) {
+        return m.root_table_idx && registry.get_from_opt(*m.root_table_idx, "test_runner");
+    }};
+    if (entry_root && declares_runner(*entry_root)) { return *entry_root; }
+
+    if (const auto std_mod{modules.find_loaded_library_module("std")};
+        std_mod && std_mod->root_table_idx) {
+        const auto testing_sym{registry.get_from_opt(*std_mod->root_table_idx, "testing")};
+        const auto node{testing_sym ? testing_sym->get_data().as_opt<symbols::node_t>()
+                                    : stdx::none};
+        const auto testing_type{node ? std_mod->get_sema_type_opt(*node) : stdx::none};
+        const auto testing_mod{testing_type ? testing_type->get_data().as_opt<types::module_t>()
+                                            : stdx::none};
+        if (testing_mod && declares_runner(testing_mod->imported)) { return testing_mod->imported; }
+    }
+
+    if (modules.has_builtin_module() && declares_runner(modules.builtin_module())) {
+        return modules.builtin_module();
     }
     return stdx::none;
 }

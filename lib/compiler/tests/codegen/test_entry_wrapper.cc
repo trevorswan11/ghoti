@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -7,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
+#include <gsl/util>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InlineAsm.h>
@@ -20,6 +22,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"
@@ -33,6 +36,7 @@
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
+#include "support/env.hh"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
@@ -76,6 +80,69 @@ struct lowered {
     codegen::optimizer_options opt_opts{.target_machine = machine.get()};
     return UNWRAP_ERR(helpers::emit_llvm_ir_executable(ctx, context, opt_opts)).get_error();
 }
+
+// An error reported in a program's root, at the line it points to
+struct root_error {
+    usize       line{};
+    std::string message;
+};
+
+// Analyzes `source` as a program's root, or a test build's, giving every error reported in it
+[[nodiscard]] auto entry_errors(std::string_view source, bool testing = false)
+    -> std::vector<root_error> {
+    const tempdir dir{"entry_error"};
+    dir.write("main.gh", source);
+
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    analyzer.set_entry_point(true);
+    const auto analyzed{analyzer.analyze(dir.path / "main.gh", testing)};
+    INFO(errors.str());
+    CHECK(analyzed);
+
+    std::vector<root_error> found;
+    const auto              root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
+    if (const auto diags{root->diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& diag : *diags) {
+            found.emplace_back<root_error>(
+                {UNWRAP(diag.to_formattable().location).line, UNWRAP(diag.get_message())});
+        }
+    }
+    return found;
+}
+
+// The one error analyzing `source` reports
+[[nodiscard]] auto entry_error(std::string_view source) -> root_error {
+    auto found{entry_errors(source)};
+    REQUIRE(found.size() == 1);
+    return std::move(found.front());
+}
+
+// The 0-based line `source` declares `main` on
+[[nodiscard]] auto main_line(std::string_view source) -> usize {
+    const auto at{source.find("pub const main")};
+    REQUIRE(at != std::string_view::npos);
+    return static_cast<usize>(std::ranges::count(source.substr(0, at), '\n'));
+}
+
+// A `Result` like `std.Result`, which a test program can't import
+constexpr std::string_view result_type{R"(
+const Res = fn(T: type, E: type): type {
+    return union { ok: T, err: E };
+};
+impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {
+    const Output = T;
+    const Residual = E;
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+        return match (self) {
+            .ok => |&mut? v| .{ .continue = v },
+            .err => |e| .{ .break = e },
+        };
+    };
+}
+)"};
 
 } // namespace
 
@@ -125,15 +192,6 @@ TEST_CASE("Main function entry validation") {
         CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
 
-    SECTION("Main with non-void and non-i32 return returns error") {
-        auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const main = fn(args: [][:0]u8): bool {
-                return true;
-            };
-        )")};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-    }
-
     SECTION("Main with i32 return is valid") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             pub const main = fn(args: [][:0]u8): i32 {
@@ -142,19 +200,97 @@ TEST_CASE("Main function entry validation") {
         )")};
         CHECK(ctx->analyzer.validate_main_entry(ctx->root_mod));
     }
-
-    SECTION("Main with incorrect param type returns error") {
-        constexpr auto input = R"(
-            pub const main = fn(args: []u8): void {
-                return;
-            };
-        )";
-        auto [ctx, idx]{helpers::resolve_and_check(input)};
-        CHECK_FALSE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-    }
 }
 
-TEST_CASE("An executable enters through lib/start, which calls main") {
+TEST_CASE("std/start.gh rejects a main it can't call") {
+    const auto [source,
+                message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
+        {"pub const main = fn(args: [][:0]u8): bool { return true; };",
+         "'main' must return 'void', 'noreturn', a 'builtin.ExitCode', or a 'Result' of them"},
+        {"pub const main = fn(args: []u8): void {};",
+         "'main' must take no parameters or one of type '[][:0]u8'"},
+        {"pub const main = fn(a: [][:0]u8, b: i32): void {};",
+         "'main' must take no parameters or one of type '[][:0]u8'"},
+    }))};
+    CAPTURE(source);
+    const auto error{entry_error(source)};
+    CHECK(error.line == 0);
+    CHECK(error.message.starts_with(message));
+}
+
+TEST_CASE("main returns anything implementing builtin.ExitCode") {
+    const auto [source, code]{GENERATE(Catch::Generators::table<std::string_view, u32>({
+        {"pub const main = fn(): u8 { return 9; };", 9},
+        {"pub const main = fn(): i64 { return 0x1_0000_000A; };", 10},
+        {R"(
+            const Code = enum { ok, bad };
+            impl builtin.ExitCode for Code {
+                pub const to_exit_code = fn(&self): i32 { return if (*self == .bad) 11 else 0; };
+            }
+            pub const main = fn(): Code { return .bad; };
+        )",
+         11},
+    }))};
+    CAPTURE(source);
+    CHECK(helpers::compile_and_run(source) == code);
+}
+
+TEST_CASE("main returns a Result that exits with its value's or its error's code") {
+    // An error whose code is 0 exits 0: the program's own word for what failure means
+    const auto [main_fn, code]{GENERATE(Catch::Generators::table<std::string_view, u32>({
+        {"pub const main = fn(): Res(void, u8) { return .{ .ok = {} }; };", 0},
+        {"pub const main = fn(): Res(void, u8) { return .{ .err = 12 }; };", 12},
+        {"pub const main = fn(): Res(i32, u8) { return .{ .ok = 13 }; };", 13},
+        {"pub const main = fn(): Res(i32, u8) { return .{ .err = 14 }; };", 14},
+        {"pub const main = fn(): Res(void, u8) { return .{ .err = 0 }; };", 0},
+    }))};
+    CAPTURE(main_fn);
+    CHECK(helpers::compile_and_run(fmt::format("{}\n{}", result_type, main_fn)) == code);
+}
+
+TEST_CASE("main may never return") {
+    // Only Windows has an exit call without libc; elsewhere it is enough that it compiles
+    constexpr std::string_view source{R"(
+        extern("kernel32", "ExitProcess") const ExitProcess: extern fn(
+            code: u32,
+        ) callconv(.winapi): noreturn;
+        pub const main = fn(): noreturn { ExitProcess(16); };
+    )"};
+    CHECK(entry_errors(source).empty());
+#if GHOTI_WINDOWS
+    CHECK(helpers::compile_and_run(source) == 16);
+#endif
+}
+
+TEST_CASE("std/start.gh rejects a Result main can't exit with") {
+    const auto [main_fn,
+                message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
+        {"pub const main = fn(): Res(void, bool) { return .{ .ok = {} }; };",
+         "the error 'main' returns must implement 'builtin.ExitCode'"},
+        {"pub const main = fn(): Res(bool, u8) { return .{ .ok = true }; };",
+         "the value 'main' returns in a 'Result' must be 'void' or implement "
+         "'builtin.ExitCode'"},
+    }))};
+    CAPTURE(main_fn);
+    const auto source{fmt::format("{}\n{}", result_type, main_fn)};
+    const auto error{entry_error(source)};
+    CHECK(error.line == main_line(source));
+    CHECK(error.message.starts_with(message));
+}
+
+TEST_CASE("std/start.gh rejects a test_runner it can't call") {
+    constexpr std::string_view source{R"(
+        test "a" { @expect(true); }
+        pub const test_runner = fn(args: [][:0]u8): i32 { _ = args; return 0; };
+    )"};
+    const auto                 errors{entry_errors(source, true)};
+    REQUIRE(errors.size() == 1);
+    CHECK(errors.front().line == 2);
+    CHECK(errors.front().message.starts_with(
+        "'test_runner' must have signature 'fn(args: [][:0]u8, tests: []Test): i32'"));
+}
+
+TEST_CASE("An executable enters through std/start.gh, which calls main") {
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
@@ -305,7 +441,7 @@ TEST_CASE("A Linux arch with no freestanding _start is rejected with a diagnosti
                                                 "powerpc64le-unknown-linux-gnu")};
     REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
 
-    // powerpc64le's target is built in, but lib/start has no `_start` for it
+    // powerpc64le's target is built in, but std/start.gh has no `_start` for it
     CHECK(lower_error_for_triple(*ctx, context, "powerpc64le-unknown-linux-gnu") ==
           codegen::error::UNSUPPORTED_TARGET);
     CHECK_FALSE(codegen::can_emit_freestanding_entry(
@@ -397,7 +533,7 @@ TEST_CASE("@export as 'main' picks the entry point") {
     CHECK(llvm_mod->getFunction("main"));
 }
 
-TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
+TEST_CASE("std/start.gh analyzes on its own, as an editor opens it") {
     std::ostringstream  errors;
     mod::file_loader    loader;
     mod::module_manager manager{loader};
@@ -408,6 +544,41 @@ TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
     CHECK(module->is_start);
     CHECK_FALSE(module->is_poisoned());
     CHECK(errors.str().empty());
+}
+
+TEST_CASE("The entry code's @compileError is reported at the program's main") {
+    const tempdir dir{"entry_errors"};
+    dir.write("start.gh", R"(const run = fn(): i32 {
+    if comptime (@typeInfo(@TypeOf(@entryMain())).function.params.len == 0) {
+        @compileError("main must take its arguments");
+    }
+    return 0;
+};
+)");
+    dir.write("main.gh", "\n\npub const main = fn(): void {};\n");
+    set_env("GHOTI_START", (dir.path / "start.gh").string());
+    const auto restore{gsl::finally([] { set_env("GHOTI_START", ""); })};
+
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    analyzer.set_entry_point(true);
+    CHECK(analyzer.analyze(dir.path / "main.gh"));
+
+    const auto  root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
+    const auto& diags{UNWRAP(root->diagnostics.as_opt<sema::diagnostics>())};
+    REQUIRE(diags.size() == 1);
+    const auto& diag{diags[0]};
+    CHECK(diag.get_error() == sema::error::COMPILE_ERROR_REACHED);
+    CHECK(UNWRAP(diag.to_formattable().location).line == 2);
+    const auto message{UNWRAP(diag.get_message())};
+    CHECK(message.starts_with("main must take its arguments (required by "));
+    CHECK(message.ends_with("start.gh:3:9)"));
+
+    const auto start{UNWRAP(manager.try_get_file_module(dir.path / "start.gh"))};
+    CHECK_FALSE(start->is_poisoned());
+    CHECK(errors.str().find("main.gh") != std::string::npos);
 }
 
 } // namespace ghoti::tests

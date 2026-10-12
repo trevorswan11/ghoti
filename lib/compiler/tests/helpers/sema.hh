@@ -46,7 +46,7 @@ struct mock_file {
 
 // Tests the collected state of a minimal non-public implicit declaration
 auto test_common_decl_collection(const sema::symbol_table_registry& registry,
-                                 const mod::module&                 module,
+                                 const mod::module_t&               module,
                                  usize                              idx,
                                  std::string_view                   name = "foo") -> void;
 
@@ -57,7 +57,7 @@ struct sema_test_context {
     stdx::box<mod::memory_loader> loader;
     mod::module_manager           manager;
     sema::analyzer                analyzer;
-    mod::module&                  root_mod;
+    mod::module_t&                root_mod;
 
     // The root is automatically added to the internal loader and can be immediately analyzed
     explicit sema_test_context(const std::vector<mock_file>&  imports,
@@ -94,10 +94,10 @@ struct sema_test_context {
     auto        check_poisoned(const sema::symbol& sym, const sema::type& type) -> void;
 
     template <typename SymbolData, typename Proj = std::identity>
-    auto check_poisoned(std::string_view           name,
-                        usize                      table_idx,
-                        stdx::option<mod::module&> module = stdx::none,
-                        Proj                       proj   = {}) -> void {
+    auto check_poisoned(std::string_view             name,
+                        usize                        table_idx,
+                        stdx::option<mod::module_t&> module = stdx::none,
+                        Proj                         proj   = {}) -> void {
         const auto [sym, _, type]{get_type_sym_info<SymbolData>(name, table_idx, module, proj)};
         check_poisoned(sym, type);
     }
@@ -112,10 +112,10 @@ struct sema_test_context {
 
     // Contains [symbol, symbol data, type]
     template <typename SymbolData, typename Proj = std::identity>
-    [[nodiscard]] auto get_type_sym_info(std::string_view           name,
-                                         usize                      table_idx,
-                                         stdx::option<mod::module&> module = stdx::none,
-                                         Proj                       proj   = {}) {
+    [[nodiscard]] auto get_type_sym_info(std::string_view             name,
+                                         usize                        table_idx,
+                                         stdx::option<mod::module_t&> module = stdx::none,
+                                         Proj                         proj   = {}) {
         auto        info{get_symbol<SymbolData>(name, table_idx)};
         auto&       enclosing{module.value_or(root_mod)};
         const auto& type =
@@ -125,10 +125,10 @@ struct sema_test_context {
 
     // Contains [symbol, symbol data, type, type data]
     template <typename SymbolData, typename TypeData, typename Proj = std::identity>
-    [[nodiscard]] auto get_full_type_sym_info(std::string_view           name,
-                                              usize                      table_idx,
-                                              stdx::option<mod::module&> module = stdx::none,
-                                              Proj                       proj   = {}) {
+    [[nodiscard]] auto get_full_type_sym_info(std::string_view             name,
+                                              usize                        table_idx,
+                                              stdx::option<mod::module_t&> module = stdx::none,
+                                              Proj                         proj   = {}) {
         auto        info{get_type_sym_info<SymbolData>(name, table_idx, module, proj)};
         const auto& type_data = UNWRAP(std::get<2>(info).get_data().template as_opt<TypeData>());
         return std::tuple_cat(info, std::forward_as_tuple(type_data));
@@ -136,10 +136,10 @@ struct sema_test_context {
 
     // Contains [symbol, symbol data, ast data]
     template <typename SymbolData, ASTData TreeData, typename Proj = std::identity>
-    [[nodiscard]] auto get_ast_sym_info(std::string_view           name,
-                                        usize                      table_idx,
-                                        stdx::option<mod::module&> module = stdx::none,
-                                        Proj                       proj   = {}) {
+    [[nodiscard]] auto get_ast_sym_info(std::string_view             name,
+                                        usize                        table_idx,
+                                        stdx::option<mod::module_t&> module = stdx::none,
+                                        Proj                         proj   = {}) {
         auto        info{get_symbol<SymbolData>(name, table_idx)};
         auto&       enclosing{module.value_or(root_mod)};
         const auto& node_data{
@@ -149,10 +149,10 @@ struct sema_test_context {
 
     // Contains the [symbol, symbol data, ast data, type]
     template <typename SymbolData, ASTData TreeData, typename Proj = std::identity>
-    [[nodiscard]] auto get_ast_type_sym_info(std::string_view           name,
-                                             usize                      table_idx,
-                                             stdx::option<mod::module&> module = stdx::none,
-                                             Proj                       proj   = {}) {
+    [[nodiscard]] auto get_ast_type_sym_info(std::string_view             name,
+                                             usize                        table_idx,
+                                             stdx::option<mod::module_t&> module = stdx::none,
+                                             Proj                         proj   = {}) {
         auto        info{get_ast_sym_info<SymbolData, TreeData>(name, table_idx, module, proj)};
         auto&       enclosing{module.value_or(root_mod)};
         const auto& type =
@@ -162,17 +162,17 @@ struct sema_test_context {
 
     // Contains [symbol, symbol data, ast data, type, type data]
     template <typename SymbolData, ASTData TreeData, typename TypeData>
-    [[nodiscard]] auto get_full_sym_info(std::string_view           name,
-                                         usize                      table_idx,
-                                         stdx::option<mod::module&> module = stdx::none) {
+    [[nodiscard]] auto get_full_sym_info(std::string_view             name,
+                                         usize                        table_idx,
+                                         stdx::option<mod::module_t&> module = stdx::none) {
         auto        info{get_ast_type_sym_info<SymbolData, TreeData>(name, table_idx, module)};
         const auto& type_data = UNWRAP(std::get<3>(info).get_data().template as_opt<TypeData>());
         return std::tuple_cat(info, std::forward_as_tuple(type_data));
     }
 
     // Returns the correct null terminated size for a string literal, defaulting to the root module
-    auto get_string_literal_size(ast::expr_handle           handle,
-                                 stdx::option<mod::module&> enclosing_mod = stdx::none) -> usize;
+    auto get_string_literal_size(ast::expr_handle             handle,
+                                 stdx::option<mod::module_t&> enclosing_mod = stdx::none) -> usize;
 };
 
 using ctx_idx_pair = std::pair<stdx::box<sema_test_context>, usize>;
@@ -242,8 +242,8 @@ auto test_collector_fail(std::string_view failing, Ds&&... expected_diagnostics)
 
 // Walk through the iterable and find the first matching expression statement
 template <ast::NodeData Node, typename NodeIterable>
-[[nodiscard]] auto lookup_expression(const NodeIterable& nodes, const mod::module& module) noexcept
-    -> const Node& {
+[[nodiscard]] auto lookup_expression(const NodeIterable&  nodes,
+                                     const mod::module_t& module) noexcept -> const Node& {
     for (const auto& body_id : nodes) {
         if (const auto& expr_stmt{module.ast.get_as_opt<ast::expr_stmt>(body_id)}) {
             if (expr_stmt->expression.template is<ast::call_expr>()) {
@@ -301,7 +301,7 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair;
 
 // Finds a `const <name> = fn(...) {...};` declared directly in `outer`'s body block, returning
 // its own node id
-[[nodiscard]] auto find_nested_fn(const mod::module&        module,
+[[nodiscard]] auto find_nested_fn(const mod::module_t&      module,
                                   const ast::function_expr& outer,
                                   std::string_view          name) -> ast::node_id;
 

@@ -87,7 +87,7 @@ enum class storageless_kind : u8 {
     COMPTIME_VALUE, // Value holds types
 };
 
-struct module {
+struct module_t {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
     source_file                                      source;
@@ -137,7 +137,7 @@ struct module {
     // Every `import` node in this module, at any nesting depth
     std::vector<ast::node_id> import_nodes;
 
-    // `lib/start`, the program's entry code
+    // `std/start.gh`, the program's entry code
     bool is_start{false};
 
     // Root `test` blocks waiting for every module's declarations to resolve (test builds only)
@@ -182,13 +182,13 @@ struct module {
         return get_storageless_kind(id) == storageless_kind::COMPTIME_VALUE;
     }
 
-    module(std::filesystem::path path,
-           std::filesystem::path parent_path,
-           source_file           source) noexcept
+    module_t(std::filesystem::path path,
+             std::filesystem::path parent_path,
+             source_file           source) noexcept
         : path{std::move(path)}, parent_path{std::move(parent_path)}, source{std::move(source)} {}
 
-    ~module() = default;
-    MAKE_MOVE_ONLY(module);
+    ~module_t() = default;
+    MAKE_MOVE_ONLY(module_t);
 
     // Errors out the module regardless of previous state and emplaces the diagnostics
     template <typename DiagList>
@@ -461,10 +461,10 @@ struct module {
 };
 
 struct body_diff_guard {
-    module&                                   mod;
+    module_t&                                 mod;
     stdx::option<const sema::body_type_diff&> prev{};
 
-    explicit body_diff_guard(module& m, stdx::option<const sema::body_type_diff&> diff) noexcept
+    explicit body_diff_guard(module_t& m, stdx::option<const sema::body_type_diff&> diff) noexcept
         : mod{m}, prev{std::exchange(m.active_body_diff, diff)} {}
 
     ~body_diff_guard() noexcept { mod.active_body_diff = prev; }
@@ -477,7 +477,7 @@ class module_manager {
                                                          std::filesystem::path,
                                                          stdx::string_transparent_hash,
                                                          stdx::string_transparent_eq>;
-    using module_table    = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>>;
+    using module_table = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module_t>>;
     MAKE_ITERATOR(modules, module_table, modules_)
 
   public:
@@ -491,11 +491,14 @@ class module_manager {
     // A relative `path` resolves against `parent_path`, which must be absolute or empty
     [[nodiscard]] auto try_get_file_module(const std::filesystem::path& path,
                                            const std::filesystem::path& parent_path = {})
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
 
     // Attempts to load the module from the loader and parse its contents
     [[nodiscard]] auto try_get_library_module(std::string_view name)
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
+
+    // The library module registered as `name`, if something has already loaded it
+    [[nodiscard]] auto find_loaded_library_module(std::string_view name) -> stdx::option<module_t&>;
 
     // Adds a library module and its underlying path to the lookup table
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
@@ -507,9 +510,9 @@ class module_manager {
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;
-    [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
+    [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module_t&;
 
-    [[nodiscard]] auto builtin_module() -> module& {
+    [[nodiscard]] auto builtin_module() -> module_t& {
         ASSERT(builtin_module_, "the `builtin` module has not been created yet");
         return *builtin_module_;
     }
@@ -518,27 +521,27 @@ class module_manager {
         return static_cast<bool>(builtin_module_);
     }
 
-    // Parses `lib/start` from `source` the first time; `path` names it in diagnostics
+    // Parses `std/start.gh` from `source` the first time; `path` names it in diagnostics
     [[nodiscard]] auto get_or_create_start_module(const std::filesystem::path& path,
-                                                  std::string_view             source) -> module&;
+                                                  std::string_view             source) -> module_t&;
 
     // The returned reference is guaranteed to be stable even across moves of the manager
     [[nodiscard]] auto arena() noexcept -> ghoti::arena& { return *arena_; }
 
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
 
-    // Whether `path` is `lib/start/start.gh`, opened like any other file (by the LSP, say)
+    // Whether `path` is `lib/std/start.gh`, opened like any other file (by the LSP, say)
     [[nodiscard]] auto is_start_path(const std::filesystem::path& path) -> bool;
 
   private:
-    source_loader&          loader_;
-    module_table            modules_;
-    stdx::box<module>       builtin_module_;
-    stdx::box<module>       start_module_;
+    source_loader&                                    loader_;
+    module_table                                      modules_;
+    stdx::box<module_t>                               builtin_module_;
+    stdx::box<module_t>                               start_module_;
     stdx::option<stdx::option<std::filesystem::path>> start_path_;
-    stdx::box<ghoti::arena> arena_{stdx::make_box<ghoti::arena>()};
+    stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

@@ -28,8 +28,8 @@ TEST_CASE("Import aliases correctly used") {
 
     const auto test_import_inner = [&](std::string_view import_name, usize inner_idx) -> void {
         const auto [sym, sym_data, type, type_data]{
-            ctx->get_full_type_sym_info<sema::symbols::node_t, sema::types::module>(import_name,
-                                                                                    idx)};
+            ctx->get_full_type_sym_info<sema::symbols::node_t, sema::types::module_t>(import_name,
+                                                                                      idx)};
         CHECK(sym.get_kind_opt() == sema::symbol_kind::MODULE);
 
         CHECK(type == ctx->get_type(sema::type_kind::MODULE, inner_idx));

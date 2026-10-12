@@ -348,7 +348,7 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
-        // Linux enters at `lib/start`'s freestanding `_start` (no crt/libc)
+        // Linux enters at `std/start.gh`'s freestanding `_start` (no crt/libc)
         args.emplace_back("-e");
         args.emplace_back(triple.isOSLinux() ? "_start" : "main");
     }
@@ -529,16 +529,16 @@ auto add_elf_args(std::vector<std::string>&   args,
         if (found) { continue; }
 
         std::vector<llvm::object::COFFShortExport> exports;
-        for (const auto& import : linker_opts.imports) {
-            if (!equals_ignore_case(import.library, library)) { continue; }
+        for (const auto& lib_import : linker_opts.imports) {
+            if (!equals_ignore_case(lib_import.library, library)) { continue; }
             llvm::object::COFFShortExport entry;
-            entry.Data = import.data;
+            entry.Data = lib_import.data;
             if (triple.getArch() == llvm::Triple::x86) {
                 // The decorated name is what the object references; the DLL exports it bare
-                entry.SymbolName = x86_decorated_name(undefined, import.symbol);
-                entry.Name       = fmt::format("_{}", import.symbol);
+                entry.SymbolName = x86_decorated_name(undefined, lib_import.symbol);
+                entry.Name       = fmt::format("_{}", lib_import.symbol);
             } else {
-                entry.Name = import.symbol;
+                entry.Name = lib_import.symbol;
             }
             exports.emplace_back(std::move(entry));
         }

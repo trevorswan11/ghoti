@@ -124,6 +124,7 @@ enum class builtin_t : u8 {
     ENUM_LITERAL,
     LLVM_INTRINSIC,
     ENTRY_MAIN,
+    ENTRY_TEST_RUNNER,
     TEST_FUNCTIONS,
     RETURN_ADDRESS,
 };
@@ -265,6 +266,7 @@ constexpr builtin_def      CALL{"@call", builtin_t::CALL};
 constexpr builtin_def      ENUM_LITERAL{"@EnumLiteral", builtin_t::ENUM_LITERAL};
 constexpr builtin_def      LLVM_INTRINSIC{"@llvmIntrinsic", builtin_t::LLVM_INTRINSIC};
 constexpr builtin_def      ENTRY_MAIN{"@entryMain", builtin_t::ENTRY_MAIN};
+constexpr builtin_def      ENTRY_TEST_RUNNER{"@entryTestRunner", builtin_t::ENTRY_TEST_RUNNER};
 constexpr builtin_def      TEST_FUNCTIONS{"@testFunctions", builtin_t::TEST_FUNCTIONS};
 constexpr builtin_def      RETURN_ADDRESS{"@returnAddress", builtin_t::RETURN_ADDRESS};
 constexpr typed_identifier CFG{"@cfg", token_type_t::BUILTIN_CFG};
@@ -387,6 +389,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::ENUM_LITERAL,
     builtins::LLVM_INTRINSIC,
     builtins::ENTRY_MAIN,
+    builtins::ENTRY_TEST_RUNNER,
     builtins::TEST_FUNCTIONS,
     builtins::RETURN_ADDRESS,
 };

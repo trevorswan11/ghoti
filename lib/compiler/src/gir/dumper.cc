@@ -211,7 +211,7 @@ auto dumper::dump(const function& fn) -> void {
     for (const auto& seg : fn.get_segments()) { dump(*seg); }
 }
 
-auto dumper::dump(const module& mod) -> void {
+auto dumper::dump(const module_t& mod) -> void {
     for (const auto& type_decl : mod.get_types()) {
         fmt::println(out_, "type {} = {}", type_decl->name, type_decl->type.to_string());
     }

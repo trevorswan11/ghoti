@@ -31,7 +31,7 @@
 namespace ghoti::tests::helpers {
 
 auto test_common_decl_collection(const sema::symbol_table_registry& registry,
-                                 const mod::module&                 module,
+                                 const mod::module_t&               module,
                                  usize                              idx,
                                  std::string_view                   name) -> void {
     const auto& symbol{UNWRAP(registry.get_from_opt(idx, name))};
@@ -94,8 +94,9 @@ auto sema_test_context::check_poisoned(const sema::symbol& sym, const sema::type
     check_poisoned(type);
 }
 
-auto sema_test_context::get_string_literal_size(ast::expr_handle           handle,
-                                                stdx::option<mod::module&> enclosing_mod) -> usize {
+auto sema_test_context::get_string_literal_size(ast::expr_handle             handle,
+                                                stdx::option<mod::module_t&> enclosing_mod)
+    -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
     const auto& str_expr{UNWRAP(module.ast.get_as_opt<ast::string_expr>(handle))};
     return str_expr.value.size();
@@ -178,7 +179,7 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
     return {std::move(ctx), idx};
 }
 
-auto find_nested_fn(const mod::module&        module,
+auto find_nested_fn(const mod::module_t&        module,
                     const ast::function_expr& outer,
                     std::string_view          name) -> ast::node_id {
     const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};
