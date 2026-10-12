@@ -36,7 +36,7 @@ auto impl_registry::record_parameterized(parameterized_impl pimpl)
     return gsl::not_null{stored};
 }
 
-auto impl_registry::param_record_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+auto impl_registry::param_record_by_site(ast::node_id site, const mod::module_t& enclosing) noexcept
     -> stdx::option<parameterized_impl&> {
     for (auto* p : param_records_) {
         if (p->site.get_index() == site.get_index() && p->site.get_kind() == site.get_kind() &&
@@ -47,7 +47,7 @@ auto impl_registry::param_record_by_site(ast::node_id site, const mod::module& e
     return stdx::none;
 }
 
-auto impl_registry::find_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+auto impl_registry::find_by_site(ast::node_id site, const mod::module_t& enclosing) noexcept
     -> stdx::option<impl_record&> {
     // `site` is only an index into one module's AST node pool, so two modules can hold an `impl`
     // block at the same index; match the owning module too

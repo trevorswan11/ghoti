@@ -9,7 +9,7 @@
 namespace ghoti::lsp {
 
 // A linear scan over known identifier positions; simple and fast enough for a single file's worth
-auto identifier_at(const mod::module& module, source_location target)
+auto identifier_at(const mod::module_t& module, source_location target)
     -> stdx::option<ast::node_id> {
     for (const auto id : module.identifier_positions) {
         const auto& start{module.ast.location_of(id)};

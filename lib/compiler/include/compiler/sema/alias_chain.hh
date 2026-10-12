@@ -1,14 +1,14 @@
 #pragma once
 
-#include <algorithm>
 #include <tuple>
-#include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <stdx/types.hh>
 
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
 
@@ -17,16 +17,16 @@ namespace ghoti::sema {
 class alias_chain {
   public:
     // Records `owner`'s `node`, false if the chain already passed through it
-    [[nodiscard]] auto step(const mod::module& owner, ast::node_id node) -> bool {
+    [[nodiscard]] auto step(const mod::module_t& owner, ast::node_id node) -> bool {
         const step_key key{&owner, node.get_kind(), node.get_index()};
-        if (std::ranges::contains(seen_, key)) { return false; }
-        seen_.push_back(key);
-        return true;
+        return seen_.insert(key).second;
     }
 
   private:
-    using step_key = std::tuple<const mod::module*, ast::node_kind, usize>;
-    std::vector<step_key> seen_;
+    using step_key = std::tuple<const mod::module_t*, ast::node_kind, usize>;
+
+  private:
+    ankerl::unordered_dense::set<step_key> seen_;
 };
 
 } // namespace ghoti::sema

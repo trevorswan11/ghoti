@@ -27,7 +27,7 @@ class analysis_session {
 
     // Runs the pipeline for `entry_path` and returns its module regardless of errors
     [[nodiscard]] auto analyze(const std::filesystem::path& entry_path)
-        -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>;
+        -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>;
 
     MAKE_DEDUCING_GETTER(manager);
     MAKE_DEDUCING_GETTER(analyzer);

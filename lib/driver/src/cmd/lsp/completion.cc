@@ -22,7 +22,8 @@ namespace ghoti::lsp {
 
 namespace {
 
-auto completion_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> completion_kind {
+auto completion_kind_of(const mod::module_t& module, const ast::decl_stmt& decl)
+    -> completion_kind {
     if (decl.value) {
         if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) {
             return completion_kind::FUNCTION;
@@ -49,7 +50,7 @@ auto contains(source_span span, source_location point) -> bool {
 }
 
 // Every declared name that's in scope at `target`
-auto local_scope_completions(const mod::module& module, source_location target) -> nlohmann::json {
+auto local_scope_completions(const mod::module_t& module, source_location target) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     stdx::option<source_span> enclosing;
@@ -167,7 +168,7 @@ auto attribute_context_at(std::string_view source, source_location target)
     };
 }
 
-auto completion_items(const mod::module& module, source_location target) -> nlohmann::json {
+auto completion_items(const mod::module_t& module, source_location target) -> nlohmann::json {
     if (const auto context{attribute_context_at(std::string_view{module.source}, target)}) {
         return attribute_completions(*context);
     }

@@ -242,7 +242,6 @@ TEST_CASE("comptime parameter: an all-comptime signature still works") {
 }
 
 TEST_CASE("a compile-time `false and` / `true or` never evaluates its right side") {
-    // `params[0]` is out of bounds for an empty list, but the left side settles the result first
     CHECK(helpers::compile_and_run(R"(
         const takes_i32 = fn(comptime params: []type): bool {
             return params.len == 1 and params[0] == i32;

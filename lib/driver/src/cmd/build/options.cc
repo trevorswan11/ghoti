@@ -403,7 +403,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
 }
 
 auto options::emit_debug_artifacts(sema::analyzer&      analyzer,
-                                   gir::module&         gir_mod,
+                                   gir::module_t&       gir_mod,
                                    std::ostream&        error_stream,
                                    sema::build_artifact artifact) const
     -> stdx::result<void, clap::error> {

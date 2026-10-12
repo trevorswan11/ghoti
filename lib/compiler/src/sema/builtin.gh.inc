@@ -100,7 +100,6 @@ pub const Rewrappable = interface {
 
 /// What a value means as the process's exit code, so `main` can return it: any type implementing
 /// this, or a `Result(S, E)` whose `E` implements it and whose `S` is `void` or implements it.
-/// The code is taken as given (an error whose code is `0` exits `0`); POSIX keeps its low 8 bits.
 pub const ExitCode = interface {
     pub const to_exit_code = fn(&self): i32;
 };

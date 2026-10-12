@@ -20,7 +20,7 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::gir {
 
@@ -73,10 +73,10 @@ class function {
     MAKE_DEDUCING_GETTER(segments);
 
     // The AST module this function's body was emitted from, which owns its diagnostics' locations
-    [[nodiscard]] auto get_source_module() const noexcept -> stdx::option<mod::module&> {
+    [[nodiscard]] auto get_source_module() const noexcept -> stdx::option<mod::module_t&> {
         return source_module_;
     }
-    auto set_source_module(mod::module& m) -> void { source_module_.emplace(m); }
+    auto set_source_module(mod::module_t& m) -> void { source_module_.emplace(m); }
 
     [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
         return aliases_;
@@ -146,7 +146,7 @@ class function {
     std::string                test_file_;
     u32                        test_line_{1};
     u32                        test_column_{1};
-    stdx::option<mod::module&> source_module_;
+    stdx::option<mod::module_t&> source_module_;
 };
 
 } // namespace ghoti::gir

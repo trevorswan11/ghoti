@@ -65,7 +65,7 @@ namespace {
 
 [[nodiscard]] auto emit_preamble(helpers::sema_test_context& test_ctx,
                                  bool                        for_test_executable = false)
-    -> stdx::result<gir::module, codegen::diagnostic> {
+    -> stdx::result<gir::module_t, codegen::diagnostic> {
     if (test_ctx.root_mod.is_poisoned()) {
         return codegen::make_codegen_err("Module is poisoned", codegen::error::MODULE_LOAD_ERROR);
     }

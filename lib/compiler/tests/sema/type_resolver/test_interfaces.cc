@@ -436,7 +436,6 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
 }
 
 TEST_CASE("a parameterized impl may target a ctor through its aliases") {
-    // `alias.Bag` is `const Bag = bag.Bag;`, the way `std.Result` re-exports `result.Result`
     const auto target{
         GENERATE(Catch::Generators::as<std::string_view>{}, "alias.Bag", "alias.Again")};
     CAPTURE(target);

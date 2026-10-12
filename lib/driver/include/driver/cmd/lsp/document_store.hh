@@ -72,7 +72,7 @@ class document_store {
     // Analyzes `path` against the persistent module graph for hover/go-to-def/completion queries.
     // Rebuilds first if a prior `update_throttled()` call left the graph stale
     [[nodiscard]] auto analyze(const std::filesystem::path& path)
-        -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>;
+        -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>;
 
     // The persistent module graph, spanning every known root. Rebuilds first if stale
     [[nodiscard]] auto manager() -> const mod::module_manager&;

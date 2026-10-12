@@ -568,7 +568,7 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
         [names](types::closure_t c) {
             return fmt::format("closure {}", c.signature.to_string(names));
         },
-        [](types::module mod) {
+        [](types::module_t mod) {
             return fmt::format("module {}", mod.imported.path.stem().string());
         },
         [names](types::enum_t e) {
@@ -810,7 +810,7 @@ auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::functi
 
 auto is_fat_callable(const type& t) noexcept -> bool { return fat_callable_fn(t).has_value(); }
 
-auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
+auto slice_copy_destination(const mod::module_t& m, ast::node_id lhs)
     -> stdx::option<ast::expr_handle> {
     const auto is_slice{[&](ast::node_id expr) {
         const auto t{m.get_sema_type_opt(expr)};

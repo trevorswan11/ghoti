@@ -10,7 +10,7 @@
 
 namespace ghoti::lsp {
 
-auto module_workspace_symbols(const mod::module& module) -> std::vector<workspace_symbol_entry> {
+auto module_workspace_symbols(const mod::module_t& module) -> std::vector<workspace_symbol_entry> {
     std::vector<workspace_symbol_entry> out;
 
     for (const auto root_id : module.ast) {

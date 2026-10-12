@@ -30,6 +30,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/variant.hh>
 
 #include "compiler/ast/statement.hh"
 #include "compiler/codegen/error.hh"
@@ -52,6 +53,7 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/error.hh"
+#include "support/diagnostic.hh"
 #include "support/tempfile.hh"
 
 namespace ghoti::sema {
@@ -64,7 +66,7 @@ namespace {
     return tempfile{std::in_place, temp_obj_path};
 }
 
-[[nodiscard]] auto export_roots(const gir::module& mod) -> std::vector<std::string_view> {
+[[nodiscard]] auto export_roots(const gir::module_t& mod) -> std::vector<std::string_view> {
     std::vector<std::string_view> roots;
     for (const auto* fn : mod.get_functions()) {
         if (fn->get_linkage() == gir::linkage::EXPORT) { roots.emplace_back(fn->get_name()); }
@@ -79,7 +81,7 @@ namespace {
 // stays internal so it can't collide with the program's own. A `panic_handler` / `assert_handler`
 // override stays visible but weak, since the program linking it defines its own that must win,
 // unless `keep_handlers` is off
-auto internalize_library(gir::module& mod, bool keep_handlers) -> void {
+auto internalize_library(gir::module_t& mod, bool keep_handlers) -> void {
     constexpr std::array handlers{std::string_view{"panic_handler"},
                                   std::string_view{"assert_handler"},
                                   std::string_view{"expect_handler"},
@@ -109,7 +111,7 @@ constexpr std::array supported_archs{
     "loongarch64",
 };
 
-auto prune_to_test_reachable(gir::module& gir_module) -> void {
+auto prune_to_test_reachable(gir::module_t& gir_module) -> void {
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
     // `std/start.gh`'s exports run the tests, through the `test_runner` it picks
@@ -121,7 +123,7 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
 }
 
 // The LLVM-level names of every `export` function and global, which must survive internalizing
-[[nodiscard]] auto exported_symbol_names(const gir::module& mod) -> std::vector<std::string> {
+[[nodiscard]] auto exported_symbol_names(const gir::module_t& mod) -> std::vector<std::string> {
     std::vector<std::string> names;
     for (const auto* fn : mod.get_functions()) {
         if (fn->get_linkage() != gir::linkage::EXPORT) { continue; }
@@ -149,14 +151,14 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
 
 // Libraries named by `extern("lib", ...)` declarations join the ones given on the command line
 [[nodiscard]] auto merged_libraries(const codegen::extra_linker_options& linker_opts,
-                                    const gir::module& gir_module) -> std::vector<std::string> {
+                                    const gir::module_t& gir_module) -> std::vector<std::string> {
     std::vector<std::string> merged{linker_opts.libraries.begin(), linker_opts.libraries.end()};
     for (auto& lib : gir_module.get_required_libraries()) { merged.emplace_back(std::move(lib)); }
     return merged;
 }
 
 // What each `extern("lib", ...)` library supplies, for a Windows import library the link writes
-[[nodiscard]] auto library_imports(const gir::module& gir_module)
+[[nodiscard]] auto library_imports(const gir::module_t& gir_module)
     -> std::vector<codegen::library_import> {
     std::vector<codegen::library_import> imports;
     for (auto& [library, symbol, data] : gir_module.get_library_imports()) {
@@ -223,16 +225,16 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 // Whether an import, at any depth, reaches a module that failed. One reached only through an import
 // cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
 // its own, so lowering it would walk untyped code.
-[[nodiscard]] auto reaches_failed_module(mod::module& root) -> bool {
-    ankerl::unordered_dense::set<const mod::module*> seen{&root};
-    std::vector<mod::module*>                        frontier{&root};
+[[nodiscard]] auto reaches_failed_module(mod::module_t& root) -> bool {
+    ankerl::unordered_dense::set<const mod::module_t*> seen{&root};
+    std::vector<mod::module_t*>                        frontier{&root};
     while (!frontier.empty()) {
         auto* current{frontier.back()};
         frontier.pop_back();
         for (const auto import_id : current->import_nodes) {
             const auto import_type{current->get_sema_type_opt(import_id)};
             if (!import_type) { continue; }
-            const auto data{import_type->get_data().as_opt<types::module>()};
+            const auto data{import_type->get_data().as_opt<types::module_t>()};
             if (!data) { continue; }
             auto& imported{data->imported};
             if (imported.is_poisoned() || imported.is_errored()) { return true; }
@@ -279,7 +281,7 @@ auto apply_target_features(llvm::Module& llvm_mod, const llvm::TargetMachine* ta
 } // namespace
 
 auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_executable)
-    -> stdx::result<gir::module, diagnostic> {
+    -> stdx::result<gir::module_t, diagnostic> {
     PROFILE_FUNCTION();
     if (for_test_executable) { ctx_.testing = true; }
     // An unknown `--cpu` / `--features` would otherwise surface at the first `cpu.has(...)`
@@ -302,7 +304,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     }
 
     // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
-    if (module->is_errored()) { return gir::module{*module, ctx_.arena}; }
+    if (module->is_errored()) { return gir::module_t{*module, ctx_.arena}; }
 
     collect_symbols(*module);
     resolve_types(*module);
@@ -310,41 +312,41 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
 
     if (module->is_poisoned() || reaches_failed_module(*module)) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena};
     }
 
     if (entry_point_ || for_test_executable) {
         TRY(attach_start_module(*module, for_test_executable));
         if (module->is_poisoned()) {
             modules_.print_all_diagnostics(error_stream_);
-            return gir::module{*module, ctx_.arena};
+            return gir::module_t{*module, ctx_.arena};
         }
     }
 
     auto gir_mod{emit_gir(*module, for_test_executable)};
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena};
     }
 
     check_types(gir_mod, *module);
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena};
     }
 
     return gir_mod;
 }
 
-auto analyzer::collect_symbols(mod::module& module) -> mod::module_state {
+auto analyzer::collect_symbols(mod::module_t& module) -> mod::module_state {
     return symbol_collector::collect_symbols(module, ctx_);
 }
 
-auto analyzer::resolve_types(mod::module& module) -> mod::module_state {
+auto analyzer::resolve_types(mod::module_t& module) -> mod::module_state {
     return type_resolver::resolve_types(module, ctx_);
 }
 
-auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
+auto analyzer::attach_start_module(mod::module_t& root, bool for_test_executable)
     -> stdx::result<void, diagnostic> {
     PROFILE_FUNCTION();
     if (ctx_.start_module) { return {}; }
@@ -386,8 +388,8 @@ auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
     return {};
 }
 
-auto analyzer::report_entry_errors_at(mod::module&     root,
-                                      mod::module&     start,
+auto analyzer::report_entry_errors_at(mod::module_t&   root,
+                                      mod::module_t&   start,
                                       std::string_view entry_name) -> void {
     const auto start_diags{start.diagnostics.as_opt<diagnostics>()};
     if (!start.is_poisoned() || !start_diags) { return; }
@@ -426,25 +428,26 @@ auto analyzer::report_entry_errors_at(mod::module&     root,
     }
 }
 
-auto analyzer::emit_gir(mod::module& module, bool for_test_executable) -> gir::module {
+auto analyzer::emit_gir(mod::module_t& module, bool for_test_executable) -> gir::module_t {
     if ((entry_point_ || for_test_executable) && !ctx_.start_module) {
         if (auto attached{attach_start_module(module, for_test_executable)}; !attached) {
             error_stream_ << attached.error().get_message().value_or("") << '\n';
         }
         if (module.is_poisoned()) {
             modules_.print_all_diagnostics(error_stream_);
-            return gir::module{module, ctx_.arena};
+            return gir::module_t{module, ctx_.arena};
         }
     }
     gir::emitter emitter{ctx_, module};
     return emitter.emit(for_test_executable);
 }
 
-auto analyzer::check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state {
+auto analyzer::check_types(gir::module_t& gir_module, mod::module_t& ast_module)
+    -> mod::module_state {
     return type_checker::check_types(gir_module, ast_module, ctx_);
 }
 
-auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
+auto analyzer::emit_llvm_ir(gir::module_t&                      gir_module,
                             llvm::LLVMContext&                context,
                             const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
@@ -459,7 +462,7 @@ auto analyzer::emit_llvm_ir(gir::module&                      gir_module,
     return llvm_mod;
 }
 
-auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_module,
+auto analyzer::emit_llvm_ir_executable(gir::module_t&                      gir_module,
                                        llvm::LLVMContext&                context,
                                        const codegen::optimizer_options& options,
                                        std::string_view                  user_main_name)
@@ -491,7 +494,7 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     return llvm_mod;
 }
 
-auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gir_module,
+auto analyzer::emit_llvm_ir_test_executable(gir::module_t&                      gir_module,
                                             llvm::LLVMContext&                context,
                                             const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
@@ -509,7 +512,7 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
     return llvm_mod;
 }
 
-auto analyzer::lower_artifact(gir::module&                      gir_module,
+auto analyzer::lower_artifact(gir::module_t&                      gir_module,
                               llvm::LLVMContext&                context,
                               const codegen::optimizer_options& options,
                               build_artifact                    artifact)
@@ -527,7 +530,7 @@ auto analyzer::lower_artifact(gir::module&                      gir_module,
     return emit_llvm_ir(gir_module, context, options);
 }
 
-auto analyzer::emit_llvm_ir_text(gir::module&                      gir_module,
+auto analyzer::emit_llvm_ir_text(gir::module_t&                      gir_module,
                                  const codegen::target_options&    target_opts,
                                  const codegen::optimizer_options& opt_options,
                                  build_artifact                    artifact)
@@ -540,7 +543,7 @@ auto analyzer::emit_llvm_ir_text(gir::module&                      gir_module,
     return codegen::llvm_lowering::to_ir_string(*llvm_mod);
 }
 
-auto analyzer::emit_asm_text(gir::module&                      gir_module,
+auto analyzer::emit_asm_text(gir::module_t&                      gir_module,
                              const codegen::target_options&    target_opts,
                              const codegen::optimizer_options& opt_options,
                              build_artifact                    artifact)
@@ -553,7 +556,7 @@ auto analyzer::emit_asm_text(gir::module&                      gir_module,
     return codegen::emit_asm_string(*llvm_mod, *target_machine);
 }
 
-auto analyzer::validate_main_entry(const mod::module& root_module) const
+auto analyzer::validate_main_entry(const mod::module_t& root_module) const
     -> stdx::result<void, diagnostic> {
     if (!root_module.root_table_idx) {
         return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
@@ -618,7 +621,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     return {};
 }
 
-auto analyzer::validate_test_entry(const mod::module& root_module) const
+auto analyzer::validate_test_entry(const mod::module_t& root_module) const
     -> stdx::result<void, diagnostic> {
     if (!root_module.root_table_idx) {
         return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
@@ -641,7 +644,7 @@ auto analyzer::validate_test_entry(const mod::module& root_module) const
     return {};
 }
 
-auto analyzer::emit_object(gir::module&                      gir_module,
+auto analyzer::emit_object(gir::module_t&                      gir_module,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,
                            const std::filesystem::path&      output_path)
@@ -650,7 +653,7 @@ auto analyzer::emit_object(gir::module&                      gir_module,
     return emit_object(gir_module, context, target_opts, opt_options, output_path);
 }
 
-auto analyzer::emit_object(gir::module&                      gir_module,
+auto analyzer::emit_object(gir::module_t&                      gir_module,
                            llvm::LLVMContext&                context,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,
@@ -663,7 +666,7 @@ auto analyzer::emit_object(gir::module&                      gir_module,
     return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
 }
 
-auto analyzer::emit_test_executable(gir::module&                         gir_module,
+auto analyzer::emit_test_executable(gir::module_t&                         gir_module,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
@@ -674,7 +677,7 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_test_executable(gir::module&                         gir_module,
+auto analyzer::emit_test_executable(gir::module_t&                         gir_module,
                                     llvm::LLVMContext&                   context,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
@@ -691,7 +694,7 @@ auto analyzer::emit_test_executable(gir::module&                         gir_mod
                          build_artifact::TEST_EXECUTABLE);
 }
 
-auto analyzer::emit_executable(gir::module&                         gir_module,
+auto analyzer::emit_executable(gir::module_t&                         gir_module,
                                const codegen::target_options&       target_opts,
                                const codegen::optimizer_options&    opt_options,
                                const std::filesystem::path&         output_path,
@@ -701,7 +704,7 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
     return emit_executable(gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_executable(gir::module&                         gir_module,
+auto analyzer::emit_executable(gir::module_t&                         gir_module,
                                llvm::LLVMContext&                   context,
                                const codegen::target_options&       target_opts,
                                const codegen::optimizer_options&    opt_options,
@@ -718,7 +721,7 @@ auto analyzer::emit_executable(gir::module&                         gir_module,
                          build_artifact::EXECUTABLE);
 }
 
-auto analyzer::emit_static_library(gir::module&                         gir_module,
+auto analyzer::emit_static_library(gir::module_t&                         gir_module,
                                    const codegen::target_options&       target_opts,
                                    const codegen::optimizer_options&    opt_options,
                                    const std::filesystem::path&         output_path,
@@ -729,7 +732,7 @@ auto analyzer::emit_static_library(gir::module&                         gir_modu
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_static_library(gir::module&                         gir_module,
+auto analyzer::emit_static_library(gir::module_t&                         gir_module,
                                    llvm::LLVMContext&                   context,
                                    const codegen::target_options&       target_opts,
                                    const codegen::optimizer_options&    opt_options,
@@ -750,7 +753,7 @@ auto analyzer::emit_static_library(gir::module&                         gir_modu
     return codegen::create_static_library(output_path, objects, target_opts);
 }
 
-auto analyzer::emit_dynamic_library(gir::module&                         gir_module,
+auto analyzer::emit_dynamic_library(gir::module_t&                         gir_module,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
@@ -761,7 +764,7 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_dynamic_library(gir::module&                         gir_module,
+auto analyzer::emit_dynamic_library(gir::module_t&                         gir_module,
                                     llvm::LLVMContext&                   context,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
@@ -789,7 +792,7 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
         temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
-auto analyzer::link_artifact(gir::module&                         gir_module,
+auto analyzer::link_artifact(gir::module_t&                         gir_module,
                              llvm::LLVMContext&                   context,
                              const codegen::target_options&       target_opts,
                              const codegen::optimizer_options&    opt_options,

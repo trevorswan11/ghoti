@@ -108,7 +108,6 @@ const run = fn(args: []Arg): i32 {
     };
 }
 
-// Whether the program reads its arguments: `main` taking them, or any test runner
 @cfg (testing) {
     const wants_args = true;
 } else {

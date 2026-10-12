@@ -22,6 +22,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"
@@ -105,7 +106,7 @@ struct root_error {
     const auto              root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
     if (const auto diags{root->diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& diag : *diags) {
-            found.push_back(
+            found.emplace_back<root_error>(
                 {UNWRAP(diag.to_formattable().location).line, UNWRAP(diag.get_message())});
         }
     }

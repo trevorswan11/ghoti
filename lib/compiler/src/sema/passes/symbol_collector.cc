@@ -76,7 +76,7 @@ auto linkage_modifier(const ast::decl_stmt& decl) -> stdx::option<std::string_vi
 }
 
 // A function literal marked `@[testing]`, directly or through the declaration it initializes
-auto is_testing_fn(const mod::module& owner, const ast::function_expr& fn) -> bool {
+auto is_testing_fn(const mod::module_t& owner, const ast::function_expr& fn) -> bool {
     if (fn.attributes && fn.attributes->find(ast::attribute_kind::TESTING)) { return true; }
     if (!fn.declaring_decl) { return false; }
     const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*fn.declaring_decl)};
@@ -93,7 +93,7 @@ auto declares_function(const ast::decl_stmt& decl) -> bool {
 
 } // namespace
 
-auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod::module_state {
+auto symbol_collector::collect_symbols(mod::module_t& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
     if (module.is_collectable()) {
         module.root_table_idx.emplace(ctx.registry.create());
@@ -802,7 +802,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> voi
 }
 
 auto symbol_collector::collect_import_payload(const ast::import_stmt& import_stmt)
-    -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>> {
+    -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>> {
     const auto             named{import_stmt.get_name(collecting_.ast)};
     const std::string_view name{named ? named->second : std::string_view{}};
     if (const auto string{collecting_.ast.get_as_opt<ast::string_expr>(import_stmt.payload)}) {
@@ -819,7 +819,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
     auto [alias, mod_result]{collect_import_payload(import_stmt)};
 
     // Only set the table index if the module exists
-    stdx::option<mod::module&> imported_mod;
+    stdx::option<mod::module_t&> imported_mod;
     if (!mod_result) {
         // The token is retrieved here to avoid copying it on success
         ctx_.diags.emplace_back(mod_result.error().get_message(),
@@ -837,7 +837,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         if (imported_mod && !imported_mod->is_errored()) {
             auto& type = *ctx_.pool[{
                 type_kind::MODULE, types::mut::CONSTANT, *imported_mod->root_table_idx}];
-            type.resolve<types::module>(*imported_mod);
+            type.resolve<types::module_t>(*imported_mod);
             collecting_.set_sema_type(id, type);
         } else {
             ctx_.poison_node(collecting_, id);
@@ -855,7 +855,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         // Its much easier for other steps to get the enclosing module if we resolve now
         auto& type =
             *ctx_.pool[{type_kind::MODULE, types::mut::CONSTANT, *imported_mod->root_table_idx}];
-        type.resolve<types::module>(*imported_mod);
+        type.resolve<types::module_t>(*imported_mod);
 
         collecting_.set_sema_type(id, type);
         auto& sym{ctx_.registry.get_from(table_idx_, alias)};

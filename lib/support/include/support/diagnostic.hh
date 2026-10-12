@@ -68,7 +68,7 @@ template <> struct source_info<source_location> {
     static auto get(const source_location& loc) -> source_location { return loc; }
 };
 
-namespace mod { struct module; } // namespace mod
+namespace mod { struct module_t; } // namespace mod
 
 // Mappings not to be changed, tied to LSP diagnostic emission
 enum class diagnostic_level : u8 {
@@ -184,8 +184,8 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     // The module whose source `location` points into, when it isn't the one whose list holds
     // this diagnostic (a compile-time call that evaluated another module's function)
-    [[nodiscard]] auto origin() const noexcept -> const mod::module* { return origin_; }
-    auto               set_origin(const mod::module& owner) noexcept -> void { origin_ = &owner; }
+    [[nodiscard]] auto origin() const noexcept -> const mod::module_t* { return origin_; }
+    auto               set_origin(const mod::module_t& owner) noexcept -> void { origin_ = &owner; }
 
     // Diagnostics are always ERROR by default, see `unset_level`
     auto set_level(diagnostic_level level) noexcept -> void { level_.emplace(level); }
@@ -196,7 +196,7 @@ template <stdx::ScopedEnum E> class diagnostic {
     stdx::option<source_location>  loc_;
     E                              error_;
     stdx::option<diagnostic_level> level_{diagnostic_level::ERROR};
-    const mod::module*             origin_{nullptr};
+    const mod::module_t*           origin_{nullptr};
 };
 
 template <typename T> struct is_diagnostic : std::false_type {};
@@ -239,7 +239,7 @@ template <Diagnostic D> class diagnostic_list {
     }
 
     // Marks every diagnostic at or after `from` that has no origin yet as belonging to `owner`
-    auto set_origin_from(usize from, const mod::module& owner) -> void {
+    auto set_origin_from(usize from, const mod::module_t& owner) -> void {
         for (usize i{from}; i < diagnostics_.size(); ++i) {
             if (!diagnostics_[i].origin()) { diagnostics_[i].set_origin(owner); }
         }

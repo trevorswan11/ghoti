@@ -124,7 +124,7 @@ auto document_store::text_of(const std::filesystem::path& path) -> stdx::option<
 }
 
 auto document_store::analyze(const std::filesystem::path& path)
-    -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic> {
+    -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
     rebuild_if_dirty();
     return session_->analyze(path);
 }

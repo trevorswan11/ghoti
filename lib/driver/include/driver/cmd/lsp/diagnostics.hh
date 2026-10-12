@@ -11,7 +11,7 @@
 namespace ghoti::lsp {
 
 // Converts a module's diagnostics (if any) into an LSP `Diagnostic[]` JSON array
-[[nodiscard]] auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json;
+[[nodiscard]] auto to_lsp_diagnostics(const mod::module_t& module) -> nlohmann::json;
 
 // Diagnostics only carry a start point today, so end is a same-line one-character placeholder
 // TODO: change diags to carry more data

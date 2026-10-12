@@ -517,7 +517,7 @@ auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     // Expose the module under one prelude name, reusing the ordinary module-access machinery
     auto& mod_type{
         *ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *builtin_mod.root_table_idx}]};
-    mod_type.resolve_if<types::module>(builtin_mod);
+    mod_type.resolve_if<types::module_t>(builtin_mod);
 
     auto& prelude{ctx.registry.get(prelude_idx)};
     prelude.insert_unchecked(
@@ -576,8 +576,8 @@ auto context::lookup_comptime_binding(std::string_view name) const
     return stdx::none;
 }
 
-auto context::entry_test_runner_module() -> stdx::option<mod::module&> {
-    const auto declares_runner{[&](const mod::module& m) {
+auto context::entry_test_runner_module() -> stdx::option<mod::module_t&> {
+    const auto declares_runner{[&](const mod::module_t& m) {
         return m.root_table_idx && registry.get_from_opt(*m.root_table_idx, "test_runner");
     }};
     if (entry_root && declares_runner(*entry_root)) { return *entry_root; }
@@ -588,7 +588,7 @@ auto context::entry_test_runner_module() -> stdx::option<mod::module&> {
         const auto node{testing_sym ? testing_sym->get_data().as_opt<symbols::node_t>()
                                     : stdx::none};
         const auto testing_type{node ? std_mod->get_sema_type_opt(*node) : stdx::none};
-        const auto testing_mod{testing_type ? testing_type->get_data().as_opt<types::module>()
+        const auto testing_mod{testing_type ? testing_type->get_data().as_opt<types::module_t>()
                                             : stdx::none};
         if (testing_mod && declares_runner(testing_mod->imported)) { return testing_mod->imported; }
     }

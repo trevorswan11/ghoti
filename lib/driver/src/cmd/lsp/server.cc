@@ -102,10 +102,10 @@ auto write_null_id(const nlohmann::json& message) -> void {
 // The `///` doc for whatever `id` resolves to (following go-to-definition across modules),
 // falling back to an imported module's `//!` doc when `id` is an import alias.
 auto doc_comment_for(const mod::module_manager& manager,
-                     const mod::module&         entry,
+                     const mod::module_t&       entry,
                      ast::node_id               id,
                      stdx::option<sema::type&>  type) -> stdx::option<std::string> {
-    const auto lookup{[&](const mod::module& mod, source_span span) -> stdx::option<std::string> {
+    const auto lookup{[&](const mod::module_t& mod, source_span span) -> stdx::option<std::string> {
         if (const auto doc{mod.ast.doc_for(span)}) { return std::string{*doc}; }
         return stdx::none;
     }};
@@ -121,7 +121,7 @@ auto doc_comment_for(const mod::module_manager& manager,
         return own;
     }
     if (type) {
-        if (const auto mod_type{type->get_data().as_opt<sema::types::module>()}) {
+        if (const auto mod_type{type->get_data().as_opt<sema::types::module_t>()}) {
             if (const auto md{mod_type->imported.ast.module_doc()}; !md.empty()) {
                 return std::string{md};
             }
@@ -131,7 +131,7 @@ auto doc_comment_for(const mod::module_manager& manager,
 }
 
 // An attribute's signature and summary when `target` is on its name inside an `@[...]` list
-auto attribute_hover(const mod::module& entry, source_location target)
+auto attribute_hover(const mod::module_t& entry, source_location target)
     -> stdx::option<nlohmann::json> {
     const auto context{lsp::attribute_context_at(std::string_view{entry.source}, target)};
     if (!context || context->in_args_of || context->after_dot) { return stdx::none; }
@@ -146,7 +146,8 @@ auto attribute_hover(const mod::module& entry, source_location target)
 }
 
 // `**Deprecated**: <message>` when `id` refers to a `@[deprecated]` declaration
-auto deprecation_note_for(const mod::module& entry, ast::node_id id) -> stdx::option<std::string> {
+auto deprecation_note_for(const mod::module_t& entry, ast::node_id id)
+    -> stdx::option<std::string> {
     const auto declaration{entry.get_identifier_declaration(id)};
     if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
     const auto& owner{*declaration->owner};
@@ -160,7 +161,7 @@ auto deprecation_note_for(const mod::module& entry, ast::node_id id) -> stdx::op
 }
 
 // The declared parameter names of the callable `id` refers to (or declares)
-auto callable_param_names_for(const mod::module& entry, ast::node_id id)
+auto callable_param_names_for(const mod::module_t& entry, ast::node_id id)
     -> stdx::option<std::vector<std::string_view>> {
     const auto declaration{entry.get_identifier_declaration(id)};
     if (!declaration) { return stdx::none; }

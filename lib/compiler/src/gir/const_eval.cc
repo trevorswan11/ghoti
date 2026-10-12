@@ -2374,7 +2374,7 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
 
     if (const auto type_opt{target_val->as_opt<stdx::option<sema::type&>>()};
         type_opt && *type_opt) {
-        if (const auto m_data{(**type_opt).get_data().as_opt<sema::types::module>()}) {
+        if (const auto m_data{(**type_opt).get_data().as_opt<sema::types::module_t>()}) {
             return eval_module_member(m_data->imported, member_name);
         }
         return eval_type_member(**type_opt, member_name);
@@ -2430,7 +2430,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     auto&      type{*denoted};
     const auto kind{type.get_kind()};
 
-    if (const auto m_data{type.get_data().as_opt<sema::types::module>()}) {
+    if (const auto m_data{type.get_data().as_opt<sema::types::module_t>()}) {
         return eval_module_member(m_data->imported, member);
     }
 
@@ -2463,7 +2463,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     if (!node) { return stdx::none; }
 
     // The member decl belongs to the type's own defining module
-    stdx::option<mod::module&> owner;
+    stdx::option<mod::module_t&> owner;
     if (const auto s{type.get_data().as_opt<sema::types::struct_t>()}) {
         owner.emplace(s->enclosing);
     } else if (const auto u{type.get_data().as_opt<sema::types::union_t>()}) {
@@ -2575,7 +2575,7 @@ auto const_eval::target_enum_value(std::string_view enum_name, std::string_view 
 namespace {
 
 // The folded attributes of `decl` (a declaration or a function literal) as `owner` sees them now
-[[nodiscard]] auto fn_decl_attributes(const mod::module& owner, ast::node_id decl)
+[[nodiscard]] auto fn_decl_attributes(const mod::module_t& owner, ast::node_id decl)
     -> sema::resolved_attributes {
     const auto literal_node{owner.fn_literal_node(decl)};
     const auto literal{owner.ast.get_as_opt<ast::function_expr>(literal_node)};
@@ -2633,7 +2633,7 @@ auto const_eval::member_fn_attributes(const ast::dot_expr& dot)
     }
     if (!denoted) { return stdx::none; }
 
-    stdx::option<mod::module&> owner;
+    stdx::option<mod::module_t&> owner;
     if (const auto st{denoted->get_data().as_opt<sema::types::struct_t>()}) {
         owner.emplace(st->enclosing);
     } else if (const auto un{denoted->get_data().as_opt<sema::types::union_t>()}) {
@@ -2901,7 +2901,7 @@ auto const_eval::eval_implicit_access(ast::node_id id, const ast::implicit_acces
     return stdx::none;
 }
 
-auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&> {
+auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::module_t&> {
     PROFILE_FUNCTION();
     // Base case: a bare identifier naming an imported module in the current scope.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(node)}) {
@@ -2921,7 +2921,7 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
                 sema_type = module_->get_sema_type_opt(*snode);
             }
             if (!sema_type) { return stdx::none; }
-            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+            const auto m_data{sema_type->get_data().as_opt<sema::types::module_t>()};
             if (!m_data) { return stdx::none; }
             return m_data->imported;
         }
@@ -2949,7 +2949,7 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
                 sema_type = outer_mod->get_sema_type_opt(*snode);
             }
             if (!sema_type) { return stdx::none; }
-            const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+            const auto m_data{sema_type->get_data().as_opt<sema::types::module_t>()};
             if (!m_data) { return stdx::none; }
             return m_data->imported;
         }
@@ -2959,7 +2959,7 @@ auto const_eval::resolve_module_chain(ast::node_id node) -> stdx::option<mod::mo
     return stdx::none;
 }
 
-auto const_eval::alias_decl_type(const mod::module&    mod,
+auto const_eval::alias_decl_type(const mod::module_t&  mod,
                                  ast::node_id          node,
                                  const ast::decl_stmt& decl) -> stdx::option<sema::type&> {
     if (decl.explicit_type || mod.get_storageless_kind(node) != mod::storageless_kind::ALIAS) {
@@ -2977,7 +2977,7 @@ auto const_eval::alias_decl_type(const mod::module&    mod,
     return sema::denoted_type(*sema_type);
 }
 
-auto const_eval::eval_module_member(mod::module& target_mod, std::string_view member)
+auto const_eval::eval_module_member(mod::module_t& target_mod, std::string_view member)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (!target_mod.root_table_idx) { return stdx::none; }
@@ -3998,7 +3998,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
     }
 
     // Resolve `Ctor(...)` (same module) or `mod::Ctor(...)` (imported module) to (module, decl).
-    stdx::option<mod::module&>  callee_mod;
+    stdx::option<mod::module_t&> callee_mod;
     stdx::option<sema::symbol&> callee_sym;
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (module_->root_table_idx) {
@@ -4103,7 +4103,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
         if (!dot || !resolve_module_chain(dot->object)) {
             const auto& member_ident{dot ? module_->ast.get_as<ast::identifier_expr>(dot->member)
                                          : module_->ast.get_as<ast::identifier_expr>(imp->member)};
-            stdx::option<mod::module&>              method_mod;
+            stdx::option<mod::module_t&>            method_mod;
             stdx::option<const ast::function_expr&> method_fn;
 
             if (const auto owner{module_->get_resolved_symbol_owner_opt(call.function)}) {
@@ -4829,13 +4829,11 @@ auto const_eval::eval_builtin(ast::node_id          id,
             using T = decltype(av);
             switch (tok) {
             case syntax::builtin_t::MIN: return const_value{av < bv ? av : bv, a->get_type()};
-            case syntax::builtin_t::MAX:
-                return const_value{av > bv ? av : bv, a->get_type()};
-            default: break;
+            case syntax::builtin_t::MAX: return const_value{av > bv ? av : bv, a->get_type()};
+            default:                     break;
             }
             if (bv == T{0}) {
-                const bool is_rem{tok == syntax::builtin_t::REM ||
-                                  tok == syntax::builtin_t::MOD};
+                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
                 ctx_.diags.emplace_back(
                     fmt::format("{} by zero in compile-time constant expression",
                                 is_rem ? "Modulo" : "Division"),
@@ -4844,8 +4842,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
                 return const_value::make_poison();
             }
             switch (tok) {
-            case syntax::builtin_t::DIV_TRUNC:
-                return const_value{av / bv, a->get_type()};
+            case syntax::builtin_t::DIV_TRUNC: return const_value{av / bv, a->get_type()};
             case syntax::builtin_t::REM:       return const_value{av % bv, a->get_type()};
             case syntax::builtin_t::DIV_FLOOR: {
                 auto q{av / bv};
@@ -5339,8 +5336,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         auto target{builtin_result_type(id, call)};
         if (!target) { return stdx::none; }
         // A float `@as` rounds once into the target, like the runtime conversion
-        if (const auto f{operand->as_opt<f128>()};
-            f && builtin_type == syntax::builtin_t::AS) {
+        if (const auto f{operand->as_opt<f128>()}; f && builtin_type == syntax::builtin_t::AS) {
             if (const auto format{sema::float_format_of(*target)}) {
                 if (!sema::comptime_float_fits(*f, *target)) {
                     ctx_.diags.emplace_back(
@@ -5363,8 +5359,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         }
         const auto ptr_bits{target_pointer_bits()};
         // Unlike `@bitCast`/`@truncate`, `@as` rejects narrowing a CONCRETE  integer operand
-        if (builtin_type == syntax::builtin_t::AS &&
-            sema::is_integer(target->get_kind()) &&
+        if (builtin_type == syntax::builtin_t::AS && sema::is_integer(target->get_kind()) &&
             !sema::comptime_int_fits(*src_int, *target, ptr_bits)) {
             auto operand_node{*op_h};
             if (const auto un{module_->ast.get_as_opt<ast::unary_expr>(operand_node)};

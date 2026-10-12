@@ -42,13 +42,13 @@ pub const println = fn(str: []u8): void {};
 
 // The table index should point to the table where the module was first declared
 [[nodiscard]] auto check_inner_module(helpers::sema_test_context& ctx,
-                                      mod::module&                enclosing_module,
+                                      mod::module_t&              enclosing_module,
                                       std::string_view            name,
                                       usize                       table_idx,
                                       bool                        is_public)
-    -> std::pair<mod::module&, const sema::type&> {
+    -> std::pair<mod::module_t&, const sema::type&> {
     const auto [sym, sym_data, node_data, type, type_data]{
-        ctx.get_full_sym_info<syms::node_t, ast::import_stmt, types::module>(
+        ctx.get_full_sym_info<syms::node_t, ast::import_stmt, types::module_t>(
             name, table_idx, enclosing_module)};
 
     CHECK(sym.get_kind_opt() == sema::symbol_kind::MODULE);

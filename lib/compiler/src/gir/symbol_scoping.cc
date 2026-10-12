@@ -34,7 +34,7 @@ struct scan_state {
     name_count_map_t&          name_counts;
     symbol_scoping::str_set_t& weak_names;
     const sema::context&       ctx;
-    const mod::module&         entry_mod;
+    const mod::module_t&       entry_mod;
 };
 
 // A function / `let mut` global whose name is fixed by an external contract must never be renamed.
@@ -46,7 +46,7 @@ struct scan_state {
 }
 
 auto scan_decl(scan_state&           st,
-               const mod::module&    owner_mod,
+               const mod::module_t&  owner_mod,
                usize                 owner_table_idx,
                const ast::decl_stmt& decl) -> void {
     const auto& ast{owner_mod.ast};
@@ -96,7 +96,7 @@ auto scan_decl(scan_state&           st,
     }
 }
 
-auto scan_module(scan_state& st, const mod::module& mod) -> void {
+auto scan_module(scan_state& st, const mod::module_t& mod) -> void {
     if (!mod.root_table_idx || mod.is_errored() || mod.is_poisoned()) { return; }
     for (const auto root_id : mod.ast) {
         if (const auto decl{mod.ast.get_as_opt<ast::decl_stmt>(root_id)}) {
@@ -112,9 +112,9 @@ auto symbol_scoping::key_of(usize owner_table_idx, std::string_view name) -> std
     return fmt::format("{}{}{}", owner_table_idx, SEP, name);
 }
 
-auto symbol_scoping::build(const sema::context&                  ctx,
-                           const mod::module&                    entry_mod,
-                           gsl::span<stdx::option<mod::module&>> deps) -> symbol_scoping {
+auto symbol_scoping::build(const sema::context&                    ctx,
+                           const mod::module_t&                    entry_mod,
+                           gsl::span<stdx::option<mod::module_t&>> deps) -> symbol_scoping {
     PROFILE_FUNCTION();
     symbol_scoping   policy;
     name_count_map_t name_counts;

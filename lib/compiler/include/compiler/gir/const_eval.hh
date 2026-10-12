@@ -46,12 +46,12 @@ class const_eval {
     };
 
   public:
-    explicit const_eval(sema::context& ctx, mod::module& module) noexcept
+    explicit const_eval(sema::context& ctx, mod::module_t& module) noexcept
         : ctx_{ctx}, module_{&module} {}
     ~const_eval() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(const_eval);
 
-    auto set_module(mod::module& module) noexcept -> void {
+    auto set_module(mod::module_t& module) noexcept -> void {
         if (module_ != &module) { clear_memo(); }
         module_ = &module;
     }
@@ -73,7 +73,7 @@ class const_eval {
     }
 
     // The module `coerce_dyn` registers a synthesized `__vtable.<N>` global onto
-    auto set_vtable_root_module(mod::module& root) noexcept -> void { vtable_root_ = root; }
+    auto set_vtable_root_module(mod::module_t& root) noexcept -> void { vtable_root_ = root; }
 
     [[nodiscard]] auto scoped_symbol_name(usize owner_table_idx, std::string_view bare) const
         -> std::string {
@@ -161,7 +161,7 @@ class const_eval {
     // The type an unannotated type-alias decl (`const X = T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
     [[nodiscard]] static auto
-    alias_decl_type(const mod::module& mod, ast::node_id node, const ast::decl_stmt& decl)
+    alias_decl_type(const mod::module_t& mod, ast::node_id node, const ast::decl_stmt& decl)
         -> stdx::option<sema::type&>;
 
     [[nodiscard]] auto coerce_dyn(const const_value& val, sema::type& dest_type)
@@ -223,7 +223,7 @@ class const_eval {
 
     // A `comptime` callable (closure or plain function) bound to `name` in scope
     struct bound_callable {
-        gsl::not_null<mod::module*>              module;
+        gsl::not_null<mod::module_t*>            module;
         gsl::not_null<const ast::function_expr*> fn_expr;
         stdx::option<const const_struct&>        captures{};
     };
@@ -405,10 +405,10 @@ class const_eval {
         -> stdx::option<const_value>;
 
     // Resolves a (possibly chained) module operand to the imported module it names
-    auto resolve_module_chain(ast::node_id node) -> stdx::option<mod::module&>;
+    auto resolve_module_chain(ast::node_id node) -> stdx::option<mod::module_t&>;
 
     // Evaluates `member`, looked up in `target_mod`'s root scope, as a cross-module constant.
-    auto eval_module_member(mod::module& target_mod, std::string_view member)
+    auto eval_module_member(mod::module_t& target_mod, std::string_view member)
         -> stdx::option<const_value>;
 
     // Resolves `member` against an already-denoted aggregate type.
@@ -454,8 +454,8 @@ class const_eval {
     usize                                          max_recursion_depth_{256};
     std::vector<usize>                             recursion_limit_stack_;
     sema::context&                                 ctx_;
-    gsl::not_null<mod::module*>                    module_;
-    stdx::option<mod::module&>                     vtable_root_;
+    gsl::not_null<mod::module_t*>                  module_;
+    stdx::option<mod::module_t&>                   vtable_root_;
     stdx::option<sema::type&>                      enclosing_type_;
     stdx::option<const symbol_scoping&>            symbol_scoping_;
     std::vector<call_frame>                        call_stack_;

@@ -35,7 +35,7 @@ analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& er
 }
 
 auto analysis_session::analyze(const std::filesystem::path& entry_path)
-    -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic> {
+    -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
     PROFILE_FUNCTION();
     // A poisoned/errored module is still returned so its diagnostics can be reported
     DISCARD(analyzer_.analyze(entry_path));

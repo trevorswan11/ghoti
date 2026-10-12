@@ -48,7 +48,7 @@ using value = stdx::variant<bool, i64, member, text, diverges>;
 // Technically a preprocessor but not really, run it before symbol collection
 class cfg_pass {
   public:
-    [[nodiscard]] static auto run(mod::module& module, context& ctx) -> bool;
+    [[nodiscard]] static auto run(mod::module_t& module, context& ctx) -> bool;
 
   private:
     using cfg_value = cfgval::value;
@@ -79,7 +79,7 @@ class cfg_pass {
     // Shared by a pass and the passes it starts to read other modules' constants
     struct shared_state {
         // `@cfgValue` constants mid-evaluation, by module and node index
-        ankerl::unordered_dense::set<std::pair<const mod::module*, usize>> in_progress;
+        ankerl::unordered_dense::set<std::pair<const mod::module_t*, usize>> in_progress;
         bool                                                               hit_cycle{false};
 
         // `@cfg` statements searched for imports and the arm each takes; `selected` is false
@@ -88,15 +88,15 @@ class cfg_pass {
             bool           selected{false};
             stdx::opt_size arm;
         };
-        ankerl::unordered_dense::map<std::pair<const mod::module*, usize>, arm_choice> arms;
+        ankerl::unordered_dense::map<std::pair<const mod::module_t*, usize>, arm_choice> arms;
     };
 
   private:
-    cfg_pass(mod::module& module, context& ctx)
+    cfg_pass(mod::module_t& module, context& ctx)
         : module_{module}, ctx_{ctx},
           facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)} {}
 
-    cfg_pass(mod::module& module, context& ctx, shared_state& shared)
+    cfg_pass(mod::module_t& module, context& ctx, shared_state& shared)
         : module_{module}, ctx_{ctx},
           facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)}, shared_{&shared} {}
 
@@ -115,11 +115,11 @@ class cfg_pass {
         -> stdx::option<cfg_value>;
     [[nodiscard]] auto to_operand(const cfg_value& value) -> operand;
     [[nodiscard]] auto find_import(std::string_view name, bool public_only)
-        -> stdx::option<mod::module&>;
+        -> stdx::option<mod::module_t&>;
     [[nodiscard]] auto taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size;
     [[nodiscard]] auto find_import_in(const std::vector<ast::stmt_handle>& items,
                                       std::string_view                     name,
-                                      bool public_only) -> stdx::option<mod::module&>;
+                                      bool public_only) -> stdx::option<mod::module_t&>;
     [[nodiscard]] auto resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value>;
     [[nodiscard]] auto is_compile_error_call(ast::expr_handle h) -> bool;
     [[nodiscard]] auto check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr)
@@ -175,7 +175,7 @@ class cfg_pass {
     auto recurse_into_members(const ast::member_list& members) -> void;
 
   private:
-    mod::module&          module_;
+    mod::module_t&        module_;
     context&              ctx_;
     codegen::target_facts facts_;
     bool                  ok_{true};
