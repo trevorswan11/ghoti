@@ -25,8 +25,7 @@ const Arg = [:0]u8;
 
 // Whether `main` takes nothing or just its arguments
 const takes_no_args_or_argv = fn(comptime params: []type): bool {
-    if comptime (params.len == 0) { return true; }
-    return params.len == 1 and params[0] == []Arg;
+    return params.len == 0 or (params.len == 1 and params[0] == []Arg);
 };
 
 // Runs `main` or the tests, giving the exit code
@@ -37,26 +36,65 @@ const run = fn(args: []Arg): i32 {
         const info = @typeInfo(@TypeOf(@entryMain())).function;
         if comptime (!takes_no_args_or_argv(info.params)) {
             @compileError("'main' must take no parameters or one of type '[][:0]u8'");
-        } else if comptime (info.return_type != void and info.return_type != i32) {
-            @compileError("'main' must return 'void' or 'i32'");
-        } else if comptime (info.params.len == 1) {
-            if comptime (info.return_type == void) {
-                @entryMain()(args);
-                return 0;
-            } else {
-                return @entryMain()(args);
-            }
+        } else if comptime (info.return_type == void) {
+            call_main(args);
+            return 0;
+        } else if comptime (info.return_type == noreturn) {
+            call_main(args);
         } else {
-            _ = args;
-            if comptime (info.return_type == void) {
-                @entryMain()();
-                return 0;
-            } else {
-                return @entryMain()();
-            }
+            return exit_code_of(call_main(args));
         }
     }
 };
+
+@cfg (!testing) {
+    // Calls `main`, passing its arguments if it takes them
+    const call_main = fn(args: []Arg): @typeInfo(@TypeOf(@entryMain())).function.return_type {
+        if comptime (@typeInfo(@TypeOf(@entryMain())).function.params.len == 1) {
+            return @entryMain()(args);
+        } else {
+            _ = args;
+            return @entryMain()();
+        }
+    };
+
+    // The exit code `main`'s result means: its own as a `builtin.ExitCode`, or a `Result`'s
+    // value's (`0` for `void`) or error's
+    const exit_code_of = fn(result: auto): i32 {
+        const Result = @TypeOf(result);
+        if comptime (@implements(Result, builtin.ExitCode)) {
+            return result.to_exit_code();
+        } else if comptime (!@implements(Result, builtin.Unwrappable)) {
+            @compileError(
+                "'main' must return 'void', 'noreturn', a 'builtin.ExitCode', or a 'Result' of them",
+            );
+        } else {
+            if (result) |value| {
+                return value_exit_code(value);
+            } else |err| {
+                if comptime (!@implements(@TypeOf(err), builtin.ExitCode)) {
+                    @compileError("the error 'main' returns must implement 'builtin.ExitCode'");
+                } else {
+                    return err.to_exit_code();
+                }
+            }
+        }
+    };
+
+    // The exit code of the value a `Result` from `main` succeeded with
+    const value_exit_code = fn(value: auto): i32 {
+        const Value = @TypeOf(value);
+        if comptime (Value == void) {
+            return 0;
+        } else if comptime (!@implements(Value, builtin.ExitCode)) {
+            @compileError(
+                "the value 'main' returns in a 'Result' must be 'void' or implement 'builtin.ExitCode'",
+            );
+        } else {
+            return value.to_exit_code();
+        }
+    };
+}
 
 // Whether the program reads its arguments: `main` taking them, or any test runner
 @cfg (testing) {

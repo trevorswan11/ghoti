@@ -277,8 +277,21 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
-    for (usize i{0}; i < pending_builtin_runtime_.size(); ++i) {
-        ensure_builtin_runtime(pending_builtin_runtime_[i]);
+    // Each may reach more of `builtin`, so both queues drain until neither grows
+    for (usize runtime{0}, impls{0};
+         runtime < pending_builtin_runtime_.size() || impls < pending_builtin_impls_.size();) {
+        for (; runtime < pending_builtin_runtime_.size(); ++runtime) {
+            ensure_builtin_runtime(pending_builtin_runtime_[runtime]);
+        }
+        for (; impls < pending_builtin_impls_.size(); ++impls) {
+            auto&      builtin_mod{ctx_.modules.builtin_module()};
+            const auto site{pending_builtin_impls_[impls]};
+            const auto prev_module{std::exchange(active_module_, builtin_mod)};
+            const_eval_.set_module(builtin_mod);
+            emit_top_level_impl(site, builtin_mod.ast.get_as<ast::impl_stmt>(site));
+            active_module_ = prev_module;
+            const_eval_.set_module(*prev_module);
+        }
     }
 
     // Any emission error (including a foreign module's) stops this module before type checking,
@@ -4504,6 +4517,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
         // `w.method(...)` on a `&dyn I`: load the method from `w`'s vtable and call it indirectly
         const auto recv_ty{active_mod().get_sema_type_opt(dot_call->object)};
+        if (recv_ty) { request_builtin_impl_method(*recv_ty, member_ident.name); }
         if (recv_ty && request_builtin_type_methods(*recv_ty)) {
             // `builtin.cpu.has(.x)` is known at compile time; only a runtime receiver needs code
             if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
@@ -6692,6 +6706,28 @@ auto emitter::request_builtin_type_methods(const sema::type& receiver) -> bool {
         return true;
     }
     return true;
+}
+
+auto emitter::request_builtin_impl_method(const sema::type& receiver, std::string_view method)
+    -> void {
+    if (!ctx_.modules.has_builtin_module()) { return; }
+    gsl::not_null<const sema::type*> t{&receiver};
+    if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
+    if (const auto r{t->get_data().as_opt<sema::types::reference>()}) { t = &r->underlying; }
+
+    const auto& builtin_mod{ctx_.modules.builtin_module()};
+    for (const auto& found : ctx_.impls.methods_of(*ctx_.pool.strip_volatile(*t))) {
+        const auto& record{*found.record};
+        if (found.method->name != method || !record.enclosing ||
+            &*record.enclosing != &builtin_mod) {
+            continue;
+        }
+        const auto queued{std::ranges::any_of(pending_builtin_impls_, [&](ast::node_id site) {
+            return site.get_index() == record.site.get_index() &&
+                   site.get_kind() == record.site.get_kind();
+        })};
+        if (!queued) { pending_builtin_impls_.emplace_back(record.site); }
+    }
 }
 
 auto emitter::ensure_builtin_runtime(std::string_view name) -> void {

@@ -260,6 +260,8 @@ class emitter {
     auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
     auto request_builtin_type_methods(const sema::type& receiver) -> bool;
+    // Queues the `builtin` impl block that gives `receiver` its `method`, if one does
+    auto request_builtin_impl_method(const sema::type& receiver, std::string_view method) -> void;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
@@ -644,6 +646,7 @@ class emitter {
     std::vector<bool>                                       open_fn_is_closure_;
     std::vector<sema::type*>                                user_type_stack_;
     std::vector<std::string_view>                           pending_builtin_runtime_;
+    std::vector<ast::node_id>                               pending_builtin_impls_;
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};

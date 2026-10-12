@@ -731,6 +731,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
     - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
     - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
+        - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
+    - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`
 - `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
     - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
 - Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it

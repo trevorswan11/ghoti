@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -79,13 +80,14 @@ struct lowered {
     return UNWRAP_ERR(helpers::emit_llvm_ir_executable(ctx, context, opt_opts)).get_error();
 }
 
-// Analyzes `source` as a program's root, giving the one error reported in it
+// An error reported in a program's root, at the line it points to
 struct root_error {
     usize       line{};
     std::string message;
 };
 
-[[nodiscard]] auto entry_error(std::string_view source) -> root_error {
+// Analyzes `source` as a program's root, giving every error reported in it
+[[nodiscard]] auto entry_errors(std::string_view source) -> std::vector<root_error> {
     const tempdir dir{"entry_error"};
     dir.write("main.gh", source);
 
@@ -98,11 +100,47 @@ struct root_error {
     INFO(errors.str());
     CHECK(analyzed);
 
-    const auto  root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
-    const auto& diags{UNWRAP(root->diagnostics.as_opt<sema::diagnostics>())};
-    REQUIRE(diags.size() == 1);
-    return {UNWRAP(diags[0].to_formattable().location).line, UNWRAP(diags[0].get_message())};
+    std::vector<root_error> found;
+    const auto              root{UNWRAP(manager.try_get_file_module(dir.path / "main.gh"))};
+    if (const auto diags{root->diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& diag : *diags) {
+            found.push_back(
+                {UNWRAP(diag.to_formattable().location).line, UNWRAP(diag.get_message())});
+        }
+    }
+    return found;
 }
+
+// The one error analyzing `source` reports
+[[nodiscard]] auto entry_error(std::string_view source) -> root_error {
+    auto found{entry_errors(source)};
+    REQUIRE(found.size() == 1);
+    return std::move(found.front());
+}
+
+// The 0-based line `source` declares `main` on
+[[nodiscard]] auto main_line(std::string_view source) -> usize {
+    const auto at{source.find("pub const main")};
+    REQUIRE(at != std::string_view::npos);
+    return static_cast<usize>(std::ranges::count(source.substr(0, at), '\n'));
+}
+
+// A `Result` like `std.Result`, which a test program can't import
+constexpr std::string_view result_type{R"(
+const Res = fn(T: type, E: type): type {
+    return union { ok: T, err: E };
+};
+impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {
+    const Output = T;
+    const Residual = E;
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+        return match (self) {
+            .ok => |&mut? v| .{ .continue = v },
+            .err => |e| .{ .break = e },
+        };
+    };
+}
+)"};
 
 } // namespace
 
@@ -166,7 +204,7 @@ TEST_CASE("std/start.gh rejects a main it can't call") {
     const auto [source,
                 message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
         {"pub const main = fn(args: [][:0]u8): bool { return true; };",
-         "'main' must return 'void' or 'i32'"},
+         "'main' must return 'void', 'noreturn', a 'builtin.ExitCode', or a 'Result' of them"},
         {"pub const main = fn(args: []u8): void {};",
          "'main' must take no parameters or one of type '[][:0]u8'"},
         {"pub const main = fn(a: [][:0]u8, b: i32): void {};",
@@ -175,6 +213,66 @@ TEST_CASE("std/start.gh rejects a main it can't call") {
     CAPTURE(source);
     const auto error{entry_error(source)};
     CHECK(error.line == 0);
+    CHECK(error.message.starts_with(message));
+}
+
+TEST_CASE("main returns anything implementing builtin.ExitCode") {
+    const auto [source, code]{GENERATE(Catch::Generators::table<std::string_view, u32>({
+        {"pub const main = fn(): u8 { return 9; };", 9},
+        {"pub const main = fn(): i64 { return 0x1_0000_000A; };", 10},
+        {R"(
+            const Code = enum { ok, bad };
+            impl builtin.ExitCode for Code {
+                pub const to_exit_code = fn(&self): i32 { return if (*self == .bad) 11 else 0; };
+            }
+            pub const main = fn(): Code { return .bad; };
+        )",
+         11},
+    }))};
+    CAPTURE(source);
+    CHECK(helpers::compile_and_run(source) == code);
+}
+
+TEST_CASE("main returns a Result that exits with its value's or its error's code") {
+    // An error whose code is 0 exits 0: the program's own word for what failure means
+    const auto [main_fn, code]{GENERATE(Catch::Generators::table<std::string_view, u32>({
+        {"pub const main = fn(): Res(void, u8) { return .{ .ok = {} }; };", 0},
+        {"pub const main = fn(): Res(void, u8) { return .{ .err = 12 }; };", 12},
+        {"pub const main = fn(): Res(i32, u8) { return .{ .ok = 13 }; };", 13},
+        {"pub const main = fn(): Res(i32, u8) { return .{ .err = 14 }; };", 14},
+        {"pub const main = fn(): Res(void, u8) { return .{ .err = 0 }; };", 0},
+    }))};
+    CAPTURE(main_fn);
+    CHECK(helpers::compile_and_run(fmt::format("{}\n{}", result_type, main_fn)) == code);
+}
+
+TEST_CASE("main may never return") {
+    // Only Windows has an exit call without libc; elsewhere it is enough that it compiles
+    constexpr std::string_view source{R"(
+        extern("kernel32", "ExitProcess") const ExitProcess: extern fn(
+            code: u32,
+        ) callconv(.winapi): noreturn;
+        pub const main = fn(): noreturn { ExitProcess(16); };
+    )"};
+    CHECK(entry_errors(source).empty());
+#if GHOTI_WINDOWS
+    CHECK(helpers::compile_and_run(source) == 16);
+#endif
+}
+
+TEST_CASE("std/start.gh rejects a Result main can't exit with") {
+    const auto [main_fn,
+                message]{GENERATE(Catch::Generators::table<std::string_view, std::string_view>({
+        {"pub const main = fn(): Res(void, bool) { return .{ .ok = {} }; };",
+         "the error 'main' returns must implement 'builtin.ExitCode'"},
+        {"pub const main = fn(): Res(bool, u8) { return .{ .ok = true }; };",
+         "the value 'main' returns in a 'Result' must be 'void' or implement "
+         "'builtin.ExitCode'"},
+    }))};
+    CAPTURE(main_fn);
+    const auto source{fmt::format("{}\n{}", result_type, main_fn)};
+    const auto error{entry_error(source)};
+    CHECK(error.line == main_line(source));
     CHECK(error.message.starts_with(message));
 }
 
