@@ -74,7 +74,7 @@ enum class deprecation_policy : u8 {
 
 // One symbol `@export` defines for a function declaration
 struct function_export {
-    stdx::option<const mod::module&> owner;
+    stdx::option<const mod::module_t&> owner;
     ast::node_id                     fn_node; // the exported function literal
     std::string                      name;
     bool                             weak{false};
@@ -88,7 +88,7 @@ class export_registry {
     auto add(function_export entry) -> void { exports_.emplace_back(std::move(entry)); }
 
     // The exports of one function literal, in the order they were written
-    [[nodiscard]] auto of(const mod::module& owner, ast::node_id fn_node) const
+    [[nodiscard]] auto of(const mod::module_t& owner, ast::node_id fn_node) const
         -> std::vector<const function_export*> {
         std::vector<const function_export*> found;
         for (const auto& entry : exports_) {
@@ -108,7 +108,7 @@ class export_registry {
         return stdx::none;
     }
 
-    // Like `named`, but skipping the exports of `lib/start`, the program's entry code
+    // Like `named`, but skipping the exports of `std/start.gh`, the program's entry code
     [[nodiscard]] auto named_by_program(std::string_view name) const
         -> stdx::option<const function_export&> {
         for (const auto& entry : exports_) {
@@ -122,7 +122,7 @@ class export_registry {
 };
 
 struct test_queue {
-    std::vector<mod::module*> modules;
+    std::vector<mod::module_t*> modules;
     usize                     resolve_depth{0};
 };
 
@@ -143,9 +143,9 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
-    // The root module and `lib/start`, once an executable's entry code is attached
-    stdx::option<mod::module&> entry_root{};
-    stdx::option<mod::module&> start_module{};
+    // The root module and `std/start.gh`, once an executable's entry code is attached
+    stdx::option<mod::module_t&> entry_root{};
+    stdx::option<mod::module_t&> start_module{};
     bool                       runtime_safety{true};
     // Building a test executable, which `@cfg(testing)` reports
     bool               testing{false};
@@ -307,7 +307,7 @@ struct context {
     //
     // Returns the poison type for optional non-lookup usage
     template <ast::IndexableID ID, typename... Args>
-    auto poison_node(mod::module& module, ID id, Args&&... args) -> type& {
+    auto poison_node(mod::module_t& module, ID id, Args&&... args) -> type& {
         if constexpr (sizeof...(args) != 0) { diags.emplace_back(std::forward<Args>(args)...); }
 
         auto& poison{get_poison()};
@@ -323,6 +323,10 @@ struct context {
 
     // A compiler-known target-fact enum by name, from the prelude
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
+
+    // The module whose own `test_runner` a test build calls: the root's, else `std.testing`'s
+    // once the program loads `std`, else `builtin`'s default
+    [[nodiscard]] auto entry_test_runner_module() -> stdx::option<mod::module_t&>;
 
     [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
     // "Type mismatch in store: cannot assign 'from' to 'to'", with the rejection reason if any

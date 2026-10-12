@@ -25,7 +25,7 @@ constexpr u32 MAX_ALIAS_DEPTH{8};
 
 auto names_of(const declaration_ref& declaration, u32 depth) -> stdx::option<names_t>;
 
-auto names_of_literal(const mod::module& owner, const ast::function_expr& fn) -> names_t {
+auto names_of_literal(const mod::module_t& owner, const ast::function_expr& fn) -> names_t {
     names_t names;
     if (fn.self) { names.emplace_back(owner.ast.get_as<ast::identifier_expr>(fn.self->name).name); }
     for (const auto& param : fn.parameters) {
@@ -36,7 +36,7 @@ auto names_of_literal(const mod::module& owner, const ast::function_expr& fn) ->
     return names;
 }
 
-auto names_of_annotation(const mod::module& owner, ast::explicit_type_id type, u32 depth)
+auto names_of_annotation(const mod::module_t& owner, ast::explicit_type_id type, u32 depth)
     -> stdx::option<names_t> {
     if (!type.is_valid()) { return stdx::none; }
     if (const auto fn_type{owner.ast.get_as_opt<ast::explicit_function_type>(type)}) {
@@ -54,7 +54,7 @@ auto names_of_annotation(const mod::module& owner, ast::explicit_type_id type, u
 }
 
 // `const g = f;` / `const g = mod.f;`
-auto names_of_alias_value(const mod::module& owner, ast::expr_handle value, u32 depth)
+auto names_of_alias_value(const mod::module_t& owner, ast::expr_handle value, u32 depth)
     -> stdx::option<names_t> {
     ast::node_id named{value};
     if (const auto dot{owner.ast.get_as_opt<ast::dot_expr>(value)}) { named = dot->member; }

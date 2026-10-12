@@ -59,7 +59,6 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
-#include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -308,14 +307,14 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
 }
 
 // Every function is declared up front so bodies and vtables can reference any of them
-auto llvm_lowering::declare_functions(const gir::module& gir_mod) -> void {
+auto llvm_lowering::declare_functions(const gir::module_t& gir_mod) -> void {
     PROFILE_SCOPE("llvm_lowering: declare functions");
     for (const auto* fn : gir_mod.get_functions()) {
         if (!is_comptime_only(*fn)) { declare_function(*fn); }
     }
 }
 
-auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
+auto llvm_lowering::lower_definitions(const gir::module_t& gir_mod) -> void {
     {
         PROFILE_SCOPE("llvm_lowering: lower vtables");
         lower_dyn_vtables(gir_mod);
@@ -332,7 +331,7 @@ auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
     }
 }
 
-auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
+auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     gir_module_.emplace(gir_mod);
     declare_functions(gir_mod);
@@ -363,7 +362,7 @@ auto llvm_lowering::maybe_emit_mingw_main_stub() -> void {
     llvm::appendToUsed(*llvm_module_, {stub});
 }
 
-auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
+auto llvm_lowering::lower_dyn_vtables(const gir::module_t& gir_mod) -> void {
     PROFILE_FUNCTION();
     auto* ptr_ty{types_.get_ptr_ty()};
     for (const auto& vt : gir_mod.get_ast_module().dyn_vtables) {
@@ -386,7 +385,7 @@ auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
     }
 }
 
-auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_view user_main_name)
+auto llvm_lowering::lower_executable(const gir::module_t& gir_mod, std::string_view user_main_name)
     -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     is_executable_  = true;
@@ -414,8 +413,8 @@ auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
     return llvm::ConstantInt::get(types_.get_usize_ty(), value);
 }
 
-auto llvm_lowering::lower_test_executable(const gir::module& gir_mod,
-                                          std::string_view   user_main_name)
+auto llvm_lowering::lower_test_executable(const gir::module_t& gir_mod,
+                                          std::string_view     user_main_name)
     -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     is_executable_  = true;

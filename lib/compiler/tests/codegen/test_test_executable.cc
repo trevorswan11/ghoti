@@ -64,7 +64,7 @@ TEST_CASE("Test with @src compiles and executes properly") {
     )") == 0);
 }
 
-TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
+TEST_CASE("The program's own `test_runner` runs instead of the default") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "ignored test" {
             @require(false);

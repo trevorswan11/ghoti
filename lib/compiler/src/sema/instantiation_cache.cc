@@ -15,7 +15,7 @@
 namespace ghoti::sema {
 
 auto body_typing_snapshot::diff_into(context&                            ctx,
-                                     mod::module&                        m,
+                                     mod::module_t&                      m,
                                      body_type_diff&                     out,
                                      stdx::option<const body_write_log&> write_log) const -> void {
     std::vector<std::pair<stdx::option<type&>*, type*>> folded;
@@ -117,7 +117,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
     m.match_arm_results   = matches;
 }
 
-auto body_typing_snapshot::restore_to(mod::module& m) const -> void {
+auto body_typing_snapshot::restore_to(mod::module_t& m) const -> void {
     m.sema_side_tables.node_types.values           = nodes;
     m.sema_side_tables.explicit_types.values       = types;
     m.if_comptime_results                          = ifs;

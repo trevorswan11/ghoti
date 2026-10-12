@@ -30,7 +30,7 @@ namespace ghoti::sema {
 // An AST walker that performs 0 type checking
 class symbol_collector {
   public:
-    static auto collect_symbols(mod::module& module, context& ctx) -> mod::module_state;
+    static auto collect_symbols(mod::module_t& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto collect(ID id) -> void {
         // An untyped parameter pack (`rest...`) has no type node at all; nothing to collect.
@@ -105,7 +105,8 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
 
     [[nodiscard]] auto collect_import_payload(const ast::import_stmt& import_stmt)
-        -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>>;
+        -> std::pair<std::string_view,
+                     stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>>;
 
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
@@ -170,13 +171,13 @@ class symbol_collector {
         return ctx_.try_result(ctx_.registry.insert_into(table_idx_, collecting_, name, node));
     }
 
-    symbol_collector(mod::module& collecting, context& ctx)
+    symbol_collector(mod::module_t& collecting, context& ctx)
         : collecting_{collecting}, table_idx_{*collecting.root_table_idx}, ctx_{ctx} {
         table_stack_.push(table_idx_);
     }
 
   private:
-    mod::module&        collecting_;
+    mod::module_t&        collecting_;
     usize               table_idx_;
     symbol_table_stack  table_stack_;
     context&            ctx_;

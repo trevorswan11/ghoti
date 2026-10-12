@@ -51,11 +51,11 @@ namespace {
 
 } // namespace
 
-type_checker::type_checker(gir::module& gir_mod, context& ctx) noexcept
+type_checker::type_checker(gir::module_t& gir_mod, context& ctx) noexcept
     : gir_mod_{gir_mod}, ctx_{ctx},
       target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
 
-auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, context& ctx)
+auto type_checker::check_types(gir::module_t& gir_mod, mod::module_t& ast_mod, context& ctx)
     -> mod::module_state {
     PROFILE_FUNCTION();
     type_checker checker{gir_mod, ctx};

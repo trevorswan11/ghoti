@@ -190,8 +190,8 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         stdx::option<ast::identifier_handle> name;
         if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}) {
             name.emplace(decl->name);
-        } else if (const auto import{ast.get_as_opt<ast::import_stmt>(node)}) {
-            if (import->alias) { name.emplace(*import->alias); }
+        } else if (const auto import_node{ast.get_as_opt<ast::import_stmt>(node)}) {
+            if (import_node->alias) { name.emplace(*import_node->alias); }
         }
         if (name) {
             ast.attach_doc({ast.location_of(*name), ast.end_location_of(*name)},

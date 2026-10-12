@@ -222,7 +222,7 @@ using param_bound_map =
 
 // The slice written through when an assignment copies elements into one (`s[lo..hi] = src` or
 // `*s = src`), rather than storing to a single place
-[[nodiscard]] auto slice_copy_destination(const mod::module& m, ast::node_id lhs)
+[[nodiscard]] auto slice_copy_destination(const mod::module_t& m, ast::node_id lhs)
     -> stdx::option<ast::expr_handle>;
 
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
@@ -291,7 +291,7 @@ struct enum_t {
     bool                                         non_exhaustive;
     type&                                        underlying;
     gsl::span<type*>                             members;
-    mod::module&                                 enclosing;
+    mod::module_t&                               enclosing;
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
@@ -306,7 +306,7 @@ struct union_t {
     gsl::span<type*>                        fields;
     gsl::span<const ast::union_expr::field> ast_fields;
     gsl::span<type*>                        members;
-    mod::module&                            enclosing;
+    mod::module_t&                          enclosing;
     bool                                    is_untagged{false};
     bool                                    is_c_abi{false};
     bool                                    is_packed{false};
@@ -333,7 +333,7 @@ struct struct_t {
     gsl::span<type*>                         fields;
     gsl::span<const ast::struct_expr::field> ast_fields;
     gsl::span<type*>                         members;
-    mod::module&                             enclosing;
+    mod::module_t&                           enclosing;
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
@@ -384,7 +384,7 @@ struct interface_t {
     gsl::span<const ast::interface_expr::method>      ast_methods;
     gsl::span<const ast::interface_expr::assoc_type>  ast_assoc_types;
     gsl::span<const ast::interface_expr::assoc_const> ast_assoc_consts;
-    mod::module&                                      enclosing;
+    mod::module_t&                                    enclosing;
 
     [[nodiscard]] auto method_decl(usize i) const -> const ast::interface_expr::method& {
         return ast_methods[method_src_indices[i]];
@@ -416,8 +416,8 @@ struct closure_t {
     type&                      impl_signature; // `signature` plus a synthetic `&mut self` param
 };
 
-struct module {
-    mod::module& imported;
+struct module_t {
+    mod::module_t& imported;
 };
 
 constexpr usize MAX_BUILTIN_PARAMS{7}; // `@cmpxchgWeak`/`@cmpxchgStrong` need the most, at 7
@@ -439,7 +439,7 @@ struct deferred_call {
 struct deferred_array {
     const ast::explicit_array_type& array;
     type&                           underlying;
-    mod::module&                    enclosing; // owns `array`'s dimension node
+    mod::module_t&                  enclosing; // owns `array`'s dimension node
 };
 
 enum class mutability_modifiers : u8 {
@@ -577,7 +577,7 @@ class type {
                                  types::struct_t,
                                  types::interface_t,
                                  types::dyn_t,
-                                 types::module,
+                                 types::module_t,
                                  types::function,
                                  types::closure_t,
                                  types::builtin_function,

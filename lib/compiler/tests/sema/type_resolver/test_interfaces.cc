@@ -4,6 +4,7 @@
 
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 #include <stdx/types.hh>
 
@@ -432,6 +433,35 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
         for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
     }
     CHECK(codes.empty());
+}
+
+TEST_CASE("a parameterized impl may target a ctor through its aliases") {
+    const auto target{
+        GENERATE(Catch::Generators::as<std::string_view>{}, "alias.Bag", "alias.Again")};
+    CAPTURE(target);
+    helpers::resolve_and_check(
+        fmt::format(R"(
+        import "alias.gh" as alias;
+        const Named = interface {{ pub const label = fn(&self): i32; }};
+        impl(T: type) Named for {}(T) {{
+            pub const label = fn(&self): i32 {{ return self.v; }};
+        }}
+        const use = fn(): i32 {{
+            let mut b: alias.Bag(i32) = .{{ .v = 7 }};
+            return b.label();
+        }};
+)",
+                    target),
+        helpers::make_vector<helpers::mock_file>(
+            helpers::mock_file{
+                .path   = "bag.gh",
+                .source = "pub const Bag = fn(T: type): type { return struct { v: i32 }; };",
+            },
+            helpers::mock_file{
+                .path = "alias.gh",
+                .source =
+                    "import \"bag.gh\" as bag;\npub const Bag = bag.Bag;\npub const Again = Bag;",
+            }));
 }
 
 TEST_CASE("`&dyn I` is a legal parameter type") {

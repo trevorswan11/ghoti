@@ -94,7 +94,7 @@ struct atom_enum_info {
 
 } // namespace
 
-auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
+auto cfg_pass::run(mod::module_t& module, context& ctx) -> bool {
     PROFILE_FUNCTION();
     cfg_pass pass{module, ctx};
     pass.gather_cfg_values(module.ast.get_roots());
@@ -187,7 +187,8 @@ auto cfg_pass::to_operand(const cfg_value& value) -> operand {
 }
 
 // The module a module-scope import binds to `name`, looking through `@cfg` arms that are taken
-auto cfg_pass::find_import(std::string_view name, bool public_only) -> stdx::option<mod::module&> {
+auto cfg_pass::find_import(std::string_view name, bool public_only)
+    -> stdx::option<mod::module_t&> {
     std::vector<ast::stmt_handle> roots;
     for (const auto id : module_.ast.get_roots()) { roots.emplace_back(ast::stmt_handle{id}); }
     return find_import_in(roots, name, public_only);
@@ -196,7 +197,7 @@ auto cfg_pass::find_import(std::string_view name, bool public_only) -> stdx::opt
 // A predicate can't use an import its own gate guards, so a statement still being selected is
 // skipped
 auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size {
-    const std::pair key{static_cast<const mod::module*>(&module_), id.get_index()};
+    const std::pair key{static_cast<const mod::module_t*>(&module_), id.get_index()};
     if (const auto seen{shared_->arms.find(key)}; seen != shared_->arms.end()) {
         return seen->second.selected ? seen->second.arm : stdx::opt_size{};
     }
@@ -211,7 +212,7 @@ auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt
 
 auto cfg_pass::find_import_in(const std::vector<ast::stmt_handle>& items,
                               std::string_view                     name,
-                              bool public_only) -> stdx::option<mod::module&> {
+                              bool public_only) -> stdx::option<mod::module_t&> {
     for (const auto item : items) {
         const ast::node_id id{item};
         if (const auto cfg{module_.ast.get_as_opt<ast::cfg_stmt>(id)}) {
@@ -222,18 +223,18 @@ auto cfg_pass::find_import_in(const std::vector<ast::stmt_handle>& items,
             }
             continue;
         }
-        const auto import{module_.ast.get_as_opt<ast::import_stmt>(id)};
-        if (!import) { continue; }
-        const auto named{import->get_name(module_.ast)};
+        const auto import_node{module_.ast.get_as_opt<ast::import_stmt>(id)};
+        if (!import_node) { continue; }
+        const auto named{import_node->get_name(module_.ast)};
         if (!named || named->second != name) { continue; }
         if (public_only && !ast::import_stmt::is_public(id)) { return stdx::none; }
 
         const auto loaded{[&] {
-            if (const auto path{module_.ast.get_as_opt<ast::string_expr>(import->payload)}) {
+            if (const auto path{module_.ast.get_as_opt<ast::string_expr>(import_node->payload)}) {
                 return ctx_.modules.try_get_file_module(path->value, module_.parent_path);
             }
             return ctx_.modules.try_get_library_module(
-                module_.ast.get_as<ast::identifier_expr>(import->payload).name);
+                module_.ast.get_as<ast::identifier_expr>(import_node->payload).name);
         }()};
         if (!loaded || (*loaded)->is_errored()) { return stdx::none; }
         return **loaded;
@@ -264,8 +265,8 @@ auto cfg_pass::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value
     const auto spelled{fmt::format("{}", fmt::join(path, "."))};
 
     // Each step reads the next module with a throwaway pass, whose errors that module reports
-    context      scratch_ctx{ctx_};
-    mod::module* current{&module_};
+    context        scratch_ctx{ctx_};
+    mod::module_t* current{&module_};
     for (usize i{0}; i + 1 < path.size(); ++i) {
         const bool is_foreign{current != &module_};
         cfg_pass   step{*current, scratch_ctx, *shared_};

@@ -98,6 +98,56 @@ pub const Rewrappable = interface {
     pub const from_residual = fn(r: From): @This();
 };
 
+/// What a value means as the process's exit code, so `main` can return it: any type implementing
+/// this, or a `Result(S, E)` whose `E` implements it and whose `S` is `void` or implements it.
+pub const ExitCode = interface {
+    pub const to_exit_code = fn(&self): i32;
+};
+
+impl ExitCode for i8 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i16 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i32 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i64 {
+    pub const to_exit_code = fn(&self): i32 { return @truncate(i32, *self); };
+}
+
+impl ExitCode for isize {
+    pub const to_exit_code = fn(&self): i32 {
+        return if comptime (@bitSizeOf(isize) == 32) @bitCast(i32, *self) else @truncate(i32, *self);
+    };
+}
+
+impl ExitCode for u8 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for u16 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for u32 {
+    pub const to_exit_code = fn(&self): i32 { return @bitCast(i32, *self); };
+}
+
+impl ExitCode for u64 {
+    pub const to_exit_code = fn(&self): i32 { return @truncate(i32, *self); };
+}
+
+impl ExitCode for usize {
+    pub const to_exit_code = fn(&self): i32 {
+        return if comptime (@bitSizeOf(usize) == 32) @bitCast(i32, *self) else @truncate(i32, *self);
+    };
+}
+
 extern const __ghoti_test_take_skipped: fn(): bool;
 
 pub weak const test_runner = fn(_: [][:0]u8, tests: []Test): i32 {

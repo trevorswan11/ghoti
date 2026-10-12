@@ -727,12 +727,16 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@call(modifier, f, args...)` calls `f` with `args` as `f(args...)` does, but how `builtin.CallModifier` asks: `.auto`, `.never_tail`, `.never_inline`, `.always_tail`, `.always_inline`, or `.compile_time`
     - Arguments are a variadic tail rather than a tuple, so `@call(.never_inline, f, rest...)` forwards a pack
     - A modifier that can't be honored is an error: an inline modifier against the function's own `@[inline(...)]`, `.always_inline` on an `extern`, `@[naked]`, or indirect call, `.always_tail` when the call isn't returned directly (a `defer` would run after it) or the signatures differ, and a `.compile_time` call that doesn't fold
-- Program entry is ghoti code: `lib/start/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
+- Program entry is ghoti code: `lib/std/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
     - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
     - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
-    - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - `@entryMain()` (the program's `main`), `@entryTestRunner()` (the `test_runner` a test build calls), and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - A test build calls the root module's own `test_runner`, else `std.testing`'s when the program uses `std`, else `builtin`'s, rather than relying on which one wins at link time; its signature is checked by the entry code and reported at the `test_runner`
+    - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
+        - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
+    - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`
 - `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
-    - `std` and `lib/start` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
+    - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
 - Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it
 - compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
 - `f80` works on every target, not only x86
@@ -769,6 +773,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
 - Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
+- Fixed: a parameterized `impl` whose target names its constructor through an alias (`impl(T: type) I for alias.Bag(T)` where `alias.gh` has `pub const Bag = bag.Bag;`) never applied, so the type had none of its methods
+- Fixed: the right side of a compile-time `false and` / `true or` was still checked, so `params.len == 0 or params[0] == T` failed for an empty `params` with an out-of-bounds error
+- Fixed: a statement calling a `noreturn` function (`exit(1);`) didn't end its path, so a function returning a value that ended with one was rejected for not returning on all code paths
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

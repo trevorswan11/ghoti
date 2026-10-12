@@ -15,14 +15,14 @@
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
 
 // Where a name was declared, in the declaring module's own AST: a `const`/`let`/`let mut`
 // declaration, or the type annotation of a parameter or aggregate field
 struct declaration_ref {
-    stdx::option<const mod::module&>    owner;
+    stdx::option<const mod::module_t&>  owner;
     stdx::option<ast::node_id>          decl;
     stdx::option<ast::explicit_type_id> annotation;
 };

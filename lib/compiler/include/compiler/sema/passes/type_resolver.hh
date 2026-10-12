@@ -77,7 +77,7 @@ class type_resolver {
     };
 
   public:
-    static auto resolve_types(mod::module& module, context& ctx) -> mod::module_state;
+    static auto resolve_types(mod::module_t& module, context& ctx) -> mod::module_state;
     // Resolves every queued `test` block, once no module is mid-resolution
     static auto resolve_pending_tests(context& ctx) -> void;
 
@@ -101,7 +101,7 @@ class type_resolver {
     // Re-resolves a parameterized impl's method bodies for one monomorphization, binding its
     // impl params to concrete types / folded `comptime` values, and diffs the result into `out`.
     auto
-    resolve_param_impl_bodies(mod::module&                                              impl_mod,
+    resolve_param_impl_bodies(mod::module_t&                                            impl_mod,
                               const ast::impl_stmt&                                     impl,
                               usize                                                     body_scope,
                               type&                                                     concrete,
@@ -147,7 +147,7 @@ class type_resolver {
     // materialized concrete target `concrete`, remapping its template typing and recording one
     // `impl_record` + emit entries per method
     auto instantiate_impls_for(type&                  concrete,
-                               const mod::module&     base_mod,
+                               const mod::module_t&   base_mod,
                                ast::node_id           base_ctor_fn,
                                gsl::span<type* const> ctor_args,
                                gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
@@ -166,6 +166,9 @@ class type_resolver {
 
     // Whether an operand names a type, holds a value, or cannot tell before instantiation
     [[nodiscard]] auto operand_nature(ast::expr_handle expr) const -> operand_nature_t;
+    // Whether `lhs` folds to the value that settles `op` (`false and`, `true or`) by itself
+    [[nodiscard]] auto lhs_decides_logical_op(syntax::token_type_t op, ast::expr_handle lhs) const
+        -> bool;
     [[nodiscard]] auto call_arg_denotes_type(const ast::call_expr::argument& arg) const -> bool;
     template <ast::IndexableID ID>
     [[nodiscard]] auto untyped_aggregate_literal(ID id, std::string_view kind) -> type&;
@@ -433,6 +436,8 @@ class type_resolver {
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
     [[nodiscard]] auto fold_target_features(const ast::attribute& item) -> std::vector<std::string>;
     [[nodiscard]] auto entry_main_type() const -> stdx::option<type&>;
+    // The type of the `test_runner` a test build calls (see `context::entry_test_runner_module`)
+    [[nodiscard]] auto entry_test_runner_type() const -> stdx::option<type&>;
 
     // What the block holding the statement being resolved is the body of, if anything hintable
     [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;
@@ -446,10 +451,10 @@ class type_resolver {
     auto check_deprecation_message(const ast::attribute& item) -> void;
     // Warns (or errors, per `--deprecated`) when `id` names a `@[deprecated]` declaration or field
     template <ast::IndexableID ID>
-    auto report_deprecated_use(ID id, const mod::module& owner, const symbol& sym) -> void;
+    auto report_deprecated_use(ID id, const mod::module_t& owner, const symbol& sym) -> void;
     // A `@[testing]` function may only be called directly, from a test or another one
     template <ast::IndexableID ID>
-    auto check_testing_use(ID id, const mod::module& owner, const symbol& sym) -> void;
+    auto check_testing_use(ID id, const mod::module_t& owner, const symbol& sym) -> void;
     [[nodiscard]] auto in_testing_context() const -> bool;
     // A positive power-of-two byte alignment, reporting anything else
     [[nodiscard]] auto fold_alignment(ast::expr_handle arg) -> stdx::option<u64>;
@@ -481,7 +486,7 @@ class type_resolver {
         -> stdx::option<bool>;
     // Whether `discardable` in `attributes` holds, reading a conditional one's folded verdict from
     // the call's own instantiation when it targets a generic
-    [[nodiscard]] auto discardable_holds(const mod::module&                       home,
+    [[nodiscard]] auto discardable_holds(const mod::module_t&                     home,
                                          ast::node_id                             owner,
                                          const stdx::option<ast::attribute_list>& attributes,
                                          ast::node_id call_id) const -> stdx::option<bool>;
@@ -536,10 +541,10 @@ class type_resolver {
 
     // Records, for the reference node `ref_id`, the symbol-table index `owner_table_idx` that
     // owns `sym`, iff `sym` names a top-level function or `let mut` global
-    auto record_symbol_owner(ast::node_id       ref_id,
-                             usize              owner_table_idx,
-                             const mod::module& target_mod,
-                             const symbol&      sym) -> void;
+    auto record_symbol_owner(ast::node_id         ref_id,
+                             usize                owner_table_idx,
+                             const mod::module_t& target_mod,
+                             const symbol&        sym) -> void;
 
     // Unwraps pointer/reference wrappers, then resolves `member` in the aggregate's
     // own symbol table.
@@ -660,7 +665,7 @@ class type_resolver {
 
     // Records which declaration `id` names, for LSP features like hover
     template <ast::IndexableID ID>
-    auto record_declaration(ID id, const mod::module& owner, const symbol& sym) -> void;
+    auto record_declaration(ID id, const mod::module_t& owner, const symbol& sym) -> void;
     // Same, for a bare name found in `table_idx` of the current scope chain
     template <ast::IndexableID ID>
     auto record_scoped_declaration(ID id, usize table_idx, const symbol& sym) -> void;
@@ -775,14 +780,14 @@ class type_resolver {
                                               const type&               want,
                                               const type&               have) -> bool;
 
-    type_resolver(mod::module& resolving, context& ctx)
+    type_resolver(mod::module_t& resolving, context& ctx)
         : resolving_{resolving}, table_idx_{*resolving.root_table_idx}, ctx_{ctx} {
         VERIFY(ctx.prelude_index, "TypeResolver must be used after prelude-injection");
         table_stack_.push(*ctx_.prelude_index);
         table_stack_.push(table_idx_);
     }
 
-    type_resolver(mod::module&       resolving,
+    type_resolver(mod::module_t&     resolving,
                   context&           ctx,
                   usize              table_idx,
                   symbol_table_stack table_stack)
@@ -803,7 +808,7 @@ class type_resolver {
     [[nodiscard]] auto target_supports_callconv(ast::calling_convention conv) const -> bool;
 
   private:
-    mod::module&              resolving_;
+    mod::module_t&            resolving_;
     usize                     table_idx_;
     symbol_table_stack        table_stack_;
     structural_type_stack     user_type_stack_;

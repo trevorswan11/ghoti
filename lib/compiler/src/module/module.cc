@@ -35,7 +35,7 @@ namespace ghoti::mod {
 
 auto format_module_diagnostic(std::ostream&                         os, // NOLINT
                               const detail::formattable_diagnostic& diag,
-                              stdx::option<const mod::module&>      module,
+                              stdx::option<const mod::module_t&>    module,
                               stdx::option<bool>                    in_terminal) -> std::ostream& {
     const auto tty{in_terminal.value_or(stdx::is_tty())};
 
@@ -53,7 +53,7 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     return os;
 }
 
-auto module::print_diagnostics(std::ostream& os) const -> void {
+auto module_t::print_diagnostics(std::ostream& os) const -> void {
     PROFILE_FUNCTION();
     if (is_ok()) { return; }
     diagnostics.visit(
@@ -74,7 +74,7 @@ auto module::print_diagnostics(std::ostream& os) const -> void {
 
 auto module_manager::try_get_file_module(const std::filesystem::path& path,
                                          const std::filesystem::path& parent_path)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     PROFILE_FUNCTION();
     ASSERT((parent_path.empty() || parent_path.is_absolute()) &&
            "Parent path must be absolute or empty");
@@ -86,13 +86,21 @@ auto module_manager::try_get_file_module(const std::filesystem::path& path,
 }
 
 auto module_manager::try_get_library_module(std::string_view name)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     PROFILE_FUNCTION();
     auto it{module_lut_.find(name)};
     if (it == module_lut_.end()) {
         return make_mod_err(fmt::format("Unknown module '{}'", name), error::MODULE_DOES_NOT_EXIST);
     }
     return try_get(it->second);
+}
+
+auto module_manager::find_loaded_library_module(std::string_view name) -> stdx::option<module_t&> {
+    const auto path{module_lut_.find(name)};
+    if (path == module_lut_.end()) { return stdx::none; }
+    const auto loaded{modules_.find(path->second)};
+    if (loaded == modules_.end()) { return stdx::none; }
+    return *loaded->second;
 }
 
 auto module_manager::add_library_module(std::string_view name, const std::filesystem::path& path)
@@ -115,7 +123,7 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
     return {};
 }
 
-auto module::print_warnings(std::ostream& os) const -> void {
+auto module_t::print_warnings(std::ostream& os) const -> void {
     for (const auto& warning : warnings) {
         format_module_diagnostic(
             os, warning.to_formattable(), *this, warnings.get_terminal_status())
@@ -152,13 +160,13 @@ auto module_manager::any_errored() const noexcept -> bool {
 }
 
 auto module_manager::try_get(const std::filesystem::path& path)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     // Prevent re-parsing by checking the map, safe as pointers are stable
     PROFILE_FUNCTION();
     if (auto it{modules_.find(path)}; it != modules_.end()) { return it->second.get(); }
     auto source{TRY(loader_.load(path))};
 
-    auto mod{stdx::make_box<module>(path, path.parent_path(), source_file{std::move(source)})};
+    auto mod{stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)})};
     syntax::parser p{mod->source};
     auto           diagnostics{p.consume(mod->ast, *arena_)};
 
@@ -174,13 +182,13 @@ auto module_manager::try_get(const std::filesystem::path& path)
     return ptr;
 }
 
-auto module_manager::get_or_create_builtin_module(std::string_view source) -> module& {
+auto module_manager::get_or_create_builtin_module(std::string_view source) -> module_t& {
     PROFILE_FUNCTION();
     if (builtin_module_) { return *builtin_module_; }
 
-    builtin_module_ = stdx::make_box<module>(std::filesystem::path{"<builtin>"},
-                                             std::filesystem::path{},
-                                             source_file{std::string{source}});
+    builtin_module_ = stdx::make_box<module_t>(std::filesystem::path{"<builtin>"},
+                                               std::filesystem::path{},
+                                               source_file{std::string{source}});
     syntax::parser p{builtin_module_->source};
     const auto     diagnostics{p.consume(builtin_module_->ast, *arena_)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
@@ -198,12 +206,12 @@ auto module_manager::is_start_path(const std::filesystem::path& path) -> bool {
 }
 
 auto module_manager::get_or_create_start_module(const std::filesystem::path& path,
-                                                std::string_view             source) -> module& {
+                                                std::string_view             source) -> module_t& {
     PROFILE_FUNCTION();
     if (start_module_) { return *start_module_; }
 
     start_module_ =
-        stdx::make_box<module>(path, path.parent_path(), source_file{std::string{source}});
+        stdx::make_box<module_t>(path, path.parent_path(), source_file{std::string{source}});
     syntax::parser p{start_module_->source};
     auto           diagnostics{p.consume(start_module_->ast, *arena_)};
 
@@ -218,27 +226,27 @@ auto module_manager::get_or_create_start_module(const std::filesystem::path& pat
     return *start_module_;
 }
 
-auto module::get_overlay_node_type(usize idx) const noexcept
+auto module_t::get_overlay_node_type(usize idx) const noexcept
     -> stdx::option<stdx::option<sema::type&>> {
     if (!active_body_diff) { return stdx::none; }
     return active_body_diff->find_node_type(idx);
 }
 
-auto module::get_overlay_explicit_type(usize idx) const noexcept
+auto module_t::get_overlay_explicit_type(usize idx) const noexcept
     -> stdx::option<stdx::option<sema::type&>> {
     if (!active_body_diff) { return stdx::none; }
     return active_body_diff->find_explicit_type(idx);
 }
 
-auto module::record_node_write(usize idx) noexcept -> void {
+auto module_t::record_node_write(usize idx) noexcept -> void {
     if (active_write_log) { active_write_log->node_idxs.emplace_back(idx); }
 }
 
-auto module::record_explicit_write(usize idx) noexcept -> void {
+auto module_t::record_explicit_write(usize idx) noexcept -> void {
     if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
 }
 
-auto module::attributes_of(ast::node_id id) const noexcept
+auto module_t::attributes_of(ast::node_id id) const noexcept
     -> stdx::option<const sema::resolved_attributes&> {
     if (active_body_diff) {
         if (const auto resolved{active_body_diff->find_attributes(id.get_index())}) {
@@ -250,19 +258,19 @@ auto module::attributes_of(ast::node_id id) const noexcept
     return it->second;
 }
 
-auto module::set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved)
+auto module_t::set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved)
     -> void {
     node_attributes.insert_or_assign(id.get_index(), resolved);
     if (active_write_log) { active_write_log->attribute_idxs.emplace_back(id.get_index()); }
 }
 
-auto module::get_overlay_call_target(usize idx) const noexcept
+auto module_t::get_overlay_call_target(usize idx) const noexcept
     -> stdx::option<stdx::option<std::string_view>> {
     if (!active_body_diff) { return stdx::none; }
     return active_body_diff->find_call_target(idx);
 }
 
-auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
+auto module_t::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
     if (active_body_diff) {
         if (const auto br{active_body_diff->find_if_branch(node_idx)}) { return br; }
     }
@@ -272,7 +280,7 @@ auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if
     return stdx::none;
 }
 
-auto module::get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size {
+auto module_t::get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size {
     if (active_body_diff) {
         if (const auto arm{active_body_diff->find_match_arm(node_idx)}) { return arm; }
     }

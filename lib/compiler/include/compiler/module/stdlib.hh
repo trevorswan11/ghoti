@@ -15,7 +15,7 @@ namespace ghoti::mod {
 [[nodiscard]] auto find_lib_path(const std::filesystem::path& relative)
     -> stdx::option<std::filesystem::path>;
 
-// The program entry code `lib/start/start.gh`: GHOTI_START, else found like `find_lib_path`
+// The program entry code `lib/std/start.gh`: GHOTI_START, else found like `find_lib_path`
 [[nodiscard]] auto find_start() -> stdx::option<std::filesystem::path>;
 
 } // namespace ghoti::mod

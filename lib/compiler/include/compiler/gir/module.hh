@@ -49,14 +49,14 @@ struct extern_import {
     bool        data{false};
 };
 
-class module {
+class module_t {
   public:
-    explicit module(const mod::module& ast_mod, ghoti::arena& arena) noexcept
+    explicit module_t(const mod::module_t& ast_mod, ghoti::arena& arena) noexcept
         : ast_module_{ast_mod}, arena_{arena} {}
-    ~module() = default;
-    MAKE_MOVE_CONSTRUCTABLE_ONLY(module);
+    ~module_t() = default;
+    MAKE_MOVE_CONSTRUCTABLE_ONLY(module_t);
 
-    MAKE_GETTER(ast_module, const mod::module&);
+    MAKE_GETTER(ast_module, const mod::module_t&);
     MAKE_DEDUCING_GETTER(types);
     MAKE_DEDUCING_GETTER(globals);
     MAKE_DEDUCING_GETTER(functions);
@@ -113,7 +113,7 @@ class module {
     [[nodiscard]] auto to_string() const -> std::string;
 
   private:
-    const mod::module&        ast_module_;
+    const mod::module_t&      ast_module_;
     ghoti::arena&             arena_;
     std::vector<type_decl*>   types_;
     std::vector<global_decl*> globals_;

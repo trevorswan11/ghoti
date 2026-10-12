@@ -38,7 +38,7 @@ struct attribute_context {
 
 // Keyword, top-level-declaration, and local-scope `CompletionItem[]` candidates for `module`, or
 // attribute names and arguments inside an `@[...]` list
-[[nodiscard]] auto completion_items(const mod::module& module, source_location target)
+[[nodiscard]] auto completion_items(const mod::module_t& module, source_location target)
     -> nlohmann::json;
 
 } // namespace ghoti::lsp

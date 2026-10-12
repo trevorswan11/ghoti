@@ -235,7 +235,7 @@ class generic_instantiation_cache {
     type_ctor_binding_map                                        type_ctor_bindings_;
 };
 
-// Every `set_sema_type`/`set_sema_type_if` write `mod::module` makes while this is installed as
+// Every `set_sema_type`/`set_sema_type_if` write `mod::module_t` makes while this is installed as
 // its `active_write_log`
 struct body_write_log {
     std::vector<usize> node_idxs;
@@ -246,7 +246,7 @@ struct body_write_log {
 // Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a
 // replayable `body_type_diff`
 struct body_typing_snapshot {
-    explicit body_typing_snapshot(const mod::module& m)
+    explicit body_typing_snapshot(const mod::module_t& m)
         : nodes{m.sema_side_tables.node_types.values},
           types{m.sema_side_tables.explicit_types.values}, ifs{m.if_comptime_results},
           matches{m.match_arm_results}, calls{m.sema_side_tables.generic_call_targets.values},
@@ -255,12 +255,12 @@ struct body_typing_snapshot {
     // Folds every still-deferred `[n]T` under the active `comptime` frame, then records each
     // side-table entry the resolution changed into `out`.
     auto diff_into(context&                            ctx,
-                   mod::module&                        m,
+                   mod::module_t&                      m,
                    body_type_diff&                     out,
                    stdx::option<const body_write_log&> write_log = stdx::none) const -> void;
 
     // Restores `m`'s side tables and branch cache back to the captured state.
-    auto restore_to(mod::module& m) const -> void;
+    auto restore_to(mod::module_t& m) const -> void;
 
     std::vector<stdx::option<type&>>                         nodes;
     std::vector<stdx::option<type&>>                         types;

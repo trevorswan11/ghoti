@@ -17,7 +17,7 @@ namespace {
 using names_t = std::vector<std::string_view>;
 
 // The parameter names hover would show for the first `name` identifier with a known declaration
-auto hover_names(const mod::module& module, std::string_view name) -> stdx::option<names_t> {
+auto hover_names(const mod::module_t& module, std::string_view name) -> stdx::option<names_t> {
     for (const auto id : module.ast.nodes_of<ast::identifier_expr>()) {
         if (module.ast.get_as<ast::identifier_expr>(id).name != name) { continue; }
         if (const auto declaration{module.get_identifier_declaration(id)}) {

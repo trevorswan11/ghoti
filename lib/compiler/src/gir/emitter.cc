@@ -86,14 +86,14 @@ namespace {
 
 } // namespace
 
-auto emitter::emit(bool include_builtin_test_runtime) -> module {
+auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
     PROFILE_FUNCTION();
     {
         PROFILE_SCOPE("emitter: resolve deferred types");
         const_eval_.resolve_all_deferred_types();
     }
 
-    const auto emit_top_level_stmt = [&](mod::module& module, ast::node_id id, bool emit_tests) {
+    const auto emit_top_level_stmt = [&](mod::module_t& module, ast::node_id id, bool emit_tests) {
         return module.ast[id].visit(
             [&](const auto&) {},
             [&](const ast::decl_stmt& decl) { emit_top_level_decl(id, decl); },
@@ -130,14 +130,14 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     };
 
     // Traverse all transitively imported modules reachable from ast_module_
-    std::vector<stdx::option<mod::module&>>                   imported_mods;
-    ankerl::unordered_dense::set<gsl::not_null<mod::module*>> visited;
+    std::vector<stdx::option<mod::module_t&>>                   imported_mods;
+    ankerl::unordered_dense::set<gsl::not_null<mod::module_t*>> visited;
     visited.insert(&ast_module_);
 
-    auto collect_imported = [&](auto& self, mod::module& cur) -> void {
+    auto collect_imported = [&](auto& self, mod::module_t& cur) -> void {
         for (const auto import_id : cur.import_nodes) {
             if (const auto sema_type{cur.get_sema_type_opt(import_id)}) {
-                if (const auto m_data{sema_type->get_data().as_opt<sema::types::module>()}) {
+                if (const auto m_data{sema_type->get_data().as_opt<sema::types::module_t>()}) {
                     auto& dep{m_data->imported};
                     // One imported only by a `test` block outside a test build is never resolved
                     const bool resolved{dep.state != mod::module_state::PARSED &&
@@ -153,10 +153,10 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     collect_imported(collect_imported, ast_module_);
 
     // Test discovery only follows `test { import "x.gh"...; }`-nested imports, recursively
-    ankerl::unordered_dense::set<gsl::not_null<mod::module*>> test_discovered;
+    ankerl::unordered_dense::set<gsl::not_null<mod::module_t*>> test_discovered;
     test_discovered.insert(&ast_module_);
     {
-        std::vector<mod::module*> frontier{&ast_module_};
+        std::vector<mod::module_t*> frontier{&ast_module_};
         while (!frontier.empty()) {
             auto* cur{frontier.back()};
             frontier.pop_back();
@@ -167,7 +167,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
                     if (!cur->ast.get_as_opt<ast::import_stmt>(stmt)) { continue; }
                     const auto sema_type{cur->get_sema_type_opt(stmt)};
                     if (!sema_type) { continue; }
-                    const auto m_data{sema_type->get_data().as_opt<sema::types::module>()};
+                    const auto m_data{sema_type->get_data().as_opt<sema::types::module_t>()};
                     if (!m_data) { continue; }
                     auto& dep{m_data->imported};
                     if (test_discovered.insert(&dep).second) { frontier.emplace_back(&dep); }
@@ -176,7 +176,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
-    // `lib/start` is attached by the compiler, and emitted last
+    // `std/start.gh` is attached by the compiler, and emitted last
     if (ctx_.start_module && visited.insert(ctx_.start_module.get()).second) {
         imported_mods.emplace_back(ctx_.start_module);
     }
@@ -211,7 +211,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
     const_eval_.set_symbol_scoping(symbol_scoping_);
 
 #ifdef GHOTI_DEBUG
-    const auto compute_side_table_checksum = [](const mod::module& m) -> u64 {
+    const auto compute_side_table_checksum = [](const mod::module_t& m) -> u64 {
         stdx::hasher h{0};
         for (const auto& ty : m.sema_side_tables.node_types.values) {
             h.combine(ty ? reinterpret_cast<u64>(ty.get()) : 0);
@@ -226,7 +226,7 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         return h.finalize();
     };
 
-    std::vector<std::pair<stdx::option<const mod::module&>, u64>> pre_emit_checksums;
+    std::vector<std::pair<stdx::option<const mod::module_t&>, u64>> pre_emit_checksums;
     pre_emit_checksums.emplace_back(&ast_module_, compute_side_table_checksum(ast_module_));
     for (const auto m : imported_mods) {
         if (m) { pre_emit_checksums.emplace_back(m, compute_side_table_checksum(*m)); }
@@ -277,8 +277,21 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
-    for (usize i{0}; i < pending_builtin_runtime_.size(); ++i) {
-        ensure_builtin_runtime(pending_builtin_runtime_[i]);
+    // Each may reach more of `builtin`, so both queues drain until neither grows
+    for (usize runtime{0}, impls{0};
+         runtime < pending_builtin_runtime_.size() || impls < pending_builtin_impls_.size();) {
+        for (; runtime < pending_builtin_runtime_.size(); ++runtime) {
+            ensure_builtin_runtime(pending_builtin_runtime_[runtime]);
+        }
+        for (; impls < pending_builtin_impls_.size(); ++impls) {
+            auto&      builtin_mod{ctx_.modules.builtin_module()};
+            const auto site{pending_builtin_impls_[impls]};
+            const auto prev_module{std::exchange(active_module_, builtin_mod)};
+            const_eval_.set_module(builtin_mod);
+            emit_top_level_impl(site, builtin_mod.ast.get_as<ast::impl_stmt>(site));
+            active_module_ = prev_module;
+            const_eval_.set_module(*prev_module);
+        }
     }
 
     // Any emission error (including a foreign module's) stops this module before type checking,
@@ -304,7 +317,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     if (gir_module_.has_function(req.mangled_name)) { return; }
     if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
 
-    mod::module& fn_mod{*req.module};
+    mod::module_t& fn_mod{*req.module};
     const auto   fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
         [&](const auto&) -> stdx::option<const ast::function_expr&> { return stdx::none; },
         [&](const ast::decl_stmt& decl) -> stdx::option<const ast::function_expr&> {
@@ -531,8 +544,8 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     attribute_diags(fn_mod, diags_before);
 }
 
-auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
-    -> void {
+auto emitter::emit_type_ctor_member(mod::module_t&                     owner_mod,
+                                    const sema::type_ctor_member_emit& tcm) -> void {
     PROFILE_FUNCTION();
     if (gir_module_.has_function(tcm.gir_name)) { return; }
 
@@ -570,7 +583,7 @@ auto emitter::emit_type_ctor_member(mod::module& owner_mod, const sema::type_cto
     attribute_diags(owner_mod, diags_before);
 }
 
-auto emitter::attribute_diags(mod::module& owner, usize diags_before) -> void {
+auto emitter::attribute_diags(mod::module_t& owner, usize diags_before) -> void {
     if (&owner == &ast_module_ || ctx_.diags.size() <= diags_before) { return; }
     owner.absorb_sema_diagnostics(ctx_.diags.split_off(diags_before));
     attributed_foreign_diags_ = true;
@@ -1335,7 +1348,7 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
 
 auto emitter::emit_impl_default_method(std::string_view          gir_name,
                                        usize                     impl_scope_idx,
-                                       mod::module&              iface_mod,
+                                       mod::module_t&            iface_mod,
                                        ast::node_id              sig_id,
                                        const ast::function_expr& fn_expr,
                                        stdx::option<sema::type&> concrete_sig,
@@ -1455,8 +1468,9 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
     }
 }
 
-auto emitter::apply_fn_attributes(gir::function& fn, const mod::module& owner, ast::node_id fn_node)
-    -> void {
+auto emitter::apply_fn_attributes(gir::function&       fn,
+                                  const mod::module_t& owner,
+                                  ast::node_id         fn_node) -> void {
     sema::resolved_attributes resolved;
     if (const auto folded{owner.attributes_of(fn_node)}) { resolved = *folded; }
     if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(fn_node)};
@@ -1466,7 +1480,7 @@ auto emitter::apply_fn_attributes(gir::function& fn, const mod::module& owner, a
     fn.set_attributes(resolved);
 }
 
-auto emitter::branch_hint_of(const mod::module& owner, ast::node_id stmt)
+auto emitter::branch_hint_of(const mod::module_t& owner, ast::node_id stmt)
     -> stdx::option<ast::branch_hint> {
     const auto block{owner.ast.get_as_opt<ast::block_stmt>(stmt)};
     if (!block || block->statements.empty()) { return stdx::none; }
@@ -1618,7 +1632,7 @@ auto emitter::emit_function(ast::node_id                   id,
 
 auto emitter::bind_declared_params(gir::function&            fn,
                                    const ast::function_expr& fn_expr,
-                                   const mod::module&        owner) -> void {
+                                   const mod::module_t&      owner) -> void {
     for (const auto& param : fn_expr.parameters) {
         const auto p_name{ast::parameter_name(owner.ast, param)};
         const auto p_type{owner.get_sema_type_opt(param.name)};
@@ -1931,7 +1945,16 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
         [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
         [&](const ast::errdefer_stmt& errdef) { emit_errdefer_stmt(stmt_id, errdef); },
-        [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
+        [&](const ast::expr_stmt& expr_st) {
+            const auto result{emit_expression_id(expr_st.expression)};
+            // A call that never returns (`exit(1);`) ends the path, as `unreachable` does
+            const auto is_call{active_ast().get_as_opt<ast::call_expr>(expr_st.expression)};
+            if (is_call && result.type && result.type->get_kind() == sema::type_kind::NORETURN) {
+                if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
+                    builder_.emit_unreachable();
+                }
+            }
+        },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
         [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); },
@@ -4019,7 +4042,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::builtin_t::ENTRY_MAIN: {
+        case syntax::builtin_t::ENTRY_MAIN:
+        case syntax::builtin_t::ENTRY_TEST_RUNNER: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             return value{undefined_val{}, ret_type};
         }
@@ -4495,6 +4519,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
         // `w.method(...)` on a `&dyn I`: load the method from `w`'s vtable and call it indirectly
         const auto recv_ty{active_mod().get_sema_type_opt(dot_call->object)};
+        if (recv_ty) { request_builtin_impl_method(*recv_ty, member_ident.name); }
         if (recv_ty && request_builtin_type_methods(*recv_ty)) {
             // `builtin.cpu.has(.x)` is known at compile time; only a runtime receiver needs code
             if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
@@ -4715,7 +4740,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
         } else if (const auto inner_dot{active_ast().get_as_opt<ast::dot_expr>(target_obj)}) {
             if (const auto mod_type{active_mod().get_sema_type_opt(inner_dot->object)}) {
-                if (const auto m_data{mod_type->get_data().as_opt<sema::types::module>()}) {
+                if (const auto m_data{mod_type->get_data().as_opt<sema::types::module_t>()}) {
                     const auto& inner_mod{m_data->imported};
                     if (inner_mod.root_table_idx) {
                         const auto& inner_ident{
@@ -5967,9 +5992,21 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
         });
 }
 
+auto emitter::folds_to_bool(ast::expr_handle expr, bool expected) -> bool {
+    const auto diags_before{ctx_.diags.size()};
+    const auto folded{const_eval_.try_eval(expr)};
+    if (ctx_.diags.size() > diags_before) {
+        DISCARD(ctx_.diags.split_off(diags_before));
+        return false;
+    }
+    return folded && folded->is<bool>() && folded->as<bool>() == expected;
+}
+
 auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    // A left side known to be false decides it, and the right side is never evaluated
+    if (folds_to_bool(binary.lhs, false)) { return value{false, bool_type}; }
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{false, bool_type});
     const auto lhs_val{coerce_condition(emit_expression(binary.lhs))};
@@ -5997,7 +6034,9 @@ auto emitter::emit_logical_and(ast::node_id, const ast::binary_expr& binary) -> 
 
 auto emitter::emit_logical_or(ast::node_id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
-    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    // A left side known to be true decides it, and the right side is never evaluated
+    if (folds_to_bool(binary.lhs, true)) { return value{true, bool_type}; }
     const auto res_slot{builder_.emit_alloca(bool_type)};
     builder_.emit_store(res_slot, value{true, bool_type});
 
@@ -6671,6 +6710,28 @@ auto emitter::request_builtin_type_methods(const sema::type& receiver) -> bool {
     return true;
 }
 
+auto emitter::request_builtin_impl_method(const sema::type& receiver, std::string_view method)
+    -> void {
+    if (!ctx_.modules.has_builtin_module()) { return; }
+    gsl::not_null<const sema::type*> t{&receiver};
+    if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
+    if (const auto r{t->get_data().as_opt<sema::types::reference>()}) { t = &r->underlying; }
+
+    const auto& builtin_mod{ctx_.modules.builtin_module()};
+    for (const auto& found : ctx_.impls.methods_of(*ctx_.pool.strip_volatile(*t))) {
+        const auto& record{*found.record};
+        if (found.method->name != method || !record.enclosing ||
+            &*record.enclosing != &builtin_mod) {
+            continue;
+        }
+        const auto queued{std::ranges::any_of(pending_builtin_impls_, [&](ast::node_id site) {
+            return site.get_index() == record.site.get_index() &&
+                   site.get_kind() == record.site.get_kind();
+        })};
+        if (!queued) { pending_builtin_impls_.emplace_back(record.site); }
+    }
+}
+
 auto emitter::ensure_builtin_runtime(std::string_view name) -> void {
     if (gir_module_.has_function(name)) { return; }
     if (!ctx_.modules.has_builtin_module()) { return; }
@@ -6827,7 +6888,7 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             ASSERT(obj_type_opt, "Dot expression object must have a resolved type");
             if (obj_type_opt->get_kind() == sema::type_kind::MODULE) {
                 const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-                const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module>()};
+                const auto  m_data{obj_type_opt->get_data().as_opt<sema::types::module_t>()};
                 if (m_data && m_data->imported.root_table_idx) {
                     // See the matching comment in `emit_dot`'s own MODULE branch: the member's
                     // `decl_stmt` lives in `m_data->imported`'s AST, not the module currently being
@@ -7911,7 +7972,7 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
 }
 
 auto emitter::emit_field_default(ast::expr_handle default_expr,
-                                 mod::module&     owner,
+                                 mod::module_t&   owner,
                                  sema::type&      field_type) -> value {
     if (&owner == &active_mod()) { return emit_coerced_expr(default_expr, field_type); }
 
@@ -7968,7 +8029,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
     if (obj_type->get_kind() == sema::type_kind::MODULE) {
         const auto& member_ident{active_ast().get_as<ast::identifier_expr>(dot.member)};
-        const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
+        const auto  m_data{obj_type->get_data().as_opt<sema::types::module_t>()};
         // A `let mut` or aggregate `const` module member has real storage: load it from its global.
         if (m_data && m_data->imported.root_table_idx) {
             auto& target_mod{m_data->imported};

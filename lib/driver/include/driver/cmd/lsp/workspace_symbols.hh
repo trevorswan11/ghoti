@@ -16,7 +16,7 @@ struct workspace_symbol_entry {
 };
 
 // Every top-level declaration in `module`, for accumulation into a workspace-wide index
-[[nodiscard]] auto module_workspace_symbols(const mod::module& module)
+[[nodiscard]] auto module_workspace_symbols(const mod::module_t& module)
     -> std::vector<workspace_symbol_entry>;
 
 } // namespace ghoti::lsp

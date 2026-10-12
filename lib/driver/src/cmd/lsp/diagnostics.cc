@@ -50,7 +50,7 @@ auto push_diagnostic(nlohmann::json& out, const diagnostic_snapshot& d, std::str
 
 } // namespace
 
-auto to_lsp_diagnostics(const mod::module& module) -> nlohmann::json {
+auto to_lsp_diagnostics(const mod::module_t& module) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     // module.parse_diagnostics is a permanent record of syntax errors found at parse time

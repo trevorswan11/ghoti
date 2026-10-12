@@ -120,15 +120,15 @@ class symbol {
     MAKE_GETTER(name, std::string_view)
     MAKE_DEDUCING_GETTER(data)
 
-    [[nodiscard]] auto get_symbol_location(const mod::module& module) const noexcept
+    [[nodiscard]] auto get_symbol_location(const mod::module_t& module) const noexcept
         -> source_location;
 
     // Like `get_symbol_location`, but a decl_stmt resolves to its declared name's span rather
     // than the whole statement's; used for LSP go-to-definition/rename ranges
-    [[nodiscard]] auto get_symbol_span(const mod::module& module) const noexcept -> source_span;
+    [[nodiscard]] auto get_symbol_span(const mod::module_t& module) const noexcept -> source_span;
 
     // Can only be true for decls, imports, and type aliases
-    [[nodiscard]] auto is_public(const mod::module& module) const noexcept -> bool;
+    [[nodiscard]] auto is_public(const mod::module_t& module) const noexcept -> bool;
 
     [[nodiscard]] auto get_status() const noexcept -> symbol_status { return status_; }
     auto               set_status(symbol_status status) noexcept -> void { status_ = status; }
@@ -181,13 +181,13 @@ class symbol_table {
 
     // Constructs the symbolic node in place with the provided args
     template <typename T, typename... Args>
-    auto insert(std::string_view name, const mod::module& module, Args&&... args)
+    auto insert(std::string_view name, const mod::module_t& module, Args&&... args)
         -> stdx::result<void, diagnostic> {
         return insert(name, module, symbol::data_t{T{std::forward<Args>(args)...}});
     }
 
     // Checks that the module was inserted without collision
-    auto insert(std::string_view name, const mod::module& module, const symbol::data_t& data)
+    auto insert(std::string_view name, const mod::module_t& module, const symbol::data_t& data)
         -> stdx::result<void, diagnostic>;
 
     // For use of prelude injection only
@@ -288,13 +288,13 @@ class symbol_table_registry {
     // Constructs the symbolic node in place with the provided args
     template <typename T, typename... Args>
     [[nodiscard]] auto
-    insert_into(usize table_idx, const mod::module& module, std::string_view name, Args&&... args)
+    insert_into(usize table_idx, const mod::module_t& module, std::string_view name, Args&&... args)
         -> stdx::result<void, diagnostic> {
         return insert_into(table_idx, module, name, symbol::data_t{T{std::forward<Args>(args)...}});
     }
 
     [[nodiscard]] auto insert_into(usize                 table_idx,
-                                   const mod::module&    module,
+                                   const mod::module_t&  module,
                                    std::string_view      name,
                                    const symbol::data_t& data) -> stdx::result<void, diagnostic>;
 
@@ -324,7 +324,7 @@ class symbol_table_registry {
 
     // Looks up all levels of the stack for possible illegal shadowing of the name
     [[nodiscard]] auto is_shadowing(const symbol_table_stack& stack,
-                                    const mod::module&        module,
+                                    const mod::module_t&      module,
                                     std::string_view          name,
                                     const symbol::data_t&     data) noexcept
         -> stdx::result<void, diagnostic>;

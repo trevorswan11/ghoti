@@ -16,7 +16,7 @@ constexpr std::string_view WIN_MODULE{R"(
     pub const last_error = fn(): u32 { return GetLastError(); };
 )"};
 
-[[nodiscard]] auto emit(helpers::sema_test_context& ctx) -> gir::module {
+[[nodiscard]] auto emit(helpers::sema_test_context& ctx) -> gir::module_t {
     gir::emitter emitter{ctx.analyzer.get_ctx(), ctx.root_mod};
     return emitter.emit();
 }
