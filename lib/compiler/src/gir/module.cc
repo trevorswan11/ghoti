@@ -80,12 +80,13 @@ auto module::get_library_imports() const -> std::vector<extern_import> {
     for (const auto* fn : functions_) {
         if (fn->get_linkage() != gir::linkage::EXTERN || fn->get_abi_name() == "c") { continue; }
         const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
-        imports.push_back({std::string{fn->get_abi_name()}, std::string{symbol}});
+        imports.emplace_back<extern_import>({std::string{fn->get_abi_name()}, std::string{symbol}});
     }
     for (const auto* global : globals_) {
         if (global->linkage != gir::linkage::EXTERN || global->abi_name == "c") { continue; }
         const auto symbol{global->link_name.empty() ? global->name : global->link_name};
-        imports.push_back({std::string{global->abi_name}, std::string{symbol}, true});
+        imports.emplace_back<extern_import>(
+            {std::string{global->abi_name}, std::string{symbol}, true});
     }
     return imports;
 }

@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <initializer_list>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -516,7 +515,7 @@ TEST_CASE("Lexing compiler builtins & Lexer resetting") {
     // Every builtin lexes as one `BUILTIN` token; `@cfg` and `@cfgValue` keep their own
     std::vector<syntax::typed_identifier> expecteds;
     for (const auto& builtin : syntax::ALL_BUILTINS) {
-        expecteds.push_back({builtin.name, token_type_t::BUILTIN});
+        expecteds.emplace_back<syntax::typed_identifier>({builtin.name, token_type_t::BUILTIN});
     }
     expecteds.insert(expecteds.end(),
                      syntax::builtins::SPECIAL_FORMS.begin(),

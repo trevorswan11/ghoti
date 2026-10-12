@@ -138,11 +138,21 @@ extern("kernel32") const VirtualAlloc: extern fn(
     alloc_type: u32,
     protect: u32
 ) callconv(.winapi): ^mut opaque;
-extern("kernel32") const VirtualFree: extern fn(addr: ^mut opaque, size: usize, free_type: u32) callconv(.winapi): BOOL;
+extern("kernel32") const VirtualFree: extern fn(
+    addr: ^mut opaque,
+    size: usize,
+    free_type: u32
+) callconv(.winapi): BOOL;
 
-extern("kernel32") const CreateDirectoryW: extern fn(path: ^u16, security: ^mut opaque) callconv(.winapi): BOOL;
+extern("kernel32") const CreateDirectoryW: extern fn(
+    path: ^u16,
+    security: ^mut opaque
+) callconv(.winapi): BOOL;
 
-extern("kernel32") const GetFileInformationByHandle: extern fn(h: Handle, info: ^mut Stat) callconv(.winapi): BOOL;
+extern("kernel32") const GetFileInformationByHandle: extern fn(
+    h: Handle,
+    info: ^mut Stat
+) callconv(.winapi): BOOL;
 
 pub const SystemInfo = extern struct {
     pub oem_id: u32,

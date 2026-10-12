@@ -208,7 +208,9 @@ const no_args = fn(): []Arg {
         allocation_type: u32,
         protect: u32,
     ) callconv(.winapi): ^mut opaque;
-    extern("kernel32", "ExitProcess") const ExitProcess: extern fn(code: u32) callconv(.winapi): noreturn;
+    extern("kernel32", "ExitProcess") const ExitProcess: extern fn(
+        code: u32
+    ) callconv(.winapi): noreturn;
 
     comptime {
         @export(windows_main, .{ .name = "main" });
@@ -390,7 +392,11 @@ const no_args = fn(): []Arg {
         return run(no_args());
     };
 } else {
-    extern("c", "malloc") const malloc: fn(size: usize): ^mut u8;
+    @cfg (os == .macos) {
+        extern("System", "malloc") const malloc: fn(size: usize): ^mut u8;
+    } else {
+        extern("c", "malloc") const malloc: fn(size: usize): ^mut u8;
+    }
 
     comptime {
         @export(posix_main, .{ .name = "main" });
