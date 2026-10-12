@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -285,6 +286,29 @@ auto resolve_result::message_contains(std::string_view needle) const -> bool {
         if (m.contains(needle)) { return true; }
     }
     return false;
+}
+
+namespace {
+
+[[nodiscard]] auto collect_diags(const sema_test_context& ctx) -> resolve_result {
+    resolve_result out;
+    if (const auto diags{ctx.root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+        for (const auto& d : *diags) {
+            out.codes.emplace_back(d.get_error());
+            if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+[[nodiscard]] auto resolve_diags_for_target(std::string_view src, std::string_view target_triple)
+    -> resolve_result {
+    sema_test_context ctx{std::vector<mock_file>{}, TEST_FILENAME, src, std::cerr, target_triple};
+    ctx.analyzer.collect_symbols(ctx.root_mod);
+    ctx.analyzer.resolve_types(ctx.root_mod);
+    return collect_diags(ctx);
 }
 
 [[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {

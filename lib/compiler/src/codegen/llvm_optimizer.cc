@@ -107,13 +107,15 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
         pic.transform([](auto& p) { return &p; }).value_or(nullptr),
     };
 
-    // Freestanding: the optimizer may only introduce the `mem*` calls ghoti defines itself
-    // (`define_mem_intrinsic_fallbacks`), never `memcmp`, `bcmp`, `strlen`, libm, ...
+    // Freestanding: the optimizer may only introduce the memory routines compiler_rt provides,
+    // never `strlen`, libm, ...
     llvm::TargetLibraryInfoImpl tlii{module.getTargetTriple()};
     tlii.disableAllFunctions();
     tlii.setAvailable(llvm::LibFunc_memcpy);
     tlii.setAvailable(llvm::LibFunc_memset);
     tlii.setAvailable(llvm::LibFunc_memmove);
+    tlii.setAvailable(llvm::LibFunc_memcmp);
+    tlii.setAvailable(llvm::LibFunc_bcmp);
     fam.registerPass([&tlii] { return llvm::TargetLibraryAnalysis{tlii}; });
 
     // Register all the basic analyses with the managers

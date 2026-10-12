@@ -88,7 +88,7 @@ pub const Stat = extern struct {
     };
 };
 
-extern("kernel32") const CreateFileW: fn(
+extern("kernel32") const CreateFileW: extern fn(
     path: ^u16,
     access: u32,
     share: u32,
@@ -96,35 +96,35 @@ extern("kernel32") const CreateFileW: fn(
     disposition: u32,
     flags: u32,
     template: ^mut opaque
-): Handle;
+) callconv(.winapi): Handle;
 
-extern("kernel32", "ReadFile") const ReadFile: fn(
+extern("kernel32", "ReadFile") const ReadFile: extern fn(
     h: Handle,
     buf: ^mut u8,
     to_read: u32,
     read: ^mut u32,
     overlapped: ^mut opaque
-): BOOL;
+) callconv(.winapi): BOOL;
 
-extern("kernel32", "WriteFile") const WriteFile: fn(
+extern("kernel32", "WriteFile") const WriteFile: extern fn(
     h: Handle,
     buf: ^u8,
     to_write: u32,
     written: ^mut u32,
     overlapped: ^mut opaque
-): BOOL;
+) callconv(.winapi): BOOL;
 
-extern("kernel32") const CloseHandle: fn(h: Handle): BOOL;
+extern("kernel32") const CloseHandle: extern fn(h: Handle) callconv(.winapi): BOOL;
 
-extern("kernel32") const SetFilePointerEx: fn(
+extern("kernel32") const SetFilePointerEx: extern fn(
     h: Handle,
     distance: i64,
     new_pointer: ^mut i64,
     method: u32
-): i32;
+) callconv(.winapi): i32;
 
-extern("kernel32") const GetStdHandle: fn(which: u32): Handle;
-extern("kernel32") const GetLastError: fn(): DWORD;
+extern("kernel32") const GetStdHandle: extern fn(which: u32) callconv(.winapi): Handle;
+extern("kernel32") const GetLastError: extern fn() callconv(.winapi): DWORD;
 
 // VirtualAlloc / VirtualFree (memoryapi.h)
 pub const MEM_COMMIT: u32 = 0x00001000u32;
@@ -132,17 +132,17 @@ pub const MEM_RESERVE: u32 = 0x00002000u32;
 pub const MEM_RELEASE: u32 = 0x00008000u32;
 pub const PAGE_READWRITE: u32 = 0x04u32;
 
-extern("kernel32") const VirtualAlloc: fn(
+extern("kernel32") const VirtualAlloc: extern fn(
     addr: ^mut opaque,
     size: usize,
     alloc_type: u32,
     protect: u32
-): ^mut opaque;
-extern("kernel32") const VirtualFree: fn(addr: ^mut opaque, size: usize, free_type: u32): BOOL;
+) callconv(.winapi): ^mut opaque;
+extern("kernel32") const VirtualFree: extern fn(addr: ^mut opaque, size: usize, free_type: u32) callconv(.winapi): BOOL;
 
-extern("kernel32") const CreateDirectoryW: fn(path: ^u16, security: ^mut opaque): BOOL;
+extern("kernel32") const CreateDirectoryW: extern fn(path: ^u16, security: ^mut opaque) callconv(.winapi): BOOL;
 
-extern("kernel32") const GetFileInformationByHandle: fn(h: Handle, info: ^mut Stat): BOOL;
+extern("kernel32") const GetFileInformationByHandle: extern fn(h: Handle, info: ^mut Stat) callconv(.winapi): BOOL;
 
 pub const SystemInfo = extern struct {
     pub oem_id: u32,
@@ -157,17 +157,17 @@ pub const SystemInfo = extern struct {
     pub processor_revision: u16,
 };
 
-extern("kernel32") const GetSystemInfo: fn(info: ^mut SystemInfo): void;
+extern("kernel32") const GetSystemInfo: extern fn(info: ^mut SystemInfo) callconv(.winapi): void;
 
 /// Treats the input as NUL-terminated and NUL-terminates the output
-extern("kernel32") const MultiByteToWideChar: fn(
+extern("kernel32") const MultiByteToWideChar: extern fn(
     code_page: u32,
     flags: u32,
     mb_str: ^u8,
     mb_len: i32,
     wide_str: ^mut u16,
     wide_cap: i32
-): i32;
+) callconv(.winapi): i32;
 
 const R = fn(T: type): type {
     return std.Result(T, Errno);

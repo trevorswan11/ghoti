@@ -767,10 +767,21 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
     };
 
     std::vector<syntax::doc_id> clauses;
-    clauses.emplace_back(doc_manager_.concat({
-        doc_manager_.text("template: "),
-        format(node.tmpl),
-    }));
+    // A multiline template starts on its own line, and the `,` after it on the next
+    if (node.tmpl->get_token_type() == syntax::token_type_t::MULTILINE_STRING) {
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("template:"),
+            doc_manager_.nest(
+                doc_manager_.concat({doc_manager_.hard_line(),
+                                     doc_manager_.without_trailing_hard_line(format(node.tmpl))})),
+            doc_manager_.hard_line(),
+        }));
+    } else {
+        clauses.emplace_back(doc_manager_.concat({
+            doc_manager_.text("template: "),
+            format(node.tmpl),
+        }));
+    }
     if (!node.outputs.empty()) { clauses.emplace_back(operand_list("outputs", node.outputs)); }
     if (!node.inputs.empty()) { clauses.emplace_back(operand_list("inputs", node.inputs)); }
     if (!node.clobbers.empty()) {
@@ -808,7 +819,12 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> args;
-    args.reserve(node.arguments.size());
+    args.reserve(node.arguments.size() + 2);
+    // `@call(modifier, f, args...)`: the modifier and the callee lead the argument list
+    if (node.modifier) {
+        args.emplace_back(format(*node.modifier));
+        args.emplace_back(format(node.function));
+    }
     for (usize i{0}; i < node.arguments.size(); ++i) {
         const auto& arg{node.arguments[i]};
         auto        rendered{arg.visit([&](expr_handle h) { return format(h); },
@@ -820,16 +836,17 @@ auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
         args.emplace_back(rendered);
     }
 
+    const auto callee{node.modifier ? doc_manager_.text("@call") : format(node.function)};
     if (args.size() == 1 && doc_manager_.contains_hard_break(args[0])) {
         return doc_manager_.concat({
-            format(node.function),
+            callee,
             doc_manager_.text("("),
             args[0],
             doc_manager_.text(")"),
         });
     }
     return doc_manager_.concat({
-        format(node.function),
+        callee,
         doc_manager_.delimited("(", ")", std::move(args), false, true, node.args_force_break),
     });
 }
@@ -969,7 +986,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id id, const identifier_expr& node) -> syntax::doc_id {
-    if (syntax::get_builtin_opt(id.get_token_type()) && !node.name.starts_with('@')) {
+    if (id.get_token_type() == syntax::token_type_t::BUILTIN && !node.name.starts_with('@')) {
         return doc_manager_.owned(fmt::format("@{}", node.name));
     }
     if (id.get_token_type() == syntax::token_type_t::IDENT &&

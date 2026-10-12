@@ -423,7 +423,7 @@ TEST_CASE("Lexing raw identifiers") {
     SECTION("`@name` without a quote is still the builtin path") {
         test_lexer(R"(@sizeOf @"sizeOf")",
                    {
-                       {token_type_t::BUILTIN_SIZE_OF, "@sizeOf"},
+                       {token_type_t::BUILTIN, "@sizeOf"},
                        {token_type_t::IDENT, R"(@"sizeOf")"},
                    });
     }
@@ -513,17 +513,14 @@ TEST_CASE("A word operator doesn't cut a longer name short") {
 }
 
 TEST_CASE("Lexing compiler builtins & Lexer resetting") {
-    std::vector<token_type_t> all_builtins;
-    all_builtins.insert(all_builtins.end(),
-                        syntax::builtins::ALL_TOKEN_TYPES.begin(),
-                        syntax::builtins::ALL_TOKEN_TYPES.end());
-    all_builtins.insert(all_builtins.end(),
-                        syntax::builtins::SPECIAL_FORM_TOKEN_TYPES.begin(),
-                        syntax::builtins::SPECIAL_FORM_TOKEN_TYPES.end());
-    const auto expecteds{
-        std::views::transform(all_builtins, [](const auto& tt) -> syntax::builtin_t {
-            return {*syntax::get_builtin_opt(tt), tt};
-        })};
+    // Every builtin lexes as one `BUILTIN` token; `@cfg` and `@cfgValue` keep their own
+    std::vector<syntax::typed_identifier> expecteds;
+    for (const auto& builtin : syntax::ALL_BUILTINS) {
+        expecteds.push_back({builtin.name, token_type_t::BUILTIN});
+    }
+    expecteds.insert(expecteds.end(),
+                     syntax::builtins::SPECIAL_FORMS.begin(),
+                     syntax::builtins::SPECIAL_FORMS.end());
 
     std::string input;
     std::ranges::for_each(expecteds, [&input](const auto& lexeme) -> void {

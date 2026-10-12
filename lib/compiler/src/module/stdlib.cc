@@ -23,6 +23,14 @@ auto find_stdlib() -> stdx::option<std::filesystem::path> {
     return stdx::none;
 }
 
+auto find_start() -> stdx::option<std::filesystem::path> {
+    if (const auto env_var{get_env("GHOTI_START")}) {
+        std::filesystem::path env_path{*env_var};
+        if (path_utils::is_file(env_path)) { return env_path; }
+    }
+    return find_lib_path("start/start.gh");
+}
+
 auto find_lib_path(const std::filesystem::path& relative) -> stdx::option<std::filesystem::path> {
     // An overridden stdlib sits at `<lib>/std/std.gh`, so its `lib` holds the other resources too
     if (const auto env_var{get_env(GHOTI_STDLIB_ENV)}) {

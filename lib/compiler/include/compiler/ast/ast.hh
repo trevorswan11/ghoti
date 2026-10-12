@@ -124,7 +124,13 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{
             nodes_.emplace_back(get_arena(), start_token, end_token, std::forward<Data>(data))};
-        return nodes_.ids.emplace_back(kind, start_token.type, index);
+        auto& id{nodes_.ids.emplace_back(kind, start_token.type, index)};
+        if (const auto builtin{start_token.type == syntax::token_type_t::BUILTIN
+                                   ? syntax::builtin_from_name(start_token.slice)
+                                   : stdx::none}) {
+            id.set_builtin(*builtin);
+        }
+        return id;
     }
 
     // For infix nodes whose operator starts after the node's true span start
@@ -147,7 +153,13 @@ class AST {
         constexpr auto kind{explicit_type_kind_of<Data>::value()};
         const auto     index{explicit_types_.emplace_back(
             get_arena(), start_token, end_token, std::forward<Data>(data))};
-        return explicit_type_id{kind, mod, start_token.type, index};
+        explicit_type_id id{kind, mod, start_token.type, index};
+        if (const auto builtin{start_token.type == syntax::token_type_t::BUILTIN
+                                   ? syntax::builtin_from_name(start_token.slice)
+                                   : stdx::none}) {
+            id.set_builtin(*builtin);
+        }
+        return id;
     }
 
     template <IndexableID ID>

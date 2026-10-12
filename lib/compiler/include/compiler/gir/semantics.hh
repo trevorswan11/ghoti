@@ -8,6 +8,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/gir/instruction.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -65,8 +66,9 @@ enum class int_compare_op : u8 {
     GE,
 };
 
-// The integer operation an operator or builtin token denotes; `@divTrunc` = `/` `@rem` = `%`
+// The integer operation an operator or builtin denotes; `@divTrunc` = `/` `@rem` = `%`
 [[nodiscard]] auto int_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_op>;
+[[nodiscard]] auto int_op_of(syntax::builtin_t builtin) noexcept -> stdx::option<int_op>;
 [[nodiscard]] auto int_compare_op_of(syntax::token_type_t token) noexcept
     -> stdx::option<int_compare_op>;
 // The integer operation a GIR arithmetic instruction performs
@@ -143,9 +145,10 @@ enum class float_op : u8 {
 };
 
 [[nodiscard]] auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op>;
+[[nodiscard]] auto float_op_of(syntax::builtin_t builtin) noexcept -> stdx::option<float_op>;
 
 // `@sqrt`, `@sin`, ... `@ceil`
-[[nodiscard]] auto math_function_of(syntax::token_type_t token) noexcept
+[[nodiscard]] auto math_function_of(syntax::builtin_t builtin) noexcept
     -> stdx::option<math_function>;
 
 // IEEE 754 in `format`, rounded once. Floats never fault: `x / 0` is an infinity or NaN, and

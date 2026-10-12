@@ -1,8 +1,12 @@
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InlineAsm.h>
@@ -22,10 +26,15 @@
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/module/file_loader.hh"
+#include "compiler/module/module.hh"
+#include "compiler/module/stdlib.hh"
+#include "compiler/sema/analyzer.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/bin_utils.hh"
 #include "support/path_utils.hh"
+#include "support/subprocess.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -41,13 +50,21 @@ namespace {
     return std::string{inline_asm.getAsmString()};
 }
 
-[[nodiscard]] auto lower_for_triple(helpers::sema_test_context& ctx,
-                                    llvm::LLVMContext&          context,
-                                    std::string_view triple_str) -> stdx::box<llvm::Module> {
+struct lowered {
+    helpers::ctx_idx_pair   ctx;
+    stdx::box<llvm::Module> mod;
+};
+
+// Analyzes `source` for `triple_str`, where the entry code is chosen, and lowers it there
+[[nodiscard]] auto lower_for_triple(std::string_view   source,
+                                    llvm::LLVMContext& context,
+                                    std::string_view   triple_str) -> lowered {
+    auto                       ctx{helpers::resolve_for_target(source, triple_str)};
     codegen::target_options    target_opts{.triple_str = std::string{triple_str}};
     auto                       machine{UNWRAP(codegen::create_target_machine(target_opts))};
     codegen::optimizer_options opt_opts{.target_machine = machine.get()};
-    return UNWRAP(helpers::emit_llvm_ir_executable(ctx, context, opt_opts));
+    auto mod{UNWRAP(helpers::emit_llvm_ir_executable(*ctx.first, context, opt_opts))};
+    return {std::move(ctx), std::move(mod)};
 }
 
 // Lowers for `triple_str` and returns the diagnostic error kind, expecting failure.
@@ -137,29 +154,27 @@ TEST_CASE("Main function entry validation") {
     }
 }
 
-TEST_CASE("Executable LLVM IR lowering with entry wrapper") {
+TEST_CASE("An executable enters through lib/start, which calls main") {
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
+    auto [ctx, llvm_mod]{lower_for_triple(R"(
         pub const main = fn(args: [][:0]u8): void {
             return;
         };
-    )")};
-    REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-    auto llvm_mod{UNWRAP(helpers::emit_llvm_ir_executable(*ctx, context))};
+    )",
+                                          context,
+                                          "x86_64-apple-macosx")};
 
-    // Verify module is valid LLVM IR
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
     CHECK_FALSE(llvm::verifyModule(*llvm_mod, &os));
 
-    // Verify user main was renamed to _ghoti_main
+    // The program's `main` is renamed so the entry code's C `main(argc, argv)` can take the name
     auto& ghoti_main_fn{UNWRAP(llvm_mod->getFunction("_ghoti_main"))};
     CHECK(ghoti_main_fn.getReturnType()->isVoidTy());
     CHECK(ghoti_main_fn.arg_size() == 1);
 
-    // Verify C entry wrapper main(i32, ptr) was generated
     auto& c_main_fn{UNWRAP(llvm_mod->getFunction("main"))};
     CHECK(c_main_fn.getReturnType()->isIntegerTy(32));
     CHECK(c_main_fn.arg_size() == 2);
@@ -210,13 +225,6 @@ TEST_CASE("Linux executables get a freestanding _start that calls main and exits
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const main = fn(): i32 {
-            return 1;
-        };
-    )")};
-    REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
-
     struct arch_case {
         std::string_view triple;
         std::string_view argc_load;
@@ -225,22 +233,51 @@ TEST_CASE("Linux executables get a freestanding _start that calls main and exits
         std::string_view syscall_insn;
     };
     const auto tc{GENERATE(
-        arch_case{"x86_64-unknown-linux-gnu", "(%rsp), %rdi", "call main", "$231, %eax", "syscall"},
-        arch_case{"aarch64-unknown-linux-gnu", "ldr x0, [sp]", "bl main", "#94", "svc #0"},
-        arch_case{"riscv64-unknown-linux-gnu", "ld a0, 0(sp)", "call main", "li a7, 94", "ecall"},
-        arch_case{"riscv32-unknown-linux-gnu", "lw a0, 0(sp)", "call main", "li a7, 94", "ecall"},
-        arch_case{"arm-unknown-linux-gnueabihf", "ldr r0, [sp, #0]", "bl main", "#248", "svc #0"},
+        arch_case{"x86_64-unknown-linux-gnu",
+                  "(%rsp), %rdi",
+                  "call __ghoti_linux_main",
+                  "$$231, %eax",
+                  "syscall"},
         arch_case{
-            "thumbv7-unknown-linux-gnueabihf", "ldr r0, [sp, #0]", "bl main", "#248", "svc #0"},
-        arch_case{
-            "loongarch64-unknown-linux-gnu", "ld.d $$a0", "bl main", "$$zero, 94", "syscall 0"})};
+            "aarch64-unknown-linux-gnu", "ldr x0, [sp]", "bl __ghoti_linux_main", "#94", "svc #0"},
+        arch_case{"riscv64-unknown-linux-gnu",
+                  "ld a0, 0(sp)",
+                  "call __ghoti_linux_main",
+                  "li a7, 94",
+                  "ecall"},
+        arch_case{"riscv32-unknown-linux-gnu",
+                  "lw a0, 0(sp)",
+                  "call __ghoti_linux_main",
+                  "li a7, 94",
+                  "ecall"},
+        arch_case{"arm-unknown-linux-gnueabihf",
+                  "ldr r0, [sp]",
+                  "bl __ghoti_linux_main",
+                  "#248",
+                  "svc #0"},
+        arch_case{"thumbv7-unknown-linux-gnueabihf",
+                  "ldr r0, [sp]",
+                  "bl __ghoti_linux_main",
+                  "#248",
+                  "svc #0"},
+        arch_case{"loongarch64-unknown-linux-gnu",
+                  "ld.d $$a0",
+                  "bl __ghoti_linux_main",
+                  "$$zero, 94",
+                  "syscall 0"})};
 
     CAPTURE(tc.triple);
-    auto  llvm_mod{lower_for_triple(*ctx, context, tc.triple)};
+    constexpr std::string_view source{R"(
+        pub const main = fn(): i32 {
+            return 1;
+        };
+    )"};
+    auto [ctx, llvm_mod]{lower_for_triple(source, context, tc.triple)};
     auto& start_fn{UNWRAP(llvm_mod->getFunction("_start"))};
     CHECK(start_fn.hasFnAttribute(llvm::Attribute::Naked));
 
     const auto text{start_asm_text(start_fn)};
+    CAPTURE(text);
     CHECK(text.find(tc.argc_load) != std::string::npos);
     CHECK(text.find(tc.call_main) != std::string::npos);
     CHECK(text.find(tc.exit_nr) != std::string::npos);
@@ -248,9 +285,10 @@ TEST_CASE("Linux executables get a freestanding _start that calls main and exits
 
     // Run the whole `_start` InlineAsm -> MC -> object -> link path so a bad
     // mnemonic for this arch fails here rather than silently at `build-exe` time.
+    auto [exe_ctx, exe_idx]{helpers::resolve_for_target(source, tc.triple)};
     codegen::target_options exe_target{.triple_str = std::string{tc.triple}};
     tempfile                exe_file{"test_start_exe"};
-    REQUIRE(helpers::emit_executable(*ctx, context, exe_file, exe_target));
+    REQUIRE(helpers::emit_executable(*exe_ctx, context, exe_file, exe_target));
     CHECK(path_utils::exists(exe_file));
     CHECK(bin_utils::check_elf_header(exe_file));
 }
@@ -259,14 +297,15 @@ TEST_CASE("A Linux arch with no freestanding _start is rejected with a diagnosti
     codegen::llvm_scope scope;
     llvm::LLVMContext   context;
 
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
+    auto [ctx, idx]{helpers::resolve_for_target(R"(
         pub const main = fn(): i32 {
             return 0;
         };
-    )")};
+    )",
+                                                "powerpc64le-unknown-linux-gnu")};
     REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
 
-    // powerpc64le's target is built in, but emit_freestanding_start has no case for it.
+    // powerpc64le's target is built in, but lib/start has no `_start` for it
     CHECK(lower_error_for_triple(*ctx, context, "powerpc64le-unknown-linux-gnu") ==
           codegen::error::UNSUPPORTED_TARGET);
     CHECK_FALSE(codegen::can_emit_freestanding_entry(
@@ -276,27 +315,62 @@ TEST_CASE("A Linux arch with no freestanding _start is rejected with a diagnosti
 }
 
 TEST_CASE("Non-Linux targets keep the crt-provided entry and get no _start") {
-    codegen::llvm_scope scope;
-    llvm::LLVMContext   context;
-
-    auto [ctx, idx]{helpers::resolve_and_check(R"(
+    codegen::llvm_scope        scope;
+    llvm::LLVMContext          context;
+    constexpr std::string_view source{R"(
         pub const main = fn(): i32 {
             return 0;
         };
-    )")};
-    REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+    )"};
 
     SECTION("Windows MinGW") {
-        auto llvm_mod{lower_for_triple(*ctx, context, "x86_64-w64-windows-gnu")};
+        auto [ctx, llvm_mod]{lower_for_triple(source, context, "x86_64-w64-windows-gnu")};
         CHECK_FALSE(llvm_mod->getFunction("_start"));
         CHECK(llvm_mod->getFunction("main"));
+        // MinGW's codegen calls `__main` from `main`
+        CHECK(llvm_mod->getFunction("__main"));
     }
 
     SECTION("macOS") {
-        auto llvm_mod{lower_for_triple(*ctx, context, "x86_64-apple-macosx")};
+        auto [ctx, llvm_mod]{lower_for_triple(source, context, "x86_64-apple-macosx")};
         CHECK_FALSE(llvm_mod->getFunction("_start"));
         CHECK(llvm_mod->getFunction("main"));
     }
+}
+
+TEST_CASE("main gets every argument, however many and however quoted") {
+    codegen::llvm_scope scope;
+    // 1 for each argument, plus 100 if the last two arrive intact
+    auto [ctx, idx]{helpers::type_check_and_verify(R"(
+        const eq = fn(a: [:0]u8, b: []u8): bool {
+            if (a.len != b.len) { return false; }
+            for (0..a.len) |i| {
+                if (a[i] != b[i]) { return false; }
+            }
+            return true;
+        };
+        pub const main = fn(args: [][:0]u8): i32 {
+            let n = args.len;
+            let intact = eq(args[n - 2], "two words") and eq(args[n - 1], "quote\"d");
+            return @intCast(i32, n) + if (intact) 100 else 0;
+        };
+    )",
+                                                   {},
+                                                   false)};
+
+    llvm::LLVMContext context;
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    const tempfile exe{
+        std::in_place,
+        fmt::format("{}{}", tempfile::make_temp_path("test_many_args").string(), extension)};
+    REQUIRE(helpers::emit_executable(*ctx, context, exe.path));
+
+    // More than the 16 (Windows) or 128 (POSIX) arguments the entry once had room for
+    std::vector<std::string> argv{exe.path.string()};
+    for (usize i{0}; i < 140; ++i) { argv.emplace_back(fmt::format("arg{}", i)); }
+    argv.emplace_back("two words");
+    argv.emplace_back("quote\"d");
+    CHECK(helpers::portable_exit_code(UNWRAP(spawn_child(mock_argv{argv}))) == 143 + 100);
 }
 
 TEST_CASE("@export as 'main' picks the entry point") {
@@ -321,6 +395,19 @@ TEST_CASE("@export as 'main' picks the entry point") {
     CHECK(ghoti_main_fn.getReturnType()->isIntegerTy(32));
     CHECK(ghoti_main_fn.arg_size() == 0);
     CHECK(llvm_mod->getFunction("main"));
+}
+
+TEST_CASE("lib/start analyzes on its own, as an editor opens it") {
+    std::ostringstream  errors;
+    mod::file_loader    loader;
+    mod::module_manager manager{loader};
+    sema::analyzer      analyzer{manager, errors, false};
+    const auto          path{UNWRAP(mod::find_start())};
+    CHECK(analyzer.analyze(path));
+    const auto module{UNWRAP(manager.try_get_file_module(path))};
+    CHECK(module->is_start);
+    CHECK_FALSE(module->is_poisoned());
+    CHECK(errors.str().empty());
 }
 
 } // namespace ghoti::tests

@@ -1,5 +1,6 @@
 #include "compiler/sema/context.hh"
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <filesystem>
@@ -9,10 +10,13 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -147,6 +151,8 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::F128, type_kind::F128);
     inject_type(kws::COMPTIME_INT, type_kind::COMPTIME_INT);
     inject_type(kws::COMPTIME_FLOAT, type_kind::COMPTIME_FLOAT);
+    // No keyword spells it; `@EnumLiteral()` names it
+    pool[{type_kind::ENUM_LITERAL, types::mut::CONSTANT}]->resolve<types::builtin_type>();
     inject_type(kws::BOOL, type_kind::BOOL);
     inject_type(kws::VOID, type_kind::VOID_);
 
@@ -216,15 +222,16 @@ auto inject_c_longdouble(symbol_table& prelude, type_pool& pool, const codegen::
 
 auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
-    const auto inject_function = [&](const syntax::builtin_t& builtin,
-                                     types::builtin_params&&  param_types,
-                                     type&                    return_type) -> void {
+    const auto inject_function = [&](const syntax::builtin_def& def,
+                                     types::builtin_params&&    param_types,
+                                     type&                      return_type) -> void {
         for (const auto& param_type : param_types) {
             ASSERT(param_type->is_resolved(), "Builtins must be fully resolved");
         }
         ASSERT(return_type.is_resolved(), "Builtins must be fully resolved");
 
-        types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+        const syntax::typed_identifier builtin{def.name, syntax::token_type_t::BUILTIN};
+        types::key_t                   key{type_kind::FUNCTION, types::mut::CONSTANT};
         key.imprint(builtin);
         auto& type{*pool[key]};
         ASSERT(!type.is_resolved(), "Builtin functions should only be resolved once");
@@ -357,6 +364,12 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::RETURN_ADDRESS, params(), t_usize);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
+    inject_function(bis::ENUM_LITERAL, params(), t_type);
+    // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
+    inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
+    // Only `lib/start` may name the program's `main` and its tests
+    inject_function(bis::ENTRY_MAIN, params(), t_auto);
+    inject_function(bis::TEST_FUNCTIONS, params(), t_auto);
 
     // `@implements(T | value, I)` -> bool (comptime)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
@@ -390,10 +403,111 @@ constexpr std::string_view BUILTIN_MODULE_SOURCE{
 
 constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 
+// A feature name that can't be a bare identifier is written as a raw one: `@"64bit"`
+[[nodiscard]] auto feature_identifier(std::string_view name) -> std::string {
+    const bool int_like{
+        name.size() > 1 && (name.front() == 'i' || name.front() == 'u') &&
+        std::ranges::all_of(name.substr(1), [](char c) { return c >= '0' && c <= '9'; })};
+    const bool plain{!name.empty() && !(name.front() >= '0' && name.front() <= '9') && !int_like &&
+                     !syntax::get_keyword_opt(name) && std::ranges::all_of(name, [](char c) {
+                         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                (c >= '0' && c <= '9') || c == '_';
+                     })};
+    return plain ? std::string{name} : fmt::format("@\"{}\"", name);
+}
+
+// The `builtin` declarations that depend on the target CPU: the target architecture family's
+// feature enum, also named `CpuFeature`, and `cpu`, the CPU code is generated for
+[[nodiscard]] auto cpu_builtin_source(const codegen::target_options& target_opts) -> std::string {
+    // Only the target's own family: code naming another architecture's features sits behind an
+    // `@cfg` that removes it, and resolving every family's enum would slow every compilation
+    const auto cpu{codegen::resolve_target_cpu(target_opts)};
+    const auto target_family{
+        codegen::cpu_feature_family_of(codegen::resolve_target_triple(target_opts.triple_str))};
+    std::string out;
+    if (target_family) {
+        const auto& f{*target_family};
+        out += fmt::format("\npub const {} = struct {{\n"
+                           "    /// {} CPU features, named as LLVM names them with `-` and `.` as "
+                           "`_`\n"
+                           "    pub const Feature = enum : u16 {{\n",
+                           f.name,
+                           f.name);
+        for (const auto& name : f.ghoti_names) {
+            out += fmt::format("        {},\n", feature_identifier(name));
+        }
+        out += "    };\n};\n";
+    }
+
+    const usize      feature_count{target_family ? target_family->ghoti_names.size() : 0};
+    const usize      word_count{std::max<usize>(1, (feature_count + 63) / 64)};
+    std::vector<u64> words(word_count, 0);
+    if (target_family && cpu) {
+        for (const auto& name : cpu->enabled) {
+            const auto at{std::ranges::find(target_family->ghoti_names, name)};
+            if (at == target_family->ghoti_names.end()) { continue; }
+            const auto index{static_cast<usize>(at - target_family->ghoti_names.begin())};
+            words[index / 64] |= u64{1} << (index % 64);
+        }
+    }
+
+    out += fmt::format(
+        R"(
+/// The target architecture's CPU features
+pub const CpuFeature = {0};
+
+/// A set of the target architecture's `CpuFeature`s
+pub const CpuFeatureSet = struct {{
+    pub words: [{1}]mut u64 = .{{ {2} }},
+
+    pub const has = fn(&self, feature: CpuFeature): bool {{
+        let index = @as(usize, @backingInt(feature));
+        return (self.words[index / 64] >> @intCast(u64, index % 64)) & 1 == 1;
+    }};
+
+    pub const set = fn(&mut self, feature: CpuFeature, enabled: bool): void {{
+        let index = @as(usize, @backingInt(feature));
+        let bit = @as(u64, 1) << @intCast(u64, index % 64);
+        if (enabled) {{
+            self.words[index / 64] |= bit;
+        }} else {{
+            self.words[index / 64] &= ~bit;
+        }}
+    }};
+}};
+
+/// A CPU model and the features code for it may use
+pub const Cpu = struct {{
+    pub model: []u8,
+    pub features: CpuFeatureSet,
+
+    pub const has = fn(&self, feature: CpuFeature): bool {{
+        return self.features.has(feature);
+    }};
+}};
+
+/// The CPU code is generated for: `--cpu` (`generic` unless given) and `--features`
+pub const cpu: Cpu = .{{
+    .model = "{3}",
+    .features = .{{ .words = .{{ {4} }} }},
+}};
+)",
+        target_family ? fmt::format("{}.Feature", target_family->name)
+                      : std::string{"enum : u16 { _ }"},
+        word_count,
+        fmt::join(std::vector<std::string>(word_count, "0"), ", "),
+        cpu ? cpu->model : target_opts.cpu,
+        fmt::join(words | std::views::transform([](u64 w) { return fmt::format("0x{:x}", w); }),
+                  ", "));
+    return out;
+}
+
 auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
+    const auto source{
+        fmt::format("{}{}", BUILTIN_MODULE_SOURCE, cpu_builtin_source(ctx.target_opts))};
+    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(source)};
     symbol_collector::collect_symbols(builtin_mod, ctx);
     type_resolver::resolve_types(builtin_mod, ctx);
     VERIFY(!builtin_mod.is_poisoned() && ctx.diags.empty(),

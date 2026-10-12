@@ -69,11 +69,22 @@ auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> 
 }
 
 auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) -> bool {
-    // libc provides these on every hosted target, and ghoti synthesizes them when freestanding
-    constexpr std::array<std::string_view, 5> libc_memory{
+    // ghoti links no libc on most targets, so compiler_rt provides the memory routines; where a
+    // libc is linked too, it comes first and its definitions win
+    constexpr std::array<std::string_view, 5> memory_routines{
         "memcpy", "memmove", "memset", "memcmp", "bcmp"};
-    if (std::ranges::contains(libc_memory, symbol)) { return false; }
+    if (std::ranges::contains(memory_routines, symbol)) { return true; }
+    // LLVM lists the allocator among some targets' libcalls, but it is libc's, never compiler_rt's
+    constexpr std::array<std::string_view, 4> allocation_routines{
+        "malloc", "calloc", "realloc", "free"};
+    if (std::ranges::contains(allocation_routines, symbol)) { return false; }
     if (triple.isWindowsMSVCEnvironment() && symbol == "_fltused") { return true; }
+    if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86_64) {
+        if (symbol == (triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk")) { return true; }
+    }
+    if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86) {
+        if (symbol == (triple.isOSCygMing() ? "_alloca" : "_chkstk")) { return true; }
+    }
     return is_runtime_libcall(triple, symbol);
 }
 

@@ -193,10 +193,8 @@ auto int_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_op> {
     case tt::PLUS:              return int_op::ADD;
     case tt::MINUS:             return int_op::SUB;
     case tt::STAR:              return int_op::MUL;
-    case tt::SLASH:
-    case tt::BUILTIN_DIV_TRUNC: return int_op::DIV;
-    case tt::PERCENT:
-    case tt::BUILTIN_REM:       return int_op::REM;
+    case tt::SLASH:             return int_op::DIV;
+    case tt::PERCENT:           return int_op::REM;
     case tt::PLUS_PERCENT:      return int_op::WRAP_ADD;
     case tt::MINUS_PERCENT:     return int_op::WRAP_SUB;
     case tt::STAR_PERCENT:      return int_op::WRAP_MUL;
@@ -210,11 +208,20 @@ auto int_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_op> {
     case tt::CARET:             return int_op::XOR;
     case tt::SHL:               return int_op::SHL;
     case tt::SHR:               return int_op::SHR;
-    case tt::BUILTIN_MIN:       return int_op::MIN;
-    case tt::BUILTIN_MAX:       return int_op::MAX;
-    case tt::BUILTIN_DIV_FLOOR: return int_op::DIV_FLOOR;
-    case tt::BUILTIN_MOD:       return int_op::MOD;
     default:                    return stdx::none;
+    }
+}
+
+auto int_op_of(syntax::builtin_t builtin) noexcept -> stdx::option<int_op> {
+    using bt = syntax::builtin_t;
+    switch (builtin) {
+    case bt::DIV_TRUNC: return int_op::DIV;
+    case bt::REM:       return int_op::REM;
+    case bt::MIN:       return int_op::MIN;
+    case bt::MAX:       return int_op::MAX;
+    case bt::DIV_FLOOR: return int_op::DIV_FLOOR;
+    case bt::MOD:       return int_op::MOD;
+    default:            return stdx::none;
     }
 }
 
@@ -464,27 +471,33 @@ auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op> 
     case tt::STAR:        return float_op::MUL;
     case tt::SLASH:       return float_op::DIV;
     case tt::PERCENT:     return float_op::REM;
-    case tt::BUILTIN_MIN: return float_op::MIN;
-    case tt::BUILTIN_MAX: return float_op::MAX;
     default:              return stdx::none;
     }
 }
 
-auto math_function_of(syntax::token_type_t token) noexcept -> stdx::option<math_function> {
-    using enum syntax::token_type_t;
-    switch (token) {
-    case BUILTIN_SQRT:  return math_function::SQRT;
-    case BUILTIN_SIN:   return math_function::SIN;
-    case BUILTIN_COS:   return math_function::COS;
-    case BUILTIN_TAN:   return math_function::TAN;
-    case BUILTIN_EXP:   return math_function::EXP;
-    case BUILTIN_EXP2:  return math_function::EXP2;
-    case BUILTIN_LOG:   return math_function::LOG;
-    case BUILTIN_LOG2:  return math_function::LOG2;
-    case BUILTIN_LOG10: return math_function::LOG10;
-    case BUILTIN_FLOOR: return math_function::FLOOR;
-    case BUILTIN_CEIL:  return math_function::CEIL;
-    default:            return stdx::none;
+auto float_op_of(syntax::builtin_t builtin) noexcept -> stdx::option<float_op> {
+    switch (builtin) {
+    case syntax::builtin_t::MIN: return float_op::MIN;
+    case syntax::builtin_t::MAX: return float_op::MAX;
+    default:                     return stdx::none;
+    }
+}
+
+auto math_function_of(syntax::builtin_t builtin) noexcept -> stdx::option<math_function> {
+    using enum syntax::builtin_t;
+    switch (builtin) {
+    case SQRT:  return math_function::SQRT;
+    case SIN:   return math_function::SIN;
+    case COS:   return math_function::COS;
+    case TAN:   return math_function::TAN;
+    case EXP:   return math_function::EXP;
+    case EXP2:  return math_function::EXP2;
+    case LOG:   return math_function::LOG;
+    case LOG2:  return math_function::LOG2;
+    case LOG10: return math_function::LOG10;
+    case FLOOR: return math_function::FLOOR;
+    case CEIL:  return math_function::CEIL;
+    default:    return stdx::none;
     }
 }
 

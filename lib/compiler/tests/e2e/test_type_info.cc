@@ -25,7 +25,7 @@ TEST_CASE("`builtin.CallConv` matches `ast::calling_convention`'s spellings") {
             let cc: builtin.CallConv = .c;
             return match (cc) {
                 .c => 1,
-                .sysv, .win64, .stdcall, .fastcall, .aapcs => 0,
+                .sysv, .win64, .stdcall, .fastcall, .aapcs, .winapi => 0,
             };
         };
     )") == 1);

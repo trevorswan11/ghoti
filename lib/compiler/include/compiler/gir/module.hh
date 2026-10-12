@@ -42,6 +42,13 @@ struct type_decl {
     sema::type& type;
 };
 
+// A symbol the module imports from an `extern("lib", ...)` library
+struct extern_import {
+    std::string library;
+    std::string symbol;
+    bool        data{false};
+};
+
 class module {
   public:
     explicit module(const mod::module& ast_mod, ghoti::arena& arena) noexcept
@@ -90,6 +97,8 @@ class module {
 
     // Names extern decls contribute to the link line (excludes the default "c" target).
     [[nodiscard]] auto get_required_libraries() const -> std::vector<std::string>;
+    // Each extern symbol and the library it comes from, by its link name
+    [[nodiscard]] auto get_library_imports() const -> std::vector<extern_import>;
 
     // Marks the split between root-module decls and imported ones
     auto mark_import_boundary() noexcept -> void {

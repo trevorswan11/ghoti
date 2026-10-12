@@ -3,13 +3,16 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
 #include "compiler/codegen/error.hh"
@@ -17,8 +20,10 @@
 #include "compiler/codegen/runtime_libcalls.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/runtime/compiler_rt.hh"
+#include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/subprocess.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -210,7 +215,14 @@ TEST_CASE("Runtime libcall names follow the target") {
     CHECK(codegen::is_runtime_libcall(linux_triple, "__addtf3"));
     CHECK(codegen::is_runtime_libcall(linux_triple, "fmodf"));
     CHECK_FALSE(codegen::is_runtime_libcall(linux_triple, "main"));
-    CHECK_FALSE(codegen::is_compiler_rt_symbol(linux_triple, "memcpy"));
+    CHECK(codegen::is_compiler_rt_symbol(linux_triple, "memcpy"));
+    CHECK(codegen::is_compiler_rt_symbol(macos_triple, "bcmp"));
+    // libSystem's allocator is in LLVM's Darwin libcall table, but it never comes from compiler_rt
+    CHECK_FALSE(codegen::is_compiler_rt_symbol(macos_triple, "malloc"));
+    CHECK(codegen::is_compiler_rt_symbol(msvc_triple, "__chkstk"));
+    CHECK(codegen::is_compiler_rt_symbol(codegen::resolve_target_triple("x86_64-w64-windows-gnu"),
+                                         "___chkstk_ms"));
+    CHECK_FALSE(codegen::is_compiler_rt_symbol(linux_triple, "__chkstk"));
     CHECK(codegen::is_compiler_rt_symbol(msvc_triple, "_fltused"));
     CHECK_FALSE(codegen::is_compiler_rt_symbol(linux_triple, "_fltused"));
     CHECK(codegen::strip_global_prefix(macos_triple, "___addtf3") == "__addtf3");
@@ -289,6 +301,49 @@ TEST_CASE("compiler_rt's own functions stay internal to it") {
     )",
                                    {},
                                    rt.linker_options()) == 6);
+}
+
+TEST_CASE("A program's memory routines and stack probe come from compiler_rt") {
+    // A frame past one page needs the stack probe, and the copy calls `memcpy`
+    constexpr std::string_view source{R"(
+        const fill = fn(n: usize): u8 {
+            let mut buf: [200000]mut u8 = undefined;
+            for (0..n) |i| { buf[i] = @truncate(u8, i); }
+            let mut copy: [200000]mut u8 = undefined;
+            @memcpy(copy[0..n], buf[0..n]);
+            return copy[n - 1];
+        };
+        pub const main = fn(): i32 {
+            return @as(i32, fill(150000)) - 0xEF + 42;
+        };
+    )"};
+
+    const auto imports{[&](std::string_view triple) {
+        auto [ctx, idx]{helpers::resolve_and_check(source)};
+        const tempfile                object{"rt_imports.o"};
+        llvm::LLVMContext             context;
+        const codegen::target_options target_opts{.triple_str = std::string{triple}};
+        REQUIRE(helpers::emit_object(*ctx, context, object.path, target_opts));
+        return UNWRAP(runtime::compiler_rt_imports(object.path, target_opts));
+    }};
+    CHECK(std::ranges::contains(imports("x86_64-unknown-linux-gnu"), "memcpy"));
+    CHECK(std::ranges::contains(imports("x86_64-pc-windows-msvc"), "__chkstk"));
+    CHECK(std::ranges::contains(imports("x86_64-w64-windows-gnu"), "___chkstk_ms"));
+
+#if GHOTI_WINDOWS
+    // MSVC also needs compiler_rt's `_fltused` once compiler_rt is linked
+    for (const std::string_view triple : {"x86_64-pc-windows-msvc", "x86_64-w64-windows-gnu"}) {
+        INFO(triple);
+        auto [ctx, idx]{helpers::resolve_and_check(source)};
+        llvm::LLVMContext context;
+        tempfile          exe{std::in_place,
+                              fmt::format("{}.exe", tempfile::make_temp_path("rt_probe").string())};
+        const auto        emitted{
+            helpers::emit_executable(*ctx, context, exe.path, {.triple_str = std::string{triple}})};
+        if (!emitted) { FAIL(fmt::format("{}", emitted.error())); }
+        CHECK(spawn_child(mock_argv{exe.path.string()}) == stdx::option<u32>{42U});
+    }
+#endif
 }
 
 } // namespace ghoti::tests

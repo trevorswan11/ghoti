@@ -75,4 +75,21 @@ TEST_CASE("a `[N]T` (const elements) still yields read-only pointers/subslices")
     )") == 19);
 }
 
+TEST_CASE("`p[i]` steps over a pointer's struct elements") {
+    CHECK(helpers::compile_and_run(R"(
+        const Pair = extern struct { a: usize, b: usize };
+        const fill = fn(p: ^mut Pair, n: usize): void {
+            for (0..n) |i| {
+                p[i] = .{ .a = i, .b = 10 * i };
+            }
+        };
+        pub const main = fn(): i32 {
+            let mut pairs: [3]mut Pair = undefined;
+            fill(pairs.ptr, 3);
+            let p = pairs.ptr;
+            return @intCast(i32, p[2].b + p[1].a + pairs[2].a);  // 20 + 1 + 2
+        };
+    )") == 23);
+}
+
 } // namespace ghoti::tests

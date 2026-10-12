@@ -174,7 +174,7 @@ auto lexer::skip_whitespace() noexcept -> void {
 }
 
 auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
-    return get_builtin_opt(ident).value_or(token_type_t::ILLEGAL);
+    return builtin_token_opt(ident).value_or(token_type_t::ILLEGAL);
 }
 
 auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {

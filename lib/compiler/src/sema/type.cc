@@ -122,6 +122,7 @@ constexpr auto TYPE_KIND_NAMES{[] {
 } // namespace
 
 auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
+    if (kind == type_kind::ENUM_LITERAL) { return "@EnumLiteral()"; }
     return TYPE_KIND_NAMES[kind];
 }
 
@@ -138,6 +139,7 @@ auto is_c_longdouble(const type& t) noexcept -> bool {
 
 auto type_kind_display_name(const type& t) -> std::string {
     if (const auto info{as_integer(t)}) { return int_display_name(*info); }
+    if (t.get_kind() == type_kind::ENUM_LITERAL) { return "@EnumLiteral()"; }
     if (is_c_longdouble(t)) { return std::string{syntax::token_type::C_LONGDOUBLE_NAME}; }
     return std::string{type_kind_display_name(t.get_kind())};
 }
@@ -619,6 +621,8 @@ auto type_pool::strip_modifiers(const type& old_type, types::mutability_modifier
 }
 
 auto holds_type_values(const type& t) noexcept -> bool {
+    // An enum literal has no runtime form either, until it becomes an enum
+    if (t.get_kind() == type_kind::ENUM_LITERAL) { return true; }
     const auto& data{t.get_data()};
     // A not-yet-folded `[N]T` or type-constructor call shares the `type` kind without being one
     if (const auto deferred{data.as_opt<types::deferred_array>()}) {
@@ -837,6 +841,13 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     if (is_implicit_widenable(src, dest)) { return true; }
     const auto src_kind{src.get_kind()};
     const auto dest_kind{dest.get_kind()};
+
+    // Whether the literal names a member is checked where its value is known
+    if (src_kind == type_kind::ENUM_LITERAL) {
+        if (dest_kind == type_kind::ENUM || dest_kind == type_kind::ENUM_LITERAL) { return true; }
+        if (const auto ut{dest.get_data().as_opt<types::union_t>()}) { return !ut->is_untagged; }
+        return false;
+    }
 
     if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {
         if (ut->is_untagged) {

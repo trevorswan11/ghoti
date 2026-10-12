@@ -259,6 +259,7 @@ class emitter {
     auto pointer_to_bool(value ptr, bool invert) -> value;
     auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
+    auto request_builtin_type_methods(const sema::type& receiver) -> bool;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
@@ -298,6 +299,11 @@ class emitter {
     auto concrete_callable_type(sema::type& fat_type, sema::type& src_type) -> sema::type&;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
     auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
+    auto fold_initializer(ast::expr_handle init, sema::type& declared) -> stdx::option<const_value>;
+    auto report_missing_enum_member(const sema::type& dest,
+                                    std::string_view  name,
+                                    ast::expr_handle  at) -> void;
+    auto emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
@@ -319,17 +325,17 @@ class emitter {
                               const mod::module&        owner) -> void;
     auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
-                           syntax::token_type_t  builtin,
+                           syntax::builtin_t     builtin,
                            sema::type&           ret_type) -> value;
     [[nodiscard]] auto current_function_is_c_variadic() -> bool;
 
     // @mem* decompose the slice args into a data pointer + byte length. A length check is only
     // needed when the operands' lengths were not already proven equal statically.
-    auto emit_mem_intrinsic(ast::node_id         id,
-                            ast::expr_handle     dest_h,
-                            ast::expr_handle     rhs_h,
-                            syntax::token_type_t builtin,
-                            bool                 check_lengths = true) -> void;
+    auto emit_mem_intrinsic(ast::node_id      id,
+                            ast::expr_handle  dest_h,
+                            ast::expr_handle  rhs_h,
+                            syntax::builtin_t builtin,
+                            bool              check_lengths = true) -> void;
 
     // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
     // and whether that is its `break` variant
@@ -503,6 +509,7 @@ class emitter {
                                                 const ast::assignment_expr& assign,
                                                 syntax::token_type_t        op_type) -> value;
     auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    auto               emit_unmodified_call(ast::node_id id, const ast::call_expr& call) -> value;
     // A module-scope `^fn(...)` global, or `let mut` of function type, named directly as a callee
     [[nodiscard]] auto callee_is_fn_pointer_global(const ast::identifier_expr& ident,
                                                    ast::expr_handle            callee) -> bool;

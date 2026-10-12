@@ -93,7 +93,10 @@ auto describe(token_type_t tt) -> std::string {
     }
     if (const auto spelling{get_operator_opt(tt)}) { return fmt::format("'{}'", *spelling); }
     if (const auto spelling{get_keyword_opt(tt)}) { return fmt::format("'{}'", *spelling); }
-    if (const auto spelling{get_builtin_opt(tt)}) { return fmt::format("'{}'", *spelling); }
+    if (tt == token_type_t::BUILTIN) { return "a builtin"; }
+    for (const auto& form : builtins::SPECIAL_FORMS) {
+        if (form.type == tt) { return fmt::format("'{}'", form.name); }
+    }
     return std::string{magic_enum::enum_name(tt)};
 }
 
@@ -118,7 +121,10 @@ auto is_valid_ident(token_type_t type) noexcept -> bool {
     case token_type_t::TYPE_TYPE:
     case token_type_t::AUTO_TYPE:
     case token_type_t::OPAQUE_TYPE: return true;
-    default:                        return is_primitive(type) || get_builtin_opt(type);
+    case token_type_t::BUILTIN:
+    case token_type_t::BUILTIN_CFG:
+    case token_type_t::BUILTIN_CFG_VALUE: return true;
+    default:                              return is_primitive(type);
     }
 }
 

@@ -112,9 +112,9 @@ auto symbol_scoping::key_of(usize owner_table_idx, std::string_view name) -> std
     return fmt::format("{}{}{}", owner_table_idx, SEP, name);
 }
 
-auto symbol_scoping::build(const sema::context&          ctx,
-                           const mod::module&            entry_mod,
-                           gsl::span<mod::module* const> deps) -> symbol_scoping {
+auto symbol_scoping::build(const sema::context&                  ctx,
+                           const mod::module&                    entry_mod,
+                           gsl::span<stdx::option<mod::module&>> deps) -> symbol_scoping {
     PROFILE_FUNCTION();
     symbol_scoping   policy;
     name_count_map_t name_counts;
@@ -122,7 +122,7 @@ auto symbol_scoping::build(const sema::context&          ctx,
     scan_state       st{policy.scopable_defs_, name_counts, weak_names, ctx, entry_mod};
 
     scan_module(st, entry_mod);
-    for (auto* dep : deps) {
+    for (auto dep : deps) {
         if (dep) { scan_module(st, *dep); }
     }
 
