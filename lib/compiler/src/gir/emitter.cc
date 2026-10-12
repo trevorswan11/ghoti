@@ -6936,6 +6936,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             auto* obj_type{obj_type_opt.get()};
             bool  element_is_const{obj_type->is_constant()};
             bool  element_is_volatile{obj_type->is_volatile()};
+            // `p[i]` steps over `p`'s elements, so its address computation is on the pointer
+            stdx::option<sema::type&> indexed_ptr_type;
             if (const auto ref_data{obj_type->get_data().as_opt<sema::types::reference>()}) {
                 auto& ref_underlying{ref_data->underlying};
                 base_lval.data = value::data_t{builder_.emit_load(base_lval, *obj_type)};
@@ -6951,7 +6953,8 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                 base_lval.type.emplace(ptr_underlying);
                 element_is_const    = obj_type->is_constant();
                 element_is_volatile = obj_type->is_volatile();
-                obj_type            = &ptr_data->underlying;
+                indexed_ptr_type.emplace(*obj_type);
+                obj_type = &ptr_data->underlying;
             }
 
             if (const auto arr_data{obj_type->get_data().as_opt<sema::types::array>()}) {
@@ -7058,8 +7061,9 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
 
             auto&      write_elem_type{*ctx_.pool.with_volatile(
                 *ctx_.pool.with_const(elem_type, element_is_const), element_is_volatile)};
-            const auto elem_ptr{
-                builder_.emit_get_element_ptr(base_lval, {idx_val}, write_elem_type)};
+            const value base{indexed_ptr_type ? value{base_lval.data, *indexed_ptr_type}
+                                              : base_lval};
+            const auto  elem_ptr{builder_.emit_get_element_ptr(base, {idx_val}, write_elem_type)};
             return value{elem_ptr, write_elem_type};
         },
         [&](const ast::dereference_expr& deref) -> value {

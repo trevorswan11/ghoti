@@ -755,6 +755,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 - Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
 - Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
+- Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
 - Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
 
