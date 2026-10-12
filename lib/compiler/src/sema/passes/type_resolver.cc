@@ -5535,7 +5535,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             }
             fn_param_types[p_idx++] = &param_type;
         }
-        TRY_RESOLVE(fn.explicit_return_type);
+        {
+            const mutating_context_guard ret_g{in_return_type_, true};
+            TRY_RESOLVE(fn.explicit_return_type);
+        }
         auto& return_type{denoted_type(*last_type_.take())};
         if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -5676,7 +5679,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
     }
 
-    TRY_RESOLVE(fn.explicit_return_type);
+    {
+        const mutating_context_guard ret_g{in_return_type_, true};
+        TRY_RESOLVE(fn.explicit_return_type);
+    }
     auto& return_type{denoted_type(*last_type_.take())};
     if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -9420,6 +9426,39 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     last_type_.emplace(result_type);
 }
 
+auto type_resolver::arm_denotes_type(ast::node_id at) const -> bool {
+    // Only forms that can name a type are worth folding to find out
+    const bool can_name_type{[&] {
+        switch (at.get_kind()) {
+        case ast::node_kind::IDENTIFIER_EXPRESSION:
+        case ast::node_kind::DOT_EXPRESSION:
+        case ast::node_kind::TYPE_EXPRESSION:
+        case ast::node_kind::STRUCT_EXPRESSION:
+        case ast::node_kind::UNION_EXPRESSION:
+        case ast::node_kind::ENUM_EXPRESSION:
+        case ast::node_kind::INTERFACE_EXPRESSION:
+        case ast::node_kind::ADDRESS_OF_EXPRESSION:
+        case ast::node_kind::REFERENCE_EXPRESSION:  return true;
+        case ast::node_kind::ARRAY_EXPRESSION:
+            return resolving_.ast.get_as<ast::array_expr>(at).is_type_expr;
+        case ast::node_kind::FUNCTION_EXPRESSION:
+            return resolving_.ast.get_as<ast::function_expr>(at).is_type_expr;
+        case ast::node_kind::IF_EXPRESSION:
+        case ast::node_kind::MATCH_EXPRESSION:
+        case ast::node_kind::LABEL_EXPRESSION:
+        case ast::node_kind::CALL_EXPRESSION:
+        case ast::node_kind::INDEX_EXPRESSION:
+        case ast::node_kind::COMPTIME_EXPRESSION: {
+            if (type_valued_results_.contains(at.get_index())) { return true; }
+            const auto t{resolving_.get_sema_type_opt(at)};
+            return t && t->get_kind() == type_kind::TYPE;
+        }
+        default: return false;
+        }
+    }()};
+    return can_name_type && operand_nature(ast::expr_handle{at}) == operand_nature_t::TYPE;
+}
+
 // The type the values of an `if`, a `match`, or a labeled block meet at. A `void` value among
 // them means the construct is a statement, where the first value's type stands.
 auto type_resolver::result_peer(ast::node_id id, gsl::span<const result_value> values) -> type& {
@@ -9431,6 +9470,18 @@ auto type_resolver::result_peer(ast::node_id id, gsl::span<const result_value> v
         operands.emplace_back(&peer_view(*value.type));
     }
     if (!first) { return *values.front().type; }
+
+    // Arms that all spell types (`if (c) u8 else S`) make it a type value, typed like a name for
+    // the type it folds to
+    if (std::ranges::all_of(values, [&](const result_value& value) {
+            return value.type->get_kind() == type_kind::NORETURN || arm_denotes_type(value.at);
+        })) {
+        type_valued_results_.insert(id.get_index());
+        const auto folded{probe_fold(ast::expr_handle{id})};
+        const auto instance{folded ? folded->as_opt<stdx::option<type&>>() : stdx::none};
+        return instance && *instance ? **instance : ctx_.get_builtin_resolved_type(type_kind::TYPE);
+    }
+
     // Only values can peer; types and scope handles keep the first arm's type
     const bool all_values{std::ranges::all_of(operands, [](const peer_operand& value) {
         const auto kind{value.type->get_kind()};
@@ -9555,6 +9606,7 @@ auto type_resolver::decl_value_denotes_type(ast::expr_handle value) const -> boo
         return true;
     }
     if (is_type_denoting_expr(ctx_, resolving_, value, &table_stack_)) { return true; }
+    if (type_valued_results_.contains(ast::node_id{value}.get_index())) { return true; }
 
     // `Ctor(T)` / `@Int(...)`: a call to anything whose declared result is `type`
     if (const auto call{resolving_.ast.get_as_opt<ast::call_expr>(value)}) {
@@ -15228,6 +15280,49 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_array_ty
     auto& final_type{apply_explicit_modifiers(id, *last_type_.take())};
     resolving_.set_sema_type(id, final_type);
     last_type_.emplace(final_type);
+}
+
+auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_expr_type& node) -> void {
+    PROFILE_FUNCTION();
+    TRY_RESOLVE(node.expr);
+    if (last_type_.take()->is_poison()) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
+
+    // The type it computes is known at compile time
+    const auto                                    diags_before{ctx_.diags.size()};
+    gir::const_eval                               evaluator{ctx_, resolving_};
+    const gir::const_eval::comptime_context_guard g{evaluator, true};
+    const auto                                    folded{evaluator.try_eval(node.expr)};
+    if (ctx_.diags.size() > diags_before) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
+    const auto denoted{folded ? folded->as_opt<stdx::option<type&>>() : stdx::none};
+    if (folded && !folded->is_poison() && (!denoted || !*denoted)) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "This expression is a value, not a type",
+                                                   error::TYPE_MISMATCH,
+                                                   resolving_.ast.location_of(node.expr)));
+    }
+    if (!folded && (in_param_type_ || in_return_type_)) {
+        // A signature's type can read a comptime parameter, which each instantiation binds
+        auto& placeholder{ctx_.get_builtin_resolved_type(type_kind::TYPE)};
+        resolving_.set_sema_type(id, placeholder);
+        return last_type_.emplace(placeholder);
+    }
+    if (!denoted || !*denoted) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "A type computed by an expression must be known at compile time",
+                             error::COMPTIME_EVALUATION_FAILED,
+                             resolving_.ast.location_of(node.expr)));
+    }
+
+    auto& resolved{apply_explicit_modifiers(id, denoted_type(**denoted))};
+    resolving_.set_sema_type(id, resolved);
+    last_type_.emplace(resolved);
 }
 
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {

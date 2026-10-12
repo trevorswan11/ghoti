@@ -632,6 +632,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         decl.explicit_type
             ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
         collect(*decl.explicit_type);
+    } else if (decl.explicit_type) {
+        collect_computed_types(*decl.explicit_type);
     }
 
     if (in_function_scope_ && !declaring_into_aggregate()) {
@@ -924,6 +926,26 @@ auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_array_ty
     const default_counter::guard g{in_expr_scope_};
     if (array.dimension) { collect(*array.dimension); }
     collect(array.inner_explicit_type);
+}
+
+auto symbol_collector::collect_computed_types(ast::explicit_type_id type) -> void {
+    switch (type.get_kind()) {
+    case ast::explicit_type_kind::EXPR: collect(type); break;
+    case ast::explicit_type_kind::RECURSIVE:
+        collect_computed_types(collecting_.ast.get_as<ast::explicit_type_id>(type));
+        break;
+    case ast::explicit_type_kind::ARRAY:
+        collect_computed_types(
+            collecting_.ast.get_as<ast::explicit_array_type>(type).inner_explicit_type);
+        break;
+    default: break;
+    }
+}
+
+auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_expr_type& type) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    collect(type.expr);
 }
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_dyn_type& dyn) -> void {

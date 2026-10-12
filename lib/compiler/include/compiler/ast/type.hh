@@ -53,6 +53,12 @@ struct explicit_function_type {
 [[nodiscard]] auto check_function_type_modifier(type_modifier modifier, const syntax::token_t& at)
     -> stdx::result<void, syntax::diagnostic>;
 
+// Any expression evaluating to a type at compile time (`if (c) A else B`, `match (k) { ... }`,
+// `blk: { ... }`, `Ts[0]`), for forms the other explicit types do not spell
+struct explicit_expr_type {
+    expr_handle expr;
+};
+
 struct explicit_dyn_type {
     struct assoc_binding {
         identifier_handle name;

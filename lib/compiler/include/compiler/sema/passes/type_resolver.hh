@@ -689,6 +689,8 @@ class type_resolver {
         -> stdx::opt_size;
 
     [[nodiscard]] auto result_peer(ast::node_id id, gsl::span<const result_value> values) -> type&;
+    // Whether an `if`/`match` arm or labeled-block value spells a type (`u8`, `S`, `[]T`)
+    [[nodiscard]] auto arm_denotes_type(ast::node_id at) const -> bool;
     [[nodiscard]] auto peer_view(type& t) -> type&;
 
     // A `comptime f: fn(...)` binds at compile time, so it keeps the thin function type
@@ -757,6 +759,7 @@ class type_resolver {
     auto visit(ast::explicit_type_id, ast::explicit_type_id) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
+    auto visit(ast::explicit_type_id, const ast::explicit_expr_type&) -> void;
 
     // Looks up the symbol by name in the current index ONLY. Changes no state on failure
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
@@ -840,6 +843,7 @@ class type_resolver {
     bool in_for_iterable_{false};
     // Set while resolving a function parameter's declared type
     bool in_param_type_{false};
+    bool in_return_type_{false};
     // While instantiating a type ctor: its returned literal's node index and the instance's pool
     // slot, which borrows the literal's shape until the instance is cloned
     stdx::option<std::pair<usize, type*>> pending_instance_slot_;
@@ -857,6 +861,8 @@ class type_resolver {
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.
     ankerl::unordered_dense::set<usize> unused_value_nodes_;
+    // The `if`s, `match`es and labeled blocks whose every value is a type
+    ankerl::unordered_dense::set<usize> type_valued_results_;
 
     std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match comptime` folding and the throwaway `Ctor(<dummy>)` cache insert

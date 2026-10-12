@@ -127,6 +127,8 @@ auto parser::reset(std::string_view input) noexcept -> void {
     pending_docs_.clear();
     pending_module_docs_.clear();
     module_doc_locked_ = false;
+    delimiter_depth_   = 0;
+    type_expression_depth_.reset();
     advance(2);
 }
 
@@ -151,6 +153,17 @@ auto parser::advance(u8 times) noexcept -> const token_t& {
     for (u8 i = 0; i < times; ++i) {
         current_token_ = peek_token_;
         peek_token_    = next_significant_token();
+        switch (current_token_.type) {
+        case token_type_t::LPAREN:
+        case token_type_t::LBRACKET:
+        case token_type_t::LBRACE:   ++delimiter_depth_; break;
+        case token_type_t::RPAREN:
+        case token_type_t::RBRACKET:
+        case token_type_t::RBRACE:
+            if (delimiter_depth_ > 0) { --delimiter_depth_; }
+            break;
+        default: break;
+        }
     }
     return current_token_;
 }
@@ -411,6 +424,7 @@ auto parser::parse_expression(bind_precedence precedence)
     // Each chained operator deepens the (left-leaning) tree the later passes recurse through
     usize chain_length{0};
     while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
+        if (ends_type_expression()) { break; }
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
         if (++chain_length > MAX_OPERATOR_CHAIN) {
@@ -600,6 +614,13 @@ constexpr auto INFIX_FNS = [] -> auto {
 
 auto parser::get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn> {
     return PREFIX_FNS.get_opt(tt);
+}
+
+auto parser::ends_type_expression() const noexcept -> bool {
+    if (!type_expression_depth_ || *type_expression_depth_ != delimiter_depth_) { return false; }
+    if (peek_token_.type == token_type_t::LBRACE) { return true; }
+    const auto peek_binding{binding::try_get_from(peek_token_.type)};
+    return peek_binding && peek_binding->precedence == bind_precedence::ASSIGNMENT;
 }
 
 auto parser::get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn> {

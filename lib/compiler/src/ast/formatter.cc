@@ -1751,6 +1751,10 @@ auto formatter::visit(explicit_type_id id, const explicit_array_type& node) -> s
                          }));
 }
 
+auto formatter::visit(explicit_type_id id, const explicit_expr_type& node) -> syntax::doc_id {
+    return with_modifier(id, format(node.expr));
+}
+
 auto formatter::visit(explicit_type_id id, const explicit_dyn_type& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> parts{doc_manager_.text("dyn "), format(node.interface_type)};
     if (!node.assoc_bindings.empty()) {
