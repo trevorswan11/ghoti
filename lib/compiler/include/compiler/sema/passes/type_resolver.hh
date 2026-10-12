@@ -432,6 +432,7 @@ class type_resolver {
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
     [[nodiscard]] auto fold_target_features(const ast::attribute& item) -> std::vector<std::string>;
+    [[nodiscard]] auto entry_main_type() const -> stdx::option<type&>;
 
     // What the block holding the statement being resolved is the body of, if anything hintable
     [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;

@@ -137,6 +137,9 @@ struct module {
     // Every `import` node in this module, at any nesting depth
     std::vector<ast::node_id> import_nodes;
 
+    // `lib/start`, the program's entry code, which alone may use `@entryMain()`
+    bool is_start{false};
+
     // Root `test` blocks waiting for every module's declarations to resolve (test builds only)
     std::vector<ast::node_id> deferred_tests;
 
@@ -515,6 +518,10 @@ class module_manager {
         return static_cast<bool>(builtin_module_);
     }
 
+    // Parses `lib/start` from `source` the first time; `path` names it in diagnostics
+    [[nodiscard]] auto get_or_create_start_module(const std::filesystem::path& path,
+                                                  std::string_view             source) -> module&;
+
     // The returned reference is guaranteed to be stable even across moves of the manager
     [[nodiscard]] auto arena() noexcept -> ghoti::arena& { return *arena_; }
 
@@ -526,6 +533,7 @@ class module_manager {
     source_loader&          loader_;
     module_table            modules_;
     stdx::box<module>       builtin_module_;
+    stdx::box<module>       start_module_;
     stdx::box<ghoti::arena> arena_{stdx::make_box<ghoti::arena>()};
 
     // Maps physical ghoti modules to their path on disk

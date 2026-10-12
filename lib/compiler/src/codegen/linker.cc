@@ -259,11 +259,6 @@ auto add_mingw_args(std::vector<std::string>&   args,
     }
     add_unix_libraries(args, linker_opts);
     add_builtins(args, linker_opts);
-    // The entry wrapper's own Win32 API calls need their import libs listed explicitly.
-    if (linker_opts.needs_windows_entry_apis) {
-        args.emplace_back("-lkernel32");
-        args.emplace_back("-lshell32");
-    }
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -297,11 +292,6 @@ auto add_msvc_args(std::vector<std::string>&   args,
         args.emplace_back(lib.ends_with(".lib") ? lib : fmt::format("{}.lib", lib));
     }
     add_builtins(args, linker_opts);
-    // See the equivalent comment in add_mingw_args -- these aren't supplied by a spec file here
-    if (linker_opts.needs_windows_entry_apis) {
-        args.emplace_back("kernel32.lib");
-        args.emplace_back("shell32.lib");
-    }
     args.emplace_back("/opt:ref");
     args.emplace_back("/opt:icf");
     args.emplace_back(fmt::format("/out:{}", out_path_str));
@@ -353,7 +343,7 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
-        // Linux gets a freestanding `_start` synthesized in codegen (no crt/libc)
+        // Linux enters at `lib/start`'s freestanding `_start` (no crt/libc)
         args.emplace_back("-e");
         args.emplace_back(triple.isOSLinux() ? "_start" : "main");
     }
@@ -492,10 +482,6 @@ auto add_elf_args(std::vector<std::string>&   args,
 auto reset_linker_context() -> void {
     if (lld::hasContext()) { lld::CommonLinkerContext::destroy(); }
     llvm::llvm_shutdown();
-}
-
-auto has_windows_argv_sysroot() -> bool {
-    return !windows_import_lib_dirs(resolve_target_triple()).empty();
 }
 
 auto link_executable(const std::filesystem::path& object_file,

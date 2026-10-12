@@ -4993,6 +4993,18 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return const_value{u64{facts.ptr_bits},
                            ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     }
+    case syntax::token_type_t::BUILTIN_ENTRY_MAIN: {
+        auto* root{ctx_.entry_root};
+        if (!root || !root->root_table_idx) { return stdx::none; }
+        const auto sym{ctx_.registry.get_from_opt(*root->root_table_idx, ctx_.user_main_name)};
+        const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+        const auto decl{node ? root->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+        if (!decl || !decl->value) { return stdx::none; }
+        const auto fn_type{root->get_sema_type_opt(*decl->value)};
+        if (!fn_type || fn_type->get_kind() != sema::type_kind::FUNCTION) { return stdx::none; }
+        return const_value{scoped_symbol_name(*root->root_table_idx, ctx_.user_main_name),
+                           *fn_type};
+    }
     case syntax::token_type_t::BUILTIN_SRC: {
         const auto   loc{id.is_valid() ? module_->ast.location_of(id)
                                        : module_->ast.location_of(call.function)};

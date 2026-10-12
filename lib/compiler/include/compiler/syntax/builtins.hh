@@ -143,6 +143,8 @@ constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
 constexpr builtin_t CALL{"@call", token_type_t::BUILTIN_CALL};
 constexpr builtin_t ENUM_LITERAL{"@EnumLiteral", token_type_t::BUILTIN_ENUM_LITERAL};
 constexpr builtin_t LLVM_INTRINSIC{"@llvmIntrinsic", token_type_t::BUILTIN_LLVM_INTRINSIC};
+constexpr builtin_t ENTRY_MAIN{"@entryMain", token_type_t::BUILTIN_ENTRY_MAIN};
+constexpr builtin_t TEST_FUNCTIONS{"@testFunctions", token_type_t::BUILTIN_TEST_FUNCTIONS};
 constexpr builtin_t RETURN_ADDRESS{"@returnAddress", token_type_t::BUILTIN_RETURN_ADDRESS};
 constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
 constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
@@ -269,6 +271,8 @@ constexpr std::array ALL_BUILTINS{
     builtins::CALL,
     builtins::ENUM_LITERAL,
     builtins::LLVM_INTRINSIC,
+    builtins::ENTRY_MAIN,
+    builtins::TEST_FUNCTIONS,
     builtins::RETURN_ADDRESS,
 };
 

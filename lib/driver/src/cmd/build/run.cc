@@ -17,6 +17,7 @@ auto run_cmd::execute() -> stdx::result<void, clap::error> {
     opts_.use_temp_executable_output("ghoti_run");
 
     build::compilation compilation{opts_, error_stream_};
+    compilation.get_analyzer().set_entry_point(true);
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 

@@ -108,6 +108,15 @@ class export_registry {
         return stdx::none;
     }
 
+    // Like `named`, but skipping the exports of `lib/start`, the program's entry code
+    [[nodiscard]] auto named_by_program(std::string_view name) const
+        -> stdx::option<const function_export&> {
+        for (const auto& entry : exports_) {
+            if (entry.name == name && !(entry.owner && entry.owner->is_start)) { return entry; }
+        }
+        return stdx::none;
+    }
+
   private:
     std::vector<function_export> exports_;
 };
@@ -134,6 +143,9 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
+    // The root module and `lib/start`, once an executable's entry code is attached
+    mod::module*            entry_root{nullptr};
+    mod::module*            start_module{nullptr};
     bool                    runtime_safety{true};
     // Building a test executable, which `@cfg(testing)` reports
     bool               testing{false};
@@ -205,7 +217,8 @@ struct context {
           instantiation_cache{other.instantiation_cache}, impls{other.impls}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
-          user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
+          user_main_name{other.user_main_name}, entry_root{other.entry_root},
+          start_module{other.start_module}, runtime_safety{other.runtime_safety},
           testing{other.testing}, build_mode{other.build_mode},
           deprecated_policy{other.deprecated_policy},
           comptime_binding_frames{other.comptime_binding_frames},

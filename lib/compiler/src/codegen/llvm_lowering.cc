@@ -326,24 +326,6 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::create_c_entry_function() -> llvm::Function* {
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    // Linux executables get a freestanding `_start` (no crt/libc) that calls into `main`
-    if (llvm::Triple{llvm_module_->getTargetTriple()}.isOSLinux()) {
-        const auto saved_insert_point{builder_.saveIP()};
-        emit_freestanding_start(main_fn);
-        builder_.restoreIP(saved_insert_point);
-    }
-    return main_fn;
-}
-
 auto llvm_lowering::finalize_runtime_support() -> void {
     lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
@@ -397,161 +379,8 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     gir_module_.emplace(gir_mod);
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
-    emit_main_entry_wrapper(user_main_name_);
     finalize_runtime_support();
     return std::move(llvm_module_);
-}
-
-auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> llvm::Function* {
-    PROFILE_FUNCTION();
-    auto* user_fn{llvm_module_->getFunction("_ghoti_main")};
-    if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
-    ASSERT(user_fn, "User main function not found in LLVM module");
-
-    auto* main_fn{create_c_entry_function()};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    emit_x87_precision_init();
-
-    // Nothing reads args unless user main takes the `[][:0]u8` parameter.
-    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
-    auto*      outer_val{emit_argv_slice(main_fn, takes_arg)};
-
-    if (user_fn->getReturnType()->isVoidTy()) {
-        if (takes_arg) {
-            builder_.CreateCall(user_fn, {outer_val});
-        } else {
-            builder_.CreateCall(user_fn, {});
-        }
-        emit_entry_exit(builder_.getInt32(0));
-    } else {
-        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
-                                : builder_.CreateCall(user_fn, {}, "main.res")};
-        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-        emit_entry_exit(ret_i32);
-    }
-
-    return main_fn;
-}
-
-auto llvm_lowering::emit_entry_exit(llvm::Value* code) -> void {
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows()) {
-        builder_.CreateRet(code);
-        return;
-    }
-
-    auto* exit_ty{llvm::FunctionType::get(types_.get_void_ty(), {types_.get_int32_ty()}, false)};
-    auto  exit_fn{llvm_module_->getOrInsertFunction("ExitProcess", exit_ty)};
-    builder_.CreateCall(exit_fn, {code});
-    builder_.CreateUnreachable();
-}
-
-auto llvm_lowering::emit_x87_precision_init() -> void {
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows() || !triple.isX86()) { return; }
-    auto* asm_ty{llvm::FunctionType::get(types_.get_void_ty(), false)};
-    // `fninit` restores the full 64-bit significand other targets start with
-    builder_.CreateCall(llvm::InlineAsm::get(asm_ty, "fninit", "~{fpsr},~{fpcr},~{dirflag}", true));
-}
-
-auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
-    PROFILE_FUNCTION();
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    std::string asm_text;
-    switch (triple.getArch()) {
-    case llvm::Triple::x86_64:
-        asm_text = "xorl %ebp, %ebp\n\t"    // mark the outermost frame
-                   "movq (%rsp), %rdi\n\t"  // argc
-                   "leaq 8(%rsp), %rsi\n\t" // argv
-                   "andq $$-16, %rsp\n\t"   // realign for the SysV call
-                   "call main\n\t"
-                   "movl %eax, %edi\n\t"  // exit code <- main()'s return
-                   "movl $$231, %eax\n\t" // __NR_exit_group
-                   "syscall\n\t"
-                   "ud2\n\t";
-        break;
-    case llvm::Triple::aarch64:
-        asm_text = "mov x29, xzr\n\t"
-                   "mov x30, xzr\n\t"
-                   "ldr x0, [sp]\n\t"   // argc (read before realigning sp)
-                   "add x1, sp, #8\n\t" // argv
-                   "mov x2, sp\n\t"
-                   "and x2, x2, #-16\n\t"
-                   "mov sp, x2\n\t"
-                   "bl main\n\t"
-                   "mov w8, #94\n\t" // __NR_exit_group
-                   "svc #0\n\t"
-                   "brk #0\n\t";
-        break;
-    case llvm::Triple::riscv64:
-        asm_text = "li s0, 0\n\t"
-                   "ld a0, 0(sp)\n\t"   // argc
-                   "addi a1, sp, 8\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::riscv32:
-        asm_text = "li s0, 0\n\t"
-                   "lw a0, 0(sp)\n\t"   // argc (32-bit word)
-                   "addi a1, sp, 4\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::arm:
-    case llvm::Triple::thumb:
-        // One template for A32 and T32. The kernel delivers an 8-byte aligned sp at
-        // entry (AAPCS), so no realign is needed before the call to `main`
-        asm_text = "ldr r0, [sp, #0]\n\t" // argc
-                   "add r1, sp, #4\n\t"   // argv
-                   "bl main\n\t"
-                   "movs r7, #248\n\t" // __NR_exit_group  (ARM EABI)
-                   "svc #0\n\t"
-                   "udf #0\n\t";
-        break;
-    case llvm::Triple::loongarch64:
-        // LoongArch registers are spelled `$a0` etc.; `$` is the operand sigil in
-        // an LLVM asm string, so each one is escaped as `$$`.
-        asm_text = "move $$fp, $$zero\n\t"
-                   "ld.d $$a0, $$sp, 0\n\t"   // argc
-                   "addi.d $$a1, $$sp, 8\n\t" // argv
-                   "bl main\n\t"
-                   "ori $$a7, $$zero, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "syscall 0\n\t"
-                   "break 0\n\t";
-        break;
-    default:
-        // Linux arch with a diagnostic before lowering runs. Kept as a safe no-op.
-        return;
-    }
-
-    auto* void_ty{llvm::Type::getVoidTy(context_)};
-    auto* start_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_fn{llvm::Function::Create(
-        start_ty, llvm::Function::ExternalLinkage, "_start", llvm_module_.get())};
-    start_fn->addFnAttr(llvm::Attribute::Naked);
-    start_fn->addFnAttr(llvm::Attribute::NoInline);
-    start_fn->addFnAttr(llvm::Attribute::NoUnwind);
-    start_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    start_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", start_fn)};
-    builder_.SetInsertPoint(entry_bb);
-
-    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_asm{
-        llvm::InlineAsm::get(asm_ty, asm_text, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
-    builder_.CreateCall(start_asm, {});
-    builder_.CreateUnreachable();
-    llvm::appendToUsed(*llvm_module_, {start_fn, main_fn});
 }
 
 auto llvm_lowering::windows_stack_probe_symbol() const -> stdx::option<std::string_view> {
@@ -564,336 +393,83 @@ auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
     return llvm::ConstantInt::get(types_.get_usize_ty(), value);
 }
 
-auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
+auto llvm_lowering::lower_test_executable(const gir::module& gir_mod,
+                                          std::string_view   user_main_name)
+    -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
-    auto*              slice_ty{types_.translate_slice_type()};
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    // Windows raw PE entry point
-    if (triple.isOSWindows()) {
-        // BaseThreadInitThunk calls entry with no argc/argv, unlike the POSIX path below.
-        llvm::Value* outer_val{nullptr};
-        if (!want_real_args) {
-            // Nothing reads args -- skip the WinAPI calls entirely and pass an empty slice
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-            builder_.CreateStore(usize_const(0), outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        } else {
-            // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
-            auto* get_cmdline_ty{llvm::FunctionType::get(types_.get_ptr_ty(), {}, false)};
-            auto  get_cmdline_fn{
-                llvm_module_->getOrInsertFunction("GetCommandLineW", get_cmdline_ty)};
-
-            auto* cmdline_to_argv_ty{llvm::FunctionType::get(
-                types_.get_ptr_ty(), {types_.get_ptr_ty(), types_.get_ptr_ty()}, false)};
-            auto  cmdline_to_argv_fn{
-                llvm_module_->getOrInsertFunction("CommandLineToArgvW", cmdline_to_argv_ty)};
-
-            auto* wc2mb_ty{llvm::FunctionType::get(types_.get_int32_ty(),
-                                                   {types_.get_int32_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_ptr_ty()},
-                                                   false)};
-            auto  wc2mb_fn{llvm_module_->getOrInsertFunction("WideCharToMultiByte", wc2mb_ty)};
-
-            constexpr u64 max_args{16};
-            constexpr u64 max_arg_bytes{1'024};
-            constexpr u32 cp_utf8{65'001};
-
-            auto* nargs_slot{builder_.CreateAlloca(types_.get_int32_ty(), nullptr, "nargs")};
-            auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
-            auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
-            auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
-            auto* raw_argc_i64{
-                builder_.CreateSExtOrTrunc(nargs_i32, types_.get_usize_ty(), "argc.i64")};
-
-            auto* max_args_v{usize_const(max_args)};
-            auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
-            auto* arg_bufs{builder_.CreateAlloca(
-                types_.get_int8_ty(), usize_const(max_args * max_arg_bytes), "arg.bufs")};
-            auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
-                                                 raw_argc_i64,
-                                                 max_args_v,
-                                                 "argc.bounded")};
-
-            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", entry_fn)};
-            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", entry_fn)};
-            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
-            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
-
-            auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "wi")};
-            builder_.CreateStore(usize_const(0), i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_cond);
-            auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "wcur.i")};
-            auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
-            builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-            builder_.SetInsertPoint(loop_body);
-            auto* wargv_elem_ptr{
-                builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
-            auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
-            auto* buf_off{builder_.CreateMul(cur_i, usize_const(max_arg_bytes), "buf.off")};
-            auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
-
-            // Subtract one to exclude the converted null terminator, matching strlen-style.
-            constexpr u32 auto_len{0xFFFFFFFFu}; // cchWideChar = -1: source is null-terminated
-            auto*         converted{
-                builder_.CreateCall(wc2mb_fn,
-                                    {builder_.getInt32(cp_utf8),
-                                     builder_.getInt32(0),
-                                     wstr_ptr,
-                                     builder_.getInt32(auto_len),
-                                     buf_ptr,
-                                     builder_.getInt32(max_arg_bytes),
-                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
-                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
-                                    "converted.len")};
-            auto* converted_i64{
-                builder_.CreateSExtOrTrunc(converted, types_.get_usize_ty(), "converted.i64")};
-            auto* final_len{builder_.CreateSub(converted_i64, usize_const(1), "final.len")};
-
-            auto* dest_slice_ptr{
-                builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
-            auto* dest_data_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX),
-                                         "wdest.data")};
-            auto* dest_len_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX),
-                                         "wdest.len")};
-            builder_.CreateStore(buf_ptr, dest_data_field);
-            builder_.CreateStore(final_len, dest_len_field);
-            builder_.CreateBr(loop_inc);
-
-            builder_.SetInsertPoint(loop_inc);
-            auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "winc.i")};
-            builder_.CreateStore(inc_i, i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_end);
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(slice_array, outer_data);
-            builder_.CreateStore(argc_i64, outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        }
-
-        return outer_val;
-    }
-
-    auto* argc{entry_fn->getArg(0)};
-    argc->setName("argc");
-    auto* argv{entry_fn->getArg(1)};
-    argv->setName("argv");
-
-    auto* raw_argc_i64{builder_.CreateSExtOrTrunc(argc, types_.get_usize_ty(), "argc.i64")};
-
-    // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
-    auto* max_args{usize_const(128)};
-    auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
-    auto* argc_i64{builder_.CreateSelect(
-        builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
-
-    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", entry_fn)};
-    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", entry_fn)};
-    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
-    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
-
-    auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "i")};
-    builder_.CreateStore(usize_const(0), i_var);
-    builder_.CreateBr(loop_cond);
-
-    // Loop condition: i < argc_i64
-    builder_.SetInsertPoint(loop_cond);
-    auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "cur.i")};
-    auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
-    builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-    // Loop body: measure strlen(argv[i]) and store into slice_array[i]
-    builder_.SetInsertPoint(loop_body);
-    auto* argv_elem_ptr{builder_.CreateGEP(types_.get_ptr_ty(), argv, {cur_i}, "argv.elem.ptr")};
-    auto* str_ptr{builder_.CreateLoad(types_.get_ptr_ty(), argv_elem_ptr, "str.ptr")};
-
-    // Calculate strlen(str_ptr) via a sub-loop
-    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", entry_fn)};
-    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
-    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
-
-    auto* len_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "str.len")};
-    builder_.CreateStore(usize_const(0), len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_cond);
-    auto* cur_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "cur.len")};
-    auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
-    auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
-    auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
-    builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
-
-    builder_.SetInsertPoint(str_len_body);
-    auto* next_len{builder_.CreateAdd(cur_len, usize_const(1), "next.len")};
-    builder_.CreateStore(next_len, len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_end);
-    auto* final_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "final.len")};
-
-    // Store { str_ptr, final_len } into slice_array[cur_i]
-    auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
-    auto* dest_data_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
-    auto* dest_len_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
-    builder_.CreateStore(str_ptr, dest_data_field);
-    builder_.CreateStore(final_len, dest_len_field);
-    builder_.CreateBr(loop_inc);
-
-    // Loop increment: i++
-    builder_.SetInsertPoint(loop_inc);
-    auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "inc.i")};
-    builder_.CreateStore(inc_i, i_var);
-    builder_.CreateBr(loop_cond);
-
-    builder_.SetInsertPoint(loop_end);
-    auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-    auto* outer_data{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-    auto* outer_len{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-    builder_.CreateStore(slice_array, outer_data);
-    builder_.CreateStore(argc_i64, outer_len);
-    return builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-}
-
-auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
-                                          stdx::option<std::string_view> user_runner_name,
-                                          bool recover_args) -> stdx::box<llvm::Module> {
-    PROFILE_FUNCTION();
-    user_main_name_ =
-        user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
-    is_executable_ = true;
+    is_executable_  = true;
+    user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
     declare_functions(gir_mod);
     define_test_take_skipped();
     lower_definitions(gir_mod);
-    emit_test_entry_wrapper(gir_mod, recover_args);
     finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
-    -> llvm::Function* {
+// `@testFunctions()`: a `[]builtin.Test` over every test function, built once
+auto llvm_lowering::emit_test_table() -> llvm::Value* {
     PROFILE_FUNCTION();
-    auto* main_fn{create_c_entry_function()};
-
     auto* slice_ty{types_.translate_slice_type()};
+    if (auto* table{llvm_module_->getGlobalVariable("__ghoti_tests_slice", true)}) {
+        return builder_.CreateLoad(slice_ty, table, "tests.slice");
+    }
+
     // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
     auto* loc_struct_ty{
         llvm::StructType::get(context_, {slice_ty, types_.get_int32_ty(), types_.get_int32_ty()})};
-    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: fn(): bool }`
+    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: extern fn(): bool }`
     auto* test_struct_ty{
         llvm::StructType::get(context_, {slice_ty, loc_struct_ty, types_.get_ptr_ty()})};
 
-    const auto& test_fns{gir_mod.get_test_functions()};
+    const auto& test_fns{gir_module_->get_test_functions()};
     const auto  test_count{test_fns.size()};
 
-    std::vector<llvm::Constant*> test_descriptors;
-    test_descriptors.reserve(test_count);
+    const auto string_slice{[&](std::string_view text, std::string_view name) {
+        auto* data{llvm::ConstantDataArray::getString(context_, text, false)};
+        auto* gvar{new llvm::GlobalVariable(
+            *llvm_module_, data->getType(), true, llvm::GlobalValue::InternalLinkage, data, name)};
+        return llvm::ConstantStruct::get(
+            slice_ty, {gvar, llvm::ConstantInt::get(types_.get_usize_ty(), text.size())});
+    }};
 
+    std::vector<llvm::Constant*> descriptors;
+    descriptors.reserve(test_count);
     for (usize i{0}; i < test_count; ++i) {
         const auto* fn{test_fns[i]};
-        const auto& fn_symbol_name{fn->get_name()};
-        auto*       test_llvm_fn{llvm_module_->getFunction(fn_symbol_name)};
-        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+        auto*       test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+        ASSERT(test_llvm_fn, "Test function must already be declared before the test table");
 
-        const auto& desc_name{fn->get_test_desc().empty() ? fn_symbol_name : fn->get_test_desc()};
-        auto*       name_str{llvm::ConstantDataArray::getString(context_, desc_name, false)};
-        auto*       name_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                       name_str->getType(),
-                                                       true,
-                                                       llvm::GlobalValue::InternalLinkage,
-                                                       name_str,
-                                                       fmt::format("str.test_name.{}", i))};
-        auto*       name_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {name_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), desc_name.size())})};
-
-        const auto file_path{fn->get_test_file().empty() ? gir_mod.get_ast_module().path.string()
-                                                         : fn->get_test_file()};
-        auto*      file_str{llvm::ConstantDataArray::getString(context_, file_path, false)};
-        auto*      file_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                      file_str->getType(),
-                                                      true,
-                                                      llvm::GlobalValue::InternalLinkage,
-                                                      file_str,
-                                                      fmt::format("str.test_file.{}", i))};
-        auto*      file_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {file_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), file_path.size())})};
-
-        auto* line_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
-        auto* col_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
-        auto* loc_val{llvm::ConstantStruct::get(loc_struct_ty, {file_slice, line_val, col_val})};
-
-        test_descriptors.emplace_back(
-            llvm::ConstantStruct::get(test_struct_ty, {name_slice, loc_val, test_llvm_fn}));
+        const auto& desc{fn->get_test_desc().empty() ? fn->get_name() : fn->get_test_desc()};
+        const auto  file{fn->get_test_file().empty() ? gir_module_->get_ast_module().path.string()
+                                                     : fn->get_test_file()};
+        auto*       line{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
+        auto*       col{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
+        auto*       loc{llvm::ConstantStruct::get(
+            loc_struct_ty, {string_slice(file, fmt::format("str.test_file.{}", i)), line, col})};
+        descriptors.emplace_back(llvm::ConstantStruct::get(
+            test_struct_ty,
+            {string_slice(desc, fmt::format("str.test_name.{}", i)), loc, test_llvm_fn}));
     }
 
-    auto* test_array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
-    auto* test_array_init{test_count > 0 ? llvm::ConstantArray::get(test_array_ty, test_descriptors)
-                                         : llvm::ConstantAggregateZero::get(test_array_ty)};
-    auto* test_array_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   test_array_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_array_init,
-                                                   "__ghoti_tests_data")};
-
-    auto* test_slice_const{llvm::ConstantStruct::get(
-        slice_ty, {test_array_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)})};
-    auto* test_slice_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   slice_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_slice_const,
-                                                   "__ghoti_tests_slice")};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    emit_x87_precision_init();
-
-    // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
-    auto* runner_fn{llvm_module_->getFunction("test_runner")};
-    VERIFY(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
-
-    auto* args_slice_val{emit_argv_slice(main_fn, recover_args)};
-    auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
-    auto* call_res{builder_.CreateCall(runner_fn, {args_slice_val, test_slice_val})};
-    if (runner_fn->getReturnType()->isIntegerTy(32)) {
-        emit_entry_exit(call_res);
-    } else {
-        emit_entry_exit(builder_.getInt32(0));
-    }
-
-    return main_fn;
+    auto* array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
+    auto* array_init{test_count > 0 ? llvm::ConstantArray::get(array_ty, descriptors)
+                                    : llvm::ConstantAggregateZero::get(array_ty)};
+    auto* array{new llvm::GlobalVariable(*llvm_module_,
+                                         array_ty,
+                                         true,
+                                         llvm::GlobalValue::InternalLinkage,
+                                         array_init,
+                                         "__ghoti_tests_data")};
+    auto* table{new llvm::GlobalVariable(
+        *llvm_module_,
+        slice_ty,
+        true,
+        llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(
+            slice_ty, {array, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)}),
+        "__ghoti_tests_slice")};
+    return builder_.CreateLoad(slice_ty, table, "tests.slice");
 }
 
 auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
@@ -2731,6 +2307,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.CreateCall(trap_fn, {});
             return nullptr;
         }
+        case syntax::token_type_t::BUILTIN_TEST_FUNCTIONS: return emit_test_table();
         case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
             // Overloaded on the code pointer it yields, which lives in the program address space
             const auto code_space{llvm_module_->getDataLayout().getProgramAddressSpace()};

@@ -78,6 +78,11 @@ namespace {
     return gir_mod;
 }
 
+// The entry code is analyzed for the target it runs on, which a test may pick only when emitting
+auto entry_target(helpers::sema_test_context& test_ctx, stdx::option<std::string> triple) -> void {
+    if (triple) { test_ctx.analyzer.get_ctx().target_opts.triple_str = std::move(triple); }
+}
+
 } // namespace
 
 auto emit_llvm_ir(helpers::sema_test_context&       test_ctx,
@@ -93,6 +98,10 @@ auto emit_llvm_ir_executable(helpers::sema_test_context&       test_ctx,
                              const codegen::optimizer_options& options,
                              std::string_view                  user_main_name)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
+    if (options.target_machine) {
+        entry_target(test_ctx, options.target_machine->getTargetTriple().str());
+    }
+    test_ctx.analyzer.set_entry_point(true);
     auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_llvm_ir_executable(gir_mod, context, options, user_main_name);
 }
@@ -120,6 +129,8 @@ auto emit_executable(helpers::sema_test_context&          test_ctx,
                      const codegen::optimizer_options&    opt_options,
                      const codegen::extra_linker_options& linker_opts)
     -> stdx::result<void, codegen::diagnostic> {
+    entry_target(test_ctx, target_opts.triple_str);
+    test_ctx.analyzer.set_entry_point(true);
     auto gir_mod{TRY(emit_preamble(test_ctx))};
     return test_ctx.analyzer.emit_executable(
         gir_mod, context, target_opts, opt_options, output_path, linker_opts);
@@ -132,6 +143,7 @@ auto emit_test_executable(helpers::sema_test_context&          test_ctx,
                           const codegen::optimizer_options&    opt_options,
                           const codegen::extra_linker_options& linker_opts)
     -> stdx::result<void, codegen::diagnostic> {
+    entry_target(test_ctx, target_opts.triple_str);
     auto gir_mod{TRY(emit_preamble(test_ctx, true))};
     return test_ctx.analyzer.emit_test_executable(
         gir_mod, context, target_opts, opt_options, output_path, linker_opts);

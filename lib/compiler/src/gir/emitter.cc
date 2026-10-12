@@ -176,6 +176,11 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
+    // `lib/start` is attached by the compiler, and emitted last
+    if (ctx_.start_module && visited.insert(ctx_.start_module).second) {
+        imported_mods.emplace_back(ctx_.start_module);
+    }
+
     // The compiler-provided `builtin` module is injected into the prelude, not imported
     if (include_builtin_test_runtime && ctx_.modules.has_builtin_module()) {
         auto& builtin_mod{ctx_.modules.builtin_module()};
@@ -4012,6 +4017,17 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 args.emplace_back(emit_expression(*call.arguments[i].as_opt<ast::expr_handle>()));
             }
             if (const auto res{builder_.emit_builtin_call(name, std::move(args), ret_type)}) {
+                return value{*res, ret_type};
+            }
+            return value{void_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_ENTRY_MAIN: {
+            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            return value{undefined_val{}, ret_type};
+        }
+        case syntax::token_type_t::BUILTIN_TEST_FUNCTIONS: {
+            // Lowering builds the table once every test function is known
+            if (const auto res{builder_.emit_builtin_call("@testFunctions", {}, ret_type)}) {
                 return value{*res, ret_type};
             }
             return value{void_val{}, ret_type};

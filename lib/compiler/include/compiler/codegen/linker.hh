@@ -23,16 +23,11 @@ struct extra_linker_options {
     gsl::span<std::filesystem::path> objects{};
     gsl::span<std::filesystem::path> library_paths{};
     gsl::span<std::string>           libraries{};
-    // Set when the entry wrapper calls raw Win32 APIs (argv recovery, `ExitProcess`).
-    bool needs_windows_entry_apis{false};
     // Compiler builtins archive, linked after every other input so it only fills in what's missing
     stdx::option<std::filesystem::path> builtins{};
     // Builds `builtins` from ghoti sources when the object calls a runtime libcall; unset skips it
     stdx::option<compiler_rt_options> compiler_rt{};
 };
-
-// True when an import-lib directory for the Windows Win32 APIs (kernel32 / shell32) is configured
-[[nodiscard]] auto has_windows_argv_sysroot() -> bool;
 
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,
                                    const std::filesystem::path& output_file,

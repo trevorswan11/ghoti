@@ -366,6 +366,9 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::ENUM_LITERAL, params(), t_type);
     // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
     inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
+    // Only `lib/start` may name the program's `main` and its tests
+    inject_function(bis::ENTRY_MAIN, params(), t_auto);
+    inject_function(bis::TEST_FUNCTIONS, params(), t_auto);
 
     // `@implements(T | value, I)` -> bool (comptime)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);

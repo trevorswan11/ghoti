@@ -133,12 +133,18 @@ auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
     if (builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored())) {
         builtin_module_->print_diagnostics(os);
     }
+    if (start_module_ && (start_module_->is_poisoned() || start_module_->is_errored())) {
+        start_module_->print_diagnostics(os);
+    }
 }
 
 auto module_manager::any_errored() const noexcept -> bool {
     // This is necessary as the module itself is lazily checked
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { return true; }
+    }
+    if (start_module_ && (start_module_->is_poisoned() || start_module_->is_errored())) {
+        return true;
     }
     return builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored());
 }
@@ -179,6 +185,27 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
     builtin_module_->state = module_state::PARSED;
     return *builtin_module_;
+}
+
+auto module_manager::get_or_create_start_module(const std::filesystem::path& path,
+                                                std::string_view             source) -> module& {
+    PROFILE_FUNCTION();
+    if (start_module_) { return *start_module_; }
+
+    start_module_ =
+        stdx::make_box<module>(path, path.parent_path(), source_file{std::string{source}});
+    syntax::parser p{start_module_->source};
+    auto           diagnostics{p.consume(start_module_->ast, *arena_)};
+
+    start_module_->sema_side_tables.resize(start_module_->ast.get_pool_sizes());
+    start_module_->parse_diagnostics.reserve(diagnostics.size());
+    for (const auto& d : diagnostics) {
+        start_module_->parse_diagnostics.emplace_back(d.snapshot());
+    }
+    start_module_->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
+    start_module_->diagnostics = std::move(diagnostics);
+    start_module_->is_start    = true;
+    return *start_module_;
 }
 
 auto module::get_overlay_node_type(usize idx) const noexcept

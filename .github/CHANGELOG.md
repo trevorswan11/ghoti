@@ -727,6 +727,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@call(modifier, f, args...)` calls `f` with `args` as `f(args...)` does, but how `builtin.CallModifier` asks: `.auto`, `.never_tail`, `.never_inline`, `.always_tail`, `.always_inline`, or `.compile_time`
     - Arguments are a variadic tail rather than a tuple, so `@call(.never_inline, f, rest...)` forwards a pack
     - A modifier that can't be honored is an error: an inline modifier against the function's own `@[inline(...)]`, `.always_inline` on an `extern`, `@[naked]`, or indirect call, `.always_tail` when the call isn't returned directly (a `defer` would run after it) or the signatures differ, and a `.compile_time` call that doesn't fold
+- Program entry is ghoti code: `lib/start/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
+    - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
+    - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
+    - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target

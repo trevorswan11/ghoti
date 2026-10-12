@@ -2515,6 +2515,31 @@ template <ast::IndexableID ID>
             types::mut::CONSTANT, true, content_opt->size(), ctx_.get_int(8, false));
         break;
     }
+    case token_type_t::BUILTIN_ENTRY_MAIN:
+    case token_type_t::BUILTIN_TEST_FUNCTIONS: {
+        const auto name{*syntax::get_builtin_opt(builtin_id)};
+        if (!resolving_.is_start) {
+            return make_sema_err(fmt::format("'{}()' is only valid in the program's entry code "
+                                             "(`lib/start`)",
+                                             name),
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        if (builtin_id == token_type_t::BUILTIN_TEST_FUNCTIONS) {
+            auto& test{ctx_.get_builtin_type("Test")};
+            return_type = &ctx_.get_slice(types::mut::CONSTANT, false, denoted_type(test));
+            break;
+        }
+        const auto main_type{entry_main_type()};
+        if (!main_type) {
+            return make_sema_err(
+                fmt::format("'{}()': the program has no '{}' function", name, ctx_.user_main_name),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        return_type = &*main_type;
+        break;
+    }
     case token_type_t::BUILTIN_ENUM_LITERAL: {
         auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
         auto  meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, literal}]};
@@ -12428,7 +12453,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
     }
 
     // Exporting a function as `main` makes it the program's entry point
-    if (*name == "main") {
+    if (*name == "main" && !resolving_.is_start) {
         if (!decl || owner != resolving_) {
             return diagnostic{"A function exported as 'main' must be declared in the module that "
                               "exports it, and named directly",
@@ -12453,6 +12478,20 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
         const bool same{earlier->owner && earlier->owner == owner &&
                         earlier->fn_node.get_index() == fn_node->get_index()};
         if (same) { return stdx::none; }
+        // The entry code's C `main` stands in for the program's `main` export
+        const bool entry_main{*name == "main" && (resolving_.is_start ||
+                                                  (earlier->owner && earlier->owner->is_start))};
+        if (entry_main) {
+            ctx_.exports.add({
+                .owner      = *owner,
+                .fn_node    = *fn_node,
+                .name       = *name,
+                .weak       = enum_field("linkage") == "weak",
+                .visibility = visibility,
+                .site       = resolving_.ast.location_of(call.function),
+            });
+            return stdx::none;
+        }
         return diagnostic{fmt::format("The symbol '{}' is already exported at {}:{}",
                                       *name,
                                       earlier->site.line + 1,
@@ -12494,6 +12533,20 @@ auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_
                             error::ILLEGAL_ATTRIBUTE,
                             resolving_.ast.location_of(arg));
     return stdx::none;
+}
+
+// The type of the root module's `main`, for `@entryMain()`
+auto type_resolver::entry_main_type() const -> stdx::option<type&> {
+    if (!ctx_.entry_root || !ctx_.entry_root->root_table_idx) { return stdx::none; }
+    const auto sym{
+        ctx_.registry.get_from_opt(*ctx_.entry_root->root_table_idx, ctx_.user_main_name)};
+    if (!sym || sym->get_status() != symbol_status::RESOLVED) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    const auto decl{node ? ctx_.entry_root->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    if (!decl || !decl->value) { return stdx::none; }
+    const auto fn_type{ctx_.entry_root->get_sema_type_opt(*decl->value)};
+    if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+    return *fn_type;
 }
 
 // Each `builtin.CpuFeature` argument, as the `+name` LLVM enables it by
