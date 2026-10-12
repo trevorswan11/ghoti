@@ -1931,7 +1931,16 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::return_stmt& ret) { emit_return_stmt(stmt_id, ret); },
         [&](const ast::defer_stmt& def) { emit_defer_stmt(stmt_id, def); },
         [&](const ast::errdefer_stmt& errdef) { emit_errdefer_stmt(stmt_id, errdef); },
-        [&](const ast::expr_stmt& expr_st) { emit_expression_id(expr_st.expression); },
+        [&](const ast::expr_stmt& expr_st) {
+            const auto result{emit_expression_id(expr_st.expression)};
+            // A call that never returns (`exit(1);`) ends the path, as `unreachable` does
+            const auto is_call{active_ast().get_as_opt<ast::call_expr>(expr_st.expression)};
+            if (is_call && result.type && result.type->get_kind() == sema::type_kind::NORETURN) {
+                if (const auto seg{builder_.get_segment()}; seg && !seg->has_terminator()) {
+                    builder_.emit_unreachable();
+                }
+            }
+        },
         [&](const ast::break_stmt& brk) { emit_break(stmt_id, brk); },
         [&](const ast::continue_stmt& cnt) { emit_continue(stmt_id, cnt); },
         [&](const ast::discard_stmt& discard) { emit_expression(discard.discarded); },
