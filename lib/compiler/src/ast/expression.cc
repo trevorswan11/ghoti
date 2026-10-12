@@ -307,6 +307,28 @@ auto asm_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax
                                      force_break);
 }
 
+auto call_modifier_from_name(std::string_view name) noexcept -> stdx::option<call_modifier> {
+    if (name == "auto") { return call_modifier::AUTO; }
+    if (name == "never_tail") { return call_modifier::NEVER_TAIL; }
+    if (name == "never_inline") { return call_modifier::NEVER_INLINE; }
+    if (name == "always_tail") { return call_modifier::ALWAYS_TAIL; }
+    if (name == "always_inline") { return call_modifier::ALWAYS_INLINE; }
+    if (name == "compile_time") { return call_modifier::COMPILE_TIME; }
+    return stdx::none;
+}
+
+auto call_modifier_name(call_modifier modifier) noexcept -> std::string_view {
+    switch (modifier) {
+    case call_modifier::AUTO:          return "auto";
+    case call_modifier::NEVER_TAIL:    return "never_tail";
+    case call_modifier::NEVER_INLINE:  return "never_inline";
+    case call_modifier::ALWAYS_TAIL:   return "always_tail";
+    case call_modifier::ALWAYS_INLINE: return "always_inline";
+    case call_modifier::COMPILE_TIME:  return "compile_time";
+    }
+    return "auto";
+}
+
 auto call_expr::parse(syntax::parser& parser, expr_handle function)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -364,6 +386,30 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         }
     }
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+
+    // `@call(modifier, f, args...)` is a call of `f`; everything else about calls applies to it
+    if (function->get_token_type() == syntax::token_type_t::BUILTIN_CALL) {
+        const auto modifier{arguments.size() >= 2 ? arguments[0].as_opt<expr_handle>()
+                                                  : stdx::none};
+        const auto callee{arguments.size() >= 2 ? arguments[1].as_opt<expr_handle>() : stdx::none};
+        if (!modifier || !callee || pack_expansions[0] || pack_expansions[1]) {
+            return make_syntax_err("'@call' takes a modifier and a function, then the arguments: "
+                                   "`@call(.never_inline, f, x, y)`",
+                                   syntax::error::MALFORMED_CALL_BUILTIN,
+                                   start_token);
+        }
+        // Copied first: the handles above refer into `arguments`
+        const expr_handle modifier_h{*modifier};
+        const expr_handle callee_h{*callee};
+        arguments.erase(arguments.begin(), arguments.begin() + 2);
+        pack_expansions.erase(pack_expansions.begin(), pack_expansions.begin() + 2);
+        return parser.add_expr<call_expr>(start_token,
+                                          callee_h,
+                                          std::move(arguments),
+                                          force_break,
+                                          std::move(pack_expansions),
+                                          modifier_h);
+    }
 
     return parser.add_expr<call_expr>(
         start_token, function, std::move(arguments), force_break, std::move(pack_expansions));

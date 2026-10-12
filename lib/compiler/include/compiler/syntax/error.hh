@@ -105,6 +105,7 @@ enum class error : u8 {
     ATTRIBUTE_ARITY,
     DUPLICATE_ATTRIBUTE,
     MISPLACED_ATTRIBUTES,
+    MALFORMED_CALL_BUILTIN,
 };
 
 using diagnostic  = diagnostic<error>;

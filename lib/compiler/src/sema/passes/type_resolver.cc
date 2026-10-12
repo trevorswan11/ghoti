@@ -4793,7 +4793,52 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_call, const ast::call_expr&)
 
 auto type_resolver::visit(ast::node_id id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
+    if (call.modifier) {
+        if (syntax::get_builtin_opt(call.function->get_token_type())) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "'@call' calls a function; a builtin isn't one",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function)));
+        }
+        if (!resolve_call_modifier(id, *call.modifier)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+    }
     resolve_call(id, call);
+}
+
+// `@call`'s modifier must be a compile-time `builtin.CallModifier`
+auto type_resolver::resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool {
+    auto& modifier_type{ctx_.get_builtin_type("CallModifier")};
+    {
+        const structural_guard g{implicit_type_stack_, modifier_type};
+        resolve(modifier);
+    }
+    const auto resolved{last_type_.take()};
+    if (resolved->is_poison()) { return false; }
+    const auto location{resolving_.ast.location_of(*modifier)};
+    if (!is_assignable(*resolved, modifier_type)) {
+        ctx_.diags.emplace_back(fmt::format("'@call' expects a builtin.CallModifier, found '{}'",
+                                            ctx_.type_display_name(*resolved)),
+                                error::TYPE_MISMATCH,
+                                location);
+        return false;
+    }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(modifier)};
+    const auto      tag{folded ? folded->as_opt<gir::const_enum>() : stdx::none};
+    const auto      parsed{tag ? ast::call_modifier_from_name(tag->name) : stdx::none};
+    if (!parsed) {
+        ctx_.diags.emplace_back("'@call' modifier must be known at compile time",
+                                error::COMPTIME_EVALUATION_FAILED,
+                                location);
+        return false;
+    }
+    resolving_.call_modifiers.insert_or_assign(id.get_index(), *parsed);
+    return true;
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {

@@ -187,6 +187,7 @@ auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     default: break;
     }
 
+    if (call.modifier) { collect(*call.modifier); }
     collect(call.function);
     for (const auto& arg : call.arguments) {
         arg.visit([this](auto arg_id) -> void { collect(arg_id); });

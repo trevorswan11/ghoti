@@ -122,6 +122,9 @@ struct module {
     // `@runtimeSafety()` call node index -> the lexically scoped safety it observed
     ankerl::unordered_dense::map<usize, bool> scoped_runtime_safety;
 
+    // `@call(modifier, ...)` call node index -> its folded modifier
+    ankerl::unordered_dense::map<usize, ast::call_modifier> call_modifiers;
+
     // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
     ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
 

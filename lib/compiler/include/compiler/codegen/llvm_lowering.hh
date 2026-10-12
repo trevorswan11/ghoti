@@ -105,6 +105,9 @@ class llvm_lowering {
     auto emit_const(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_call(const gir::instruction& inst) -> llvm::Value*;
+    auto apply_call_modifier(ast::call_modifier modifier,
+                             llvm::BasicBlock&  block,
+                             llvm::Instruction* before) -> void;
     auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
 
     // `code(ctx, args...)` for an erased `fn(...)`: the thin signature with a leading `ctx: ptr`

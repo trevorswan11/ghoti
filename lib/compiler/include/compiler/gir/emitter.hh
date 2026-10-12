@@ -509,6 +509,7 @@ class emitter {
                                                 const ast::assignment_expr& assign,
                                                 syntax::token_type_t        op_type) -> value;
     auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    auto               emit_unmodified_call(ast::node_id id, const ast::call_expr& call) -> value;
     // A module-scope `^fn(...)` global, or `let mut` of function type, named directly as a callee
     [[nodiscard]] auto callee_is_fn_pointer_global(const ast::identifier_expr& ident,
                                                    ast::expr_handle            callee) -> bool;

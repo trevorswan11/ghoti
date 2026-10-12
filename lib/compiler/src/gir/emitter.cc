@@ -3651,6 +3651,32 @@ auto emitter::try_emit_field_builtin_addr(const ast::call_expr& call) -> stdx::o
 
 auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
     PROFILE_FUNCTION();
+    const auto found{active_mod().call_modifiers.find(id.get_index())};
+    if (found == active_mod().call_modifiers.end() || found->second == ast::call_modifier::AUTO) {
+        return emit_unmodified_call(id, call);
+    }
+    const auto modifier{found->second};
+    if (modifier == ast::call_modifier::COMPILE_TIME) {
+        const auto diags_before{ctx_.diags.size()};
+        if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
+            return materialize_const(*cv);
+        }
+        if (ctx_.diags.size() == diags_before) {
+            ctx_.diags.emplace_back("'@call(.compile_time, ...)': this call can't be evaluated at "
+                                    "compile time",
+                                    sema::error::COMPTIME_EVALUATION_FAILED,
+                                    active_ast().location_of(id));
+        }
+        const auto ret{active_mod().get_sema_type_opt(id)};
+        return value{undefined_val{},
+                     ret.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
+    }
+    auto result{emit_unmodified_call(id, call)};
+    builder_.mark_last_call(modifier);
+    return result;
+}
+
+auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) -> value {
     auto& ret_type{active_mod().get_sema_type_opt(id).value_or(
         ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
 

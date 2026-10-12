@@ -1,11 +1,13 @@
 #include "compiler/sema/passes/type_checker.hh"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -223,7 +225,96 @@ auto type_checker::check_function(gir::function& fn) -> void {
 
 auto type_checker::check_segment(gir::function& fn, gir::segment& seg) -> void {
     PROFILE_FUNCTION();
-    for (const auto* inst : seg.get_instructions()) { check_instruction(fn, *inst); }
+    const auto& instructions{seg.get_instructions()};
+    for (usize i{0}; i < instructions.size(); ++i) {
+        check_instruction(fn, *instructions[i]);
+        if (instructions[i]->call_modifier) { check_call_modifier(fn, seg, i); }
+    }
+}
+
+namespace {
+
+// Whether a tail call can replace a call from `caller` to `callee`: LLVM's `musttail` needs the
+// same parameters, result, and calling convention
+[[nodiscard]] auto same_prototype(const types::function& caller, const types::function& callee)
+    -> bool {
+    if (caller.params.size() != callee.params.size() || caller.is_variadic != callee.is_variadic ||
+        caller.conv != callee.conv ||
+        !is_same_unqualified(caller.return_type, callee.return_type)) {
+        return false;
+    }
+    for (usize i{0}; i < caller.params.size(); ++i) {
+        if (!is_same_unqualified(*caller.params[i], *callee.params[i])) { return false; }
+    }
+    return true;
+}
+
+} // namespace
+
+// What `@call`'s modifier promises, checked against the call it was given
+auto type_checker::check_call_modifier(gir::function& fn, gir::segment& seg, usize index) -> void {
+    const auto& inst{*seg.get_instructions()[index]};
+    const auto  modifier{*inst.call_modifier};
+    const auto  callee{inst.callee_name ? find_function(*inst.callee_name) : stdx::none};
+    const auto  fail{[&](std::string_view why) {
+        emit_diagnostic(
+            fmt::format("'@call(.{}, ...)': {}", ast::call_modifier_name(modifier), why),
+            error::IMPOSSIBLE_CALL_MODIFIER,
+            inst.location);
+    }};
+    const auto  inlining{callee ? callee->get_attributes().inlining : stdx::none};
+
+    switch (modifier) {
+    case ast::call_modifier::NEVER_INLINE:
+        if (inlining == ast::inline_mode::ALWAYS) { fail("the function is `@[inline(.always)]`"); }
+        break;
+    case ast::call_modifier::ALWAYS_INLINE:
+        if (!callee) {
+            fail("only a call that names its function can be inlined, not one through a value");
+        } else if (callee->get_linkage() == gir::linkage::EXTERN) {
+            fail("an `extern` function has no body here to inline");
+        } else if (callee->get_attributes().naked) {
+            fail("a `@[naked]` function can't be inlined");
+        } else if (inlining == ast::inline_mode::NEVER) {
+            fail("the function is `@[inline(.never)]`");
+        }
+        break;
+    case ast::call_modifier::ALWAYS_TAIL: {
+        const auto& instructions{seg.get_instructions()};
+        const auto* next{index + 1 < instructions.size() ? instructions[index + 1] : nullptr};
+        const bool  returned{[&] {
+            if (!next || next->kind != gir::instruction_kind::RET) { return false; }
+            if (next->operands.empty()) { return !inst.result || !inst.type; }
+            const auto id{next->operands.front().data.as_opt<gir::local_id>()};
+            return inst.result && id && *id == *inst.result;
+        }()};
+        if (!returned) {
+            fail("the call must be returned directly (`return @call(.always_tail, f, ...)`), with "
+                 "no `defer` left to run after it");
+            break;
+        }
+        const auto caller_fn{fn.get_type().get_data().as_opt<types::function>()};
+        const auto callee_fn{callee ? callee->get_type().get_data().as_opt<types::function>()
+                                    : stdx::none};
+        if (caller_fn && callee_fn && !same_prototype(*caller_fn, *callee_fn)) {
+            fail("a tail call needs the same parameters, result, and calling convention as the "
+                 "function it returns from");
+            break;
+        }
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        if (triple.isWasm()) {
+            const auto cpu{codegen::resolve_target_cpu(ctx_.target_opts)};
+            if (!cpu || !std::ranges::contains(cpu->enabled, "tail_call")) {
+                fail("WebAssembly makes tail calls only with the `tail_call` feature "
+                     "(`--features +tail-call`)");
+            }
+        }
+        break;
+    }
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::NEVER_TAIL:
+    case ast::call_modifier::COMPILE_TIME: break;
+    }
 }
 
 auto type_checker::record_value_result(const gir::instruction& inst) -> void {

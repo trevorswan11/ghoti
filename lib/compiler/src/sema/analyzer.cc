@@ -201,7 +201,15 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 // `@[inline(.always)]` is honored even at -O0, where only the always-inliner runs
 [[nodiscard]] auto has_always_inline(const llvm::Module& llvm_mod) -> bool {
     return std::ranges::any_of(llvm_mod, [](const llvm::Function& fn) {
-        return fn.hasFnAttribute(llvm::Attribute::AlwaysInline);
+        if (fn.hasFnAttribute(llvm::Attribute::AlwaysInline)) { return true; }
+        // `@call(.always_inline, ...)` marks the call site, not the function
+        for (const auto& block : fn) {
+            for (const auto& inst : block) {
+                const auto* call{llvm::dyn_cast<llvm::CallBase>(&inst)};
+                if (call && call->hasFnAttr(llvm::Attribute::AlwaysInline)) { return true; }
+            }
+        }
+        return false;
     });
 }
 

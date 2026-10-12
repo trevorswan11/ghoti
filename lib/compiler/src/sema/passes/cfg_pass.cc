@@ -833,6 +833,7 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             if (range.rhs) { recurse_into_expr(*range.rhs); }
         },
         [&](const ast::call_expr& call) {
+            if (call.modifier) { recurse_into_expr(*call.modifier); }
             recurse_into_expr(call.function);
             for (const auto& arg : call.arguments) {
                 if (const auto value{arg.as_opt<ast::expr_handle>()}) { recurse_into_expr(*value); }

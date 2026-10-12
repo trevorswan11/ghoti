@@ -37,6 +37,20 @@ struct array_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// Mirrors `builtin.CallModifier`
+enum class call_modifier : u8 {
+    AUTO,
+    NEVER_TAIL,
+    NEVER_INLINE,
+    ALWAYS_TAIL,
+    ALWAYS_INLINE,
+    COMPILE_TIME,
+};
+
+[[nodiscard]] auto call_modifier_from_name(std::string_view name) noexcept
+    -> stdx::option<call_modifier>;
+[[nodiscard]] auto call_modifier_name(call_modifier modifier) noexcept -> std::string_view;
+
 struct call_expr {
     using argument = stdx::variant<expr_handle, explicit_type_id>;
 
@@ -45,6 +59,8 @@ struct call_expr {
     bool                  args_force_break{false}; // trailing comma before `)`
     // Parallel to `arguments`: true where that argument was written `expr...` (pack expansion).
     std::vector<bool> pack_expansions{};
+    // `@call(modifier, f, args...)` parses as a call of `f` carrying the modifier
+    stdx::option<expr_handle> modifier{};
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
         -> stdx::result<expr_handle, syntax::diagnostic>;

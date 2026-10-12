@@ -22,6 +22,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
@@ -1848,7 +1849,15 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
     case gir::instruction_kind::MAKE_CALLABLE:   result_val = emit_make_callable(inst); break;
-    case gir::instruction_kind::CALL:            result_val = emit_call(inst); break;
+    case gir::instruction_kind::CALL:            {
+        auto*              block{builder_.GetInsertBlock()};
+        llvm::Instruction* before{block && !block->empty() ? &block->back() : nullptr};
+        result_val = emit_call(inst);
+        if (inst.call_modifier && block) {
+            apply_call_modifier(*inst.call_modifier, *block, before);
+        }
+        break;
+    }
     case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
     case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
     case gir::instruction_kind::RET:             emit_ret(inst); return;
@@ -2379,6 +2388,31 @@ auto llvm_lowering::resolve_named_constant(std::string_view name) -> llvm::Const
         }
     }
     return nullptr;
+}
+
+// `@call(modifier, ...)`: finds the call lowering just made after `before` and marks it
+auto llvm_lowering::apply_call_modifier(ast::call_modifier modifier,
+                                        llvm::BasicBlock&  block,
+                                        llvm::Instruction* before) -> void {
+    llvm::CallInst* call{nullptr};
+    for (auto it{block.rbegin()}; it != block.rend() && &*it != before; ++it) {
+        if (auto* candidate{llvm::dyn_cast<llvm::CallInst>(&*it)};
+            candidate && !llvm::isa<llvm::IntrinsicInst>(candidate)) {
+            call = candidate;
+            break;
+        }
+    }
+    if (!call) { return; }
+    switch (modifier) {
+    case ast::call_modifier::NEVER_TAIL: call->setTailCallKind(llvm::CallInst::TCK_NoTail); break;
+    case ast::call_modifier::ALWAYS_TAIL:
+        call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        break;
+    case ast::call_modifier::NEVER_INLINE:  call->addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::call_modifier::ALWAYS_INLINE: call->addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::COMPILE_TIME:  break;
+    }
 }
 
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {

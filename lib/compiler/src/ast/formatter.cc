@@ -808,7 +808,12 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> args;
-    args.reserve(node.arguments.size());
+    args.reserve(node.arguments.size() + 2);
+    // `@call(modifier, f, args...)`: the modifier and the callee lead the argument list
+    if (node.modifier) {
+        args.emplace_back(format(*node.modifier));
+        args.emplace_back(format(node.function));
+    }
     for (usize i{0}; i < node.arguments.size(); ++i) {
         const auto& arg{node.arguments[i]};
         auto        rendered{arg.visit([&](expr_handle h) { return format(h); },
@@ -820,16 +825,17 @@ auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
         args.emplace_back(rendered);
     }
 
+    const auto callee{node.modifier ? doc_manager_.text("@call") : format(node.function)};
     if (args.size() == 1 && doc_manager_.contains_hard_break(args[0])) {
         return doc_manager_.concat({
-            format(node.function),
+            callee,
             doc_manager_.text("("),
             args[0],
             doc_manager_.text(")"),
         });
     }
     return doc_manager_.concat({
-        format(node.function),
+        callee,
         doc_manager_.delimited("(", ")", std::move(args), false, true, node.args_force_break),
     });
 }

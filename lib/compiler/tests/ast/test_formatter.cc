@@ -477,6 +477,8 @@ TEST_CASE("formatter force-breaks a parameter list that has a trailing comma") {
 )");
 
     round_trips("const f = fn(a: i32, b: i32,): void {};");
+    round_trips("const x = @call(.never_inline, add, 1, 2);");
+    round_trips("const y = @call(.always_tail, f, rest...);");
 
     CHECK(format_source("const S = struct { const m = fn(&self, x: i32,): void {}; };") ==
           R"(const S = struct {

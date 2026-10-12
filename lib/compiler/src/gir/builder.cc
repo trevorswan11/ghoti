@@ -24,6 +24,17 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     return segment_->append(std::move(inst));
 }
 
+auto builder::mark_last_call(ast::call_modifier modifier) -> void {
+    ASSERT(segment_, "Cannot mark a call without an active segment");
+    auto& instructions{segment_->get_instructions()};
+    for (auto it{instructions.rbegin()}; it != instructions.rend(); ++it) {
+        if ((*it)->kind == instruction_kind::CALL) {
+            (*it)->call_modifier = modifier;
+            return;
+        }
+    }
+}
+
 auto builder::emit_alloca(sema::type& type,
                           std::string_view,
                           bool              is_const,

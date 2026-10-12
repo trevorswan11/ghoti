@@ -82,9 +82,9 @@ class node_id {
   private:
     static constexpr u64 KIND_MASK{0xFF00000000000000ULL};
     static constexpr u64 KIND_OFFSET{std::countr_zero(KIND_MASK)};
-    static constexpr u64 TOKEN_TYPE_MASK{0x00FF000000000000ULL};
+    static constexpr u64 TOKEN_TYPE_MASK{0x00FFFF0000000000ULL};
     static constexpr u64 TOKEN_TYPE_OFFSET{std::countr_zero(TOKEN_TYPE_MASK)};
-    static constexpr u64 INDEX_MASK{0x0000FFFFFFFFFFFFULL};
+    static constexpr u64 INDEX_MASK{0x000000FFFFFFFFFFULL};
 
   private:
     u64 raw_;
@@ -223,9 +223,9 @@ class explicit_type_id {
     static constexpr u64 KIND_OFFSET{std::countr_zero(KIND_MASK)};
     static constexpr u64 MODIFIER_MASK{0x0F00000000000000ULL};
     static constexpr u64 MODIFIER_OFFSET{std::countr_zero(MODIFIER_MASK)};
-    static constexpr u64 TOKEN_TYPE_MASK{0x00FF000000000000ULL};
+    static constexpr u64 TOKEN_TYPE_MASK{0x00FFFF0000000000ULL};
     static constexpr u64 TOKEN_TYPE_OFFSET{std::countr_zero(TOKEN_TYPE_MASK)};
-    static constexpr u64 INDEX_MASK{0x0000FFFFFFFFFFFFULL};
+    static constexpr u64 INDEX_MASK{0x000000FFFFFFFFFFULL};
 
   private:
     u64 raw_;

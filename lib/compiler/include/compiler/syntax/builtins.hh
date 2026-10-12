@@ -140,6 +140,7 @@ constexpr builtin_t FENCE{"@fence", token_type_t::BUILTIN_FENCE};
 
 constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
 constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
+constexpr builtin_t CALL{"@call", token_type_t::BUILTIN_CALL};
 constexpr builtin_t ENUM_LITERAL{"@EnumLiteral", token_type_t::BUILTIN_ENUM_LITERAL};
 constexpr builtin_t LLVM_INTRINSIC{"@llvmIntrinsic", token_type_t::BUILTIN_LLVM_INTRINSIC};
 constexpr builtin_t RETURN_ADDRESS{"@returnAddress", token_type_t::BUILTIN_RETURN_ADDRESS};
@@ -265,6 +266,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::CFG_VALUE,
     builtins::COMPILE_ERROR,
     builtins::EMBED,
+    builtins::CALL,
     builtins::ENUM_LITERAL,
     builtins::LLVM_INTRINSIC,
     builtins::RETURN_ADDRESS,

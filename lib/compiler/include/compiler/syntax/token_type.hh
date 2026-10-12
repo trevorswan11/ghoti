@@ -8,6 +8,7 @@
 #include <utility>
 
 #include <ankerl/unordered_dense.h>
+#include <magic_enum/magic_enum.hpp>
 #include <stdx/assert.hh>
 #include <stdx/fixed/hash_table.hh>
 #include <stdx/hash.hh>
@@ -16,7 +17,7 @@
 
 namespace ghoti::syntax {
 
-enum class token_type_t : u8 {
+enum class token_type_t : u16 {
     END,
 
     IDENT,
@@ -288,6 +289,7 @@ enum class token_type_t : u8 {
     BUILTIN_FENCE,
     BUILTIN_COMPILE_ERROR,
     BUILTIN_EMBED,
+    BUILTIN_CALL,
     BUILTIN_ENUM_LITERAL,
     BUILTIN_LLVM_INTRINSIC,
     BUILTIN_RETURN_ADDRESS,
@@ -416,6 +418,12 @@ template <std::size_t I>
 }
 
 } // namespace ghoti::syntax
+
+// There are more tokens than the 255 every other enum is reflected over
+template <> struct magic_enum::customize::enum_range<ghoti::syntax::token_type_t> {
+    static constexpr int min = 0;
+    static constexpr int max = 511;
+};
 
 template <> struct ankerl::unordered_dense::hash<ghoti::syntax::typed_identifier> {
     using is_avalanching   = void;

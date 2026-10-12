@@ -41,6 +41,8 @@ class builder {
     }
 
     auto emit_instruction(instruction inst) -> instruction&;
+    // Tags the most recent `CALL` in the active segment with `@call`'s modifier
+    auto mark_last_call(ast::call_modifier modifier) -> void;
     auto emit_alloca(sema::type&       type,
                      std::string_view  name      = {},
                      bool              is_const  = false,

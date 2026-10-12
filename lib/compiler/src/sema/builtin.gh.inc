@@ -149,6 +149,24 @@ pub const Visibility = enum { default, hidden, protected };
 /// Whether another definition of an `@export`ed symbol may replace it at link time.
 pub const Linkage = enum { strong, @"weak" };
 
+/// How `@call(modifier, f, args...)` makes its call; an `always_*` that can't be honored, or a
+/// `compile_time` call that can't be folded, is a compile error
+pub const CallModifier = enum {
+    /// An ordinary call, as `f(args...)`
+    @"auto",
+    /// Never a tail call, so the return address names this call site
+    never_tail,
+    /// Never inlined
+    never_inline,
+    /// Always a tail call: the call must be returned directly, and `f`'s signature must match the
+    /// caller's
+    always_tail,
+    /// Always inlined at this call site
+    always_inline,
+    /// Evaluated at compile time
+    compile_time,
+};
+
 /// How `@export(f, options)` defines `f` under another symbol name.
 pub const ExportOptions = struct {
     pub name: [:0]u8,

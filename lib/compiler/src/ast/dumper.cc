@@ -156,6 +156,11 @@ auto dumper::visit(node_id, const call_expr& call) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "CallExpression");
     const auto has_args{!call.arguments.empty()};
+    if (call.modifier) {
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}Modifier: ", indent_.current_branch());
+        dump(*call.modifier);
+    }
     {
         const indent::guard g{indent_, !has_args};
         fmt::print(out_, "{}Callee: ", indent_.current_branch());
