@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
@@ -94,6 +95,11 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
     // Keeps loop-idiom recognition from turning a hand-written `memcpy` loop into a `memcpy` call
     if (attributes.no_builtins) { llvm_fn.addFnAttr("no-builtins"); }
+    // Joined with the target's own features once the target machine is known
+    if (!attributes.target_features.empty()) {
+        llvm_fn.addFnAttr("ghoti-target-features",
+                          fmt::format("{}", fmt::join(attributes.target_features, ",")));
+    }
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
     if (!attributes.inlining) { return; }
     switch (*attributes.inlining) {

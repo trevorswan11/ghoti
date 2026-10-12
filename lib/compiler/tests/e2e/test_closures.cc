@@ -404,4 +404,25 @@ TEST_CASE("a closure in a test block captures the test's locals") {
     )") == 0);
 }
 
+TEST_CASE("a type first used inside a function doesn't make its methods closures") {
+    // `X` resolves from inside `run`, and its methods' sibling calls aren't captures of `run`
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { v: i32 };
+        const run = fn(): i32 {
+            let local: i32 = 40;
+            let mut s: S = .{ .v = local };
+            X.bump(&mut s);
+            return s.v;
+        };
+        const X = struct {
+            const two = fn(): i32 { return 2; };
+            const bump = fn(s: &mut S): void {
+                let by = two();
+                s.v += by;
+            };
+        };
+        pub const main = fn(): i32 { return run(); };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

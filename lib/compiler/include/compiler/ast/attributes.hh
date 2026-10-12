@@ -40,6 +40,7 @@ enum class attribute_kind : u8 {
     VISIBILITY,
     TESTING,
     NO_BUILTINS,
+    TARGET_FEATURES,
 };
 
 // Mirrors `builtin.BranchHint`

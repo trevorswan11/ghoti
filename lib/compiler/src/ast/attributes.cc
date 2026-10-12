@@ -116,6 +116,16 @@ constexpr std::array ALL_ATTRIBUTES{
         .doc       = "The optimizer never turns the body's loops into calls to `memcpy`, `memset`, "
                      "or other library routines, as freestanding code implementing them needs",
     },
+    attribute_spec{
+        .name      = "target_features",
+        .kind      = attribute_kind::TARGET_FEATURES,
+        .min_args  = 1,
+        .max_args  = 255,
+        .targets   = attribute_target::FN,
+        .signature = "target_features(builtin.CpuFeature...)",
+        .doc       = "Compiles the function for these CPU features on top of the target's; calling "
+                     "it on a CPU without them is undefined, so guard it with `std.cpu.detect()`",
+    },
 };
 
 [[nodiscard]] auto parse_attribute_args(syntax::parser& parser)

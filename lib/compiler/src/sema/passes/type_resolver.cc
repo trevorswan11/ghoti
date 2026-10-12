@@ -6401,6 +6401,29 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         }
     }
 
+    // A declaration outside every open function resolves on first use as if from its own scope;
+    // otherwise its functions would see the open ones' frames and capture from them
+    if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
+        lookup->depth < function_boundaries_.front()) {
+        const std::vector<usize> outer_tables(table_stack_.begin(), table_stack_.end());
+        for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) { table_stack_.pop(); }
+        const auto outer_table_idx{std::exchange(table_idx_, outer_tables[lookup->depth])};
+        auto       outer_boundaries{std::exchange(function_boundaries_, {})};
+        auto       outer_fn_nodes{std::exchange(open_function_nodes_, {})};
+        auto       outer_recursive{std::exchange(self_recursive_flags_, {})};
+        const auto restore{gsl::finally([&] {
+            for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) {
+                table_stack_.push(outer_tables[i]);
+            }
+            table_idx_            = outer_table_idx;
+            function_boundaries_  = std::move(outer_boundaries);
+            open_function_nodes_  = std::move(outer_fn_nodes);
+            self_recursive_flags_ = std::move(outer_recursive);
+        })};
+        resolve_symbol(id, lookup->symbol);
+        return;
+    }
+
     resolve_symbol(id, lookup->symbol);
 }
 
@@ -12473,6 +12496,40 @@ auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_
     return stdx::none;
 }
 
+// Each `builtin.CpuFeature` argument, as the `+name` LLVM enables it by
+auto type_resolver::fold_target_features(const ast::attribute& item) -> std::vector<std::string> {
+    const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+    const auto family{codegen::cpu_feature_family_of(triple)};
+    auto&      feature_type{denoted_type(ctx_.get_builtin_type("CpuFeature"))};
+
+    std::vector<std::string> features;
+    for (const auto arg : item.args) {
+        {
+            const structural_guard g{implicit_type_stack_, feature_type};
+            resolve(arg);
+        }
+        const auto arg_type{resolving_.get_sema_type_opt(arg)};
+        if (arg_type && arg_type->is_poison()) { continue; }
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{arg_type && is_same_unqualified(*arg_type, feature_type)
+                               ? evaluator.try_eval(arg)
+                               : stdx::none};
+        const auto      variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+        const auto      at{variant && family ? std::ranges::find(family->ghoti_names, variant->name)
+                                             : std::vector<std::string>::const_iterator{}};
+        if (!variant || !family || at == family->ghoti_names.end()) {
+            ctx_.diags.emplace_back("Attribute 'target_features' requires compile-time "
+                                    "'builtin.CpuFeature' values",
+                                    error::ILLEGAL_ATTRIBUTE,
+                                    resolving_.ast.location_of(arg));
+            continue;
+        }
+        const auto index{static_cast<usize>(at - family->ghoti_names.begin())};
+        features.emplace_back(fmt::format("+{}", family->llvm_names[index]));
+    }
+    return features;
+}
+
 auto type_resolver::fold_visibility(const ast::attribute& item)
     -> stdx::option<ast::symbol_visibility> {
     const auto variant{fold_attribute_enum(item, "Visibility")};
@@ -12559,6 +12616,9 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
         case ast::attribute_kind::TESTING:    resolved.testing = true; break;
         case ast::attribute_kind::NO_BUILTINS:
             resolved.no_builtins = fold_attribute_bool(*item).value_or(false);
+            break;
+        case ast::attribute_kind::TARGET_FEATURES:
+            resolved.target_features = fold_target_features(*item);
             break;
         }
     }

@@ -714,6 +714,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@cfg (cpu.has(.avx2)) { ... }` and `@cfgValue(cpu.has(.neon))` test the target CPU; a feature of another architecture is simply absent, so `arch == .x86_64 and cpu.has(.avx2)` works on every target, and a name no architecture has is an error suggesting the closest
     - `builtin.cpu` is the CPU code is generated for (`model` and `features`), and `builtin.cpu.has(.sse4_2)` works at compile time and at runtime
     - `builtin.<arch>.Feature` (`builtin.x86.Feature`, `builtin.aarch64.Feature`, ...) names the target architecture's features as LLVM does, with `-` and `.` as `_`; `builtin.CpuFeature` is the target's, and `builtin.CpuFeatureSet` is a set of them that can be built at runtime
+- `@[target_features(.avx2, .fma)]` compiles one function for CPU features beyond the target's, so it can use them while the rest of the program runs anywhere
+    - Its arguments are compile-time `builtin.CpuFeature`s; calling the function on a CPU without them is undefined, so guard the call with `std.cpu.detect()`
 - `@llvmIntrinsic(name, ReturnType, args...)` calls an LLVM intrinsic directly: `@llvmIntrinsic("llvm.x86.sse2.pause", void)`, `@llvmIntrinsic("llvm.ctpop", u32, x)`
     - The name must be one LLVM knows, a target intrinsic must be the target architecture's, the types must fit one of its overloads (a mangled name like `llvm.ctpop.i32` must match the arguments), and arguments it takes as immediates must be known at compile time
     - Untyped literal arguments are `i32` / `f64`, as when they bind an `auto` parameter
@@ -753,12 +755,15 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 - Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
 - Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
+- Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
+- Add `std.cpu.detect()`, the features of the CPU the program is running on: `builtin.cpu.features` plus whatever the machine reports
+    - x86 asks `cpuid` (and the OS, through `xgetbv`, whether AVX, AVX-512, and AMX state is saved); AArch64 reads `AT_HWCAP` on Linux, `hw.optional` sysctls on macOS, and `IsProcessorFeaturePresent` on Windows
 - Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`

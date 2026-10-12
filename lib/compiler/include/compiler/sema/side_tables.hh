@@ -64,6 +64,8 @@ struct resolved_attributes {
     bool                           cold{false};    // `@branchHint(.cold)` opens the body
     bool                           testing{false}; // `@[testing]`: a test helper
     bool                           no_builtins{false};
+    // `@[target_features(...)]`, as LLVM spells them: `+avx2`
+    std::vector<std::string> target_features{};
     // An attribute whose argument names a parameter so only folds per instantiation
     stdx::option<ast::attribute_kind>    dependent{};
     stdx::option<ast::symbol_visibility> visibility{};

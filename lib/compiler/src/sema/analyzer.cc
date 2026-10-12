@@ -19,6 +19,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -235,9 +236,25 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
     return false;
 }
 
+// LLVM's `target-features` replaces the target's whole feature string for a function, so an
+// `@[target_features(...)]` function gets the target's features with its own added on
+auto apply_target_features(llvm::Module& llvm_mod, const llvm::TargetMachine* target_machine)
+    -> void {
+    const auto base{target_machine ? target_machine->getTargetFeatureString().str()
+                                   : std::string{}};
+    for (auto& fn : llvm_mod) {
+        if (!fn.hasFnAttribute("ghoti-target-features")) { continue; }
+        const auto extra{fn.getFnAttribute("ghoti-target-features").getValueAsString().str()};
+        fn.removeFnAttr("ghoti-target-features");
+        fn.addFnAttr("target-features", base.empty() ? extra : fmt::format("{},{}", base, extra));
+        if (target_machine) { fn.addFnAttr("target-cpu", target_machine->getTargetCPU()); }
+    }
+}
+
 [[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
                                        const codegen::optimizer_options& options)
     -> stdx::result<void, codegen::diagnostic> {
+    apply_target_features(llvm_mod, options.target_machine);
     TRY(codegen::soften_f80(llvm_mod));
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
