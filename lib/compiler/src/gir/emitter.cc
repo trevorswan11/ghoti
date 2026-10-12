@@ -2599,6 +2599,11 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
         [&](const ast::asm_expr& data) -> value { return emit_asm(id, data); },
         [&](const ast::array_expr& data) -> value { return emit_array(id, data); },
+        [&](const ast::range_expr&) -> value {
+            const auto cv{const_eval_.try_eval(id)};
+            ASSERT(cv, "A range used as a value must fold to its array");
+            return materialize_const(*cv);
+        },
         [&](ast::grouped_expr) -> value { return emit_expression_id(id); });
 }
 

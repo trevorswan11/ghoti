@@ -1643,6 +1643,16 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return stdx::none;
         },
         [&](const ast::array_expr& data) { return eval_array(id, data); },
+        [&](const ast::range_expr& data) -> stdx::option<const_value> {
+            // Only a range used as a value is typed as the array of values it takes
+            const auto sema_type{module_->get_sema_type_opt(id)};
+            if (!sema_type || !sema_type->get_data().is<sema::types::array>()) {
+                return stdx::none;
+            }
+            auto values{range_sequence(id, data)};
+            if (!values) { return stdx::none; }
+            return const_value{const_array{.elements = std::move(*values)}, sema_type};
+        },
         [&](const ast::index_expr& data) { return eval_index(id, data); },
         [&](const ast::initializer_expr& data) { return eval_initializer(id, data); },
         [&](const ast::dot_expr& data) { return eval_dot(id, data); },

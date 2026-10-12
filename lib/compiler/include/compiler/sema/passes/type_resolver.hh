@@ -503,6 +503,8 @@ class type_resolver {
     auto record_range_counter(usize                     loop_table,
                               const ast::for_loop_expr& for_expr,
                               usize                     iterable_idx) -> void;
+    // Types a range used as a value as the array of values it takes
+    auto resolve_range_value(ast::node_id id, const ast::range_expr& range) -> void;
     // Retypes a bare range-counter read to `target` when every value it takes fits there
     auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // Resolves a parameter's declared type, where `auto` may sit inside a slice or array

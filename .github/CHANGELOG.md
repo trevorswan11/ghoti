@@ -650,6 +650,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
 - **Breaking:** a `for` range whose start is past its end counts down (`3..0` is 3, 2, 1; `-1..=-8` is -1 through -8), including with runtime bounds, where `for (i..n)` with `i > n` used to run zero times
     - a subscript range still only counts up, so constant bounds the wrong way round (`a[3..1]`) are an error
+- A range with bounds known at compile time is a value anywhere outside a `for` iterable or subscript: the array of values it takes (`let x = 0..10;` is a `[10]usize`, `let y: [4]u8 = 2..6;`, `f(0..8)`), counting down when its start is past its end
 - Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
 - Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
 - Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler

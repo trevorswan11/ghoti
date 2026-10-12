@@ -6867,6 +6867,17 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
                                                    error::TYPE_USED_AS_VALUE,
                                                    resolving_.ast.location_of(index.index)));
     }
+    if (!index.index.is<ast::range_expr>() && !access_type.is_poison() &&
+        !is_integer(access_type.get_kind()) && access_type.get_kind() != type_kind::COMPTIME_INT &&
+        !is_generic_type(access_type)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("An index must be an integer; found '{}'",
+                                         ctx_.type_display_name(access_type)),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(index.index)));
+    }
 
     // A subscript range only counts up, unlike a loop's
     if (const auto range{resolving_.ast.get_as_opt<ast::range_expr>(index.index)};
@@ -6880,8 +6891,8 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("A subscript range cannot count down ({} to {}); only a `for` loop's "
-                            "range may",
+                fmt::format("A subscript range cannot count down ({} to {}); only `for` loops and "
+                            "range values may",
                             static_cast<i64>(*lo),
                             static_cast<i64>(*hi)),
                 error::ILLEGAL_OPEN_RANGE,
@@ -8041,19 +8052,101 @@ auto type_resolver::visit(ast::node_id id, const ast::dot_expr& dot) -> void {
     resolve_dot(id, dot);
 }
 
+auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& range) -> void {
+    // An expected integer array or slice decides the element type
+    type* expected_elem{nullptr};
+    if (const auto expected{implicit_type_stack_.peek()}) {
+        const auto& data{concrete_array_type(*expected).get_data()};
+        if (const auto arr{data.as_opt<types::array>()}) {
+            expected_elem = &arr->underlying;
+        } else if (const auto sl{data.as_opt<types::slice>()}) {
+            expected_elem = &sl->underlying;
+        }
+        if (expected_elem && !is_integer(expected_elem->get_kind())) { expected_elem = nullptr; }
+    }
+
+    {
+        const mutating_context_guard subscript_g{in_subscript_index_, false};
+        const mutating_context_guard for_iter_g{in_for_iterable_, false};
+        const structural_guard       g{implicit_type_stack_, expected_elem};
+        TRY_RESOLVE(*range.lhs);
+        TRY_RESOLVE(*range.rhs);
+    }
+    type* bound_type{nullptr};
+    for (const auto bound : {*range.lhs, *range.rhs}) {
+        if (operand_nature(bound) == operand_nature_t::TYPE) {
+            return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                       id,
+                                                       "A range bound must be a value, not a type",
+                                                       error::TYPE_USED_AS_VALUE,
+                                                       resolving_.ast.location_of(bound)));
+        }
+        auto& t{resolving_.get_sema_type(bound)};
+        if (t.is_poison()) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+        if (!is_integer(t.get_kind()) && t.get_kind() != type_kind::COMPTIME_INT) {
+            return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                       id,
+                                                       "Range bounds must be integers",
+                                                       error::TYPE_MISMATCH,
+                                                       resolving_.ast.location_of(id)));
+        }
+        if (t.get_kind() != type_kind::COMPTIME_INT && !bound_type) { bound_type = &t; }
+    }
+
+    // Its length and every element are fixed at compile time
+    const auto fold_int{[&](ast::expr_handle bound) -> stdx::option<i128> {
+        const auto folded{probe_fold(bound)};
+        return folded && !folded->is_poison() ? folded->as_int_opt() : stdx::none;
+    }};
+    const auto lo{fold_int(*range.lhs)};
+    const auto hi{fold_int(*range.rhs)};
+    if (!lo || !hi) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "A range used as a value needs bounds known at compile time; only a `for` loop or a "
+            "subscript takes runtime bounds",
+            error::ILLEGAL_OPEN_RANGE,
+            resolving_.ast.location_of(!lo ? *range.lhs : *range.rhs)));
+    }
+
+    // Untyped bounds count in `usize`, or in `isize` once a bound is negative, as a loop does
+    auto* elem_type{expected_elem};
+    if (!elem_type && bound_type) { elem_type = ctx_.pool.strip_volatile(*bound_type).get(); }
+    if (!elem_type) {
+        elem_type = &ctx_.get_builtin_resolved_type(*lo < 0 || *hi < 0 ? type_kind::ISIZE
+                                                                       : type_kind::USIZE);
+    }
+    const auto ptr_bits{target_ptr_bits()};
+    for (const auto [bound, value] : {std::pair{*range.lhs, *lo}, std::pair{*range.rhs, *hi}}) {
+        if (!comptime_int_fits(value, *elem_type, ptr_bits)) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("Range bound {} does not fit in its element type '{}'",
+                                             static_cast<i64>(value),
+                                             ctx_.type_display_name(*elem_type)),
+                                 error::LITERAL_OUT_OF_RANGE,
+                                 resolving_.ast.location_of(bound)));
+        }
+    }
+
+    const bool inclusive{id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ};
+    const auto steps{range_steps_of(*lo, *hi, inclusive)};
+    auto&      array_type{
+        ctx_.get_array(types::mut::CONSTANT, false, static_cast<usize>(steps.count), *elem_type)};
+    resolving_.set_sema_type(id, array_type);
+    last_type_.emplace(array_type);
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
-    // A range is not a first-class value; match patterns resolve their endpoints directly
+    // Anywhere else a range is the array of values it takes; match patterns resolve their
+    // endpoints directly
     if (range.lhs && range.rhs && !in_subscript_index_ && !in_for_iterable_) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            "A range is only valid inside a subscript (`x[lo..hi]`), as a `for` iterable, or as a "
-            "`match` arm pattern",
-            error::ILLEGAL_OPEN_RANGE,
-            resolving_.ast.location_of(id)));
+        return resolve_range_value(id, range);
     }
 
     // An omitted endpoint is filled from context: the indexed operand inside `[]`, or a sibling
