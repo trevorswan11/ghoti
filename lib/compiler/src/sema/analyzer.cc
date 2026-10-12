@@ -251,6 +251,11 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     -> stdx::result<gir::module, diagnostic> {
     PROFILE_FUNCTION();
     if (for_test_executable) { ctx_.testing = true; }
+    // An unknown `--cpu` / `--features` would otherwise surface at the first `cpu.has(...)`
+    if (auto cpu{codegen::resolve_target_cpu(ctx_.target_opts)}; !cpu) {
+        return make_sema_err(cpu.error().get_message().value_or("Unknown target CPU"),
+                             error::UNSUPPORTED_TARGET);
+    }
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
         return make_sema_err(std::move(module_result.error()).get_message(),

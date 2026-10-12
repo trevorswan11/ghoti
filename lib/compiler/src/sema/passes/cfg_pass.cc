@@ -365,6 +365,64 @@ auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
     return cfg_value{cfgval::member{atom_value_str(atom)}};
 }
 
+// `cpu.has(.feature)`
+auto cfg_pass::is_cpu_has(const ast::call_expr& call) const -> bool {
+    const auto dot{module_.ast.get_as_opt<ast::dot_expr>(call.function)};
+    if (!dot || call.arguments.size() != 1) { return false; }
+    const auto object{module_.ast.get_as_opt<ast::identifier_expr>(dot->object)};
+    const auto member{module_.ast.get_as_opt<ast::identifier_expr>(dot->member)};
+    return object && member && object->name == "cpu" && member->name == "has";
+}
+
+// True for an enabled feature of the target's architecture, false for a disabled one or one of
+// another architecture (so `arch == .x86_64 and cpu.has(.avx2)` works everywhere); a name no
+// architecture has is an error
+auto cfg_pass::cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::option<cfg_value> {
+    const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
+    const auto access{arg ? module_.ast.get_as_opt<ast::implicit_access_expr>(*arg) : stdx::none};
+    if (!access) {
+        fail(at, error::CFG_ILLEGAL_PREDICATE, "cpu.has expects a feature, like `cpu.has(.avx2)`");
+        return stdx::none;
+    }
+    const auto& name{module_.ast.get_as<ast::identifier_expr>(access->member).name};
+
+    if (!target_cpu_) {
+        auto resolved{codegen::resolve_target_cpu(ctx_.target_opts)};
+        if (!resolved) {
+            fail(at,
+                 error::CFG_ILLEGAL_PREDICATE,
+                 "{}",
+                 resolved.error().get_message().value_or("the target CPU can't be resolved"));
+            return stdx::none;
+        }
+        target_cpu_.emplace(std::move(*resolved));
+    }
+    if (std::ranges::contains(target_cpu_->enabled, name)) { return cfg_value{true}; }
+
+    std::string_view closest;
+    usize            closest_dist{3}; // suggest only for distance <= 2
+    for (const auto& family : codegen::cpu_feature_families()) {
+        if (std::ranges::contains(family.ghoti_names, name)) { return cfg_value{false}; }
+        for (const auto& candidate : family.ghoti_names) {
+            const auto dist{string_utils::edit_distance(name, candidate)};
+            if (dist < closest_dist) {
+                closest_dist = dist;
+                closest      = candidate;
+            }
+        }
+    }
+    if (closest.empty()) {
+        fail(at, error::CFG_UNKNOWN_ENUM_MEMBER, "no architecture has a CPU feature '{}'", name);
+    } else {
+        fail(at,
+             error::CFG_UNKNOWN_ENUM_MEMBER,
+             "no architecture has a CPU feature '{}'; did you mean '{}'?",
+             name,
+             closest);
+    }
+    return stdx::none;
+}
+
 auto cfg_pass::int_literal(ast::expr_handle h) -> stdx::option<i64> {
     PROFILE_FUNCTION();
     return module_.ast[h].visit([](const auto&) -> stdx::option<i64> { return stdx::none; },
@@ -386,7 +444,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         fail(id,
              error::CFG_UNKNOWN_ATOM,
              "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
-             "optimize, safety "
+             "optimize, safety, testing, cpu.has(.feature) "
              "(or a @cfgValue constant)",
              name);
         return stdx::none;
@@ -411,6 +469,7 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
             fire_compile_error(id, call);
             return cfg_value{cfgval::diverges{}};
         }
+        if (is_cpu_has(call)) { return cpu_has(id, call); }
         break;
     }
     default: break;
@@ -476,7 +535,7 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
         fail(id,
              error::CFG_UNKNOWN_ATOM,
              "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
-             "optimize, safety "
+             "optimize, safety, testing, cpu.has(.feature) "
              "(or a @cfgValue constant)",
              name);
         return {};

@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -92,6 +93,31 @@ struct target_facts {
 [[nodiscard]] auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel;
 [[nodiscard]] auto create_target_machine(const target_options& options)
     -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic>;
+
+// One architecture family's CPU features, named as ghoti spells them (`sse4_2`, `@"64bit"`)
+struct cpu_feature_family {
+    std::string_view         name; // The `builtin.<name>` namespace: `x86`, `aarch64`, `riscv`, ...
+    std::vector<std::string> llvm_names;  // LLVM's spelling, in LLVM's (sorted) order
+    std::vector<std::string> ghoti_names; // Index-aligned with `llvm_names`
+};
+
+// Every family whose LLVM backend is linked in, in a fixed order
+[[nodiscard]] auto cpu_feature_families() -> const std::vector<cpu_feature_family>&;
+
+// The family `triple`'s architecture belongs to, if ghoti knows one
+[[nodiscard]] auto cpu_feature_family_of(const llvm::Triple& triple)
+    -> stdx::option<const cpu_feature_family&>;
+
+// The CPU code is generated for and the features it may use, after `generic` and `native` are
+// resolved the way `create_target_machine` resolves them
+struct target_cpu {
+    std::string               model;
+    std::vector<std::string>  enabled; // ghoti names, in family order
+    stdx::option<std::string> family;
+};
+
+[[nodiscard]] auto resolve_target_cpu(const target_options& options)
+    -> stdx::result<target_cpu, diagnostic>;
 
 auto emit_object_file(llvm::Module&                module,
                       llvm::TargetMachine&         target_machine,

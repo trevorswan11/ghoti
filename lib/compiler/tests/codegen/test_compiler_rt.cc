@@ -332,7 +332,7 @@ TEST_CASE("A program's memory routines and stack probe come from compiler_rt") {
         auto [ctx, idx]{helpers::resolve_and_check(source)};
         llvm::LLVMContext context;
         tempfile          exe{std::in_place,
-                     fmt::format("{}.exe", tempfile::make_temp_path("rt_probe").string())};
+                              fmt::format("{}.exe", tempfile::make_temp_path("rt_probe").string())};
         const auto        emitted{
             helpers::emit_executable(*ctx, context, exe.path, {.triple_str = std::string{triple}})};
         if (!emitted) { FAIL(fmt::format("{}", emitted.error())); }

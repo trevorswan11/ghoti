@@ -710,6 +710,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A helper is only called directly, from a test or another `@[testing]` function
 - `@[no_builtins]` keeps the optimizer from turning a function's loops into calls to `memcpy`, `memset`, and other library routines, as freestanding code implementing them needs
     - `@typeInfo(f).function.no_builtins` reflects it
+- CPU features are visible to ghoti code
+    - `@cfg (cpu.has(.avx2)) { ... }` and `@cfgValue(cpu.has(.neon))` test the target CPU; a feature of another architecture is simply absent, so `arch == .x86_64 and cpu.has(.avx2)` works on every target, and a name no architecture has is an error suggesting the closest
+    - `builtin.cpu` is the CPU code is generated for (`model` and `features`), and `builtin.cpu.has(.sse4_2)` works at compile time and at runtime
+    - `builtin.<arch>.Feature` (`builtin.x86.Feature`, `builtin.aarch64.Feature`, ...) names the target architecture's features as LLVM does, with `-` and `.` as `_`; `builtin.CpuFeature` is the target's, and `builtin.CpuFeatureSet` is a set of them that can be built at runtime
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
@@ -759,6 +763,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 
 ## Tooling
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
+- `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
+- An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`

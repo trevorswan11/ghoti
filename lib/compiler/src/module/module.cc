@@ -129,6 +129,10 @@ auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }
     }
+    // An error inside an emitted `builtin` declaration is attributed to `builtin` itself
+    if (builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored())) {
+        builtin_module_->print_diagnostics(os);
+    }
 }
 
 auto module_manager::any_errored() const noexcept -> bool {
@@ -136,7 +140,7 @@ auto module_manager::any_errored() const noexcept -> bool {
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { return true; }
     }
-    return false;
+    return builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored());
 }
 
 auto module_manager::try_get(const std::filesystem::path& path)

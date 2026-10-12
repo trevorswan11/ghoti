@@ -188,10 +188,21 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
             const_eval evaluator{ctx_, *m};
             evaluator.resolve_all_deferred_types();
         }
+        // `builtin`'s types reach any program on demand, not only test builds
+        if (ctx_.modules.has_builtin_module() &&
+            !visited.contains(&ctx_.modules.builtin_module())) {
+            const_eval evaluator{ctx_, ctx_.modules.builtin_module()};
+            evaluator.resolve_all_deferred_types();
+        }
     }
 
     // With every participating module known, decide which same-named symbols must be qualified.
-    symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, imported_mods);
+    // `builtin`'s types are emitted on demand in any build, so their members are named too
+    auto scoped_mods{imported_mods};
+    if (ctx_.modules.has_builtin_module() && !visited.contains(&ctx_.modules.builtin_module())) {
+        scoped_mods.emplace_back(&ctx_.modules.builtin_module());
+    }
+    symbol_scoping_ = symbol_scoping::build(ctx_, ast_module_, scoped_mods);
     const_eval_.set_symbol_scoping(symbol_scoping_);
 
 #ifdef GHOTI_DEBUG
@@ -261,7 +272,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module {
         }
     }
 
-    for (const auto name : pending_builtin_runtime_) { ensure_builtin_runtime(name); }
+    for (usize i{0}; i < pending_builtin_runtime_.size(); ++i) {
+        ensure_builtin_runtime(pending_builtin_runtime_[i]);
+    }
 
     // Any emission error (including a foreign module's) stops this module before type checking,
     // which would otherwise pile follow-on errors onto the poisoned values
@@ -4369,7 +4382,13 @@ auto emitter::emit_call(ast::node_id id, const ast::call_expr& call) -> value {
         }
 
         // `w.method(...)` on a `&dyn I`: load the method from `w`'s vtable and call it indirectly
-        const auto                recv_ty{active_mod().get_sema_type_opt(dot_call->object)};
+        const auto recv_ty{active_mod().get_sema_type_opt(dot_call->object)};
+        if (recv_ty && request_builtin_type_methods(*recv_ty)) {
+            // `builtin.cpu.has(.x)` is known at compile time; only a runtime receiver needs code
+            if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
+                return materialize_const(*cv);
+            }
+        }
         stdx::option<sema::type&> recv_dyn;
         if (recv_ty) {
             if (const auto p{recv_ty->get_data().as_opt<sema::types::pointer>()}) {
@@ -6515,6 +6534,31 @@ auto emitter::request_builtin_runtime(std::string_view name) -> void {
     }
 }
 
+// A struct declared in `builtin` (`Cpu`, `CpuFeatureSet`) has its methods emitted only once a
+// call reaches them, since `builtin` itself isn't emitted outside test builds
+auto emitter::request_builtin_type_methods(const sema::type& receiver) -> bool {
+    if (!ctx_.modules.has_builtin_module()) { return false; }
+    const auto* t{&receiver};
+    if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
+    if (const auto r{t->get_data().as_opt<sema::types::reference>()}) { t = &r->underlying; }
+    const auto st{t->get_data().as_opt<sema::types::struct_t>()};
+    auto&      builtin_mod{ctx_.modules.builtin_module()};
+    if (!st || &st->enclosing != &builtin_mod) { return false; }
+
+    for (const auto root_id : builtin_mod.ast) {
+        const auto decl{builtin_mod.ast.get_as_opt<ast::decl_stmt>(root_id)};
+        if (!decl || !decl->name.is_valid() || !decl->value) { continue; }
+        const auto declared{builtin_mod.get_sema_type_opt(*decl->value)};
+        if (!declared) { continue; }
+        const auto& denoted{sema::denoted_type(*declared)};
+        if (!sema::is_same_unqualified(denoted, *t)) { continue; }
+        const auto ident{builtin_mod.ast.get_as_opt<ast::identifier_expr>(decl->name)};
+        if (ident) { request_builtin_runtime(ident->name); }
+        return true;
+    }
+    return true;
+}
+
 auto emitter::ensure_builtin_runtime(std::string_view name) -> void {
     if (gir_module_.has_function(name)) { return; }
     if (!ctx_.modules.has_builtin_module()) { return; }
@@ -6676,7 +6720,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                     // See the matching comment in `emit_dot`'s own MODULE branch: the member's
                     // `decl_stmt` lives in `m_data->imported`'s AST, not the module currently being
                     // emitted, so `global_ref_in` needs that module swapped in for the lookup.
-                    auto&      target_mod{m_data->imported};
+                    auto& target_mod{m_data->imported};
+                    if (ctx_.modules.has_builtin_module() &&
+                        &target_mod == &ctx_.modules.builtin_module()) {
+                        request_builtin_runtime(member_ident.name);
+                    }
                     auto       prev_module{std::exchange(active_module_, &target_mod)};
                     const auto restore_module{gsl::finally([&] { active_module_ = prev_module; })};
                     if (const auto gref{
@@ -7807,7 +7855,11 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto  m_data{obj_type->get_data().as_opt<sema::types::module>()};
         // A `let mut` or aggregate `const` module member has real storage: load it from its global.
         if (m_data && m_data->imported.root_table_idx) {
-            auto&      target_mod{m_data->imported};
+            auto& target_mod{m_data->imported};
+            if (ctx_.modules.has_builtin_module() &&
+                &target_mod == &ctx_.modules.builtin_module()) {
+                request_builtin_runtime(member_ident.name);
+            }
             auto       prev_module{std::exchange(active_module_, &target_mod)};
             const auto restore_module{gsl::finally([&] { active_module_ = prev_module; })};
             if (const auto gref{

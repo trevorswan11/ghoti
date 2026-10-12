@@ -358,6 +358,17 @@ auto run_built_executable(const options& opts, std::ostream& error_stream, bool 
     return {};
 }
 
+auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("--cpu",
+                     opts.cpu,
+                     "Target CPU: `generic` (the default), `native` for this machine, or a model "
+                     "such as `skylake` or `apple-m1`")
+        ->default_val(opts.cpu);
+    subcmd->add_option(
+        "--features", opts.features, "Target CPU features to add or remove: `+avx2,-sse4.2`");
+}
+
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void {
     if (output_desc) { subcmd->add_option("-o,--output", opts.output, std::string{*output_desc}); }
@@ -368,8 +379,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         "-L,--library-path", opts.library_paths, "Add directory to library search paths");
     subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
     subcmd->add_option("--target", opts.target, "Target triple");
-    subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture")->default_val(opts.cpu);
-    subcmd->add_option("--features", opts.features, "Target CPU features");
+    add_cpu_options(subcmd, opts);
     add_mode_option(subcmd, opts);
     subcmd
         ->add_flag("--debug-passes",

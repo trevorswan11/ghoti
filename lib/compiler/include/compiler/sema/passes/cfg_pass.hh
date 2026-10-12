@@ -110,6 +110,8 @@ class cfg_pass {
 
     auto               gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     auto               resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value>;
+    [[nodiscard]] auto is_cpu_has(const ast::call_expr& call) const -> bool;
+    auto cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::option<cfg_value>;
     [[nodiscard]] auto to_operand(const cfg_value& value) -> operand;
     [[nodiscard]] auto find_import(std::string_view name, bool public_only)
         -> stdx::option<mod::module&>;
@@ -176,6 +178,8 @@ class cfg_pass {
     context&              ctx_;
     codegen::target_facts facts_;
     bool                  ok_{true};
+    // Resolved on the first `cpu.has(...)`
+    stdx::option<codegen::target_cpu> target_cpu_;
 
     ankerl::unordered_dense::map<std::string_view, cfg_decl> cfg_value_decls_;
     ankerl::unordered_dense::map<usize, cfg_value>           cfg_value_cache_;

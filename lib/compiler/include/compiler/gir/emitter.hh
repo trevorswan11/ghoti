@@ -259,6 +259,7 @@ class emitter {
     auto pointer_to_bool(value ptr, bool invert) -> value;
     auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
+    auto request_builtin_type_methods(const sema::type& receiver) -> bool;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;

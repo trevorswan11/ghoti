@@ -136,6 +136,9 @@ class compilation {
 auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
 // `-M,--mode debug|release_safe|release_fast|release_small`, shared by every compiling subcommand
 auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
+
+// `--cpu` and `--features`
+auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void;
 // `--no-compiler-rt`, shared by every subcommand that links
 auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
