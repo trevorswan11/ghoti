@@ -28,10 +28,22 @@ const takes_no_args_or_argv = fn(comptime params: []type): bool {
     return params.len == 0 or (params.len == 1 and params[0] == []Arg);
 };
 
+// Whether a test runner takes the arguments and the tests, and gives the exit code
+const is_test_runner = fn(comptime params: []type, ret: type): bool {
+    return params.len == 2 and params[0] == []Arg and params[1] == []builtin.Test and ret == i32;
+};
+
 // Runs `main` or the tests, giving the exit code
 const run = fn(args: []Arg): i32 {
     @cfg (testing) {
-        return builtin.test_runner(args, @testFunctions());
+        const info = @typeInfo(@TypeOf(@entryTestRunner())).function;
+        if comptime (!is_test_runner(info.params, info.return_type)) {
+            @compileError(
+                "'test_runner' must have signature 'fn(args: [][:0]u8, tests: []Test): i32'",
+            );
+        } else {
+            return @entryTestRunner()(args, @testFunctions());
+        }
     } else {
         const info = @typeInfo(@TypeOf(@entryMain())).function;
         if comptime (!takes_no_args_or_argv(info.params)) {

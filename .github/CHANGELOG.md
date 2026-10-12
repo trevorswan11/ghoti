@@ -730,7 +730,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Program entry is ghoti code: `lib/std/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
     - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
     - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
-    - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - `@entryMain()` (the program's `main`), `@entryTestRunner()` (the `test_runner` a test build calls), and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - A test build calls the root module's own `test_runner`, else `std.testing`'s when the program uses `std`, else `builtin`'s, rather than relying on which one wins at link time; its signature is checked by the entry code and reported at the `test_runner`
     - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
         - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
     - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`

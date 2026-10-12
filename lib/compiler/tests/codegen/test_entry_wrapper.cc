@@ -86,8 +86,9 @@ struct root_error {
     std::string message;
 };
 
-// Analyzes `source` as a program's root, giving every error reported in it
-[[nodiscard]] auto entry_errors(std::string_view source) -> std::vector<root_error> {
+// Analyzes `source` as a program's root, or a test build's, giving every error reported in it
+[[nodiscard]] auto entry_errors(std::string_view source, bool testing = false)
+    -> std::vector<root_error> {
     const tempdir dir{"entry_error"};
     dir.write("main.gh", source);
 
@@ -96,7 +97,7 @@ struct root_error {
     mod::module_manager manager{loader};
     sema::analyzer      analyzer{manager, errors, false};
     analyzer.set_entry_point(true);
-    const auto analyzed{analyzer.analyze(dir.path / "main.gh")};
+    const auto analyzed{analyzer.analyze(dir.path / "main.gh", testing)};
     INFO(errors.str());
     CHECK(analyzed);
 
@@ -274,6 +275,18 @@ TEST_CASE("std/start.gh rejects a Result main can't exit with") {
     const auto error{entry_error(source)};
     CHECK(error.line == main_line(source));
     CHECK(error.message.starts_with(message));
+}
+
+TEST_CASE("std/start.gh rejects a test_runner it can't call") {
+    constexpr std::string_view source{R"(
+        test "a" { @expect(true); }
+        pub const test_runner = fn(args: [][:0]u8): i32 { _ = args; return 0; };
+    )"};
+    const auto                 errors{entry_errors(source, true)};
+    REQUIRE(errors.size() == 1);
+    CHECK(errors.front().line == 2);
+    CHECK(errors.front().message.starts_with(
+        "'test_runner' must have signature 'fn(args: [][:0]u8, tests: []Test): i32'"));
 }
 
 TEST_CASE("An executable enters through std/start.gh, which calls main") {

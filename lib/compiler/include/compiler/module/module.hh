@@ -497,6 +497,9 @@ class module_manager {
     [[nodiscard]] auto try_get_library_module(std::string_view name)
         -> stdx::result<gsl::not_null<module*>, diagnostic>;
 
+    // The library module registered as `name`, if something has already loaded it
+    [[nodiscard]] auto find_loaded_library_module(std::string_view name) -> stdx::option<module&>;
+
     // Adds a library module and its underlying path to the lookup table
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
         -> stdx::result<void, diagnostic>;

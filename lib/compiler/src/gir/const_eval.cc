@@ -5026,6 +5026,15 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return const_value{scoped_symbol_name(*root->root_table_idx, ctx_.user_main_name),
                            *fn_type};
     }
+    case syntax::builtin_t::ENTRY_TEST_RUNNER: {
+        const auto owner{ctx_.entry_test_runner_module()};
+        if (!owner || !owner->root_table_idx) { return stdx::none; }
+        const auto sym{ctx_.registry.get_from_opt(*owner->root_table_idx, "test_runner")};
+        const auto node{sym ? sym->get_data().as_opt<sema::symbols::node_t>() : stdx::none};
+        const auto fn_type{node ? owner->get_sema_type_opt(*node) : stdx::none};
+        if (!fn_type || fn_type->get_kind() != sema::type_kind::FUNCTION) { return stdx::none; }
+        return const_value{scoped_symbol_name(*owner->root_table_idx, "test_runner"), *fn_type};
+    }
     case syntax::builtin_t::SRC: {
         const auto   loc{id.is_valid() ? module_->ast.location_of(id)
                                        : module_->ast.location_of(call.function)};

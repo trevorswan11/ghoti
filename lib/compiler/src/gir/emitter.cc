@@ -4041,7 +4041,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             return value{void_val{}, ret_type};
         }
-        case syntax::builtin_t::ENTRY_MAIN: {
+        case syntax::builtin_t::ENTRY_MAIN:
+        case syntax::builtin_t::ENTRY_TEST_RUNNER: {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
             return value{undefined_val{}, ret_type};
         }

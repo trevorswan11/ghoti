@@ -64,18 +64,6 @@ namespace {
     return tempfile{std::in_place, temp_obj_path};
 }
 
-[[nodiscard]] auto is_argv_slice_type(const type* t) noexcept -> bool {
-    if (!t || t->get_kind() != type_kind::SLICE) { return false; }
-    const auto outer{t->get_data().as_opt<types::slice>()};
-    if (!outer || outer->null_terminated || outer->underlying.get_kind() != type_kind::SLICE) {
-        return false;
-    }
-    const auto inner{outer->underlying.get_data().as_opt<types::slice>()};
-    if (!inner || !inner->null_terminated) { return false; }
-    const auto elem{as_integer(inner->underlying)};
-    return elem && elem->bits == 8 && !elem->is_signed;
-}
-
 [[nodiscard]] auto export_roots(const gir::module& mod) -> std::vector<std::string_view> {
     std::vector<std::string_view> roots;
     for (const auto* fn : mod.get_functions()) {
@@ -124,9 +112,8 @@ constexpr std::array supported_archs{
 auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
-    // `std/start.gh`'s exports run the tests
+    // `std/start.gh`'s exports run the tests, through the `test_runner` it picks
     for (const auto root : export_roots(gir_module)) { roots.emplace_back(root); }
-    roots.emplace_back("test_runner");
     roots.emplace_back("expect_handler");
     roots.emplace_back("require_handler");
     roots.emplace_back("skip_handler");
@@ -637,52 +624,20 @@ auto analyzer::validate_test_entry(const mod::module& root_module) const
         return make_sema_err("missing root module", error::MODULE_LOAD_ERROR);
     }
 
-    // No user-defined `test_runner` -> the `weak` `builtin` default is used,
+    // Without its own `test_runner` the program runs `std.testing`'s or `builtin`'s
     const auto& root_table{registry_.get(*root_module.root_table_idx)};
     const auto  runner_sym_opt{root_table.get_opt("test_runner")};
     if (!runner_sym_opt) { return {}; }
 
-    const auto&                runner_sym{*runner_sym_opt};
-    constexpr std::string_view want{
-        "'test_runner' must have signature 'fn(args: [][:0]u8, tests: []Test): i32'"};
-    const auto loc{runner_sym.get_symbol_location(root_module)};
-
-    if (runner_sym.get_kind_opt() != symbol_kind::CALLABLE) {
+    const auto& runner_sym{*runner_sym_opt};
+    const auto  loc{runner_sym.get_symbol_location(root_module)};
+    if (runner_sym.get_kind_opt() != symbol_kind::CALLABLE ||
+        !runner_sym.get_data().is<symbols::node_t>()) {
         return make_sema_err(
-            fmt::format("{} (it is not a function)", want), error::TYPE_MISMATCH, loc);
+            "'test_runner' must be a function defined in this module", error::TYPE_MISMATCH, loc);
     }
 
-    const auto node_sym{runner_sym.get_data().as_opt<symbols::node_t>()};
-    if (!node_sym) {
-        return make_sema_err(fmt::format("{} (it must be a user-defined function)", want),
-                             error::TYPE_MISMATCH,
-                             loc);
-    }
-
-    const auto sema_type_opt{root_module.get_sema_type_opt(*node_sym)};
-    if (!sema_type_opt || sema_type_opt->get_kind() != type_kind::FUNCTION) {
-        return make_sema_err(fmt::format("{}", want), error::TYPE_MISMATCH, loc);
-    }
-
-    const auto& fn_data{sema_type_opt->get_data().as<types::function>()};
-    if (fn_data.params.size() != 2 || !is_argv_slice_type(fn_data.params[0]) ||
-        fn_data.params[1] == nullptr || fn_data.params[1]->get_kind() != type_kind::SLICE) {
-        return make_sema_err(fmt::format("{}", want), error::TYPE_MISMATCH, loc);
-    }
-
-    const auto tests_slice{fn_data.params[1]->get_data().as_opt<types::slice>()};
-    if (!tests_slice || tests_slice->null_terminated ||
-        tests_slice->underlying.get_kind() != type_kind::STRUCT) {
-        return make_sema_err(fmt::format("{} (the second parameter must be '[]Test')", want),
-                             error::TYPE_MISMATCH,
-                             loc);
-    }
-
-    if (!is_i32(fn_data.return_type)) {
-        return make_sema_err(
-            fmt::format("{} (it must return 'i32')", want), error::TYPE_MISMATCH, loc);
-    }
-
+    // Its parameters and return type are the entry code's to check
     return {};
 }
 

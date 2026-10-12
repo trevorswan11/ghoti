@@ -324,6 +324,10 @@ struct context {
     // A compiler-known target-fact enum by name, from the prelude
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
 
+    // The module whose own `test_runner` a test build calls: the root's, else `std.testing`'s
+    // once the program loads `std`, else `builtin`'s default
+    [[nodiscard]] auto entry_test_runner_module() -> stdx::option<mod::module&>;
+
     [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
     // "Type mismatch in store: cannot assign 'from' to 'to'", with the rejection reason if any
     [[nodiscard]] auto store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const

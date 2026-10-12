@@ -2516,6 +2516,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::ENTRY_MAIN:
+    case syntax::builtin_t::ENTRY_TEST_RUNNER:
     case syntax::builtin_t::TEST_FUNCTIONS: {
         const auto name{syntax::builtin_name(builtin_id)};
         if (!resolving_.is_start) {
@@ -2528,6 +2529,16 @@ template <ast::IndexableID ID>
         if (builtin_id == syntax::builtin_t::TEST_FUNCTIONS) {
             auto& test{ctx_.get_builtin_type("Test")};
             return_type = &ctx_.get_slice(types::mut::CONSTANT, false, denoted_type(test));
+            break;
+        }
+        if (builtin_id == syntax::builtin_t::ENTRY_TEST_RUNNER) {
+            const auto runner_type{entry_test_runner_type()};
+            if (!runner_type) {
+                return make_sema_err(fmt::format("'{}()': the program has no 'test_runner'", name),
+                                     error::TYPE_MISMATCH,
+                                     resolving_.ast.location_of(call.function));
+            }
+            return_type = &*runner_type;
             break;
         }
         if (!ctx_.entry_root) {
@@ -12561,6 +12572,17 @@ auto type_resolver::entry_main_type() const -> stdx::option<type&> {
     const auto fn_type{ctx_.entry_root->get_sema_type_opt(*decl->value)};
     if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
     return *fn_type;
+}
+
+auto type_resolver::entry_test_runner_type() const -> stdx::option<type&> {
+    const auto owner{ctx_.entry_test_runner_module()};
+    if (!owner || !owner->root_table_idx) { return stdx::none; }
+    const auto sym{ctx_.registry.get_from_opt(*owner->root_table_idx, "test_runner")};
+    if (!sym || sym->get_status() != symbol_status::RESOLVED) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    const auto runner_type{node ? owner->get_sema_type_opt(*node) : stdx::none};
+    if (!runner_type || runner_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+    return *runner_type;
 }
 
 // Each `builtin.CpuFeature` argument, as the `+name` LLVM enables it by
