@@ -1,6 +1,8 @@
 #include "compiler/codegen/linker.hh"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <filesystem>
 #include <ranges>
 #include <string>
@@ -18,6 +20,8 @@
 #include <llvm/ADT/SmallString.h>
 #include <llvm/Object/Archive.h>
 #include <llvm/Object/ArchiveWriter.h>
+#include <llvm/Object/COFFImportFile.h>
+#include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/ManagedStatic.h>
@@ -40,6 +44,7 @@
 #include "support/env.hh"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
+#include "support/tempfile.hh"
 
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(coff)
@@ -259,11 +264,6 @@ auto add_mingw_args(std::vector<std::string>&   args,
     }
     add_unix_libraries(args, linker_opts);
     add_builtins(args, linker_opts);
-    // The entry wrapper's own Win32 API calls need their import libs listed explicitly.
-    if (linker_opts.needs_windows_entry_apis) {
-        args.emplace_back("-lkernel32");
-        args.emplace_back("-lshell32");
-    }
     args.emplace_back("--gc-sections");
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
@@ -297,11 +297,6 @@ auto add_msvc_args(std::vector<std::string>&   args,
         args.emplace_back(lib.ends_with(".lib") ? lib : fmt::format("{}.lib", lib));
     }
     add_builtins(args, linker_opts);
-    // See the equivalent comment in add_mingw_args -- these aren't supplied by a spec file here
-    if (linker_opts.needs_windows_entry_apis) {
-        args.emplace_back("kernel32.lib");
-        args.emplace_back("shell32.lib");
-    }
     args.emplace_back("/opt:ref");
     args.emplace_back("/opt:icf");
     args.emplace_back(fmt::format("/out:{}", out_path_str));
@@ -353,7 +348,7 @@ auto add_elf_args(std::vector<std::string>&   args,
     args.emplace_back("-o");
     args.emplace_back(out_path_str);
     if (!is_dylib) {
-        // Linux gets a freestanding `_start` synthesized in codegen (no crt/libc)
+        // Linux enters at `lib/start`'s freestanding `_start` (no crt/libc)
         args.emplace_back("-e");
         args.emplace_back(triple.isOSLinux() ? "_start" : "main");
     }
@@ -452,6 +447,119 @@ auto add_elf_args(std::vector<std::string>&   args,
     return {};
 }
 
+[[nodiscard]] auto equals_ignore_case(std::string_view a, std::string_view b) -> bool {
+    return std::ranges::equal(a, b, [](char x, char y) {
+        return std::tolower(static_cast<u8>(x)) == std::tolower(static_cast<u8>(y));
+    });
+}
+
+[[nodiscard]] auto coff_machine(const llvm::Triple& triple) -> llvm::COFF::MachineTypes {
+    switch (triple.getArch()) {
+    case llvm::Triple::x86:     return llvm::COFF::IMAGE_FILE_MACHINE_I386;
+    case llvm::Triple::aarch64: return llvm::COFF::IMAGE_FILE_MACHINE_ARM64;
+    case llvm::Triple::arm:
+    case llvm::Triple::thumb:   return llvm::COFF::IMAGE_FILE_MACHINE_ARMNT;
+    default:                    return llvm::COFF::IMAGE_FILE_MACHINE_AMD64;
+    }
+}
+
+// Whether `dir` holds an import library the linker would take for `-l<library>`
+[[nodiscard]] auto has_import_library(const std::filesystem::path& dir, std::string_view library)
+    -> bool {
+    const std::array candidates{fmt::format("{}.lib", library),
+                                fmt::format("lib{}.a", library),
+                                fmt::format("lib{}.dll.a", library),
+                                fmt::format("{}.dll.a", library)};
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator{dir, ec}) {
+        const auto name{entry.path().filename().string()};
+        for (const auto& candidate : candidates) {
+            if (equals_ignore_case(name, candidate)) { return true; }
+        }
+    }
+    return false;
+}
+
+// The object's references to `symbol`, decorated as 32-bit x86 decorates a stdcall name: `_f@8`
+[[nodiscard]] auto x86_decorated_name(const std::vector<std::string>& undefined,
+                                      std::string_view                symbol) -> std::string {
+    const auto prefix{fmt::format("_{}@", symbol)};
+    for (std::string_view name : undefined) {
+        if (name.starts_with("__imp_")) { name.remove_prefix(6); }
+        if (name.starts_with(prefix) && name.size() > prefix.size()) { return std::string{name}; }
+    }
+    return fmt::format("_{}", symbol);
+}
+
+// Windows needs an import library per DLL, which only an SDK or MinGW sysroot ships; any the
+// program uses that can't be found is written into `dir` from the symbols it imports
+[[nodiscard]] auto write_missing_import_libraries(const llvm::Triple&          triple,
+                                                  const std::filesystem::path& object_file,
+                                                  const extra_linker_options&  linker_opts,
+                                                  const std::filesystem::path& dir)
+    -> stdx::result<bool, diagnostic> {
+    std::vector<std::filesystem::path> search{linker_opts.library_paths.begin(),
+                                              linker_opts.library_paths.end()};
+    for (auto& found : windows_import_lib_dirs(triple)) { search.emplace_back(std::move(found)); }
+
+    std::vector<std::string> undefined;
+    if (triple.getArch() == llvm::Triple::x86) {
+        if (auto object{llvm::object::ObjectFile::createObjectFile(object_file.string())}) {
+            for (const auto& sym : object->getBinary()->symbols()) {
+                auto flags{sym.getFlags()};
+                auto name{sym.getName()};
+                if (!flags || !name) {
+                    llvm::consumeError(flags.takeError());
+                    llvm::consumeError(name.takeError());
+                    continue;
+                }
+                if (*flags & llvm::object::SymbolRef::SF_Undefined) {
+                    undefined.emplace_back(name->str());
+                }
+            }
+        } else {
+            llvm::consumeError(object.takeError());
+        }
+    }
+
+    bool wrote{false};
+    for (const auto& library : linker_opts.libraries) {
+        const auto found{std::ranges::any_of(
+            search, [&](const auto& path) { return has_import_library(path, library); })};
+        if (found) { continue; }
+
+        std::vector<llvm::object::COFFShortExport> exports;
+        for (const auto& import : linker_opts.imports) {
+            if (!equals_ignore_case(import.library, library)) { continue; }
+            llvm::object::COFFShortExport entry;
+            entry.Data = import.data;
+            if (triple.getArch() == llvm::Triple::x86) {
+                // The decorated name is what the object references; the DLL exports it bare
+                entry.SymbolName = x86_decorated_name(undefined, import.symbol);
+                entry.Name       = fmt::format("_{}", import.symbol);
+            } else {
+                entry.Name = import.symbol;
+            }
+            exports.emplace_back(std::move(entry));
+        }
+        if (exports.empty()) { continue; }
+
+        const auto path{(dir / fmt::format("{}.lib", library)).string()};
+        if (auto error{llvm::object::writeImportLibrary(fmt::format("{}.dll", library),
+                                                        path,
+                                                        exports,
+                                                        coff_machine(triple),
+                                                        triple.isWindowsGNUEnvironment())}) {
+            return make_codegen_err(fmt::format("failed to write an import library for '{}': {}",
+                                                library,
+                                                llvm::toString(std::move(error))),
+                                    error::LINKING_FAILED);
+        }
+        wrote = true;
+    }
+    return wrote;
+}
+
 [[nodiscard]] auto link_image(const std::filesystem::path& object_file,
                               const std::filesystem::path& output_file,
                               const target_options&        target_opts,
@@ -462,16 +570,30 @@ auto add_elf_args(std::vector<std::string>&   args,
     const auto               out_path_str{output_file.string()};
     std::vector<std::string> args;
 
+    // Import libraries written for this link are searched after every other library directory
+    stdx::option<tempdir>              import_dir;
+    std::vector<std::filesystem::path> library_paths{linker_opts.library_paths.begin(),
+                                                     linker_opts.library_paths.end()};
+    auto                               effective_opts{linker_opts};
+    if (triple.isOSWindows() && !linker_opts.imports.empty()) {
+        import_dir.emplace("ghoti_import_libs");
+        if (TRY(write_missing_import_libraries(triple, object_file, linker_opts, import_dir->path))) {
+            library_paths.emplace_back(import_dir->path);
+            effective_opts.library_paths = library_paths;
+        }
+    }
+    const auto& opts{effective_opts};
+
     if (triple.isOSDarwin()) {
-        add_darwin_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+        add_darwin_args(args, triple, obj_path_str, out_path_str, opts, is_dylib);
     } else if (triple.isWindowsGNUEnvironment()) {
-        add_mingw_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+        add_mingw_args(args, triple, obj_path_str, out_path_str, opts, is_dylib);
     } else if (triple.isOSWindows()) {
-        add_msvc_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+        add_msvc_args(args, triple, obj_path_str, out_path_str, opts, is_dylib);
     } else if (triple.isWasm()) {
-        add_wasm_args(args, obj_path_str, out_path_str, linker_opts, is_dylib);
+        add_wasm_args(args, obj_path_str, out_path_str, opts, is_dylib);
     } else {
-        add_elf_args(args, triple, obj_path_str, out_path_str, linker_opts, is_dylib);
+        add_elf_args(args, triple, obj_path_str, out_path_str, opts, is_dylib);
     }
     TRY(run_link(triple, args, linker_opts.builtins.has_value()));
 
@@ -492,10 +614,6 @@ auto add_elf_args(std::vector<std::string>&   args,
 auto reset_linker_context() -> void {
     if (lld::hasContext()) { lld::CommonLinkerContext::destroy(); }
     llvm::llvm_shutdown();
-}
-
-auto has_windows_argv_sysroot() -> bool {
-    return !windows_import_lib_dirs(resolve_target_triple()).empty();
 }
 
 auto link_executable(const std::filesystem::path& object_file,

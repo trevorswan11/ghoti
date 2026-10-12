@@ -46,6 +46,7 @@ enum class type_kind : u8 {
     F128,
     COMPTIME_INT,
     COMPTIME_FLOAT,
+    ENUM_LITERAL,
     VOID_,
     UNDEFINED,
     NULLPTR,

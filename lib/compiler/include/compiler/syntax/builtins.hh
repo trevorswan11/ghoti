@@ -10,145 +10,267 @@
 
 namespace ghoti::syntax {
 
-using builtin_t = typed_identifier;
+// Every `@builtin` but the special forms `@cfg` / `@cfgValue`, which the parser handles itself.
+// They all lex as one `token_type_t::BUILTIN`; the spelling says which
+enum class builtin_t : u8 {
+    ALIGN_CAST,
+    PTR_CAST,
+    BIT_CAST,
+    CONST_CAST,
+    VOLATILE_CAST,
+    AS,
+    INT_CAST,
+    TRUNCATE,
+    BOOL_FROM_INT,
+    INT_FROM_BOOL,
+    BACKING_INT,
+    FROM_BACKING_INT,
+    INT_FROM_FLOAT,
+    FLOAT_FROM_INT,
+    FLOAT_CAST,
+    INT_FROM_PTR,
+    PTR_FROM_INT,
+    SLICE_FROM_PTR,
+    FIELD_PARENT_PTR,
+    ALIGN_OF,
+    SIZE_OF,
+    BIT_SIZE_OF,
+    TYPE_OF,
+    THIS,
+    TAG_NAME,
+    TYPE_NAME,
+    TYPE_INFO,
+    HAS_FIELD,
+    FIELD_TYPE,
+    FIELD,
+    INT,
+    FLOAT,
+    POINTER,
+    REFERENCE,
+    SLICE,
+    ARRAY,
+    FN,
+    FIELD_DEFAULT,
+    STRUCT,
+    UNION,
+    ENUM,
+    MEMCPY,
+    MEMSET,
+    MEMMOVE,
+    MUL_ADD,
+    CLZ,
+    CTZ,
+    POPCOUNT,
+    ABS,
+    SQRT,
+    SIN,
+    COS,
+    TAN,
+    EXP,
+    EXP2,
+    LOG,
+    LOG2,
+    LOG10,
+    FLOOR,
+    CEIL,
+    MIN,
+    MAX,
+    DIV_TRUNC,
+    DIV_FLOOR,
+    REM,
+    MOD,
+    ADD_WITH_OVERFLOW,
+    SUB_WITH_OVERFLOW,
+    MUL_WITH_OVERFLOW,
+    SHL_WITH_OVERFLOW,
+    C_VA_START,
+    C_VA_ARG,
+    C_VA_COPY,
+    C_VA_END,
+    TARGET_OS,
+    TARGET_ARCH,
+    TARGET_TRIPLE,
+    TARGET_ABI,
+    TARGET_PTR_BITS,
+    TARGET_ENDIAN,
+    TARGET_FAMILY,
+    OPTIMIZE_MODE,
+    RUNTIME_SAFETY,
+    SET_RUNTIME_SAFETY,
+    BRANCH_HINT,
+    SET_EVAL_RECURSION_LIMIT,
+    SET_EVAL_UNROLL_LIMIT,
+    EXPORT,
+    PANIC,
+    TRAP,
+    FN_CTX,
+    SRC,
+    EXPECT,
+    REQUIRE,
+    SKIP,
+    IMPLEMENTS,
+    ASSERT,
+    VERIFY,
+    DYN_CAST,
+    ATOMIC_LOAD,
+    ATOMIC_STORE,
+    ATOMIC_RMW,
+    CMPXCHG_WEAK,
+    CMPXCHG_STRONG,
+    FENCE,
+    COMPILE_ERROR,
+    EMBED,
+    CALL,
+    ENUM_LITERAL,
+    LLVM_INTRINSIC,
+    ENTRY_MAIN,
+    TEST_FUNCTIONS,
+    RETURN_ADDRESS,
+};
+
+// A builtin's spelling and kind
+struct builtin_def {
+    std::string_view name;
+    builtin_t        kind;
+};
 
 namespace builtins {
 
-constexpr builtin_t ALIGN_CAST{"@alignCast", token_type_t::BUILTIN_ALIGN_CAST};
-constexpr builtin_t PTR_CAST{"@ptrCast", token_type_t::BUILTIN_PTR_CAST};
-constexpr builtin_t BIT_CAST{"@bitCast", token_type_t::BUILTIN_BIT_CAST};
-constexpr builtin_t CONST_CAST{"@constCast", token_type_t::BUILTIN_CONST_CAST};
-constexpr builtin_t VOLATILE_CAST{"@volatileCast", token_type_t::BUILTIN_VOLATILE_CAST};
-constexpr builtin_t AS{"@as", token_type_t::BUILTIN_AS};
-constexpr builtin_t INT_CAST{"@intCast", token_type_t::BUILTIN_INT_CAST};
-constexpr builtin_t TRUNCATE{"@truncate", token_type_t::BUILTIN_TRUNCATE};
-constexpr builtin_t BOOL_FROM_INT{"@boolFromInt", token_type_t::BUILTIN_BOOL_FROM_INT};
-constexpr builtin_t INT_FROM_BOOL{"@intFromBool", token_type_t::BUILTIN_INT_FROM_BOOL};
-constexpr builtin_t BACKING_INT{"@backingInt", token_type_t::BUILTIN_BACKING_INT};
-constexpr builtin_t FROM_BACKING_INT{"@fromBackingInt", token_type_t::BUILTIN_FROM_BACKING_INT};
-constexpr builtin_t INT_FROM_FLOAT{"@intFromFloat", token_type_t::BUILTIN_INT_FROM_FLOAT};
-constexpr builtin_t FLOAT_FROM_INT{"@floatFromInt", token_type_t::BUILTIN_FLOAT_FROM_INT};
-constexpr builtin_t FLOAT_CAST{"@floatCast", token_type_t::BUILTIN_FLOAT_CAST};
-constexpr builtin_t DYN_CAST{"@dynCast", token_type_t::BUILTIN_DYN_CAST};
+constexpr builtin_def ALIGN_CAST{"@alignCast", builtin_t::ALIGN_CAST};
+constexpr builtin_def PTR_CAST{"@ptrCast", builtin_t::PTR_CAST};
+constexpr builtin_def BIT_CAST{"@bitCast", builtin_t::BIT_CAST};
+constexpr builtin_def CONST_CAST{"@constCast", builtin_t::CONST_CAST};
+constexpr builtin_def VOLATILE_CAST{"@volatileCast", builtin_t::VOLATILE_CAST};
+constexpr builtin_def AS{"@as", builtin_t::AS};
+constexpr builtin_def INT_CAST{"@intCast", builtin_t::INT_CAST};
+constexpr builtin_def TRUNCATE{"@truncate", builtin_t::TRUNCATE};
+constexpr builtin_def BOOL_FROM_INT{"@boolFromInt", builtin_t::BOOL_FROM_INT};
+constexpr builtin_def INT_FROM_BOOL{"@intFromBool", builtin_t::INT_FROM_BOOL};
+constexpr builtin_def BACKING_INT{"@backingInt", builtin_t::BACKING_INT};
+constexpr builtin_def FROM_BACKING_INT{"@fromBackingInt", builtin_t::FROM_BACKING_INT};
+constexpr builtin_def INT_FROM_FLOAT{"@intFromFloat", builtin_t::INT_FROM_FLOAT};
+constexpr builtin_def FLOAT_FROM_INT{"@floatFromInt", builtin_t::FLOAT_FROM_INT};
+constexpr builtin_def FLOAT_CAST{"@floatCast", builtin_t::FLOAT_CAST};
+constexpr builtin_def DYN_CAST{"@dynCast", builtin_t::DYN_CAST};
 
-constexpr builtin_t INT_FROM_PTR{"@intFromPtr", token_type_t::BUILTIN_INT_FROM_PTR};
-constexpr builtin_t PTR_FROM_INT{"@ptrFromInt", token_type_t::BUILTIN_PTR_FROM_INT};
-constexpr builtin_t SLICE_FROM_PTR{"@sliceFromPtr", token_type_t::BUILTIN_SLICE_FROM_PTR};
-constexpr builtin_t FIELD_PARENT_PTR{"@fieldParentPtr", token_type_t::BUILTIN_FIELD_PARENT_PTR};
+constexpr builtin_def INT_FROM_PTR{"@intFromPtr", builtin_t::INT_FROM_PTR};
+constexpr builtin_def PTR_FROM_INT{"@ptrFromInt", builtin_t::PTR_FROM_INT};
+constexpr builtin_def SLICE_FROM_PTR{"@sliceFromPtr", builtin_t::SLICE_FROM_PTR};
+constexpr builtin_def FIELD_PARENT_PTR{"@fieldParentPtr", builtin_t::FIELD_PARENT_PTR};
 
-constexpr builtin_t ALIGN_OF{"@alignOf", token_type_t::BUILTIN_ALIGN_OF};
-constexpr builtin_t SIZE_OF{"@sizeOf", token_type_t::BUILTIN_SIZE_OF};
-constexpr builtin_t BIT_SIZE_OF{"@bitSizeOf", token_type_t::BUILTIN_BIT_SIZE_OF};
-constexpr builtin_t TYPE_OF{"@TypeOf", token_type_t::BUILTIN_TYPE_OF};
-constexpr builtin_t THIS{"@This", token_type_t::BUILTIN_THIS};
-constexpr builtin_t TAG_NAME{"@tagName", token_type_t::BUILTIN_TAG_NAME};
-constexpr builtin_t TYPE_NAME{"@typeName", token_type_t::BUILTIN_TYPE_NAME};
-constexpr builtin_t TYPE_INFO{"@typeInfo", token_type_t::BUILTIN_TYPE_INFO};
-constexpr builtin_t HAS_FIELD{"@hasField", token_type_t::BUILTIN_HAS_FIELD};
-constexpr builtin_t FIELD_TYPE{"@fieldType", token_type_t::BUILTIN_FIELD_TYPE};
-constexpr builtin_t FIELD{"@field", token_type_t::BUILTIN_FIELD};
+constexpr builtin_def ALIGN_OF{"@alignOf", builtin_t::ALIGN_OF};
+constexpr builtin_def SIZE_OF{"@sizeOf", builtin_t::SIZE_OF};
+constexpr builtin_def BIT_SIZE_OF{"@bitSizeOf", builtin_t::BIT_SIZE_OF};
+constexpr builtin_def TYPE_OF{"@TypeOf", builtin_t::TYPE_OF};
+constexpr builtin_def THIS{"@This", builtin_t::THIS};
+constexpr builtin_def TAG_NAME{"@tagName", builtin_t::TAG_NAME};
+constexpr builtin_def TYPE_NAME{"@typeName", builtin_t::TYPE_NAME};
+constexpr builtin_def TYPE_INFO{"@typeInfo", builtin_t::TYPE_INFO};
+constexpr builtin_def HAS_FIELD{"@hasField", builtin_t::HAS_FIELD};
+constexpr builtin_def FIELD_TYPE{"@fieldType", builtin_t::FIELD_TYPE};
+constexpr builtin_def FIELD{"@field", builtin_t::FIELD};
 
-constexpr builtin_t INT{"@Int", token_type_t::BUILTIN_INT};
-constexpr builtin_t FLOAT{"@Float", token_type_t::BUILTIN_FLOAT};
-constexpr builtin_t POINTER{"@Pointer", token_type_t::BUILTIN_POINTER};
-constexpr builtin_t REFERENCE{"@Reference", token_type_t::BUILTIN_REFERENCE};
-constexpr builtin_t SLICE{"@Slice", token_type_t::BUILTIN_SLICE};
-constexpr builtin_t ARRAY{"@Array", token_type_t::BUILTIN_ARRAY};
-constexpr builtin_t FN{"@Fn", token_type_t::BUILTIN_FN};
-constexpr builtin_t FIELD_DEFAULT{"@fieldDefault", token_type_t::BUILTIN_FIELD_DEFAULT};
-constexpr builtin_t STRUCT{"@Struct", token_type_t::BUILTIN_STRUCT};
-constexpr builtin_t UNION{"@Union", token_type_t::BUILTIN_UNION};
-constexpr builtin_t ENUM{"@Enum", token_type_t::BUILTIN_ENUM};
+constexpr builtin_def INT{"@Int", builtin_t::INT};
+constexpr builtin_def FLOAT{"@Float", builtin_t::FLOAT};
+constexpr builtin_def POINTER{"@Pointer", builtin_t::POINTER};
+constexpr builtin_def REFERENCE{"@Reference", builtin_t::REFERENCE};
+constexpr builtin_def SLICE{"@Slice", builtin_t::SLICE};
+constexpr builtin_def ARRAY{"@Array", builtin_t::ARRAY};
+constexpr builtin_def FN{"@Fn", builtin_t::FN};
+constexpr builtin_def FIELD_DEFAULT{"@fieldDefault", builtin_t::FIELD_DEFAULT};
+constexpr builtin_def STRUCT{"@Struct", builtin_t::STRUCT};
+constexpr builtin_def UNION{"@Union", builtin_t::UNION};
+constexpr builtin_def ENUM{"@Enum", builtin_t::ENUM};
 
-constexpr builtin_t MEMCPY{"@memcpy", token_type_t::BUILTIN_MEMCPY};
-constexpr builtin_t MEMSET{"@memset", token_type_t::BUILTIN_MEMSET};
-constexpr builtin_t MEMMOVE{"@memmove", token_type_t::BUILTIN_MEMMOVE};
+constexpr builtin_def MEMCPY{"@memcpy", builtin_t::MEMCPY};
+constexpr builtin_def MEMSET{"@memset", builtin_t::MEMSET};
+constexpr builtin_def MEMMOVE{"@memmove", builtin_t::MEMMOVE};
 
-constexpr builtin_t MUL_ADD{"@mulAdd", token_type_t::BUILTIN_MUL_ADD};
-constexpr builtin_t CLZ{"@clz", token_type_t::BUILTIN_CLZ};
-constexpr builtin_t CTZ{"@ctz", token_type_t::BUILTIN_CTZ};
-constexpr builtin_t POPCOUNT{"@popCount", token_type_t::BUILTIN_POPCOUNT};
-constexpr builtin_t ABS{"@abs", token_type_t::BUILTIN_ABS};
-constexpr builtin_t SQRT{"@sqrt", token_type_t::BUILTIN_SQRT};
-constexpr builtin_t SIN{"@sin", token_type_t::BUILTIN_SIN};
-constexpr builtin_t COS{"@cos", token_type_t::BUILTIN_COS};
-constexpr builtin_t TAN{"@tan", token_type_t::BUILTIN_TAN};
-constexpr builtin_t EXP{"@exp", token_type_t::BUILTIN_EXP};
-constexpr builtin_t EXP2{"@exp2", token_type_t::BUILTIN_EXP2};
-constexpr builtin_t LOG{"@log", token_type_t::BUILTIN_LOG};
-constexpr builtin_t LOG2{"@log2", token_type_t::BUILTIN_LOG2};
-constexpr builtin_t LOG10{"@log10", token_type_t::BUILTIN_LOG10};
-constexpr builtin_t FLOOR{"@floor", token_type_t::BUILTIN_FLOOR};
-constexpr builtin_t CEIL{"@ceil", token_type_t::BUILTIN_CEIL};
+constexpr builtin_def MUL_ADD{"@mulAdd", builtin_t::MUL_ADD};
+constexpr builtin_def CLZ{"@clz", builtin_t::CLZ};
+constexpr builtin_def CTZ{"@ctz", builtin_t::CTZ};
+constexpr builtin_def POPCOUNT{"@popCount", builtin_t::POPCOUNT};
+constexpr builtin_def ABS{"@abs", builtin_t::ABS};
+constexpr builtin_def SQRT{"@sqrt", builtin_t::SQRT};
+constexpr builtin_def SIN{"@sin", builtin_t::SIN};
+constexpr builtin_def COS{"@cos", builtin_t::COS};
+constexpr builtin_def TAN{"@tan", builtin_t::TAN};
+constexpr builtin_def EXP{"@exp", builtin_t::EXP};
+constexpr builtin_def EXP2{"@exp2", builtin_t::EXP2};
+constexpr builtin_def LOG{"@log", builtin_t::LOG};
+constexpr builtin_def LOG2{"@log2", builtin_t::LOG2};
+constexpr builtin_def LOG10{"@log10", builtin_t::LOG10};
+constexpr builtin_def FLOOR{"@floor", builtin_t::FLOOR};
+constexpr builtin_def CEIL{"@ceil", builtin_t::CEIL};
 
-constexpr builtin_t MIN{"@min", token_type_t::BUILTIN_MIN};
-constexpr builtin_t MAX{"@max", token_type_t::BUILTIN_MAX};
-constexpr builtin_t DIV_TRUNC{"@divTrunc", token_type_t::BUILTIN_DIV_TRUNC};
-constexpr builtin_t DIV_FLOOR{"@divFloor", token_type_t::BUILTIN_DIV_FLOOR};
-constexpr builtin_t REM{"@rem", token_type_t::BUILTIN_REM};
-constexpr builtin_t MOD{"@mod", token_type_t::BUILTIN_MOD};
-constexpr builtin_t ADD_WITH_OVERFLOW{"@addWithOverflow", token_type_t::BUILTIN_ADD_WITH_OVERFLOW};
-constexpr builtin_t SUB_WITH_OVERFLOW{"@subWithOverflow", token_type_t::BUILTIN_SUB_WITH_OVERFLOW};
-constexpr builtin_t MUL_WITH_OVERFLOW{"@mulWithOverflow", token_type_t::BUILTIN_MUL_WITH_OVERFLOW};
-constexpr builtin_t SHL_WITH_OVERFLOW{"@shlWithOverflow", token_type_t::BUILTIN_SHL_WITH_OVERFLOW};
+constexpr builtin_def MIN{"@min", builtin_t::MIN};
+constexpr builtin_def MAX{"@max", builtin_t::MAX};
+constexpr builtin_def DIV_TRUNC{"@divTrunc", builtin_t::DIV_TRUNC};
+constexpr builtin_def DIV_FLOOR{"@divFloor", builtin_t::DIV_FLOOR};
+constexpr builtin_def REM{"@rem", builtin_t::REM};
+constexpr builtin_def MOD{"@mod", builtin_t::MOD};
+constexpr builtin_def ADD_WITH_OVERFLOW{"@addWithOverflow", builtin_t::ADD_WITH_OVERFLOW};
+constexpr builtin_def SUB_WITH_OVERFLOW{"@subWithOverflow", builtin_t::SUB_WITH_OVERFLOW};
+constexpr builtin_def MUL_WITH_OVERFLOW{"@mulWithOverflow", builtin_t::MUL_WITH_OVERFLOW};
+constexpr builtin_def SHL_WITH_OVERFLOW{"@shlWithOverflow", builtin_t::SHL_WITH_OVERFLOW};
 
-constexpr builtin_t C_VA_START{"@cVaStart", token_type_t::BUILTIN_C_VA_START};
-constexpr builtin_t C_VA_ARG{"@cVaArg", token_type_t::BUILTIN_C_VA_ARG};
-constexpr builtin_t C_VA_COPY{"@cVaCopy", token_type_t::BUILTIN_C_VA_COPY};
-constexpr builtin_t C_VA_END{"@cVaEnd", token_type_t::BUILTIN_C_VA_END};
+constexpr builtin_def C_VA_START{"@cVaStart", builtin_t::C_VA_START};
+constexpr builtin_def C_VA_ARG{"@cVaArg", builtin_t::C_VA_ARG};
+constexpr builtin_def C_VA_COPY{"@cVaCopy", builtin_t::C_VA_COPY};
+constexpr builtin_def C_VA_END{"@cVaEnd", builtin_t::C_VA_END};
 
-constexpr builtin_t TARGET_OS{"@targetOs", token_type_t::BUILTIN_TARGET_OS};
-constexpr builtin_t TARGET_ARCH{"@targetArch", token_type_t::BUILTIN_TARGET_ARCH};
-constexpr builtin_t TARGET_TRIPLE{"@targetTriple", token_type_t::BUILTIN_TARGET_TRIPLE};
-constexpr builtin_t TARGET_ABI{"@targetAbi", token_type_t::BUILTIN_TARGET_ABI};
-constexpr builtin_t TARGET_PTR_BITS{"@targetPtrBits", token_type_t::BUILTIN_TARGET_PTR_BITS};
-constexpr builtin_t TARGET_ENDIAN{"@targetEndian", token_type_t::BUILTIN_TARGET_ENDIAN};
-constexpr builtin_t TARGET_FAMILY{"@targetFamily", token_type_t::BUILTIN_TARGET_FAMILY};
-constexpr builtin_t OPTIMIZE_MODE{"@optimizeMode", token_type_t::BUILTIN_OPTIMIZE_MODE};
-constexpr builtin_t RUNTIME_SAFETY{"@runtimeSafety", token_type_t::BUILTIN_RUNTIME_SAFETY};
-constexpr builtin_t SET_RUNTIME_SAFETY{"@setRuntimeSafety",
-                                       token_type_t::BUILTIN_SET_RUNTIME_SAFETY};
-constexpr builtin_t BRANCH_HINT{"@branchHint", token_type_t::BUILTIN_BRANCH_HINT};
+constexpr builtin_def TARGET_OS{"@targetOs", builtin_t::TARGET_OS};
+constexpr builtin_def TARGET_ARCH{"@targetArch", builtin_t::TARGET_ARCH};
+constexpr builtin_def TARGET_TRIPLE{"@targetTriple", builtin_t::TARGET_TRIPLE};
+constexpr builtin_def TARGET_ABI{"@targetAbi", builtin_t::TARGET_ABI};
+constexpr builtin_def TARGET_PTR_BITS{"@targetPtrBits", builtin_t::TARGET_PTR_BITS};
+constexpr builtin_def TARGET_ENDIAN{"@targetEndian", builtin_t::TARGET_ENDIAN};
+constexpr builtin_def TARGET_FAMILY{"@targetFamily", builtin_t::TARGET_FAMILY};
+constexpr builtin_def OPTIMIZE_MODE{"@optimizeMode", builtin_t::OPTIMIZE_MODE};
+constexpr builtin_def RUNTIME_SAFETY{"@runtimeSafety", builtin_t::RUNTIME_SAFETY};
+constexpr builtin_def SET_RUNTIME_SAFETY{"@setRuntimeSafety", builtin_t::SET_RUNTIME_SAFETY};
+constexpr builtin_def BRANCH_HINT{"@branchHint", builtin_t::BRANCH_HINT};
 
-constexpr builtin_t SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
-                                             token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT};
-constexpr builtin_t SET_EVAL_UNROLL_LIMIT{"@setEvalUnrollLimit",
-                                          token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT};
-constexpr builtin_t EXPORT{"@export", token_type_t::BUILTIN_EXPORT};
+constexpr builtin_def SET_EVAL_RECURSION_LIMIT{"@setEvalRecursionLimit",
+                                               builtin_t::SET_EVAL_RECURSION_LIMIT};
+constexpr builtin_def SET_EVAL_UNROLL_LIMIT{"@setEvalUnrollLimit",
+                                            builtin_t::SET_EVAL_UNROLL_LIMIT};
+constexpr builtin_def EXPORT{"@export", builtin_t::EXPORT};
 
-constexpr builtin_t PANIC{"@panic", token_type_t::BUILTIN_PANIC};
-constexpr builtin_t TRAP{"@trap", token_type_t::BUILTIN_TRAP};
+constexpr builtin_def PANIC{"@panic", builtin_t::PANIC};
+constexpr builtin_def TRAP{"@trap", builtin_t::TRAP};
 
 // The innermost enclosing function as a callable value, for self-recursion
-constexpr builtin_t FN_CTX{"@fnCtx", token_type_t::BUILTIN_FN_CTX};
+constexpr builtin_def FN_CTX{"@fnCtx", builtin_t::FN_CTX};
 
-constexpr builtin_t SRC{"@src", token_type_t::BUILTIN_SRC};
-constexpr builtin_t IMPLEMENTS{"@implements", token_type_t::BUILTIN_IMPLEMENTS};
-constexpr builtin_t EXPECT{"@expect", token_type_t::BUILTIN_EXPECT};
-constexpr builtin_t REQUIRE{"@require", token_type_t::BUILTIN_REQUIRE};
-constexpr builtin_t SKIP{"@skip", token_type_t::BUILTIN_SKIP};
+constexpr builtin_def SRC{"@src", builtin_t::SRC};
+constexpr builtin_def IMPLEMENTS{"@implements", builtin_t::IMPLEMENTS};
+constexpr builtin_def EXPECT{"@expect", builtin_t::EXPECT};
+constexpr builtin_def REQUIRE{"@require", builtin_t::REQUIRE};
+constexpr builtin_def SKIP{"@skip", builtin_t::SKIP};
 
-constexpr builtin_t ASSERT{"@assert", token_type_t::BUILTIN_ASSERT};
-constexpr builtin_t VERIFY{"@verify", token_type_t::BUILTIN_VERIFY};
+constexpr builtin_def ASSERT{"@assert", builtin_t::ASSERT};
+constexpr builtin_def VERIFY{"@verify", builtin_t::VERIFY};
 
-constexpr builtin_t ATOMIC_LOAD{"@atomicLoad", token_type_t::BUILTIN_ATOMIC_LOAD};
-constexpr builtin_t ATOMIC_STORE{"@atomicStore", token_type_t::BUILTIN_ATOMIC_STORE};
-constexpr builtin_t ATOMIC_RMW{"@atomicRmw", token_type_t::BUILTIN_ATOMIC_RMW};
-constexpr builtin_t CMPXCHG_WEAK{"@cmpxchgWeak", token_type_t::BUILTIN_CMPXCHG_WEAK};
-constexpr builtin_t CMPXCHG_STRONG{"@cmpxchgStrong", token_type_t::BUILTIN_CMPXCHG_STRONG};
-constexpr builtin_t FENCE{"@fence", token_type_t::BUILTIN_FENCE};
+constexpr builtin_def ATOMIC_LOAD{"@atomicLoad", builtin_t::ATOMIC_LOAD};
+constexpr builtin_def ATOMIC_STORE{"@atomicStore", builtin_t::ATOMIC_STORE};
+constexpr builtin_def ATOMIC_RMW{"@atomicRmw", builtin_t::ATOMIC_RMW};
+constexpr builtin_def CMPXCHG_WEAK{"@cmpxchgWeak", builtin_t::CMPXCHG_WEAK};
+constexpr builtin_def CMPXCHG_STRONG{"@cmpxchgStrong", builtin_t::CMPXCHG_STRONG};
+constexpr builtin_def FENCE{"@fence", builtin_t::FENCE};
 
-constexpr builtin_t COMPILE_ERROR{"@compileError", token_type_t::BUILTIN_COMPILE_ERROR};
-constexpr builtin_t EMBED{"@embed", token_type_t::BUILTIN_EMBED};
-constexpr builtin_t RETURN_ADDRESS{"@returnAddress", token_type_t::BUILTIN_RETURN_ADDRESS};
-constexpr builtin_t CFG{"@cfg", token_type_t::BUILTIN_CFG};
-constexpr builtin_t CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
+constexpr builtin_def      COMPILE_ERROR{"@compileError", builtin_t::COMPILE_ERROR};
+constexpr builtin_def      EMBED{"@embed", builtin_t::EMBED};
+constexpr builtin_def      CALL{"@call", builtin_t::CALL};
+constexpr builtin_def      ENUM_LITERAL{"@EnumLiteral", builtin_t::ENUM_LITERAL};
+constexpr builtin_def      LLVM_INTRINSIC{"@llvmIntrinsic", builtin_t::LLVM_INTRINSIC};
+constexpr builtin_def      ENTRY_MAIN{"@entryMain", builtin_t::ENTRY_MAIN};
+constexpr builtin_def      TEST_FUNCTIONS{"@testFunctions", builtin_t::TEST_FUNCTIONS};
+constexpr builtin_def      RETURN_ADDRESS{"@returnAddress", builtin_t::RETURN_ADDRESS};
+constexpr typed_identifier CFG{"@cfg", token_type_t::BUILTIN_CFG};
+constexpr typed_identifier CFG_VALUE{"@cfgValue", token_type_t::BUILTIN_CFG_VALUE};
 
-constexpr auto ALL_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_ALIGN_CAST, token_type_t::BUILTIN_RETURN_ADDRESS>()};
-
-constexpr auto SPECIAL_FORM_TOKEN_TYPES{
-    stdx::enum_range<token_type_t::BUILTIN_CFG, token_type_t::BUILTIN_CFG_VALUE>()};
+constexpr std::array SPECIAL_FORMS{CFG, CFG_VALUE};
 
 } // namespace builtins
 
@@ -259,14 +381,19 @@ constexpr std::array ALL_BUILTINS{
     builtins::CMPXCHG_WEAK,
     builtins::CMPXCHG_STRONG,
     builtins::FENCE,
-    builtins::CFG,
-    builtins::CFG_VALUE,
     builtins::COMPILE_ERROR,
     builtins::EMBED,
+    builtins::CALL,
+    builtins::ENUM_LITERAL,
+    builtins::LLVM_INTRINSIC,
+    builtins::ENTRY_MAIN,
+    builtins::TEST_FUNCTIONS,
     builtins::RETURN_ADDRESS,
 };
 
-[[nodiscard]] auto get_builtin_opt(token_type_t tt) noexcept -> stdx::option<std::string_view>;
-[[nodiscard]] auto get_builtin_opt(std::string_view sv) noexcept -> stdx::option<token_type_t>;
+[[nodiscard]] auto builtin_name(builtin_t builtin) noexcept -> std::string_view;
+[[nodiscard]] auto builtin_from_name(std::string_view name) noexcept -> stdx::option<builtin_t>;
+// A `@builtin` or special form's token type
+[[nodiscard]] auto builtin_token_opt(std::string_view name) noexcept -> stdx::option<token_type_t>;
 
 } // namespace ghoti::syntax

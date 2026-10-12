@@ -708,6 +708,33 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
     - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
     - A helper is only called directly, from a test or another `@[testing]` function
+- `@[no_builtins]` keeps the optimizer from turning a function's loops into calls to `memcpy`, `memset`, and other library routines, as freestanding code implementing them needs
+    - `@typeInfo(f).function.no_builtins` reflects it
+- CPU features are visible to ghoti code
+    - `@cfg (cpu.has(.avx2)) { ... }` and `@cfgValue(cpu.has(.neon))` test the target CPU; a feature of another architecture is simply absent, so `arch == .x86_64 and cpu.has(.avx2)` works on every target, and a name no architecture has is an error suggesting the closest
+    - `builtin.cpu` is the CPU code is generated for (`model` and `features`), and `builtin.cpu.has(.sse4_2)` works at compile time and at runtime
+    - `builtin.<arch>.Feature` (`builtin.x86.Feature`, `builtin.aarch64.Feature`, ...) names the target architecture's features as LLVM does, with `-` and `.` as `_`; `builtin.CpuFeature` is the target's, and `builtin.CpuFeatureSet` is a set of them that can be built at runtime
+- `@[target_features(.avx2, .fma)]` compiles one function for CPU features beyond the target's, so it can use them while the rest of the program runs anywhere
+    - Its arguments are compile-time `builtin.CpuFeature`s; calling the function on a CPU without them is undefined, so guard the call with `std.cpu.detect()`
+- `@llvmIntrinsic(name, ReturnType, args...)` calls an LLVM intrinsic directly: `@llvmIntrinsic("llvm.x86.sse2.pause", void)`, `@llvmIntrinsic("llvm.ctpop", u32, x)`
+    - The name must be one LLVM knows, a target intrinsic must be the target architecture's, the types must fit one of its overloads (a mangled name like `llvm.ctpop.i32` must match the arguments), and arguments it takes as immediates must be known at compile time
+    - Untyped literal arguments are `i32` / `f64`, as when they bind an `auto` parameter
+- Enum literals: a `.name` with no type to name a member of has its own compile-time-only type, `@EnumLiteral()`
+    - It becomes any enum with a variant of that name, or any tagged union whose field of that name is `void`, wherever one is expected: `const mode = .fast; let l: Level = mode;`, `takes_level(mode)`, `let o: Option(i32) = nothing;`
+    - `.a == x` works with the literal on either side, two literals compare by name, and `@tagName(.fast)` is `"fast"`
+    - A `comptime` / `auto` parameter can take one (`pick(.small)` with `match comptime (k) { .small => ... }`); a runtime `let` or runtime `auto` parameter can't hold one, and says so
+    - `@typeInfo(@EnumLiteral())` is `.enum_literal`
+- `@call(modifier, f, args...)` calls `f` with `args` as `f(args...)` does, but how `builtin.CallModifier` asks: `.auto`, `.never_tail`, `.never_inline`, `.always_tail`, `.always_inline`, or `.compile_time`
+    - Arguments are a variadic tail rather than a tuple, so `@call(.never_inline, f, rest...)` forwards a pack
+    - A modifier that can't be honored is an error: an inline modifier against the function's own `@[inline(...)]`, `.always_inline` on an `extern`, `@[naked]`, or indirect call, `.always_tail` when the call isn't returned directly (a `defer` would run after it) or the signatures differ, and a `.compile_time` call that doesn't fold
+- Program entry is ghoti code: `lib/start/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
+    - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
+    - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
+    - `@entryMain()` (the program's `main`) and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+- `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
+    - `std` and `lib/start` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
+- Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it
+- compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
@@ -736,12 +763,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
 - Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
 - Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
+- Fixed: an `extern` function declared with an `extern fn(...) callconv(...)` type was called with the C convention
+- Fixed: on i686 Windows, a function with a stack frame over 4 KiB could skip the guard page and crash, as no stack probe was emitted
+- Fixed: a generic type instantiated with `type` (`Option(type)`) emitted declarations for its compile-time-only methods that failed LLVM verification, so a module using one could not be built on its own
+- Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
+- Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
 - Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
+- Add `std.cpu.detect()`, the features of the CPU the program is running on: `builtin.cpu.features` plus whatever the machine reports
+    - x86 asks `cpuid` (and the OS, through `xgetbv`, whether AVX, AVX-512, and AMX state is saved); AArch64 reads `AT_HWCAP` on Linux, `hw.optional` sysctls on macOS, and `IsProcessorFeaturePresent` on Windows
 - Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
 - `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
     - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
@@ -756,7 +790,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `std.os.HAS_BACKEND` says whether the target has one
 
 ## Tooling
+- `ghoti fmt` puts a multiline (`\\`) asm template on lines of its own, with the `,` after it on the next
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
+- `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
+- An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it
 - **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
     - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
     - The LSP analyzes as `debug`
@@ -766,6 +803,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
     - `lib/compiler_rt` can `import std;` like any program
+    - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
+    - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
 - Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked

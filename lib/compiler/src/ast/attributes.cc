@@ -31,7 +31,8 @@ constexpr auto CALLCONV_NAMES_TO_VALUES{string_utils::make_constexpr_map<calling
     std::pair{"win64", calling_convention::WIN64},
     std::pair{"stdcall", calling_convention::X86_STDCALL},
     std::pair{"fastcall", calling_convention::X86_FASTCALL},
-    std::pair{"aapcs", calling_convention::AAPCS})};
+    std::pair{"aapcs", calling_convention::AAPCS},
+    std::pair{"winapi", calling_convention::X86_WINAPI})};
 
 constexpr auto CALLCONV_VALS_TO_NAMES{[] {
     stdx::fixed::enum_map<calling_convention, std::string_view> map{};
@@ -105,6 +106,26 @@ constexpr std::array ALL_ATTRIBUTES{
         .signature = "testing",
         .doc = "A test helper: may use `@expect`, `@require`, and `@skip`, and is called only "
                "from tests and other `@[testing]` functions",
+    },
+    attribute_spec{
+        .name      = "no_builtins",
+        .kind      = attribute_kind::NO_BUILTINS,
+        .min_args  = 0,
+        .max_args  = 1,
+        .targets   = attribute_target::FN,
+        .signature = "no_builtins(bool = true)",
+        .doc       = "The optimizer never turns the body's loops into calls to `memcpy`, `memset`, "
+                     "or other library routines, as freestanding code implementing them needs",
+    },
+    attribute_spec{
+        .name      = "target_features",
+        .kind      = attribute_kind::TARGET_FEATURES,
+        .min_args  = 1,
+        .max_args  = 255,
+        .targets   = attribute_target::FN,
+        .signature = "target_features(builtin.CpuFeature...)",
+        .doc       = "Compiles the function for these CPU features on top of the target's; calling "
+                     "it on a CPU without them is undefined, so guard it with `std.cpu.detect()`",
     },
 };
 

@@ -17,6 +17,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/semantics.hh"
 #include "compiler/gir/symbol_scoping.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -54,6 +55,11 @@ class const_eval {
         if (module_ != &module) { clear_memo(); }
         module_ = &module;
     }
+
+    // An enum literal (`.name`) as `dest`: the enum's variant, or the tagged union's `void` field
+    // of that name; `none` when `dest` has no such member
+    [[nodiscard]] auto coerce_enum_literal(const const_value& literal, sema::type& dest)
+        -> stdx::option<const_value>;
 
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
@@ -94,9 +100,17 @@ class const_eval {
     // Folds two integers exactly: a concrete signed type rejects overflow unless `wrapping`, and
     // unsigned results (and shifts) wrap to the type's width as they do at runtime
     // `@abs`, `@clz`, `@ctz`, and `@popCount` of a concrete integer, or none for anything else
-    [[nodiscard]] auto fold_int_builtin_unary(ast::node_id         id,
-                                              syntax::token_type_t builtin,
+    [[nodiscard]] auto fold_int_builtin_unary(ast::node_id       id,
+                                              syntax::builtin_t  builtin,
                                               const const_value& arg) -> stdx::option<const_value>;
+    // An integer operation in its result type's domain, as generated code computes it; none when
+    // that type is wider than 128 bits
+    [[nodiscard]] auto fold_int_in_domain(semantics::int_op         op,
+                                          const const_value&        lhs,
+                                          const const_value&        rhs,
+                                          ast::node_id              id,
+                                          stdx::option<sema::type&> result_type = stdx::none)
+        -> stdx::option<const_value>;
     [[nodiscard]] auto fold_integer_binary(syntax::token_type_t op_type,
                                            const const_value&   lhs,
                                            const const_value&   rhs,
@@ -310,9 +324,8 @@ class const_eval {
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
     auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;
-    auto eval_builtin(ast::node_id          id,
-                      const ast::call_expr& call,
-                      syntax::token_type_t  builtin_type) -> stdx::option<const_value>;
+    auto eval_builtin(ast::node_id id, const ast::call_expr& call, syntax::builtin_t builtin_type)
+        -> stdx::option<const_value>;
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;

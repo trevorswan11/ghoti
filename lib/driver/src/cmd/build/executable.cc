@@ -14,6 +14,7 @@ auto build_exe::execute() -> stdx::result<void, clap::error> {
     PROFILE_FUNCTION();
 
     build::compilation compilation{opts_, error_stream_};
+    compilation.get_analyzer().set_entry_point(true);
     auto [module, gir_mod]{TRY(compilation.analyze())};
     auto& analyzer{compilation.get_analyzer()};
 

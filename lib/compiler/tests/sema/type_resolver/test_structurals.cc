@@ -309,12 +309,6 @@ TEST_CASE("Initializer expression in various resolution contexts") {
                 "or use in a typed context",
                 sema::error::TYPE_MISMATCH,
                 std::pair{0UZ, 1UZ}});
-
-        helpers::test_resolver_fail(
-            "const a = .f;",
-            sema::diagnostic{"Implicit access expression used outside of a typed context",
-                             sema::error::TYPE_MISMATCH,
-                             std::pair{0UZ, 10UZ}});
     }
 
     SECTION("Initializer with incomplete type") {
@@ -418,27 +412,23 @@ TEST_CASE("Struct field access through dereferenced pointer and reference") {
     CHECK(sema::is_i32(ry_d_type));
 }
 
-TEST_CASE("Implicit access as the left operand of a binary expression is rejected") {
-    const auto expected_diag = [] -> sema::diagnostic {
-        return {"Implicit access cannot appear on the left side of a binary expression; it "
-                "requires the other operand to establish type context first",
-                sema::error::TYPE_MISMATCH,
-                std::pair{0UZ, 69UZ}};
-    };
+TEST_CASE("Implicit access as the left operand takes the right operand's type") {
+    SECTION("a union") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            "const U = union { a: i32, b: i32 }; const u = U{ .a = 1 }; const r = .a == u;")};
+        const auto [sym, _, node, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
+        CHECK(type.get_kind() == sema::type_kind::BOOL);
+    }
 
-    helpers::test_resolver_fail(
-        "const U = union { a: i32, b: i32 }; const u = U{ .a = 1 }; const r = .a == u;",
-        expected_diag());
-}
-
-TEST_CASE("Implicit access as the left operand still rejects for enums") {
-    helpers::test_resolver_fail(
-        "const Color = enum { RED, GREEN, BLUE }; const c = Color.GREEN; "
-        "const r = .GREEN == c;",
-        sema::diagnostic{"Implicit access cannot appear on the left side of a binary expression; "
-                         "it requires the other operand to establish type context first",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 74UZ}});
+    SECTION("an enum") {
+        auto [ctx, idx]{helpers::resolve_and_check(
+            "const Color = enum { RED, GREEN, BLUE }; const c = Color.GREEN; "
+            "const r = .GREEN == c;")};
+        const auto [sym, _, node, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
+        CHECK(type.get_kind() == sema::type_kind::BOOL);
+    }
 }
 
 TEST_CASE("A type error inside an imported generic body is attributed to the defining module") {

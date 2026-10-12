@@ -350,5 +350,7 @@ struct resolve_result {
 };
 
 [[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result;
+[[nodiscard]] auto resolve_diags_for_target(std::string_view src, std::string_view target_triple)
+    -> resolve_result;
 
 } // namespace ghoti::tests::helpers

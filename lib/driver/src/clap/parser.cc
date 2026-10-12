@@ -177,6 +177,7 @@ auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option(
         "-L,--library-path", run_opts_.library_paths, "Add directory to library search paths");
     sub->add_option("-l,--library", run_opts_.libraries, "Link against library name");
+    cmd::build::add_cpu_options(sub, run_opts_);
     cmd::build::add_mode_option(sub, run_opts_);
     cmd::build::add_deprecated_option(sub, run_opts_);
     cmd::build::add_compiler_rt_option(sub, run_opts_);

@@ -17,6 +17,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -35,18 +36,12 @@ class llvm_lowering {
     MAKE_PINNED(llvm_lowering);
 
     auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
+    // The program's `main` becomes the internal `_ghoti_main` that `lib/start` calls, leaving
+    // the C `main` symbol to the entry code
     auto lower_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
         -> stdx::box<llvm::Module>;
-    auto emit_main_entry_wrapper(std::string_view user_main_name = "main") -> llvm::Function*;
-
-    // Lowers every function/global as usual, but synthesizes an entry point that calls each
-    // `test` block in declaration order. `recover_args` passes an empty `[][:0]u8` to `test_runner`
-    // instead when Win32 sysroot could not be loaded
-    auto lower_test_executable(const gir::module&             gir_mod,
-                               stdx::option<std::string_view> user_runner_name = stdx::none,
-                               bool recover_args = true) -> stdx::box<llvm::Module>;
-    auto emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args = true)
-        -> llvm::Function*;
+    auto lower_test_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
+        -> stdx::box<llvm::Module>;
 
     [[nodiscard]] static auto to_ir_string(const llvm::Module& mod) -> std::string;
 
@@ -105,6 +100,9 @@ class llvm_lowering {
     auto emit_const(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_call(const gir::instruction& inst) -> llvm::Value*;
+    auto apply_call_modifier(ast::call_modifier modifier,
+                             llvm::BasicBlock&  block,
+                             llvm::Instruction* before) -> void;
     auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
 
     // `code(ctx, args...)` for an erased `fn(...)`: the thin signature with a leading `ctx: ptr`
@@ -117,6 +115,7 @@ class llvm_lowering {
     [[nodiscard]] auto promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
         -> llvm::Value*;
     auto load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value*;
+    auto emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
 
@@ -129,30 +128,16 @@ class llvm_lowering {
     auto emit_cond_goto(const gir::instruction& inst) -> void;
     auto emit_unreachable() -> void;
 
-    // Builds the `[][:0]u8` argv value (a `{ ptr, len }` slice of `{ ptr, len }`
-    // elements) for an entry function
-    auto emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value*;
-
-    // `ret` everywhere but Windows, which calls `ExitProcess`
-    auto emit_entry_exit(llvm::Value* code) -> void;
-
-    // Emits a freestanding ELF `_start` (Linux, no crt/libc)
-    auto emit_freestanding_start(llvm::Function* main_fn) -> void;
-
-    // Windows starts x86 threads with the x87 precision control at 53 bits, which rounds every
-    // `f80` operation like `f64`
-    auto emit_x87_precision_init() -> void;
+    // `@testFunctions()`
+    auto emit_test_table() -> llvm::Value*;
 
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
-    // target, or `none` when no synthesized stack probe is needed
+    // target (compiler_rt provides it), or `none` where nothing could
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
     auto               declare_functions(const gir::module& gir_mod) -> void;
     auto               lower_definitions(const gir::module& gir_mod) -> void;
-    auto               create_c_entry_function() -> llvm::Function*;
     auto               finalize_runtime_support() -> void;
     auto               maybe_emit_mingw_main_stub() -> void;
-    // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
-    auto maybe_emit_windows_stack_probe() -> void;
 
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;

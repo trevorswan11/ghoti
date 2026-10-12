@@ -354,6 +354,7 @@ class type_resolver {
     resolve_builtin_call(ID id, const ast::call_expr& call, const types::builtin_function& builtin)
         -> stdx::result<void, diagnostic>;
 
+    auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
@@ -430,6 +431,8 @@ class type_resolver {
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
         -> void;
     [[nodiscard]] auto fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool>;
+    [[nodiscard]] auto fold_target_features(const ast::attribute& item) -> std::vector<std::string>;
+    [[nodiscard]] auto entry_main_type() const -> stdx::option<type&>;
 
     // What the block holding the statement being resolved is the body of, if anything hintable
     [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;

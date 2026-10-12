@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,10 +18,13 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -30,7 +36,6 @@
 #include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_lowering.hh"
 #include "compiler/codegen/llvm_optimizer.hh"
-#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/soft_f80.hh"
 #include "compiler/codegen/target.hh"
@@ -38,6 +43,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/module/module.hh"
+#include "compiler/module/stdlib.hh"
 #include "compiler/runtime/compiler_rt.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
@@ -46,6 +52,8 @@
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/error.hh"
+#include "support/env.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 
 namespace ghoti::sema {
@@ -118,6 +126,8 @@ constexpr std::array supported_archs{
 auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string_view> roots;
     for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
+    // `lib/start`'s exports run the tests
+    for (const auto root : export_roots(gir_module)) { roots.emplace_back(root); }
     roots.emplace_back("test_runner");
     roots.emplace_back("expect_handler");
     roots.emplace_back("require_handler");
@@ -158,6 +168,16 @@ auto prune_to_test_reachable(gir::module& gir_module) -> void {
     std::vector<std::string> merged{linker_opts.libraries.begin(), linker_opts.libraries.end()};
     for (auto& lib : gir_module.get_required_libraries()) { merged.emplace_back(std::move(lib)); }
     return merged;
+}
+
+// What each `extern("lib", ...)` library supplies, for a Windows import library the link writes
+[[nodiscard]] auto library_imports(const gir::module& gir_module)
+    -> std::vector<codegen::library_import> {
+    std::vector<codegen::library_import> imports;
+    for (auto& [library, symbol, data] : gir_module.get_library_imports()) {
+        imports.push_back({std::move(library), std::move(symbol), data});
+    }
+    return imports;
 }
 
 // A DLL exports only what is marked `dllexport`, so mark what an ELF or Mach-O shared library
@@ -202,7 +222,15 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 // `@[inline(.always)]` is honored even at -O0, where only the always-inliner runs
 [[nodiscard]] auto has_always_inline(const llvm::Module& llvm_mod) -> bool {
     return std::ranges::any_of(llvm_mod, [](const llvm::Function& fn) {
-        return fn.hasFnAttribute(llvm::Attribute::AlwaysInline);
+        if (fn.hasFnAttribute(llvm::Attribute::AlwaysInline)) { return true; }
+        // `@call(.always_inline, ...)` marks the call site, not the function
+        for (const auto& block : fn) {
+            for (const auto& inst : block) {
+                const auto* call{llvm::dyn_cast<llvm::CallBase>(&inst)};
+                if (call && call->hasFnAttr(llvm::Attribute::AlwaysInline)) { return true; }
+            }
+        }
+        return false;
     });
 }
 
@@ -228,9 +256,25 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
     return false;
 }
 
+// LLVM's `target-features` replaces the target's whole feature string for a function, so an
+// `@[target_features(...)]` function gets the target's features with its own added on
+auto apply_target_features(llvm::Module& llvm_mod, const llvm::TargetMachine* target_machine)
+    -> void {
+    const auto base{target_machine ? target_machine->getTargetFeatureString().str()
+                                   : std::string{}};
+    for (auto& fn : llvm_mod) {
+        if (!fn.hasFnAttribute("ghoti-target-features")) { continue; }
+        const auto extra{fn.getFnAttribute("ghoti-target-features").getValueAsString().str()};
+        fn.removeFnAttr("ghoti-target-features");
+        fn.addFnAttr("target-features", base.empty() ? extra : fmt::format("{},{}", base, extra));
+        if (target_machine) { fn.addFnAttr("target-cpu", target_machine->getTargetCPU()); }
+    }
+}
+
 [[nodiscard]] auto verify_and_optimize(llvm::Module&                     llvm_mod,
                                        const codegen::optimizer_options& options)
     -> stdx::result<void, codegen::diagnostic> {
+    apply_target_features(llvm_mod, options.target_machine);
     TRY(codegen::soften_f80(llvm_mod));
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
@@ -242,8 +286,6 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
         has_always_inline(llvm_mod)) {
         codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
         TRY(optimizer.optimize(llvm_mod, options));
-        // Optimization may turn loops into `mem*` calls lowering never saw
-        codegen::define_mem_intrinsic_fallbacks(llvm_mod);
     }
     return {};
 }
@@ -254,6 +296,11 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     -> stdx::result<gir::module, diagnostic> {
     PROFILE_FUNCTION();
     if (for_test_executable) { ctx_.testing = true; }
+    // An unknown `--cpu` / `--features` would otherwise surface at the first `cpu.has(...)`
+    if (auto cpu{codegen::resolve_target_cpu(ctx_.target_opts)}; !cpu) {
+        return make_sema_err(cpu.error().get_message().value_or("Unknown target CPU"),
+                             error::UNSUPPORTED_TARGET);
+    }
     auto module_result{modules_.try_get_file_module(entry_path)};
     if (!module_result) {
         return make_sema_err(std::move(module_result.error()).get_message(),
@@ -280,6 +327,10 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
         return gir::module{*module, ctx_.arena};
     }
 
+    if (entry_point_ || for_test_executable) {
+        TRY(attach_start_module(*module, for_test_executable));
+    }
+
     auto gir_mod{emit_gir(*module, for_test_executable)};
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
@@ -303,7 +354,52 @@ auto analyzer::resolve_types(mod::module& module) -> mod::module_state {
     return type_resolver::resolve_types(module, ctx_);
 }
 
+auto analyzer::attach_start_module(mod::module& root, bool for_test_executable)
+    -> stdx::result<void, diagnostic> {
+    PROFILE_FUNCTION();
+    if (ctx_.start_module) { return {}; }
+    // An invalid `main` or `test_runner` is reported by its own check, with no entry code to call
+    // it
+    const auto valid{for_test_executable ? validate_test_entry(root) : validate_main_entry(root)};
+    if (!valid) { return {}; }
+
+    const auto path{mod::find_start()};
+    if (!path) {
+        return make_sema_err("cannot find the program entry code `lib/start/start.gh`; set "
+                             "GHOTI_START to its path",
+                             error::MODULE_LOAD_ERROR);
+    }
+    std::ifstream file{*path, std::ios::binary};
+    if (!file) {
+        return make_sema_err(fmt::format("cannot read the program entry code '{}'", path->string()),
+                             error::MODULE_LOAD_ERROR);
+    }
+    const std::string source{std::istreambuf_iterator<char>{file}, {}};
+
+    auto& start{modules_.get_or_create_start_module(*path, source)};
+    if (!start.is_errored()) {
+        ctx_.entry_root   = &root;
+        ctx_.start_module = &start;
+        // The entry code's `@cfg(testing)` picks between `main` and the tests by what is built
+        const auto testing{std::exchange(ctx_.testing, for_test_executable)};
+        collect_symbols(start);
+        resolve_types(start);
+        ctx_.testing = testing;
+    }
+    if (start.is_errored() || start.is_poisoned()) {
+        modules_.print_all_diagnostics(error_stream_);
+        return make_sema_err("the program entry code `lib/start/start.gh` failed to compile",
+                             error::MODULE_LOAD_ERROR);
+    }
+    return {};
+}
+
 auto analyzer::emit_gir(mod::module& module, bool for_test_executable) -> gir::module {
+    if ((entry_point_ || for_test_executable) && !ctx_.start_module) {
+        if (auto attached{attach_start_module(module, for_test_executable)}; !attached) {
+            error_stream_ << attached.error().get_message().value_or("") << '\n';
+        }
+    }
     gir::emitter emitter{ctx_, module};
     return emitter.emit(for_test_executable);
 }
@@ -336,7 +432,9 @@ auto analyzer::emit_llvm_ir_executable(gir::module&                      gir_mod
     const auto effective_main_name{user_main_name == "main" && ctx_.user_main_name != "main"
                                        ? std::string_view{ctx_.user_main_name}
                                        : user_main_name};
-    const std::vector<std::string_view> roots{effective_main_name};
+    // `lib/start`'s exports call `main`
+    auto roots{export_roots(gir_module)};
+    roots.emplace_back(effective_main_name);
     gir_module.prune_unreachable(roots);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
@@ -364,16 +462,13 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module&                      gi
     PROFILE_FUNCTION();
     prune_to_test_reachable(gir_module);
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
-    bool                   recover_args{true};
     if (options.target_machine) {
         const llvm::Triple triple{options.target_machine->getTargetTriple()};
         TRY(check_freestanding_entry(triple, "a test executable"));
         lowering.module().setDataLayout(options.target_machine->createDataLayout());
         lowering.module().setTargetTriple(triple);
-        // A freestanding Windows entry recovers argv through kernel32 / shell32
-        recover_args = !triple.isOSWindows() || codegen::has_windows_argv_sysroot();
     }
-    auto llvm_mod{lowering.lower_test_executable(gir_module, stdx::none, recover_args)};
+    auto llvm_mod{lowering.lower_test_executable(gir_module, ctx_.user_main_name)};
     TRY(verify_and_optimize(*llvm_mod, options));
     return llvm_mod;
 }
@@ -429,7 +524,7 @@ auto analyzer::validate_main_entry(const mod::module& root_module) const
     }
 
     // `@export(f, .{ .name = "main" })` picks the entry point, and needn't be `pub`
-    const auto exported_main{ctx_.exports.named("main")};
+    const auto exported_main{ctx_.exports.named_by_program("main")};
     if (exported_main && exported_main->owner && exported_main->owner != root_module) {
         return make_sema_err("Only the root module can export a function as 'main'",
                              error::TYPE_MISMATCH);
@@ -703,9 +798,11 @@ auto analyzer::emit_dynamic_library(gir::module&                         gir_mod
     if (target_machine->getTargetTriple().isOSBinFormatCOFF()) { mark_dll_exports(*llvm_mod); }
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
-    auto libraries{merged_libraries(linker_opts, gir_module)};
-    auto effective_linker_opts{linker_opts};
+    auto       libraries{merged_libraries(linker_opts, gir_module)};
+    const auto imports{library_imports(gir_module)};
+    auto       effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
+    effective_linker_opts.imports   = imports;
     TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_dynamic_library(
         temp_obj_path, output_path, target_opts, effective_linker_opts);
@@ -724,13 +821,11 @@ auto analyzer::link_artifact(gir::module&                         gir_module,
     const auto temp_obj_path{make_tmp_obj(output_path)};
     TRY(codegen::emit_object_file(*llvm_mod, *target_machine, temp_obj_path));
 
-    // Only link kernel32/shell32 when the entry wrapper calls them to recover argv or exit
-    auto libraries{merged_libraries(linker_opts, gir_module)};
-    auto effective_linker_opts{linker_opts};
+    auto       libraries{merged_libraries(linker_opts, gir_module)};
+    const auto imports{library_imports(gir_module)};
+    auto       effective_linker_opts{linker_opts};
     effective_linker_opts.libraries = libraries;
-    effective_linker_opts.needs_windows_entry_apis =
-        llvm_mod->getFunction("GetCommandLineW") != nullptr ||
-        llvm_mod->getFunction("ExitProcess") != nullptr;
+    effective_linker_opts.imports   = imports;
     TRY(add_compiler_rt(effective_linker_opts, target_opts, temp_obj_path));
     return codegen::link_executable(temp_obj_path, output_path, target_opts, effective_linker_opts);
 }

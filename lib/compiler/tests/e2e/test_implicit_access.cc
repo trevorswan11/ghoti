@@ -3,7 +3,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
-#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -59,15 +58,15 @@ TEST_CASE("A no-self function member taking arguments is called through implicit
     )") == 7);
 }
 
-TEST_CASE("Implicit access on the left side of a comparison is rejected") {
-    helpers::expect_compile_error(R"(
+TEST_CASE("Implicit access on the left side of a comparison takes the right side's type") {
+    CHECK(helpers::compile_and_run(R"(
         const U = union { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .a = 1 };
-            if (.a == u) { return 1; }
+            if (.a == u and .b != u) { return 1; }
             return 0;
         };
-    )");
+    )") == 1);
 }
 
 TEST_CASE("Member constant on a generic type constructor returned via implicit access") {

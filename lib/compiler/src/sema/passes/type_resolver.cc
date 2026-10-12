@@ -44,6 +44,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/ast/visitor.hh"
+#include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
@@ -187,8 +188,7 @@ template <typename ID> [[nodiscard]] auto is_range(const ID& id) -> bool {
     const ast::node_id id{value};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return stdx::none; }
     const auto& call{ast.get_as<ast::call_expr>(id)};
-    if (ast::node_id{call.function}.get_token_type() !=
-        syntax::token_type_t::BUILTIN_COMPILE_ERROR) {
+    if (ast::node_id{call.function}.get_builtin() != syntax::builtin_t::COMPILE_ERROR) {
         return stdx::none;
     }
     if (call.arguments.size() != 1) { return stdx::none; }
@@ -324,7 +324,7 @@ template <typename T>
     if (const auto dot{module.ast.get_as_opt<ast::dot_expr>(expr)}) {
         // `@This().member` reaches a static member through the enclosing type itself
         if (const auto call{module.ast.get_as_opt<ast::call_expr>(dot->object)};
-            call && call->function->get_token_type() == syntax::token_type_t::BUILTIN_THIS) {
+            call && call->function->get_builtin() == syntax::builtin_t::THIS) {
             return true;
         }
         if (const auto obj_t{module.get_sema_type_opt(dot->object)}) {
@@ -349,7 +349,7 @@ template <typename T>
     if (module.ast.get_as_opt<ast::dereference_expr>(expr)) { return true; }
     // `@field(x, "name")` names the field itself, so it is as assignable as `x.name`
     if (const auto call{module.ast.get_as_opt<ast::call_expr>(expr)}) {
-        return call->function->get_token_type() == syntax::token_type_t::BUILTIN_FIELD;
+        return call->function->get_builtin() == syntax::builtin_t::FIELD;
     }
     return false;
 }
@@ -629,23 +629,23 @@ enum class atomic_arg : u8 {
 };
 
 // The roles of an atomic builtin's arguments, in order; empty for any other builtin
-[[nodiscard]] auto atomic_arg_roles(syntax::token_type_t tok) noexcept
+[[nodiscard]] auto atomic_arg_roles(stdx::option<syntax::builtin_t> builtin) noexcept
     -> gsl::span<const atomic_arg> {
     using enum atomic_arg;
-    using syntax::token_type_t;
     static constexpr std::array load{PLAIN, PLAIN, ORDER};
     static constexpr std::array store{PLAIN, OPERAND, ORDER};
     static constexpr std::array rmw{PLAIN, PLAIN, OP, OPERAND, ORDER};
     static constexpr std::array cmpxchg{PLAIN, PLAIN, OPERAND, OPERAND, ORDER, ORDER, PLAIN};
     static constexpr std::array fence{ORDER};
-    switch (tok) {
-    case token_type_t::BUILTIN_ATOMIC_LOAD:    return load;
-    case token_type_t::BUILTIN_ATOMIC_STORE:   return store;
-    case token_type_t::BUILTIN_ATOMIC_RMW:     return rmw;
-    case token_type_t::BUILTIN_CMPXCHG_WEAK:
-    case token_type_t::BUILTIN_CMPXCHG_STRONG: return cmpxchg;
-    case token_type_t::BUILTIN_FENCE:          return fence;
-    default:                                   return {};
+    if (!builtin) { return {}; }
+    switch (*builtin) {
+    case syntax::builtin_t::ATOMIC_LOAD:    return load;
+    case syntax::builtin_t::ATOMIC_STORE:   return store;
+    case syntax::builtin_t::ATOMIC_RMW:     return rmw;
+    case syntax::builtin_t::CMPXCHG_WEAK:
+    case syntax::builtin_t::CMPXCHG_STRONG: return cmpxchg;
+    case syntax::builtin_t::FENCE:          return fence;
+    default:                                return {};
     }
 }
 
@@ -687,24 +687,25 @@ template <ast::IndexableID ID>
     -> stdx::result<void, diagnostic> {
     ASSERT(call.function.is<ast::identifier_expr>(), "Builtin function must be a raw ident");
     // There must be an actual builtin present with a token id
-    const auto builtin_id{call.function->get_token_type()};
-    ASSERT(syntax::get_builtin_opt(builtin_id), "Cannot resolve non-builtin function");
+    const auto builtin_opt{call.function->get_builtin()};
+    ASSERT(builtin_opt, "Cannot resolve non-builtin function");
+    const auto builtin_id{*builtin_opt};
 
+    using syntax::builtin_t;
     using syntax::token_type_t;
-    const auto  is_expect_or_require{builtin_id == token_type_t::BUILTIN_EXPECT ||
-                                     builtin_id == token_type_t::BUILTIN_REQUIRE};
-    const auto  is_assert_or_verify{builtin_id == token_type_t::BUILTIN_ASSERT ||
-                                    builtin_id == token_type_t::BUILTIN_VERIFY};
-    const auto  is_skip{builtin_id == token_type_t::BUILTIN_SKIP};
-    const auto  is_inferrable_cast{builtin_id == token_type_t::BUILTIN_AS ||
-                                   builtin_id == token_type_t::BUILTIN_INT_CAST ||
-                                   builtin_id == token_type_t::BUILTIN_BIT_CAST ||
-                                   builtin_id == token_type_t::BUILTIN_TRUNCATE ||
-                                   builtin_id == token_type_t::BUILTIN_INT_FROM_BOOL ||
-                                   builtin_id == token_type_t::BUILTIN_FROM_BACKING_INT ||
-                                   builtin_id == token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                                   builtin_id == token_type_t::BUILTIN_FLOAT_FROM_INT ||
-                                   builtin_id == token_type_t::BUILTIN_FLOAT_CAST};
+    const auto is_expect_or_require{builtin_id == syntax::builtin_t::EXPECT ||
+                                    builtin_id == syntax::builtin_t::REQUIRE};
+    const auto is_assert_or_verify{builtin_id == syntax::builtin_t::ASSERT ||
+                                   builtin_id == syntax::builtin_t::VERIFY};
+    const auto is_skip{builtin_id == syntax::builtin_t::SKIP};
+    const auto is_inferrable_cast{
+        builtin_id == syntax::builtin_t::AS || builtin_id == syntax::builtin_t::INT_CAST ||
+        builtin_id == syntax::builtin_t::BIT_CAST || builtin_id == syntax::builtin_t::TRUNCATE ||
+        builtin_id == syntax::builtin_t::INT_FROM_BOOL ||
+        builtin_id == syntax::builtin_t::FROM_BACKING_INT ||
+        builtin_id == syntax::builtin_t::INT_FROM_FLOAT ||
+        builtin_id == syntax::builtin_t::FLOAT_FROM_INT ||
+        builtin_id == syntax::builtin_t::FLOAT_CAST};
     const auto& params{builtin.params};
     if (is_expect_or_require || is_assert_or_verify || is_inferrable_cast) {
         if (call.arguments.empty() || call.arguments.size() > 2) {
@@ -720,7 +721,15 @@ template <ast::IndexableID ID>
                 error::ARITY_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
-    } else if (builtin_id == token_type_t::BUILTIN_TYPE_OF) {
+    } else if (builtin_id == syntax::builtin_t::LLVM_INTRINSIC) {
+        if (call.arguments.size() < 2) {
+            return make_sema_err(fmt::format("'@llvmIntrinsic' expects a name and a return type, "
+                                             "then the arguments; found {} argument(s)",
+                                             call.arguments.size()),
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+    } else if (builtin_id == syntax::builtin_t::TYPE_OF) {
         if (call.arguments.empty()) {
             return make_sema_err("'@TypeOf' expects at least 1 argument, found 0",
                                  error::ARITY_MISMATCH,
@@ -796,9 +805,9 @@ template <ast::IndexableID ID>
 
     // Indexing can be done freely as arity is already validated
     switch (builtin_id) {
-    case token_type_t::BUILTIN_ALIGN_CAST:
-    case token_type_t::BUILTIN_PTR_CAST:   {
-        const auto name{builtin_id == token_type_t::BUILTIN_ALIGN_CAST ? "@alignCast" : "@ptrCast"};
+    case syntax::builtin_t::ALIGN_CAST:
+    case syntax::builtin_t::PTR_CAST:   {
+        const auto name{builtin_id == syntax::builtin_t::ALIGN_CAST ? "@alignCast" : "@ptrCast"};
         auto&      target{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      operand{*get_resolved_call_arg_type(call.arguments[1])};
         if (call_arg_denotes_type(call.arguments[1])) {
@@ -828,7 +837,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_BIT_CAST: {
+    case syntax::builtin_t::BIT_CAST: {
         const auto args_res{extract_cast_args("@bitCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -892,7 +901,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_AS: {
+    case syntax::builtin_t::AS: {
         const auto args_res{extract_cast_args("@as")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -954,7 +963,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_INT_CAST: {
+    case syntax::builtin_t::INT_CAST: {
         const auto args_res{extract_cast_args("@intCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -978,7 +987,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_TRUNCATE: {
+    case syntax::builtin_t::TRUNCATE: {
         const auto args_res{extract_cast_args("@truncate")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1029,7 +1038,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_BOOL_FROM_INT: {
+    case syntax::builtin_t::BOOL_FROM_INT: {
         const auto& arg{call.arguments[0]};
         auto&       src{*get_resolved_call_arg_type(arg)};
         if (src.is_poison()) { break; }
@@ -1044,7 +1053,7 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(sema::type_kind::BOOL);
         break;
     }
-    case token_type_t::BUILTIN_INT_FROM_BOOL: {
+    case syntax::builtin_t::INT_FROM_BOOL: {
         const auto args_res{extract_cast_args("@intFromBool")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1068,7 +1077,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_BACKING_INT: {
+    case syntax::builtin_t::BACKING_INT: {
         const auto& arg{call.arguments[0]};
         auto&       src{*get_resolved_call_arg_type(arg)};
         if (src.is_poison()) { break; }
@@ -1088,7 +1097,7 @@ template <ast::IndexableID ID>
         return_type = backing.get();
         break;
     }
-    case token_type_t::BUILTIN_FROM_BACKING_INT: {
+    case syntax::builtin_t::FROM_BACKING_INT: {
         const auto args_res{extract_cast_args("@fromBackingInt")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1119,7 +1128,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_INT_FROM_FLOAT: {
+    case syntax::builtin_t::INT_FROM_FLOAT: {
         const auto args_res{extract_cast_args("@intFromFloat")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1142,7 +1151,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_FLOAT_FROM_INT: {
+    case syntax::builtin_t::FLOAT_FROM_INT: {
         const auto args_res{extract_cast_args("@floatFromInt")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1166,7 +1175,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_FLOAT_CAST: {
+    case syntax::builtin_t::FLOAT_CAST: {
         const auto args_res{extract_cast_args("@floatCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
@@ -1198,7 +1207,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_DYN_CAST: {
+    case syntax::builtin_t::DYN_CAST: {
         // reinterpret `w`'s erased data pointer, unchecked.
         auto& target{*get_resolved_call_arg_type(call.arguments[0])};
         if (target.get_kind() != type_kind::POINTER && target.get_kind() != type_kind::REFERENCE) {
@@ -1225,7 +1234,7 @@ template <ast::IndexableID ID>
         return_type = &target;
         break;
     }
-    case token_type_t::BUILTIN_CONST_CAST: {
+    case syntax::builtin_t::CONST_CAST: {
         // Pointer/reference/slice/array is checked since it is an invariant of the cast
         auto&      expr_type{*get_resolved_call_arg_type(call.arguments[0])};
         const auto castable_kind{expr_type.get_kind() == type_kind::POINTER ||
@@ -1243,12 +1252,12 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    case token_type_t::BUILTIN_VOLATILE_CAST: {
+    case syntax::builtin_t::VOLATILE_CAST: {
         auto& expr_type{*get_resolved_call_arg_type(call.arguments[0])};
         return_type = ctx_.pool.strip_volatile(expr_type);
         break;
     }
-    case token_type_t::BUILTIN_INT_FROM_PTR: {
+    case syntax::builtin_t::INT_FROM_PTR: {
         auto& operand{*get_resolved_call_arg_type(call.arguments[0])};
         if (!operand.is_poison() && operand.get_kind() != type_kind::POINTER) {
             const auto hint{operand.get_kind() == type_kind::REFERENCE
@@ -1265,23 +1274,23 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_ALIGN_OF:
-    case token_type_t::BUILTIN_SIZE_OF:
-    case token_type_t::BUILTIN_BIT_SIZE_OF: {
+    case syntax::builtin_t::ALIGN_OF:
+    case syntax::builtin_t::SIZE_OF:
+    case syntax::builtin_t::BIT_SIZE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
         break;
     }
     // The result is an unsigned integer with the minimum number of bits needed to represent the
     // operand type's own bit width
-    case token_type_t::BUILTIN_CLZ:
-    case token_type_t::BUILTIN_CTZ:
-    case token_type_t::BUILTIN_POPCOUNT: {
+    case syntax::builtin_t::CLZ:
+    case syntax::builtin_t::CTZ:
+    case syntax::builtin_t::POPCOUNT: {
         auto& operand_type{comptime_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
         const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
         if (width == 0) {
             return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
-                                             *syntax::get_builtin_opt(builtin_id),
+                                             syntax::builtin_name(builtin_id),
                                              ctx_.type_display_name(operand_type)),
                                  error::TYPE_MISMATCH,
                                  get_call_arg_location(call.arguments[0]));
@@ -1291,7 +1300,7 @@ template <ast::IndexableID ID>
         break;
     }
     // @TypeOf returns a type as per documentation, but it's not the literal `type` type
-    case token_type_t::BUILTIN_TYPE_OF: {
+    case syntax::builtin_t::TYPE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::TYPE);
         // Several operands name the type they would meet at
         std::vector<peer_operand> operands;
@@ -1322,7 +1331,7 @@ template <ast::IndexableID ID>
         break;
     }
     // @This returns a type as per docs, but it's really a structural type with full determinism
-    case token_type_t::BUILTIN_THIS:
+    case syntax::builtin_t::THIS:
         if (const auto user_type{user_type_stack_.peek()}) {
             return_type = user_type.get();
             break;
@@ -1332,7 +1341,7 @@ template <ast::IndexableID ID>
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(id));
     // @fnCtx() returns the enclosing function's own (pre-capture) signature as a callable value
-    case token_type_t::BUILTIN_FN_CTX:
+    case syntax::builtin_t::FN_CTX:
         if (open_function_nodes_.empty()) {
             return make_sema_err("@fnCtx() may only be used inside of a function",
                                  error::TYPE_MISMATCH,
@@ -1348,7 +1357,7 @@ template <ast::IndexableID ID>
             "explicit (non-auto) return type",
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(id));
-    case token_type_t::BUILTIN_RETURN_ADDRESS:
+    case syntax::builtin_t::RETURN_ADDRESS:
         if (open_function_nodes_.empty()) {
             return make_sema_err("@returnAddress() may only be used inside of a function",
                                  error::ILLEGAL_RETURN_ADDRESS_USAGE,
@@ -1356,7 +1365,7 @@ template <ast::IndexableID ID>
         }
         return_type = &builtin.return_type;
         break;
-    case token_type_t::BUILTIN_PTR_FROM_INT: {
+    case syntax::builtin_t::PTR_FROM_INT: {
         auto& requested_output{*get_resolved_call_arg_type(call.arguments[0])};
         if (requested_output.get_kind() == type_kind::POINTER) {
             return_type = &requested_output;
@@ -1367,7 +1376,7 @@ template <ast::IndexableID ID>
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
-    case token_type_t::BUILTIN_SLICE_FROM_PTR: {
+    case syntax::builtin_t::SLICE_FROM_PTR: {
         auto& ptr_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (const auto ptr_data{ptr_type.get_data().as_opt<types::pointer>()}) {
             // The resulting slice isn't null terminated since the pointer gives no guarantee,
@@ -1383,7 +1392,7 @@ template <ast::IndexableID ID>
                              error::TYPE_MISMATCH,
                              get_call_arg_location(call.arguments[0]));
     }
-    case token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+    case syntax::builtin_t::FIELD_PARENT_PTR: {
         auto& parent_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (!parent_type.get_data().is<types::struct_t>()) {
             return make_sema_err(fmt::format("'@fieldParentPtr' expects a struct type; found '{}'",
@@ -1423,7 +1432,7 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_pointer(mutability, parent_type);
         break;
     }
-    case token_type_t::BUILTIN_TAG_NAME: {
+    case syntax::builtin_t::TAG_NAME: {
         if (call_arg_denotes_type(call.arguments[0])) {
             return make_sema_err(
                 "'@tagName' expects an enum or tagged union value, but was given a "
@@ -1434,6 +1443,7 @@ template <ast::IndexableID ID>
         const auto& operand{*get_resolved_call_arg_type(call.arguments[0])};
         const auto  tagged_union{operand.get_data().as_opt<types::union_t>()};
         const bool  has_tag{operand.get_kind() == type_kind::ENUM ||
+                            operand.get_kind() == type_kind::ENUM_LITERAL ||
                             (tagged_union && !tagged_union->is_untagged)};
         if (!has_tag && !operand.is_poison() && !is_generic_type(operand)) {
             return make_sema_err(
@@ -1446,12 +1456,12 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_TARGET_TRIPLE: {
+    case syntax::builtin_t::TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_IMPLEMENTS: {
+    case syntax::builtin_t::IMPLEMENTS: {
         // `@implements(T | value, I)` -> comptime bool. The value is produced by const-eval.
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
         DISCARD(get_resolved_call_arg_type(call.arguments[1]));
@@ -1459,7 +1469,7 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_TYPE_NAME: {
+    case syntax::builtin_t::TYPE_NAME: {
         // Fold any `[N]T` first so the length agrees with the name GIR later materializes
         auto&           arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         gir::const_eval evaluator{ctx_, resolving_};
@@ -1469,7 +1479,7 @@ template <ast::IndexableID ID>
             &ctx_.get_array(types::mut::CONSTANT, true, name.size(), ctx_.get_int(8, false));
         break;
     }
-    case token_type_t::BUILTIN_TYPE_INFO: {
+    case syntax::builtin_t::TYPE_INFO: {
         DISCARD(get_resolved_call_arg_type(call.arguments[0]));
         if (const auto arg{call.arguments[0].as_opt<ast::expr_handle>()}) {
             gir::const_eval evaluator{ctx_, resolving_};
@@ -1486,7 +1496,7 @@ template <ast::IndexableID ID>
         return_type = &denoted_type(ctx_.get_builtin_type("TypeInfo"));
         break;
     }
-    case token_type_t::BUILTIN_HAS_FIELD: {
+    case syntax::builtin_t::HAS_FIELD: {
         // Always folds, so anything that can't is an error here rather than a runtime call later
         const auto& owner_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (!owner_type.is_poison() && !call_arg_denotes_type(call.arguments[0]) &&
@@ -1505,7 +1515,7 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_FIELD_TYPE: {
+    case syntax::builtin_t::FIELD_TYPE: {
         auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      denoted{denoted_type(arg_type)};
         const auto field{resolve_field_by_name(call.arguments[1], denoted)};
@@ -1519,7 +1529,7 @@ template <ast::IndexableID ID>
         return_type->resolve_if<types::meta_type>(field->field_type);
         break;
     }
-    case token_type_t::BUILTIN_FIELD_DEFAULT: {
+    case syntax::builtin_t::FIELD_DEFAULT: {
         // The field's real default value, statically typed to the field's own type
         auto&      arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      denoted{denoted_type(arg_type)};
@@ -1539,7 +1549,7 @@ template <ast::IndexableID ID>
         return_type = &field->field_type;
         break;
     }
-    case token_type_t::BUILTIN_FIELD: {
+    case syntax::builtin_t::FIELD: {
         auto& arg_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (const auto arg0_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
             gir::const_eval type_check{ctx_, resolving_};
@@ -1601,14 +1611,14 @@ template <ast::IndexableID ID>
         return_type = &field->field_type;
         break;
     }
-    case token_type_t::BUILTIN_INT:
-    case token_type_t::BUILTIN_FLOAT:
-    case token_type_t::BUILTIN_POINTER:
-    case token_type_t::BUILTIN_REFERENCE:
-    case token_type_t::BUILTIN_SLICE:
-    case token_type_t::BUILTIN_ARRAY:
-    case token_type_t::BUILTIN_FN:        {
-        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+    case syntax::builtin_t::INT:
+    case syntax::builtin_t::FLOAT:
+    case syntax::builtin_t::POINTER:
+    case syntax::builtin_t::REFERENCE:
+    case syntax::builtin_t::SLICE:
+    case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::FN:        {
+        const auto builtin_name{syntax::builtin_name(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc && mentions_unbound_type(call.arguments[0])) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
@@ -1637,7 +1647,7 @@ template <ast::IndexableID ID>
         }};
 
         switch (builtin_id) {
-        case token_type_t::BUILTIN_INT: {
+        case syntax::builtin_t::INT: {
             TRY_DESC_FIELD(bits_v, u64, "bits");
             auto signedness_v{read_desc_field<gir::const_enum>(*desc, "signedness")};
             if (!signedness_v) { signedness_v = read_desc_field<gir::const_enum>(*desc, "signed"); }
@@ -1652,7 +1662,7 @@ template <ast::IndexableID ID>
             return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), is_signed));
             break;
         }
-        case token_type_t::BUILTIN_FLOAT: {
+        case syntax::builtin_t::FLOAT: {
             TRY_DESC_FIELD(bits_v, u64, "bits");
             type_kind kind{};
             switch (*bits_v) {
@@ -1670,19 +1680,19 @@ template <ast::IndexableID ID>
             return_type = wrap_type(ctx_.get_builtin_resolved_type(kind));
             break;
         }
-        case token_type_t::BUILTIN_POINTER:
-        case token_type_t::BUILTIN_REFERENCE: {
+        case syntax::builtin_t::POINTER:
+        case syntax::builtin_t::REFERENCE: {
             TRY_DESC_FIELD(child_v, sema::type&, "child");
             TRY_DESC_FIELD(mut_v, bool, "is_mut");
             TRY_DESC_FIELD(vol_v, bool, "is_volatile");
             auto mods{*mut_v ? types::mut::MUTABLE : types::mut::CONSTANT};
             if (*vol_v) { mods |= types::mut::VOLATILE; }
-            return_type = wrap_type(builtin_id == token_type_t::BUILTIN_POINTER
+            return_type = wrap_type(builtin_id == syntax::builtin_t::POINTER
                                         ? ctx_.get_pointer(mods, *child_v)
                                         : ctx_.get_reference(mods, *child_v));
             break;
         }
-        case token_type_t::BUILTIN_SLICE: {
+        case syntax::builtin_t::SLICE: {
             TRY_DESC_FIELD(child_v, sema::type&, "child");
             TRY_DESC_FIELD(sentinel_v, bool, "sentinel");
             TRY_DESC_FIELD(mut_v, bool, "is_mut");
@@ -1692,7 +1702,7 @@ template <ast::IndexableID ID>
             return_type = wrap_type(ctx_.get_slice(mods, *sentinel_v, *child_v));
             break;
         }
-        case token_type_t::BUILTIN_ARRAY: {
+        case syntax::builtin_t::ARRAY: {
             TRY_DESC_FIELD(child_v, sema::type&, "child");
             TRY_DESC_FIELD(len_v, u64, "len");
             TRY_DESC_FIELD(sentinel_v, bool, "sentinel");
@@ -1704,7 +1714,7 @@ template <ast::IndexableID ID>
                 wrap_type(ctx_.get_array(mods, *sentinel_v, static_cast<usize>(*len_v), *child_v));
             break;
         }
-        case token_type_t::BUILTIN_FN: {
+        case syntax::builtin_t::FN: {
             TRY_DESC_FIELD(params_arr, gir::const_array, "params");
             TRY_DESC_FIELD(ret_v, sema::type&, "return_type");
             TRY_DESC_FIELD(variadic_v, bool, "variadic");
@@ -1750,9 +1760,9 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    case token_type_t::BUILTIN_ENUM:
-    case token_type_t::BUILTIN_STRUCT:
-    case token_type_t::BUILTIN_UNION:  {
+    case syntax::builtin_t::ENUM:
+    case syntax::builtin_t::STRUCT:
+    case syntax::builtin_t::UNION:  {
         if (const auto existing{resolving_.get_sema_type_opt(id)}) {
             const auto& denoted{denoted_type(*existing)};
             const bool  stale_instantiation{
@@ -1765,7 +1775,7 @@ template <ast::IndexableID ID>
             }
         }
 
-        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+        const auto builtin_name{syntax::builtin_name(builtin_id)};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc) {
             return make_sema_err(
@@ -1775,10 +1785,9 @@ template <ast::IndexableID ID>
         }
 
         const auto loc{resolving_.ast.location_of(id)};
-        auto synthesized = builtin_id == token_type_t::BUILTIN_ENUM ? synthesize_enum(loc, *desc)
-                           : builtin_id == token_type_t::BUILTIN_STRUCT
-                               ? synthesize_struct(loc, *desc)
-                               : synthesize_union(loc, *desc);
+        auto synthesized = builtin_id == syntax::builtin_t::ENUM     ? synthesize_enum(loc, *desc)
+                           : builtin_id == syntax::builtin_t::STRUCT ? synthesize_struct(loc, *desc)
+                                                                     : synthesize_union(loc, *desc);
         if (!synthesized) { return stdx::err<diagnostic>{std::move(synthesized).error()}; }
 
         auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **synthesized}]};
@@ -1786,19 +1795,19 @@ template <ast::IndexableID ID>
         return_type = meta;
         break;
     }
-    case token_type_t::BUILTIN_TARGET_OS:     return_type = &ctx_.get_builtin_type("Os"); break;
-    case token_type_t::BUILTIN_TARGET_ARCH:   return_type = &ctx_.get_builtin_type("Arch"); break;
-    case token_type_t::BUILTIN_TARGET_ABI:    return_type = &ctx_.get_builtin_type("Abi"); break;
-    case token_type_t::BUILTIN_TARGET_FAMILY: return_type = &ctx_.get_builtin_type("Family"); break;
-    case token_type_t::BUILTIN_OPTIMIZE_MODE:
+    case syntax::builtin_t::TARGET_OS:     return_type = &ctx_.get_builtin_type("Os"); break;
+    case syntax::builtin_t::TARGET_ARCH:   return_type = &ctx_.get_builtin_type("Arch"); break;
+    case syntax::builtin_t::TARGET_ABI:    return_type = &ctx_.get_builtin_type("Abi"); break;
+    case syntax::builtin_t::TARGET_FAMILY: return_type = &ctx_.get_builtin_type("Family"); break;
+    case syntax::builtin_t::OPTIMIZE_MODE:
         return_type = &ctx_.get_builtin_type("OptimizeMode");
         break;
-    case token_type_t::BUILTIN_RUNTIME_SAFETY:
+    case syntax::builtin_t::RUNTIME_SAFETY:
         ASSERT(builtin.return_type.get_kind() == type_kind::BOOL);
         resolving_.scoped_runtime_safety.insert_or_assign(id.get_index(), scoped_runtime_safety());
         return_type = &builtin.return_type;
         break;
-    case token_type_t::BUILTIN_BRANCH_HINT: {
+    case syntax::builtin_t::BRANCH_HINT: {
         const auto      arg{*call.arguments[0].as_opt<ast::expr_handle>()};
         gir::const_eval evaluator{ctx_, resolving_};
         const auto      cv{evaluator.try_eval(arg)};
@@ -1828,7 +1837,7 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_SET_RUNTIME_SAFETY: {
+    case syntax::builtin_t::SET_RUNTIME_SAFETY: {
         if (active_blocks_.empty() || return_trackers_.empty()) {
             return make_sema_err("@setRuntimeSafety can only be used within a function body",
                                  error::TYPE_MISMATCH,
@@ -1848,18 +1857,18 @@ template <ast::IndexableID ID>
         return_type                           = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_TARGET_ENDIAN: return_type = &ctx_.get_builtin_type("Endian"); break;
-    case token_type_t::BUILTIN_TARGET_PTR_BITS: {
+    case syntax::builtin_t::TARGET_ENDIAN: return_type = &ctx_.get_builtin_type("Endian"); break;
+    case syntax::builtin_t::TARGET_PTR_BITS: {
         ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_MEMCPY:
-    case token_type_t::BUILTIN_MEMSET:
-    case token_type_t::BUILTIN_MEMMOVE: {
+    case syntax::builtin_t::MEMCPY:
+    case syntax::builtin_t::MEMSET:
+    case syntax::builtin_t::MEMMOVE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
-        const bool is_set{builtin_id == token_type_t::BUILTIN_MEMSET};
-        const auto op_name{*syntax::get_builtin_opt(builtin_id)};
+        const bool is_set{builtin_id == syntax::builtin_t::MEMSET};
+        const auto op_name{syntax::builtin_name(builtin_id)};
 
         // Peel one `&`/`^` layer, then report {element type, is_writable} for a slice or array.
         const auto contiguous_of{[](type& t) -> stdx::option<std::pair<type&, bool>> {
@@ -1930,7 +1939,7 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_SET_EVAL_RECURSION_LIMIT: {
+    case syntax::builtin_t::SET_EVAL_RECURSION_LIMIT: {
         if (return_trackers_.empty()) {
             return make_sema_err("@setEvalRecursionLimit can only be used within a function scope",
                                  error::TYPE_MISMATCH,
@@ -1939,7 +1948,7 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_SET_EVAL_UNROLL_LIMIT: {
+    case syntax::builtin_t::SET_EVAL_UNROLL_LIMIT: {
         if (return_trackers_.empty()) {
             return make_sema_err("@setEvalUnrollLimit can only be used within a function scope",
                                  error::TYPE_MISMATCH,
@@ -1948,26 +1957,26 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_EXPORT: {
+    case syntax::builtin_t::EXPORT: {
         if (auto problem{record_export(call)}) { return stdx::err{std::move(*problem)}; }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
-    case token_type_t::BUILTIN_SQRT:
-    case token_type_t::BUILTIN_SIN:
-    case token_type_t::BUILTIN_COS:
-    case token_type_t::BUILTIN_TAN:
-    case token_type_t::BUILTIN_EXP:
-    case token_type_t::BUILTIN_EXP2:
-    case token_type_t::BUILTIN_LOG:
-    case token_type_t::BUILTIN_LOG2:
-    case token_type_t::BUILTIN_LOG10:
-    case token_type_t::BUILTIN_FLOOR:
-    case token_type_t::BUILTIN_CEIL:  {
+    case syntax::builtin_t::SQRT:
+    case syntax::builtin_t::SIN:
+    case syntax::builtin_t::COS:
+    case syntax::builtin_t::TAN:
+    case syntax::builtin_t::EXP:
+    case syntax::builtin_t::EXP2:
+    case syntax::builtin_t::LOG:
+    case syntax::builtin_t::LOG2:
+    case syntax::builtin_t::LOG10:
+    case syntax::builtin_t::FLOOR:
+    case syntax::builtin_t::CEIL:  {
         const auto& arg{call.arguments[0]};
         auto&       operand{*get_resolved_call_arg_type(arg)};
         if (operand.is_poison()) { break; }
-        const auto name{*syntax::get_builtin_opt(builtin_id)};
+        const auto name{syntax::builtin_name(builtin_id)};
         if (call_arg_denotes_type(arg)) {
             return make_sema_err(
                 fmt::format("'{}' expects a float value, but was given a type", name),
@@ -2005,11 +2014,11 @@ template <ast::IndexableID ID>
         break;
     }
     // These return @TypeOf(expression) which is trivial
-    case token_type_t::BUILTIN_ABS: {
+    case syntax::builtin_t::ABS: {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
         break;
     }
-    case token_type_t::BUILTIN_MUL_ADD: {
+    case syntax::builtin_t::MUL_ADD: {
         return_type = get_resolved_call_arg_type(call.arguments[0]);
         // Every operand is a `T`, the first argument
         for (usize i{1}; return_type && i < call.arguments.size(); ++i) {
@@ -2024,16 +2033,16 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    case token_type_t::BUILTIN_MIN:
-    case token_type_t::BUILTIN_MAX:
-    case token_type_t::BUILTIN_DIV_TRUNC:
-    case token_type_t::BUILTIN_DIV_FLOOR:
-    case token_type_t::BUILTIN_REM:
-    case token_type_t::BUILTIN_MOD:       {
+    case syntax::builtin_t::MIN:
+    case syntax::builtin_t::MAX:
+    case syntax::builtin_t::DIV_TRUNC:
+    case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::REM:
+    case syntax::builtin_t::MOD:       {
         auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto&      rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
-        const bool floats_ok{builtin_id == token_type_t::BUILTIN_MIN ||
-                             builtin_id == token_type_t::BUILTIN_MAX};
+        const bool floats_ok{builtin_id == syntax::builtin_t::MIN ||
+                             builtin_id == syntax::builtin_t::MAX};
         const auto accepts{
             [&](type_kind k) -> bool { return floats_ok ? is_numeric(k) : is_integer(k); }};
         // The operands meet at their peer type, which is also the result
@@ -2042,7 +2051,7 @@ template <ast::IndexableID ID>
         const auto peer{peer_type(ctx_, operands)};
         if (both_numeric && !peer) {
             return make_sema_err(fmt::format("'{}': {}",
-                                             *syntax::get_builtin_opt(builtin_id),
+                                             syntax::builtin_name(builtin_id),
                                              peer_error_message(ctx_, operands, peer.error())),
                                  error::NO_PEER_TYPE,
                                  get_call_arg_location(call.arguments[0]));
@@ -2051,7 +2060,7 @@ template <ast::IndexableID ID>
         if (!both_numeric || !accepts(operand_type.get_kind())) {
             return make_sema_err(
                 fmt::format("'{}' expects two {} operands; found '{}' and '{}'",
-                            *syntax::get_builtin_opt(builtin_id),
+                            syntax::builtin_name(builtin_id),
                             floats_ok ? "numeric" : "integer",
                             ctx_.type_display_name(comptime_numeric_view(lhs_type)),
                             ctx_.type_display_name(comptime_numeric_view(rhs_type))),
@@ -2061,15 +2070,15 @@ template <ast::IndexableID ID>
         return_type = ctx_.pool.with_const(operand_type, false);
         break;
     }
-    case token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
-    case token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
-    case token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
-    case token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+    case syntax::builtin_t::ADD_WITH_OVERFLOW:
+    case syntax::builtin_t::SUB_WITH_OVERFLOW:
+    case syntax::builtin_t::MUL_WITH_OVERFLOW:
+    case syntax::builtin_t::SHL_WITH_OVERFLOW: {
         auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
         auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
         // A shift's count is not a peer of the value shifted; the others meet at their peer type
-        const bool       is_shift{builtin_id == token_type_t::BUILTIN_SHL_WITH_OVERFLOW};
+        const bool       is_shift{builtin_id == syntax::builtin_t::SHL_WITH_OVERFLOW};
         const std::array operands{peer_operand{&lhs_type}, peer_operand{&rhs_type}};
         const auto       peer{is_shift ? stdx::result<gsl::not_null<type*>, peer_error>{&lhs_type}
                                        : peer_type(ctx_, operands)};
@@ -2079,7 +2088,7 @@ template <ast::IndexableID ID>
         const bool       integers{is_int_operand(lhs_type) && is_int_operand(rhs_type)};
         if (integers && !peer) {
             return make_sema_err(fmt::format("'{}': {}",
-                                             *syntax::get_builtin_opt(builtin_id),
+                                             syntax::builtin_name(builtin_id),
                                              peer_error_message(ctx_, operands, peer.error())),
                                  error::NO_PEER_TYPE,
                                  get_call_arg_location(call.arguments[0]));
@@ -2090,7 +2099,7 @@ template <ast::IndexableID ID>
             return make_sema_err(
                 fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
                             "'{}'",
-                            *syntax::get_builtin_opt(builtin_id),
+                            syntax::builtin_name(builtin_id),
                             ctx_.type_display_name(lhs_type),
                             ctx_.type_display_name(rhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
@@ -2111,7 +2120,7 @@ template <ast::IndexableID ID>
             return make_sema_err(
                 fmt::format("'{}' expects its third argument to be a '&mut {}' result reference; "
                             "found '{}'",
-                            *syntax::get_builtin_opt(builtin_id),
+                            syntax::builtin_name(builtin_id),
                             ctx_.type_display_name(comptime_numeric_view(**peer)),
                             ctx_.type_display_name(out_type)),
                 error::TYPE_MISMATCH,
@@ -2120,15 +2129,15 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::BOOL);
         break;
     }
-    case token_type_t::BUILTIN_ATOMIC_LOAD:
-    case token_type_t::BUILTIN_ATOMIC_STORE:
-    case token_type_t::BUILTIN_ATOMIC_RMW:
-    case token_type_t::BUILTIN_CMPXCHG_WEAK:
-    case token_type_t::BUILTIN_CMPXCHG_STRONG:
-    case token_type_t::BUILTIN_FENCE:          {
-        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+    case syntax::builtin_t::ATOMIC_LOAD:
+    case syntax::builtin_t::ATOMIC_STORE:
+    case syntax::builtin_t::ATOMIC_RMW:
+    case syntax::builtin_t::CMPXCHG_WEAK:
+    case syntax::builtin_t::CMPXCHG_STRONG:
+    case syntax::builtin_t::FENCE:          {
+        const auto builtin_name{syntax::builtin_name(builtin_id)};
 
-        if (builtin_id == token_type_t::BUILTIN_FENCE) {
+        if (builtin_id == syntax::builtin_t::FENCE) {
             const auto order{resolve_const_enum_arg(call.arguments[0], builtin_name, "order")};
             if (!order) { return stdx::err{order.error()}; }
             if (!is_valid_memory_order_name(order->name)) {
@@ -2145,7 +2154,7 @@ template <ast::IndexableID ID>
         }
 
         // `@atomicStore` has no leading `T: type` argument; `T` is `ptr`'s pointee instead.
-        const bool  has_t_arg{builtin_id != token_type_t::BUILTIN_ATOMIC_STORE};
+        const bool  has_t_arg{builtin_id != syntax::builtin_t::ATOMIC_STORE};
         const usize ptr_idx{has_t_arg ? 1UZ : 0UZ};
 
         auto&      ptr_type{*get_resolved_call_arg_type(call.arguments[ptr_idx])};
@@ -2168,7 +2177,7 @@ template <ast::IndexableID ID>
         auto& t{has_t_arg ? denoted_type(*get_resolved_call_arg_type(call.arguments[0]))
                           : ptr_data->underlying};
 
-        const bool needs_mut_ptr{builtin_id != token_type_t::BUILTIN_ATOMIC_LOAD};
+        const bool needs_mut_ptr{builtin_id != syntax::builtin_t::ATOMIC_LOAD};
         if (needs_mut_ptr && ptr_type.is_constant()) {
             return make_sema_err(
                 fmt::format(
@@ -2228,7 +2237,7 @@ template <ast::IndexableID ID>
         };
 
         switch (builtin_id) {
-        case token_type_t::BUILTIN_ATOMIC_LOAD: {
+        case syntax::builtin_t::ATOMIC_LOAD: {
             const auto order{resolve_const_enum_arg(call.arguments[2], builtin_name, "order")};
             if (!order) { return stdx::err{order.error()}; }
             if (order->name != "relaxed" && order->name != "acquire" && order->name != "seq_cst") {
@@ -2243,7 +2252,7 @@ template <ast::IndexableID ID>
             return_type = &t;
             break;
         }
-        case token_type_t::BUILTIN_ATOMIC_STORE: {
+        case syntax::builtin_t::ATOMIC_STORE: {
             if (auto diag{check_matches_t(1, "val")}) { return stdx::err{std::move(*diag)}; }
             const auto order{resolve_const_enum_arg(call.arguments[2], builtin_name, "order")};
             if (!order) { return stdx::err{order.error()}; }
@@ -2259,7 +2268,7 @@ template <ast::IndexableID ID>
             return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
             break;
         }
-        case token_type_t::BUILTIN_ATOMIC_RMW: {
+        case syntax::builtin_t::ATOMIC_RMW: {
             const auto op{resolve_const_enum_arg(call.arguments[2], builtin_name, "op")};
             if (!op) { return stdx::err{op.error()}; }
             if (!is_valid_atomic_rmw_op_name(op->name)) {
@@ -2281,8 +2290,8 @@ template <ast::IndexableID ID>
             return_type = &t;
             break;
         }
-        case token_type_t::BUILTIN_CMPXCHG_WEAK:
-        case token_type_t::BUILTIN_CMPXCHG_STRONG: {
+        case syntax::builtin_t::CMPXCHG_WEAK:
+        case syntax::builtin_t::CMPXCHG_STRONG: {
             if (auto diag{check_matches_t(2, "expected")}) { return stdx::err{std::move(*diag)}; }
             if (auto diag{check_matches_t(3, "new")}) { return stdx::err{std::move(*diag)}; }
 
@@ -2343,13 +2352,13 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    case token_type_t::BUILTIN_C_VA_START:
-    case token_type_t::BUILTIN_C_VA_COPY:
-    case token_type_t::BUILTIN_C_VA_END:
-    case token_type_t::BUILTIN_C_VA_ARG:   {
+    case syntax::builtin_t::C_VA_START:
+    case syntax::builtin_t::C_VA_COPY:
+    case syntax::builtin_t::C_VA_END:
+    case syntax::builtin_t::C_VA_ARG:   {
         // Every va builtin addresses caller-provided `va_list` storage through a pointer
-        const auto list_arg_count{builtin_id == token_type_t::BUILTIN_C_VA_COPY ? 2UZ : 1UZ};
-        const auto builtin_name{*syntax::get_builtin_opt(builtin_id)};
+        const auto list_arg_count{builtin_id == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
+        const auto builtin_name{syntax::builtin_name(builtin_id)};
         for (usize i{0}; i < list_arg_count; ++i) {
             const auto& list_type{*get_resolved_call_arg_type(call.arguments[i])};
             if (list_type.get_kind() != type_kind::POINTER || list_type.is_constant()) {
@@ -2361,7 +2370,7 @@ template <ast::IndexableID ID>
                     get_call_arg_location(call.arguments[i]));
             }
         }
-        if (builtin_id == token_type_t::BUILTIN_C_VA_ARG) {
+        if (builtin_id == syntax::builtin_t::C_VA_ARG) {
             auto&      read_type{denoted_type(*get_resolved_call_arg_type(call.arguments[1]))};
             const auto read_kind{read_type.get_kind()};
             const bool generic_placeholder{read_kind == type_kind::TYPE &&
@@ -2386,7 +2395,7 @@ template <ast::IndexableID ID>
         }
         break;
     }
-    case token_type_t::BUILTIN_PANIC: {
+    case syntax::builtin_t::PANIC: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
         // The message must be compile-time known so it can be validated / interned
         if (!call.arguments.empty()) {
@@ -2410,12 +2419,12 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_TRAP: {
+    case syntax::builtin_t::TRAP: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_SKIP: {
+    case syntax::builtin_t::SKIP: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
         // An optional message must be compile-time known so it can be interned
         if (!call.arguments.empty()) {
@@ -2439,7 +2448,7 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_COMPILE_ERROR: {
+    case syntax::builtin_t::COMPILE_ERROR: {
         if (in_comptime_loop_) {
             return_type = &builtin.return_type;
             break;
@@ -2463,11 +2472,11 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_SRC: {
+    case syntax::builtin_t::SRC: {
         return_type = &ctx_.get_builtin_type("SourceLocation");
         break;
     }
-    case token_type_t::BUILTIN_EMBED: {
+    case syntax::builtin_t::EMBED: {
         if (call.arguments.empty()) {
             return make_sema_err("@embed expects 1 argument",
                                  error::TYPE_MISMATCH,
@@ -2505,8 +2514,112 @@ template <ast::IndexableID ID>
             types::mut::CONSTANT, true, content_opt->size(), ctx_.get_int(8, false));
         break;
     }
-    case token_type_t::BUILTIN_EXPECT:
-    case token_type_t::BUILTIN_REQUIRE: {
+    case syntax::builtin_t::ENTRY_MAIN:
+    case syntax::builtin_t::TEST_FUNCTIONS: {
+        const auto name{syntax::builtin_name(builtin_id)};
+        if (!resolving_.is_start) {
+            return make_sema_err(fmt::format("'{}()' is only valid in the program's entry code "
+                                             "(`lib/start`)",
+                                             name),
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+        if (builtin_id == syntax::builtin_t::TEST_FUNCTIONS) {
+            auto& test{ctx_.get_builtin_type("Test")};
+            return_type = &ctx_.get_slice(types::mut::CONSTANT, false, denoted_type(test));
+            break;
+        }
+        if (!ctx_.entry_root) {
+            return_type = &ctx_.get_function({},
+                                             ctx_.get_builtin_resolved_type(type_kind::VOID_),
+                                             false,
+                                             ast::calling_convention::C,
+                                             false);
+            break;
+        }
+        const auto main_type{entry_main_type()};
+        if (!main_type) {
+            return make_sema_err(
+                fmt::format("'{}()': the program has no '{}' function", name, ctx_.user_main_name),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(call.function));
+        }
+        return_type = &*main_type;
+        break;
+    }
+    case syntax::builtin_t::ENUM_LITERAL: {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        auto  meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, literal}]};
+        meta->resolve_if<types::meta_type>(literal);
+        return_type = meta;
+        break;
+    }
+    case syntax::builtin_t::LLVM_INTRINSIC: {
+        stdx::option<std::string> name;
+        if (const auto name_h{call.arguments[0].as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            if (const auto val{evaluator.try_eval(*name_h)}) { name = val->as_string_opt(); }
+        }
+        if (!name) {
+            return make_sema_err("'@llvmIntrinsic' needs a compile-time string naming the "
+                                 "intrinsic, like \"llvm.x86.sse2.pause\"",
+                                 error::COMPTIME_EVALUATION_FAILED,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        if (!call_arg_denotes_type(call.arguments[1])) {
+            return make_sema_err("'@llvmIntrinsic' expects the return type as its second argument",
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[1]));
+        }
+        auto& result{denoted_type(*get_resolved_call_arg_type(call.arguments[1]))};
+        if (result.is_poison()) { break; }
+
+        std::vector<const type*> arg_types;
+        bool                     poisoned{false};
+        for (usize i{2}; i < call.arguments.size(); ++i) {
+            const auto& arg{call.arguments[i]};
+            if (call_arg_denotes_type(arg)) {
+                return make_sema_err("'@llvmIntrinsic' arguments are values, not types",
+                                     error::TYPE_USED_AS_VALUE,
+                                     get_call_arg_location(arg));
+            }
+            auto& arg_type{*get_resolved_call_arg_type(arg)};
+            if (arg_type.is_poison()) {
+                poisoned = true;
+                break;
+            }
+            // An untyped literal is an `i32` / `f64`, as when it binds an `auto` parameter
+            arg_types.emplace_back(&ctx_.default_concrete(arg_type));
+        }
+        if (poisoned) { break; }
+        std::vector<usize> immediate_args;
+        if (const auto problem{codegen::check_llvm_intrinsic(
+                *name,
+                result,
+                arg_types,
+                codegen::resolve_target_triple(ctx_.target_opts.triple_str),
+                &immediate_args)}) {
+            return make_sema_err(
+                *problem, error::INVALID_LLVM_INTRINSIC, resolving_.ast.location_of(call.function));
+        }
+        // LLVM takes these as part of the instruction, so they must be known now
+        for (const auto index : immediate_args) {
+            const auto&     arg{call.arguments[index + 2]};
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      arg_h{arg.as_opt<ast::expr_handle>()};
+            if (!arg_h || !evaluator.try_eval(*arg_h)) {
+                return make_sema_err(
+                    fmt::format(
+                        "argument {} of '{}' must be known at compile time", index + 1, *name),
+                    error::COMPTIME_EVALUATION_FAILED,
+                    get_call_arg_location(arg));
+            }
+        }
+        return_type = &result;
+        break;
+    }
+    case syntax::builtin_t::EXPECT:
+    case syntax::builtin_t::REQUIRE: {
         if (const auto cond_expr{call.arguments[0].as_opt<ast::expr_handle>()}) {
             if (const auto ct{resolving_.get_sema_type_opt(*cond_expr)};
                 ct && !ct->is_poison() && ct->get_kind() != type_kind::BOOL &&
@@ -2514,7 +2627,7 @@ template <ast::IndexableID ID>
                 return make_sema_err(
                     fmt::format("{} condition must be `bool` or a pointer, found `{}` (wrap it in "
                                 "`@boolFromInt(...)` if that is intended)",
-                                *syntax::get_builtin_opt(builtin_id),
+                                syntax::builtin_name(builtin_id),
                                 ctx_.type_display_name(*ct)),
                     error::TYPE_MISMATCH,
                     get_call_arg_location(call.arguments[0]));
@@ -2523,9 +2636,9 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case token_type_t::BUILTIN_ASSERT:
-    case token_type_t::BUILTIN_VERIFY: {
-        const auto* name{builtin_id == token_type_t::BUILTIN_VERIFY ? "@verify" : "@assert"};
+    case syntax::builtin_t::ASSERT:
+    case syntax::builtin_t::VERIFY: {
+        const auto* name{builtin_id == syntax::builtin_t::VERIFY ? "@verify" : "@assert"};
         const auto  cond_expr{call.arguments[0].as_opt<ast::expr_handle>()};
 
         gir::const_eval evaluator{ctx_, resolving_};
@@ -2617,13 +2730,13 @@ auto type_resolver::resolve_call_args(gsl::span<const ast::call_expr::argument> 
 }
 
 auto type_resolver::resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result {
-    const auto tok{call.function->get_token_type()};
+    const auto tok{call.function->get_builtin()};
     const auto roles{atomic_arg_roles(tok)};
     const auto args{gsl::span<const ast::call_expr::argument>{call.arguments}};
     if (args.size() != roles.size()) { return resolve_call_args(args); }
 
     // `T` is the leading type argument, or `ptr`'s pointee for `@atomicStore`
-    const bool          has_t_arg{tok != syntax::token_type_t::BUILTIN_ATOMIC_STORE};
+    const bool          has_t_arg{tok != syntax::builtin_t::ATOMIC_STORE};
     stdx::option<type&> operand_type;
     const auto          find_operand_type = [&] {
         if (has_t_arg && call_arg_denotes_type(args[0])) {
@@ -3512,12 +3625,10 @@ namespace {
         const ast::node_id expr{*ret->expression};
         if (expr.any<ast::struct_expr, ast::union_expr, ast::enum_expr>()) { return expr; }
         if (const auto call{ast.get_as_opt<ast::call_expr>(expr)}) {
-            using syntax::token_type_t;
-            switch (call->function->get_token_type()) {
-            case token_type_t::BUILTIN_STRUCT:
-            case token_type_t::BUILTIN_UNION:
-            case token_type_t::BUILTIN_ENUM:   return expr;
-            default:                           break;
+            const auto builtin{call->function->get_builtin()};
+            if (builtin == syntax::builtin_t::STRUCT || builtin == syntax::builtin_t::UNION ||
+                builtin == syntax::builtin_t::ENUM) {
+                return expr;
             }
         }
     }
@@ -3835,7 +3946,7 @@ auto type_resolver::reject_type_of_args(const ast::call_expr&     call,
         const auto& param{fn_expr.parameters[i]};
         if (param.is_comptime) { continue; }
         const auto slot{runtime_idx++};
-        if (param.explicit_type.get_token_type() != syntax::token_type_t::BUILTIN_TYPE_OF ||
+        if (param.explicit_type.get_builtin() != syntax::builtin_t::TYPE_OF ||
             slot >= request->arg_types.size()) {
             continue;
         }
@@ -4070,7 +4181,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
                 const auto&                    arg{call.arguments[expanded.source_index[i]]};
                 stdx::option<structural_guard> g;
-                if (!is_generic_type(*param_type)) { g.emplace(implicit_type_stack_, *param_type); }
+                if (!is_generic_type(*param_type)) {
+                    g.emplace(implicit_type_stack_, *param_type);
+                } else if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
+                           param_type->get_kind() == type_kind::AUTO && arg_h &&
+                           resolving_.ast.get_as_opt<ast::implicit_access_expr>(*arg_h)) {
+                    // An `auto` slot names nothing, so `.name` there is an enum literal rather
+                    // than a member of whatever context surrounds the call
+                    g.emplace(implicit_type_stack_,
+                              ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL));
+                }
 
                 auto result_arg_type = arg.visit([this,
                                                   param_type](auto arg_id) -> stdx::option<type&> {
@@ -4157,6 +4277,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // A slot bound to a concrete value type (`x: T` with `T = u8`) can't take a type
                 if (arg_expr && reject_type_as_value(*arg_expr, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                // An enum literal has no runtime form for a runtime `auto` parameter to hold
+                if (resolved_type->get_kind() == type_kind::ENUM_LITERAL &&
+                    param_type->get_kind() == type_kind::AUTO && i < fn_params.size() &&
+                    !fn_params[i].is_comptime) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("Argument {} is an enum literal, which only exists at compile "
+                                    "time; make the parameter `comptime`, or pass an enum value",
+                                    i + 1),
+                        error::TYPE_MISMATCH,
+                        get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
                 // ...and a `T: type` slot can't take a value
                 const bool declared_type_param{i < fn_params.size() &&
@@ -4525,45 +4658,46 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         last_type_.emplace(*return_type);
     } else if (const auto builtin_type{callee_data.as_opt<types::builtin_function>()}) {
         // Let `.{...}` infer its fields without spelling out `builtin.XInfo{...}`.
-        using syntax::token_type_t;
         stdx::option<type&> descriptor_hint;
-        switch (call.function->get_token_type()) {
-        case token_type_t::BUILTIN_INT:
-            descriptor_hint.emplace(ctx_.get_builtin_type("IntInfo"));
-            break;
-        case token_type_t::BUILTIN_FLOAT:
-            descriptor_hint.emplace(ctx_.get_builtin_type("FloatInfo"));
-            break;
-        case token_type_t::BUILTIN_POINTER:
-        case token_type_t::BUILTIN_REFERENCE:
-            descriptor_hint.emplace(ctx_.get_builtin_type("PointerInfo"));
-            break;
-        case token_type_t::BUILTIN_SLICE:
-            descriptor_hint.emplace(ctx_.get_builtin_type("SliceInfo"));
-            break;
-        case token_type_t::BUILTIN_ARRAY:
-            descriptor_hint.emplace(ctx_.get_builtin_type("ArrayInfo"));
-            break;
-        case token_type_t::BUILTIN_FN:
-            descriptor_hint.emplace(ctx_.get_builtin_type("FnInfo"));
-            break;
-        case token_type_t::BUILTIN_STRUCT:
-            descriptor_hint.emplace(ctx_.get_builtin_type("StructInfo"));
-            break;
-        case token_type_t::BUILTIN_UNION:
-            descriptor_hint.emplace(ctx_.get_builtin_type("UnionInfo"));
-            break;
-        case token_type_t::BUILTIN_ENUM:
-            descriptor_hint.emplace(ctx_.get_builtin_type("EnumInfo"));
-            break;
-        case token_type_t::BUILTIN_BRANCH_HINT:
-            descriptor_hint.emplace(ctx_.get_builtin_type("BranchHint"));
-            break;
-        default: break;
+        if (call.function->get_builtin()) {
+            switch (*call.function->get_builtin()) {
+            case syntax::builtin_t::INT:
+                descriptor_hint.emplace(ctx_.get_builtin_type("IntInfo"));
+                break;
+            case syntax::builtin_t::FLOAT:
+                descriptor_hint.emplace(ctx_.get_builtin_type("FloatInfo"));
+                break;
+            case syntax::builtin_t::POINTER:
+            case syntax::builtin_t::REFERENCE:
+                descriptor_hint.emplace(ctx_.get_builtin_type("PointerInfo"));
+                break;
+            case syntax::builtin_t::SLICE:
+                descriptor_hint.emplace(ctx_.get_builtin_type("SliceInfo"));
+                break;
+            case syntax::builtin_t::ARRAY:
+                descriptor_hint.emplace(ctx_.get_builtin_type("ArrayInfo"));
+                break;
+            case syntax::builtin_t::FN:
+                descriptor_hint.emplace(ctx_.get_builtin_type("FnInfo"));
+                break;
+            case syntax::builtin_t::STRUCT:
+                descriptor_hint.emplace(ctx_.get_builtin_type("StructInfo"));
+                break;
+            case syntax::builtin_t::UNION:
+                descriptor_hint.emplace(ctx_.get_builtin_type("UnionInfo"));
+                break;
+            case syntax::builtin_t::ENUM:
+                descriptor_hint.emplace(ctx_.get_builtin_type("EnumInfo"));
+                break;
+            case syntax::builtin_t::BRANCH_HINT:
+                descriptor_hint.emplace(ctx_.get_builtin_type("BranchHint"));
+                break;
+            default: break;
+            }
         }
 
         auto args_result{resolve_result::OK};
-        if (call.function->get_token_type() == token_type_t::BUILTIN_EXPORT &&
+        if (call.function->get_builtin() == syntax::builtin_t::EXPORT &&
             call.arguments.size() == 2) {
             // The function stands alone; the options are a `builtin.ExportOptions` literal
             {
@@ -4588,25 +4722,25 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
-        } else if (call.function->get_token_type() == token_type_t::BUILTIN_TYPE_OF ||
-                   call.function->get_token_type() == token_type_t::BUILTIN_INT_FROM_FLOAT ||
-                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_FROM_INT ||
-                   call.function->get_token_type() == token_type_t::BUILTIN_FLOAT_CAST ||
-                   gir::semantics::math_function_of(call.function->get_token_type())) {
+        } else if (call.function->get_builtin() == syntax::builtin_t::TYPE_OF ||
+                   call.function->get_builtin() == syntax::builtin_t::INT_FROM_FLOAT ||
+                   call.function->get_builtin() == syntax::builtin_t::FLOAT_FROM_INT ||
+                   call.function->get_builtin() == syntax::builtin_t::FLOAT_CAST ||
+                   (call.function->get_builtin() &&
+                    gir::semantics::math_function_of(*call.function->get_builtin()))) {
             // The result type must not flow into a literal operand of the other numeric kind
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
-        } else if (const auto tok{call.function->get_token_type()};
-                   (tok == token_type_t::BUILTIN_AS || tok == token_type_t::BUILTIN_BIT_CAST ||
-                    tok == token_type_t::BUILTIN_INT_CAST ||
-                    tok == token_type_t::BUILTIN_TRUNCATE) &&
+        } else if (const auto tok{call.function->get_builtin()};
+                   (tok == syntax::builtin_t::AS || tok == syntax::builtin_t::BIT_CAST ||
+                    tok == syntax::builtin_t::INT_CAST || tok == syntax::builtin_t::TRUNCATE) &&
                    call.arguments.size() == 2) {
             const auto is_numeric_literal = [this](const ast::call_expr::argument& arg) {
                 const auto handle{arg.as_opt<ast::expr_handle>()};
                 if (!handle) { return false; }
                 ast::node_id node{*handle};
                 if (const auto un{resolving_.ast.get_as_opt<ast::unary_expr>(node)};
-                    un && node.get_token_type() == token_type_t::MINUS) {
+                    un && node.get_token_type() == syntax::token_type_t::MINUS) {
                     node = un->rhs;
                 }
                 return resolving_.ast[node].is<ast::int_literal_expr>() ||
@@ -4618,7 +4752,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
             }
             // A cast's operand is typed by the cast, never by the context the cast sits in
-            const bool as_literal{tok == token_type_t::BUILTIN_AS &&
+            const bool as_literal{tok == syntax::builtin_t::AS &&
                                   is_numeric_literal(call.arguments[1])};
             if (args_result == resolve_result::OK && as_literal) {
                 // The literal is the cast target's, not the surrounding context's
@@ -4641,7 +4775,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             } else if (args_result == resolve_result::OK) {
                 stdx::option<type&> operand_hint;
-                if (tok == token_type_t::BUILTIN_AS && call_arg_denotes_type(call.arguments[0])) {
+                if (tok == syntax::builtin_t::AS && call_arg_denotes_type(call.arguments[0])) {
                     operand_hint.emplace(
                         denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
                 }
@@ -4650,16 +4784,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
-        } else if ((tok == token_type_t::BUILTIN_INT_CAST ||
-                    tok == token_type_t::BUILTIN_BIT_CAST ||
-                    tok == token_type_t::BUILTIN_TRUNCATE ||
-                    tok == token_type_t::BUILTIN_INT_FROM_BOOL ||
-                    tok == token_type_t::BUILTIN_FROM_BACKING_INT) &&
+        } else if ((tok == syntax::builtin_t::INT_CAST || tok == syntax::builtin_t::BIT_CAST ||
+                    tok == syntax::builtin_t::TRUNCATE || tok == syntax::builtin_t::INT_FROM_BOOL ||
+                    tok == syntax::builtin_t::FROM_BACKING_INT) &&
                    call.arguments.size() == 1) {
             // The inferred target is the cast's result, not its operand's type
             const structural_guard shield{implicit_type_stack_, nullptr};
             args_result = resolve_call_args(call.arguments);
-        } else if (!atomic_arg_roles(call.function->get_token_type()).empty()) {
+        } else if (!atomic_arg_roles(call.function->get_builtin()).empty()) {
             args_result = resolve_atomic_call_args(call);
         } else {
             args_result = resolve_call_args(call.arguments);
@@ -4690,7 +4822,52 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_call, const ast::call_expr&)
 
 auto type_resolver::visit(ast::node_id id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
+    if (call.modifier) {
+        if (call.function->get_token_type() == syntax::token_type_t::BUILTIN) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "'@call' calls a function; a builtin isn't one",
+                                 error::TYPE_MISMATCH,
+                                 resolving_.ast.location_of(call.function)));
+        }
+        if (!resolve_call_modifier(id, *call.modifier)) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id));
+        }
+    }
     resolve_call(id, call);
+}
+
+// `@call`'s modifier must be a compile-time `builtin.CallModifier`
+auto type_resolver::resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool {
+    auto& modifier_type{ctx_.get_builtin_type("CallModifier")};
+    {
+        const structural_guard g{implicit_type_stack_, modifier_type};
+        resolve(modifier);
+    }
+    const auto resolved{last_type_.take()};
+    if (resolved->is_poison()) { return false; }
+    const auto location{resolving_.ast.location_of(*modifier)};
+    if (!is_assignable(*resolved, modifier_type)) {
+        ctx_.diags.emplace_back(fmt::format("'@call' expects a builtin.CallModifier, found '{}'",
+                                            ctx_.type_display_name(*resolved)),
+                                error::TYPE_MISMATCH,
+                                location);
+        return false;
+    }
+
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(modifier)};
+    const auto      tag{folded ? folded->as_opt<gir::const_enum>() : stdx::none};
+    const auto      parsed{tag ? ast::call_modifier_from_name(tag->name) : stdx::none};
+    if (!parsed) {
+        ctx_.diags.emplace_back("'@call' modifier must be known at compile time",
+                                error::COMPTIME_EVALUATION_FAILED,
+                                location);
+        return false;
+    }
+    resolving_.call_modifiers.insert_or_assign(id.get_index(), *parsed);
+    return true;
 }
 
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {
@@ -6253,6 +6430,29 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         }
     }
 
+    // A declaration outside every open function resolves on first use as if from its own scope;
+    // otherwise its functions would see the open ones' frames and capture from them
+    if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
+        lookup->depth < function_boundaries_.front()) {
+        const std::vector<usize> outer_tables(table_stack_.begin(), table_stack_.end());
+        for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) { table_stack_.pop(); }
+        const auto outer_table_idx{std::exchange(table_idx_, outer_tables[lookup->depth])};
+        auto       outer_boundaries{std::exchange(function_boundaries_, {})};
+        auto       outer_fn_nodes{std::exchange(open_function_nodes_, {})};
+        auto       outer_recursive{std::exchange(self_recursive_flags_, {})};
+        const auto restore{gsl::finally([&] {
+            for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) {
+                table_stack_.push(outer_tables[i]);
+            }
+            table_idx_            = outer_table_idx;
+            function_boundaries_  = std::move(outer_boundaries);
+            open_function_nodes_  = std::move(outer_fn_nodes);
+            self_recursive_flags_ = std::move(outer_recursive);
+        })};
+        resolve_symbol(id, lookup->symbol);
+        return;
+    }
+
     resolve_symbol(id, lookup->symbol);
 }
 
@@ -6262,7 +6462,7 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
     PROFILE_FUNCTION();
     // A builtin has no value of its own; only a call to it means anything
     const bool is_callee{std::exchange(resolving_callee_, false)};
-    if (!is_callee && syntax::get_builtin_opt(id.get_token_type())) {
+    if (!is_callee && id.get_token_type() == syntax::token_type_t::BUILTIN) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -6941,24 +7141,32 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
     PROFILE_FUNCTION();
 
-    // Implicit access needs type context established elsewhere; nothing has for a binary LHS.
+    // `.a == x`: the right side names what `.a` is a member of, so it resolves first
+    type* lhs_type{nullptr};
+    type* rhs_first{nullptr};
     if (resolving_.ast.get_as_opt<ast::implicit_access_expr>(binary.lhs)) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            "Implicit access cannot appear on the left side of a binary expression; it "
-            "requires the other operand to establish type context first",
-            error::TYPE_MISMATCH,
-            resolving_.ast.location_of(binary.lhs)));
+        {
+            // Whatever context surrounds the comparison doesn't describe its right side
+            const structural_guard g{implicit_type_stack_,
+                                     ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+            TRY_RESOLVE(binary.rhs);
+        }
+        rhs_first = last_type_.take();
+        {
+            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*rhs_first)};
+            TRY_RESOLVE(binary.lhs);
+        }
+        lhs_type = last_type_.take();
+    } else {
+        TRY_RESOLVE(binary.lhs);
+        lhs_type = last_type_.take();
+        {
+            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
+            TRY_RESOLVE(binary.rhs);
+        }
+        rhs_first = last_type_.take();
     }
-
-    TRY_RESOLVE(binary.lhs);
-    auto* lhs_type{last_type_.take()};
-    {
-        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
-        TRY_RESOLVE(binary.rhs);
-    }
-    auto& rhs_type{*last_type_.take()};
+    auto& rhs_type{*rhs_first};
 
     // A range counter on the left takes the right side's type when it holds every value
     const auto shift_token{id.get_token_type()};
@@ -10021,13 +10229,12 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     -> void {
     PROFILE_FUNCTION();
     const auto implicit_type{implicit_type_stack_.peek()};
-    if (!implicit_type) {
-        return last_type_.emplace(
-            ctx_.poison_node(resolving_,
-                             id,
-                             "Implicit access expression used outside of a typed context",
-                             error::TYPE_MISMATCH,
-                             resolving_.ast.location_of(id)));
+    // With nothing to name a member of, `.name` is an enum literal of its own
+    if (!implicit_type || implicit_type->get_kind() == type_kind::ENUM_LITERAL) {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        resolving_.set_sema_type(implicit_access.member, literal);
+        resolving_.set_sema_type(id, literal);
+        return last_type_.emplace(literal);
     }
 
     // `const f: fn(): T = .init;` finds its member through the function's return type
@@ -10035,6 +10242,15 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     if (const auto fn_data{member_owner->get_data().as_opt<types::function>()}) {
         member_owner = &fn_data->return_type;
     }
+
+    // An `auto` slot takes whatever it's given, so `.name` stays an enum literal there
+    if (member_owner->get_kind() == type_kind::AUTO) {
+        auto& literal{ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
+        resolving_.set_sema_type(implicit_access.member, literal);
+        resolving_.set_sema_type(id, literal);
+        return last_type_.emplace(literal);
+    }
+
     auto result{resolve_structural_access(
         *member_owner, implicit_access.member, resolving_.ast.location_of(id))};
     if (!result) {
@@ -11385,10 +11601,16 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                   is_comptime_aggregate(resolved_type)};
         if (comptime_value && runtime_binding) {
             ctx_.poison_symbol(sym,
-                               fmt::format("a value of type '{}' holds 'type's and only exists at "
-                                           "compile time, so it cannot be stored in a 'let' or "
-                                           "'let mut' binding; use 'const' instead",
-                                           ctx_.type_display_name(resolved_type)),
+                               resolved_type.get_kind() == type_kind::ENUM_LITERAL
+                                   ? std::string{"an enum literal only exists at compile time, so "
+                                                 "it cannot be stored in a 'let' or 'let mut' "
+                                                 "binding; give the binding an enum type "
+                                                 "(`let x: E = .name;`) or use 'const' instead"}
+                                   : fmt::format("a value of type '{}' holds 'type's and only "
+                                                 "exists at compile time, so it cannot be stored "
+                                                 "in a 'let' or 'let mut' binding; use 'const' "
+                                                 "instead",
+                                                 ctx_.type_display_name(resolved_type)),
                                error::MUTABLE_TYPE_BINDING,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -12235,7 +12457,7 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
     }
 
     // Exporting a function as `main` makes it the program's entry point
-    if (*name == "main") {
+    if (*name == "main" && !resolving_.is_start) {
         if (!decl || owner != resolving_) {
             return diagnostic{"A function exported as 'main' must be declared in the module that "
                               "exports it, and named directly",
@@ -12260,6 +12482,20 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
         const bool same{earlier->owner && earlier->owner == owner &&
                         earlier->fn_node.get_index() == fn_node->get_index()};
         if (same) { return stdx::none; }
+        // The entry code's C `main` stands in for the program's `main` export
+        const bool entry_main{*name == "main" && (resolving_.is_start ||
+                                                  (earlier->owner && earlier->owner->is_start))};
+        if (entry_main) {
+            ctx_.exports.add({
+                .owner      = *owner,
+                .fn_node    = *fn_node,
+                .name       = *name,
+                .weak       = enum_field("linkage") == "weak",
+                .visibility = visibility,
+                .site       = resolving_.ast.location_of(call.function),
+            });
+            return stdx::none;
+        }
         return diagnostic{fmt::format("The symbol '{}' is already exported at {}:{}",
                                       *name,
                                       earlier->site.line + 1,
@@ -12301,6 +12537,54 @@ auto type_resolver::fold_attribute_enum(const ast::attribute& item, std::string_
                             error::ILLEGAL_ATTRIBUTE,
                             resolving_.ast.location_of(arg));
     return stdx::none;
+}
+
+// The type of the root module's `main`, for `@entryMain()`
+auto type_resolver::entry_main_type() const -> stdx::option<type&> {
+    if (!ctx_.entry_root || !ctx_.entry_root->root_table_idx) { return stdx::none; }
+    const auto sym{
+        ctx_.registry.get_from_opt(*ctx_.entry_root->root_table_idx, ctx_.user_main_name)};
+    if (!sym || sym->get_status() != symbol_status::RESOLVED) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    const auto decl{node ? ctx_.entry_root->ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
+    if (!decl || !decl->value) { return stdx::none; }
+    const auto fn_type{ctx_.entry_root->get_sema_type_opt(*decl->value)};
+    if (!fn_type || fn_type->get_kind() != type_kind::FUNCTION) { return stdx::none; }
+    return *fn_type;
+}
+
+// Each `builtin.CpuFeature` argument, as the `+name` LLVM enables it by
+auto type_resolver::fold_target_features(const ast::attribute& item) -> std::vector<std::string> {
+    const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+    const auto family{codegen::cpu_feature_family_of(triple)};
+    auto&      feature_type{denoted_type(ctx_.get_builtin_type("CpuFeature"))};
+
+    std::vector<std::string> features;
+    for (const auto arg : item.args) {
+        {
+            const structural_guard g{implicit_type_stack_, feature_type};
+            resolve(arg);
+        }
+        const auto arg_type{resolving_.get_sema_type_opt(arg)};
+        if (arg_type && arg_type->is_poison()) { continue; }
+        gir::const_eval evaluator{ctx_, resolving_};
+        const auto      cv{arg_type && is_same_unqualified(*arg_type, feature_type)
+                               ? evaluator.try_eval(arg)
+                               : stdx::none};
+        const auto      variant{cv ? cv->as_opt<gir::const_enum>() : stdx::none};
+        const auto      at{variant && family ? std::ranges::find(family->ghoti_names, variant->name)
+                                             : std::vector<std::string>::const_iterator{}};
+        if (!variant || !family || at == family->ghoti_names.end()) {
+            ctx_.diags.emplace_back("Attribute 'target_features' requires compile-time "
+                                    "'builtin.CpuFeature' values",
+                                    error::ILLEGAL_ATTRIBUTE,
+                                    resolving_.ast.location_of(arg));
+            continue;
+        }
+        const auto index{static_cast<usize>(at - family->ghoti_names.begin())};
+        features.emplace_back(fmt::format("+{}", family->llvm_names[index]));
+    }
+    return features;
 }
 
 auto type_resolver::fold_visibility(const ast::attribute& item)
@@ -12387,6 +12671,12 @@ auto type_resolver::resolve_attributes(const attribute_refs& items,
         case ast::attribute_kind::DEPRECATED: check_deprecation_message(*item); break;
         case ast::attribute_kind::VISIBILITY: resolved.visibility = fold_visibility(*item); break;
         case ast::attribute_kind::TESTING:    resolved.testing = true; break;
+        case ast::attribute_kind::NO_BUILTINS:
+            resolved.no_builtins = fold_attribute_bool(*item).value_or(false);
+            break;
+        case ast::attribute_kind::TARGET_FEATURES:
+            resolved.target_features = fold_target_features(*item);
+            break;
         }
     }
 
@@ -14304,7 +14594,7 @@ auto type_resolver::apply_explicit_modifiers(ast::explicit_type_id id, type& inn
     // names the implementing type instead
     const auto names_this{[&] {
         const auto call{resolving_.ast.get_as_opt<ast::call_expr>(id)};
-        return call && call->function->get_token_type() == syntax::token_type_t::BUILTIN_THIS;
+        return call && call->function->get_builtin() == syntax::builtin_t::THIS;
     }};
     if ((modifier.is_ptr() || modifier.is_ref()) && inner_type.get_kind() == type_kind::INTERFACE &&
         !names_this()) {
@@ -14467,7 +14757,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     PROFILE_FUNCTION();
 
     // A builtin names an operation, never a type
-    if (syntax::get_builtin_opt(id.get_token_type())) {
+    if (id.get_token_type() == syntax::token_type_t::BUILTIN) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,

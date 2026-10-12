@@ -477,6 +477,8 @@ TEST_CASE("formatter force-breaks a parameter list that has a trailing comma") {
 )");
 
     round_trips("const f = fn(a: i32, b: i32,): void {};");
+    round_trips("const x = @call(.never_inline, add, 1, 2);");
+    round_trips("const y = @call(.always_tail, f, rest...);");
 
     CHECK(format_source("const S = struct { const m = fn(&self, x: i32,): void {}; };") ==
           R"(const S = struct {
@@ -1128,6 +1130,21 @@ TEST_CASE("formatter leaves no lone trailing comma after a multiline string") {
     CHECK(format_source("const f = fn(): void { g(\n\\\\a\n, 2); };\n") ==
           "const f = fn(): void {\n    g(\n        \\\\a\n        ,\n        2,\n    );\n};\n");
     round_trips("const f = fn(): void { g(\n\\\\a\n\\\\b\n); };\n");
+}
+
+TEST_CASE("formatter puts a multiline asm template on lines of its own") {
+    constexpr std::string_view formatted{"const f = fn(): void {\n"
+                                         "    asm {\n"
+                                         "        template:\n"
+                                         "            \\\\mov %1, %0\n"
+                                         "            \\\\add %2, %0\n"
+                                         "        ,\n"
+                                         "        options: (volatile),\n"
+                                         "    };\n"
+                                         "};\n"};
+    CHECK(format_source("const f = fn(): void { asm { template: \\\\mov %1, %0\n"
+                        "\\\\add %2, %0\n, options: (volatile) }; };\n") == formatted);
+    round_trips(formatted);
 }
 
 constexpr std::string_view corpus{

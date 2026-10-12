@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/TargetParser/Triple.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/enum.hh>
 #include <stdx/harness/hooks.hh>
@@ -97,10 +98,15 @@ TEST_CASE("extern targets are forwarded to the real linker invocation") {
             tempfile                out_file{"test_extern_lib_link"};
             codegen::target_options target_opts{.triple_str = triple_str};
 
-            const auto  result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
-            const auto& diag{UNWRAP_ERR(result)};
-            REQUIRE(diag.get_message());
-            CHECK(diag.get_message()->contains("ghoti_test_missing_lib_9f3a"));
+            // Windows writes the missing import library itself; elsewhere the linker names it
+            const auto result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
+            if (codegen::resolve_target_triple(triple_str).isOSWindows()) {
+                CHECK(result);
+            } else {
+                const auto& diag{UNWRAP_ERR(result)};
+                REQUIRE(diag.get_message());
+                CHECK(diag.get_message()->contains("ghoti_test_missing_lib_9f3a"));
+            }
         }
     }
 }
@@ -236,6 +242,40 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
 #else
         CHECK(UNWRAP(diag.get_message()).contains("error: unable to find library"));
 #endif
+    }
+}
+
+TEST_CASE("A Windows import library that can't be found is written from what the program uses") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    // No SDK ships `kernelbase.lib`, so every host links this through a written import library
+    constexpr auto input = R"(
+        extern("kernelbase", "GetTickCount") const ticks: extern fn() callconv(.winapi): u32;
+        pub const main = fn(): i32 {
+            let a = ticks();
+            return if (ticks() >= a) 7 else 1;
+        };
+    )";
+
+    // 32-bit x86 links against the stdcall-decorated `_GetTickCount@0`
+    for (const std::string_view triple : {"x86_64-pc-windows-msvc",
+                                          "x86_64-w64-windows-gnu",
+                                          "i686-pc-windows-msvc",
+                                          "i686-w64-windows-gnu"}) {
+        DYNAMIC_SECTION("Target: " << triple) {
+            llvm::LLVMContext context;
+            auto [ctx, idx]{helpers::type_check_and_verify(input, {}, false)};
+            const tempfile exe{
+                std::in_place,
+                fmt::format("{}.exe", tempfile::make_temp_path("test_written_implib").string())};
+            const codegen::target_options target_opts{.triple_str = std::string{triple}};
+            REQUIRE(helpers::emit_executable(*ctx, context, exe.path, target_opts));
+#if GHOTI_WINDOWS
+            CHECK(helpers::portable_exit_code(UNWRAP(spawn_child(mock_argv{exe.path.string()}))) ==
+                  7);
+#endif
+        }
     }
 }
 

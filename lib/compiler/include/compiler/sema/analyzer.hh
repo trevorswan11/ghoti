@@ -87,6 +87,8 @@ class analyzer {
     // Whether a library keeps its `panic_handler`-style overrides visible (weak) for the program
     // linking it; compiler_rt's builtins never panic, so theirs would only drag in std's I/O
     auto set_library_keeps_handlers(bool keep) noexcept -> void { library_keeps_handlers_ = keep; }
+    // Whether the program is built as an executable, which `lib/start`'s entry code joins
+    auto set_entry_point(bool entry_point) noexcept -> void { entry_point_ = entry_point; }
 
     // Runs the entire sema pipeline
     auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
@@ -219,6 +221,10 @@ class analyzer {
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
+    // Analyzes `lib/start` against `root`, unless `root` has no valid entry to call
+    [[nodiscard]] auto attach_start_module(mod::module& root, bool for_test_executable)
+        -> stdx::result<void, diagnostic>;
+
     // Prunes, lowers, verifies, and optimizes `gir_module` the way `artifact`'s build requires
     [[nodiscard]] auto lower_artifact(gir::module&                      gir_module,
                                       llvm::LLVMContext&                context,
@@ -247,6 +253,7 @@ class analyzer {
     stdx::option<bool>          in_terminal_;
     bool                        tolerate_syntax_errors_;
     bool                        library_keeps_handlers_{true};
+    bool                        entry_point_{false};
 
     context ctx_;
 };

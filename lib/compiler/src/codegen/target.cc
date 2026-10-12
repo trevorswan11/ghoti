@@ -1,6 +1,9 @@
 #include "compiler/codegen/target.hh"
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -8,6 +11,8 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/DiagnosticInfo.h>
@@ -16,6 +21,7 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
+#include <llvm/MC/MCSubtargetInfo.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/CodeGen.h>
@@ -27,6 +33,7 @@
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/SubtargetFeature.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/fixed/vector.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -354,8 +361,26 @@ struct machine_baseline {
 
 // What `generic` means per target: the baseline its OS ABI already assumes. A requested feature
 // comes after the defaults, so `-cx16` still turns one off
+// The build machine's model and every feature it has, as `+name` / `-name`, then `requested`
+[[nodiscard]] auto native_baseline(std::string_view requested) -> machine_baseline {
+    std::string features;
+    for (const auto& [name, enabled] : llvm::sys::getHostCPUFeatures()) {
+        if (!features.empty()) { features += ','; }
+        features += fmt::format("{}{}", enabled ? '+' : '-', name.str());
+    }
+    if (!requested.empty()) { features += fmt::format(",{}", requested); }
+    return {llvm::sys::getHostCPUName().str(), std::move(features), {}};
+}
+
 [[nodiscard]] auto machine_baseline_for(const llvm::Triple& triple, const target_options& options)
     -> machine_baseline {
+    if (options.cpu == "native") {
+        auto native{native_baseline(options.features)};
+        if (triple.isRISCV() && triple.isOSLinux()) {
+            native.abi = triple.isRISCV64() ? "lp64d" : "ilp32d";
+        }
+        return native;
+    }
     machine_baseline base{options.cpu, options.features, {}};
     if (options.cpu != "generic") { return base; }
     const auto with_defaults{[&](std::string_view defaults) {
@@ -380,20 +405,223 @@ struct machine_baseline {
 
 } // namespace
 
-auto create_target_machine(const target_options& options)
-    -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic> {
-    PROFILE_FUNCTION();
-    initialize_all_targets();
+namespace {
 
-    const auto  triple{resolve_target_triple(options.triple_str)};
+[[nodiscard]] auto lookup_target(const llvm::Triple& triple)
+    -> stdx::result<const llvm::Target*, diagnostic> {
     std::string error;
     const auto* target{llvm::TargetRegistry::lookupTarget(triple, error)};
-
     if (target == nullptr) {
         return make_codegen_err(
             fmt::format("Unable to find target for triple '{}': {}", triple.str(), error),
             error::TARGET_LOOKUP_FAILED);
     }
+    return target;
+}
+
+[[nodiscard]] auto make_subtarget_info(const llvm::Target& target,
+                                       const llvm::Triple& triple,
+                                       std::string_view    cpu,
+                                       std::string_view    features)
+    -> stdx::box<llvm::MCSubtargetInfo> {
+    return stdx::box<llvm::MCSubtargetInfo>{target.createMCSubtargetInfo(triple, cpu, features)};
+}
+
+// LLVM only warns about an unknown CPU or feature and carries on without it; ghoti rejects them
+[[nodiscard]] auto check_cpu_request(const llvm::Target&   target,
+                                     const llvm::Triple&   triple,
+                                     const target_options& options)
+    -> stdx::result<void, diagnostic> {
+    if (options.cpu == "native") {
+        const llvm::Triple host{llvm::sys::getProcessTriple()};
+        if (host.getArch() != triple.getArch()) {
+            return make_codegen_err(fmt::format("'--cpu native' describes this machine ({}), which "
+                                                "can't run code for '{}'; name a CPU instead",
+                                                host.getArchName().str(),
+                                                triple.str()),
+                                    error::UNKNOWN_CPU);
+        }
+    }
+
+    const auto info{make_subtarget_info(target, triple, "", "")};
+    if (options.cpu != "generic" && options.cpu != "native" &&
+        !info->isCPUStringValid(options.cpu)) {
+        return make_codegen_err(
+            fmt::format("Unknown CPU '{}' for '{}'", options.cpu, triple.getArchName().str()),
+            error::UNKNOWN_CPU);
+    }
+
+    const auto known{info->getAllProcessorFeatures()};
+    for (auto feature : llvm::split(llvm::StringRef{options.features}, ',')) {
+        feature = feature.trim();
+        if (feature.empty()) { continue; }
+        if (feature.front() == '+' || feature.front() == '-') { feature = feature.drop_front(); }
+        const bool exists{std::ranges::any_of(
+            known, [&](const llvm::SubtargetFeatureKV& kv) { return feature == kv.key(); })};
+        if (!exists) {
+            return make_codegen_err(fmt::format("Unknown CPU feature '{}' for '{}'",
+                                                feature.str(),
+                                                triple.getArchName().str()),
+                                    error::UNKNOWN_CPU);
+        }
+    }
+    return {};
+}
+
+struct family_spec {
+    std::string_view name;
+    std::string_view probe_triple;
+};
+
+constexpr std::array family_specs{
+    family_spec{"x86", "x86_64-unknown-unknown"},
+    family_spec{"aarch64", "aarch64-unknown-unknown"},
+    family_spec{"arm", "arm-unknown-unknown"},
+    family_spec{"riscv", "riscv64-unknown-unknown"},
+    family_spec{"wasm", "wasm32-unknown-unknown"},
+    family_spec{"powerpc", "powerpc64-unknown-unknown"},
+    family_spec{"mips", "mips64-unknown-unknown"},
+    family_spec{"s390x", "s390x-unknown-unknown"},
+    family_spec{"loongarch", "loongarch64-unknown-unknown"},
+    family_spec{"sparc", "sparc64-unknown-unknown"},
+};
+
+[[nodiscard]] auto family_name_of(const llvm::Triple& triple) -> stdx::option<std::string_view> {
+    switch (triple.getArch()) {
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:      return "x86";
+    case llvm::Triple::aarch64:
+    case llvm::Triple::aarch64_be:  return "aarch64";
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:     return "arm";
+    case llvm::Triple::riscv32:
+    case llvm::Triple::riscv64:     return "riscv";
+    case llvm::Triple::wasm32:
+    case llvm::Triple::wasm64:      return "wasm";
+    case llvm::Triple::ppc:
+    case llvm::Triple::ppcle:
+    case llvm::Triple::ppc64:
+    case llvm::Triple::ppc64le:     return "powerpc";
+    case llvm::Triple::mips:
+    case llvm::Triple::mipsel:
+    case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:    return "mips";
+    case llvm::Triple::systemz:     return "s390x";
+    case llvm::Triple::loongarch32:
+    case llvm::Triple::loongarch64: return "loongarch";
+    case llvm::Triple::sparc:
+    case llvm::Triple::sparcel:
+    case llvm::Triple::sparcv9:     return "sparc";
+    default:                        return stdx::none;
+    }
+}
+
+// `sse4.2` -> `sse4_2`, `fp-armv8` -> `fp_armv8`; a clash keeps LLVM's spelling
+[[nodiscard]] auto ghoti_feature_names(const std::vector<std::string>& llvm_names)
+    -> std::vector<std::string> {
+    std::vector<std::string> names;
+    names.reserve(llvm_names.size());
+    for (const auto& llvm_name : llvm_names) {
+        std::string name{llvm_name};
+        std::ranges::replace(name, '-', '_');
+        std::ranges::replace(name, '.', '_');
+        if (std::ranges::contains(names, name)) { name = llvm_name; }
+        names.emplace_back(std::move(name));
+    }
+    return names;
+}
+
+} // namespace
+
+namespace {
+
+// Built on first use, one family at a time: a compilation usually needs only its target's
+[[nodiscard]] auto build_family(const family_spec& spec) -> stdx::option<cpu_feature_family> {
+    initialize_all_targets();
+    const llvm::Triple triple{std::string{spec.probe_triple}};
+    auto               target{lookup_target(triple)};
+    if (!target) { return stdx::none; }
+    const auto               info{make_subtarget_info(**target, triple, "", "")};
+    std::vector<std::string> llvm_names;
+    for (const auto& kv : info->getAllProcessorFeatures()) { llvm_names.emplace_back(kv.key()); }
+    if (llvm_names.empty()) { return stdx::none; }
+    auto ghoti_names{ghoti_feature_names(llvm_names)};
+    return cpu_feature_family{
+        .name        = spec.name,
+        .llvm_names  = std::move(llvm_names),
+        .ghoti_names = std::move(ghoti_names),
+    };
+}
+
+struct family_cache {
+    std::mutex                                                                      mutex;
+    std::array<stdx::option<stdx::option<cpu_feature_family>>, family_specs.size()> slots;
+};
+
+[[nodiscard]] auto cached_family(usize index) -> stdx::option<const cpu_feature_family&> {
+    static family_cache    cache;
+    const std::scoped_lock lock{cache.mutex};
+    auto&                  slot{cache.slots[index]};
+    if (!slot) { slot.emplace(build_family(family_specs[index])); }
+    if (!*slot) { return stdx::none; }
+    return **slot;
+}
+
+} // namespace
+
+auto cpu_feature_families()
+    -> stdx::fixed::vector<gsl::not_null<const cpu_feature_family*>, family_specs.size()> {
+    stdx::fixed::vector<gsl::not_null<const cpu_feature_family*>, family_specs.size()> out;
+    for (usize i{0}; i < family_specs.size(); ++i) {
+        if (const auto family{cached_family(i)}) { out.emplace_back(family.get()); }
+    }
+    return out;
+}
+
+auto cpu_feature_family_of(const llvm::Triple& triple) -> stdx::option<const cpu_feature_family&> {
+    const auto name{family_name_of(triple)};
+    if (!name) { return stdx::none; }
+    for (usize i{0}; i < family_specs.size(); ++i) {
+        if (family_specs[i].name == *name) { return cached_family(i); }
+    }
+    return stdx::none;
+}
+
+auto resolve_target_cpu(const target_options& options) -> stdx::result<target_cpu, diagnostic> {
+    PROFILE_FUNCTION();
+    initialize_all_targets();
+    const auto triple{resolve_target_triple(options.triple_str)};
+    const auto target{TRY(lookup_target(triple))};
+    TRY(check_cpu_request(*target, triple, options));
+
+    const auto baseline{machine_baseline_for(triple, options)};
+    const auto info{make_subtarget_info(*target, triple, baseline.cpu, baseline.features)};
+    target_cpu cpu{.model = baseline.cpu, .enabled = {}, .family = stdx::none};
+    const auto family{cpu_feature_family_of(triple)};
+    if (!family) { return cpu; }
+    cpu.family.emplace(family->name);
+
+    const auto& bits{info->getFeatureBits()};
+    for (const auto& kv : info->getAllProcessorFeatures()) {
+        if (!bits.test(kv.Value)) { continue; }
+        const auto at{std::ranges::find(family->llvm_names, std::string_view{kv.key()})};
+        if (at == family->llvm_names.end()) { continue; }
+        cpu.enabled.emplace_back(
+            family->ghoti_names[static_cast<usize>(at - family->llvm_names.begin())]);
+    }
+    return cpu;
+}
+
+auto create_target_machine(const target_options& options)
+    -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic> {
+    PROFILE_FUNCTION();
+    initialize_all_targets();
+
+    const auto triple{resolve_target_triple(options.triple_str)};
+    const auto target{TRY(lookup_target(triple))};
+    TRY(check_cpu_request(*target, triple, options));
 
     const auto          baseline{machine_baseline_for(triple, options)};
     llvm::TargetOptions target_opts;

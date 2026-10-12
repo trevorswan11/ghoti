@@ -12,9 +12,11 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
@@ -22,6 +24,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
@@ -45,7 +48,6 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
-#include "compiler/codegen/mem_intrinsics.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -92,6 +94,13 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     apply_visibility(llvm_fn, attributes.visibility);
     if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
     if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
+    // Keeps loop-idiom recognition from turning a hand-written `memcpy` loop into a `memcpy` call
+    if (attributes.no_builtins) { llvm_fn.addFnAttr("no-builtins"); }
+    // Joined with the target's own features once the target machine is known
+    if (!attributes.target_features.empty()) {
+        llvm_fn.addFnAttr("ghoti-target-features",
+                          fmt::format("{}", fmt::join(attributes.target_features, ",")));
+    }
     if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
     if (!attributes.inlining) { return; }
     switch (*attributes.inlining) {
@@ -115,6 +124,13 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 [[nodiscard]] auto is_comptime_only_signature(const sema::types::function& fn_data) noexcept
     -> bool {
     return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
+}
+
+// A function over compile-time-only values (`Option(type)`'s methods, say) has no runtime form
+[[nodiscard]] auto is_comptime_only(const gir::function& fn) -> bool {
+    const auto fn_data{sema::signature_of(fn.get_type())};
+    return fn.get_linkage() != gir::linkage::EXTERN && fn_data &&
+           is_comptime_only_signature(*fn_data);
 }
 
 // The concrete peer type two operands should lower against, or none if both are
@@ -201,9 +217,12 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return llvm::ConstantFP::get(ty, converted);
 }
 
-[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
-    -> llvm::CallingConv::ID {
+[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv,
+                                    const llvm::Triple& triple) noexcept -> llvm::CallingConv::ID {
     switch (conv) {
+    case ast::calling_convention::X86_WINAPI:
+        return triple.getArch() == llvm::Triple::x86 ? llvm::CallingConv::X86_StdCall
+                                                     : llvm::CallingConv::C;
     case ast::calling_convention::C:            return llvm::CallingConv::C;
     case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
     case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
@@ -291,7 +310,9 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
 // Every function is declared up front so bodies and vtables can reference any of them
 auto llvm_lowering::declare_functions(const gir::module& gir_mod) -> void {
     PROFILE_SCOPE("llvm_lowering: declare functions");
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    for (const auto* fn : gir_mod.get_functions()) {
+        if (!is_comptime_only(*fn)) { declare_function(*fn); }
+    }
 }
 
 auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
@@ -305,7 +326,9 @@ auto llvm_lowering::lower_definitions(const gir::module& gir_mod) -> void {
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+        for (const auto* fn : gir_mod.get_functions()) {
+            if (!is_comptime_only(*fn)) { lower_function(*fn); }
+        }
     }
 }
 
@@ -318,29 +341,9 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::create_c_entry_function() -> llvm::Function* {
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    // Linux executables get a freestanding `_start` (no crt/libc) that calls into `main`
-    if (llvm::Triple{llvm_module_->getTargetTriple()}.isOSLinux()) {
-        const auto saved_insert_point{builder_.saveIP()};
-        emit_freestanding_start(main_fn);
-        builder_.restoreIP(saved_insert_point);
-    }
-    return main_fn;
-}
-
 auto llvm_lowering::finalize_runtime_support() -> void {
     lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
-    maybe_emit_windows_stack_probe();
-    define_mem_intrinsic_fallbacks(*llvm_module_);
     // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
     for (auto& fn : *llvm_module_) { fn.addFnAttr(llvm::Attribute::NoUnwind); }
 }
@@ -391,552 +394,103 @@ auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_vie
     gir_module_.emplace(gir_mod);
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
-    emit_main_entry_wrapper(user_main_name_);
     finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> llvm::Function* {
-    PROFILE_FUNCTION();
-    auto* user_fn{llvm_module_->getFunction("_ghoti_main")};
-    if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
-    ASSERT(user_fn, "User main function not found in LLVM module");
-
-    auto* main_fn{create_c_entry_function()};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    emit_x87_precision_init();
-
-    // Nothing reads args unless user main takes the `[][:0]u8` parameter.
-    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
-    auto*      outer_val{emit_argv_slice(main_fn, takes_arg)};
-
-    if (user_fn->getReturnType()->isVoidTy()) {
-        if (takes_arg) {
-            builder_.CreateCall(user_fn, {outer_val});
-        } else {
-            builder_.CreateCall(user_fn, {});
-        }
-        emit_entry_exit(builder_.getInt32(0));
-    } else {
-        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
-                                : builder_.CreateCall(user_fn, {}, "main.res")};
-        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-        emit_entry_exit(ret_i32);
-    }
-
-    return main_fn;
-}
-
-auto llvm_lowering::emit_entry_exit(llvm::Value* code) -> void {
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows()) {
-        builder_.CreateRet(code);
-        return;
-    }
-
-    auto* exit_ty{llvm::FunctionType::get(types_.get_void_ty(), {types_.get_int32_ty()}, false)};
-    auto  exit_fn{llvm_module_->getOrInsertFunction("ExitProcess", exit_ty)};
-    builder_.CreateCall(exit_fn, {code});
-    builder_.CreateUnreachable();
-}
-
-auto llvm_lowering::emit_x87_precision_init() -> void {
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows() || !triple.isX86()) { return; }
-    auto* asm_ty{llvm::FunctionType::get(types_.get_void_ty(), false)};
-    // `fninit` restores the full 64-bit significand other targets start with
-    builder_.CreateCall(llvm::InlineAsm::get(asm_ty, "fninit", "~{fpsr},~{fpcr},~{dirflag}", true));
-}
-
-auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
-    PROFILE_FUNCTION();
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    std::string asm_text;
-    switch (triple.getArch()) {
-    case llvm::Triple::x86_64:
-        asm_text = "xorl %ebp, %ebp\n\t"    // mark the outermost frame
-                   "movq (%rsp), %rdi\n\t"  // argc
-                   "leaq 8(%rsp), %rsi\n\t" // argv
-                   "andq $$-16, %rsp\n\t"   // realign for the SysV call
-                   "call main\n\t"
-                   "movl %eax, %edi\n\t"  // exit code <- main()'s return
-                   "movl $$231, %eax\n\t" // __NR_exit_group
-                   "syscall\n\t"
-                   "ud2\n\t";
-        break;
-    case llvm::Triple::aarch64:
-        asm_text = "mov x29, xzr\n\t"
-                   "mov x30, xzr\n\t"
-                   "ldr x0, [sp]\n\t"   // argc (read before realigning sp)
-                   "add x1, sp, #8\n\t" // argv
-                   "mov x2, sp\n\t"
-                   "and x2, x2, #-16\n\t"
-                   "mov sp, x2\n\t"
-                   "bl main\n\t"
-                   "mov w8, #94\n\t" // __NR_exit_group
-                   "svc #0\n\t"
-                   "brk #0\n\t";
-        break;
-    case llvm::Triple::riscv64:
-        asm_text = "li s0, 0\n\t"
-                   "ld a0, 0(sp)\n\t"   // argc
-                   "addi a1, sp, 8\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::riscv32:
-        asm_text = "li s0, 0\n\t"
-                   "lw a0, 0(sp)\n\t"   // argc (32-bit word)
-                   "addi a1, sp, 4\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::arm:
-    case llvm::Triple::thumb:
-        // One template for A32 and T32. The kernel delivers an 8-byte aligned sp at
-        // entry (AAPCS), so no realign is needed before the call to `main`
-        asm_text = "ldr r0, [sp, #0]\n\t" // argc
-                   "add r1, sp, #4\n\t"   // argv
-                   "bl main\n\t"
-                   "movs r7, #248\n\t" // __NR_exit_group  (ARM EABI)
-                   "svc #0\n\t"
-                   "udf #0\n\t";
-        break;
-    case llvm::Triple::loongarch64:
-        // LoongArch registers are spelled `$a0` etc.; `$` is the operand sigil in
-        // an LLVM asm string, so each one is escaped as `$$`.
-        asm_text = "move $$fp, $$zero\n\t"
-                   "ld.d $$a0, $$sp, 0\n\t"   // argc
-                   "addi.d $$a1, $$sp, 8\n\t" // argv
-                   "bl main\n\t"
-                   "ori $$a7, $$zero, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "syscall 0\n\t"
-                   "break 0\n\t";
-        break;
-    default:
-        // Linux arch with a diagnostic before lowering runs. Kept as a safe no-op.
-        return;
-    }
-
-    auto* void_ty{llvm::Type::getVoidTy(context_)};
-    auto* start_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_fn{llvm::Function::Create(
-        start_ty, llvm::Function::ExternalLinkage, "_start", llvm_module_.get())};
-    start_fn->addFnAttr(llvm::Attribute::Naked);
-    start_fn->addFnAttr(llvm::Attribute::NoInline);
-    start_fn->addFnAttr(llvm::Attribute::NoUnwind);
-    start_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    start_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", start_fn)};
-    builder_.SetInsertPoint(entry_bb);
-
-    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_asm{
-        llvm::InlineAsm::get(asm_ty, asm_text, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
-    builder_.CreateCall(start_asm, {});
-    builder_.CreateUnreachable();
-    llvm::appendToUsed(*llvm_module_, {start_fn, main_fn});
-}
-
 auto llvm_lowering::windows_stack_probe_symbol() const -> stdx::option<std::string_view> {
     const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) { return stdx::none; }
-    return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
-}
-
-// Emit a weak, self-contained probe so `no-stack-arg-probe` can stay off on Windows and
-// large frames grow the stack one 4 KiB page at a time. Weak + its own section: a build
-// with no big frame drops it at link time (`--gc-sections` / `/opt:ref`).
-auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
-    const auto sym{windows_stack_probe_symbol()};
-    if (!sym || llvm_module_->getFunction(*sym)) { return; }
-
-    auto* void_ty{llvm::Type::getVoidTy(context_)};
-    auto* fn_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* probe_fn{
-        llvm::Function::Create(fn_ty, llvm::GlobalValue::WeakAnyLinkage, *sym, llvm_module_.get())};
-    probe_fn->setComdat(llvm_module_->getOrInsertComdat(*sym));
-    probe_fn->addFnAttr(llvm::Attribute::Naked);
-    probe_fn->addFnAttr(llvm::Attribute::NoInline);
-    probe_fn->addFnAttr(llvm::Attribute::NoUnwind);
-    probe_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    probe_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    // Allocation size is passed in %rax; %rsp is left untouched. Every register except the saved
-    // scratch is preserved. This is libgcc's `___chkstk_ms`, which also satisfies the MSVC
-    // `__chkstk` contract on x64.
-    static constexpr std::string_view probe_asm{R"(push %rcx
-	push %rax
-	cmp $$0x1000, %rax
-	lea 0x18(%rsp), %rcx
-	jb 2f
-	1:
-	sub $$0x1000, %rcx
-	orq $$0x0, (%rcx)
-	sub $$0x1000, %rax
-	cmp $$0x1000, %rax
-	ja 1b
-	2:
-	sub %rax, %rcx
-	orq $$0x0, (%rcx)
-	pop %rax
-	pop %rcx
-	ret
-	)"};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", probe_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* probe_asm_val{
-        llvm::InlineAsm::get(asm_ty, probe_asm, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
-    builder_.CreateCall(probe_asm_val, {});
-    builder_.CreateUnreachable();
+    if (!triple.isOSWindows()) { return stdx::none; }
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
+    }
+    if (triple.getArch() == llvm::Triple::x86) {
+        return triple.isOSCygMing() ? "_alloca" : "_chkstk";
+    }
+    return stdx::none;
 }
 
 auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
     return llvm::ConstantInt::get(types_.get_usize_ty(), value);
 }
 
-auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
+auto llvm_lowering::lower_test_executable(const gir::module& gir_mod,
+                                          std::string_view   user_main_name)
+    -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
-    auto*              slice_ty{types_.translate_slice_type()};
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    // Windows raw PE entry point
-    if (triple.isOSWindows()) {
-        // BaseThreadInitThunk calls entry with no argc/argv, unlike the POSIX path below.
-        llvm::Value* outer_val{nullptr};
-        if (!want_real_args) {
-            // Nothing reads args -- skip the WinAPI calls entirely and pass an empty slice
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-            builder_.CreateStore(usize_const(0), outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        } else {
-            // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
-            auto* get_cmdline_ty{llvm::FunctionType::get(types_.get_ptr_ty(), {}, false)};
-            auto  get_cmdline_fn{
-                llvm_module_->getOrInsertFunction("GetCommandLineW", get_cmdline_ty)};
-
-            auto* cmdline_to_argv_ty{llvm::FunctionType::get(
-                types_.get_ptr_ty(), {types_.get_ptr_ty(), types_.get_ptr_ty()}, false)};
-            auto  cmdline_to_argv_fn{
-                llvm_module_->getOrInsertFunction("CommandLineToArgvW", cmdline_to_argv_ty)};
-
-            auto* wc2mb_ty{llvm::FunctionType::get(types_.get_int32_ty(),
-                                                   {types_.get_int32_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_ptr_ty()},
-                                                   false)};
-            auto  wc2mb_fn{llvm_module_->getOrInsertFunction("WideCharToMultiByte", wc2mb_ty)};
-
-            constexpr u64 max_args{16};
-            constexpr u64 max_arg_bytes{1'024};
-            constexpr u32 cp_utf8{65'001};
-
-            auto* nargs_slot{builder_.CreateAlloca(types_.get_int32_ty(), nullptr, "nargs")};
-            auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
-            auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
-            auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
-            auto* raw_argc_i64{
-                builder_.CreateSExtOrTrunc(nargs_i32, types_.get_usize_ty(), "argc.i64")};
-
-            auto* max_args_v{usize_const(max_args)};
-            auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
-            auto* arg_bufs{builder_.CreateAlloca(
-                types_.get_int8_ty(), usize_const(max_args * max_arg_bytes), "arg.bufs")};
-            auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
-                                                 raw_argc_i64,
-                                                 max_args_v,
-                                                 "argc.bounded")};
-
-            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", entry_fn)};
-            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", entry_fn)};
-            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
-            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
-
-            auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "wi")};
-            builder_.CreateStore(usize_const(0), i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_cond);
-            auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "wcur.i")};
-            auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
-            builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-            builder_.SetInsertPoint(loop_body);
-            auto* wargv_elem_ptr{
-                builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
-            auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
-            auto* buf_off{builder_.CreateMul(cur_i, usize_const(max_arg_bytes), "buf.off")};
-            auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
-
-            // Subtract one to exclude the converted null terminator, matching strlen-style.
-            constexpr u32 auto_len{0xFFFFFFFFu}; // cchWideChar = -1: source is null-terminated
-            auto*         converted{
-                builder_.CreateCall(wc2mb_fn,
-                                    {builder_.getInt32(cp_utf8),
-                                     builder_.getInt32(0),
-                                     wstr_ptr,
-                                     builder_.getInt32(auto_len),
-                                     buf_ptr,
-                                     builder_.getInt32(max_arg_bytes),
-                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
-                                     llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
-                                    "converted.len")};
-            auto* converted_i64{
-                builder_.CreateSExtOrTrunc(converted, types_.get_usize_ty(), "converted.i64")};
-            auto* final_len{builder_.CreateSub(converted_i64, usize_const(1), "final.len")};
-
-            auto* dest_slice_ptr{
-                builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
-            auto* dest_data_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX),
-                                         "wdest.data")};
-            auto* dest_len_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX),
-                                         "wdest.len")};
-            builder_.CreateStore(buf_ptr, dest_data_field);
-            builder_.CreateStore(final_len, dest_len_field);
-            builder_.CreateBr(loop_inc);
-
-            builder_.SetInsertPoint(loop_inc);
-            auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "winc.i")};
-            builder_.CreateStore(inc_i, i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_end);
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(slice_array, outer_data);
-            builder_.CreateStore(argc_i64, outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        }
-
-        return outer_val;
-    }
-
-    auto* argc{entry_fn->getArg(0)};
-    argc->setName("argc");
-    auto* argv{entry_fn->getArg(1)};
-    argv->setName("argv");
-
-    auto* raw_argc_i64{builder_.CreateSExtOrTrunc(argc, types_.get_usize_ty(), "argc.i64")};
-
-    // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
-    auto* max_args{usize_const(128)};
-    auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
-    auto* argc_i64{builder_.CreateSelect(
-        builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
-
-    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", entry_fn)};
-    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", entry_fn)};
-    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
-    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
-
-    auto* i_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "i")};
-    builder_.CreateStore(usize_const(0), i_var);
-    builder_.CreateBr(loop_cond);
-
-    // Loop condition: i < argc_i64
-    builder_.SetInsertPoint(loop_cond);
-    auto* cur_i{builder_.CreateLoad(types_.get_usize_ty(), i_var, "cur.i")};
-    auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
-    builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-    // Loop body: measure strlen(argv[i]) and store into slice_array[i]
-    builder_.SetInsertPoint(loop_body);
-    auto* argv_elem_ptr{builder_.CreateGEP(types_.get_ptr_ty(), argv, {cur_i}, "argv.elem.ptr")};
-    auto* str_ptr{builder_.CreateLoad(types_.get_ptr_ty(), argv_elem_ptr, "str.ptr")};
-
-    // Calculate strlen(str_ptr) via a sub-loop
-    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", entry_fn)};
-    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
-    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
-
-    auto* len_var{builder_.CreateAlloca(types_.get_usize_ty(), nullptr, "str.len")};
-    builder_.CreateStore(usize_const(0), len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_cond);
-    auto* cur_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "cur.len")};
-    auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
-    auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
-    auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
-    builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
-
-    builder_.SetInsertPoint(str_len_body);
-    auto* next_len{builder_.CreateAdd(cur_len, usize_const(1), "next.len")};
-    builder_.CreateStore(next_len, len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_end);
-    auto* final_len{builder_.CreateLoad(types_.get_usize_ty(), len_var, "final.len")};
-
-    // Store { str_ptr, final_len } into slice_array[cur_i]
-    auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
-    auto* dest_data_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
-    auto* dest_len_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
-    builder_.CreateStore(str_ptr, dest_data_field);
-    builder_.CreateStore(final_len, dest_len_field);
-    builder_.CreateBr(loop_inc);
-
-    // Loop increment: i++
-    builder_.SetInsertPoint(loop_inc);
-    auto* inc_i{builder_.CreateAdd(cur_i, usize_const(1), "inc.i")};
-    builder_.CreateStore(inc_i, i_var);
-    builder_.CreateBr(loop_cond);
-
-    builder_.SetInsertPoint(loop_end);
-    auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-    auto* outer_data{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-    auto* outer_len{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-    builder_.CreateStore(slice_array, outer_data);
-    builder_.CreateStore(argc_i64, outer_len);
-    return builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-}
-
-auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
-                                          stdx::option<std::string_view> user_runner_name,
-                                          bool recover_args) -> stdx::box<llvm::Module> {
-    PROFILE_FUNCTION();
-    user_main_name_ =
-        user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
-    is_executable_ = true;
+    is_executable_  = true;
+    user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
     declare_functions(gir_mod);
     define_test_take_skipped();
     lower_definitions(gir_mod);
-    emit_test_entry_wrapper(gir_mod, recover_args);
     finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
-    -> llvm::Function* {
+// `@testFunctions()`: a `[]builtin.Test` over every test function, built once
+auto llvm_lowering::emit_test_table() -> llvm::Value* {
     PROFILE_FUNCTION();
-    auto* main_fn{create_c_entry_function()};
-
     auto* slice_ty{types_.translate_slice_type()};
+    if (auto* table{llvm_module_->getGlobalVariable("__ghoti_tests_slice", true)}) {
+        return builder_.CreateLoad(slice_ty, table, "tests.slice");
+    }
+
     // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
     auto* loc_struct_ty{
         llvm::StructType::get(context_, {slice_ty, types_.get_int32_ty(), types_.get_int32_ty()})};
-    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: fn(): bool }`
+    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: extern fn(): bool }`
     auto* test_struct_ty{
         llvm::StructType::get(context_, {slice_ty, loc_struct_ty, types_.get_ptr_ty()})};
 
-    const auto& test_fns{gir_mod.get_test_functions()};
+    const auto& test_fns{gir_module_->get_test_functions()};
     const auto  test_count{test_fns.size()};
 
-    std::vector<llvm::Constant*> test_descriptors;
-    test_descriptors.reserve(test_count);
+    const auto string_slice{[&](std::string_view text, std::string_view name) {
+        auto* data{llvm::ConstantDataArray::getString(context_, text, false)};
+        auto* gvar{new llvm::GlobalVariable(
+            *llvm_module_, data->getType(), true, llvm::GlobalValue::InternalLinkage, data, name)};
+        return llvm::ConstantStruct::get(
+            slice_ty, {gvar, llvm::ConstantInt::get(types_.get_usize_ty(), text.size())});
+    }};
 
+    std::vector<llvm::Constant*> descriptors;
+    descriptors.reserve(test_count);
     for (usize i{0}; i < test_count; ++i) {
         const auto* fn{test_fns[i]};
-        const auto& fn_symbol_name{fn->get_name()};
-        auto*       test_llvm_fn{llvm_module_->getFunction(fn_symbol_name)};
-        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+        auto*       test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+        ASSERT(test_llvm_fn, "Test function must already be declared before the test table");
 
-        const auto& desc_name{fn->get_test_desc().empty() ? fn_symbol_name : fn->get_test_desc()};
-        auto*       name_str{llvm::ConstantDataArray::getString(context_, desc_name, false)};
-        auto*       name_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                       name_str->getType(),
-                                                       true,
-                                                       llvm::GlobalValue::InternalLinkage,
-                                                       name_str,
-                                                       fmt::format("str.test_name.{}", i))};
-        auto*       name_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {name_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), desc_name.size())})};
-
-        const auto file_path{fn->get_test_file().empty() ? gir_mod.get_ast_module().path.string()
-                                                         : fn->get_test_file()};
-        auto*      file_str{llvm::ConstantDataArray::getString(context_, file_path, false)};
-        auto*      file_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                      file_str->getType(),
-                                                      true,
-                                                      llvm::GlobalValue::InternalLinkage,
-                                                      file_str,
-                                                      fmt::format("str.test_file.{}", i))};
-        auto*      file_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {file_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), file_path.size())})};
-
-        auto* line_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
-        auto* col_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
-        auto* loc_val{llvm::ConstantStruct::get(loc_struct_ty, {file_slice, line_val, col_val})};
-
-        test_descriptors.emplace_back(
-            llvm::ConstantStruct::get(test_struct_ty, {name_slice, loc_val, test_llvm_fn}));
+        const auto& desc{fn->get_test_desc().empty() ? fn->get_name() : fn->get_test_desc()};
+        const auto  file{fn->get_test_file().empty() ? gir_module_->get_ast_module().path.string()
+                                                     : fn->get_test_file()};
+        auto*       line{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
+        auto*       col{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
+        auto*       loc{llvm::ConstantStruct::get(
+            loc_struct_ty, {string_slice(file, fmt::format("str.test_file.{}", i)), line, col})};
+        descriptors.emplace_back(llvm::ConstantStruct::get(
+            test_struct_ty,
+            {string_slice(desc, fmt::format("str.test_name.{}", i)), loc, test_llvm_fn}));
     }
 
-    auto* test_array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
-    auto* test_array_init{test_count > 0 ? llvm::ConstantArray::get(test_array_ty, test_descriptors)
-                                         : llvm::ConstantAggregateZero::get(test_array_ty)};
-    auto* test_array_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   test_array_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_array_init,
-                                                   "__ghoti_tests_data")};
-
-    auto* test_slice_const{llvm::ConstantStruct::get(
-        slice_ty, {test_array_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)})};
-    auto* test_slice_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   slice_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_slice_const,
-                                                   "__ghoti_tests_slice")};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    emit_x87_precision_init();
-
-    // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
-    auto* runner_fn{llvm_module_->getFunction("test_runner")};
-    VERIFY(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
-
-    auto* args_slice_val{emit_argv_slice(main_fn, recover_args)};
-    auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
-    auto* call_res{builder_.CreateCall(runner_fn, {args_slice_val, test_slice_val})};
-    if (runner_fn->getReturnType()->isIntegerTy(32)) {
-        emit_entry_exit(call_res);
-    } else {
-        emit_entry_exit(builder_.getInt32(0));
-    }
-
-    return main_fn;
+    auto* array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
+    auto* array_init{test_count > 0 ? llvm::ConstantArray::get(array_ty, descriptors)
+                                    : llvm::ConstantAggregateZero::get(array_ty)};
+    auto* array{new llvm::GlobalVariable(*llvm_module_,
+                                         array_ty,
+                                         true,
+                                         llvm::GlobalValue::InternalLinkage,
+                                         array_init,
+                                         "__ghoti_tests_data")};
+    auto* table{new llvm::GlobalVariable(
+        *llvm_module_,
+        slice_ty,
+        true,
+        llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(
+            slice_ty, {array, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)}),
+        "__ghoti_tests_slice")};
+    return builder_.CreateLoad(slice_ty, table, "tests.slice");
 }
 
 auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
@@ -1618,7 +1172,8 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     // Non x86-64 Windows links no runtime that could provide a probe symbol
     if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
     if (fn.get_calling_conv() != ast::calling_convention::C) {
-        llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
+        llvm_fn->setCallingConv(
+            to_llvm_callconv(fn.get_calling_conv(), llvm::Triple{llvm_module_->getTargetTriple()}));
     }
     apply_fn_attributes(*llvm_fn, fn.get_attributes());
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
@@ -1898,13 +1453,21 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
     case gir::instruction_kind::MAKE_CALLABLE:   result_val = emit_make_callable(inst); break;
-    case gir::instruction_kind::CALL:            result_val = emit_call(inst); break;
-    case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
-    case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
-    case gir::instruction_kind::RET:             emit_ret(inst); return;
-    case gir::instruction_kind::GOTO:            emit_goto(inst); return;
-    case gir::instruction_kind::COND_GOTO:       emit_cond_goto(inst); return;
-    case gir::instruction_kind::UNREACHABLE:     emit_unreachable(); return;
+    case gir::instruction_kind::CALL:            {
+        auto*              block{builder_.GetInsertBlock()};
+        llvm::Instruction* before{block && !block->empty() ? &block->back() : nullptr};
+        result_val = emit_call(inst);
+        if (inst.call_modifier && block) {
+            apply_call_modifier(*inst.call_modifier, *block, before);
+        }
+        break;
+    }
+    case gir::instruction_kind::BUILTIN_CALL: result_val = emit_builtin_call(inst); break;
+    case gir::instruction_kind::INLINE_ASM:   result_val = emit_inline_asm(inst); break;
+    case gir::instruction_kind::RET:          emit_ret(inst); return;
+    case gir::instruction_kind::GOTO:         emit_goto(inst); return;
+    case gir::instruction_kind::COND_GOTO:    emit_cond_goto(inst); return;
+    case gir::instruction_kind::UNREACHABLE:  emit_unreachable(); return;
     }
 
     if (result_val && inst.result) { set_local(*inst.result, result_val); }
@@ -2431,6 +1994,31 @@ auto llvm_lowering::resolve_named_constant(std::string_view name) -> llvm::Const
     return nullptr;
 }
 
+// `@call(modifier, ...)`: finds the call lowering just made after `before` and marks it
+auto llvm_lowering::apply_call_modifier(ast::call_modifier modifier,
+                                        llvm::BasicBlock&  block,
+                                        llvm::Instruction* before) -> void {
+    llvm::CallInst* call{nullptr};
+    for (auto it{block.rbegin()}; it != block.rend() && &*it != before; ++it) {
+        if (auto* candidate{llvm::dyn_cast<llvm::CallInst>(&*it)};
+            candidate && !llvm::isa<llvm::IntrinsicInst>(candidate)) {
+            call = candidate;
+            break;
+        }
+    }
+    if (!call) { return; }
+    switch (modifier) {
+    case ast::call_modifier::NEVER_TAIL: call->setTailCallKind(llvm::CallInst::TCK_NoTail); break;
+    case ast::call_modifier::ALWAYS_TAIL:
+        call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        break;
+    case ast::call_modifier::NEVER_INLINE:  call->addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::call_modifier::ALWAYS_INLINE: call->addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::COMPILE_TIME:  break;
+    }
+}
+
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     if (inst.callee_name) {
@@ -2521,8 +2109,10 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
-    call_inst->setCallingConv(is_erased ? llvm::CallingConv::C
-                                        : to_llvm_callconv(ind_fn_data->conv));
+    call_inst->setCallingConv(
+        is_erased
+            ? llvm::CallingConv::C
+            : to_llvm_callconv(ind_fn_data->conv, llvm::Triple{llvm_module_->getTargetTriple()}));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
 }
@@ -2602,7 +2192,7 @@ auto llvm_lowering::get_or_create_fn_trampoline(const sema::types::function& fn)
     std::vector<llvm::Value*> forwarded;
     for (auto& arg : trampoline->args() | std::views::drop(1)) { forwarded.emplace_back(&arg); }
     auto* call{builder_.CreateCall(thin_ty, trampoline->getArg(0), forwarded)};
-    call->setCallingConv(to_llvm_callconv(fn.conv));
+    call->setCallingConv(to_llvm_callconv(fn.conv, llvm::Triple{llvm_module_->getTargetTriple()}));
     call->setTailCall();
     if (thin_ty->getReturnType()->isVoidTy()) {
         builder_.CreateRetVoid();
@@ -2695,27 +2285,54 @@ auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand)
     return call;
 }
 
+// `@llvmIntrinsic(name, ...)`: sema already matched the types against the intrinsic, so its
+// overloads follow from the lowered operands
+auto llvm_lowering::emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value* {
+    const auto id{llvm::Intrinsic::lookupIntrinsicID(*inst.callee_name)};
+    ASSERT(id != llvm::Intrinsic::not_intrinsic, "@llvmIntrinsic names an intrinsic");
+
+    std::vector<llvm::Value*> args;
+    std::vector<llvm::Type*>  params;
+    for (const auto& operand : inst.operands) {
+        auto* arg{lower_value(operand)};
+        args.emplace_back(arg);
+        params.emplace_back(arg->getType());
+    }
+    auto* ret{inst.type ? types_.translate(*inst.type) : types_.get_void_ty()};
+    auto* fn_type{llvm::FunctionType::get(ret, params, false)};
+
+    llvm::SmallVector<llvm::Type*, 4> overloads;
+    const bool matched{llvm::Intrinsic::isSignatureValid(id, fn_type, overloads)};
+    ASSERT(matched, "@llvmIntrinsic's types were checked against the intrinsic");
+    auto* callee{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, overloads)};
+    return builder_.CreateCall(callee, args);
+}
+
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
-    stdx::option<syntax::token_type_t> builtin_tok;
+    if (inst.callee_name && inst.callee_name->starts_with("llvm.")) {
+        return emit_llvm_intrinsic_call(inst);
+    }
+    stdx::option<syntax::builtin_t> builtin_tok;
     if (inst.callee_name) {
-        builtin_tok = syntax::get_builtin_opt(*inst.callee_name);
+        builtin_tok = syntax::builtin_from_name(*inst.callee_name);
         if (!builtin_tok && !inst.callee_name->starts_with('@')) {
             const auto at_name{fmt::format("@{}", *inst.callee_name)};
-            builtin_tok = syntax::get_builtin_opt(at_name);
+            builtin_tok = syntax::builtin_from_name(at_name);
         }
     }
 
     if (builtin_tok) {
         switch (*builtin_tok) {
-        case syntax::token_type_t::BUILTIN_PANIC:
-        case syntax::token_type_t::BUILTIN_TRAP:  {
+        case syntax::builtin_t::PANIC:
+        case syntax::builtin_t::TRAP:  {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
+        case syntax::builtin_t::TEST_FUNCTIONS: return emit_test_table();
+        case syntax::builtin_t::RETURN_ADDRESS: {
             // Overloaded on the code pointer it yields, which lives in the program address space
             const auto code_space{llvm_module_->getDataLayout().getProgramAddressSpace()};
             auto*      retaddr_fn{
@@ -2727,7 +2344,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (!target_ty) { target_ty = builder_.getIntPtrTy(llvm_module_->getDataLayout()); }
             return builder_.CreatePtrToInt(call_val, target_ty, "return_address");
         }
-        case syntax::token_type_t::BUILTIN_EXPECT: {
+        case syntax::builtin_t::EXPECT: {
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
@@ -2743,7 +2360,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (inst.result) { set_local(*inst.result, cond_val); }
             return cond_val;
         }
-        case syntax::token_type_t::BUILTIN_REQUIRE: {
+        case syntax::builtin_t::REQUIRE: {
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
@@ -2763,9 +2380,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ASSERT:
-        case syntax::token_type_t::BUILTIN_VERIFY: {
-            const bool is_verify{*builtin_tok == syntax::token_type_t::BUILTIN_VERIFY};
+        case syntax::builtin_t::ASSERT:
+        case syntax::builtin_t::VERIFY: {
+            const bool is_verify{*builtin_tok == syntax::builtin_t::VERIFY};
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
@@ -2787,7 +2404,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SKIP: {
+        case syntax::builtin_t::SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
             emit_context_handler_call(inst, "skip_handler", 0UZ, 1UZ);
             // A test returns right after; a `@[testing]` helper unwinds to it here
@@ -2799,7 +2416,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SRC: {
+        case syntax::builtin_t::SRC: {
             ASSERT(inst.type, "@src must carry its SourceLocation result type");
             ASSERT(inst.operands.size() >= 3, "@src expects [file, line, column] operands");
             auto* struct_ty{llvm::cast<llvm::StructType>(types_.translate(*inst.type))};
@@ -2825,22 +2442,22 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (col_v) { agg = builder_.CreateInsertValue(agg, col_v, {2U}); }
             return agg;
         }
-        case syntax::token_type_t::BUILTIN_TARGET_OS: {
+        case syntax::builtin_t::TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
+        case syntax::builtin_t::TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{
                 std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        case syntax::builtin_t::TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{triple.str(), inst.type});
         }
 
         // Memory operations
-        case syntax::token_type_t::BUILTIN_MEMCPY: {
+        case syntax::builtin_t::MEMCPY: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2850,7 +2467,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMSET: {
+        case syntax::builtin_t::MEMSET: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -2858,7 +2475,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+        case syntax::builtin_t::MEMMOVE: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2870,7 +2487,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
 
         // C Varargs
-        case syntax::token_type_t::BUILTIN_C_VA_START: {
+        case syntax::builtin_t::C_VA_START: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2879,7 +2496,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_COPY: {
+        case syntax::builtin_t::C_VA_COPY: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2892,7 +2509,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_END: {
+        case syntax::builtin_t::C_VA_END: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2901,7 +2518,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_ARG: {
+        case syntax::builtin_t::C_VA_ARG: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
                 if (auto* ty{types_.translate(*inst.type)}) { return emit_va_arg(list, ty); }
@@ -2909,7 +2526,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_CLZ: {
+        case syntax::builtin_t::CLZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2919,7 +2536,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_CTZ: {
+        case syntax::builtin_t::CTZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2929,7 +2546,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_POPCOUNT: {
+        case syntax::builtin_t::POPCOUNT: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2941,7 +2558,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
 
         // Fused multiply add
-        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+        case syntax::builtin_t::MUL_ADD: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             const usize base_idx{inst.operands.size() >= 4 ? 1u : 0u};
             auto*       a{lower_value(inst.operands[base_idx])};
@@ -2959,24 +2576,24 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_SQRT:
-        case syntax::token_type_t::BUILTIN_SIN:
-        case syntax::token_type_t::BUILTIN_COS:
-        case syntax::token_type_t::BUILTIN_TAN:
-        case syntax::token_type_t::BUILTIN_EXP:
-        case syntax::token_type_t::BUILTIN_EXP2:
-        case syntax::token_type_t::BUILTIN_LOG:
-        case syntax::token_type_t::BUILTIN_LOG2:
-        case syntax::token_type_t::BUILTIN_LOG10:
-        case syntax::token_type_t::BUILTIN_FLOOR:
-        case syntax::token_type_t::BUILTIN_CEIL:  {
+        case syntax::builtin_t::SQRT:
+        case syntax::builtin_t::SIN:
+        case syntax::builtin_t::COS:
+        case syntax::builtin_t::TAN:
+        case syntax::builtin_t::EXP:
+        case syntax::builtin_t::EXP2:
+        case syntax::builtin_t::LOG:
+        case syntax::builtin_t::LOG2:
+        case syntax::builtin_t::LOG10:
+        case syntax::builtin_t::FLOOR:
+        case syntax::builtin_t::CEIL:  {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* operand{lower_value(inst.operands[0])};
             if (!operand || !operand->getType()->isFloatingPointTy()) { return nullptr; }
             return emit_math_call(*gir::semantics::math_function_of(*builtin_tok), operand);
         }
 
-        case syntax::token_type_t::BUILTIN_ABS: {
+        case syntax::builtin_t::ABS: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 if (val->getType()->isFloatingPointTy()) {
@@ -3001,7 +2618,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+        case syntax::builtin_t::FIELD_PARENT_PTR: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* field_ptr{lower_value(inst.operands[0])};
             if (!field_ptr || !inst.type) { return nullptr; }
@@ -3024,13 +2641,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
         }
 
-        case syntax::token_type_t::BUILTIN_MIN:
-        case syntax::token_type_t::BUILTIN_MAX: {
+        case syntax::builtin_t::MIN:
+        case syntax::builtin_t::MAX: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
-            const bool is_max{*builtin_tok == syntax::token_type_t::BUILTIN_MAX};
+            const bool is_max{*builtin_tok == syntax::builtin_t::MAX};
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (a->getType()->isFloatingPointTy()) {
                 // IEEE minimumNumber/maximumNumber, spelled out so every float type lowers on
@@ -3056,30 +2673,30 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return builder_.CreateCall(fn, {a, b});
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_TRUNC:
-        case syntax::token_type_t::BUILTIN_REM:       {
+        case syntax::builtin_t::DIV_TRUNC:
+        case syntax::builtin_t::REM:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
-            const bool is_rem{*builtin_tok == syntax::token_type_t::BUILTIN_REM};
+            const bool is_rem{*builtin_tok == syntax::builtin_t::REM};
             if (is_rem) {
                 return is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b);
             }
             return is_signed ? builder_.CreateSDiv(a, b) : builder_.CreateUDiv(a, b);
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_FLOOR:
-        case syntax::token_type_t::BUILTIN_MOD:       {
+        case syntax::builtin_t::DIV_FLOOR:
+        case syntax::builtin_t::MOD:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
-            const bool is_mod{*builtin_tok == syntax::token_type_t::BUILTIN_MOD};
+            const bool is_mod{*builtin_tok == syntax::builtin_t::MOD};
             if (!is_signed) {
                 return is_mod ? builder_.CreateURem(a, b) : builder_.CreateUDiv(a, b);
             }
@@ -3104,10 +2721,10 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 adjust, builder_.CreateSub(q, llvm::ConstantInt::get(a->getType(), 1)), q);
         }
 
-        case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+        case syntax::builtin_t::ADD_WITH_OVERFLOW:
+        case syntax::builtin_t::SUB_WITH_OVERFLOW:
+        case syntax::builtin_t::MUL_WITH_OVERFLOW:
+        case syntax::builtin_t::SHL_WITH_OVERFLOW: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
@@ -3118,7 +2735,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 
             llvm::Value* result{nullptr};
             llvm::Value* overflow{nullptr};
-            if (*builtin_tok == syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW) {
+            if (*builtin_tok == syntax::builtin_t::SHL_WITH_OVERFLOW) {
                 result = builder_.CreateShl(a, b);
                 auto* back{is_signed ? builder_.CreateAShr(result, b)
                                      : builder_.CreateLShr(result, b)};
@@ -3126,11 +2743,11 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             } else {
                 llvm::Intrinsic::ID id{};
                 switch (*builtin_tok) {
-                case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
+                case syntax::builtin_t::ADD_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::sadd_with_overflow
                                    : llvm::Intrinsic::uadd_with_overflow;
                     break;
-                case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
+                case syntax::builtin_t::SUB_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::ssub_with_overflow
                                    : llvm::Intrinsic::usub_with_overflow;
                     break;
@@ -3149,7 +2766,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return overflow;
         }
 
-        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+        case syntax::builtin_t::ATOMIC_LOAD: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             if (!ptr || !inst.type) { return nullptr; }
@@ -3161,7 +2778,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             load->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return load;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+        case syntax::builtin_t::ATOMIC_STORE: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -3171,7 +2788,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             store->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+        case syntax::builtin_t::ATOMIC_RMW: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -3182,8 +2799,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                             llvm::MaybeAlign(),
                                             to_llvm_ordering(inst.atomic_order.value_or(0)));
         }
-        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
-        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+        case syntax::builtin_t::CMPXCHG_WEAK:
+        case syntax::builtin_t::CMPXCHG_STRONG: {
             VERIFY(inst.operands.size() >= 4, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* expected{lower_value(inst.operands[1])};
@@ -3197,13 +2814,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                              llvm::MaybeAlign(),
                                              to_llvm_ordering(inst.atomic_order.value_or(0)),
                                              to_llvm_ordering(inst.atomic_fail_order.value_or(0)))};
-            cmpxchg->setWeak(*builtin_tok == syntax::token_type_t::BUILTIN_CMPXCHG_WEAK);
+            cmpxchg->setWeak(*builtin_tok == syntax::builtin_t::CMPXCHG_WEAK);
             auto* cx_result{builder_.CreateExtractValue(cmpxchg, {0U})};
             auto* success{builder_.CreateExtractValue(cmpxchg, {1U})};
             builder_.CreateStore(cx_result, out_ptr);
             return success;
         }
-        case syntax::token_type_t::BUILTIN_FENCE: {
+        case syntax::builtin_t::FENCE: {
             builder_.CreateFence(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }

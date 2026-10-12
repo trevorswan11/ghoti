@@ -1,0 +1,409 @@
+//! Program entry: what runs before `main` and after it returns.
+
+// A `[:0]u8` as its two words, for building argument slices from raw pointers
+const RawArg = extern struct {
+    ptr: ^u8,
+    len: usize,
+};
+
+const Arg = [:0]u8;
+
+// The length of a NUL-terminated string
+@[no_builtins] const c_strlen = fn(s: ^u8): usize {
+    let mut n: usize = 0;
+    while (s[n] != 0) : (n += 1) {}
+    return n;
+};
+
+// Fills `slots` with an argument slice per `argv` entry
+@[no_builtins] const args_from_argv = fn(argc: usize, argv: ^^u8, slots: ^mut RawArg): []Arg {
+    for (0..argc) |i| {
+        slots[i] = .{ .ptr = argv[i], .len = c_strlen(argv[i]) };
+    }
+    return @sliceFromPtr(@ptrCast(^mut Arg, slots), argc);
+};
+
+// Runs `main` or the tests, giving the exit code
+const run = fn(args: []Arg): i32 {
+    @cfg (testing) {
+        return builtin.test_runner(args, @testFunctions());
+    } else {
+        const info = @typeInfo(@TypeOf(@entryMain())).function;
+        if comptime (info.params.len == 1) {
+            if comptime (info.return_type == void) {
+                @entryMain()(args);
+                return 0;
+            } else {
+                return @entryMain()(args);
+            }
+        } else {
+            _ = args;
+            if comptime (info.return_type == void) {
+                @entryMain()();
+                return 0;
+            } else {
+                return @entryMain()();
+            }
+        }
+    }
+};
+
+// Whether the program reads its arguments: `main` taking them, or any test runner
+@cfg (testing) {
+    const wants_args = true;
+} else {
+    const wants_args = @typeInfo(@TypeOf(@entryMain())).function.params.len == 1;
+}
+
+// No arguments, for a program that doesn't read them
+const no_args = fn(): []Arg {
+    return @sliceFromPtr(@ptrFromInt(^mut Arg, @alignOf(Arg)), 0);
+};
+
+@cfg (os == .linux) {
+    comptime {
+        @export(linux_start, .{ .name = "_start" });
+        @export(linux_main, .{ .name = "__ghoti_linux_main" });
+    }
+
+    /// The kernel leaves `argc` at the stack pointer and `argv` after it. Room
+    /// for the argument slices is taken from the stack below them, and `main`'s result becomes
+    /// the `exit_group` status.
+    @[naked] const linux_start = fn() callconv(.c): void {
+        @cfg (arch == .x86_64) {
+            asm {
+                template:
+                    \\xorl %%ebp, %%ebp
+                    \\movq (%%rsp), %%rdi
+                    \\leaq 8(%%rsp), %%rsi
+                    \\movq %%rdi, %%rax
+                    \\shlq $4, %%rax
+                    \\subq %%rax, %%rsp
+                    \\andq $-16, %%rsp
+                    \\movq %%rsp, %%rdx
+                    \\call __ghoti_linux_main
+                    \\movl %%eax, %%edi
+                    \\movl $231, %%eax
+                    \\syscall
+                    \\ud2
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn, att),
+            };
+        } else @cfg (arch == .aarch64) {
+            asm {
+                template:
+                    \\mov x29, xzr
+                    \\mov x30, xzr
+                    \\ldr x0, [sp]
+                    \\add x1, sp, #8
+                    \\lsl x2, x0, #4
+                    \\mov x3, sp
+                    \\sub x3, x3, x2
+                    \\and x3, x3, #-16
+                    \\mov sp, x3
+                    \\mov x2, sp
+                    \\bl __ghoti_linux_main
+                    \\mov w8, #94
+                    \\svc #0
+                    \\brk #0
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn),
+            };
+        } else @cfg (arch == .riscv64) {
+            asm {
+                template:
+                    \\li s0, 0
+                    \\ld a0, 0(sp)
+                    \\addi a1, sp, 8
+                    \\slli t0, a0, 4
+                    \\sub t1, sp, t0
+                    \\andi sp, t1, -16
+                    \\mv a2, sp
+                    \\call __ghoti_linux_main
+                    \\li a7, 94
+                    \\ecall
+                    \\unimp
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn),
+            };
+        } else @cfg (arch == .riscv32) {
+            asm {
+                template:
+                    \\li s0, 0
+                    \\lw a0, 0(sp)
+                    \\addi a1, sp, 4
+                    \\slli t0, a0, 3
+                    \\sub t1, sp, t0
+                    \\andi sp, t1, -16
+                    \\mv a2, sp
+                    \\call __ghoti_linux_main
+                    \\li a7, 94
+                    \\ecall
+                    \\unimp
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn),
+            };
+        } else @cfg (arch == .arm or arch == .thumb) {
+            asm {
+                template:
+                    \\ldr r0, [sp]
+                    \\add r1, sp, #4
+                    \\lsl r3, r0, #3
+                    \\mov r2, sp
+                    \\sub r2, r2, r3
+                    \\bic r2, r2, #15
+                    \\mov sp, r2
+                    \\bl __ghoti_linux_main
+                    \\movs r7, #248
+                    \\svc #0
+                    \\udf #0
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn),
+            };
+        } else @cfg (arch == .loongarch64) {
+            asm {
+                template:
+                    \\move $fp, $zero
+                    \\ld.d $a0, $sp, 0
+                    \\addi.d $a1, $sp, 8
+                    \\slli.d $t0, $a0, 4
+                    \\sub.d $t1, $sp, $t0
+                    \\bstrins.d $t1, $zero, 3, 0
+                    \\move $sp, $t1
+                    \\move $a2, $sp
+                    \\bl __ghoti_linux_main
+                    \\ori $a7, $zero, 94
+                    \\syscall 0
+                    \\break 0
+                ,
+                clobbers: ("memory"),
+                options: (volatile, noreturn),
+            };
+        }
+    };
+
+    const linux_main = fn(argc: c_int, argv: ^^u8, slots: ^mut RawArg) callconv(.c): c_int {
+        return run(args_from_argv(@intCast(usize, argc), argv, slots));
+    };
+} else @cfg (os == .windows) {
+    extern("kernel32", "GetCommandLineW") const GetCommandLineW: extern fn() callconv(.winapi): ^u16;
+    extern("kernel32", "WideCharToMultiByte") const WideCharToMultiByte: extern fn(
+        code_page: u32,
+        flags: u32,
+        wide: ^u16,
+        wide_len: i32,
+        out: ^mut u8,
+        out_len: i32,
+        default_char: ^u8,
+        used_default: ^mut i32,
+    ) callconv(.winapi): i32;
+    extern("kernel32", "VirtualAlloc") const VirtualAlloc: extern fn(
+        address: ^mut opaque,
+        size: usize,
+        allocation_type: u32,
+        protect: u32,
+    ) callconv(.winapi): ^mut opaque;
+    extern("kernel32", "ExitProcess") const ExitProcess: extern fn(code: u32) callconv(.winapi): noreturn;
+
+    comptime {
+        @export(windows_main, .{ .name = "main" });
+    }
+
+    const CP_UTF8: u32 = 65001;
+    const MEM_COMMIT_RESERVE: u32 = 0x3000;
+    const PAGE_READWRITE: u32 = 4;
+
+    // Zeroed, writable pages for `size` bytes
+    const alloc = fn(size: usize): ^mut u8 {
+        return @ptrCast(
+            ^mut u8,
+            VirtualAlloc(nullptr, if (size == 0) 1 else size, MEM_COMMIT_RESERVE, PAGE_READWRITE),
+        );
+    };
+
+    const is_blank = fn(c: u8): bool {
+        return c == ' ' or c == '\t';
+    };
+
+    // Splits the UTF-8 command line `line` as `CommandLineToArgvW` does and gives the count.
+    // With `write`, each argument goes NUL-terminated to `out` and its slice to `slots`.
+    @[no_builtins] const split_command_line = fn(
+        line: []u8,
+        write: bool,
+        out: ^mut u8,
+        slots: ^mut RawArg,
+    ): usize {
+        let mut count: usize = 0;
+        let mut at: usize = 0;
+        let mut written: usize = 0;
+
+        // The program name ends at its closing quote or the first blank; backslashes are literal
+        {
+            let start = written;
+            if (at < line.len and line[at] == '"') {
+                at += 1;
+                while (at < line.len and line[at] != '"') : (at += 1) {
+                    if (write) {
+                        out[written] = line[at];
+                    }
+                    written += 1;
+                }
+                if (at < line.len) {
+                    at += 1;
+                }
+            } else {
+                while (at < line.len and !is_blank(line[at])) : (at += 1) {
+                    if (write) {
+                        out[written] = line[at];
+                    }
+                    written += 1;
+                }
+            }
+            if (write) {
+                out[written] = 0;
+            }
+            if (write) {
+                slots[count] =
+                    .{
+                        .ptr = @ptrFromInt(^u8, @intFromPtr(out) + start),
+                        .len = written - start,
+                    };
+            }
+            written += 1;
+            count += 1;
+        }
+
+        while (true) {
+            while (at < line.len and is_blank(line[at])) : (at += 1) {}
+            if (at >= line.len) {
+                break;
+            }
+
+            let start = written;
+            let mut quoted = false;
+            while (at < line.len and (quoted or !is_blank(line[at]))) {
+                let mut backslashes: usize = 0;
+                while (at < line.len and line[at] == '\\') : (at += 1) {
+                    backslashes += 1;
+                }
+                if (at < line.len and line[at] == '"') {
+                    // 2n backslashes and a quote: n backslashes, and the quote toggles quoting;
+                    // 2n + 1: n backslashes and a literal quote
+                    for (0..backslashes / 2) |_| {
+                        if (write) {
+                            out[written] = '\\';
+                        }
+                        written += 1;
+                    }
+                    if (backslashes % 2 == 1) {
+                        if (write) {
+                            out[written] = '"';
+                        }
+                        written += 1;
+                    } else if (quoted and at + 1 < line.len and line[at + 1] == '"') {
+                        // `""` inside quotes is a literal quote
+                        if (write) {
+                            out[written] = '"';
+                        }
+                        written += 1;
+                        at += 1;
+                    } else {
+                        quoted = !quoted;
+                    }
+                    at += 1;
+                } else {
+                    for (0..backslashes) |_| {
+                        if (write) {
+                            out[written] = '\\';
+                        }
+                        written += 1;
+                    }
+                    if (at < line.len and (quoted or !is_blank(line[at]))) {
+                        if (write) {
+                            out[written] = line[at];
+                        }
+                        written += 1;
+                        at += 1;
+                    }
+                }
+            }
+            if (write) {
+                out[written] = 0;
+            }
+            if (write) {
+                slots[count] =
+                    .{ .ptr = @ptrFromInt(^u8, @intFromPtr(out) + start), .len = written - start };
+            }
+            written += 1;
+            count += 1;
+        }
+        return count;
+    };
+
+    // The process's arguments, from its UTF-16 command line
+    const windows_args = fn(): []Arg {
+        let wide = GetCommandLineW();
+        let len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0) {
+            return no_args();
+        }
+        let bytes = @intCast(usize, len);
+        // One block for the program's lifetime, sized for the most arguments a line this long
+        // holds: blanks separate them, so at most `bytes / 2 + 1`, each at most its own text
+        // plus a NUL. The slices come first, where the block's page alignment suits them
+        let max_args = bytes / 2 + 1;
+        let slots_size = max_args * @sizeOf(RawArg);
+        let block = alloc(slots_size + bytes + bytes + max_args);
+        let slots = @ptrCast(^mut RawArg, block);
+        let line = @ptrFromInt(^mut u8, @intFromPtr(block) + slots_size);
+        let out = @ptrFromInt(^mut u8, @intFromPtr(line) + bytes);
+        _ = WideCharToMultiByte(CP_UTF8, 0, wide, -1, line, len, nullptr, nullptr);
+        let text = @sliceFromPtr(@ptrCast(^u8, line), bytes - 1);
+        let count = split_command_line(text, true, out, slots);
+        return @sliceFromPtr(@ptrCast(^mut Arg, slots), count);
+    };
+
+    /// The process entry, which Windows calls with no arguments
+    const windows_main = fn() callconv(.c): noreturn {
+        // `fninit` gives x87 the full 64-bit significand other targets start with
+        @cfg (arch == .x86 or arch == .x86_64) {
+            asm { template: "fninit", clobbers: ("fpsr", "fpcr", "dirflag"), options: (volatile) };
+        }
+        if comptime (wants_args) {
+            ExitProcess(@bitCast(u32, run(windows_args())));
+        } else {
+            ExitProcess(@bitCast(u32, run(no_args())));
+        }
+    };
+} else @cfg (os == .freestanding or os == .uefi) {
+    comptime {
+        @export(freestanding_main, .{ .name = "main" });
+    }
+
+    /// With no C runtime there are no arguments to read
+    const freestanding_main = fn() callconv(.c): c_int {
+        return run(no_args());
+    };
+} else {
+    extern("c", "malloc") const malloc: fn(size: usize): ^mut u8;
+
+    comptime {
+        @export(posix_main, .{ .name = "main" });
+    }
+
+    /// The C runtime's `main`
+    const posix_main = fn(argc: c_int, argv: ^^u8) callconv(.c): c_int {
+        if comptime (!wants_args) {
+            return run(no_args());
+        } else {
+            let n = @intCast(usize, argc);
+            let slots = @ptrCast(^mut RawArg, malloc(n * @sizeOf(RawArg) + 1));
+            return run(args_from_argv(n, argv, slots));
+        }
+    };
+}

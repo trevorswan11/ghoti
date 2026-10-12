@@ -25,10 +25,10 @@ namespace syms = sema::symbols;
 namespace {
 
 // Checks for the builtin's presence in the prelude table and its return type when called
-auto test_builtin_resolve(const syntax::builtin_t& builtin,
-                          std::string_view         mock_params,
-                          auto&&                   expected_type_fn,
-                          std::string_view         prelude = "") -> void {
+auto test_builtin_resolve(const syntax::builtin_def& builtin,
+                          std::string_view           mock_params,
+                          auto&&                     expected_type_fn,
+                          std::string_view           prelude = "") -> void {
     auto [ctx, idx]{helpers::resolve_and_check(
         fmt::format("{}const foo = {}({});", prelude, builtin.name, mock_params))};
 

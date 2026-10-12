@@ -526,7 +526,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
                           token_type_t::NORETURN}) {
         fns[tt] = ast::identifier_expr::parse;
     }
-    for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
+    fns[token_type_t::BUILTIN]           = ast::identifier_expr::parse;
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
     fns[token_type_t::COMPTIME]          = ast::parse_comptime_expr;
 

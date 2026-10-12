@@ -187,6 +187,12 @@ auto completion_items(const mod::module& module, source_location target) -> nloh
             {"kind", completion_kind::FUNCTION},
         });
     }
+    for (const auto& form : syntax::builtins::SPECIAL_FORMS) {
+        out.push_back({
+            {"label", std::string{form.name}},
+            {"kind", completion_kind::FUNCTION},
+        });
+    }
 
     for (const auto root_id : module.ast) {
         const auto decl{module.ast.get_as_opt<ast::decl_stmt>(root_id)};
