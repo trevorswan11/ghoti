@@ -585,6 +585,23 @@ struct function_header {
 // parameters. The `@` keeps it from colliding with anything but a raw identifier
 [[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
 
+// One hidden wrapper for a defaulted function: it takes the first `kept` parameters, binds the rest
+// to their defaults, and calls the function by `fn_name`
+struct default_wrapper {
+    usize             kept;
+    identifier_handle name;
+    function_handle   fn;
+};
+
+// The wrappers for the function literal just parsed at `fn`, re-parsing its parameters for each so
+// their defaults are nodes of their own. `keep_return_type` spells the result out instead of `auto`
+[[nodiscard]] auto build_default_wrappers(syntax::parser&        parser,
+                                          function_handle        fn,
+                                          const syntax::token_t& name_token,
+                                          std::string_view       fn_name,
+                                          bool                   keep_return_type)
+    -> stdx::result<std::vector<default_wrapper>, syntax::diagnostic>;
+
 // A parameter's declared name, or empty for a discarded `_`
 [[nodiscard]] auto parameter_name(const AST& ast, const function_expr::parameter& param)
     -> std::string_view;

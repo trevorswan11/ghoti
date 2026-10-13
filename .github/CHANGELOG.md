@@ -792,6 +792,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `comptime` and `type` parameters can have defaults: `fn(x: i32, T: type = i64): T`
     - Defaults belong to the declaration: a direct call, a method call, `Type.method(obj)`, a call through another module, and a `const` alias of the function (`const g = f;`) see them, while a function value (`let p = f;`, `^fn`, closures, `dyn Fn`) does not, and a function type cannot declare them
     - Calls that leave defaults off fold at compile time like any other call
+    - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound
+    - An implementation inherits its interface's defaults; it may repeat them as written, but adding one or changing one is an error
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

@@ -2908,6 +2908,50 @@ auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
 auto type_resolver::redirect_to_default_wrapper(ast::node_id          id,
                                                 const ast::call_expr& call,
                                                 usize                 written_args) -> bool {
+    if (redirect_by_declaration(id, call, written_args)) { return true; }
+    const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
+    return dot && redirect_to_default_member(id, *dot, written_args);
+}
+
+auto type_resolver::redirect_to_default_member(ast::node_id         id,
+                                               const ast::dot_expr& dot,
+                                               usize                written_args) -> bool {
+    auto&      ast{resolving_.ast};
+    const auto method{ast.get_as_opt<ast::identifier_expr>(dot.member)};
+    if (!method) { return false; }
+
+    const auto            location{ast.location_of(dot.member)};
+    const auto            stable{ast.intern(ast::default_wrapper_name(method->name, written_args))};
+    const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
+    const auto member{ast::identifier_handle{ast.add_node(tok, tok, ast::identifier_expr{stable})}};
+    resolving_.sync_side_tables_for_new_node();
+    const auto callee{ast::expr_handle{
+        ast.add_node(tok, tok, ast::dot_expr{.object = dot.object, .member = member})}};
+    resolving_.sync_side_tables_for_new_node();
+
+    // Resolved as a callee, the way `resolve_call` does, keeping quiet when there's no such member
+    const auto diags_before{ctx_.diags.size()};
+    {
+        const mutating_context_guard callee_g{resolving_callee_, false};
+        callee_dots_.insert(callee.get_index());
+        const auto prev_callee{direct_callee_};
+        direct_callee_ = member.get_index();
+        resolve(callee);
+        direct_callee_ = prev_callee;
+        callee_dots_.erase(callee.get_index());
+    }
+    const auto found{last_type_.take()};
+    if (!found || found->is_poison()) {
+        (void)ctx_.diags.split_off(diags_before);
+        return false;
+    }
+    ast.get_as_mut<ast::call_expr>(id).function = callee;
+    return true;
+}
+
+auto type_resolver::redirect_by_declaration(ast::node_id          id,
+                                            const ast::call_expr& call,
+                                            usize                 written_args) -> bool {
     auto&      ast{resolving_.ast};
     const auto dot{ast.get_as_opt<ast::dot_expr>(call.function)};
     const auto named{dot ? ast::node_id{dot->member} : ast::node_id{call.function}};
@@ -14538,6 +14582,79 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
     return false;
 }
 
+namespace {
+
+// A node's source text, which `end_location_of` ends just past
+auto node_source(const mod::module_t& module, ast::node_id id) -> std::string_view {
+    const std::string_view source{module.source};
+    const auto             offset_of{[&](const source_location& loc) -> usize {
+        usize offset{0};
+        for (usize line{0}; line < loc.line && offset < source.size(); ++line) {
+            const auto newline{source.find('\n', offset)};
+            if (newline == std::string_view::npos) { return source.size(); }
+            offset = newline + 1;
+        }
+        return std::min(offset + loc.column, source.size());
+    }};
+    const auto             start{offset_of(module.ast.location_of(id))};
+    const auto             end{offset_of(module.ast.end_location_of(id))};
+    return start < end ? source.substr(start, end - start) : std::string_view{};
+}
+
+// Whether two spellings differ only in whitespace
+auto same_spelling(std::string_view lhs, std::string_view rhs) -> bool {
+    const auto is_space{[](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }};
+    auto       l{lhs | std::views::filter([&](char c) { return !is_space(c); })};
+    auto       r{rhs | std::views::filter([&](char c) { return !is_space(c); })};
+    return std::ranges::equal(l, r);
+}
+
+} // namespace
+
+auto type_resolver::check_impl_defaults(const impl_record&        rec,
+                                        const types::interface_t& iface,
+                                        const mod::module_t&      cmod) -> void {
+    const auto iface_name{ctx_.type_display_name(*rec.interface_type)};
+    for (usize i{0}; i < iface.method_names.size(); ++i) {
+        const auto name{iface.method_names[i]};
+        const auto supplied{rec.find_method(name)};
+        if (!supplied) { continue; }
+        const auto& want{
+            iface.enclosing.ast.get_as<ast::function_expr>(iface.method_decl(i).signature)};
+        const auto decl{cmod.ast.get_as_opt<ast::decl_stmt>(supplied->decl)};
+        if (!decl || !decl->value) { continue; }
+        const auto have{cmod.ast.get_as_opt<ast::function_expr>(*decl->value)};
+        if (!have || have->parameters.size() != want.parameters.size()) { continue; }
+
+        // The interface's defaults are the ones every call sees, through `dyn` or not
+        for (usize p{0}; p < have->parameters.size(); ++p) {
+            const auto& have_default{have->parameters[p].default_value};
+            if (!have_default) { continue; }
+            const auto& want_default{want.parameters[p].default_value};
+            if (!want_default) {
+                ctx_.diags.emplace_back(
+                    fmt::format("method `{}`: parameter {} has a default `{}` doesn't declare; "
+                                "an implementation can only repeat its interface's defaults",
+                                name,
+                                p + 1,
+                                iface_name),
+                    error::IMPL_SIGNATURE_MISMATCH,
+                    cmod.ast.location_of(*have_default));
+            } else if (!same_spelling(node_source(cmod, *have_default),
+                                      node_source(iface.enclosing, *want_default))) {
+                ctx_.diags.emplace_back(
+                    fmt::format("method `{}`: parameter {}'s default differs from `{}`'s `{}`",
+                                name,
+                                p + 1,
+                                iface_name,
+                                node_source(iface.enclosing, *want_default)),
+                    error::IMPL_SIGNATURE_MISMATCH,
+                    cmod.ast.location_of(*have_default));
+            }
+        }
+    }
+}
+
 auto type_resolver::check_impl_conformance(const impl_record& rec, const types::interface_t& iface)
     -> void {
     PROFILE_FUNCTION();
@@ -14622,6 +14739,8 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                 method_loc);
         }
     }
+
+    check_impl_defaults(rec, iface, cmod);
 
     // Every required associated type must be bound by the impl or defaulted by the interface.
     for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {

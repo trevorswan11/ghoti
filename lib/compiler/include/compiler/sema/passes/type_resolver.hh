@@ -389,6 +389,15 @@ class type_resolver {
     [[nodiscard]] auto redirect_to_default_wrapper(ast::node_id          id,
                                                    const ast::call_expr& call,
                                                    usize                 written_args) -> bool;
+    // Through the callee's own declaration, following `const` aliases
+    [[nodiscard]] auto redirect_by_declaration(ast::node_id          id,
+                                               const ast::call_expr& call,
+                                               usize                 written_args) -> bool;
+    // `obj.m(...)` with `m@default<k>` on what `obj` reaches: an interface's default method for a
+    // `dyn` object, a bound generic, or a type inheriting the interface's defaults
+    [[nodiscard]] auto redirect_to_default_member(ast::node_id         id,
+                                                  const ast::dot_expr& dot,
+                                                  usize                written_args) -> bool;
 
     // Aggregate synthesis for `@Struct`/`@Union`/`@Enum`
     [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
@@ -741,6 +750,10 @@ class type_resolver {
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
     // Checks required methods present & signature-compatible, required associated items bound, no
     // stray members.
+    // An impl's method may only repeat the defaults its interface declares, spelled the same
+    auto check_impl_defaults(const impl_record&        rec,
+                             const types::interface_t& iface,
+                             const mod::module_t&      cmod) -> void;
     auto check_impl_conformance(const impl_record& rec, const types::interface_t& iface) -> void;
     // For each interface default method the impl does not override, re-type its body against the
     // concrete target so cross-module defaults work
