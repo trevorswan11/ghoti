@@ -168,7 +168,8 @@ auto module_manager::try_get(const std::filesystem::path& path)
 
     auto mod{stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)})};
     syntax::parser p{mod->source};
-    auto           diagnostics{p.consume(mod->ast, *arena_)};
+    p.enable_default_wrappers();
+    auto diagnostics{p.consume(mod->ast, *arena_)};
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());
@@ -190,7 +191,8 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
                                                std::filesystem::path{},
                                                source_file{std::string{source}});
     syntax::parser p{builtin_module_->source};
-    const auto     diagnostics{p.consume(builtin_module_->ast, *arena_)};
+    p.enable_default_wrappers();
+    const auto diagnostics{p.consume(builtin_module_->ast, *arena_)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
 
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
@@ -213,7 +215,8 @@ auto module_manager::get_or_create_start_module(const std::filesystem::path& pat
     start_module_ =
         stdx::make_box<module_t>(path, path.parent_path(), source_file{std::string{source}});
     syntax::parser p{start_module_->source};
-    auto           diagnostics{p.consume(start_module_->ast, *arena_)};
+    p.enable_default_wrappers();
+    auto diagnostics{p.consume(start_module_->ast, *arena_)};
 
     start_module_->sema_side_tables.resize(start_module_->ast.get_pool_sizes());
     start_module_->parse_diagnostics.reserve(diagnostics.size());

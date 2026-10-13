@@ -31,7 +31,7 @@ TEST_CASE("Function missing return type") {
 TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
     helpers::test_parser_fail("fn(x = 1): i32;",
                               syntax::diagnostic{"Function parameters must be explicitly typed",
-                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                                 syntax::error::MISSING_EXPLICIT_TYPE,
                                                  0,
                                                  7});
 }
@@ -86,11 +86,21 @@ TEST_CASE("Out-of-place variadic parameter") {
             "Expected ')', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
-TEST_CASE("Default function parameter") {
-    helpers::test_parser_fail("fn(a: A = 2): i32;",
-                              syntax::diagnostic{"Function parameters may not have default values",
-                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                                 std::pair{0UZ, 6UZ}});
+TEST_CASE("A function type cannot give a parameter a default value") {
+    helpers::test_parser_fail(
+        "fn(a: A = 2): i32;",
+        syntax::diagnostic{"Only a function with a body or an interface method signature can give "
+                           "a parameter a default value",
+                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                           std::pair{0UZ, 10UZ}});
+}
+
+TEST_CASE("Default parameter values must be trailing") {
+    helpers::test_parser_fail(
+        "fn(a: i32 = 1, b: i32): i32 { return a + b; };",
+        syntax::diagnostic{"A parameter after one with a default value needs a default value too",
+                           syntax::error::FN_PARAMETER_DEFAULT_NOT_TRAILING,
+                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Noreturn function types") {

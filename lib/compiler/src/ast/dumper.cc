@@ -318,9 +318,14 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
 
                            // An untyped pack (`rest...`) has no type to dump.
                            if (parameter.explicit_type.is_valid()) {
-                               const indent::guard g_type{indent_, true};
+                               const indent::guard g_type{indent_, !parameter.default_value};
                                fmt::print(out_, "{}Type: ", indent_.current_branch());
                                dump(parameter.explicit_type);
+                           }
+                           if (parameter.default_value) {
+                               const indent::guard g_default{indent_, true};
+                               fmt::print(out_, "{}Default: ", indent_.current_branch());
+                               dump(**parameter.default_value);
                            }
                        });
     }

@@ -2905,6 +2905,75 @@ auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
     return ast::identifier_handle{id};
 }
 
+auto type_resolver::redirect_to_default_wrapper(ast::node_id          id,
+                                                const ast::call_expr& call,
+                                                usize                 written_args) -> bool {
+    auto&      ast{resolving_.ast};
+    const auto dot{ast.get_as_opt<ast::dot_expr>(call.function)};
+    const auto named{dot ? ast::node_id{dot->member} : ast::node_id{call.function}};
+    if (!ast.get_as_opt<ast::identifier_expr>(named)) { return false; }
+
+    // Only a call naming the declaration sees its defaults, through `const` aliases; a function
+    // value has none. `object` is what reaches the declaring scope (`mod` in `mod.f`)
+    stdx::option<ast::expr_handle> object;
+    if (dot) { object.emplace(dot->object); }
+    auto                      declaration{resolving_.get_identifier_declaration(named)};
+    const ast::function_expr* fn{nullptr};
+    std::string_view          fn_name;
+    constexpr u32             MAX_ALIAS_DEPTH{8};
+    for (u32 depth{0}; depth < MAX_ALIAS_DEPTH && !fn; ++depth) {
+        if (!declaration || !declaration->owner || !declaration->decl) { return false; }
+        const auto& owner{*declaration->owner};
+        const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
+        if (!decl || !decl->value) { return false; }
+        if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+            fn      = &*literal;
+            fn_name = owner.ast.get_as<ast::identifier_expr>(decl->name).name;
+            break;
+        }
+
+        // `const g = f;` / `const g = mod.f;`, whose value this module can name again
+        if (!decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
+            decl->has_modifier(ast::decl_modifiers::MUT)) {
+            return false;
+        }
+        if (owner.ast.get_as_opt<ast::identifier_expr>(*decl->value)) {
+            if (!object && &owner != &resolving_) { return false; }
+            declaration = owner.get_identifier_declaration(*decl->value);
+        } else if (const auto alias_dot{owner.ast.get_as_opt<ast::dot_expr>(*decl->value)}) {
+            if (object || &owner != &resolving_) { return false; }
+            object.emplace(alias_dot->object);
+            declaration = owner.get_identifier_declaration(alias_dot->member);
+        } else {
+            return false;
+        }
+    }
+    if (!fn) { return false; }
+
+    const auto first_default{std::ranges::find_if(
+        fn->parameters, [](const auto& param) { return param.default_value.has_value(); })};
+    if (first_default == fn->parameters.end() ||
+        written_args < static_cast<usize>(first_default - fn->parameters.begin()) ||
+        written_args >= fn->parameters.size()) {
+        return false;
+    }
+
+    const auto            location{ast.location_of(named)};
+    const auto            stable{ast.intern(ast::default_wrapper_name(fn_name, written_args))};
+    const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
+    const auto member{ast::identifier_handle{ast.add_node(tok, tok, ast::identifier_expr{stable})}};
+    resolving_.sync_side_tables_for_new_node();
+
+    ast::expr_handle callee{member};
+    if (object) {
+        callee = ast::expr_handle{
+            ast.add_node(tok, tok, ast::dot_expr{.object = *object, .member = member})};
+        resolving_.sync_side_tables_for_new_node();
+    }
+    ast.get_as_mut<ast::call_expr>(id).function = callee;
+    return true;
+}
+
 // Builds the `.<name> = <value>` accessor half of one synthesized initializer entry.
 auto type_resolver::synthesize_implicit_access(std::string_view name)
     -> ast::implicit_access_handle {
@@ -4112,6 +4181,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         const auto effective_arity{expanded.source_index.size()};
 
         const auto expected_arity{params.size() - param_offset - (has_pack_param ? 1UZ : 0UZ)};
+        // `self` written as the first argument (`Type.method(obj, ...)`) is no parameter's default
+        const usize explicit_self{function_type->has_self && !has_implicit_self ? 1UZ : 0UZ};
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            if (effective_arity < expected_arity && effective_arity >= explicit_self &&
+                redirect_to_default_wrapper(id, call, effective_arity - explicit_self)) {
+                return resolve_call(id, call);
+            }
+        }
         if (function_type->is_variadic || has_pack_param) {
             if (effective_arity < expected_arity) {
                 return last_type_.emplace(

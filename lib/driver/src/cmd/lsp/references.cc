@@ -1,5 +1,6 @@
 #include "driver/cmd/lsp/references.hh"
 
+#include <algorithm>
 #include <vector>
 
 #include <stdx/option.hh>
@@ -27,12 +28,13 @@ auto find_references(const mod::module_manager& manager, const located_span& def
     for (const auto& [path, mod] : manager) {
         for (const auto id : mod->identifier_positions) {
             const auto def{mod->get_identifier_definition(id)};
-            if (def && *def == definition) {
-                results.emplace_back<located_span>({
-                    .path = path,
-                    .span = {mod->ast.location_of(id), mod->ast.end_location_of(id)},
-                });
-            }
+            if (!def || *def != definition) { continue; }
+            // A defaulted parameter's wrappers each repeat its default expression
+            located_span found{
+                .path = path,
+                .span = {mod->ast.location_of(id), mod->ast.end_location_of(id)},
+            };
+            if (!std::ranges::contains(results, found)) { results.emplace_back(std::move(found)); }
         }
     }
     return results;

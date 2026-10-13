@@ -207,6 +207,8 @@ struct function_expr {
         // Where the body reads an inferred `comptime` param at compile time
         ast::node_id comptime_read{ast::node_id::make_invalid()};
         bool         comptime_read_in_const{false};
+        // `b: i32 = a * 2`: evaluated by a call that leaves the argument off
+        stdx::option<expr_handle> default_value{};
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -566,6 +568,22 @@ struct while_loop_expr {
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+// A function literal's `(...)`, from its `fn` token through the `)`
+struct function_header {
+    stdx::option<self_parameter>           self;
+    std::vector<function_expr::parameter>  parameters;
+    std::vector<function_expr::impl_bound> impl_bounds;
+    bool                                   variadic{false};
+    bool                                   params_force_break{false};
+};
+
+[[nodiscard]] auto parse_function_header(syntax::parser& parser)
+    -> stdx::result<function_header, syntax::diagnostic>;
+
+// `f@default1`: the hidden declaration calling `fn_name` with the defaults after its first `kept`
+// parameters. The `@` keeps it from colliding with anything but a raw identifier
+[[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
 
 // A parameter's declared name, or empty for a discarded `_`
 [[nodiscard]] auto parameter_name(const AST& ast, const function_expr::parameter& param)

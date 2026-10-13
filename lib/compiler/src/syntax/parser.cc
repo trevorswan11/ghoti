@@ -125,6 +125,7 @@ auto parser::reset(std::string_view input) noexcept -> void {
     lexer_.reset(input);
     pending_docs_.clear();
     pending_module_docs_.clear();
+    synthesized_stmts_.clear();
     module_doc_locked_ = false;
     doc_tokens_.clear();
     claimed_docs_.clear();
@@ -247,6 +248,7 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         if (stmt) {
             ast.add_root(**stmt);
             attach_docs(**stmt, stmt_start_line);
+            for (const auto synthesized : take_synthesized()) { ast.add_root(*synthesized); }
         } else {
             diagnostics.emplace_back(std::move(stmt.error()));
             skip_failed_statement(stmt_start);

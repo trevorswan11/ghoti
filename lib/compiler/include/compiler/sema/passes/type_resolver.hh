@@ -384,6 +384,12 @@ class type_resolver {
                                               std::string_view                what)
         -> stdx::result<gir::const_enum, diagnostic>;
 
+    // `f(a)` for `f(a: i32, b: i32 = 2)`: points the call at the parser's `f@default1` wrapper,
+    // given the arguments written besides an implicit `self`
+    [[nodiscard]] auto redirect_to_default_wrapper(ast::node_id          id,
+                                                   const ast::call_expr& call,
+                                                   usize                 written_args) -> bool;
+
     // Aggregate synthesis for `@Struct`/`@Union`/`@Enum`
     [[nodiscard]] auto synthesize_ident(std::string_view name, bool is_public)
         -> ast::identifier_handle;

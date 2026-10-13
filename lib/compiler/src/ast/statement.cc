@@ -40,6 +40,7 @@ auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
         statements.emplace_back(TRY(parser.parse_statement()));
+        parser.append_synthesized(statements);
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
@@ -98,10 +99,12 @@ namespace {
             parser.advance();
             if (parser.current_token_is(token_type_t::SEMICOLON)) { continue; }
             items.emplace_back(TRY(parser.parse_statement()));
+            parser.append_synthesized(items);
         }
         TRY(parser.expect_peek(token_type_t::RBRACE));
     } else {
         items.emplace_back(TRY(parser.parse_statement()));
+        parser.append_synthesized(items);
     }
     return items;
 }
@@ -246,6 +249,131 @@ auto decl_stmt::evaluates_at_compile_time() const noexcept -> bool {
            !value->any<function_expr, struct_expr, union_expr, enum_expr, interface_expr>();
 }
 
+namespace {
+
+// For each call shape that leaves defaulted arguments off, a hidden sibling declaration taking the
+// leading parameters, binding the rest to their defaults, and calling the function:
+//   const f@default1 = fn(a: i32): auto { let b: i32 = a * 2; return f(a, b); };
+// Each wrapper re-parses the parameter list so its defaults are nodes of its own.
+auto synthesize_default_wrappers(syntax::parser&                   parser,
+                                 const syntax::parser::checkpoint& fn_start,
+                                 const syntax::token_t&            name_token,
+                                 std::string_view                  fn_name,
+                                 const function_expr&              fn,
+                                 decl_modifiers                    modifiers)
+    -> stdx::result<void, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    auto&      ast{parser.get_ast()};
+    const auto first_default{
+        std::ranges::find_if(fn.parameters, [](const function_expr::parameter& p) {
+            return p.default_value.has_value();
+        })};
+    if (first_default == fn.parameters.end()) { return {}; }
+
+    // Spanning just the declaration's name, where the LSP already points for it
+    const auto ident{[&](std::string_view name) -> identifier_handle {
+        return identifier_handle{
+            ast.add_node(name_token, name_token, identifier_expr{ast.intern(name)})};
+    }};
+    // A discarded `_` still has to be passed along, so it gets a name the source can't spell
+    const auto param_name{[&](const function_expr::parameter& p, usize index) -> std::string {
+        if (p.name.is<identifier_expr>()) {
+            return std::string{ast.get_as<identifier_expr>(p.name).name};
+        }
+        return fmt::format("_@{}", index);
+    }};
+
+    const auto first_index{static_cast<usize>(first_default - fn.parameters.begin())};
+    for (usize kept{first_index}; kept < fn.parameters.size(); ++kept) {
+        if (fn.parameters[kept].is_pack) { break; }
+        auto header{TRY(parser.replay_from(fn_start, [&] {
+            const syntax::parser::function_scope fn_scope{parser};
+            return parse_function_header(parser);
+        }))};
+
+        std::vector<function_expr::parameter> params;
+        std::vector<stmt_handle>              body;
+        std::vector<call_expr::argument>      args;
+        for (usize i{0}; i < header.parameters.size(); ++i) {
+            auto&       param{header.parameters[i]};
+            const auto& original{fn.parameters[i]};
+            if (param.is_pack) { continue; }
+            const auto name{param_name(param, i)};
+            if (i < kept) {
+                param.default_value.reset();
+                param.is_comptime         = original.is_comptime;
+                param.is_comptime_written = original.is_comptime_written;
+                if (!param.name.is<identifier_expr>()) {
+                    param.name = discardable_ident_handle{ident(name)};
+                }
+                params.emplace_back(param);
+            } else {
+                // A `type` is always compile-time, `comptime` written or not
+                const bool compile_time{original.is_comptime ||
+                                        param.explicit_type.get_token_type() == tt::TYPE_TYPE};
+                const auto binding{compile_time ? decl_modifiers::COMPTIME : decl_modifiers::LET};
+                body.emplace_back(parser.add_node<stmt_handle, decl_stmt>(
+                    name_token,
+                    ident(name),
+                    stdx::option<explicit_type_id>{param.explicit_type},
+                    param.default_value,
+                    binding,
+                    stdx::none,
+                    stdx::none,
+                    stdx::none));
+            }
+            args.emplace_back(expr_handle{ident(name)});
+        }
+        std::erase_if(header.impl_bounds,
+                      [&](const function_expr::impl_bound& b) { return b.param_index >= kept; });
+
+        expr_handle callee{ident(fn_name)};
+        if (header.self) {
+            const auto self_name{ast.get_as<identifier_expr>(header.self->name).name};
+            callee = parser.add_expr<dot_expr>(
+                name_token, expr_handle{ident(self_name)}, ident(fn_name));
+        }
+        const auto arg_count{args.size()};
+        const auto call{parser.add_expr<call_expr>(
+            name_token, callee, std::move(args), false, std::vector<bool>(arg_count, false))};
+        body.emplace_back(
+            parser.add_stmt<return_stmt>(name_token, stdx::option<expr_handle>{call}));
+
+        const syntax::token_t auto_token{tt::AUTO_TYPE, "auto", name_token.line, name_token.column};
+        const auto            wrapper{parser.add_expr<function_expr>(
+            name_token,
+            header.self,
+            std::move(params),
+            parser.add_type<identifier_expr>(auto_token, type_modifier{}, identifier_expr{"auto"}),
+            block_handle{parser.add_stmt<block_stmt>(name_token, std::move(body), false)},
+            false,
+            false,
+            false,
+            false,
+            calling_convention::C,
+            false,
+            false,
+            std::move(header.impl_bounds))};
+
+        const auto wrapper_name{default_wrapper_name(fn_name, kept)};
+        const auto decl{parser.add_node<stmt_handle, decl_stmt>(
+            name_token,
+            ident(wrapper_name),
+            stdx::none,
+            stdx::option<expr_handle>{wrapper},
+            decl_modifiers::COMPTIME | (modifiers & decl_modifiers::PUBLIC),
+            stdx::none,
+            stdx::none,
+            stdx::none)};
+        ast.get_as_mut<decl_stmt>(*decl).is_default_wrapper = true;
+        ast.get_as_mut<function_expr>(*wrapper).declaring_decl.emplace(*decl);
+        parser.queue_synthesized(decl);
+    }
+    return {};
+}
+
+} // namespace
+
 auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto                   span_start{parser.get_current_token()};
@@ -332,6 +460,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    const auto              decl_name_token{parser.get_current_token()};
     const identifier_handle decl_name{TRY(identifier_expr::parse(parser))};
     const auto [decl_type, value_initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
@@ -371,7 +500,18 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                                 link_name,
                                                 std::move(attributes))};
     if (decl_value && decl_value->is<function_expr>()) {
-        parser.get_ast().get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
+        auto& fn{parser.get_ast().get_as_mut<function_expr>(**decl_value)};
+        fn.declaring_decl.emplace(*decl);
+        const auto fn_start{parser.defaulted_function_start(**decl_value)};
+        if (fn_start && parser.synthesizes_default_wrappers()) {
+            TRY(synthesize_default_wrappers(
+                parser,
+                *fn_start,
+                decl_name_token,
+                parser.get_ast().get_as<identifier_expr>(decl_name).name,
+                fn,
+                modifiers));
+        }
     }
     return decl;
 }

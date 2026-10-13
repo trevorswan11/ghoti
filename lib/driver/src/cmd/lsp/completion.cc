@@ -198,7 +198,7 @@ auto completion_items(const mod::module_t& module, source_location target) -> nl
 
     for (const auto root_id : module.ast) {
         const auto decl{module.ast.get_as_opt<ast::decl_stmt>(root_id)};
-        if (!decl) { continue; }
+        if (!decl || decl->is_default_wrapper) { continue; }
         const auto name_ident{module.ast.get_as_opt<ast::identifier_expr>(decl->name)};
         if (!name_ident) { continue; }
         out.push_back({

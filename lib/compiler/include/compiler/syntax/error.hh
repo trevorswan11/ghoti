@@ -107,6 +107,7 @@ enum class error : u8 {
     MISPLACED_ATTRIBUTES,
     MALFORMED_CALL_BUILTIN,
     MISPLACED_DOC_COMMENT,
+    FN_PARAMETER_DEFAULT_NOT_TRAILING,
 };
 
 using diagnostic  = diagnostic<error>;

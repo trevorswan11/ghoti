@@ -947,12 +947,15 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
                 doc_manager_.concat({format(param.name), doc_manager_.text("...")}));
             continue;
         }
-        params.emplace_back(
-            doc_manager_.concat({doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
-                                 format(param.name),
-                                 doc_manager_.text(": "),
-                                 format_param_type(param.explicit_type, bound),
-                                 doc_manager_.text(param.is_pack ? "..." : "")}));
+        params.emplace_back(doc_manager_.concat(
+            {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
+             format(param.name),
+             doc_manager_.text(": "),
+             format_param_type(param.explicit_type, bound),
+             doc_manager_.text(param.is_pack ? "..." : ""),
+             param.default_value
+                 ? doc_manager_.concat({doc_manager_.text(" = "), format(*param.default_value)})
+                 : doc_manager_.nil()}));
     }
     if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
 
