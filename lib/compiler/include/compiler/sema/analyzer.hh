@@ -232,13 +232,13 @@ class analyzer {
                                 std::string_view entry_name) -> void;
 
     // Prunes, lowers, verifies, and optimizes `gir_module` the way `artifact`'s build requires
-    [[nodiscard]] auto lower_artifact(gir::module_t&                      gir_module,
+    [[nodiscard]] auto lower_artifact(gir::module_t&                    gir_module,
                                       llvm::LLVMContext&                context,
                                       const codegen::optimizer_options& options,
                                       build_artifact                    artifact)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
-    [[nodiscard]] auto link_artifact(gir::module_t&                         gir_module,
+    [[nodiscard]] auto link_artifact(gir::module_t&                       gir_module,
                                      llvm::LLVMContext&                   context,
                                      const codegen::target_options&       target_opts,
                                      const codegen::optimizer_options&    opt_options,

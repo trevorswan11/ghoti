@@ -120,7 +120,7 @@ auto is_valid_ident(token_type_t type) noexcept -> bool {
     case token_type_t::NORETURN:
     case token_type_t::TYPE_TYPE:
     case token_type_t::AUTO_TYPE:
-    case token_type_t::OPAQUE_TYPE: return true;
+    case token_type_t::OPAQUE_TYPE:       return true;
     case token_type_t::BUILTIN:
     case token_type_t::BUILTIN_CFG:
     case token_type_t::BUILTIN_CFG_VALUE: return true;

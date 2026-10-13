@@ -199,10 +199,10 @@ class llvm_lowering {
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
     ankerl::unordered_dense::map<llvm::FunctionType*, llvm::Function*> fn_trampolines_;
-    bool                             reserved_symbols_built_{false};
-    bool                             is_executable_{false};
+    bool                               reserved_symbols_built_{false};
+    bool                               is_executable_{false};
     stdx::option<const gir::module_t&> gir_module_;
-    std::string                      user_main_name_{"main"};
+    std::string                        user_main_name_{"main"};
 };
 
 } // namespace ghoti::codegen

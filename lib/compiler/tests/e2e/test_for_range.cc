@@ -145,7 +145,7 @@ TEST_CASE("a range whose start is past its end counts down") {
             return -s;
         };
     )") == 36);
-    // Equal bounds run zero times exclusively and once inclusively, in either direction
+
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut n: i32 = 0;
@@ -200,7 +200,6 @@ TEST_CASE("a subscript range cannot count down") {
         pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; const s = a[3..1]; return 0; };
     )",
                           sema::error::ILLEGAL_OPEN_RANGE));
-    // An empty inclusive range one below its start is not descending
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; const s = a[2..=1]; return @intCast(s.len); };
     )") == 0);

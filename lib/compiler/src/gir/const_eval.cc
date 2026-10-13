@@ -4010,7 +4010,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
 
     // Resolve `Ctor(...)` (same module) or `mod::Ctor(...)` (imported module) to (module, decl).
     stdx::option<mod::module_t&> callee_mod;
-    stdx::option<sema::symbol&> callee_sym;
+    stdx::option<sema::symbol&>  callee_sym;
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (module_->root_table_idx) {
             callee_mod.emplace(*module_);

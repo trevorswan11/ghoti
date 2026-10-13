@@ -40,7 +40,6 @@ TEST_CASE("a type expression may read a parameter, which becomes compile-time") 
             return @intCast(@sizeOf(@TypeOf(h(true))) * 10 + @sizeOf(@TypeOf(h(false))));
         };
     )") == 84);
-    // Each instantiation checks its arguments against the type it computes
     helpers::expect_compile_error(R"(
         const K = enum { a, b };
         const f = fn(comptime k: K, x: match (k) { .a => u8, .b => u64 }): usize { return x; };

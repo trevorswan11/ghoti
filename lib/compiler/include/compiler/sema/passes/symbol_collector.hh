@@ -181,7 +181,7 @@ class symbol_collector {
     }
 
   private:
-    mod::module_t&        collecting_;
+    mod::module_t&      collecting_;
     usize               table_idx_;
     symbol_table_stack  table_stack_;
     context&            ctx_;

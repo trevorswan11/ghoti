@@ -318,7 +318,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
 
     mod::module_t& fn_mod{*req.module};
-    const auto   fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
+    const auto     fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
         [&](const auto&) -> stdx::option<const ast::function_expr&> { return stdx::none; },
         [&](const ast::decl_stmt& decl) -> stdx::option<const ast::function_expr&> {
             if (decl.value) { return fn_mod.ast.get_as_opt<ast::function_expr>(*decl.value); }
@@ -4463,8 +4463,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // @fnCtx()(args): the inner call is never emitted, its callee names the enclosing function
     const auto fn_ctx_call{active_ast().get_as_opt<ast::call_expr>(call.function)};
-    const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_builtin() ==
-                                                 syntax::builtin_t::FN_CTX};
+    const bool is_fn_ctx_call{fn_ctx_call &&
+                              fn_ctx_call->function->get_builtin() == syntax::builtin_t::FN_CTX};
 
     // The resolver pinned this call's monomorphization (keyed on types *and* comptime values).
     bool resolved_generic_target{false};
@@ -7497,7 +7497,7 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
     }
 
     // `@cVaArg`'s trailing type argument only shapes the result type
-    const usize list_arg_count{builtin == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
+    const usize        list_arg_count{builtin == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
     std::vector<value> args;
     args.reserve(list_arg_count);
     for (usize i{0}; i < list_arg_count; ++i) {
@@ -7517,11 +7517,11 @@ auto emitter::current_function_is_c_variadic() -> bool {
     return sig && sig->is_variadic;
 }
 
-auto emitter::emit_mem_intrinsic(ast::node_id         id,
-                                 ast::expr_handle     dest_h,
-                                 ast::expr_handle     rhs_h,
-                                 syntax::builtin_t    builtin,
-                                 bool                 check_lengths) -> void {
+auto emitter::emit_mem_intrinsic(ast::node_id      id,
+                                 ast::expr_handle  dest_h,
+                                 ast::expr_handle  rhs_h,
+                                 syntax::builtin_t builtin,
+                                 bool              check_lengths) -> void {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto& u8_type{ctx_.get_int(8, false)};

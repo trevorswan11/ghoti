@@ -20,7 +20,6 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/precedence.hh"

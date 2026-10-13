@@ -45,7 +45,6 @@ TEST_CASE("a range value takes its element type from the expected type") {
             return @intCast(sum(0..8) + @as(usize, sum_u8(10..=12)));
         };
     )") == 28 + 33);
-    // An untyped negative bound counts in `isize`
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 { const n = -2..2; const v: isize = n[0]; return @intCast(v + 10); };
     )") == 8);
@@ -78,7 +77,6 @@ TEST_CASE("a range value needs bounds known at compile time that fit its element
                           sema::error::ILLEGAL_OPEN_RANGE));
     CHECK(helpers::raised("const f = fn(): void { let a = 0..u8; _ = a; };",
                           sema::error::TYPE_USED_AS_VALUE));
-    // The length is part of its type
     helpers::expect_compile_error(
         "pub const main = fn(): i32 { let a: [4]usize = 0..3; _ = a; return 0; };");
 }

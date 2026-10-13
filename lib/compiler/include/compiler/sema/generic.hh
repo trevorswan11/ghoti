@@ -105,11 +105,11 @@ class generic_function_registry {
 };
 
 struct generic_instantiation_request {
-    gsl::not_null<type*>        generic_fn_type;
-    gsl::span<type*>            arg_types;
-    gsl::not_null<type*>        return_type;
-    std::string                 mangled_name;
-    ast::node_id                fn_node_id;
+    gsl::not_null<type*>          generic_fn_type;
+    gsl::span<type*>              arg_types;
+    gsl::not_null<type*>          return_type;
+    std::string                   mangled_name;
+    ast::node_id                  fn_node_id;
     gsl::not_null<mod::module_t*> module;
 };
 

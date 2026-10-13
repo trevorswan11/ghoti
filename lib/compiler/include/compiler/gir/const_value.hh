@@ -59,10 +59,10 @@ struct const_union {
 };
 
 struct const_closure {
-    ast::node_id               fn_node;
+    ast::node_id                 fn_node;
     stdx::option<mod::module_t&> module{};
-    const_struct               captures;
-    [[nodiscard]] auto         operator==(const const_closure& other) const noexcept -> bool;
+    const_struct                 captures;
+    [[nodiscard]] auto           operator==(const const_closure& other) const noexcept -> bool;
 };
 
 struct const_addr {

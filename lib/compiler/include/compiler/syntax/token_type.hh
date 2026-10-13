@@ -309,7 +309,6 @@ template <std::size_t I>
 
 } // namespace ghoti::syntax
 
-
 template <> struct ankerl::unordered_dense::hash<ghoti::syntax::typed_identifier> {
     using is_avalanching   = void;
     using typed_identifier = ghoti::syntax::typed_identifier;

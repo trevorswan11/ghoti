@@ -7,7 +7,6 @@
 namespace ghoti::sema {
 
 // The values a range with constant bounds takes: `count` of them from `first`, moving by `step`.
-// A range counts down when its start is past its end (`3..0` is 3, 2, 1).
 struct range_steps {
     i128 first;
     i128 count;
