@@ -103,7 +103,7 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
     SECTION("a shift between a comptime_int literal and a concretely-typed comptime local "
             "still coerces back to a comptime_int-returning function's declared return type") {
         CHECK(helpers::compile_and_run(R"(
-            const maxUnsigned = fn(T: type): comptime_int {
+            const maxUnsigned = fn(comptime T: type): comptime_int {
                 const info = @typeInfo(T).int;
                 return (1 << info.bits) - 1;
             };
@@ -117,7 +117,7 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
 
     SECTION("a shift amount at or beyond the folding width's bit count does not fold as UB") {
         CHECK(helpers::compile_and_run(R"(
-            const maxUnsigned = fn(T: type): comptime_int {
+            const maxUnsigned = fn(comptime T: type): comptime_int {
                 const info = @typeInfo(T).int;
                 return (1 << info.bits) - 1;
             };
@@ -131,7 +131,7 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
 
     SECTION("negating a type's narrowest representable magnitude does not fold as UB") {
         CHECK(helpers::compile_and_run(R"(
-            const minInt = fn(T: type): comptime_int {
+            const minInt = fn(comptime T: type): comptime_int {
                 const info = @typeInfo(T).int;
                 return if comptime (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
             };
@@ -148,7 +148,7 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
 
     SECTION("negating i128's own narrowest representable magnitude does not fold as UB") {
         CHECK(helpers::compile_and_run(R"(
-            const minInt = fn(T: type): comptime_int {
+            const minInt = fn(comptime T: type): comptime_int {
                 const info = @typeInfo(T).int;
                 return if comptime (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
             };
@@ -164,7 +164,7 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
         "a chained double dot-access into an explicitly-typed comptime decl does not spuriously "
         "trip the shift-overflow safety check") {
         CHECK(helpers::compile_and_run(R"(
-            const maxUnsigned = fn(T: type): comptime_int {
+            const maxUnsigned = fn(comptime T: type): comptime_int {
                 const bits: u16 = @typeInfo(T).int.bits;
                 return (1 << bits) - 1;
             };

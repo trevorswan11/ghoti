@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: `^r` on a `&i32` binding is a `^i32` aliasing the referent") {
+TEST_CASE("`^r` on a `&i32` binding is a `^i32` aliasing the referent") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut x: i32 = 40;
@@ -15,7 +15,7 @@ TEST_CASE("E2E: `^r` on a `&i32` binding is a `^i32` aliasing the referent") {
     )") == 42);
 }
 
-TEST_CASE("E2E: writing through `^mut r` mutates the reference's original target") {
+TEST_CASE("Writing through `^mut r` mutates the reference's original target") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut x: i32 = 0;
@@ -27,7 +27,7 @@ TEST_CASE("E2E: writing through `^mut r` mutates the reference's original target
     )") == 42);
 }
 
-TEST_CASE("E2E: `^mut c` on a `&mut i32` parameter aliases the caller's variable") {
+TEST_CASE("`^mut c` on a `&mut i32` parameter aliases the caller's variable") {
     CHECK(helpers::compile_and_run(R"(
         const bump = fn(c: &mut i32): void {
             let p: ^mut i32 = ^mut c;
@@ -41,7 +41,7 @@ TEST_CASE("E2E: `^mut c` on a `&mut i32` parameter aliases the caller's variable
     )") == 42);
 }
 
-TEST_CASE("E2E: `^` of a reference-typed struct field points at the field's referent") {
+TEST_CASE("`^` of a reference-typed struct field points at the field's referent") {
     CHECK(helpers::compile_and_run(R"(
         const Holder = struct { r: &i32 };
         pub const main = fn(): i32 {
@@ -53,7 +53,7 @@ TEST_CASE("E2E: `^` of a reference-typed struct field points at the field's refe
     )") == 42);
 }
 
-TEST_CASE("E2E: `^r` decays through the reference -- pointer round-trips as `^T`") {
+TEST_CASE("`^r` decays through the reference -- pointer round-trips as `^T`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut x: i32 = 40;

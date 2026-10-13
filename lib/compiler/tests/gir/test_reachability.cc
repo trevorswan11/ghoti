@@ -23,7 +23,7 @@ constexpr std::string_view WIN_MODULE{R"(
 
 } // namespace
 
-TEST_CASE("GIR reachability: unreferenced imported extern contributes no library") {
+TEST_CASE("Unreferenced imported extern contributes no library") {
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "win.gh" as win;
@@ -44,7 +44,7 @@ TEST_CASE("GIR reachability: unreferenced imported extern contributes no library
     CHECK(gir_mod.get_required_libraries().empty());
 }
 
-TEST_CASE("GIR reachability: transitively referenced imported extern is retained") {
+TEST_CASE("Transitively referenced imported extern is retained") {
     auto [ctx, idx]{helpers::resolve_and_check(
         R"(
             import "win.gh" as win;
@@ -65,7 +65,7 @@ TEST_CASE("GIR reachability: transitively referenced imported extern is retained
     CHECK(gir_mod.get_required_libraries()[0] == "kernel32");
 }
 
-TEST_CASE("GIR reachability: an unreferenced root-module extern is pruned too") {
+TEST_CASE("An unreferenced root-module extern is pruned too") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
         pub const main = fn(args: [][:0]u8): void {};
@@ -80,7 +80,7 @@ TEST_CASE("GIR reachability: an unreferenced root-module extern is pruned too") 
     CHECK(gir_mod.get_required_libraries().empty());
 }
 
-TEST_CASE("GIR reachability: a referenced root-module extern is retained") {
+TEST_CASE("A referenced root-module extern is retained") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         extern("kernel32") const GetLastError: fn(): u32;
         pub const main = fn(args: [][:0]u8): void {

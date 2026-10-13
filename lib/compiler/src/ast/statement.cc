@@ -40,6 +40,7 @@ auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
         statements.emplace_back(TRY(parser.parse_statement()));
+        parser.append_synthesized(statements);
     }
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
 
@@ -98,10 +99,12 @@ namespace {
             parser.advance();
             if (parser.current_token_is(token_type_t::SEMICOLON)) { continue; }
             items.emplace_back(TRY(parser.parse_statement()));
+            parser.append_synthesized(items);
         }
         TRY(parser.expect_peek(token_type_t::RBRACE));
     } else {
         items.emplace_back(TRY(parser.parse_statement()));
+        parser.append_synthesized(items);
     }
     return items;
 }
@@ -332,6 +335,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::IDENT));
+    const auto              decl_name_token{parser.get_current_token()};
     const identifier_handle decl_name{TRY(identifier_expr::parse(parser))};
     const auto [decl_type, value_initialized]{TRY(explicit_type::parse_opt_init(parser))};
 
@@ -371,7 +375,29 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                                 link_name,
                                                 std::move(attributes))};
     if (decl_value && decl_value->is<function_expr>()) {
-        parser.get_ast().get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
+        auto& ast{parser.get_ast()};
+        ast.get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
+
+        // `__ghoti_f@default<k>` siblings for calls that leave `f`'s defaults off
+        const auto wrappers{TRY(build_default_wrappers(parser,
+                                                       function_handle{**decl_value},
+                                                       decl_name_token,
+                                                       ast.get_as<identifier_expr>(decl_name).name,
+                                                       false))};
+        for (const auto& wrapper : wrappers) {
+            const auto wrapper_decl{parser.add_node<stmt_handle, decl_stmt>(
+                decl_name_token,
+                wrapper.name,
+                stdx::none,
+                stdx::option<expr_handle>{expr_handle{wrapper.fn}},
+                decl_modifiers::COMPTIME | (modifiers & decl_modifiers::PUBLIC),
+                stdx::none,
+                stdx::none,
+                stdx::none)};
+            ast.get_as_mut<decl_stmt>(*wrapper_decl).is_default_wrapper = true;
+            ast.get_as_mut<function_expr>(*wrapper.fn).declaring_decl.emplace(*wrapper_decl);
+            parser.queue_synthesized(wrapper_decl);
+        }
     }
     return decl;
 }
@@ -675,6 +701,24 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                parser.get_peek_token());
     }
     auto members{TRY(parse_member_block(parser))};
+    // An interface's defaults are the only ones its methods take, through `dyn` or not, so an
+    // implementation inherits them instead of writing its own
+    if (interface_type) {
+        auto& ast{parser.get_ast()};
+        for (const auto member : members) {
+            const auto decl{ast.get_as_opt<decl_stmt>(*member)};
+            const auto fn{decl && decl->value ? ast.get_as_opt<function_expr>(**decl->value)
+                                              : stdx::none};
+            if (!fn) { continue; }
+            for (const auto& param : fn->parameters) {
+                if (!param.default_value) { continue; }
+                return make_syntax_err("An implementation of an interface can't give a parameter "
+                                       "a default value; calls use the interface's defaults",
+                                       syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                       parser.get_location_of(**param.default_value));
+            }
+        }
+    }
 
     return parser.add_stmt<impl_stmt>(start_token,
                                       std::move(impl_params),

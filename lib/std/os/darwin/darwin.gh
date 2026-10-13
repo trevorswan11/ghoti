@@ -115,7 +115,7 @@ extern("System", "mmap") const sys_mmap: fn(
 ): ^mut opaque;
 extern("System", "munmap") const sys_munmap: fn(addr: ^mut opaque, len: usize): i32;
 
-const R = fn(T: type): type {
+const R = fn(comptime T: type): type {
     return std.Result(T, Errno);
 };
 

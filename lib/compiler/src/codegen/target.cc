@@ -545,13 +545,18 @@ namespace {
     if (!target) { return stdx::none; }
     const auto               info{make_subtarget_info(**target, triple, "", "")};
     std::vector<std::string> llvm_names;
-    for (const auto& kv : info->getAllProcessorFeatures()) { llvm_names.emplace_back(kv.key()); }
+    std::vector<std::string> descriptions;
+    for (const auto& kv : info->getAllProcessorFeatures()) {
+        llvm_names.emplace_back(kv.key());
+        descriptions.emplace_back(kv.desc());
+    }
     if (llvm_names.empty()) { return stdx::none; }
     auto ghoti_names{ghoti_feature_names(llvm_names)};
     return cpu_feature_family{
-        .name        = spec.name,
-        .llvm_names  = std::move(llvm_names),
-        .ghoti_names = std::move(ghoti_names),
+        .name         = spec.name,
+        .llvm_names   = std::move(llvm_names),
+        .ghoti_names  = std::move(ghoti_names),
+        .descriptions = std::move(descriptions),
     };
 }
 

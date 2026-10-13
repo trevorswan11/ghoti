@@ -13,18 +13,22 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`comptime` on a `type` parameter is redundant") {
+TEST_CASE("a `type` parameter without `comptime` is an error") {
     helpers::test_resolver_fail(
-        "const f = fn(comptime t: type): i32 { _ = t; return 0; };",
-        sema::diagnostic{"'comptime' is redundant on a parameter of type 'type'; type values "
-                         "are always compile-time known",
-                         sema::error::REDUNDANT_COMPTIME,
-                         std::pair{0UZ, 22UZ}});
+        "const f = fn(t: type): i32 { _ = t; return 0; };",
+        sema::diagnostic{"A parameter of type 'type' must be written 'comptime t: type'",
+                         sema::error::TYPE_PARAM_NOT_COMPTIME,
+                         std::pair{0UZ, 13UZ}});
+    helpers::test_resolver_fail(
+        "const f = fn(comptime a: type, b: type): i32 { return 0; };",
+        sema::diagnostic{"A parameter of type 'type' must be written 'comptime b: type'",
+                         sema::error::TYPE_PARAM_NOT_COMPTIME,
+                         std::pair{0UZ, 31UZ}});
 }
 
 TEST_CASE("`comptime` on a parameter typed by an earlier generic type param isn't redundant") {
     helpers::resolve_and_check(
-        "const Point = fn(T: type, comptime default_z: T): type { return T; };");
+        "const Point = fn(comptime T: type, comptime default_z: T): type { return T; };");
 }
 
 TEST_CASE("a `var` binding cannot hold a `type` value") {
@@ -42,15 +46,15 @@ TEST_CASE("a `var` binding cannot hold a `type` value") {
     helpers::test_resolver_fail("const S = struct { x: i32 }; let mut a = S;",
                                 mutable_type_diag(29UZ));
     helpers::test_resolver_fail(
-        "const Box = fn(T: type): type { return struct { v: T }; }; let mut a = Box(i32);",
-        mutable_type_diag(59UZ));
+        "const Box = fn(comptime T: type): type { return struct { v: T }; }; let mut a = Box(i32);",
+        mutable_type_diag(68UZ));
 
     helpers::resolve_and_check("const a: type = i32;");
     helpers::resolve_and_check("const a = i32;");
     helpers::resolve_and_check("const a: type = i32;");
     helpers::resolve_and_check("const a = i32;");
     helpers::resolve_and_check("const S = struct { x: i32 };");
-    helpers::resolve_and_check("const f = fn(t: type): i32 { _ = t; return 0; };");
+    helpers::resolve_and_check("const f = fn(comptime t: type): i32 { _ = t; return 0; };");
 
     helpers::resolve_and_check("const P = struct { x: i32 }; let mut p: P = undefined;");
     helpers::resolve_and_check("let mut arr: [2uz]i32 = [_]i32{1, 2};");

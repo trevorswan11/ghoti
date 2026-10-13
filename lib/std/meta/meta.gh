@@ -2,7 +2,7 @@ import std;
 
 /// The return type of a callable type: a function, a closure, or an erased `fn`, directly or
 /// through a `^` / `&`
-pub const return_type = fn(T: type): type {
+pub const return_type = fn(comptime T: type): type {
     const info = @typeInfo(T);
     if comptime (info == .pointer) {
         return return_type(info.pointer.child);

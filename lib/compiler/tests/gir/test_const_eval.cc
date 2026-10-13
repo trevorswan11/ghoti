@@ -909,7 +909,7 @@ TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
 
 TEST_CASE("`errdefer` in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
@@ -954,7 +954,7 @@ TEST_CASE("`errdefer` in `const_eval`") {
 
 TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;

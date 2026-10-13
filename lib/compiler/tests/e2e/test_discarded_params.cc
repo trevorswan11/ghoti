@@ -79,7 +79,7 @@ TEST_CASE("comptime function with discarded parameter") {
 
 TEST_CASE("generic function with discarded parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const identity_or_42 = fn(T: type, _: T): i32 {
+        const identity_or_42 = fn(comptime T: type, _: T): i32 {
             return 42;
         };
 

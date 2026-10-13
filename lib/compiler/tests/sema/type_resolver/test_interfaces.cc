@@ -341,7 +341,7 @@ TEST_CASE("an `impl (A + B)` parameter requires both interfaces") {
 
 TEST_CASE("a parameterized inherent impl expands for each concrete instantiation") {
     helpers::resolve_and_check(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         impl(T: type) Box(T) {
             pub const get = fn(&self): T { return self.v; };
         }
@@ -355,7 +355,7 @@ TEST_CASE("a parameterized inherent impl expands for each concrete instantiation
 TEST_CASE("a parameterized trait impl over a local ctor conforms and its method is callable") {
     helpers::resolve_and_check(R"(
         const Show = interface { pub const show = fn(&self): i32; };
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         impl(T: type) Show for Box(T) {
             pub const show = fn(&self): i32 { return self.v; };
         }
@@ -367,12 +367,13 @@ TEST_CASE("a parameterized trait impl over a local ctor conforms and its method 
 }
 
 TEST_CASE("a parameterized impl anchored on neither its ctor nor its interface is an orphan") {
-    CHECK(raised_with_import(R"(
+    CHECK(raised_with_import(
+        R"(
         import "other.gh" as other;
         impl(T: type) other.Bag(T) { pub const peek = fn(&self): T { return self.v; }; }
 )",
-                             R"(pub const Bag = fn(T: type): type { return struct { v: T }; };)",
-                             sema::error::ORPHAN_IMPL));
+        R"(pub const Bag = fn(comptime T: type): type { return struct { v: T }; };)",
+        sema::error::ORPHAN_IMPL));
 }
 
 TEST_CASE("a parameterized impl with several type params conforms per instantiation") {
@@ -381,7 +382,7 @@ TEST_CASE("a parameterized impl with several type params conforms per instantiat
             pub const lhs = fn(&self): i32;
             pub const rhs = fn(&self): i32;
         };
-        const Pair = fn(A: type, B: type): type { return struct { a: A, b: B }; };
+        const Pair = fn(comptime A: type, comptime B: type): type { return struct { a: A, b: B }; };
         impl(A: type, B: type) Both for Pair(A, B) {
             pub const lhs = fn(&self): i32 { return self.a; };
             pub const rhs = fn(&self): i32 { return self.b; };
@@ -426,7 +427,7 @@ TEST_CASE("a parameterized impl anchored on a local interface may target a forei
 )",
         helpers::make_vector<helpers::mock_file>(helpers::mock_file{
             .path   = "other.gh",
-            .source = "pub const Bag = fn(T: type): type { return struct { v: i32 }; };",
+            .source = "pub const Bag = fn(comptime T: type): type { return struct { v: i32 }; };",
         }))};
     std::vector<sema::error> codes;
     if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
@@ -454,8 +455,9 @@ TEST_CASE("a parameterized impl may target a ctor through its aliases") {
                     target),
         helpers::make_vector<helpers::mock_file>(
             helpers::mock_file{
-                .path   = "bag.gh",
-                .source = "pub const Bag = fn(T: type): type { return struct { v: i32 }; };",
+                .path = "bag.gh",
+                .source =
+                    "pub const Bag = fn(comptime T: type): type { return struct { v: i32 }; };",
             },
             helpers::mock_file{
                 .path = "alias.gh",

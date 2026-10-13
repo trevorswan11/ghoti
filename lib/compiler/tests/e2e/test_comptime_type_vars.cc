@@ -33,7 +33,7 @@ TEST_CASE("a `comptime let mut` type can start without an annotation and change 
 
 TEST_CASE("a `comptime let mut` type builds up across `for comptime` iterations") {
     CHECK(helpers::compile_and_run(R"(
-        const Wrap = fn(T: type): type { return struct { inner: T, pad: u8 }; };
+        const Wrap = fn(comptime T: type): type { return struct { inner: T, pad: u8 }; };
         pub const main = fn(): i32 {
             comptime let mut T: type = u8;
             for comptime (0..3) |_| { T = Wrap(T); }
@@ -46,7 +46,7 @@ TEST_CASE("a `comptime let mut` type builds up across `for comptime` iterations"
 
 TEST_CASE("a `comptime let mut` type builds up across `while comptime` iterations") {
     CHECK(helpers::compile_and_run(R"(
-        const Wrap = fn(T: type): type { return struct { inner: T, pad: u8 }; };
+        const Wrap = fn(comptime T: type): type { return struct { inner: T, pad: u8 }; };
         pub const main = fn(): i32 {
             comptime let mut T: type = u8;
             comptime let mut n: usize = 0;

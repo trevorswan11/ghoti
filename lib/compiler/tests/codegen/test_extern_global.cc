@@ -11,7 +11,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Codegen: valueless extern global lowers as a declaration") {
+TEST_CASE("Valueless extern global lowers as a declaration") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -28,7 +28,7 @@ TEST_CASE("Codegen: valueless extern global lowers as a declaration") {
     CHECK(gv.getLinkage() == llvm::GlobalValue::ExternalLinkage);
 }
 
-TEST_CASE("Codegen: same extern global from root and imported module does not collide") {
+TEST_CASE("Same extern global from root and imported module does not collide") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(
@@ -47,7 +47,7 @@ TEST_CASE("Codegen: same extern global from root and imported module does not co
     CHECK_FALSE(gv.hasInitializer());
 }
 
-TEST_CASE("Codegen: global with an initializer stays a definition") {
+TEST_CASE("Global with an initializer stays a definition") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

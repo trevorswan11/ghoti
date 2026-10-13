@@ -1163,6 +1163,17 @@ constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };
 
+TEST_CASE("formatter round-trips default parameter values") {
+    constexpr std::string_view src{
+        R"(const f = fn(a: i32, b: i32 = a * 2, comptime T: type = i32): T {
+    return a + b;
+};
+)"};
+    CHECK(format_source("const f = fn(a: i32, b: i32=a*2, comptime T: type=i32): T {\n    return "
+                        "a + b;\n};\n") == src);
+    CHECK(format_source(src) == src);
+}
+
 TEST_CASE("formatter round trip: full node corpus") { round_trips(corpus); }
 
 } // namespace ghoti::tests

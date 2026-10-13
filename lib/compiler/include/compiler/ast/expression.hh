@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -12,8 +13,8 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti {
@@ -205,8 +206,9 @@ struct function_expr {
         bool                     is_pack{false};             // `rest...` / `rest: impl I...`
         bool                     is_comptime_written{false}; // `is_comptime` may also be inferred
         // Where the body reads an inferred `comptime` param at compile time
-        ast::node_id comptime_read{ast::node_id::make_invalid()};
-        bool         comptime_read_in_const{false};
+        ast::node_id              comptime_read{ast::node_id::make_invalid()};
+        bool                      comptime_read_in_const{false};
+        stdx::option<expr_handle> default_value{};
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -566,6 +568,38 @@ struct while_loop_expr {
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+// A function literal's `(...)`, from its `fn` token through the `)`
+struct function_header {
+    stdx::option<self_parameter>           self;
+    std::vector<function_expr::parameter>  parameters;
+    std::vector<function_expr::impl_bound> impl_bounds;
+    bool                                   variadic{false};
+    bool                                   params_force_break{false};
+};
+
+[[nodiscard]] auto parse_function_header(syntax::parser& parser)
+    -> stdx::result<function_header, syntax::diagnostic>;
+
+// `__ghoti_f@default1`: the hidden decl calling `fn_name` with the defaults after its first `kept`
+// params
+[[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
+
+// One hidden wrapper for a defaulted function
+struct default_wrapper {
+    usize             kept; // The first `kept` parameters
+    identifier_handle name;
+    function_handle   fn;
+};
+
+// The wrappers for the function literal just parsed at `fn`, re-parsing its parameters for each so
+// their defaults are nodes of their own. `keep_return_type` spells the result out instead of `auto`
+[[nodiscard]] auto build_default_wrappers(syntax::parser&        parser,
+                                          function_handle        fn,
+                                          const syntax::token_t& name_token,
+                                          std::string_view       fn_name,
+                                          bool                   keep_return_type)
+    -> stdx::result<std::vector<default_wrapper>, syntax::diagnostic>;
 
 // A parameter's declared name, or empty for a discarded `_`
 [[nodiscard]] auto parameter_name(const AST& ast, const function_expr::parameter& param)

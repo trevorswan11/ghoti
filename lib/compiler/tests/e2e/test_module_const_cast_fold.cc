@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through @intFromPtr") {
+TEST_CASE("Module-scope pointer const from @ptrFromInt round-trips through @intFromPtr") {
     CHECK(helpers::compile_and_run(R"(
         const P: ^mut opaque = @ptrFromInt(^mut opaque, 0xDEADBEEFuz);
         pub const main = fn(): i32 {
@@ -13,7 +13,7 @@ TEST_CASE("E2E: module-scope pointer const from @ptrFromInt round-trips through 
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope comptime ptr sentinel compares equal to the same runtime pointer") {
+TEST_CASE("Module-scope comptime ptr sentinel compares equal to the same runtime pointer") {
     CHECK(helpers::compile_and_run(R"(
         const IHV: ^mut opaque = @ptrFromInt(^mut opaque, 0xFFFFFFFFFFFFFFFFuz);
         pub const main = fn(): i32 {
@@ -23,7 +23,7 @@ TEST_CASE("E2E: module-scope comptime ptr sentinel compares equal to the same ru
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope @ptrFromInt with a negative literal folds to an all-ones pointer") {
+TEST_CASE("Module-scope @ptrFromInt with a negative literal folds to an all-ones pointer") {
     CHECK(helpers::compile_and_run(R"(
         const IHV: ^mut opaque = @ptrFromInt(^mut opaque, -1);
         pub const main = fn(): i32 {
@@ -32,7 +32,7 @@ TEST_CASE("E2E: module-scope @ptrFromInt with a negative literal folds to an all
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones") {
+TEST_CASE("Module-scope usize maximum via @as(usize, -1) folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @as(usize, -1);
         pub const main = fn(): i32 {
@@ -41,7 +41,7 @@ TEST_CASE("E2E: module-scope usize maximum via @as(usize, -1) folds to all-ones"
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope comptime usize maximum via @bitCast folds to all-ones") {
+TEST_CASE("Module-scope comptime usize maximum via @bitCast folds to all-ones") {
     CHECK(helpers::compile_and_run(R"(
         const MAX: usize = @bitCast(usize, -1i64);
         pub const main = fn(): i32 {
@@ -50,7 +50,7 @@ TEST_CASE("E2E: module-scope comptime usize maximum via @bitCast folds to all-on
     )") == 7);
 }
 
-TEST_CASE("E2E: module-scope narrow unsigned const from @as(-1) wraps to its maximum") {
+TEST_CASE("Module-scope narrow unsigned const from @as(-1) wraps to its maximum") {
     CHECK(helpers::compile_and_run(R"(
         const A: u8  = @as(u8, -1);
         const B: u16 = @as(u16, -1);
@@ -62,7 +62,7 @@ TEST_CASE("E2E: module-scope narrow unsigned const from @as(-1) wraps to its max
     )") == 7);
 }
 
-TEST_CASE("E2E: local narrow unsigned @as / @bitCast of a negative literal wraps to its maximum") {
+TEST_CASE("Local narrow unsigned @as / @bitCast of a negative literal wraps to its maximum") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let a: u8  = @as(u8, -1);
@@ -78,7 +78,7 @@ TEST_CASE("E2E: local narrow unsigned @as / @bitCast of a negative literal wraps
     )") == 7);
 }
 
-TEST_CASE("E2E: a folded @ptrFromInt module const serves as a compile-time array dimension") {
+TEST_CASE("A folded @ptrFromInt module const serves as a compile-time array dimension") {
     CHECK(helpers::compile_and_run(R"(
         const N: usize = @as(usize, 4);
         const BUF_LEN: usize = @intFromPtr(@ptrFromInt(^mut opaque, N + 1uz));

@@ -508,10 +508,14 @@ parse_aggregate_cfg_group(syntax::parser& parser,
                     continue;
                 }
                 items.emplace_back(TRY(parse_one(parser)));
+                if constexpr (std::same_as<Item, member_handle>) {
+                    parser.append_synthesized(items);
+                }
             }
             TRY(parser.expect_peek(tt::RBRACE));
         } else {
             items.emplace_back(TRY(parse_one(parser)));
+            if constexpr (std::same_as<Item, member_handle>) { parser.append_synthesized(items); }
             if (parser.peek_token_is(tt::COMMA)) { parser.advance(); }
         }
         return items;
@@ -596,6 +600,7 @@ using member_cfg_group = cfg_item_group<member_handle>;
             continue;
         }
         members.emplace_back(TRY(parse_one_member(parser)));
+        parser.append_synthesized(members);
     }
     return members;
 }
@@ -959,19 +964,17 @@ auto parse_attributed_function_expr(syntax::parser& parser)
     return *conv;
 }
 
-auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
-    -> stdx::result<expr_handle, syntax::diagnostic> {
-    PROFILE_FUNCTION();
-    const auto                           start_token{parser.get_current_token()};
-    const syntax::parser::function_scope fn_scope{parser};
+auto parse_function_header(syntax::parser& parser)
+    -> stdx::result<function_header, syntax::diagnostic> {
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+    const auto lparen_line{parser.get_current_token().line};
 
-    // Parse the definition now that we're at the fn token
-    stdx::option<self_parameter>           self;
-    std::vector<parameter>                 parameters;
-    std::vector<function_expr::impl_bound> impl_bounds;
-    bool                                   variadic{false};
-    bool                                   params_force_break{false}; // trailing comma in `fn(...)`
+    function_header header;
+    auto&           self{header.self};
+    auto&           parameters{header.parameters};
+    auto&           impl_bounds{header.impl_bounds};
+    auto&           variadic{header.variadic};
+    auto&           params_force_break{header.params_force_break}; // trailing comma in `fn(...)`
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
         parser.advance();
     } else if (TRY(try_parse_variadic_fn(parser))) {
@@ -1015,8 +1018,19 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                                    modifier_start);
         }
 
+        if (self) { parser.attach_member_doc(self->name, lparen_line); }
+
+        // A param's `///` lines sit below the `(` or the previous param's comma
+        auto       doc_floor{self ? parser.get_current_token().line : lparen_line};
+        const auto attach_param_doc{[&](const discardable_ident_handle& name) {
+            if (name.is<identifier_expr>()) {
+                parser.attach_member_doc(identifier_handle{name}, doc_floor);
+            }
+        }};
+
         // The loop starts either on an LPAREN or COMMA
-        bool first{true};
+        bool                      first{true};
+        stdx::option<expr_handle> first_default;
         while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
                !parser.peek_token_is(syntax::token_type_t::END)) {
             // Skip only for the first param with no self: current already sits on its name
@@ -1034,6 +1048,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                 parser.advance();
             }
 
+            stdx::option<expr_handle> default_value;
             const auto name{parser.current_token_is(syntax::token_type_t::UNDERSCORE)
                                 ? parser.add_node<discardable_ident_handle, ast::discarded>(
                                       parser.get_current_token())
@@ -1047,17 +1062,18 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                 is_pack = true;
             } else {
                 const auto [param_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
-
-                // There are no default values for parameters, and they must be explicitly typed
                 if (!param_type) {
                     return make_syntax_err("Function parameters must be explicitly typed",
-                                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                           syntax::error::MISSING_EXPLICIT_TYPE,
                                            parser.get_current_token());
                 }
                 if (initialized) {
-                    return make_syntax_err("Function parameters may not have default values",
-                                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                           parser.get_location_of(*param_type));
+                    default_value.emplace(TRY(parser.parse_expression()));
+                } else if (first_default && !parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
+                    return make_syntax_err(
+                        "A parameter after one with a default value needs a default value too",
+                        syntax::error::FN_PARAMETER_DEFAULT_NOT_TRAILING,
+                        parser.get_location_of(*param_type));
                 }
 
                 param_explicit_type = *param_type;
@@ -1085,9 +1101,25 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                 }
             }
 
-            parameters.emplace_back(name, param_explicit_type, is_comptime, is_pack, is_comptime);
+            if (default_value && is_pack) {
+                return make_syntax_err("A parameter pack cannot have a default value",
+                                       syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                       parser.get_location_of(**default_value));
+            }
+            if (default_value && !first_default) { first_default.emplace(*default_value); }
+            // `comptime T: type` is spelled out for consistency, but a `type` binds through
+            // generic instantiation rather than by folding the argument to a value
+            const bool type_param{
+                param_explicit_type.is_valid() && param_explicit_type.get_modifier().is_value() &&
+                param_explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE};
+            auto& param{parameters.emplace_back(
+                name, param_explicit_type, is_comptime && !type_param, is_pack, is_comptime)};
+            param.default_value = default_value;
+            attach_param_doc(name);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                attach_param_doc(name); // a trailing `///` is siphoned only now
+                doc_floor = parser.get_current_token().line;
                 // A comma immediately before `)` is a trailing comma: keep one param per line.
                 params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
                 if (is_pack && !params_force_break) {
@@ -1100,6 +1132,19 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
         }
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
+
+    return header;
+}
+
+auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto                           start_token{parser.get_current_token()};
+    const bool                           signature_defaults{parser.take_signature_defaults()};
+    const syntax::parser::checkpoint     fn_start{parser};
+    const syntax::parser::function_scope fn_scope{parser};
+    auto [self, parameters, impl_bounds, variadic, params_force_break]{
+        TRY(parse_function_header(parser))};
 
     const bool has_explicit_conv{parser.peek_token_is(syntax::token_type_t::CALLCONV)};
     const auto conv{TRY(try_parse_callconv(parser))};
@@ -1114,9 +1159,19 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                                start_token);
     }
 
+    const bool has_defaults{
+        std::ranges::any_of(parameters, [](const auto& p) { return p.default_value.has_value(); })};
+
     // No body: `fn(params): ret` is a function*type value
     if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         for (const auto& param : parameters) {
+            // A function type has no declaration to keep defaults on, except an interface method
+            if (param.default_value && !signature_defaults) {
+                return make_syntax_err("Only a function with a body or an interface method "
+                                       "signature can give a parameter a default value",
+                                       syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                       parser.get_location_of(**param.default_value));
+            }
             if (param.name.is<ast::discarded>()) {
                 return make_syntax_err("Function type parameter names cannot be discarded; a "
                                        "parameter name is required",
@@ -1124,37 +1179,41 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                                        parser.get_location_of(*param.name));
             }
         }
-        return parser.add_expr<function_expr>(start_token,
-                                              self,
-                                              std::move(parameters),
-                                              return_type,
-                                              block_handle::make_invalid(),
-                                              variadic,
-                                              is_move,
-                                              true,
-                                              params_force_break,
-                                              conv,
-                                              has_explicit_conv,
-                                              is_extern,
-                                              std::move(impl_bounds));
+        const auto signature{parser.add_expr<function_expr>(start_token,
+                                                            self,
+                                                            std::move(parameters),
+                                                            return_type,
+                                                            block_handle::make_invalid(),
+                                                            variadic,
+                                                            is_move,
+                                                            true,
+                                                            params_force_break,
+                                                            conv,
+                                                            has_explicit_conv,
+                                                            is_extern,
+                                                            std::move(impl_bounds))};
+        if (has_defaults) { parser.note_defaulted_function(*signature, fn_start); }
+        return signature;
     }
 
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
     infer_comptime_params(parser, fn_scope.frame(), parameters);
-    return parser.add_expr<function_expr>(start_token,
-                                          self,
-                                          std::move(parameters),
-                                          return_type,
-                                          body,
-                                          variadic,
-                                          is_move,
-                                          false,
-                                          params_force_break,
-                                          conv,
-                                          has_explicit_conv,
-                                          false,
-                                          std::move(impl_bounds));
+    const auto fn{parser.add_expr<function_expr>(start_token,
+                                                 self,
+                                                 std::move(parameters),
+                                                 return_type,
+                                                 body,
+                                                 variadic,
+                                                 is_move,
+                                                 false,
+                                                 params_force_break,
+                                                 conv,
+                                                 has_explicit_conv,
+                                                 false,
+                                                 std::move(impl_bounds))};
+    if (has_defaults) { parser.note_defaulted_function(*fn, fn_start); }
+    return fn;
 }
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -2208,6 +2267,7 @@ auto interface_expr::parse(syntax::parser& parser)
     std::vector<method>      methods;
 
     while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+        const auto                   doc_floor{parser.get_current_token().line};
         stdx::option<attribute_list> attributes;
         if (parser.peek_token_is(tt::AT_LBRACKET)) {
             parser.advance();
@@ -2230,14 +2290,28 @@ auto interface_expr::parse(syntax::parser& parser)
         if (parser.peek_token_is(tt::CONSTANT)) {
             parser.advance(); // current == const
             TRY(parser.expect_peek(tt::IDENT));
+            const auto        name_token{parser.get_current_token()};
             identifier_handle name{TRY(identifier_expr::parse(parser))};
+            parser.attach_member_doc(name, doc_floor);
 
             if (parser.peek_token_is(tt::ASSIGN)) {
                 parser.advance(); // current == =
                 TRY(parser.expect_peek(tt::FUNCTION));
+                parser.arm_signature_defaults();
                 const auto signature{TRY(function_expr::parse(parser))};
                 if (is_pub) { name->set_token_type(tt::PUBLIC); }
                 methods.emplace_back(method{name, signature, std::move(attributes)});
+
+                // A call leaving defaults off reaches a default method every implementor shares
+                for (auto wrapper :
+                     TRY(build_default_wrappers(parser,
+                                                function_handle{signature},
+                                                name_token,
+                                                parser.get_ast().get_as<identifier_expr>(name).name,
+                                                true))) {
+                    if (is_pub) { wrapper.name->set_token_type(tt::PUBLIC); }
+                    methods.emplace_back(method{wrapper.name, wrapper.fn, stdx::none});
+                }
             } else if (attributes) {
                 return make_syntax_err("Attributes may only be applied to interface methods",
                                        syntax::error::MISPLACED_ATTRIBUTES,
@@ -2263,9 +2337,11 @@ auto interface_expr::parse(syntax::parser& parser)
                     parser.get_peek_token());
             }
             TRY(parser.expect_semicolon());
+            parser.attach_member_doc(name, doc_floor); // a trailing `///` is siphoned only now
         } else if (!is_pub && parser.peek_token_is(tt::IDENT)) {
             parser.advance(); // current == Name
             identifier_handle name{TRY(identifier_expr::parse(parser))};
+            parser.attach_member_doc(name, doc_floor);
             TRY(parser.expect_peek(tt::COLON));
             const auto annotation{TRY(explicit_type::parse(parser))};
 
@@ -2276,6 +2352,7 @@ auto interface_expr::parse(syntax::parser& parser)
             }
             assoc_types.emplace_back(assoc_type{name, annotation, default_type});
             TRY(parser.expect_semicolon());
+            parser.attach_member_doc(name, doc_floor);
         } else {
             return make_syntax_err("Illegal interface member",
                                    syntax::error::ILLEGAL_INTERFACE_MEMBER,
@@ -2300,6 +2377,142 @@ auto type_expr::parse_dyn(syntax::parser& parser) -> stdx::result<expr_handle, s
     const auto type{
         parser.add_type<explicit_dyn_type>(start_token, type_modifier{}, std::move(dyn))};
     return parser.add_expr<type_expr>(start_token, type);
+}
+
+auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string {
+    return fmt::format("__ghoti_{}@default{}", fn_name, kept);
+}
+
+namespace {
+
+// A replayed parameter list with the return type after it, which a wrapper needs when it can't
+// infer one (an interface method's must be spelled out for `dyn`)
+[[nodiscard]] auto parse_signature_again(syntax::parser& parser)
+    -> stdx::result<std::pair<function_header, explicit_type_id>, syntax::diagnostic> {
+    const syntax::parser::function_scope fn_scope{parser};
+    auto                                 header{TRY(parse_function_header(parser))};
+    TRY(try_parse_callconv(parser));
+    TRY(parser.expect_peek(syntax::token_type_t::COLON));
+    const auto return_type{TRY(explicit_type::parse(parser, true))};
+    return std::pair{std::move(header), return_type};
+}
+
+} // namespace
+
+auto build_default_wrappers(syntax::parser&        parser,
+                            function_handle        fn_handle,
+                            const syntax::token_t& name_token,
+                            std::string_view       fn_name,
+                            bool                   keep_return_type)
+    -> stdx::result<std::vector<default_wrapper>, syntax::diagnostic> {
+    using tt = syntax::token_type_t;
+    std::vector<default_wrapper> wrappers;
+    const auto                   fn_start{parser.defaulted_function_start(*fn_handle)};
+    if (!fn_start || !parser.synthesizes_default_wrappers()) { return wrappers; }
+
+    auto&       ast{parser.get_ast()};
+    const auto& fn{ast.get_as<function_expr>(fn_handle)};
+    const auto  first_default{
+        std::ranges::find_if(fn.parameters, [](const function_expr::parameter& p) {
+            return p.default_value.has_value();
+        })};
+
+    // Spanning just the declaration's name, where the LSP already points for it
+    const auto ident{[&](std::string_view name) -> identifier_handle {
+        return identifier_handle{
+            ast.add_node(name_token, name_token, identifier_expr{ast.intern(name)})};
+    }};
+    // A discarded `_` still has to be passed along, so it gets a name the source can't spell
+    const auto param_name{[&](const function_expr::parameter& p, usize index) -> std::string {
+        if (p.name.is<identifier_expr>()) {
+            return std::string{ast.get_as<identifier_expr>(p.name).name};
+        }
+        return fmt::format("_@{}", index);
+    }};
+
+    const auto first_index{static_cast<usize>(first_default - fn.parameters.begin())};
+    for (usize kept{first_index}; kept < fn.parameters.size(); ++kept) {
+        if (fn.parameters[kept].is_pack) { break; }
+        auto [header, return_type]{
+            TRY(parser.replay_from(*fn_start, [&] { return parse_signature_again(parser); }))};
+
+        std::vector<function_expr::parameter> params;
+        std::vector<stmt_handle>              body;
+        std::vector<call_expr::argument>      args;
+        for (usize i{0}; i < header.parameters.size(); ++i) {
+            auto&       param{header.parameters[i]};
+            const auto& original{fn.parameters[i]};
+            if (param.is_pack) { continue; }
+            const auto name{param_name(param, i)};
+            if (i < kept) {
+                param.default_value.reset();
+                param.is_comptime         = original.is_comptime;
+                param.is_comptime_written = original.is_comptime_written;
+                if (!param.name.is<identifier_expr>()) {
+                    param.name = discardable_ident_handle{ident(name)};
+                }
+                params.emplace_back(param);
+            } else {
+                // A `type` is always compile-time, `comptime` written or not
+                const bool compile_time{original.is_comptime ||
+                                        param.explicit_type.get_token_type() == tt::TYPE_TYPE};
+                const auto binding{compile_time ? decl_modifiers::COMPTIME : decl_modifiers::LET};
+                body.emplace_back(parser.add_node<stmt_handle, decl_stmt>(
+                    name_token,
+                    ident(name),
+                    stdx::option<explicit_type_id>{param.explicit_type},
+                    param.default_value,
+                    binding,
+                    stdx::none,
+                    stdx::none,
+                    stdx::none));
+            }
+            args.emplace_back(expr_handle{ident(name)});
+        }
+        std::erase_if(header.impl_bounds,
+                      [&](const function_expr::impl_bound& b) { return b.param_index >= kept; });
+
+        expr_handle callee{ident(fn_name)};
+        if (header.self) {
+            const auto self_name{ast.get_as<identifier_expr>(header.self->name).name};
+            callee = parser.add_expr<dot_expr>(
+                name_token, expr_handle{ident(self_name)}, ident(fn_name));
+        }
+        const auto arg_count{args.size()};
+        const auto call{parser.add_expr<call_expr>(
+            name_token, callee, std::move(args), false, std::vector<bool>(arg_count, false))};
+        body.emplace_back(
+            parser.add_stmt<return_stmt>(name_token, stdx::option<expr_handle>{call}));
+
+        // A declaration's wrapper infers its result, since a defaulted parameter it no longer
+        // takes may name it (`fn(comptime T: type = i64): T`)
+        if (!keep_return_type) {
+            const syntax::token_t auto_token{
+                tt::AUTO_TYPE, "auto", name_token.line, name_token.column};
+            return_type = parser.add_type<identifier_expr>(
+                auto_token, type_modifier{}, identifier_expr{"auto"});
+        }
+        const auto wrapper{parser.add_expr<function_expr>(
+            name_token,
+            header.self,
+            std::move(params),
+            return_type,
+            block_handle{parser.add_stmt<block_stmt>(name_token, std::move(body), false)},
+            false,
+            false,
+            false,
+            false,
+            calling_convention::C,
+            false,
+            false,
+            std::move(header.impl_bounds))};
+        wrappers.emplace_back(default_wrapper{
+            .kept = kept,
+            .name = ident(default_wrapper_name(fn_name, kept)),
+            .fn   = function_handle{wrapper},
+        });
+    }
+    return wrappers;
 }
 
 auto parameter_name(const AST& ast, const function_expr::parameter& param) -> std::string_view {

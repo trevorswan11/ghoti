@@ -60,7 +60,7 @@ TEST_CASE("a range value's bounds may be constants and comptime parameters") {
             for (a) |x| { s += x; }
             return s + a.len;
         };
-        const g = fn(T: type, comptime k: T): T { const r = k..=0; return r[0] + @as(T, @intCast(r.len)); };
+        const g = fn(comptime T: type, comptime k: T): T { const r = k..=0; return r[0] + @as(T, @intCast(r.len)); };
         pub const main = fn(): i32 {
             if (TABLE[3] != 7) { return 1; }
             return @intCast(f(4) + f(3) + @as(usize, g(u8, 5)));

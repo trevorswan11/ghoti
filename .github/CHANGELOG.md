@@ -740,6 +740,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A test build calls the root module's own `test_runner`, else `std.testing`'s when the program uses `std`, else `builtin`'s, rather than relying on which one wins at link time; its signature is checked by the entry code and reported at the `test_runner`
     - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
         - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
+        - Enums that do not implement exit code will try to utilize the `ExitCode` for their backing int
     - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`
 - `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
     - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
@@ -782,6 +783,19 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a parameterized `impl` whose target names its constructor through an alias (`impl(T: type) I for alias.Bag(T)` where `alias.gh` has `pub const Bag = bag.Bag;`) never applied, so the type had none of its methods
 - Fixed: the right side of a compile-time `false and` / `true or` was still checked, so `params.len == 0 or params[0] == T` failed for an empty `params` with an out-of-bounds error
 - Fixed: a statement calling a `noreturn` function (`exit(1);`) didn't end its path, so a function returning a value that ended with one was rejected for not returning on all code paths
+- **Breaking:** a `///` doc comment must document something: a declaration (including one inside a top-level `@cfg` block), an aggregate or interface member, or a function parameter
+    - One anywhere else (before a statement in a function body, a `test`, an `impl`, or a `@cfg` block, or with nothing after it) is an error; it used to be dropped silently
+    - A `//!` module doc comment after the first line of code is an error too, rather than a plain comment
+- `///` doc comments on function parameters (including `self`) and on interface members (methods, associated types and `const`s) are kept for hover
+- **Breaking:** a parameter of type `type` must be written `comptime T: type`; a bare `T: type` is an error. This used to be the other way around, where `comptime` on a `type` parameter was reported as redundant, so every compile-time parameter is now spelled the same way
+- Function parameters can have default values: `const area = fn(w: i32, h: i32 = w): i32 { ... };` is called as `area(3)` or `area(3, 4)`
+    - A default is any expression, evaluated by each call that leaves its argument off, and can read the parameters before it (other defaults included)
+    - Defaults are trailing: every parameter after a defaulted one needs a default too, except a closing `rest...` pack, which gets the arguments past the parameters
+    - `comptime` parameters can have defaults: `fn(x: i32, comptime T: type = i64): T`
+    - Defaults belong to the declaration: a direct call, a method call, `Type.method(obj)`, a call through another module, and a `const` alias of the function (`const g = f;`) see them, while a function value (`let p = f;`, `^fn`, closures, `dyn Fn`) does not, and a function type cannot declare them
+    - Calls that leave defaults off fold at compile time like any other call
+    - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound
+    - An implementation inherits its interface's defaults and can't write any of its own
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -828,6 +842,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
     - `volatile [N]T` was dropped silently; write `[N]volatile T`
 - Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
+- LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)
+    - Each target CPU feature in `builtin.<arch>.Feature` is documented with LLVM's description and its LLVM spelling
+- LSP hover on a function shows its parameters' defaults (`fn(w: i32, h: i32 = w * scale): i32`)
 - Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
 - Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
 - Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from

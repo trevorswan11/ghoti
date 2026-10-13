@@ -25,9 +25,9 @@ TEST_CASE("A type alias is rejected where a value of that type is expected") {
                                 type_as_value("S", "S", 42UZ));
     helpers::test_resolver_fail("const P = ^i32; const q: ^i32 = P;",
                                 type_as_value("^i32", "^i32", 32UZ));
-    helpers::test_resolver_fail(
-        "const Box = fn(T: type): type { return struct { v: T }; }; const g: bool = Box(i32);",
-        type_as_value("bool", "Box(i32)", 78UZ));
+    helpers::test_resolver_fail("const Box = fn(comptime T: type): type { return struct { v: T }; "
+                                "}; const g: bool = Box(i32);",
+                                type_as_value("bool", "Box(i32)", 87UZ));
 }
 
 TEST_CASE("A type is rejected in assignment, argument, and return positions") {
@@ -49,7 +49,7 @@ TEST_CASE("A type is rejected as an aggregate or array element value") {
 
 TEST_CASE("Type-accepting slots and ordinary values are unaffected") {
     helpers::resolve_and_check(
-        "const f = fn(T: type): usize { return @sizeOf(T); }; const n = f(i32);");
+        "const f = fn(comptime T: type): usize { return @sizeOf(T); }; const n = f(i32);");
     helpers::resolve_and_check("const x: type = i32;");
     helpers::resolve_and_check("const T = i32; const x: T = 3; const U = T;");
     helpers::resolve_and_check(

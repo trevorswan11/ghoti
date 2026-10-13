@@ -15,7 +15,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
+TEST_CASE("Arithmetic, Loops and Multi-Function Calls") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -46,7 +46,7 @@ TEST_CASE("E2E LLVM Emission: Arithmetic, Loops and Multi-Function Calls") {
     CHECK(fn_comp.arg_size() == 1);
 }
 
-TEST_CASE("E2E LLVM Emission: Struct Operations and Nested Aggregates") {
+TEST_CASE("Struct Operations and Nested Aggregates") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -73,7 +73,7 @@ TEST_CASE("E2E LLVM Emission: Struct Operations and Nested Aggregates") {
     CHECK(llvm_mod->getFunction("dot_product"));
 }
 
-TEST_CASE("E2E LLVM Emission: Array Manipulation, Mutation & Pointers") {
+TEST_CASE("Array Manipulation, Mutation & Pointers") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

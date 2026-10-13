@@ -172,7 +172,7 @@ TEST_CASE("`impl` bounds hold for callers in other modules and inside other gene
 
 TEST_CASE("an `impl Fn` member of a type constructor checks each instantiation's signature") {
     constexpr auto boxed{R"(
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 pub const map = fn(&self, f: impl Fn(x: T): auto): auto { return f(self.v); };

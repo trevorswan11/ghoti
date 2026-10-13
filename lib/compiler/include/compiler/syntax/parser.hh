@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
@@ -42,7 +43,8 @@ class parser {
             : snapshot_{parser.lexer_}, current_{parser.current_token_}, peek_{parser.peek_token_},
               pending_docs_len_{parser.pending_docs_.size()},
               pending_module_docs_len_{parser.pending_module_docs_.size()},
-              delimiter_depth_{parser.delimiter_depth_} {}
+              delimiter_depth_{parser.delimiter_depth_},
+              synthesized_len_{parser.synthesized_stmts_.size()} {}
 
       private:
         lexer::snapshot snapshot_;
@@ -51,6 +53,7 @@ class parser {
         usize           pending_docs_len_;
         usize           pending_module_docs_len_;
         usize           delimiter_depth_;
+        usize           synthesized_len_;
 
         friend class parser;
     };
@@ -318,6 +321,55 @@ class parser {
     // The next function literal belongs to a `const` declaration
     auto arm_comptime_param_inference() noexcept -> void { infer_next_fn_params_ = true; }
 
+    // Declarations the parser writes itself (a defaulted function's wrappers), which the statement
+    // list holding the declaration that caused them takes right after it
+    auto queue_synthesized(ast::stmt_handle stmt) -> void { synthesized_stmts_.emplace_back(stmt); }
+    [[nodiscard]] auto take_synthesized() -> std::vector<ast::stmt_handle> {
+        return std::exchange(synthesized_stmts_, {});
+    }
+    template <typename Item> auto append_synthesized(std::vector<Item>& items) -> void {
+        for (const auto stmt : take_synthesized()) { items.emplace_back(Item{stmt}); }
+    }
+
+    // Parses again from `from` with `fn`, then resumes exactly where the parser was
+    template <typename F> auto replay_from(const checkpoint& from, F&& fn) {
+        const checkpoint resume{*this};
+        auto             docs{pending_docs_};
+        auto             module_docs{pending_module_docs_};
+        auto             synthesized{synthesized_stmts_};
+        rollback(from);
+        auto result{std::forward<F>(fn)()};
+        rollback(resume);
+        pending_docs_        = std::move(docs);
+        pending_module_docs_ = std::move(module_docs);
+        synthesized_stmts_   = std::move(synthesized);
+        return result;
+    }
+
+    // Wrappers for defaulted parameters are only for analysis; the formatter wants the source as is
+    auto enable_default_wrappers() noexcept -> void { synthesize_default_wrappers_ = true; }
+    [[nodiscard]] auto synthesizes_default_wrappers() const noexcept -> bool {
+        return synthesize_default_wrappers_;
+    }
+
+    // The most recently parsed function literal with defaulted parameters, from its `fn` token
+    auto note_defaulted_function(ast::node_id fn, const checkpoint& start) -> void {
+        last_defaulted_function_.emplace(fn, start);
+    }
+    [[nodiscard]] auto defaulted_function_start(ast::node_id fn) const -> stdx::option<checkpoint> {
+        if (!last_defaulted_function_ ||
+            last_defaulted_function_->first.get_index() != fn.get_index()) {
+            return stdx::none;
+        }
+        return last_defaulted_function_->second;
+    }
+
+    // The next function literal is an interface method, whose bodyless signature may hold defaults
+    auto arm_signature_defaults() noexcept -> void { signature_defaults_armed_ = true; }
+    [[nodiscard]] auto take_signature_defaults() noexcept -> bool {
+        return std::exchange(signature_defaults_armed_, false);
+    }
+
     // Inside `@TypeOf(x)` and friends only `x`'s type is read, never its value
     [[nodiscard]] auto enter_type_only_operand() noexcept -> counter<u32>::guard {
         return counter<u32>::guard{type_only_depth_};
@@ -378,11 +430,26 @@ class parser {
         pending_docs_.resize(checkpoint.pending_docs_len_);
         pending_module_docs_.resize(checkpoint.pending_module_docs_len_);
         delimiter_depth_ = checkpoint.delimiter_depth_;
+        if (synthesized_stmts_.size() > checkpoint.synthesized_len_) {
+            synthesized_stmts_.erase(synthesized_stmts_.begin() +
+                                         static_cast<isize>(checkpoint.synthesized_len_),
+                                     synthesized_stmts_.end());
+        }
     }
 
     // Like `lexer_.advance()` but siphons off `///` / `//!` comments into the pending-doc
     // buffers and skips plain comments, so callers only see significant tokens.
     [[nodiscard]] auto next_significant_token() noexcept -> token_t;
+
+    // Marks doc lines as attached to something that can carry them.
+    auto claim_docs(gsl::span<const pending_doc> lines) -> void {
+        for (const auto& line : lines) { claimed_docs_.insert(offset_of(line.text)); }
+    }
+    [[nodiscard]] auto offset_of(std::string_view text) const noexcept -> usize {
+        return static_cast<usize>(text.data() - input_.data());
+    }
+    // One error per `///` / `//!` that never attached to a declaration, member, or parameter.
+    auto report_misplaced_docs(diagnostics& diagnostics) const -> void;
 
     // Joins pending doc lines into one `\n`-separated block.
     [[nodiscard]] static auto join_docs(gsl::span<const pending_doc> lines) -> std::string {
@@ -403,11 +470,20 @@ class parser {
 
     std::vector<comptime_param_frame> comptime_param_frames_;
 
-    std::vector<pending_doc> pending_docs_;
-    std::vector<pending_doc> pending_module_docs_;
-    bool                     module_doc_locked_{false};
-    bool                     infer_next_fn_params_{false};
-    u32                      compile_time_depth_outside_functions_{0};
+    std::vector<pending_doc>                          pending_docs_;
+    std::vector<pending_doc>                          pending_module_docs_;
+    std::vector<ast::stmt_handle>                     synthesized_stmts_;
+    stdx::option<std::pair<ast::node_id, checkpoint>> last_defaulted_function_;
+
+    // Every `///` (and late `//!`) seen, in source order and keyed by its offset in the input
+    // since a rollback lexes them again. Whatever is never attached is misplaced.
+    ankerl::unordered_dense::map<usize, token_t> doc_tokens_;
+    ankerl::unordered_dense::set<usize>          claimed_docs_;
+    bool                                         module_doc_locked_{false};
+    bool                                         infer_next_fn_params_{false};
+    bool                                         signature_defaults_armed_{false};
+    bool                                         synthesize_default_wrappers_{false};
+    u32                                          compile_time_depth_outside_functions_{0};
 
     // How many `(`, `[` and `{` enclose the current token, and that depth for an open type
     // expression

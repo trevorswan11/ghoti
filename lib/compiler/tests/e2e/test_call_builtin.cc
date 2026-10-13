@@ -62,7 +62,7 @@ TEST_CASE("@call makes the call its modifier asks for") {
     )") == 3 + 7 + 11 + 15 + 19);
 }
 
-TEST_CASE("Codegen: @call marks the LLVM call") {
+TEST_CASE("@call marks the LLVM call") {
     llvm::LLVMContext context;
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         pub const add = fn(a: i32, b: i32): i32 { return a + b; };

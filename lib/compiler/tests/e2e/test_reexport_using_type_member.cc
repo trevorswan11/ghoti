@@ -34,7 +34,7 @@ constexpr std::string_view AGG_MOD{R"(
 
 } // namespace
 
-TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `alias.Type.MEMBER`") {
+TEST_CASE("Cross-module `pub using` alias resolves an enum variant via `alias.Type.MEMBER`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "enums.gh" as x;
@@ -47,7 +47,7 @@ TEST_CASE("E2E: cross-module `pub using` alias resolves an enum variant via `ali
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a `pub using` alias re-exported through a middle module still resolves `.MEMBER`") {
+TEST_CASE("A `pub using` alias re-exported through a middle module still resolves `.MEMBER`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "mid.gh" as m;
@@ -63,7 +63,7 @@ TEST_CASE("E2E: a `pub using` alias re-exported through a middle module still re
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a local `using` alias of a module resolves `alias.Type.MEMBER`") {
+TEST_CASE("A local `using` alias of a module resolves `alias.Type.MEMBER`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
@@ -80,12 +80,12 @@ TEST_CASE("E2E: a local `using` alias of a module resolves `alias.Type.MEMBER`")
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` capture and compare") {
+TEST_CASE("`alias.Enum.MEMBER` folds through a generic-union `match` capture and compare") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "pkg.gh" as pkg;
             const x = pkg.en;
-            const Result = fn(T: type, F: type): type { return union { ok: T, err: F }; };
+            const Result = fn(comptime T: type, comptime F: type): type { return union { ok: T, err: F }; };
             const g = fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main = fn(): i32 {
                 let miss = match (g()) {
@@ -102,7 +102,7 @@ TEST_CASE("E2E: `alias.Enum.MEMBER` folds through a generic-union `match` captur
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a `using` alias of a cross-module struct resolves its `comptime` static members") {
+TEST_CASE("A `using` alias of a cross-module struct resolves its `comptime` static members") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "agg.gh" as agg;
@@ -133,7 +133,7 @@ TEST_CASE(
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scrutinee and arms") {
+TEST_CASE("Implicit_access against a cross-module aliased enum in match scrutinee and arms") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "enums.gh" as x;
@@ -151,7 +151,7 @@ TEST_CASE("E2E: implicit_access against a cross-module aliased enum in match scr
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolves static methods") {
+TEST_CASE("A re-exported `pub using` alias of a cross-module struct resolves static methods") {
     constexpr std::string_view MID_AGG{R"(
         import "agg.gh" as a;
         pub const CfgAlias = a.Cfg;
@@ -170,7 +170,7 @@ TEST_CASE("E2E: a re-exported `pub using` alias of a cross-module struct resolve
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
+TEST_CASE("@This()-relative member accessed through a local using alias") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const S = struct {
@@ -187,7 +187,7 @@ TEST_CASE("E2E: @This()-relative member accessed through a local using alias") {
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: a cross-module using alias of a union constructs and matches payload") {
+TEST_CASE("A cross-module using alias of a union constructs and matches payload") {
     constexpr std::string_view UNION_MOD{R"(
         pub const U = union { a: i32, b: bool };
         pub const AliasU = U;

@@ -15,6 +15,7 @@
 #include <fmt/format.h>
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
+#include <stdx/hash.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
 #include <stdx/type_traits.hh>
@@ -49,6 +50,17 @@ struct located_span {
     source_span           span;
 
     auto operator==(const located_span&) const noexcept -> bool = default;
+};
+
+struct located_span_hash {
+    [[nodiscard]] static auto operator()(const located_span& located) noexcept -> u64 {
+        return stdx::hasher{std::filesystem::hash_value(located.path)}
+            .combine(located.span.start.line)
+            .combine(located.span.start.column)
+            .combine(located.span.end.line)
+            .combine(located.span.end.column)
+            .finalize();
+    }
 };
 
 template <typename T> struct source_info;

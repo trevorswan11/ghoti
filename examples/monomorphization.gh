@@ -1,4 +1,4 @@
-pub const Array = fn(T: type, comptime n: usize): type {
+pub const Array = fn(comptime T: type, comptime n: usize): type {
     return [n]T;
 };
 

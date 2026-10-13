@@ -38,7 +38,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
+TEST_CASE("@[inline(...)] maps each mode onto its LLVM attribute") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -73,7 +73,7 @@ TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
     CHECK_FALSE(plain.hasFnAttribute(llvm::Attribute::InlineHint));
 }
 
-TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") {
+TEST_CASE("@[naked] on a function literal is naked and never inlined") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -93,7 +93,7 @@ TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") 
     CHECK(fn.hasFnAttribute(llvm::Attribute::NoInline));
 }
 
-TEST_CASE("Codegen: @[no_builtins] marks the function no-builtins") {
+TEST_CASE("@[no_builtins] marks the function no-builtins") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -163,7 +163,7 @@ TEST_CASE("@[align(n)] raises a field's alignment in the aggregate layout") {
     )");
 }
 
-TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
+TEST_CASE("An over-aligned field is laid out at its aligned offset") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -195,7 +195,7 @@ TEST_CASE("@[align(n)] is not supported on union fields") {
                     sema::error::ILLEGAL_ATTRIBUTE));
 }
 
-TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
+TEST_CASE("@[align(n)] on globals, locals and functions") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -259,12 +259,12 @@ TEST_CASE("The removed `@alignas` builtin no longer parses") {
     CHECK_FALSE(p.consume(ast, arena).empty());
 }
 
-TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
+TEST_CASE("A generic function's attributes fold per instantiation") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         @[align(if (@sizeOf(T) > 4) 64 else 16)]
-        const first = fn(T: type, a: T, b: T): T { return a; };
+        const first = fn(comptime T: type, a: T, b: T): T { return a; };
         pub const main = fn(args: [][:0]u8): i32 {
             let small = first(i32, 1, 2);
             let big = first(i64, 3, 4);
@@ -288,7 +288,7 @@ TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
 TEST_CASE("A generic function's conditional discardable folds per instantiation") {
     constexpr std::string_view generic{R"(
         @[discardable(@sizeOf(T) == 1)]
-        const echo = fn(T: type, x: T): T { return x; };
+        const echo = fn(comptime T: type, x: T): T { return x; };
     )"};
     helpers::resolve_and_check(
         fmt::format("{}\npub const main = fn(): i32 {{ echo(u8, 1); return 0; }};", generic));
@@ -320,7 +320,7 @@ TEST_CASE("A comptime parameter reaches the function's attribute arguments") {
 
 TEST_CASE("A type constructor's field attributes fold per instantiation") {
     helpers::resolve_and_check(R"(
-        const Boxed = fn(T: type): type {
+        const Boxed = fn(comptime T: type): type {
             return struct { tag: u8, @[align(@alignOf(T) * 4)] value: T };
         };
         comptime {

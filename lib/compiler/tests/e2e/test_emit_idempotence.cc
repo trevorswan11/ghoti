@@ -46,7 +46,7 @@ TEST_CASE("Plain functions produce byte-identical GIR across multiple emit passe
 
 TEST_CASE("Generic functions with multiple instantiations produce identical GIR") {
     constexpr std::string_view SOURCE{R"(
-        const add = fn(T: type, a: T, b: T): T {
+        const add = fn(comptime T: type, a: T, b: T): T {
             return a + b;
         };
 
@@ -140,7 +140,7 @@ TEST_CASE("Multiple modules sharing an interface impl produce identical GIR") {
 
 TEST_CASE("`fn(...): type` constructors with const members produce identical GIR") {
     constexpr std::string_view SOURCE{R"(
-        const Pair = fn(T: type): type {
+        const Pair = fn(comptime T: type): type {
             return struct {
                 first: T,
                 second: T,

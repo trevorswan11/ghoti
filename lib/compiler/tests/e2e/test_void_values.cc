@@ -29,7 +29,7 @@ TEST_CASE("an all-void union can be constructed through a void parameter") {
 
 TEST_CASE("a generic union constructor taking T compiles when T is void") {
     CHECK(helpers::compile_and_run(R"(
-        const R = fn(T: type, E: type): type {
+        const R = fn(comptime T: type, comptime E: type): type {
             return union {
                 ok: T,
                 err: E,

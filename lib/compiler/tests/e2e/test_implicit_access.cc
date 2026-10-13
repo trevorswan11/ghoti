@@ -71,7 +71,7 @@ TEST_CASE("Implicit access on the left side of a comparison takes the right side
 
 TEST_CASE("Member constant on a generic type constructor returned via implicit access") {
     CHECK(helpers::compile_and_run(R"(
-        pub const Option = fn(T: type): type {
+        pub const Option = fn(comptime T: type): type {
             return union {
                 some: T,
                 none: void,

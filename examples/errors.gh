@@ -1,33 +1,28 @@
 import std;
 
-pub const main = fn(args: [][:0]u8): i32 {
+pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
     if (args.len <= 1) {
         std.io.eprintln("Expected at least 1 arg")!;
-        return 1;
+        return .of(1);
     }
 
-    const run = fn(): std.Result(void, std.io.Error) {
-        let mut file: std.io.File = .open(args[1], .{})?;
-        defer file.close();
+    // This will print the error name on failure from a ? propagation
+    errdefer |e| {
+        std.io.eprintln(@tagName(e))!;
+    }
 
-        let mut buf: [4096]mut u8 = undefined;
-        loop {
-            let n = file.read(buf)?;
-            if (n == 0) {
-                break;
-            } else {
-                std.io.println(buf[0..n])?;
-            }
+    let mut file: std.io.File = .open(args[1], .{})?;
+    defer file.close();
+
+    let mut buf: [4096]mut u8 = undefined;
+    loop {
+        let n = file.read(buf)?;
+        if (n == 0) {
+            break;
+        } else {
+            std.io.println(buf[0..n])?;
         }
+    }
 
-        return .{ .ok = {} };
-    };
-
-    return match (run()) {
-        .ok => 0,
-        .err => |e| blk: {
-            std.io.eprintln(@tagName(e))!;
-            break :blk 1;
-        },
-    };
+    return .of(0);
 };
