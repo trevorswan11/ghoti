@@ -101,7 +101,7 @@ TEST_CASE("Top-level sentinel-string const iterated at runtime") {
     )") == ('A' + 'B' + 'C' - 100));
 }
 
-TEST_CASE("E2E WS-5: module-scope struct const with scalar and slice fields referenced by value") {
+TEST_CASE("Module-scope struct const with scalar and slice fields referenced by value") {
     CHECK(helpers::compile_and_run(R"(
         const Config = struct {
             id: i32,
@@ -118,7 +118,7 @@ TEST_CASE("E2E WS-5: module-scope struct const with scalar and slice fields refe
     )") == 0);
 }
 
-TEST_CASE("E2E WS-5: module-scope struct const referenced by pointer/ref") {
+TEST_CASE("Module-scope struct const referenced by pointer/ref") {
     CHECK(helpers::compile_and_run(R"(
         const Point = struct { x: i32, y: i32 };
         const ORIGIN = Point{ .x = 10, .y = 20 };
@@ -134,7 +134,7 @@ TEST_CASE("E2E WS-5: module-scope struct const referenced by pointer/ref") {
     )") == 30);
 }
 
-TEST_CASE("E2E WS-5: module-scope array of structs indexed and iterated") {
+TEST_CASE("Module-scope array of structs indexed and iterated") {
     CHECK(helpers::compile_and_run(R"(
         const Entry = struct { val: i32 };
         const ITEMS = [3]Entry{
@@ -153,7 +153,7 @@ TEST_CASE("E2E WS-5: module-scope array of structs indexed and iterated") {
     )") == 80);
 }
 
-TEST_CASE("E2E WS-5: module-scope union const lowering and matching") {
+TEST_CASE("Module-scope union const lowering and matching") {
     CHECK(helpers::compile_and_run(R"(
         const Val = union {
             int_val: i32,
@@ -170,7 +170,7 @@ TEST_CASE("E2E WS-5: module-scope union const lowering and matching") {
     )") == 99);
 }
 
-TEST_CASE("E2E WS-5: module-scope struct with pointer field from int cast") {
+TEST_CASE("Module-scope struct with pointer field from int cast") {
     CHECK(helpers::compile_and_run(R"(
         const PtrHolder = struct {
             p: ^i32,
@@ -188,7 +188,7 @@ TEST_CASE("E2E WS-5: module-scope struct with pointer field from int cast") {
     )") == 7);
 }
 
-TEST_CASE("E2E WS-6: match arm return statement without semicolon") {
+TEST_CASE("Match arm return statement without semicolon") {
     CHECK(helpers::compile_and_run(R"(
         const Tag = enum { A, B, C };
         const classify = fn(t: Tag): i32 {
@@ -205,7 +205,7 @@ TEST_CASE("E2E WS-6: match arm return statement without semicolon") {
     )") == 20);
 }
 
-TEST_CASE("E2E WS-6: match arm break and continue statements without semicolon") {
+TEST_CASE("Match arm break and continue statements without semicolon") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut sum: i32 = 0;
@@ -223,7 +223,7 @@ TEST_CASE("E2E WS-6: match arm break and continue statements without semicolon")
     )") == (1 + 3 + 4));
 }
 
-TEST_CASE("E2E WS-6: pointer-to-bool coercion in @assert and @verify") {
+TEST_CASE("Pointer-to-bool coercion in @assert and @verify") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut x: i32 = 123;

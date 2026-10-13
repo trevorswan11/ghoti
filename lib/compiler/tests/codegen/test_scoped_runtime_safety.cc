@@ -34,7 +34,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Codegen: @setRuntimeSafety scopes checks to the rest of its block") {
+TEST_CASE("@setRuntimeSafety scopes checks to the rest of its block") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

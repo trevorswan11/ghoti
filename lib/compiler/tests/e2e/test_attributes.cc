@@ -27,7 +27,7 @@ TEST_CASE("An over-aligned struct field keeps its value and offset at runtime") 
 
 TEST_CASE("A local's alignment in a generic body folds per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const misaligned = fn(T: type): i32 {
+        const misaligned = fn(comptime T: type): i32 {
             @[align(if (@sizeOf(T) > 4) 64 else 32)]
             let mut buf: [4]u8 = undefined;
             let addr: usize = @intFromPtr(^buf);

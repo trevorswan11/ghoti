@@ -37,7 +37,7 @@ test "is_power_of_two" {
 }
 
 /// Cast an integer to a different integer type only if it fits.
-pub const int_cast = fn(T: type, x: auto): std.Option(T) {
+pub const int_cast = fn(comptime T: type, x: auto): std.Option(T) {
     comptime {
         @assert(@typeInfo(T) == .int);
         @assert(is_integer(@TypeOf(x)));
@@ -77,7 +77,7 @@ test "int_cast" {
 
 /// Returns an unsigned int type that can hold the number of bits in T - 1.
 /// Suitable for 0-based bit indices of T.
-pub const Log2Int = fn(T: type): type {
+pub const Log2Int = fn(comptime T: type): type {
     return match comptime (@typeInfo(T)) {
         .comptime_int => comptime_int,
         .int => |info| blk: {
@@ -97,7 +97,7 @@ test "Log2Int construction" {
 }
 
 /// Returns the maximum value of integer type T.
-pub const max_int = fn(T: type): comptime_int {
+pub const max_int = fn(comptime T: type): comptime_int {
     const info = @typeInfo(T).int;
     return (1 << (info.bits - @intFromBool(info.signedness == .signed))) - 1;
 };
@@ -120,7 +120,7 @@ test "max_int" {
 }
 
 /// Returns the minimum value of integer type T.
-pub const min_int = fn(T: type): comptime_int {
+pub const min_int = fn(comptime T: type): comptime_int {
     const info = @typeInfo(T).int;
     return if comptime (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
 };
@@ -211,16 +211,16 @@ test "order" {
 }
 
 /// Whether a `V` compares against a `T` payload by value
-pub const compares_numerically = fn(T: type, V: type): bool {
+pub const compares_numerically = fn(comptime T: type, comptime V: type): bool {
     return (is_integer(V) and (@typeInfo(T) == .int or @typeInfo(T) == .float)) or
         (is_float(V) and @typeInfo(T) == .float);
 };
 
-const is_integer = fn(V: type): bool {
+const is_integer = fn(comptime V: type): bool {
     return @typeInfo(V) == .int or @typeInfo(V) == .comptime_int;
 };
 
-const is_float = fn(V: type): bool {
+const is_float = fn(comptime V: type): bool {
     return @typeInfo(V) == .float or @typeInfo(V) == .comptime_float;
 };
 

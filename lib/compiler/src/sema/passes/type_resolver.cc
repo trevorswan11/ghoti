@@ -2905,6 +2905,120 @@ auto type_resolver::synthesize_ident(std::string_view name, bool is_public)
     return ast::identifier_handle{id};
 }
 
+auto type_resolver::redirect_to_default_wrapper(ast::node_id          id,
+                                                const ast::call_expr& call,
+                                                usize                 written_args) -> bool {
+    if (redirect_by_declaration(id, call, written_args)) { return true; }
+    const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
+    return dot && redirect_to_default_member(id, *dot, written_args);
+}
+
+auto type_resolver::redirect_to_default_member(ast::node_id         id,
+                                               const ast::dot_expr& dot,
+                                               usize                written_args) -> bool {
+    auto&      ast{resolving_.ast};
+    const auto method{ast.get_as_opt<ast::identifier_expr>(dot.member)};
+    if (!method) { return false; }
+
+    const auto            location{ast.location_of(dot.member)};
+    const auto            stable{ast.intern(ast::default_wrapper_name(method->name, written_args))};
+    const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
+    const ast::identifier_handle member{ast.add_node(tok, tok, ast::identifier_expr{stable})};
+    resolving_.sync_side_tables_for_new_node();
+    const ast::expr_handle callee{
+        ast.add_node(tok, tok, ast::dot_expr{.object = dot.object, .member = member})};
+    resolving_.sync_side_tables_for_new_node();
+
+    // Resolved as a callee, the way `resolve_call` does, keeping quiet when there's no such member
+    const auto diags_before{ctx_.diags.size()};
+    {
+        const mutating_context_guard callee_g{resolving_callee_, false};
+        callee_dots_.insert(callee.get_index());
+        const auto prev_callee{direct_callee_};
+        direct_callee_ = member.get_index();
+        resolve(callee);
+        direct_callee_ = prev_callee;
+        callee_dots_.erase(callee.get_index());
+    }
+    const auto found{last_type_.take()};
+    if (!found || found->is_poison()) {
+        DISCARD(ctx_.diags.split_off(diags_before));
+        return false;
+    }
+    ast.get_as_mut<ast::call_expr>(id).function = callee;
+    return true;
+}
+
+auto type_resolver::redirect_by_declaration(ast::node_id          id,
+                                            const ast::call_expr& call,
+                                            usize                 written_args) -> bool {
+    auto&      ast{resolving_.ast};
+    const auto dot{ast.get_as_opt<ast::dot_expr>(call.function)};
+    const auto named{dot ? ast::node_id{dot->member} : ast::node_id{call.function}};
+    if (!ast.get_as_opt<ast::identifier_expr>(named)) { return false; }
+
+    // Only a call naming the declaration sees its defaults, through `const` aliases; a function
+    // value has none. `object` is what reaches the declaring scope (`mod` in `mod.f`)
+    stdx::option<ast::expr_handle> object;
+    if (dot) { object.emplace(dot->object); }
+    auto declaration{resolving_.get_identifier_declaration(named)};
+    stdx::option<const ast::function_expr&> fn;
+    std::string_view                        fn_name;
+    // Each declaration is visited once, so a chain that loops back on itself ends
+    ankerl::unordered_dense::set<gsl::not_null<const ast::decl_stmt*>> visited;
+    while (!fn) {
+        if (!declaration || !declaration->owner || !declaration->decl) { return false; }
+        const auto& owner{*declaration->owner};
+        const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
+        if (!decl || !decl->value || !visited.insert(decl.get()).second) { return false; }
+        if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
+            fn      = literal;
+            fn_name = owner.ast.get_as<ast::identifier_expr>(decl->name).name;
+            break;
+        }
+
+        // `const g = f;` / `const g = mod.f;`, whose value this module can name again
+        if (!decl->has_modifier(ast::decl_modifiers::COMPTIME) ||
+            decl->has_modifier(ast::decl_modifiers::MUT)) {
+            return false;
+        }
+        if (owner.ast.get_as_opt<ast::identifier_expr>(*decl->value)) {
+            if (!object && &owner != &resolving_) { return false; }
+            declaration = owner.get_identifier_declaration(*decl->value);
+        } else if (const auto alias_dot{owner.ast.get_as_opt<ast::dot_expr>(*decl->value)}) {
+            if (object || &owner != &resolving_) { return false; }
+            object.emplace(alias_dot->object);
+            declaration = owner.get_identifier_declaration(alias_dot->member);
+        } else {
+            return false;
+        }
+    }
+    if (!fn) { return false; }
+
+    const auto first_default{std::ranges::find_if(
+        fn->parameters, [](const auto& param) { return param.default_value.has_value(); })};
+    if (first_default == fn->parameters.end() ||
+        written_args < static_cast<usize>(first_default - fn->parameters.begin()) ||
+        written_args >= fn->parameters.size()) {
+        return false;
+    }
+
+    const auto            location{ast.location_of(named)};
+    const auto            stable{ast.intern(ast::default_wrapper_name(fn_name, written_args))};
+    const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
+    const ast::identifier_handle member{ast.add_node(tok, tok, ast::identifier_expr{stable})};
+    resolving_.sync_side_tables_for_new_node();
+
+    ast::expr_handle callee{member};
+    if (object) {
+        callee = ast::expr_handle{
+            ast.add_node(tok, tok, ast::dot_expr{.object = *object, .member = member})};
+        resolving_.sync_side_tables_for_new_node();
+    }
+    ast.get_as_mut<ast::call_expr>(id).function = callee;
+    return true;
+}
+
 // Builds the `.<name> = <value>` accessor half of one synthesized initializer entry.
 auto type_resolver::synthesize_implicit_access(std::string_view name)
     -> ast::implicit_access_handle {
@@ -4112,6 +4226,14 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         const auto effective_arity{expanded.source_index.size()};
 
         const auto expected_arity{params.size() - param_offset - (has_pack_param ? 1UZ : 0UZ)};
+        // `self` written as the first argument (`Type.method(obj, ...)`) is no parameter's default
+        const usize explicit_self{function_type->has_self && !has_implicit_self ? 1UZ : 0UZ};
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            if (effective_arity < expected_arity && effective_arity >= explicit_self &&
+                redirect_to_default_wrapper(id, call, effective_arity - explicit_self)) {
+                return resolve_call(id, call);
+            }
+        }
         if (function_type->is_variadic || has_pack_param) {
             if (effective_arity < expected_arity) {
                 return last_type_.emplace(
@@ -5655,13 +5777,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         if (reject_non_runtime_slot(param.explicit_type, param_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
-        // A `type`-typed value is always compile-time known, so `comptime` adds nothing.
-        if (param.is_comptime_written && param_type.get_kind() == type_kind::TYPE &&
+        // A `type` is only ever known at compile time, and saying so keeps every compile-time
+        // parameter spelled the same way
+        if (!param.is_comptime_written && param_type.get_kind() == type_kind::TYPE &&
             param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
-                "'comptime' is redundant on a parameter of type 'type'; type values are "
-                "always compile-time known",
-                error::REDUNDANT_COMPTIME,
+                fmt::format("A parameter of type 'type' must be written 'comptime {}: type'",
+                            ast::parameter_name(resolving_.ast, param)),
+                error::TYPE_PARAM_NOT_COMPTIME,
                 resolving_.ast.location_of(param.name));
         }
         param_types[param_idx++] = &param_type;

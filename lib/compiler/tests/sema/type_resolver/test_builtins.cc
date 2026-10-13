@@ -191,7 +191,7 @@ TEST_CASE("A return type may depend on a parameter whose type depends on an earl
 
 TEST_CASE("A later parameter's type may be a type-constructor call over an earlier parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         const unbox = fn(a: auto, b: Box(@TypeOf(a))): i32 { return b.val; };
         const boxed: Box(i32) = .{ .val = 2 };
         const call_unbox = unbox(1, boxed);

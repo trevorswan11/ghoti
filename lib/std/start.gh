@@ -29,7 +29,7 @@ const takes_no_args_or_argv = fn(comptime params: []type): bool {
 };
 
 // Whether a test runner takes the arguments and the tests, and gives the exit code
-const is_test_runner = fn(comptime params: []type, ret: type): bool {
+const is_test_runner = fn(comptime params: []type, comptime ret: type): bool {
     return params.len == 2 and params[0] == []Arg and params[1] == []builtin.Test and ret == i32;
 };
 
@@ -82,28 +82,28 @@ const run = fn(args: []Arg): i32 {
             );
         } else {
             if (result) |value| {
-                return value_exit_code(value);
-            } else |err| {
-                if comptime (!@implements(@TypeOf(err), builtin.ExitCode)) {
-                    @compileError("the error 'main' returns must implement 'builtin.ExitCode'");
+                const Value = @TypeOf(value);
+                if comptime (Value == void) {
+                    return 0;
+                } else if comptime (@implements(Value, builtin.ExitCode)) {
+                    return value.to_exit_code();
+                } else if comptime (@typeInfo(Value) == .enum) {
+                    return @backingInt(value).to_exit_code();
                 } else {
+                    @compileError(
+                        "the value 'main' returns in a 'Result' must be 'void' or implement 'builtin.ExitCode'",
+                    );
+                }
+            } else |err| {
+                const Err = @TypeOf(err);
+                if comptime (@implements(Err, builtin.ExitCode)) {
                     return err.to_exit_code();
+                } else if comptime (@typeInfo(Err) == .enum) {
+                    return @backingInt(err).to_exit_code();
+                } else {
+                    @compileError("the error 'main' returns must implement 'builtin.ExitCode'");
                 }
             }
-        }
-    };
-
-    // The exit code of the value a `Result` from `main` succeeded with
-    const value_exit_code = fn(value: auto): i32 {
-        const Value = @TypeOf(value);
-        if comptime (Value == void) {
-            return 0;
-        } else if comptime (!@implements(Value, builtin.ExitCode)) {
-            @compileError(
-                "the value 'main' returns in a 'Result' must be 'void' or implement 'builtin.ExitCode'",
-            );
-        } else {
-            return value.to_exit_code();
         }
     };
 }

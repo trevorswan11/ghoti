@@ -1,6 +1,6 @@
 import std;
 
-pub const Result = fn(T: type, E: type): type {
+pub const Result = fn(comptime T: type, comptime E: type): type {
     return union {
         ok: T,
         err: E,

@@ -129,7 +129,7 @@ struct root_error {
 
 // A `Result` like `std.Result`, which a test program can't import
 constexpr std::string_view result_type{R"(
-const Res = fn(T: type, E: type): type {
+const Res = fn(comptime T: type, comptime E: type): type {
     return union { ok: T, err: E };
 };
 impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {

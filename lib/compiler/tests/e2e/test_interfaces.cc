@@ -113,7 +113,7 @@ TEST_CASE("an `impl (A + B)` intersection parameter uses both interfaces") {
 
 TEST_CASE("a parameterized inherent impl adds a method to every instantiation of its ctor") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         impl(T: type) Box(T) {
             pub const doubled = fn(&self): T { return self.val + self.val; };
         }
@@ -126,7 +126,7 @@ TEST_CASE("a parameterized inherent impl adds a method to every instantiation of
 
 TEST_CASE("one parameterized-impl method set serves repeated uses of the same instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         impl(T: type) Box(T) {
             pub const get = fn(&self): T { return self.val; };
         }
@@ -141,7 +141,7 @@ TEST_CASE("one parameterized-impl method set serves repeated uses of the same in
 TEST_CASE("a parameterized trait impl over a local ctor dispatches statically") {
     CHECK(helpers::compile_and_run(R"(
         const Show = interface { pub const show = fn(&self): i32; };
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         impl(T: type) Show for Box(T) {
             pub const show = fn(&self): i32 { return self.val; };
         }
@@ -154,7 +154,7 @@ TEST_CASE("a parameterized trait impl over a local ctor dispatches statically") 
 
 TEST_CASE("a parameterized impl with two type parameters remaps each independently") {
     CHECK(helpers::compile_and_run(R"(
-        const Pair = fn(A: type, B: type): type { return struct { a: A, b: B }; };
+        const Pair = fn(comptime A: type, comptime B: type): type { return struct { a: A, b: B }; };
         impl(A: type, B: type) Pair(A, B) {
             pub const first = fn(&self): A { return self.a; };
             pub const second = fn(&self): B { return self.b; };
@@ -182,7 +182,7 @@ TEST_CASE("a parameterized impl folds a `comptime` parameter into its method bod
 
 TEST_CASE("a parameterized impl mixes a type and a `comptime` parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const Slot = fn(T: type, comptime tag: i32): type { return struct { val: T }; };
+        const Slot = fn(comptime T: type, comptime tag: i32): type { return struct { val: T }; };
         impl(T: type, comptime tag: i32) Slot(T, tag) {
             pub const tagged = fn(&self): T { return self.val + tag; };
         }
@@ -223,7 +223,7 @@ TEST_CASE("a parameterized impl in a library module is used from the consumer") 
               helpers::make_vector<helpers::mock_file>(helpers::mock_file{
                   "shapes.gh",
                   R"(
-            pub const Scaled = fn(T: type): type { return struct { base: T }; };
+            pub const Scaled = fn(comptime T: type): type { return struct { base: T }; };
             pub const Measure = interface { pub const size = fn(&self): i32; };
             impl(T: type) Measure for Scaled(T) {
                 pub const size = fn(&self): i32 { return self.base; };

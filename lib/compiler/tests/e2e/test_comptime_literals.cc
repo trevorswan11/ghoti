@@ -69,7 +69,7 @@ TEST_CASE("a comptime literal mixed with a concrete operand adopts the concrete 
 
 TEST_CASE("an untyped constant bound to a name takes the other operand's type") {
     CHECK(helpers::compile_and_run(R"(
-        const bits_of = fn(T: type): comptime_int { return @bitSizeOf(T) - 8; };
+        const bits_of = fn(comptime T: type): comptime_int { return @bitSizeOf(T) - 8; };
         const lit = 4;
         pub const main = fn(): i32 {
             const n = bits_of(u16);           // 8

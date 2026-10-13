@@ -114,6 +114,10 @@ auto doc_comment_for(const mod::module_manager& manager,
         for (const auto& [path, mod] : manager) {
             if (path == def->path) { return lookup(*mod, def->span); }
         }
+        // The compiler-provided `builtin` module lives outside the module table
+        if (manager.has_builtin_module() && manager.builtin_module().path == def->path) {
+            return lookup(manager.builtin_module(), def->span);
+        }
         return lookup(entry, def->span);
     }
 
@@ -160,17 +164,19 @@ auto deprecation_note_for(const mod::module_t& entry, ast::node_id id)
     return fmt::format("**Deprecated**: {}", message ? message->value : std::string_view{});
 }
 
-// The declared parameter names of the callable `id` refers to (or declares)
-auto callable_param_names_for(const mod::module_t& entry, ast::node_id id)
-    -> stdx::option<std::vector<std::string_view>> {
+// The declared parameters of the callable `id` refers to (or declares)
+auto callable_params_for(const mod::module_t& entry, ast::node_id id)
+    -> stdx::option<std::vector<sema::callable_param>> {
     const auto declaration{entry.get_identifier_declaration(id)};
     if (!declaration) { return stdx::none; }
-    return sema::callable_param_names(*declaration);
+    return sema::callable_params(*declaration);
 }
 
-// `fn(a: i32, b: i32): i32`, naming each parameter when the declaration wrote the names down
-auto render_hover_type(const sema::type&                                  type,
-                       const stdx::option<std::vector<std::string_view>>& names) -> std::string {
+// `fn(a: i32, b: i32 = a * 2): i32`, naming each parameter (and its default) when the declaration
+// wrote the names down
+auto render_hover_type(const sema::type&                                      type,
+                       const stdx::option<std::vector<sema::callable_param>>& names)
+    -> std::string {
     const sema::type* target{&type};
     std::string_view  prefix;
     if (const auto p{type.get_data().as_opt<sema::types::pointer>()}) {
@@ -185,7 +191,12 @@ auto render_hover_type(const sema::type&                                  type,
 
     std::vector<std::string> params;
     for (usize i{0}; i < fn->params.size(); ++i) {
-        params.emplace_back(fmt::format("{}: {}", (*names)[i], fn->params[i]->to_string()));
+        const auto& param{(*names)[i]};
+        params.emplace_back(fmt::format("{}: {}{}{}",
+                                        param.name,
+                                        fn->params[i]->to_string(),
+                                        param.default_value.empty() ? "" : " = ",
+                                        param.default_value));
     }
     if (fn->is_variadic) { params.emplace_back("..."); }
     return fmt::format(
@@ -392,7 +403,7 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     if (const auto note{deprecation_note_for(entry_module, *id)}) {
         doc = doc ? fmt::format("{}\n\n{}", *note, *doc) : *note;
     }
-    const auto rendered{render_hover_type(*type, callable_param_names_for(entry_module, *id))};
+    const auto rendered{render_hover_type(*type, callable_params_for(entry_module, *id))};
 
     std::string signature{rendered};
     if (const auto ident{entry_module.ast.get_as_opt<ast::identifier_expr>(*id)};

@@ -179,7 +179,7 @@ extern("kernel32") const MultiByteToWideChar: extern fn(
     wide_cap: i32
 ) callconv(.winapi): i32;
 
-const R = fn(T: type): type {
+const R = fn(comptime T: type): type {
     return std.Result(T, Errno);
 };
 

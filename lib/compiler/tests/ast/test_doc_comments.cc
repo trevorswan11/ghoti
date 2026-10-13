@@ -8,7 +8,9 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "helpers/ast.hh"
 
@@ -31,6 +33,41 @@ auto doc_for_name(const ast::AST& ast, ast::identifier_handle name)
 template <typename Expr> auto first_decl_value(const ast::AST& ast) -> const Expr& {
     const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
     return ast.get_as<Expr>(*decl.value);
+}
+
+// The `MISPLACED_DOC_COMMENT` errors parsing `source` reports.
+auto misplaced_docs(std::string_view source) -> usize {
+    syntax::parser p{source};
+    ghoti::arena   arena;
+    ast::AST       ast;
+    usize          count{0};
+    for (const auto& diag : p.consume(ast, arena)) {
+        if (diag.get_error() == syntax::error::MISPLACED_DOC_COMMENT) { ++count; }
+    }
+    return count;
+}
+
+// The doc on the declaration called `name`, looking through `@cfg` blocks at any depth
+auto doc_in_cfg(const ast::AST& ast, std::string_view name) -> stdx::option<std::string_view> {
+    const auto search{
+        [&](this const auto& self, ast::node_id id) -> stdx::option<std::string_view> {
+            if (const auto decl{ast.get_as_opt<ast::decl_stmt>(id)}) {
+                if (ast.get_as<ast::identifier_expr>(decl->name).name == name) {
+                    return doc_for_name(ast, decl->name);
+                }
+            } else if (const auto cfg{ast.get_as_opt<ast::cfg_stmt>(id)}) {
+                for (const auto& arm : cfg->arms) {
+                    for (const auto item : arm.items) {
+                        if (auto doc{self(*item)}) { return doc; }
+                    }
+                }
+            }
+            return stdx::none;
+        }};
+    for (const auto root : ast) {
+        if (auto doc{search(root)}) { return doc; }
+    }
+    return stdx::none;
 }
 
 } // namespace
@@ -71,30 +108,6 @@ const x = 1;
                                     arena)};
     CHECK(ast.module_doc() == "This module does things.\nAnd more things.");
     CHECK(!first_doc(ast));
-}
-
-TEST_CASE("a `//!` after real code is not treated as a module doc") {
-    ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const x = 1;
-//! too late
-const y = 2;
-)",
-                                    arena)};
-    CHECK(ast.module_doc().empty());
-}
-
-TEST_CASE("a `///` on a nested declaration does not leak to the next top-level declaration") {
-    ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const f = fn(): void {
-    /// nested
-    let local = 1;
-    _ = local;
-};
-const g = 2;
-)",
-                                    arena)};
-    const auto&  g{ast.get_as<ast::decl_stmt>(ast.get_roots()[1])};
-    CHECK(!ast.doc_for({ast.location_of(g.name), ast.end_location_of(g.name)}));
 }
 
 TEST_CASE("doc attachment survives an intervening plain comment") {
@@ -231,6 +244,184 @@ const Point = struct {
     const auto& se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.fields.size() == 1);
     CHECK(!doc_for_name(ast, se.fields[0].name));
+}
+
+TEST_CASE("a `///` that documents nothing is an error") {
+    SECTION("Statements inside a function body") {
+        CHECK(misplaced_docs(R"(const f = fn(): void {
+    /// nested
+    let local = 1;
+    _ = local;
+};
+)") == 1);
+    }
+
+    SECTION("A test block, an `impl` block, and a `@cfg` block are not declarations") {
+        CHECK(misplaced_docs(R"(/// a test
+test "t" {}
+)") == 1);
+        CHECK(misplaced_docs(R"(const S = struct {};
+const I = interface {};
+/// an impl
+impl I for S {}
+)") == 1);
+        CHECK(misplaced_docs(R"(/// a cfg block
+@cfg (os == .linux) {
+    const a = 1;
+}
+)") == 1);
+    }
+
+    SECTION("Trailing the file with nothing after it") {
+        CHECK(misplaced_docs(R"(const a = 1;
+/// dangling
+)") == 1);
+    }
+
+    SECTION("A `//!` after code") {
+        CHECK(misplaced_docs(R"(const x = 1;
+//! too late
+const y = 2;
+)") == 1);
+    }
+}
+
+TEST_CASE("a `///` in a logical location is accepted") {
+    CHECK(misplaced_docs(R"(//! module docs
+/// a decl
+const a = 1; /// trailing
+/// an aggregate
+const S = struct {
+    /// a field
+    x: i32,
+    /// a method
+    pub const get = fn(
+        /// the receiver
+        &self,
+    ): i32 {
+        return self.x;
+    };
+};
+/// an interface
+const I = interface {
+    /// an associated type
+    Item: type;
+    /// an associated const
+    const N: usize;
+    /// a method
+    const next = fn(
+        &mut self,
+        /// how many to skip
+        skip: usize,
+    ): Item;
+};
+@cfg (os == .linux) {
+    /// a decl in a cfg block
+    const b = 2;
+}
+)") == 0);
+}
+
+TEST_CASE("a leading or trailing `///` on a parameter attaches to its name") {
+    ghoti::arena arena;
+    auto         ast{helpers::parse(R"(const f = fn(
+    /// the first
+    a: i32,
+    b: i32, /// the second
+): i32 {
+    return a + b;
+};
+)",
+                                    arena)};
+    const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+    const auto&  fn{ast.get_as<ast::function_expr>(*decl.value)};
+    REQUIRE(fn.parameters.size() == 2);
+    const auto name_of{[&](usize i) { return ast::identifier_handle{fn.parameters[i].name}; }};
+    REQUIRE(doc_for_name(ast, name_of(0)));
+    CHECK(*doc_for_name(ast, name_of(0)) == "the first");
+    REQUIRE(doc_for_name(ast, name_of(1)));
+    CHECK(*doc_for_name(ast, name_of(1)) == "the second");
+}
+
+TEST_CASE("a `///` on an interface member attaches to its name") {
+    ghoti::arena arena;
+    auto         ast{helpers::parse(R"(const I = interface {
+    /// the item
+    Item: type;
+    /// advances
+    const next = fn(&mut self): Item;
+};
+)",
+                                    arena)};
+    const auto&  ie{first_decl_value<ast::interface_expr>(ast)};
+    REQUIRE(doc_for_name(ast, ie.assoc_types[0].name));
+    CHECK(*doc_for_name(ast, ie.assoc_types[0].name) == "the item");
+    REQUIRE(doc_for_name(ast, ie.methods[0].name));
+    CHECK(*doc_for_name(ast, ie.methods[0].name) == "advances");
+}
+
+TEST_CASE("`///` inside nested `@cfg` blocks documents the declarations there") {
+    constexpr std::string_view source{R"(@cfg (os == .linux) {
+    @cfg (arch == .x86_64) {
+        /// inner
+        const a = 1;
+    } else @cfg (arch == .aarch64) {
+        /// middle
+        const b = 2;
+    } else {
+        @cfg (abi == .gnu) {
+            /// deepest
+            const c = 3;
+        }
+    }
+    /// outer
+    const d = 4;
+}
+)"};
+    CHECK(misplaced_docs(source) == 0);
+    ghoti::arena arena;
+    auto         ast{helpers::parse(source, arena)};
+    CHECK(doc_in_cfg(ast, "a").value_or("") == "inner");
+    CHECK(doc_in_cfg(ast, "b").value_or("") == "middle");
+    CHECK(doc_in_cfg(ast, "c").value_or("") == "deepest");
+    CHECK(doc_in_cfg(ast, "d").value_or("") == "outer");
+}
+
+TEST_CASE("a `///` on a nested `@cfg` block itself is misplaced and documents nothing inside") {
+    constexpr std::string_view source{R"(@cfg (os == .linux) {
+    /// the block
+    @cfg (arch == .x86_64) {
+        const a = 1;
+    }
+}
+)"};
+    CHECK(misplaced_docs(source) == 1);
+}
+
+TEST_CASE("`///` inside `@cfg` member, field, and variant groups documents those items") {
+    constexpr std::string_view source{R"(const S = struct {
+    @cfg (os == .linux) {
+        /// a linux field
+        fd: i32,
+    } else {
+        /// another field
+        handle: u64,
+    }
+
+    @cfg (os == .linux) {
+        /// a linux member
+        const open = fn(): void {};
+    }
+};
+const E = enum {
+    @cfg (os == .linux) {
+        /// a linux variant
+        epoll,
+    }
+    kqueue,
+};
+)"};
+    CHECK(misplaced_docs(source) == 0);
 }
 
 } // namespace ghoti::tests

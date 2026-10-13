@@ -99,8 +99,9 @@ struct target_facts {
 // One architecture family's CPU features
 struct cpu_feature_family {
     std::string_view         name; // The `builtin.<name>` namespace: `x86`, `aarch64`, `riscv`, ...
-    std::vector<std::string> llvm_names;  // LLVM's spelling, in LLVM's (sorted) order
-    std::vector<std::string> ghoti_names; // Index-aligned with `llvm_names`
+    std::vector<std::string> llvm_names;   // LLVM's spelling, in LLVM's (sorted) order
+    std::vector<std::string> ghoti_names;  // Index-aligned with `llvm_names`
+    std::vector<std::string> descriptions; // LLVM's summary of each, index-aligned too
 };
 
 // Every family whose LLVM backend is linked in, in a fixed order; built once and kept

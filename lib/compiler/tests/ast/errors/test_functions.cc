@@ -24,16 +24,14 @@ TEST_CASE("Function missing return type") {
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ",
                               syntax::diagnostic{"Expected a type, found the end of input",
                                                  syntax::error::MISSING_EXPLICIT_TYPE,
-                                                 0,
-                                                 28});
+                                                 std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
     helpers::test_parser_fail("fn(x = 1): i32;",
                               syntax::diagnostic{"Function parameters must be explicitly typed",
-                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                                 0,
-                                                 7});
+                                                 syntax::error::MISSING_EXPLICIT_TYPE,
+                                                 std::pair{0UZ, 7UZ}});
 }
 
 TEST_CASE("Function parameter missing type") {
@@ -69,8 +67,7 @@ TEST_CASE("Illegal self parameter modifier") {
 }
 
 TEST_CASE("Self parameter modifier without a name") {
-    using namespace std::string_view_literals;
-    const auto modifier{GENERATE("&"sv, "&mut"sv, "^"sv, "^mut"sv)};
+    const auto modifier{GENERATE("&", "&mut", "^", "^mut")};
 
     helpers::test_parser_fail(
         fmt::format("fn({}): i32;", modifier),
@@ -86,11 +83,37 @@ TEST_CASE("Out-of-place variadic parameter") {
             "Expected ')', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
-TEST_CASE("Default function parameter") {
-    helpers::test_parser_fail("fn(a: A = 2): i32;",
-                              syntax::diagnostic{"Function parameters may not have default values",
-                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                                 std::pair{0UZ, 6UZ}});
+TEST_CASE("A function type cannot give a parameter a default value") {
+    helpers::test_parser_fail(
+        "fn(a: A = 2): i32;",
+        syntax::diagnostic{"Only a function with a body or an interface method signature can give "
+                           "a parameter a default value",
+                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                           std::pair{0UZ, 10UZ}});
+}
+
+TEST_CASE("An implementation of an interface can't write defaults") {
+    syntax::parser p{R"(const Shape = interface {
+    pub const scaled = fn(&self, by: i32 = 2): i32;
+};
+impl Shape for Sq {
+    pub const scaled = fn(&self, by: i32 = 2): i32 { return by; };
+}
+)"};
+    ghoti::arena   arena;
+    ast::AST       ast;
+    const auto     errors{p.consume(ast, arena)};
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].get_error() == syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE);
+    CHECK(errors[0].get_message()->contains("calls use the interface's defaults"));
+}
+
+TEST_CASE("Default parameter values must be trailing") {
+    helpers::test_parser_fail(
+        "fn(a: i32 = 1, b: i32): i32 { return a + b; };",
+        syntax::diagnostic{"A parameter after one with a default value needs a default value too",
+                           syntax::error::FN_PARAMETER_DEFAULT_NOT_TRAILING,
+                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Noreturn function types") {

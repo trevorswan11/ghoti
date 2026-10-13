@@ -374,7 +374,7 @@ TEST_CASE("a generic's peer types follow each instantiation") {
             let sum = a + b;
             return if (a < b) sum else sum;
         };
-        const Peer = fn(A: type, B: type): type {
+        const Peer = fn(comptime A: type, comptime B: type): type {
             let mut a: A = undefined;
             let mut b: B = undefined;
             return @TypeOf(a, b);

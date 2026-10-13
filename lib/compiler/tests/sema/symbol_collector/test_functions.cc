@@ -14,8 +14,8 @@ namespace ghoti::tests {
 namespace syms = sema::symbols;
 
 TEST_CASE("Function hollow types") {
-    auto [ctx, idx]{
-        helpers::collect_and_check("const a = fn(&self, c: type): void { let foo = bar; };")};
+    auto [ctx, idx]{helpers::collect_and_check(
+        "const a = fn(&self, comptime c: type): void { let foo = bar; };")};
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 2);
 

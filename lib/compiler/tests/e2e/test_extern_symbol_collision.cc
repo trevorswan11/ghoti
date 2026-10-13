@@ -18,7 +18,7 @@ constexpr std::string_view SYS_MODULE{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a function named like an `extern` link name in the same module") {
+TEST_CASE("A function named like an `extern` link name in the same module") {
     CHECK(helpers::compile_and_run(R"(
         extern("ghoti_fake_libc", "write") const raw_write: fn(n: i32): i32;
 
@@ -30,7 +30,7 @@ TEST_CASE("E2E: a function named like an `extern` link name in the same module")
     )") == 42);
 }
 
-TEST_CASE("E2E: the colliding function may be declared before the `extern`") {
+TEST_CASE("The colliding function may be declared before the `extern`") {
     CHECK(helpers::compile_and_run(R"(
         const write = fn(n: i32): i32 { return n + 1; };
 
@@ -42,7 +42,7 @@ TEST_CASE("E2E: the colliding function may be declared before the `extern`") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a `pub` function imported across modules still collides safely") {
+TEST_CASE("A `pub` function imported across modules still collides safely") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sys.gh" as sys;

@@ -4,7 +4,7 @@
 
 /// Creates floating point type T from an unbiased exponent and raw mantissa.
 @[inline(.always)] pub const reconstruct_float = fn(
-    T: type,
+    comptime T: type,
     comptime exponent: comptime_int,
     comptime mantissa: comptime_int,
 ): T {
@@ -17,13 +17,13 @@
 };
 
 /// Creates a raw "1.0" mantissa for floating point type T
-@[inline(.always)] pub const mantissa_one = fn(T: type): comptime_int {
+@[inline(.always)] pub const mantissa_one = fn(comptime T: type): comptime_int {
     comptime @assert(@typeInfo(T) == .float);
     return if (@typeInfo(T).float.bits == 80) 1 << float_fractional_bits(T) else 0;
 };
 
 /// Returns the number of fractional bits in the mantissa of floating point type T.
-@[inline(.always)] pub const float_fractional_bits = fn(T: type): comptime_int {
+@[inline(.always)] pub const float_fractional_bits = fn(comptime T: type): comptime_int {
     comptime @assert(@typeInfo(T) == .float);
 
     // standard IEEE floats have an implicit 0.m or 1.m integer part
@@ -38,7 +38,7 @@
 };
 
 /// Returns the number of bits in the mantissa of floating point type T.
-@[inline(.always)] pub const float_mantissa_bits = fn(T: type): comptime_int {
+@[inline(.always)] pub const float_mantissa_bits = fn(comptime T: type): comptime_int {
     comptime @assert(@typeInfo(T) == .float);
 
     return match comptime (@typeInfo(T).float.bits) {
@@ -52,7 +52,7 @@
 };
 
 /// Returns the number of bits in the exponent of floating point type T.
-@[inline(.always)] pub const float_exponent_bits = fn(T: type): comptime_int {
+@[inline(.always)] pub const float_exponent_bits = fn(comptime T: type): comptime_int {
     comptime @assert(@typeInfo(T) == .float);
 
     return match comptime (@typeInfo(T).float.bits) {
@@ -66,17 +66,17 @@
 };
 
 /// Returns the minimum exponent that can represent a normalized value in floating point type T.
-@[inline(.always)] pub const float_exponent_min = fn(T: type): comptime_int {
+@[inline(.always)] pub const float_exponent_min = fn(comptime T: type): comptime_int {
     return -float_exponent_max(T) + 1;
 };
 
 /// Returns the maximum exponent that can represent a normalized value in floating point type T.
-@[inline(.always)] pub const float_exponent_max = fn(T: type): comptime_int {
+@[inline(.always)] pub const float_exponent_max = fn(comptime T: type): comptime_int {
     return (1 << (float_exponent_bits(T) - 1)) - 1;
 };
 
 /// Returns the canonical quiet NaN representation for a floating point `Type`.
-@[inline(.always)] pub const nan = fn(T: type): T {
+@[inline(.always)] pub const nan = fn(comptime T: type): T {
     comptime @assert(@typeInfo(T) == .float);
 
     const RuntimeType = match comptime (T) {
@@ -104,7 +104,7 @@ test "Quiet NaN canonical representation" {
 }
 
 /// Returns a signalling NaN representation for a floating point `Type`.
-@[inline(.always)] pub const snan = fn(T: type): T {
+@[inline(.always)] pub const snan = fn(comptime T: type): T {
     comptime @assert(@typeInfo(T) == .float);
 
     const RuntimeType = match comptime (T) {
@@ -132,7 +132,7 @@ test "Signalling NaN canonical representation" {
 }
 
 /// Returns the inf value for a floating point `Type`.
-@[inline(.always)] pub const inf = fn(T: type): T {
+@[inline(.always)] pub const inf = fn(comptime T: type): T {
     comptime @assert(@typeInfo(T) == .float);
 
     const RuntimeType = match comptime (T) {

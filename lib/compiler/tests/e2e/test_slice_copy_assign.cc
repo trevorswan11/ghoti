@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: assigning an array to a constant-bounded range copies it in") {
+TEST_CASE("Assigning an array to a constant-bounded range copies it in") {
     const auto exit_code{helpers::compile_and_run(R"(
         const digits2 = fn(v: u8): [2]u8 { return [2]u8{ '0' + v / 10, '0' + v % 10 }; };
 
@@ -24,7 +24,7 @@ TEST_CASE("E2E: assigning an array to a constant-bounded range copies it in") {
     CHECK(exit_code == 0);
 }
 
-TEST_CASE("E2E: a known-length slice source is copied with overlap-safe semantics") {
+TEST_CASE("A known-length slice source is copied with overlap-safe semantics") {
     const auto exit_code{helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut a: [6]mut u8 = .{ 1, 2, 3, 4, 5, 6 };
@@ -37,7 +37,7 @@ TEST_CASE("E2E: a known-length slice source is copied with overlap-safe semantic
     CHECK(exit_code == 45);
 }
 
-TEST_CASE("E2E: a range copy accepts `.{...}` sources and `*slice` destinations") {
+TEST_CASE("A range copy accepts `.{...}` sources and `*slice` destinations") {
     const auto exit_code{helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut a: [4]mut u8 = .{ 1, 2, 3, 4 };
@@ -53,7 +53,7 @@ TEST_CASE("E2E: a range copy accepts `.{...}` sources and `*slice` destinations"
     CHECK(exit_code == 78);
 }
 
-TEST_CASE("E2E: assigning a slice variable still rebinds it rather than copying") {
+TEST_CASE("Assigning a slice variable still rebinds it rather than copying") {
     const auto exit_code{helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut a: [4]mut u8 = .{ 1, 2, 3, 4 };
@@ -69,7 +69,7 @@ TEST_CASE("E2E: assigning a slice variable still rebinds it rather than copying"
     CHECK(exit_code == 30 + 1 + 50);
 }
 
-TEST_CASE("E2E: range copies and element writes through a range fold at compile time") {
+TEST_CASE("Range copies and element writes through a range fold at compile time") {
     const auto exit_code{helpers::compile_and_run(R"(
         const build = fn(): [4]u8 {
             let mut buf: [4]mut u8 = .{ 0, 0, 0, 0 };

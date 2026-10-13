@@ -58,7 +58,7 @@ constexpr std::string_view OS_SELECT{R"(
 
 constexpr std::string_view OS_STD{R"( pub import "os_select.gh" as os; )"};
 
-TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const through `std`") {
+TEST_CASE("A @cfg-selected backend flat-re-exports its type / fn / const through `std`") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "std.gh" as std;
@@ -79,7 +79,7 @@ TEST_CASE("E2E: a @cfg-selected backend flat-re-exports its type / fn / const th
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: importing every platform module still links on the host") {
+TEST_CASE("Importing every platform module still links on the host") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "plat_linux.gh" as plat_linux;

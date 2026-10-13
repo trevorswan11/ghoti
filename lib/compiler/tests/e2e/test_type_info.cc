@@ -380,7 +380,7 @@ TEST_CASE("`if comptime` can fold a compile-time string's `.len`") {
 
 TEST_CASE("`if comptime` can fold a compile-time slice range `arr[lo..hi]`") {
     CHECK(helpers::compile_and_run(R"(
-        const eql = fn(T: type, a: []T, b: []T): bool {
+        const eql = fn(comptime T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
             for (a, b) |x, y| { if (x != y) return false; }
             return true;
@@ -433,7 +433,7 @@ TEST_CASE("consecutive `for comptime` iterations that fold `if comptime` to the 
 TEST_CASE("a bare (non-`match`) `@typeInfo(T).int` field access spilled to memory materializes the "
           "real tagged-union payload") {
     constexpr std::string_view MATH_MOD{R"(
-        pub const maxIntBits = fn(T: type): i32 {
+        pub const maxIntBits = fn(comptime T: type): i32 {
             const info = @typeInfo(T).int;
             return @intCast(i32, info.bits);
         };
@@ -442,7 +442,7 @@ TEST_CASE("a bare (non-`match`) `@typeInfo(T).int` field access spilled to memor
               R"(
             import "sub/math.gh" as math;
 
-            pub const eql = fn(T: type, a: []T, b: []T): bool {
+            pub const eql = fn(comptime T: type, a: []T, b: []T): bool {
                 if (a.len != b.len) return false;
                 return true;
             };
@@ -458,7 +458,7 @@ TEST_CASE("a bare (non-`match`) `@typeInfo(T).int` field access spilled to memor
 TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair folds per-field "
           "inside a `for comptime` over `@typeInfo(T).fields`") {
     CHECK(helpers::compile_and_run(R"(
-        const eql = fn(T: type, a: []T, b: []T): bool {
+        const eql = fn(comptime T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
             if (a.len == 0) return true;
             if (@typeInfo(T) != .float and a.ptr == b.ptr) return true;
@@ -467,7 +467,7 @@ TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair fold
             }
             return true;
         };
-        const startsWith = fn(T: type, haystack: []T, needle: []T): bool {
+        const startsWith = fn(comptime T: type, haystack: []T, needle: []T): bool {
             return if (needle.len > haystack.len) false else eql(T, haystack[0..needle.len], needle);
         };
         const Data = struct { count_x: f32, count_y: u32, other: bool };
@@ -485,16 +485,16 @@ TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair fold
 
 TEST_CASE("A `const` bound to `@typeInfo` is compared and matched at compile time") {
     CHECK(helpers::compile_and_run(R"(
-        const both_int = fn(T: type, V: type): bool {
+        const both_int = fn(comptime T: type, comptime V: type): bool {
             const t = @typeInfo(T);
             const v = @typeInfo(V);
             return t == .int and v == .int;
         };
-        const not_float = fn(T: type): bool {
+        const not_float = fn(comptime T: type): bool {
             const t = @typeInfo(T);
             return t != .float;
         };
-        const kind = fn(T: type): i32 {
+        const kind = fn(comptime T: type): i32 {
             const t = @typeInfo(T);
             return match (t) {
                 .int => 1,

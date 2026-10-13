@@ -1,5 +1,6 @@
 #include "compiler/module/module.hh"
 
+#include <algorithm>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -21,6 +22,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/module/error.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/instantiation_cache.hh"
@@ -51,6 +53,23 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     fmt::print(os, "\n    {}", line);
     if (caret) { os << fmt::format(tty ? style::GREEN : style::BASE, "\n    {}", *caret); }
     return os;
+}
+
+auto module_t::source_of(ast::node_id id) const -> std::string_view {
+    const std::string_view text{source};
+    const auto             offset_of{[&](const source_location& loc) -> usize {
+        usize offset{0};
+        for (usize line{0}; line < loc.line && offset < text.size(); ++line) {
+            const auto newline{text.find('\n', offset)};
+            if (newline == std::string_view::npos) { return text.size(); }
+            offset = newline + 1;
+        }
+        return std::min(offset + loc.column, text.size());
+    }};
+    // `end_location_of` ends just past the node's last token
+    const auto start{offset_of(ast.location_of(id))};
+    const auto end{offset_of(ast.end_location_of(id))};
+    return start < end ? text.substr(start, end - start) : std::string_view{};
 }
 
 auto module_t::print_diagnostics(std::ostream& os) const -> void {
@@ -168,7 +187,8 @@ auto module_manager::try_get(const std::filesystem::path& path)
 
     auto mod{stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)})};
     syntax::parser p{mod->source};
-    auto           diagnostics{p.consume(mod->ast, *arena_)};
+    p.enable_default_wrappers();
+    auto diagnostics{p.consume(mod->ast, *arena_)};
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());
@@ -190,7 +210,8 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
                                                std::filesystem::path{},
                                                source_file{std::string{source}});
     syntax::parser p{builtin_module_->source};
-    const auto     diagnostics{p.consume(builtin_module_->ast, *arena_)};
+    p.enable_default_wrappers();
+    const auto diagnostics{p.consume(builtin_module_->ast, *arena_)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
 
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
@@ -213,7 +234,8 @@ auto module_manager::get_or_create_start_module(const std::filesystem::path& pat
     start_module_ =
         stdx::make_box<module_t>(path, path.parent_path(), source_file{std::string{source}});
     syntax::parser p{start_module_->source};
-    auto           diagnostics{p.consume(start_module_->ast, *arena_)};
+    p.enable_default_wrappers();
+    auto diagnostics{p.consume(start_module_->ast, *arena_)};
 
     start_module_->sema_side_tables.resize(start_module_->ast.get_pool_sizes());
     start_module_->parse_diagnostics.reserve(diagnostics.size());

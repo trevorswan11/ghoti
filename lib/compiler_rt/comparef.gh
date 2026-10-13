@@ -82,7 +82,7 @@ pub const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
     return cmpf2(f64, a, b);
 };
 
-@[inline(.always)] const cmpf2 = fn(T: type, a: T, b: T): std.Option(Order) {
+@[inline(.always)] const cmpf2 = fn(comptime T: type, a: T, b: T): std.Option(Order) {
     const bits = @typeInfo(T).float.bits;
     const SRep = @Int(.{ .signedness = .signed, .bits = bits });
     const Rep = @Int(.{ .signedness = .unsigned, .bits = bits });
@@ -127,7 +127,7 @@ pub const unord_f64 = fn(a: f64, b: f64): bool {
     return unord(f64, a, b);
 };
 
-@[inline(.always)] const unord = fn(T: type, a: T, b: T): bool {
+@[inline(.always)] const unord = fn(comptime T: type, a: T, b: T): bool {
     const Rep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
 
     const significand_bits = std.math.float_mantissa_bits(T);

@@ -7,7 +7,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E cfg: a module-scope @cfg picks exactly one declaration") {
+TEST_CASE("A module-scope @cfg picks exactly one declaration") {
     CHECK(helpers::compile_and_run(R"(
         @cfg(ptr_bits >= 16) { let N = 42; }
         else                 { let N = 7; }
@@ -16,7 +16,7 @@ TEST_CASE("E2E cfg: a module-scope @cfg picks exactly one declaration") {
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: an else-@cfg chain falls through to the final else") {
+TEST_CASE("An else-@cfg chain falls through to the final else") {
     CHECK(helpers::compile_and_run(R"(
         @cfg(ptr_bits == 7)      { let N = 1; }
         else @cfg(ptr_bits == 9) { let N = 2; }
@@ -26,7 +26,7 @@ TEST_CASE("E2E cfg: an else-@cfg chain falls through to the final else") {
     )") == 9);
 }
 
-TEST_CASE("E2E cfg: a @cfg statement gates control flow inside a function body") {
+TEST_CASE("A @cfg statement gates control flow inside a function body") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             @cfg(ptr_bits == 64) { return 64; }
@@ -35,7 +35,7 @@ TEST_CASE("E2E cfg: a @cfg statement gates control flow inside a function body")
     )") == 64);
 }
 
-TEST_CASE("E2E cfg: a @cfgValue predicate constant is readable as a comptime bool") {
+TEST_CASE("A @cfgValue predicate constant is readable as a comptime bool") {
     CHECK(helpers::compile_and_run(R"(
         const IS_WIDE = @cfgValue(ptr_bits >= 32);
 
@@ -46,7 +46,7 @@ TEST_CASE("E2E cfg: a @cfgValue predicate constant is readable as a comptime boo
     )") == 1);
 }
 
-TEST_CASE("E2E cfg: @cfgValue constants may chain acyclically and gate a @cfg block") {
+TEST_CASE("@cfgValue constants may chain acyclically and gate a @cfg block") {
     CHECK(helpers::compile_and_run(R"(
         const A = @cfgValue(ptr_bits >= 8);
         const B = @cfgValue(A);
@@ -58,7 +58,7 @@ TEST_CASE("E2E cfg: @cfgValue constants may chain acyclically and gate a @cfg bl
     )") == 5);
 }
 
-TEST_CASE("E2E cfg: the @cfgValue guard form yields a per-target comptime value") {
+TEST_CASE("The @cfgValue guard form yields a per-target comptime value") {
     CHECK(helpers::compile_and_run(R"(
         const WORD = @cfgValue(
             ptr_bits == 64 => 8,
@@ -82,7 +82,7 @@ constexpr std::string_view BROKEN_BACKEND{R"(
 
 } // namespace
 
-TEST_CASE("E2E cfg: a non-selected @cfg import is never parsed") {
+TEST_CASE("A non-selected @cfg import is never parsed") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             @cfg(ptr_bits == 64) import "good.gh"   as backend;
@@ -98,7 +98,7 @@ TEST_CASE("E2E cfg: a non-selected @cfg import is never parsed") {
     CHECK(exit_code == 77);
 }
 
-TEST_CASE("E2E cfg: a selected struct @cfg block contributes real, ordered fields") {
+TEST_CASE("A selected struct @cfg block contributes real, ordered fields") {
     CHECK(helpers::compile_and_run(R"(
         const S = struct {
             a: i32,
@@ -113,7 +113,7 @@ TEST_CASE("E2E cfg: a selected struct @cfg block contributes real, ordered field
     )") == 10);
 }
 
-TEST_CASE("E2E cfg: @cfg selects an aggregate member and its methods stay callable") {
+TEST_CASE("@cfg selects an aggregate member and its methods stay callable") {
     CHECK(helpers::compile_and_run(R"(
         const S = struct {
             n: i32,
@@ -125,7 +125,7 @@ TEST_CASE("E2E cfg: @cfg selects an aggregate member and its methods stay callab
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: an unselected struct @cfg block drops its fields; else wins") {
+TEST_CASE("An unselected struct @cfg block drops its fields; else wins") {
     CHECK(helpers::compile_and_run(R"(
         const S = struct {
             a: i32,
@@ -140,7 +140,7 @@ TEST_CASE("E2E cfg: an unselected struct @cfg block drops its fields; else wins"
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: a non-generic `if comptime` over a @cfgValue prunes the dead arm") {
+TEST_CASE("A non-generic `if comptime` over a @cfgValue prunes the dead arm") {
     CHECK(helpers::compile_and_run(R"(
         const IS_64 = @cfgValue(ptr_bits == 64);
 
@@ -151,9 +151,9 @@ TEST_CASE("E2E cfg: a non-generic `if comptime` over a @cfgValue prunes the dead
     )") == 123);
 }
 
-TEST_CASE("E2E cfg: a generic `if comptime` prunes the dead arm per instantiation") {
+TEST_CASE("A generic `if comptime` prunes the dead arm per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const pick = fn(T: type, x: T): i32 {
+        const pick = fn(comptime T: type, x: T): i32 {
             if comptime (T == i32) { return 100; }
             else                    { return x.no_such_method_on_this_type(); }
         };
@@ -162,7 +162,7 @@ TEST_CASE("E2E cfg: a generic `if comptime` prunes the dead arm per instantiatio
     )") == 100);
 }
 
-TEST_CASE("E2E cfg: a valued `if comptime` over a @cfgValue takes the live arm's type") {
+TEST_CASE("A valued `if comptime` over a @cfgValue takes the live arm's type") {
     CHECK(helpers::compile_and_run(R"(
         const IS_64 = @cfgValue(ptr_bits == 64);
 
@@ -173,7 +173,7 @@ TEST_CASE("E2E cfg: a valued `if comptime` over a @cfgValue takes the live arm's
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: a non-taken @cfgValue guard arm with @compileError is inert") {
+TEST_CASE("A non-taken @cfgValue guard arm with @compileError is inert") {
     CHECK(helpers::compile_and_run(R"(
         const SYS = @cfgValue(
             ptr_bits == 64 => 30,
@@ -184,7 +184,7 @@ TEST_CASE("E2E cfg: a non-taken @cfgValue guard arm with @compileError is inert"
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: a @cfg-gated enum variant is real and usable") {
+TEST_CASE("A @cfg-gated enum variant is real and usable") {
     CHECK(helpers::compile_and_run(R"(
         const Tag = enum {
             A,
@@ -204,7 +204,7 @@ TEST_CASE("E2E cfg: a @cfg-gated enum variant is real and usable") {
     )") == 42);
 }
 
-TEST_CASE("E2E cfg: a non-braced @cfg arm on a variant / field may be followed by a bare else") {
+TEST_CASE("A non-braced @cfg arm on a variant / field may be followed by a bare else") {
     CHECK(helpers::compile_and_run(R"(
         const Tag = enum : u32 {
             A = 1u32,
@@ -229,7 +229,7 @@ TEST_CASE("E2E cfg: a non-braced @cfg arm on a variant / field may be followed b
     )") == 7);
 }
 
-TEST_CASE("E2E cfg: a `@cfg`-gated member may follow a non-exhaustive enum's `_` marker") {
+TEST_CASE("A `@cfg`-gated member may follow a non-exhaustive enum's `_` marker") {
     CHECK(helpers::compile_and_run(R"(
         const E = enum : u32 {
             A = 1u32,
@@ -241,7 +241,7 @@ TEST_CASE("E2E cfg: a `@cfg`-gated member may follow a non-exhaustive enum's `_`
     )") == 7);
 }
 
-TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a value") {
+TEST_CASE("A re-exported @cfgValue constant is usable cross-module as a value") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sys.gh" as sys;
@@ -266,7 +266,7 @@ TEST_CASE("E2E cfg: a re-exported @cfgValue constant is usable cross-module as a
     CHECK(exit_code == 8);
 }
 
-TEST_CASE("E2E cfg: a predicate reads another module's @cfgValue through its public imports") {
+TEST_CASE("A predicate reads another module's @cfgValue through its public imports") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sys.gh" as sys;
@@ -289,7 +289,7 @@ TEST_CASE("E2E cfg: a predicate reads another module's @cfgValue through its pub
     CHECK(exit_code == 8);
 }
 
-TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs") {
+TEST_CASE("Endian is decided at compile time and exactly one arm runs") {
     CHECK(helpers::compile_and_run(R"(
         @cfg(endian == .little) { let MARK = 1; }
         else                    { let MARK = 2; }
@@ -301,7 +301,7 @@ TEST_CASE("E2E cfg: endian is decided at compile time and exactly one arm runs")
     )") == 41);
 }
 
-TEST_CASE("E2E cfg: `testing` is true only in a test build") {
+TEST_CASE("`testing` is true only in a test build") {
     CHECK(helpers::compile_and_run_tests(R"(
         const IN_TESTS = @cfgValue(testing);
         @cfg(testing) {

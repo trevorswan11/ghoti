@@ -1,6 +1,6 @@
 import std;
 
-pub const Option = fn(T: type): type {
+pub const Option = fn(comptime T: type): type {
     return union {
         some: T,
         none: void,

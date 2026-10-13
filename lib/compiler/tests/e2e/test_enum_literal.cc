@@ -54,7 +54,7 @@ TEST_CASE("An enum literal becomes an enum value wherever one is expected") {
 
 TEST_CASE("An enum literal becomes a tagged union's `void` field") {
     CHECK(helpers::compile_and_run(R"(
-        const Opt = fn(T: type): type { return union { some: T, none: void }; };
+        const Opt = fn(comptime T: type): type { return union { some: T, none: void }; };
         const nothing = .none;
         pub const main = fn(): i32 {
             let o: Opt(i32) = nothing;
@@ -62,7 +62,7 @@ TEST_CASE("An enum literal becomes a tagged union's `void` field") {
         };
     )") == 42);
     helpers::expect_compile_error(R"(
-        const Opt = fn(T: type): type { return union { some: T, none: void }; };
+        const Opt = fn(comptime T: type): type { return union { some: T, none: void }; };
         const some = .some;
         pub const main = fn(): i32 { let o: Opt(i32) = some; _ = o; return 0; };
     )");

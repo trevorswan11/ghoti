@@ -13,7 +13,7 @@ namespace {
 using helpers::mock_file;
 
 constexpr std::string_view RESULT{R"(
-    pub const Result = fn(T: type, E: type): type {
+    pub const Result = fn(comptime T: type, comptime E: type): type {
         return union { ok: T, err: E };
     };
 )"};
@@ -39,7 +39,7 @@ constexpr std::string_view LEAF{R"(
         pub spare: [2]i64,
     };
 
-    const R = fn(T: type): type { return result.Result(T, Errno); };
+    const R = fn(comptime T: type): type { return result.Result(T, Errno); };
 
     pub const stat = fn(): R(Stat) {
         let mut out: Stat = undefined;
@@ -62,7 +62,7 @@ constexpr std::string_view MID{R"(
 
 } // namespace
 
-TEST_CASE("E2E: importing a re-exported extern struct with a fixed-array field does not crash") {
+TEST_CASE("Importing a re-exported extern struct with a fixed-array field does not crash") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "mid.gh" as mid;
@@ -76,7 +76,7 @@ TEST_CASE("E2E: importing a re-exported extern struct with a fixed-array field d
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported extern struct's fixed-array field is usable through the chain") {
+TEST_CASE("A re-exported extern struct's fixed-array field is usable through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "mid.gh" as mid;

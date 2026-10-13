@@ -115,7 +115,7 @@ const __subtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     };
 }
 
-@[inline(.always)] const addf3 = fn(T: type, a: T, b: T): T {
+@[inline(.always)] const addf3 = fn(comptime T: type, a: T, b: T): T {
     const bits = @typeInfo(T).float.bits;
     const Z = @Int(.{ .signedness = .unsigned, .bits = bits });
 

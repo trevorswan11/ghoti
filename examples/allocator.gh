@@ -1,31 +1,21 @@
 import std;
 
-pub const main = fn(): i32 {
-    const run = fn(): std.Result(i32, std.mem.AllocError) {
-        let allocator = std.heap.page_allocator;
-        let mem = allocator.alloc(i32, 10)?;
-        defer allocator.free(mem);
+pub const main = fn(): std.Result(i32, std.mem.AllocError) {
+    errdefer |e| {
+        std.io.eprintln(@tagName(e))!;
+    }
 
-        for (mem, 0..) |&mut v, i| {
-            v = @intCast(i32, i);
-        }
+    let allocator = std.heap.page_allocator;
+    let mem = allocator.alloc(i32, 10)?;
+    defer allocator.free(mem);
 
-        return .{
-            .ok = blk: {
-                let mut acc: i32 = 0;
-                for (mem) |v| {
-                    acc += v;
-                };
-                break :blk acc;
-            },
-        };
+    for (mem, 0..) |&mut v, i| {
+        v = @intCast(i32, i);
+    }
+
+    let mut acc: i32 = 0;
+    for (mem) |v| {
+        acc += v;
     };
-
-    return match (run()) {
-        .ok => |v| v,
-        .err => |e| blk: {
-            std.io.eprintln(@tagName(e))!;
-            break :blk 1;
-        },
-    };
+    return .of(acc);
 };

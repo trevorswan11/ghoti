@@ -7,7 +7,7 @@ namespace ghoti::tests {
 
 #if GHOTI_ASM_HOST_X86_64
 
-TEST_CASE("E2E asm (x86-64): value flows through a bound output") {
+TEST_CASE("Value flows through a bound output") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let x: i32 = 40;
@@ -24,7 +24,7 @@ TEST_CASE("E2E asm (x86-64): value flows through a bound output") {
     )") == 42);
 }
 
-TEST_CASE("E2E asm (x86-64): result slot feeds an expression") {
+TEST_CASE("Result slot feeds an expression") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let seed: i32 = 21;
@@ -41,7 +41,7 @@ TEST_CASE("E2E asm (x86-64): result slot feeds an expression") {
 
 #elif GHOTI_ASM_HOST_AARCH64
 
-TEST_CASE("E2E asm (aarch64): value flows through a bound output") {
+TEST_CASE("Value flows through a bound output") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let x: i32 = 40;
@@ -58,7 +58,7 @@ TEST_CASE("E2E asm (aarch64): value flows through a bound output") {
     )") == 42);
 }
 
-TEST_CASE("E2E asm (aarch64): result slot feeds an expression") {
+TEST_CASE("Result slot feeds an expression") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let seed: i32 = 21;

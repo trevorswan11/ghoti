@@ -25,7 +25,7 @@ constexpr std::string_view K2{R"(
 
 } // namespace
 
-TEST_CASE("E2E: same-named `pub const fn` in two modules stay distinct") {
+TEST_CASE("Same-named `pub const fn` in two modules stay distinct") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
@@ -43,7 +43,7 @@ TEST_CASE("E2E: same-named `pub const fn` in two modules stay distinct") {
     CHECK(exit_code == 37);
 }
 
-TEST_CASE("E2E: same-named `pub var` in two modules have independent storage") {
+TEST_CASE("Same-named `pub var` in two modules have independent storage") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
@@ -63,7 +63,7 @@ TEST_CASE("E2E: same-named `pub var` in two modules have independent storage") {
     CHECK(exit_code == 81);
 }
 
-TEST_CASE("E2E: a module-scope alias of a colliding cross-module function") {
+TEST_CASE("A module-scope alias of a colliding cross-module function") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
@@ -83,7 +83,7 @@ TEST_CASE("E2E: a module-scope alias of a colliding cross-module function") {
     CHECK(exit_code == 37);
 }
 
-TEST_CASE("E2E: two structs in one module with a same-named static method") {
+TEST_CASE("Two structs in one module with a same-named static method") {
     CHECK(helpers::compile_and_run(R"(
         const A = struct {
             n: i32,
@@ -102,7 +102,7 @@ TEST_CASE("E2E: two structs in one module with a same-named static method") {
     )") == 22);
 }
 
-TEST_CASE("E2E: two structs in one module with a same-named `^self` method") {
+TEST_CASE("Two structs in one module with a same-named `^self` method") {
     CHECK(helpers::compile_and_run(R"(
         const A = struct {
             n: i32,
@@ -143,7 +143,7 @@ constexpr std::string_view SHAPE_B{R"(
 
 } // namespace
 
-TEST_CASE("E2E: same-named method on same-named struct in two modules") {
+TEST_CASE("Same-named method on same-named struct in two modules") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sa.gh" as sa;
@@ -164,7 +164,7 @@ TEST_CASE("E2E: same-named method on same-named struct in two modules") {
     CHECK(exit_code == 25);
 }
 
-TEST_CASE("E2E: a module function and a struct method sharing a name do not cross-talk") {
+TEST_CASE("A module function and a struct method sharing a name do not cross-talk") {
     CHECK(helpers::compile_and_run(R"(
         const make = fn(v: i32): i32 { return v + 100; };
 
@@ -190,7 +190,7 @@ constexpr std::string_view EXPORTER{R"(
 
 } // namespace
 
-TEST_CASE("E2E: an `export`ed name still resolves alongside a colliding internal one") {
+TEST_CASE("An `export`ed name still resolves alongside a colliding internal one") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "exp.gh" as exp;

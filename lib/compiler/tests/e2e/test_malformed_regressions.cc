@@ -12,7 +12,7 @@ namespace ghoti::tests {
 
 TEST_CASE("An attribute argument with a builtin arity error is reported, not a crash") {
     helpers::expect_compile_error(R"(
-        const misaligned = fn(T: type): i32 {
+        const misaligned = fn(comptime T: type): i32 {
             @[align(if (@sizeOf() > 4) 64 else 32)]
             let mut buf: [4]u8 = undefined;
             _ = buf;
@@ -158,7 +158,7 @@ TEST_CASE("The `type` keyword and a type argument for a generic `[]T` slot are n
     helpers::expect_compile_error(
         "pub const main = fn(): i32 { let s: [:0]u8 = type; return 0; };");
     helpers::expect_compile_error(R"(
-        pub const f = fn(T: type, a: []T): usize { return a.len; };
+        pub const f = fn(comptime T: type, a: []T): usize { return a.len; };
         pub const main = fn(): i32 { return @intCast(i32, f(u8, noreturn)); };
     )");
 }

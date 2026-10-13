@@ -43,7 +43,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Codegen: @branchHint weights the branch it opens") {
+TEST_CASE("@branchHint weights the branch it opens") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -105,7 +105,7 @@ TEST_CASE("Codegen: @branchHint weights the branch it opens") {
     CHECK(arm[0] < arm[1]);
 }
 
-TEST_CASE("Codegen: @branchHint(.cold) opening a function body marks it cold") {
+TEST_CASE("@branchHint(.cold) opening a function body marks it cold") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

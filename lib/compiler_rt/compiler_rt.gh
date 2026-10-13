@@ -31,12 +31,12 @@ pub const @"f80" = match comptime (@targetArch()) {
     _ => u80,
 };
 
-/// MSVC's linker looks for this symbol in any object that uses floating point
 @cfg (os == .windows and abi == .msvc and !testing) {
+    /// MSVC's linker looks for this symbol in any object that uses floating point
     export let mut _fltused: c_int = 1;
 }
 
-pub const normalize = fn(T: type, significand: ^mut auto): i32 {
+pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
     const Z = @typeInfo(@TypeOf(significand)).pointer.child;
     const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
 
