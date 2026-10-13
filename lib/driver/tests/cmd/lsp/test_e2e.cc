@@ -390,8 +390,8 @@ pub const main = fn(): i32 {
                        });
     // Assigned, since brace-initializing a json wraps it in an array
     const auto symbols = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)).at("result");
-    CHECK(symbols.size() == 3); // scale, area, main; not area@default1
-    CHECK_FALSE(lsp::has_field(symbols, "name", "area@default1"));
+    CHECK(symbols.size() == 3); // scale, area, main; not __ghoti_area@default1
+    CHECK_FALSE(lsp::has_field(symbols, "name", "__ghoti_area@default1"));
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});

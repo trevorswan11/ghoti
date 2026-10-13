@@ -581,7 +581,8 @@ struct function_header {
 [[nodiscard]] auto parse_function_header(syntax::parser& parser)
     -> stdx::result<function_header, syntax::diagnostic>;
 
-// `f@default1`: the hidden decl calling `fn_name` with the defaults after its first `kept` params
+// `__ghoti_f@default1`: the hidden decl calling `fn_name` with the defaults after its first `kept`
+// params
 [[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
 
 // One hidden wrapper for a defaulted function

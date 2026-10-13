@@ -92,6 +92,22 @@ TEST_CASE("A function type cannot give a parameter a default value") {
                            std::pair{0UZ, 10UZ}});
 }
 
+TEST_CASE("An implementation of an interface can't write defaults") {
+    syntax::parser p{R"(const Shape = interface {
+    pub const scaled = fn(&self, by: i32 = 2): i32;
+};
+impl Shape for Sq {
+    pub const scaled = fn(&self, by: i32 = 2): i32 { return by; };
+}
+)"};
+    ghoti::arena   arena;
+    ast::AST       ast;
+    const auto     errors{p.consume(ast, arena)};
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].get_error() == syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE);
+    CHECK(errors[0].get_message()->contains("calls use the interface's defaults"));
+}
+
 TEST_CASE("Default parameter values must be trailing") {
     helpers::test_parser_fail(
         "fn(a: i32 = 1, b: i32): i32 { return a + b; };",

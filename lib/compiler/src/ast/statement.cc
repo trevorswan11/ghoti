@@ -378,7 +378,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         auto& ast{parser.get_ast()};
         ast.get_as_mut<function_expr>(**decl_value).declaring_decl.emplace(*decl);
 
-        // `f@default<k>` siblings for calls that leave `f`'s defaults off
+        // `__ghoti_f@default<k>` siblings for calls that leave `f`'s defaults off
         const auto wrappers{TRY(build_default_wrappers(parser,
                                                        function_handle{**decl_value},
                                                        decl_name_token,
@@ -701,12 +701,23 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                                parser.get_peek_token());
     }
     auto members{TRY(parse_member_block(parser))};
-    // An implementation of an interface shares the interface's default methods for its defaults
+    // An interface's defaults are the only ones its methods take, through `dyn` or not, so an
+    // implementation inherits them instead of writing its own
     if (interface_type) {
-        std::erase_if(members, [&](member_handle member) {
-            const auto decl{parser.get_ast().get_as_opt<decl_stmt>(*member)};
-            return decl && decl->is_default_wrapper;
-        });
+        auto& ast{parser.get_ast()};
+        for (const auto member : members) {
+            const auto decl{ast.get_as_opt<decl_stmt>(*member)};
+            const auto fn{decl && decl->value ? ast.get_as_opt<function_expr>(**decl->value)
+                                              : stdx::none};
+            if (!fn) { continue; }
+            for (const auto& param : fn->parameters) {
+                if (!param.default_value) { continue; }
+                return make_syntax_err("An implementation of an interface can't give a parameter "
+                                       "a default value; calls use the interface's defaults",
+                                       syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                                       parser.get_location_of(**param.default_value));
+            }
+        }
     }
 
     return parser.add_stmt<impl_stmt>(start_token,

@@ -2,30 +2,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
-namespace {
-
-// Every diagnostic full analysis of `source` reports
-auto sema_outcome(std::string_view source) -> helpers::cfg_outcome {
-    auto [ctx, idx]{helpers::expect_compile_error(source)};
-    helpers::cfg_outcome out;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& diag : *diags) {
-            out.codes.emplace_back(diag.get_error());
-            out.messages.emplace_back(diag.get_message().value_or(""));
-        }
-    }
-    return out;
-}
-
-} // namespace
-
-TEST_CASE("E2E: a call may leave trailing defaulted arguments off") {
+TEST_CASE("A call may leave trailing defaulted arguments off") {
     CHECK(helpers::compile_and_run(R"(
         const add = fn(a: i32, b: i32 = 10, c: i32 = 100): i32 {
             return a + b + c;
@@ -215,8 +197,7 @@ TEST_CASE("An interface's defaults reach concrete, generic, and `dyn` calls") {
         }
         const Rect = struct { w: i32 };
         impl Shape for Rect {
-            // Repeating the interface's defaults is allowed
-            pub const scaled = fn(&self, by: i32 = 2, extra: i32 = 0): i32 {
+            pub const scaled = fn(&self, by: i32, extra: i32): i32 {
                 return self.w * by + extra;
             };
         }
@@ -231,32 +212,6 @@ TEST_CASE("An interface's defaults reach concrete, generic, and `dyn` calls") {
             return direct + through_dyn(&sq) + through_bound(&r); // 18 + 10 + 21
         };
     )") == 49);
-}
-
-TEST_CASE("An impl can't add or change its interface's defaults") {
-    const auto adds{sema_outcome(R"(
-        const Shape = interface {
-            pub const scaled = fn(&self, by: i32): i32;
-        };
-        const Sq = struct { s: i32 };
-        impl Shape for Sq {
-            pub const scaled = fn(&self, by: i32 = 2): i32 { return self.s * by; };
-        }
-    )")};
-    CHECK(adds.has_code(sema::error::IMPL_SIGNATURE_MISMATCH));
-    CHECK(adds.any_message_contains("has a default `Shape` doesn't declare"));
-
-    const auto changes{sema_outcome(R"(
-        const Shape = interface {
-            pub const scaled = fn(&self, by: i32 = 2): i32;
-        };
-        const Sq = struct { s: i32 };
-        impl Shape for Sq {
-            pub const scaled = fn(&self, by: i32 = 3): i32 { return self.s * by; };
-        }
-    )")};
-    CHECK(changes.has_code(sema::error::IMPL_SIGNATURE_MISMATCH));
-    CHECK(changes.any_message_contains("default differs from `Shape`'s `2`"));
 }
 
 TEST_CASE("A function value leaves its declaration's defaults behind") {

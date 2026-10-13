@@ -86,7 +86,7 @@ struct decl_stmt {
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
     stdx::option<attribute_list>   attributes;
-    // A hidden `f@default<k>` the parser wrote for a call leaving `f`'s defaults off
+    // A hidden `__ghoti_f@default<k>` the parser wrote for a call leaving `f`'s defaults off
     bool is_default_wrapper{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)

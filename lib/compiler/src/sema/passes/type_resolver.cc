@@ -2964,12 +2964,13 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
     auto declaration{resolving_.get_identifier_declaration(named)};
     stdx::option<const ast::function_expr&> fn;
     std::string_view                        fn_name;
-    constexpr u32                           MAX_ALIAS_DEPTH{8};
-    for (u32 depth{0}; depth < MAX_ALIAS_DEPTH && !fn; ++depth) {
+    // Each declaration is visited once, so a chain that loops back on itself ends
+    ankerl::unordered_dense::set<const ast::decl_stmt*> visited;
+    while (!fn) {
         if (!declaration || !declaration->owner || !declaration->decl) { return false; }
         const auto& owner{*declaration->owner};
         const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
-        if (!decl || !decl->value) { return false; }
+        if (!decl || !decl->value || !visited.insert(&*decl).second) { return false; }
         if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
             fn      = literal;
             fn_name = owner.ast.get_as<ast::identifier_expr>(decl->name).name;
@@ -14583,62 +14584,6 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
     return false;
 }
 
-namespace {
-
-// Whether two spellings differ only in whitespace
-auto same_spelling(std::string_view lhs, std::string_view rhs) -> bool {
-    const auto is_space{[](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }};
-    auto       l{lhs | std::views::filter([&](char c) { return !is_space(c); })};
-    auto       r{rhs | std::views::filter([&](char c) { return !is_space(c); })};
-    return std::ranges::equal(l, r);
-}
-
-} // namespace
-
-auto type_resolver::check_impl_defaults(const impl_record&        rec,
-                                        const types::interface_t& iface,
-                                        const mod::module_t&      cmod) -> void {
-    const auto iface_name{ctx_.type_display_name(*rec.interface_type)};
-    for (usize i{0}; i < iface.method_names.size(); ++i) {
-        const auto name{iface.method_names[i]};
-        const auto supplied{rec.find_method(name)};
-        if (!supplied) { continue; }
-        const auto& want{
-            iface.enclosing.ast.get_as<ast::function_expr>(iface.method_decl(i).signature)};
-        const auto decl{cmod.ast.get_as_opt<ast::decl_stmt>(supplied->decl)};
-        if (!decl || !decl->value) { continue; }
-        const auto have{cmod.ast.get_as_opt<ast::function_expr>(*decl->value)};
-        if (!have || have->parameters.size() != want.parameters.size()) { continue; }
-
-        // The interface's defaults are the ones every call sees, through `dyn` or not
-        for (usize p{0}; p < have->parameters.size(); ++p) {
-            const auto& have_default{have->parameters[p].default_value};
-            if (!have_default) { continue; }
-            const auto& want_default{want.parameters[p].default_value};
-            if (!want_default) {
-                ctx_.diags.emplace_back(
-                    fmt::format("method `{}`: parameter {} has a default `{}` doesn't declare; "
-                                "an implementation can only repeat its interface's defaults",
-                                name,
-                                p + 1,
-                                iface_name),
-                    error::IMPL_SIGNATURE_MISMATCH,
-                    cmod.ast.location_of(*have_default));
-            } else if (!same_spelling(cmod.source_of(*have_default),
-                                      iface.enclosing.source_of(*want_default))) {
-                ctx_.diags.emplace_back(
-                    fmt::format("method `{}`: parameter {}'s default differs from `{}`'s `{}`",
-                                name,
-                                p + 1,
-                                iface_name,
-                                iface.enclosing.source_of(*want_default)),
-                    error::IMPL_SIGNATURE_MISMATCH,
-                    cmod.ast.location_of(*have_default));
-            }
-        }
-    }
-}
-
 auto type_resolver::check_impl_conformance(const impl_record& rec, const types::interface_t& iface)
     -> void {
     PROFILE_FUNCTION();
@@ -14723,8 +14668,6 @@ auto type_resolver::check_impl_conformance(const impl_record& rec, const types::
                 method_loc);
         }
     }
-
-    check_impl_defaults(rec, iface, cmod);
 
     // Every required associated type must be bound by the impl or defaulted by the interface.
     for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {

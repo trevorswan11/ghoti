@@ -2380,7 +2380,7 @@ auto type_expr::parse_dyn(syntax::parser& parser) -> stdx::result<expr_handle, s
 }
 
 auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string {
-    return fmt::format("{}@default{}", fn_name, kept);
+    return fmt::format("__ghoti_{}@default{}", fn_name, kept);
 }
 
 namespace {
