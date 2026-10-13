@@ -1528,8 +1528,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
 
     auto* dest_ptr{has_explicit_dest ? lower_value(inst.operands[0])
                                      : lower_value(gir::value{*inst.result})};
-    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0],
-                          inst.type ? inst.type.get() : nullptr)};
+    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0], inst.type.raw())};
     if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val || val->getType()->isVoidTy()) {
         return;
     }
@@ -1954,7 +1953,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
-    auto* val{lower_value(inst.operands[0], inst.type ? inst.type.get() : nullptr)};
+    auto* val{lower_value(inst.operands[0], inst.type.raw())};
     if (inst.result) { set_local(*inst.result, val); }
     return val;
 }

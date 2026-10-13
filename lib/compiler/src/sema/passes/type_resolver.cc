@@ -2539,7 +2539,7 @@ template <ast::IndexableID ID>
                                      error::TYPE_MISMATCH,
                                      resolving_.ast.location_of(call.function));
             }
-            return_type = &*runner_type;
+            return_type = runner_type.get();
             break;
         }
         if (!ctx_.entry_root) {
@@ -2557,7 +2557,7 @@ template <ast::IndexableID ID>
                 error::TYPE_MISMATCH,
                 resolving_.ast.location_of(call.function));
         }
-        return_type = &*main_type;
+        return_type = main_type.get();
         break;
     }
     case syntax::builtin_t::ENUM_LITERAL: {
@@ -4539,8 +4539,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 .generic_fn_type = &callee_type,
                 .arg_types       = concrete_arg_types,
                 .comptime_args   = comptime_args,
-                .enclosing_type =
-                    fn_info_copy.enclosing_type ? &*fn_info_copy.enclosing_type : nullptr,
+                .enclosing_type  = fn_info_copy.enclosing_type.raw(),
             };
 
             if (const auto cached{ctx_.instantiation_cache.find(key)}) {
@@ -4785,9 +4784,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
                 const auto             outer_hint{implicit_type_stack_.peek()};
                 const structural_guard g{implicit_type_stack_,
-                                         literal_hint ? literal_hint.get()
-                                         : outer_hint ? outer_hint.get()
-                                                      : nullptr};
+                                         literal_hint ? literal_hint.get() : outer_hint.raw()};
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             } else if (args_result == resolve_result::OK) {
@@ -4796,8 +4793,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     operand_hint.emplace(
                         denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
                 }
-                const structural_guard g{implicit_type_stack_,
-                                         operand_hint ? operand_hint.get() : nullptr};
+                const structural_guard g{implicit_type_stack_, operand_hint.raw()};
                 args_result = resolve_call_args(
                     gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
             }
@@ -8076,8 +8072,7 @@ auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& 
     {
         const mutating_context_guard subscript_g{in_subscript_index_, false};
         const mutating_context_guard for_iter_g{in_for_iterable_, false};
-        const structural_guard       g{implicit_type_stack_,
-                                       expected_elem ? expected_elem.get() : nullptr};
+        const structural_guard       g{implicit_type_stack_, expected_elem.raw()};
         TRY_RESOLVE(*range.lhs);
         TRY_RESOLVE(*range.rhs);
     }
@@ -13731,7 +13726,7 @@ auto type_resolver::register_parameterized_impl(ast::node_id root, const ast::im
         .site              = root,
         .interface_type    = iface_type,
         .base_ctor_fn      = *base_ctor_fn,
-        .base_mod          = &*base_mod,
+        .base_mod          = base_mod.get(),
         .enclosing         = here,
         .body_scope_idx    = impl_type.get_symbol_table_idx(),
         .param_to_ctor_arg = std::move(mapping),

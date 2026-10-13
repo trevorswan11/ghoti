@@ -204,7 +204,7 @@ auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt
     shared_->arms.emplace(key, shared_state::arm_choice{});
     stdx::opt_size taken;
     if (const auto arm{select_arm_of(cfg.arms)}) {
-        taken.emplace(static_cast<usize>(&*arm - cfg.arms.data()));
+        taken.emplace(static_cast<usize>(arm.get() - cfg.arms.data()));
     }
     shared_->arms[key] = {.selected = true, .arm = taken};
     return taken;
@@ -280,7 +280,7 @@ auto cfg_pass::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value
                  is_foreign ? " public" : "");
             return stdx::none;
         }
-        current = &*next;
+        current = next.get();
     }
 
     cfg_pass owner{*current, scratch_ctx, *shared_};
