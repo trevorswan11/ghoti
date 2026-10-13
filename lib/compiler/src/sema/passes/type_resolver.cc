@@ -2923,10 +2923,10 @@ auto type_resolver::redirect_to_default_member(ast::node_id         id,
     const auto            location{ast.location_of(dot.member)};
     const auto            stable{ast.intern(ast::default_wrapper_name(method->name, written_args))};
     const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
-    const auto member{ast::identifier_handle{ast.add_node(tok, tok, ast::identifier_expr{stable})}};
+    const ast::identifier_handle member{ast.add_node(tok, tok, ast::identifier_expr{stable})};
     resolving_.sync_side_tables_for_new_node();
-    const auto callee{ast::expr_handle{
-        ast.add_node(tok, tok, ast::dot_expr{.object = dot.object, .member = member})}};
+    const ast::expr_handle callee{
+        ast.add_node(tok, tok, ast::dot_expr{.object = dot.object, .member = member})};
     resolving_.sync_side_tables_for_new_node();
 
     // Resolved as a callee, the way `resolve_call` does, keeping quiet when there's no such member
@@ -2942,7 +2942,7 @@ auto type_resolver::redirect_to_default_member(ast::node_id         id,
     }
     const auto found{last_type_.take()};
     if (!found || found->is_poison()) {
-        (void)ctx_.diags.split_off(diags_before);
+        DISCARD(ctx_.diags.split_off(diags_before));
         return false;
     }
     ast.get_as_mut<ast::call_expr>(id).function = callee;
@@ -2961,17 +2961,17 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
     // value has none. `object` is what reaches the declaring scope (`mod` in `mod.f`)
     stdx::option<ast::expr_handle> object;
     if (dot) { object.emplace(dot->object); }
-    auto                      declaration{resolving_.get_identifier_declaration(named)};
-    const ast::function_expr* fn{nullptr};
-    std::string_view          fn_name;
-    constexpr u32             MAX_ALIAS_DEPTH{8};
+    auto declaration{resolving_.get_identifier_declaration(named)};
+    stdx::option<const ast::function_expr&> fn;
+    std::string_view                        fn_name;
+    constexpr u32                           MAX_ALIAS_DEPTH{8};
     for (u32 depth{0}; depth < MAX_ALIAS_DEPTH && !fn; ++depth) {
         if (!declaration || !declaration->owner || !declaration->decl) { return false; }
         const auto& owner{*declaration->owner};
         const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
         if (!decl || !decl->value) { return false; }
         if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
-            fn      = &*literal;
+            fn      = literal;
             fn_name = owner.ast.get_as<ast::identifier_expr>(decl->name).name;
             break;
         }
@@ -3005,7 +3005,7 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
     const auto            location{ast.location_of(named)};
     const auto            stable{ast.intern(ast::default_wrapper_name(fn_name, written_args))};
     const syntax::token_t tok{syntax::token_type_t::IDENT, stable, location.line, location.column};
-    const auto member{ast::identifier_handle{ast.add_node(tok, tok, ast::identifier_expr{stable})}};
+    const ast::identifier_handle member{ast.add_node(tok, tok, ast::identifier_expr{stable})};
     resolving_.sync_side_tables_for_new_node();
 
     ast::expr_handle callee{member};

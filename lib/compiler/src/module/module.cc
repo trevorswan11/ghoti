@@ -1,5 +1,6 @@
 #include "compiler/module/module.hh"
 
+#include <algorithm>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -21,6 +22,7 @@
 #include <stdx/variant.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/module/error.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/instantiation_cache.hh"

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -12,8 +13,8 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti {
@@ -205,9 +206,8 @@ struct function_expr {
         bool                     is_pack{false};             // `rest...` / `rest: impl I...`
         bool                     is_comptime_written{false}; // `is_comptime` may also be inferred
         // Where the body reads an inferred `comptime` param at compile time
-        ast::node_id comptime_read{ast::node_id::make_invalid()};
-        bool         comptime_read_in_const{false};
-        // `b: i32 = a * 2`: evaluated by a call that leaves the argument off
+        ast::node_id              comptime_read{ast::node_id::make_invalid()};
+        bool                      comptime_read_in_const{false};
         stdx::option<expr_handle> default_value{};
     };
 
@@ -581,14 +581,12 @@ struct function_header {
 [[nodiscard]] auto parse_function_header(syntax::parser& parser)
     -> stdx::result<function_header, syntax::diagnostic>;
 
-// `f@default1`: the hidden declaration calling `fn_name` with the defaults after its first `kept`
-// parameters. The `@` keeps it from colliding with anything but a raw identifier
+// `f@default1`: the hidden decl calling `fn_name` with the defaults after its first `kept` params
 [[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
 
-// One hidden wrapper for a defaulted function: it takes the first `kept` parameters, binds the rest
-// to their defaults, and calls the function by `fn_name`
+// One hidden wrapper for a defaulted function
 struct default_wrapper {
-    usize             kept;
+    usize             kept; // The first `kept` parameters
     identifier_handle name;
     function_handle   fn;
 };

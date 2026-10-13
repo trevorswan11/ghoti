@@ -1,6 +1,7 @@
 #include "driver/cmd/lsp/references.hh"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include <stdx/option.hh>

@@ -748,12 +748,12 @@ class type_resolver {
     auto visit(ast::node_id, const ast::discard_stmt&) -> void;
     auto visit(ast::node_id, const ast::expr_stmt&) -> void;
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
-    // Checks required methods present & signature-compatible, required associated items bound, no
-    // stray members.
     // An impl's method may only repeat the defaults its interface declares, spelled the same
     auto check_impl_defaults(const impl_record&        rec,
                              const types::interface_t& iface,
                              const mod::module_t&      cmod) -> void;
+    // Checks required methods present & signature-compatible, required associated items bound, no
+    // stray members.
     auto check_impl_conformance(const impl_record& rec, const types::interface_t& iface) -> void;
     // For each interface default method the impl does not override, re-type its body against the
     // concrete target so cross-module defaults work

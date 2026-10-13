@@ -9,6 +9,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "helpers/ast.hh"
 
@@ -222,36 +223,43 @@ const Point = struct {
 }
 
 TEST_CASE("a `///` that documents nothing is an error") {
-    // Statements inside a function body
-    CHECK(misplaced_docs(R"(const f = fn(): void {
+    SECTION("Statements inside a function body") {
+        CHECK(misplaced_docs(R"(const f = fn(): void {
     /// nested
     let local = 1;
     _ = local;
 };
 )") == 1);
-    // A test block, an `impl` block, and a `@cfg` block are not declarations
-    CHECK(misplaced_docs(R"(/// a test
+    }
+
+    SECTION("A test block, an `impl` block, and a `@cfg` block are not declarations") {
+        CHECK(misplaced_docs(R"(/// a test
 test "t" {}
 )") == 1);
-    CHECK(misplaced_docs(R"(const S = struct {};
+        CHECK(misplaced_docs(R"(const S = struct {};
 const I = interface {};
 /// an impl
 impl I for S {}
 )") == 1);
-    CHECK(misplaced_docs(R"(/// a cfg block
+        CHECK(misplaced_docs(R"(/// a cfg block
 @cfg (os == .linux) {
     const a = 1;
 }
 )") == 1);
-    // Trailing the file with nothing after it
-    CHECK(misplaced_docs(R"(const a = 1;
+    }
+
+    SECTION("Trailing the file with nothing after it") {
+        CHECK(misplaced_docs(R"(const a = 1;
 /// dangling
 )") == 1);
-    // A `//!` after code
-    CHECK(misplaced_docs(R"(const x = 1;
+    }
+
+    SECTION("A `//!` after code") {
+        CHECK(misplaced_docs(R"(const x = 1;
 //! too late
 const y = 2;
 )") == 1);
+    }
 }
 
 TEST_CASE("a `///` in a logical location is accepted") {

@@ -474,12 +474,12 @@ class parser {
     std::vector<pending_doc>                          pending_module_docs_;
     std::vector<ast::stmt_handle>                     synthesized_stmts_;
     stdx::option<std::pair<ast::node_id, checkpoint>> last_defaulted_function_;
-    bool                                              module_doc_locked_{false};
 
     // Every `///` (and late `//!`) seen, in source order and keyed by its offset in the input
     // since a rollback lexes them again. Whatever is never attached is misplaced.
     ankerl::unordered_dense::map<usize, token_t> doc_tokens_;
     ankerl::unordered_dense::set<usize>          claimed_docs_;
+    bool                                         module_doc_locked_{false};
     bool                                         infer_next_fn_params_{false};
     bool                                         signature_defaults_armed_{false};
     bool                                         synthesize_default_wrappers_{false};

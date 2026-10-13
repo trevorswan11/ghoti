@@ -24,16 +24,14 @@ TEST_CASE("Function missing return type") {
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ",
                               syntax::diagnostic{"Expected a type, found the end of input",
                                                  syntax::error::MISSING_EXPLICIT_TYPE,
-                                                 0,
-                                                 28});
+                                                 std::pair{0UZ, 28UZ}});
 }
 
 TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
     helpers::test_parser_fail("fn(x = 1): i32;",
                               syntax::diagnostic{"Function parameters must be explicitly typed",
                                                  syntax::error::MISSING_EXPLICIT_TYPE,
-                                                 0,
-                                                 7});
+                                                 std::pair{0UZ, 7UZ}});
 }
 
 TEST_CASE("Function parameter missing type") {
@@ -69,8 +67,7 @@ TEST_CASE("Illegal self parameter modifier") {
 }
 
 TEST_CASE("Self parameter modifier without a name") {
-    using namespace std::string_view_literals;
-    const auto modifier{GENERATE("&"sv, "&mut"sv, "^"sv, "^mut"sv)};
+    const auto modifier{GENERATE("&", "&mut", "^", "^mut")};
 
     helpers::test_parser_fail(
         fmt::format("fn({}): i32;", modifier),
