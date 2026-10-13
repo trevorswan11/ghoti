@@ -67,13 +67,13 @@ constexpr std::string_view CYCLE_UTIL{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a root test block that only imports a file runs that file's tests") {
+TEST_CASE("A root test block that only imports a file runs that file's tests") {
     CHECK(helpers::compile_and_run_tests(
               R"(test "bundle" { import "suite.gh" as suite; })",
               {helpers::mock_file{"suite.gh", IMPORTED_TESTS, "suite"}}) != 0);
 }
 
-TEST_CASE("E2E: an import inside a function body still links the imported module") {
+TEST_CASE("An import inside a function body still links the imported module") {
     CHECK(helpers::compile_and_run(
               R"(
             pub const main = fn(): i32 {
@@ -84,7 +84,7 @@ TEST_CASE("E2E: an import inside a function body still links the imported module
               {helpers::mock_file{"dep.gh", IMPORTED_FN, "dep"}}) == 42);
 }
 
-TEST_CASE("E2E: a test block doesn't resolve while its module's importers are mid-resolution") {
+TEST_CASE("A test block doesn't resolve while its module's importers are mid-resolution") {
     CHECK(helpers::compile_and_run_tests(
               R"(
             import "lib.gh" as lib;

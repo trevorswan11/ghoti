@@ -21,7 +21,7 @@ constexpr std::string_view SIZED{R"(
 
 // The leading constants give the root's AST early integer literals, so folding the imported
 // dimension node against the root module used to silently read one of them instead
-TEST_CASE("E2E: layout builtins on an imported `[N]T` fold N in the declaring module") {
+TEST_CASE("Layout builtins on an imported `[N]T` fold N in the declaring module") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const P = 7;
@@ -52,7 +52,7 @@ TEST_CASE("E2E: layout builtins on an imported `[N]T` fold N in the declaring mo
     CHECK(exit_code == 0);
 }
 
-TEST_CASE("E2E: layout builtins on an imported struct with a `[N]T` field") {
+TEST_CASE("Layout builtins on an imported struct with a `[N]T` field") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const P = 7;
@@ -73,7 +73,7 @@ TEST_CASE("E2E: layout builtins on an imported struct with a `[N]T` field") {
     CHECK(exit_code == 0);
 }
 
-TEST_CASE("E2E: layout builtins on a local struct whose `[N]T` field is still deferred") {
+TEST_CASE("Layout builtins on a local struct whose `[N]T` field is still deferred") {
     const auto exit_code{helpers::compile_and_run(R"(
         const N = 3;
         const S = struct { pub d: [N]u64, pub x: u8, };
@@ -93,7 +93,7 @@ TEST_CASE("E2E: layout builtins on a local struct whose `[N]T` field is still de
     CHECK(exit_code == 0);
 }
 
-TEST_CASE("E2E: reflection builtins fold an imported `[N]T` in the declaring module") {
+TEST_CASE("Reflection builtins fold an imported `[N]T` in the declaring module") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             const P = 7;
@@ -126,7 +126,7 @@ TEST_CASE("E2E: reflection builtins fold an imported `[N]T` in the declaring mod
     CHECK(exit_code == 0);
 }
 
-TEST_CASE("E2E: builtins see through a concrete array with a deferred `[M]T` element") {
+TEST_CASE("Builtins see through a concrete array with a deferred `[M]T` element") {
     const auto exit_code{helpers::compile_and_run(R"(
         const N = 3;
 

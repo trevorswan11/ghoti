@@ -40,7 +40,7 @@ TEST_CASE("E2E: a call may leave trailing defaulted arguments off") {
     )") == 0);
 }
 
-TEST_CASE("E2E: a default may read the parameters before it, including other defaults") {
+TEST_CASE("A default may read the parameters before it, including other defaults") {
     CHECK(helpers::compile_and_run(R"(
         const area = fn(w: i32, h: i32 = w, scale: i32 = h * 2): i32 {
             return w * h * scale;
@@ -52,7 +52,7 @@ TEST_CASE("E2E: a default may read the parameters before it, including other def
     )") == 53);
 }
 
-TEST_CASE("E2E: a default is evaluated again by every call that leaves it off") {
+TEST_CASE("A default is evaluated again by every call that leaves it off") {
     CHECK(helpers::compile_and_run(R"(
         let mut counter: i32 = 0;
         const next = fn(): i32 {
@@ -70,7 +70,7 @@ TEST_CASE("E2E: a default is evaluated again by every call that leaves it off") 
     )") == 160);
 }
 
-TEST_CASE("E2E: methods, static members, and explicit `self` calls see defaults") {
+TEST_CASE("Methods, static members, and explicit `self` calls see defaults") {
     CHECK(helpers::compile_and_run(R"(
         const Counter = struct {
             value: i32,
@@ -96,7 +96,7 @@ TEST_CASE("E2E: methods, static members, and explicit `self` calls see defaults"
     )") == 120);
 }
 
-TEST_CASE("E2E: a type parameter may have a default") {
+TEST_CASE("A type parameter may have a default") {
     CHECK(helpers::compile_and_run(R"(
         const width = fn(x: i32, T: type = i64): usize {
             _ = x;
@@ -109,7 +109,7 @@ TEST_CASE("E2E: a type parameter may have a default") {
     )") == 82);
 }
 
-TEST_CASE("E2E: a generic function's defaults follow its type parameter") {
+TEST_CASE("A generic function's defaults follow its type parameter") {
     CHECK(helpers::compile_and_run(R"(
         const scaled = fn(T: type, x: T, by: T = 3): T {
             return x * by;
@@ -123,7 +123,7 @@ TEST_CASE("E2E: a generic function's defaults follow its type parameter") {
     )") == 22);
 }
 
-TEST_CASE("E2E: defaults fold at compile time") {
+TEST_CASE("Defaults fold at compile time") {
     CHECK(helpers::compile_and_run(R"(
         const add = fn(a: i32, b: i32 = a + 1): i32 { return a + b; };
         const FOLDED = add(20);
@@ -137,7 +137,7 @@ TEST_CASE("E2E: defaults fold at compile time") {
     )") == 41);
 }
 
-TEST_CASE("E2E: a local function, a void function, and a discarded parameter take defaults") {
+TEST_CASE("A local function, a void function, and a discarded parameter take defaults") {
     CHECK(helpers::compile_and_run(R"(
         let mut total: i32 = 0;
         const record = fn(n: i32 = 7): void { total += n; };
@@ -152,7 +152,7 @@ TEST_CASE("E2E: a local function, a void function, and a discarded parameter tak
     )") == 19);
 }
 
-TEST_CASE("E2E: a parameter pack after defaults takes only the arguments past them") {
+TEST_CASE("A parameter pack after defaults takes only the arguments past them") {
     CHECK(helpers::compile_and_run(R"(
         const count = fn(base: i32 = 100, rest...): i32 {
             return base + @intCast(i32, rest.len);
@@ -164,7 +164,7 @@ TEST_CASE("E2E: a parameter pack after defaults takes only the arguments past th
     )") == 8);
 }
 
-TEST_CASE("E2E: defaults reach a call across modules") {
+TEST_CASE("Defaults reach a call across modules") {
     CHECK(helpers::compile_and_run(R"(
             import "geo.gh" as geo;
 
@@ -181,7 +181,7 @@ TEST_CASE("E2E: defaults reach a call across modules") {
                                    }) == 18);
 }
 
-TEST_CASE("E2E: a `const` alias of a function keeps its defaults") {
+TEST_CASE("A `const` alias of a function keeps its defaults") {
     CHECK(helpers::compile_and_run(R"(
             import "geo.gh" as geo;
 
@@ -202,7 +202,7 @@ TEST_CASE("E2E: a `const` alias of a function keeps its defaults") {
                                    }) == 24);
 }
 
-TEST_CASE("E2E: an interface's defaults reach concrete, generic, and `dyn` calls") {
+TEST_CASE("An interface's defaults reach concrete, generic, and `dyn` calls") {
     CHECK(helpers::compile_and_run(R"(
         const Shape = interface {
             pub const scaled = fn(&self, by: i32 = 2, extra: i32 = 0): i32;

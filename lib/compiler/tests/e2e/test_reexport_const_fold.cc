@@ -28,7 +28,7 @@ constexpr std::string_view SYS{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a `const` folds through a chained re-export used as an operand") {
+TEST_CASE("A `const` folds through a chained re-export used as an operand") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "std.gh" as std;
@@ -45,7 +45,7 @@ TEST_CASE("E2E: a `const` folds through a chained re-export used as an operand")
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a `const` folds through a chained re-export passed as a call argument") {
+TEST_CASE("A `const` folds through a chained re-export passed as a call argument") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "std.gh" as std;
@@ -62,7 +62,7 @@ TEST_CASE("E2E: a `const` folds through a chained re-export passed as a call arg
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a `const` folds through a three-hop re-export chain") {
+TEST_CASE("A `const` folds through a three-hop re-export chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sys.gh" as sys;

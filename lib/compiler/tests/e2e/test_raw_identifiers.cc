@@ -6,7 +6,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E raw identifier: a keyword-named binding is usable") {
+TEST_CASE("A keyword-named binding is usable") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let @"type" = 40;
@@ -16,7 +16,7 @@ TEST_CASE("E2E raw identifier: a keyword-named binding is usable") {
     )") == 42);
 }
 
-TEST_CASE("E2E raw identifier: a raw name and its bare spelling denote the same symbol") {
+TEST_CASE("A raw name and its bare spelling denote the same symbol") {
     CHECK(helpers::compile_and_run(R"(
         const plain = 42;
 
@@ -26,7 +26,7 @@ TEST_CASE("E2E raw identifier: a raw name and its bare spelling denote the same 
     )") == 42);
 }
 
-TEST_CASE("E2E raw identifier: keyword-named struct fields round-trip through codegen") {
+TEST_CASE("Keyword-named struct fields round-trip through codegen") {
     CHECK(helpers::compile_and_run(R"(
         const Box = struct {
             @"struct": i32,
@@ -40,7 +40,7 @@ TEST_CASE("E2E raw identifier: keyword-named struct fields round-trip through co
     )") == 42);
 }
 
-TEST_CASE("E2E raw identifier: a primitive spelling can name a user binding") {
+TEST_CASE("A primitive spelling can name a user binding") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let @"i32": i32 = 42;
@@ -70,7 +70,7 @@ TEST_CASE(
     )") == 42);
 }
 
-TEST_CASE("E2E raw identifier: a folded const named after a primitive can read the primitive") {
+TEST_CASE("A folded const named after a primitive can read the primitive") {
     CHECK(helpers::compile_and_run(R"(
         const @"f80" = match comptime (@targetArch()) {
             .x86_64, .x86 => f80,
@@ -89,7 +89,7 @@ TEST_CASE("E2E raw identifier: a folded const named after a primitive can read t
     )") == 90);
 }
 
-TEST_CASE("E2E raw identifier: folding reads a raw name as the decl, not the primitive") {
+TEST_CASE("Folding reads a raw name as the decl, not the primitive") {
     CHECK(helpers::compile_and_run(R"(
         const @"u8" = struct { a: u64, b: u64 };
         const N: usize = @sizeOf(@"u8");

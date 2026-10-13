@@ -13,7 +13,7 @@ namespace ghoti::tests {
 
 using helpers::mock_file;
 
-TEST_CASE("E2E: an `impl` block on a struct whose method returns `Ctor(Self)` compiles") {
+TEST_CASE("An `impl` block on a struct whose method returns `Ctor(Self)` compiles") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         const Err = enum : i32 { bad, _ };
@@ -34,7 +34,7 @@ TEST_CASE("E2E: an `impl` block on a struct whose method returns `Ctor(Self)` co
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: an `impl` target's method param names a not-yet-resolved sibling struct") {
+TEST_CASE("An `impl` target's method param names a not-yet-resolved sibling struct") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         const Err = enum : i32 { bad, _ };
@@ -59,7 +59,7 @@ TEST_CASE("E2E: an `impl` target's method param names a not-yet-resolved sibling
     CHECK(exit_code == 3);
 }
 
-TEST_CASE("E2E: a cross-module `using` alias in an `impl` target's method signature resolves") {
+TEST_CASE("A cross-module `using` alias in an `impl` target's method signature resolves") {
     constexpr std::string_view result_gh{
         R"(pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
     constexpr std::string_view err_gh{R"(pub const Error = enum : i32 { bad, worse, _ };)"};
@@ -92,7 +92,7 @@ TEST_CASE("E2E: a cross-module `using` alias in an `impl` target's method signat
     CHECK(exit_code == 9);
 }
 
-TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through `self`") {
+TEST_CASE("A cross-module trait-impl method calls a sibling method through `self`") {
     constexpr std::string_view iface_gh{R"(
         pub const W = interface {
             pub const put = fn(&mut self, n: i32): i32;
@@ -126,7 +126,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling method through 
     CHECK(exit_code == 30);
 }
 
-TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`self` receiver") {
+TEST_CASE("A cross-module trait-impl method calls a sibling through a non-`self` receiver") {
     constexpr std::string_view iface_gh{R"(
         pub const W = interface {
             pub const put = fn(&mut self, n: i32): i32;
@@ -157,7 +157,7 @@ TEST_CASE("E2E: a cross-module trait-impl method calls a sibling through a non-`
     CHECK(exit_code == 30);
 }
 
-TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is a direct call") {
+TEST_CASE("A static enum method reached cross-module via a `using` alias is a direct call") {
     constexpr std::string_view err_gh{R"(
         pub const Error = enum : i32 {
             not_found, other, _,
@@ -186,7 +186,7 @@ TEST_CASE("E2E: a static enum method reached cross-module via a `using` alias is
     CHECK(exit_code == 5);
 }
 
-TEST_CASE("E2E: a re-exported function called as `mod.fn(...)` links to its real owner") {
+TEST_CASE("A re-exported function called as `mod.fn(...)` links to its real owner") {
     constexpr std::string_view backend_gh{R"(pub const dup = fn(n: i32): i32 { return n + n; };)"};
     constexpr std::string_view os_gh{R"(
         import "backend.gh" as backend;
@@ -211,7 +211,7 @@ TEST_CASE("E2E: a re-exported function called as `mod.fn(...)` links to its real
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a cross-module interface default method the impl does not override is inherited") {
+TEST_CASE("A cross-module interface default method the impl does not override is inherited") {
     constexpr std::string_view adder_gh{R"(
         pub const Adder = interface {
             pub const step = fn(&self): i32;
@@ -309,7 +309,7 @@ TEST_CASE(
     CHECK(exit_code == 3);
 }
 
-TEST_CASE("E2E: one inherited cross-module default method calls another through `self`") {
+TEST_CASE("One inherited cross-module default method calls another through `self`") {
     constexpr std::string_view res_gh{R"(
         pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
@@ -377,7 +377,7 @@ TEST_CASE("E2E: one inherited cross-module default method calls another through 
     CHECK(exit_code == 2);
 }
 
-TEST_CASE("E2E: a second impl of the same interface still inherits its default methods") {
+TEST_CASE("A second impl of the same interface still inherits its default methods") {
     constexpr std::string_view res_gh{R"(
         pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
@@ -464,7 +464,7 @@ TEST_CASE("E2E: a second impl of the same interface still inherits its default m
     CHECK(exit_code == 8);
 }
 
-TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay distinct") {
+TEST_CASE("Two instantiations of a nested `fn(...): type` constructor stay distinct") {
     const auto exit_code{helpers::compile_and_run(R"(
         const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
         const Errno = enum : i32 { bad, _ };
@@ -484,7 +484,7 @@ TEST_CASE("E2E: two instantiations of a nested `fn(...): type` constructor stay 
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a parameterized impl only expands for its own module's type constructor") {
+TEST_CASE("A parameterized impl only expands for its own module's type constructor") {
     constexpr std::string_view source{R"(
         const Result = fn(T: type, E: type): type {{ return union {{ ok: T, err: E }}; }};
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {{

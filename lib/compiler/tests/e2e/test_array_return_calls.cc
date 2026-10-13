@@ -28,7 +28,7 @@ constexpr std::string_view REEXPORT{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a `[n]T`-returning call with a runtime argument is typed as an array") {
+TEST_CASE("A `[n]T`-returning call with a runtime argument is typed as an array") {
     const auto exit_code{helpers::compile_and_run(R"(
         const pair = fn(v: u8): [2]u8 { return [2]u8{ v, v + 1 }; };
 
@@ -44,7 +44,7 @@ TEST_CASE("E2E: a `[n]T`-returning call with a runtime argument is typed as an a
     CHECK(exit_code == 11);
 }
 
-TEST_CASE("E2E: a `[n]T`-returning function called through a local alias") {
+TEST_CASE("A `[n]T`-returning function called through a local alias") {
     const auto exit_code{helpers::compile_and_run(R"(
         const N = 2;
         const pair = fn(v: u8): [N]u8 { return [N]u8{ v, v + 1 }; };
@@ -59,7 +59,7 @@ TEST_CASE("E2E: a `[n]T`-returning function called through a local alias") {
     CHECK(exit_code == 5);
 }
 
-TEST_CASE("E2E: a `[n]T`-returning function called across a module boundary") {
+TEST_CASE("A `[n]T`-returning function called across a module boundary") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "digits.gh" as digits;
@@ -80,7 +80,7 @@ TEST_CASE("E2E: a `[n]T`-returning function called across a module boundary") {
     CHECK(exit_code == 42 + 44);
 }
 
-TEST_CASE("E2E: a `[n]T`-returning function re-exported through another module") {
+TEST_CASE("A `[n]T`-returning function re-exported through another module") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "reexport.gh" as re;

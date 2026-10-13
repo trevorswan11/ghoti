@@ -62,7 +62,7 @@ constexpr std::string_view MID{R"(
 
 } // namespace
 
-TEST_CASE("E2E: importing a re-exported extern struct with a fixed-array field does not crash") {
+TEST_CASE("Importing a re-exported extern struct with a fixed-array field does not crash") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "mid.gh" as mid;
@@ -76,7 +76,7 @@ TEST_CASE("E2E: importing a re-exported extern struct with a fixed-array field d
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported extern struct's fixed-array field is usable through the chain") {
+TEST_CASE("A re-exported extern struct's fixed-array field is usable through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "mid.gh" as mid;

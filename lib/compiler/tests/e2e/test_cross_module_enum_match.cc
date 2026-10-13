@@ -16,7 +16,7 @@ constexpr std::string_view MOD_A{R"(
 
 } // namespace
 
-TEST_CASE("E2E: match on a cross-module enum honors explicit discriminant values") {
+TEST_CASE("Match on a cross-module enum honors explicit discriminant values") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "a.gh" as a;
@@ -29,7 +29,7 @@ TEST_CASE("E2E: match on a cross-module enum honors explicit discriminant values
     CHECK(exit_code == 2);
 }
 
-TEST_CASE("E2E: `==` against a cross-module enum's `Type.Variant` honors explicit values") {
+TEST_CASE("`==` against a cross-module enum's `Type.Variant` honors explicit values") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "a.gh" as a;
@@ -43,7 +43,7 @@ TEST_CASE("E2E: `==` against a cross-module enum's `Type.Variant` honors explici
     CHECK(exit_code == 7);
 }
 
-TEST_CASE("E2E: an exhaustive cross-module enum match doesn't trap on a legitimately-matched arm") {
+TEST_CASE("An exhaustive cross-module enum match doesn't trap on a legitimately-matched arm") {
     constexpr std::string_view mod{R"(
         pub const Status = enum { ok = 10, fail = 20 };
         pub const make = fn(v: i32): Status { return @fromBackingInt(Status, v); };
@@ -63,7 +63,7 @@ TEST_CASE("E2E: an exhaustive cross-module enum match doesn't trap on a legitima
     CHECK(exit_code == 2);
 }
 
-TEST_CASE("E2E: `@tagName` of a cross-module enum with explicit values reports the right variant") {
+TEST_CASE("`@tagName` of a cross-module enum with explicit values reports the right variant") {
     constexpr std::string_view mod{R"(
         pub const Color = enum { red = 5, green = 6, blue = 7 };
     )"};

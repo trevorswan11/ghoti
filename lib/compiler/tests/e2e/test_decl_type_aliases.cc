@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: a local `const` alias of a type constructor call is a type, not a runtime call") {
+TEST_CASE("A local `const` alias of a type constructor call is a type, not a runtime call") {
     CHECK(helpers::compile_and_run(R"(
         const Pair = fn(T: type): type { return struct { a: T, b: T }; };
 
@@ -19,7 +19,7 @@ TEST_CASE("E2E: a local `const` alias of a type constructor call is a type, not 
     )") == 122);
 }
 
-TEST_CASE("E2E: a local `comptime` alias of a type constructor call is a type") {
+TEST_CASE("A local `comptime` alias of a type constructor call is a type") {
     CHECK(helpers::compile_and_run(R"(
         const Pair = fn(T: type): type { return struct { a: T, b: T }; };
 
@@ -31,7 +31,7 @@ TEST_CASE("E2E: a local `comptime` alias of a type constructor call is a type") 
     )") == 3);
 }
 
-TEST_CASE("E2E: pointer and slice types built over a local constructor alias") {
+TEST_CASE("Pointer and slice types built over a local constructor alias") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { v: T }; };
 
@@ -48,7 +48,7 @@ TEST_CASE("E2E: pointer and slice types built over a local constructor alias") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a constructor alias inside a generic body re-resolves per instantiation") {
+TEST_CASE("A constructor alias inside a generic body re-resolves per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { v: T }; };
 
@@ -64,7 +64,7 @@ TEST_CASE("E2E: a constructor alias inside a generic body re-resolves per instan
     )") == 1 + 3 + 8 + 30);
 }
 
-TEST_CASE("E2E: `Result.map_err`-shaped comptime alias in a generic method (#334)") {
+TEST_CASE("`Result.map_err`-shaped comptime alias in a generic method (#334)") {
     CHECK(helpers::compile_and_run(R"(
         const Result = fn(T: type, E: type): type {
             return union {
@@ -100,7 +100,7 @@ TEST_CASE("E2E: `Result.map_err`-shaped comptime alias in a generic method (#334
     )") == 42);
 }
 
-TEST_CASE("E2E: `@This()` and `@Int(...)` aliases bind types") {
+TEST_CASE("`@This()` and `@Int(...)` aliases bind types") {
     CHECK(helpers::compile_and_run(R"(
         const Counter = struct {
             n: i32,
@@ -118,7 +118,7 @@ TEST_CASE("E2E: `@This()` and `@Int(...)` aliases bind types") {
     )") == 42);
 }
 
-TEST_CASE("E2E: module-scope aliases of `void` and of a constructor call are storageless") {
+TEST_CASE("Module-scope aliases of `void` and of a constructor call are storageless") {
     CHECK(helpers::compile_and_run(R"(
         const V = void;
         const Pair = fn(T: type): type { return struct { a: T }; };
@@ -134,7 +134,7 @@ TEST_CASE("E2E: module-scope aliases of `void` and of a constructor call are sto
     )") == 7);
 }
 
-TEST_CASE("E2E: a generic returning its `T: type` parameter's value is still a value") {
+TEST_CASE("A generic returning its `T: type` parameter's value is still a value") {
     CHECK(helpers::compile_and_run(R"(
         const dup = fn(T: type, val: T): T { return val + val; };
 
@@ -146,7 +146,7 @@ TEST_CASE("E2E: a generic returning its `T: type` parameter's value is still a v
     )") == 42);
 }
 
-TEST_CASE("E2E: `@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
+TEST_CASE("`@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { v: T }; };
 
@@ -162,7 +162,7 @@ TEST_CASE("E2E: `@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
     )") == 8 + 10 + 80 + 100);
 }
 
-TEST_CASE("E2E: `&dyn I` / `^dyn I` aliases written as decls") {
+TEST_CASE("`&dyn I` / `^dyn I` aliases written as decls") {
     CHECK(helpers::compile_and_run(R"(
         const Shape = interface {
             const area = fn(&self): i32;
@@ -186,7 +186,7 @@ TEST_CASE("E2E: `&dyn I` / `^dyn I` aliases written as decls") {
     )") == 9 + 16 + 16 - 16);
 }
 
-TEST_CASE("E2E: `opaque`, `type`, and `noreturn` aliases") {
+TEST_CASE("`opaque`, `type`, and `noreturn` aliases") {
     CHECK(helpers::compile_and_run(R"(
         const Handle = ^mut opaque;
         const Type = type;
@@ -204,7 +204,7 @@ TEST_CASE("E2E: `opaque`, `type`, and `noreturn` aliases") {
     )") == 42);
 }
 
-TEST_CASE("E2E: pointer and reference aliases over `type`-valued operands") {
+TEST_CASE("Pointer and reference aliases over `type`-valued operands") {
     CHECK(helpers::compile_and_run(R"(
         const Fp = ^fn(a: i32): i32;
         const inc = fn(a: i32): i32 { return a + 1; };
@@ -222,7 +222,7 @@ TEST_CASE("E2E: pointer and reference aliases over `type`-valued operands") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a bare `dyn I` alias is indirected at its use sites") {
+TEST_CASE("A bare `dyn I` alias is indirected at its use sites") {
     CHECK(helpers::compile_and_run(R"(
         const Shape = interface { pub const area = fn(&self): i32; };
         const AnyShape = dyn Shape;
@@ -236,7 +236,7 @@ TEST_CASE("E2E: a bare `dyn I` alias is indirected at its use sites") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a non-generic constructor returning an existing scalar type folds to it") {
+TEST_CASE("A non-generic constructor returning an existing scalar type folds to it") {
     CHECK(helpers::compile_and_run(R"(
         const choose = fn(wide: bool): type {
             if (wide) { return i64; } else { return u8; }
@@ -254,7 +254,7 @@ TEST_CASE("E2E: a non-generic constructor returning an existing scalar type fold
     )") == 8 + 1 + 30 + 3 + 1);
 }
 
-TEST_CASE("E2E: struct and union fields typed by a `type` value store the denoted type") {
+TEST_CASE("Struct and union fields typed by a `type` value store the denoted type") {
     CHECK(helpers::compile_and_run(R"(
         const inc = fn(a: i32): i32 { return a + 1; };
         const Callback = fn(a: i32): i32;
@@ -269,7 +269,7 @@ TEST_CASE("E2E: struct and union fields typed by a `type` value store the denote
     )") == 2 + 3 + 4);
 }
 
-TEST_CASE("E2E: calling through a `^fn(...)` value loads the function it points at") {
+TEST_CASE("Calling through a `^fn(...)` value loads the function it points at") {
     CHECK(helpers::compile_and_run(R"(
         const inc = fn(a: i32): i32 { return a + 1; };
         const Holder = struct { f: ^fn(a: i32): i32 };
@@ -283,7 +283,7 @@ TEST_CASE("E2E: calling through a `^fn(...)` value loads the function it points 
     )") == 1 + 2 + 3 + 4);
 }
 
-TEST_CASE("E2E: module-scope function pointer globals are loaded, assigned, and called") {
+TEST_CASE("Module-scope function pointer globals are loaded, assigned, and called") {
     CHECK(helpers::compile_and_run(R"(
         const inc = fn(a: i32): i32 { return a + 1; };
         const dbl = fn(a: i32): i32 { return a * 2; };
@@ -302,7 +302,7 @@ TEST_CASE("E2E: module-scope function pointer globals are loaded, assigned, and 
     )") == (2 + 3) + (4 + 5) + 10 + 12);
 }
 
-TEST_CASE("E2E: `&dyn I` / `^dyn I` lay out as two-word fat pointers") {
+TEST_CASE("`&dyn I` / `^dyn I` lay out as two-word fat pointers") {
     CHECK(helpers::compile_and_run(R"(
         const Shape = interface { const area = fn(&self): i32; };
         const Holder = struct { d: &dyn Shape, tag: u8 };

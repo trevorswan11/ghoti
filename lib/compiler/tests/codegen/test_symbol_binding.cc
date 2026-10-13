@@ -23,7 +23,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("Codegen: extern link-name override renames the imported symbol") {
+TEST_CASE("Extern link-name override renames the imported symbol") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -40,7 +40,7 @@ TEST_CASE("Codegen: extern link-name override renames the imported symbol") {
     CHECK_FALSE(llvm_mod->getFunction("errno_loc"));
 }
 
-TEST_CASE("Codegen: export link-name override renames the exported symbol") {
+TEST_CASE("Export link-name override renames the exported symbol") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -55,7 +55,7 @@ TEST_CASE("Codegen: export link-name override renames the exported symbol") {
     CHECK_FALSE(llvm_mod->getFunction("add"));
 }
 
-TEST_CASE("Codegen: threadlocal extern global gets a TLS model") {
+TEST_CASE("Threadlocal extern global gets a TLS model") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -71,7 +71,7 @@ TEST_CASE("Codegen: threadlocal extern global gets a TLS model") {
     CHECK(gv.isDeclaration());
 }
 
-TEST_CASE("Codegen: weak extern function uses extern_weak linkage") {
+TEST_CASE("Weak extern function uses extern_weak linkage") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -88,7 +88,7 @@ TEST_CASE("Codegen: weak extern function uses extern_weak linkage") {
     CHECK(fn.hasExternalWeakLinkage());
 }
 
-TEST_CASE("Codegen: weak definition uses weak_any linkage") {
+TEST_CASE("Weak definition uses weak_any linkage") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -103,7 +103,7 @@ TEST_CASE("Codegen: weak definition uses weak_any linkage") {
     CHECK(fn.hasWeakAnyLinkage());
 }
 
-TEST_CASE("Codegen: a bounds check pulls in the weak default panic_handler") {
+TEST_CASE("A bounds check pulls in the weak default panic_handler") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -120,7 +120,7 @@ TEST_CASE("Codegen: a bounds check pulls in the weak default panic_handler") {
     CHECK(handler.hasWeakAnyLinkage());
 }
 
-TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
+TEST_CASE("A non-weak panic_handler overrides the builtin default") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -140,7 +140,7 @@ TEST_CASE("Codegen: a non-weak panic_handler overrides the builtin default") {
     CHECK_FALSE(handler.isWeakForLinker());
 }
 
-TEST_CASE("Codegen: naked function carries the naked attribute and no synthesized return") {
+TEST_CASE("Naked function carries the naked attribute and no synthesized return") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -169,7 +169,7 @@ TEST_CASE("Codegen: naked function carries the naked attribute and no synthesize
     CHECK_FALSE(has_ret);
 }
 
-TEST_CASE("Codegen: callconv sets the LLVM calling convention on the function and its call sites") {
+TEST_CASE("Callconv sets the LLVM calling convention on the function and its call sites") {
     llvm::LLVMContext context;
 
     // `.win64` is only valid on an x86_64 target
@@ -203,7 +203,7 @@ TEST_CASE("Codegen: callconv sets the LLVM calling convention on the function an
     CHECK(found_call);
 }
 
-TEST_CASE("Codegen: an extern declaration calls with its type's convention, and winapi is "
+TEST_CASE("An extern declaration calls with its type's convention, and winapi is "
           "stdcall only on 32-bit x86") {
     llvm::LLVMContext          context;
     constexpr std::string_view source{R"(

@@ -52,7 +52,7 @@ constexpr std::string_view TOP{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a re-exported `pub var` has one storage location across the whole chain") {
+TEST_CASE("A re-exported `pub var` has one storage location across the whole chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -66,7 +66,7 @@ TEST_CASE("E2E: a re-exported `pub var` has one storage location across the whol
     CHECK(exit_code == 102);
 }
 
-TEST_CASE("E2E: a re-exported `pub const` folds as a compile-time array dimension") {
+TEST_CASE("A re-exported `pub const` folds as a compile-time array dimension") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -80,7 +80,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a compile-time array dimensio
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported `pub const` folds as a value operand through the chain") {
+TEST_CASE("A re-exported `pub const` folds as a value operand through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -92,7 +92,7 @@ TEST_CASE("E2E: a re-exported `pub const` folds as a value operand through the c
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported `struct` type is constructible with a callable member") {
+TEST_CASE("A re-exported `struct` type is constructible with a callable member") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -105,7 +105,7 @@ TEST_CASE("E2E: a re-exported `struct` type is constructible with a callable mem
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a `pub using` alias of a re-exported symbol is itself re-exported") {
+TEST_CASE("A `pub using` alias of a re-exported symbol is itself re-exported") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -118,7 +118,7 @@ TEST_CASE("E2E: a `pub using` alias of a re-exported symbol is itself re-exporte
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported `enum` matches by variant through the chain") {
+TEST_CASE("A re-exported `enum` matches by variant through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -154,7 +154,7 @@ TEST_CASE(
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a re-exported generic type constructor instantiates through the chain") {
+TEST_CASE("A re-exported generic type constructor instantiates through the chain") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "top.gh" as top;
@@ -167,7 +167,7 @@ TEST_CASE("E2E: a re-exported generic type constructor instantiates through the 
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: same-named symbols from two leaves re-exported into one parent stay distinct") {
+TEST_CASE("Same-named symbols from two leaves re-exported into one parent stay distinct") {
     constexpr std::string_view a_leaf{R"( pub const kind = fn(): i32 { return 10; }; )"};
     constexpr std::string_view b_leaf{R"( pub const kind = fn(): i32 { return 32; }; )"};
     constexpr std::string_view combined{R"(

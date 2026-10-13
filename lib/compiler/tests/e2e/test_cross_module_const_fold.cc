@@ -21,7 +21,7 @@ constexpr std::string_view MOD_B{R"(
 
 } // namespace
 
-TEST_CASE("E2E: a `pub const` folds to its own module's value across imports") {
+TEST_CASE("A `pub const` folds to its own module's value across imports") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "a.gh" as a;

@@ -8,7 +8,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") {
+TEST_CASE("A generic `union` type constructor is usable as a return type") {
     CHECK(helpers::compile_and_run(R"(
         const Result = fn(T: type, E: type): type {
             return union { ok: T, err: E };
@@ -32,7 +32,7 @@ TEST_CASE("E2E: a generic `union` type constructor is usable as a return type") 
     )") == 41);
 }
 
-TEST_CASE("E2E: a `fn(T: type): type` returning an existing scalar type is usable as a value") {
+TEST_CASE("A `fn(comptime T: type): type` returning an existing scalar type is usable as a value") {
     CHECK(helpers::compile_and_run(R"(
         const Ident = fn(T: type): type { return T; };
 
@@ -43,7 +43,7 @@ TEST_CASE("E2E: a `fn(T: type): type` returning an existing scalar type is usabl
     )") == 42);
 }
 
-TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `comptime_int`") {
+TEST_CASE("A `fn(comptime T: type): type` with an early-return branch over `comptime_int`") {
     CHECK(helpers::compile_and_run(R"(
         const Log2Int = fn(T: type): type {
             if (T == comptime_int) return comptime_int;
@@ -57,7 +57,7 @@ TEST_CASE("E2E: a `fn(T: type): type` with an early-return branch over `comptime
     )") == 42);
 }
 
-TEST_CASE("E2E: a later parameter and the return type depend on an earlier parameter's type") {
+TEST_CASE("A later parameter and the return type depend on an earlier parameter's type") {
     CHECK(helpers::compile_and_run(R"(
         const pick = fn(a: auto, b: @TypeOf(a)): @TypeOf(b) {
             return a + b;
@@ -70,7 +70,7 @@ TEST_CASE("E2E: a later parameter and the return type depend on an earlier param
     )") == 9);
 }
 
-TEST_CASE("E2E: a later parameter's type is a type-constructor call over an earlier parameter") {
+TEST_CASE("A later parameter's type is a type-constructor call over an earlier parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { val: T }; };
 
@@ -86,7 +86,7 @@ TEST_CASE("E2E: a later parameter's type is a type-constructor call over an earl
     )") == 9);
 }
 
-TEST_CASE("E2E: the return type may also be a type-constructor call over an earlier parameter") {
+TEST_CASE("The return type may also be a type-constructor call over an earlier parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { val: T }; };
 
@@ -103,7 +103,7 @@ TEST_CASE("E2E: the return type may also be a type-constructor call over an earl
     )") == 9);
 }
 
-TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` constructor") {
+TEST_CASE("Two structurally distinct instantiations of a generic `struct` constructor") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { val: T }; };
 
@@ -118,7 +118,7 @@ TEST_CASE("E2E: two structurally distinct instantiations of a generic `struct` c
     )") == 7);
 }
 
-TEST_CASE("E2E: two instantiations of a generic `union` constructor, matched independently") {
+TEST_CASE("Two instantiations of a generic `union` constructor, matched independently") {
     CHECK(helpers::compile_and_run(R"(
         const Option = fn(T: type): type { return union { some: T, none: void }; };
 
@@ -136,7 +136,7 @@ TEST_CASE("E2E: two instantiations of a generic `union` constructor, matched ind
     )") == 42);
 }
 
-TEST_CASE("E2E: repeated same-argument instantiation shares one type") {
+TEST_CASE("Repeated same-argument instantiation shares one type") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { val: T }; };
 
@@ -153,7 +153,7 @@ TEST_CASE("E2E: repeated same-argument instantiation shares one type") {
     )") == 42);
 }
 
-TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh struct") {
+TEST_CASE("A zero-parameter `fn(): type` that builds a fresh struct") {
     CHECK(helpers::compile_and_run(R"(
         const MakePoint = fn(): type { return struct { x: i32, y: i32 }; };
         const Point = MakePoint();
@@ -165,7 +165,7 @@ TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh struct") {
     )") == 7);
 }
 
-TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh union") {
+TEST_CASE("A zero-parameter `fn(): type` that builds a fresh union") {
     CHECK(helpers::compile_and_run(R"(
         const MakeCell = fn(): type { return union { i: i32, f: f32 }; };
         const Cell = MakeCell();
@@ -177,7 +177,7 @@ TEST_CASE("E2E: a zero-parameter `fn(): type` that builds a fresh union") {
     )") == 99);
 }
 
-TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
+TEST_CASE("A `fn(bool): type` that selects between existing named types") {
     CHECK(helpers::compile_and_run(R"(
         const Wide = struct { a: i64, b: i64 };
         const Narrow = struct { a: i32 };
@@ -196,7 +196,7 @@ TEST_CASE("E2E: a `fn(bool): type` that selects between existing named types") {
     )") == 7);
 }
 
-TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a primitive") {
+TEST_CASE("@sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a primitive") {
     CHECK(helpers::compile_and_run(R"(
         const choose = fn(wide: bool): type {
             if (wide) { return i64; }
@@ -212,7 +212,7 @@ TEST_CASE("E2E: @sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a 
     )") == 8 + 8 + 4 + 4);
 }
 
-TEST_CASE("E2E: a single generic type constructor instantiation with a member function") {
+TEST_CASE("A single generic type constructor instantiation with a member function") {
     CHECK(helpers::compile_and_run(R"(
         const Vec = fn(T: type): type {
             return struct {
@@ -228,7 +228,7 @@ TEST_CASE("E2E: a single generic type constructor instantiation with a member fu
     )") == 42);
 }
 
-TEST_CASE("E2E: two instantiations of a generic type constructor do not alias their methods") {
+TEST_CASE("Two instantiations of a generic type constructor do not alias their methods") {
     CHECK(helpers::compile_and_run(R"(
         const Vec = fn(T: type): type {
             return struct {
@@ -249,7 +249,7 @@ TEST_CASE("E2E: two instantiations of a generic type constructor do not alias th
     )") == 20);
 }
 
-TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
+TEST_CASE("A non-generic `fn(): type` result with member functions") {
     CHECK(helpers::compile_and_run(R"(
         const Make = fn(): type {
             return struct {
@@ -267,7 +267,7 @@ TEST_CASE("E2E: a non-generic `fn(): type` result with member functions") {
     )") == 42);
 }
 
-TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method calls") {
+TEST_CASE("Type constructor members with `&mut self` and sibling-method calls") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type {
             return struct {
@@ -288,7 +288,7 @@ TEST_CASE("E2E: type constructor members with `&mut self` and sibling-method cal
     )") == 30);
 }
 
-TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") {
+TEST_CASE("A cross-module non-generic `fn(): type` with member functions") {
     constexpr std::string_view LIB{R"(
         pub const Make = fn(): type {
             return struct {
@@ -311,7 +311,7 @@ TEST_CASE("E2E: a cross-module non-generic `fn(): type` with member functions") 
     CHECK(exit_code == 42);
 }
 
-TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, methods distinct") {
+TEST_CASE("A cross-module generic type constructor, two instantiations, methods distinct") {
     constexpr std::string_view VEC{R"(
         pub const Vec = fn(T: type): type {
             return struct {
@@ -336,7 +336,7 @@ TEST_CASE("E2E: a cross-module generic type constructor, two instantiations, met
     CHECK(exit_code == 20);
 }
 
-TEST_CASE("E2E: two instantiations of the same constructor passed to another generic") {
+TEST_CASE("Two instantiations of the same constructor passed to another generic") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(T: type): type { return struct { v: T }; };
         const boxSize = fn(B: type): i32 { return @intCast(i32, @sizeOf(B)); };
@@ -347,7 +347,7 @@ TEST_CASE("E2E: two instantiations of the same constructor passed to another gen
     )") == 48);
 }
 
-TEST_CASE("E2E: a generic type constructor without member functions still resolves") {
+TEST_CASE("A generic type constructor without member functions still resolves") {
     CHECK(helpers::compile_and_run(R"(
         const Pair = fn(A: type, B: type): type { return struct { a: A, b: B }; };
 
@@ -358,7 +358,7 @@ TEST_CASE("E2E: a generic type constructor without member functions still resolv
     )") == 7);
 }
 
-TEST_CASE("E2E: a type constructor's members read its `comptime` value parameters") {
+TEST_CASE("A type constructor's members read its `comptime` value parameters") {
     SECTION("a scalar `comptime` parameter") {
         CHECK(helpers::compile_and_run(R"(
             const Box = fn(T: type, comptime tag: i32): type {
@@ -464,7 +464,7 @@ TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type const
     )") == 12 + 18);
 }
 
-TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `comptime` parameter") {
+TEST_CASE("A type constructor member sizes a local `[n]T` from a `comptime` parameter") {
     SECTION("the array length folds from the constructor's `comptime` binding") {
         CHECK(helpers::compile_and_run(R"(
             const Vec = fn(comptime n: usize): type {
@@ -535,7 +535,7 @@ TEST_CASE("E2E: a type constructor member sizes a local `[n]T` from a `comptime`
     }
 }
 
-TEST_CASE("E2E: a plain generic fn sizes a local `[n]mut T` from a `comptime` parameter") {
+TEST_CASE("A plain generic fn sizes a local `[n]mut T` from a `comptime` parameter") {
     CHECK(helpers::compile_and_run(R"(
         const probe = fn(comptime n: usize, head: i32): i32 {
             let mut buf: [n]mut i32 = undefined;

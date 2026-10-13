@@ -38,7 +38,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
+TEST_CASE("@[inline(...)] maps each mode onto its LLVM attribute") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -73,7 +73,7 @@ TEST_CASE("Codegen: @[inline(...)] maps each mode onto its LLVM attribute") {
     CHECK_FALSE(plain.hasFnAttribute(llvm::Attribute::InlineHint));
 }
 
-TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") {
+TEST_CASE("@[naked] on a function literal is naked and never inlined") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -93,7 +93,7 @@ TEST_CASE("Codegen: @[naked] on a function literal is naked and never inlined") 
     CHECK(fn.hasFnAttribute(llvm::Attribute::NoInline));
 }
 
-TEST_CASE("Codegen: @[no_builtins] marks the function no-builtins") {
+TEST_CASE("@[no_builtins] marks the function no-builtins") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -163,7 +163,7 @@ TEST_CASE("@[align(n)] raises a field's alignment in the aggregate layout") {
     )");
 }
 
-TEST_CASE("Codegen: an over-aligned field is laid out at its aligned offset") {
+TEST_CASE("An over-aligned field is laid out at its aligned offset") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -195,7 +195,7 @@ TEST_CASE("@[align(n)] is not supported on union fields") {
                     sema::error::ILLEGAL_ATTRIBUTE));
 }
 
-TEST_CASE("Codegen: @[align(n)] on globals, locals and functions") {
+TEST_CASE("@[align(n)] on globals, locals and functions") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
@@ -259,7 +259,7 @@ TEST_CASE("The removed `@alignas` builtin no longer parses") {
     CHECK_FALSE(p.consume(ast, arena).empty());
 }
 
-TEST_CASE("Codegen: a generic function's attributes fold per instantiation") {
+TEST_CASE("A generic function's attributes fold per instantiation") {
     llvm::LLVMContext context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(

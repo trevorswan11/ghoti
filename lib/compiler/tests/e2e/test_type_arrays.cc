@@ -4,7 +4,7 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("E2E: a local `comptime` array of `type`s is compile-time only") {
+TEST_CASE("A local `comptime` array of `type`s is compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
             const ts = [_]type{ i32, u8 };
@@ -16,7 +16,7 @@ TEST_CASE("E2E: a local `comptime` array of `type`s is compile-time only") {
     )") == 0);
 }
 
-TEST_CASE("E2E: a local `const` array of `type`s is compile-time only") {
+TEST_CASE("A local `const` array of `type`s is compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
             const ts = [_]type{ i32, u8, u64 };
@@ -27,7 +27,7 @@ TEST_CASE("E2E: a local `const` array of `type`s is compile-time only") {
     )") == 0);
 }
 
-TEST_CASE("E2E: an element of a `type` array names a usable type") {
+TEST_CASE("An element of a `type` array names a usable type") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             const ts = [_]type{ i32, u8 };
@@ -38,7 +38,7 @@ TEST_CASE("E2E: an element of a `type` array names a usable type") {
     )") == 44);
 }
 
-TEST_CASE("E2E: a module-level `type` array folds at every use") {
+TEST_CASE("A module-level `type` array folds at every use") {
     CHECK(helpers::compile_and_run_tests(R"(
         const ts = [_]type{ u8, u16, u32 };
         const more = [_]type{ i64 };
@@ -53,7 +53,7 @@ TEST_CASE("E2E: a module-level `type` array folds at every use") {
     )") == 0);
 }
 
-TEST_CASE("E2E: `for comptime` walks a `type` array") {
+TEST_CASE("`for comptime` walks a `type` array") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             const ts = [_]type{ u8, u16, u32, u64 };
@@ -64,7 +64,7 @@ TEST_CASE("E2E: `for comptime` walks a `type` array") {
     )") == 15);
 }
 
-TEST_CASE("E2E: nested arrays and slices of `type`s are compile-time only") {
+TEST_CASE("Nested arrays and slices of `type`s are compile-time only") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "t" {
             const grid = [_][2]type{ .{ i8, i16 }, .{ i32, i64 } };
@@ -80,7 +80,7 @@ TEST_CASE("E2E: nested arrays and slices of `type`s are compile-time only") {
     )") == 0);
 }
 
-TEST_CASE("E2E: a struct value holding a `type` field is compile-time only") {
+TEST_CASE("A struct value holding a `type` field is compile-time only") {
     CHECK(helpers::compile_and_run(R"(
         const Slot = struct { T: type, count: usize };
 
@@ -92,7 +92,7 @@ TEST_CASE("E2E: a struct value holding a `type` field is compile-time only") {
     )") == 13);
 }
 
-TEST_CASE("E2E: a `comptime let mut` array of `type`s can be rewritten at compile time") {
+TEST_CASE("A `comptime let mut` array of `type`s can be rewritten at compile time") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut ts = [_]type{ u8, u8 };
@@ -102,7 +102,7 @@ TEST_CASE("E2E: a `comptime let mut` array of `type`s can be rewritten at compil
     )") == 9);
 }
 
-TEST_CASE("E2E: a generic signature's placeholder target never emits parameterized impl bodies") {
+TEST_CASE("A generic signature's placeholder target never emits parameterized impl bodies") {
     // `empty`'s own `Res([]mut T, Oops)` instantiates `Res` over the still-unbound `T`
     CHECK(helpers::compile_and_run(R"(
         const Res = fn(T: type, E: type): type {
