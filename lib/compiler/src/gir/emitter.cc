@@ -318,7 +318,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
 
     mod::module_t& fn_mod{*req.module};
-    const auto   fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
+    const auto     fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
         [&](const auto&) -> stdx::option<const ast::function_expr&> { return stdx::none; },
         [&](const ast::decl_stmt& decl) -> stdx::option<const ast::function_expr&> {
             if (decl.value) { return fn_mod.ast.get_as_opt<ast::function_expr>(*decl.value); }
@@ -2599,6 +2599,11 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::call_expr& data) -> value { return emit_call(id, data); },
         [&](const ast::asm_expr& data) -> value { return emit_asm(id, data); },
         [&](const ast::array_expr& data) -> value { return emit_array(id, data); },
+        [&](const ast::range_expr&) -> value {
+            const auto cv{const_eval_.try_eval(id)};
+            ASSERT(cv, "A range used as a value must fold to its array");
+            return materialize_const(*cv);
+        },
         [&](ast::grouped_expr) -> value { return emit_expression_id(id); });
 }
 
@@ -4458,8 +4463,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // @fnCtx()(args): the inner call is never emitted, its callee names the enclosing function
     const auto fn_ctx_call{active_ast().get_as_opt<ast::call_expr>(call.function)};
-    const bool is_fn_ctx_call{fn_ctx_call && fn_ctx_call->function->get_builtin() ==
-                                                 syntax::builtin_t::FN_CTX};
+    const bool is_fn_ctx_call{fn_ctx_call &&
+                              fn_ctx_call->function->get_builtin() == syntax::builtin_t::FN_CTX};
 
     // The resolver pinned this call's monomorphization (keyed on types *and* comptime values).
     bool resolved_generic_target{false};
@@ -5632,6 +5637,15 @@ auto emitter::emit_for(ast::node_id                   id,
             const auto slot{builder_.emit_alloca(*elem_type, cap_name.value_or(""))};
             builder_.emit_store(slot, start_val);
 
+            // A closed range counts down when its start is past its end
+            stdx::option<value> descending;
+            if (!open_upper) {
+                auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+                descending.emplace(
+                    builder_.emit_binary(instruction_kind::GT, start_val, end_val, bool_type),
+                    bool_type);
+            }
+
             iter_infos.emplace_back<iterable_info>({
                 .is_range         = true,
                 .is_inclusive     = inclusive,
@@ -5639,6 +5653,7 @@ auto emitter::emit_for(ast::node_id                   id,
                 .var_slot         = slot,
                 .elem_type        = elem_type,
                 .end_val          = end_val,
+                .descending       = descending,
                 .capture_name     = cap_name,
                 .capture_type     = cap_type,
                 .alias_capture    = alias_capture,
@@ -5713,12 +5728,14 @@ auto emitter::emit_for(ast::node_id                   id,
 
         value cond_val{true, bool_type};
         for (bool first{true}; const auto& info : iter_infos) {
-            // An open-upper range (`for (arr, lo..)`) contributes no stop condition of its own.
-            if (info.is_range && info.range_open_upper) { continue; }
+            // An open-upper range (`for (arr, lo..)`) contributes no stop condition of its own,
+            // and an inclusive one always runs once and stops in the step segment
+            if (info.is_range && (info.range_open_upper || info.is_inclusive)) { continue; }
             auto& var_type{info.is_range ? *info.elem_type
                                          : ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
             const auto cur_val{builder_.emit_load(info.var_slot, var_type)};
-            const auto cmp_kind{info.is_inclusive ? instruction_kind::LE : instruction_kind::LT};
+            // A range's counter reaches its end exactly, whichever way it counts
+            const auto cmp_kind{info.is_range ? instruction_kind::NE : instruction_kind::LT};
             const auto cmp_res{
                 builder_.emit_binary(cmp_kind, value{cur_val, var_type}, info.end_val, bool_type)};
             const value this_cond{cmp_res, bool_type};
@@ -5844,11 +5861,29 @@ auto emitter::emit_for(ast::node_id                   id,
                         value{at_end, bool_type}, done_target, step_on.get_id());
                     builder_.set_segment(step_on);
                 }
-                const auto next{builder_.emit_binary(instruction_kind::ADD,
-                                                     value{cur, *info.elem_type},
-                                                     value{static_cast<i64>(1), *info.elem_type},
-                                                     *info.elem_type)};
-                builder_.emit_store(info.var_slot, value{next, *info.elem_type});
+                const auto advance{[&](instruction_kind kind) {
+                    const auto next{
+                        builder_.emit_binary(kind,
+                                             value{cur, *info.elem_type},
+                                             value{static_cast<i64>(1), *info.elem_type},
+                                             *info.elem_type)};
+                    builder_.emit_store(info.var_slot, value{next, *info.elem_type});
+                }};
+                if (!info.descending) {
+                    advance(instruction_kind::ADD);
+                    continue;
+                }
+                auto& down{fn.add_segment()};
+                auto& up{fn.add_segment()};
+                auto& stepped{fn.add_segment()};
+                builder_.emit_cond_goto(*info.descending, down.get_id(), up.get_id());
+                builder_.set_segment(down);
+                advance(instruction_kind::SUB);
+                builder_.emit_goto(stepped.get_id());
+                builder_.set_segment(up);
+                advance(instruction_kind::ADD);
+                builder_.emit_goto(stepped.get_id());
+                builder_.set_segment(stepped);
             } else {
                 auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                 const auto cur{builder_.emit_load(info.var_slot, usize_type)};
@@ -7462,7 +7497,7 @@ auto emitter::emit_c_va_builtin(const ast::call_expr& call,
     }
 
     // `@cVaArg`'s trailing type argument only shapes the result type
-    const usize list_arg_count{builtin == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
+    const usize        list_arg_count{builtin == syntax::builtin_t::C_VA_COPY ? 2UZ : 1UZ};
     std::vector<value> args;
     args.reserve(list_arg_count);
     for (usize i{0}; i < list_arg_count; ++i) {
@@ -7482,11 +7517,11 @@ auto emitter::current_function_is_c_variadic() -> bool {
     return sig && sig->is_variadic;
 }
 
-auto emitter::emit_mem_intrinsic(ast::node_id         id,
-                                 ast::expr_handle     dest_h,
-                                 ast::expr_handle     rhs_h,
-                                 syntax::builtin_t    builtin,
-                                 bool                 check_lengths) -> void {
+auto emitter::emit_mem_intrinsic(ast::node_id      id,
+                                 ast::expr_handle  dest_h,
+                                 ast::expr_handle  rhs_h,
+                                 syntax::builtin_t builtin,
+                                 bool              check_lengths) -> void {
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
     auto& u8_type{ctx_.get_int(8, false)};

@@ -470,7 +470,7 @@ auto add_elf_args(std::vector<std::string>&   args,
                                 fmt::format("lib{}.a", library),
                                 fmt::format("lib{}.dll.a", library),
                                 fmt::format("{}.dll.a", library)};
-    std::error_code ec;
+    std::error_code  ec;
     for (const auto& entry : std::filesystem::directory_iterator{dir, ec}) {
         const auto name{entry.path().filename().string()};
         for (const auto& candidate : candidates) {
@@ -577,7 +577,8 @@ auto add_elf_args(std::vector<std::string>&   args,
     auto                               effective_opts{linker_opts};
     if (triple.isOSWindows() && !linker_opts.imports.empty()) {
         import_dir.emplace("ghoti_import_libs");
-        if (TRY(write_missing_import_libraries(triple, object_file, linker_opts, import_dir->path))) {
+        if (TRY(write_missing_import_libraries(
+                triple, object_file, linker_opts, import_dir->path))) {
             library_paths.emplace_back(import_dir->path);
             effective_opts.library_paths = library_paths;
         }

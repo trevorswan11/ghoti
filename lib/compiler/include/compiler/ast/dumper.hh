@@ -110,6 +110,7 @@ class dumper {
     auto visit(explicit_type_id, const interface_expr&) -> void;
     auto visit(explicit_type_id, const explicit_array_type&) -> void;
     auto visit(explicit_type_id, const explicit_dyn_type&) -> void;
+    auto visit(explicit_type_id, const explicit_expr_type&) -> void;
 
     template <typename T, typename Func>
     auto dump_container(const T& container, Func&& func) -> void {

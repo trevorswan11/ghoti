@@ -126,22 +126,83 @@ TEST_CASE("a range counter can be matched on, addressed, but not assigned") {
         "pub const main = fn(): i32 { for (0..3) |i| { i = 4; } return 0; };");
 }
 
-TEST_CASE("ranges only count up") {
-    // A start past the end runs zero times
+TEST_CASE("a range whose start is past its end counts down") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut s: i32 = 0;
+            for (3..0) |i| { s = s * 10 + @as(i32, @intCast(i)); }
+            let lo: i32 = 9;
+            let hi: i32 = 7;
+            for (lo..hi) |i| { s = s * 10 + i; }
+            for (hi..=lo) |i| { s = s * 10 + i; }
+            return if (s == 32198789) 7 else 1;
+        };
+    )") == 7);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut s: i32 = 0;
+            for (-1..=-8) |i| { s += @as(i32, @intCast(i)); }
+            return -s;
+        };
+    )") == 36);
+
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut n: i32 = 0;
-            let lo: i32 = 9;
-            let hi: i32 = 2;
-            for (lo..hi) |_| { n += 1; }
+            let k: i32 = 4;
+            for (k..k) |_| { n += 1; }
+            for (k..=k) |_| { n += 10; }
+            return n;
+        };
+    )") == 10);
+}
+
+TEST_CASE("a descending range reaches its type's extremes") {
+    CHECK(helpers::compile_and_run(R"(
+        const count = fn(lo: u8, hi: u8): i32 {
+            let mut n: i32 = 0;
             for (lo..=hi) |_| { n += 1; }
             return n;
         };
+        pub const main = fn(): i32 {
+            let mut m: i32 = 0;
+            for (127i8..=-128) |_| { m += 1; }
+            return (count(255, 0) - 256) + (m - 256);
+        };
     )") == 0);
-    CHECK(helpers::raised("pub const main = fn(): i32 { for (5..3) |_| {} return 0; };",
+}
+
+TEST_CASE("a descending range folds at compile time and unrolls") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(a: i32, b: i32): i32 { let mut s: i32 = 0; for (a..=b) |i| { s += i; } return s; };
+        const K = @call(.compile_time, sum, 5, 2);
+        pub const main = fn(): i32 {
+            let mut u: i32 = 0;
+            for comptime (4..1) |i| { u = u * 10 + i; }
+            return if (K == 14 and u == 432) 9 else 1;
+        };
+    )") == 9);
+}
+
+TEST_CASE("a descending range counter converts when its values fit") {
+    CHECK(helpers::compile_and_run(R"(
+        const take = fn(x: u8): i32 { return x; };
+        pub const main = fn(): i32 {
+            let mut s: i32 = 0;
+            for (200..=198) |i| { s += take(i); }
+            return s - 500;
+        };
+    )") == 97);
+}
+
+TEST_CASE("a subscript range cannot count down") {
+    CHECK(helpers::raised(R"(
+        pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; const s = a[3..1]; return 0; };
+    )",
                           sema::error::ILLEGAL_OPEN_RANGE));
-    CHECK(helpers::raised("pub const main = fn(): i32 { for (1..=-1) |_| {} return 0; };",
-                          sema::error::ILLEGAL_OPEN_RANGE));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { let a: [5]i32 = .{1, 2, 3, 4, 5}; const s = a[2..=1]; return @intCast(s.len); };
+    )") == 0);
 }
 
 TEST_CASE("an inclusive range stops at its type's maximum") {

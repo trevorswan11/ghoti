@@ -50,7 +50,8 @@ auto contains(source_span span, source_location point) -> bool {
 }
 
 // Every declared name that's in scope at `target`
-auto local_scope_completions(const mod::module_t& module, source_location target) -> nlohmann::json {
+auto local_scope_completions(const mod::module_t& module, source_location target)
+    -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     stdx::option<source_span> enclosing;

@@ -179,7 +179,7 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
     return {std::move(ctx), idx};
 }
 
-auto find_nested_fn(const mod::module_t&        module,
+auto find_nested_fn(const mod::module_t&      module,
                     const ast::function_expr& outer,
                     std::string_view          name) -> ast::node_id {
     const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};

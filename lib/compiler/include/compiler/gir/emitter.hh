@@ -87,6 +87,7 @@ class emitter {
         local_id                       var_slot;
         stdx::option<sema::type&>      elem_type;
         value                          end_val{};
+        stdx::option<value>            descending{}; // a closed range's runtime direction
         stdx::option<std::string_view> capture_name;
         stdx::option<value>            arr_val{};
         stdx::option<sema::type&>      capture_type;
@@ -622,24 +623,24 @@ class emitter {
     }
 
   private:
-    sema::context&             ctx_;
+    sema::context&               ctx_;
     mod::module_t&               ast_module_;
     stdx::option<mod::module_t&> active_module_{ast_module_};
-    bool                       attributed_foreign_diags_{false};
-    const_eval                 const_eval_;
-    builder                    builder_;
+    bool                         attributed_foreign_diags_{false};
+    const_eval                   const_eval_;
+    builder                      builder_;
     module_t                     gir_module_;
-    std::vector<scope_frame>   scopes_;
-    std::vector<loop_context>  loop_stack_;
-    bool                       comptime_loop_continue_{false};
-    bool                       comptime_loop_break_{false};
-    stdx::option<value>        comptime_loop_break_value_{};
-    stdx::option<value>        current_error_slot_{};
-    default_counter            anon_test_desc_counter_;
-    default_counter            anon_test_fn_counter_;
-    default_counter            anon_fn_counter_;
-    default_counter            anon_slice_lit_counter_;
-    std::vector<std::string>   open_fn_names_;
+    std::vector<scope_frame>     scopes_;
+    std::vector<loop_context>    loop_stack_;
+    bool                         comptime_loop_continue_{false};
+    bool                         comptime_loop_break_{false};
+    stdx::option<value>          comptime_loop_break_value_{};
+    stdx::option<value>          current_error_slot_{};
+    default_counter              anon_test_desc_counter_;
+    default_counter              anon_test_fn_counter_;
+    default_counter              anon_fn_counter_;
+    default_counter              anon_slice_lit_counter_;
+    std::vector<std::string>     open_fn_names_;
     // A type constructor's function-valued `comptime` arguments, bound as callables inside the
     // member function being emitted
     std::vector<std::pair<std::string_view, const_closure>> ctor_closure_bindings_;

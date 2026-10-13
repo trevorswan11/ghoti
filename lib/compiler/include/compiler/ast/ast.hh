@@ -150,8 +150,8 @@ class AST {
                                           const syntax::token_t& end_token,
                                           type_modifier          mod,
                                           Data&&                 data) -> explicit_type_id {
-        constexpr auto kind{explicit_type_kind_of<Data>::value()};
-        const auto     index{explicit_types_.emplace_back(
+        constexpr auto   kind{explicit_type_kind_of<Data>::value()};
+        const auto       index{explicit_types_.emplace_back(
             get_arena(), start_token, end_token, std::forward<Data>(data))};
         explicit_type_id id{kind, mod, start_token.type, index};
         if (const auto builtin{start_token.type == syntax::token_type_t::BUILTIN

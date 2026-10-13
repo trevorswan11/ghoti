@@ -648,7 +648,13 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
     - `for comptime` is unchanged: it unrolls into constants of the default integer type
 - Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
-- A `for` range whose constant bounds are the wrong way round (`for (5..3)`) is an error, since ranges only count up; with runtime bounds it runs zero times
+- **Breaking:** a `for` range whose start is past its end counts down (`3..0` is 3, 2, 1; `-1..=-8` is -1 through -8), including with runtime bounds, where `for (i..n)` with `i > n` used to run zero times
+    - a subscript range still only counts up, so constant bounds the wrong way round (`a[3..1]`) are an error
+- A range with bounds known at compile time is a value anywhere outside a `for` iterable or subscript: the array of values it takes (`let x = 0..10;` is a `[10]usize`, `let y: [4]u8 = 2..6;`, `f(0..8)`), counting down when its start is past its end
+- A type position (a parameter, return, declaration, field, or element type) takes any expression that computes a type at compile time: `fn(x: if (WIDE) i64 else i32)`, `x: match (k) { .small => u8, .large => u32 }`, `let v: blk: { break :blk u8; } = 3;`, `let b: TYPES[0] = 1;`
+    - every branch must still be a type; `if comptime` / `match comptime` check only the branch taken
+    - a parameter that a type expression reads becomes compile-time, so each call instantiates its own types
+- Fixed: an `if` or `match` whose values are types (`const T = if (c) u8 else S;`) was typed as the types' peer, so it only compiled when they had one, and as a local it was given storage
 - Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
 - Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
 - Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler

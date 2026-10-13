@@ -19,6 +19,18 @@
 
 namespace ghoti::ast {
 
+namespace {
+
+// With `current` on an identifier, whether it labels a block (`blk: { ... }`)
+[[nodiscard]] auto starts_labeled_block(syntax::parser& parser) -> bool {
+    if (!parser.peek_token_is(syntax::token_type_t::COLON)) { return false; }
+    const syntax::parser::transaction lookahead{parser};
+    parser.advance();
+    return parser.peek_token_is(syntax::token_type_t::LBRACE);
+}
+
+} // namespace
+
 auto try_parse_dyn_fn(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<stdx::option<explicit_function_type>, syntax::diagnostic> {
     const bool is_fn_sugar{[&] {
@@ -328,9 +340,14 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         }
 
         parser.advance();
+        // Indexing (`Ts[0]`) and a labeled block (`blk: { ... }`) compute the type
+        const bool computed{parser.peek_token_is(syntax::token_type_t::LBRACKET) ||
+                            starts_labeled_block(parser)};
         // Manually dispatch to prevent weird consumption
-        if (parser.peek_token_is(syntax::token_type_t::DOT) ||
+        if (computed || parser.peek_token_is(syntax::token_type_t::DOT) ||
             parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            const syntax::parser::type_expression_scope type_scope{parser};
+            const syntax::parser::compile_time_scope    cx_scope{parser, computed};
             const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
             if (parsed.is<dot_expr>()) {
                 return parser.add_type<dot_expr>(
@@ -342,9 +359,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
                     modifier_token, modifier, parser.get_node<call_expr>(*parsed));
             }
 
-            return make_syntax_err("Expected a type",
-                                   syntax::error::ILLEGAL_EXPLICIT_TYPE,
-                                   parser.get_location_of(*parsed));
+            return parser.add_type<explicit_expr_type>(
+                modifier_token, modifier, explicit_expr_type{parsed});
         }
 
         const auto ident{TRY(identifier_expr::parse(parser))};
@@ -379,9 +395,11 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     }
 
     // Parse at TYPE precedence so a following `= <init>` is not  absorbed into an assignment
-    stdx::option<explicit_type_id> id;
-    switch (const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
-            user->get_kind()) {
+    const syntax::parser::type_expression_scope type_scope{parser};
+    const syntax::parser::compile_time_scope    cx_scope{parser, true};
+    stdx::option<explicit_type_id>              id;
+    const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+    switch (user->get_kind()) {
     case node_kind::STRUCT_EXPRESSION:
         id.emplace(parser.add_type<struct_expr>(
             modifier_token, modifier, parser.get_node<struct_expr>(*user)));
@@ -410,7 +428,20 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         }
         return *id;
     }
-    return make_syntax_err("Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
+
+    // A literal can never be a type
+    if (user.any<int_literal_expr,
+                 float_literal_expr,
+                 string_expr,
+                 bool_expr,
+                 nullptr_expr,
+                 undefined_expr,
+                 unreachable_expr>()) {
+        return make_syntax_err("Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
+    }
+
+    // Anything else is an expression computing the type (`if (c) A else B`, `match (k) { ... }`)
+    return parser.add_type<explicit_expr_type>(modifier_token, modifier, explicit_expr_type{user});
 }
 
 namespace {

@@ -119,6 +119,10 @@ class symbol_collector {
     auto visit(ast::explicit_type_id, ast::explicit_type_id id) -> void { collect(id); }
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
+    auto visit(ast::explicit_type_id, const ast::explicit_expr_type&) -> void;
+    // Collects the scopes of the type expressions a declaration's type spells, under its modifiers
+    // and array levels
+    auto collect_computed_types(ast::explicit_type_id type) -> void;
 
     template <typename... IterPairs>
     [[nodiscard]] auto visit_scopes(type_kind kind, IterPairs&&... pairs) -> usize {
@@ -177,7 +181,7 @@ class symbol_collector {
     }
 
   private:
-    mod::module_t&        collecting_;
+    mod::module_t&      collecting_;
     usize               table_idx_;
     symbol_table_stack  table_stack_;
     context&            ctx_;

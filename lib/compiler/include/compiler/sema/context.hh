@@ -75,11 +75,11 @@ enum class deprecation_policy : u8 {
 // One symbol `@export` defines for a function declaration
 struct function_export {
     stdx::option<const mod::module_t&> owner;
-    ast::node_id                     fn_node; // the exported function literal
-    std::string                      name;
-    bool                             weak{false};
-    ast::symbol_visibility           visibility{ast::symbol_visibility::DEFAULT};
-    source_location                  site;
+    ast::node_id                       fn_node; // the exported function literal
+    std::string                        name;
+    bool                               weak{false};
+    ast::symbol_visibility             visibility{ast::symbol_visibility::DEFAULT};
+    source_location                    site;
 };
 
 // Every `@export` in the program, shared by every module's context
@@ -123,7 +123,7 @@ class export_registry {
 
 struct test_queue {
     std::vector<mod::module_t*> modules;
-    usize                     resolve_depth{0};
+    usize                       resolve_depth{0};
 };
 
 // A contextual wrapper around sematic steps
@@ -146,7 +146,7 @@ struct context {
     // The root module and `std/start.gh`, once an executable's entry code is attached
     stdx::option<mod::module_t&> entry_root{};
     stdx::option<mod::module_t&> start_module{};
-    bool                       runtime_safety{true};
+    bool                         runtime_safety{true};
     // Building a test executable, which `@cfg(testing)` reports
     bool               testing{false};
     optimize_mode      build_mode{optimize_mode::DEBUG};

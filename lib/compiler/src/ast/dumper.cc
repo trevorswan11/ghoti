@@ -19,7 +19,6 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/token_type.hh"
@@ -1264,6 +1263,14 @@ auto dumper::visit(explicit_type_id, const explicit_array_type& array) -> void {
         fmt::print(out_, "{}", indent_.current_branch());
         dump(array.inner_explicit_type);
     }
+}
+
+auto dumper::visit(explicit_type_id, const explicit_expr_type& type) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "{}ExprType", indent_.current_branch());
+    const indent::guard g{indent_, true};
+    fmt::print(out_, "{}Expr: ", indent_.current_branch());
+    dump(type.expr);
 }
 
 auto dumper::visit(explicit_type_id, const explicit_dyn_type& dyn) -> void {

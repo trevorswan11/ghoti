@@ -22,13 +22,6 @@ TEST_CASE("unary plus is an identity on numeric operands") {
     CHECK(helpers::raised("const x = +true;", sema::error::OPERATOR_TYPE_MISMATCH));
 }
 
-TEST_CASE("a closed range is not a first-class value") {
-    CHECK(helpers::raised(R"(
-        const f = fn(): void { let r = 1..5; _ = r; };
-    )",
-                          sema::error::ILLEGAL_OPEN_RANGE));
-}
-
 TEST_CASE("an unsuffixed integer literal typed `comptime_float` folds as a float") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
@@ -285,7 +278,8 @@ TEST_CASE("errors inside a parameterized impl method are reported once per site"
     )"};
     const auto     with_body{
         [&](std::string_view body) { return std::string{prefix} + std::string{body} + suffix; }};
-    const auto range_diags{helpers::resolve_diags(with_body("return 0..1;"))};
+    const auto range_diags{
+        helpers::resolve_diags(with_body("let r = self.a..9; _ = r; return 0;"))};
     CHECK(std::ranges::count(range_diags.codes, sema::error::ILLEGAL_OPEN_RANGE) == 1);
     const auto undeclared{helpers::resolve_diags(with_body("return nope;"))};
     CHECK(std::ranges::count(undeclared.codes, sema::error::UNDECLARED_IDENTIFIER) == 1);
@@ -576,7 +570,7 @@ TEST_CASE("a closure only modifies a captured `let mut`") {
     )") == 7);
 }
 
-TEST_CASE("a range nested inside a `for` iterable or subscript is not a value") {
+TEST_CASE("a range nested inside a `for` iterable or subscript is a range value") {
     CHECK(helpers::raised(R"(
         pub const main = fn(): i32 {
             let mut n: i32 = 2;
@@ -585,11 +579,15 @@ TEST_CASE("a range nested inside a `for` iterable or subscript is not a value") 
         };
     )",
                           sema::error::ILLEGAL_OPEN_RANGE));
-    CHECK(helpers::raised(
-        "pub const main = fn(): void { for (blk: { break :blk 0..1; }) |i| { _ = i; } };",
-        sema::error::ILLEGAL_OPEN_RANGE));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut n: i32 = 0;
+            for (blk: { break :blk 3..1; }) |i| { n = n * 10 + @as(i32, @intCast(i)); }
+            return n;
+        };
+    )") == 32);
     CHECK(helpers::raised("pub const f = fn(a: []i32): void { _ = a[blk: { break :blk 0..1; }]; };",
-                          sema::error::ILLEGAL_OPEN_RANGE));
+                          sema::error::TYPE_MISMATCH));
 }
 
 TEST_CASE("a generic function cannot be C-variadic") {

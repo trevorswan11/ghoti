@@ -447,7 +447,7 @@ auto analyzer::check_types(gir::module_t& gir_module, mod::module_t& ast_module)
     return type_checker::check_types(gir_module, ast_module, ctx_);
 }
 
-auto analyzer::emit_llvm_ir(gir::module_t&                      gir_module,
+auto analyzer::emit_llvm_ir(gir::module_t&                    gir_module,
                             llvm::LLVMContext&                context,
                             const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
@@ -462,7 +462,7 @@ auto analyzer::emit_llvm_ir(gir::module_t&                      gir_module,
     return llvm_mod;
 }
 
-auto analyzer::emit_llvm_ir_executable(gir::module_t&                      gir_module,
+auto analyzer::emit_llvm_ir_executable(gir::module_t&                    gir_module,
                                        llvm::LLVMContext&                context,
                                        const codegen::optimizer_options& options,
                                        std::string_view                  user_main_name)
@@ -494,7 +494,7 @@ auto analyzer::emit_llvm_ir_executable(gir::module_t&                      gir_m
     return llvm_mod;
 }
 
-auto analyzer::emit_llvm_ir_test_executable(gir::module_t&                      gir_module,
+auto analyzer::emit_llvm_ir_test_executable(gir::module_t&                    gir_module,
                                             llvm::LLVMContext&                context,
                                             const codegen::optimizer_options& options)
     -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic> {
@@ -512,7 +512,7 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module_t&                      
     return llvm_mod;
 }
 
-auto analyzer::lower_artifact(gir::module_t&                      gir_module,
+auto analyzer::lower_artifact(gir::module_t&                    gir_module,
                               llvm::LLVMContext&                context,
                               const codegen::optimizer_options& options,
                               build_artifact                    artifact)
@@ -530,7 +530,7 @@ auto analyzer::lower_artifact(gir::module_t&                      gir_module,
     return emit_llvm_ir(gir_module, context, options);
 }
 
-auto analyzer::emit_llvm_ir_text(gir::module_t&                      gir_module,
+auto analyzer::emit_llvm_ir_text(gir::module_t&                    gir_module,
                                  const codegen::target_options&    target_opts,
                                  const codegen::optimizer_options& opt_options,
                                  build_artifact                    artifact)
@@ -543,7 +543,7 @@ auto analyzer::emit_llvm_ir_text(gir::module_t&                      gir_module,
     return codegen::llvm_lowering::to_ir_string(*llvm_mod);
 }
 
-auto analyzer::emit_asm_text(gir::module_t&                      gir_module,
+auto analyzer::emit_asm_text(gir::module_t&                    gir_module,
                              const codegen::target_options&    target_opts,
                              const codegen::optimizer_options& opt_options,
                              build_artifact                    artifact)
@@ -644,7 +644,7 @@ auto analyzer::validate_test_entry(const mod::module_t& root_module) const
     return {};
 }
 
-auto analyzer::emit_object(gir::module_t&                      gir_module,
+auto analyzer::emit_object(gir::module_t&                    gir_module,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,
                            const std::filesystem::path&      output_path)
@@ -653,7 +653,7 @@ auto analyzer::emit_object(gir::module_t&                      gir_module,
     return emit_object(gir_module, context, target_opts, opt_options, output_path);
 }
 
-auto analyzer::emit_object(gir::module_t&                      gir_module,
+auto analyzer::emit_object(gir::module_t&                    gir_module,
                            llvm::LLVMContext&                context,
                            const codegen::target_options&    target_opts,
                            const codegen::optimizer_options& opt_options,
@@ -666,7 +666,7 @@ auto analyzer::emit_object(gir::module_t&                      gir_module,
     return codegen::emit_object_file(*llvm_mod, *target_machine, output_path);
 }
 
-auto analyzer::emit_test_executable(gir::module_t&                         gir_module,
+auto analyzer::emit_test_executable(gir::module_t&                       gir_module,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
@@ -677,7 +677,7 @@ auto analyzer::emit_test_executable(gir::module_t&                         gir_m
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_test_executable(gir::module_t&                         gir_module,
+auto analyzer::emit_test_executable(gir::module_t&                       gir_module,
                                     llvm::LLVMContext&                   context,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
@@ -694,7 +694,7 @@ auto analyzer::emit_test_executable(gir::module_t&                         gir_m
                          build_artifact::TEST_EXECUTABLE);
 }
 
-auto analyzer::emit_executable(gir::module_t&                         gir_module,
+auto analyzer::emit_executable(gir::module_t&                       gir_module,
                                const codegen::target_options&       target_opts,
                                const codegen::optimizer_options&    opt_options,
                                const std::filesystem::path&         output_path,
@@ -704,7 +704,7 @@ auto analyzer::emit_executable(gir::module_t&                         gir_module
     return emit_executable(gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_executable(gir::module_t&                         gir_module,
+auto analyzer::emit_executable(gir::module_t&                       gir_module,
                                llvm::LLVMContext&                   context,
                                const codegen::target_options&       target_opts,
                                const codegen::optimizer_options&    opt_options,
@@ -721,7 +721,7 @@ auto analyzer::emit_executable(gir::module_t&                         gir_module
                          build_artifact::EXECUTABLE);
 }
 
-auto analyzer::emit_static_library(gir::module_t&                         gir_module,
+auto analyzer::emit_static_library(gir::module_t&                       gir_module,
                                    const codegen::target_options&       target_opts,
                                    const codegen::optimizer_options&    opt_options,
                                    const std::filesystem::path&         output_path,
@@ -732,7 +732,7 @@ auto analyzer::emit_static_library(gir::module_t&                         gir_mo
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_static_library(gir::module_t&                         gir_module,
+auto analyzer::emit_static_library(gir::module_t&                       gir_module,
                                    llvm::LLVMContext&                   context,
                                    const codegen::target_options&       target_opts,
                                    const codegen::optimizer_options&    opt_options,
@@ -753,7 +753,7 @@ auto analyzer::emit_static_library(gir::module_t&                         gir_mo
     return codegen::create_static_library(output_path, objects, target_opts);
 }
 
-auto analyzer::emit_dynamic_library(gir::module_t&                         gir_module,
+auto analyzer::emit_dynamic_library(gir::module_t&                       gir_module,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
                                     const std::filesystem::path&         output_path,
@@ -764,7 +764,7 @@ auto analyzer::emit_dynamic_library(gir::module_t&                         gir_m
         gir_module, context, target_opts, opt_options, output_path, linker_opts);
 }
 
-auto analyzer::emit_dynamic_library(gir::module_t&                         gir_module,
+auto analyzer::emit_dynamic_library(gir::module_t&                       gir_module,
                                     llvm::LLVMContext&                   context,
                                     const codegen::target_options&       target_opts,
                                     const codegen::optimizer_options&    opt_options,
@@ -792,7 +792,7 @@ auto analyzer::emit_dynamic_library(gir::module_t&                         gir_m
         temp_obj_path, output_path, target_opts, effective_linker_opts);
 }
 
-auto analyzer::link_artifact(gir::module_t&                         gir_module,
+auto analyzer::link_artifact(gir::module_t&                       gir_module,
                              llvm::LLVMContext&                   context,
                              const codegen::target_options&       target_opts,
                              const codegen::optimizer_options&    opt_options,

@@ -30,22 +30,22 @@ template <typename T>
 // One resolved `impl [I for] T { ... }` block. `interface_type` is null for an inherent impl.
 struct impl_record {
     struct method {
-        std::string_view           name;
-        ast::node_id               decl;    // the `decl_stmt` in the impl body
-        stdx::option<type&>        fn_type; // resolved once conformance runs
-        bool                       is_pub;
-        bool                       inherited{false};
-        std::string                typing_key{};
+        std::string_view             name;
+        ast::node_id                 decl;    // the `decl_stmt` in the impl body
+        stdx::option<type&>          fn_type; // resolved once conformance runs
+        bool                         is_pub;
+        bool                         inherited{false};
+        std::string                  typing_key{};
         stdx::option<mod::module_t&> defining_mod{};
-        ast::node_id               signature{ast::node_id::make_invalid()};
+        ast::node_id                 signature{ast::node_id::make_invalid()};
     };
 
-    stdx::option<type&>        interface_type;
-    stdx::option<type&>        target_type;
-    ast::node_id               site;           // the `impl_stmt`, for diagnostics
+    stdx::option<type&>          interface_type;
+    stdx::option<type&>          target_type;
+    ast::node_id                 site;           // the `impl_stmt`, for diagnostics
     stdx::option<mod::module_t&> enclosing;      // module the impl was written in
-    usize                      body_scope_idx; // the impl block's own symbol table
-    std::vector<method>        methods{};
+    usize                        body_scope_idx; // the impl block's own symbol table
+    std::vector<method>          methods{};
 
     // Set for a record produced by expanding an `impl(P) ...` for one concrete target
     bool               from_parameterized{false};
@@ -72,12 +72,12 @@ struct extension_method {
 
 // A `impl(P: type, ...) [I for] Ctor(P) { ... }` held un-expanded
 struct parameterized_impl {
-    ast::node_id                      site;           // the `impl_stmt`
-    stdx::option<type&>               interface_type; // none for an inherent parameterized impl
-    ast::node_id                      base_ctor_fn;   // the generic ctor's `function_expr` node
+    ast::node_id                        site;           // the `impl_stmt`
+    stdx::option<type&>                 interface_type; // none for an inherent parameterized impl
+    ast::node_id                        base_ctor_fn;   // the generic ctor's `function_expr` node
     gsl::not_null<const mod::module_t*> base_mod;       // the module `base_ctor_fn` indexes into
     stdx::option<mod::module_t&>        enclosing;      // module the impl body lives in
-    usize                             body_scope_idx; // the impl block's own symbol table
+    usize                               body_scope_idx; // the impl block's own symbol table
     // none here means the param could not be matched positionally; the impl is skipped
     std::vector<stdx::opt_size> param_to_ctor_arg{};
 };

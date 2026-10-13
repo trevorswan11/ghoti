@@ -387,6 +387,9 @@ class const_eval {
     auto eval_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop)
         -> stdx::option<const_value>;
     auto eval_for(ast::node_id id, const ast::for_loop_expr& loop) -> stdx::option<const_value>;
+    // The values a range with constant bounds takes, typed as its counter
+    auto range_sequence(ast::node_id id, const ast::range_expr& range)
+        -> stdx::option<std::vector<const_value>>;
 
     auto eval_array(ast::node_id id, const ast::array_expr& array) -> stdx::option<const_value>;
     auto eval_index(ast::node_id id, const ast::index_expr& index_expr)

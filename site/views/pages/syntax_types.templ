@@ -42,6 +42,15 @@ templ SyntaxTypesPage() {
 					</ul>
 				</li>
 				<li>Nested types: Consist of an outer type modifier acting on any of these types in a recursive fashion</li>
+				<li>
+					Computed types: Any expression that evaluates to a type at compile time, such as <code>{ "if" }</code>, <code>match</code>, a labeled block, or indexing into an array of types
+					<ul>
+						<li>Every branch must still be a valid type; write <code>{ "if comptime" }</code> or <code>match comptime</code> to check only the branch taken</li>
+						<li>A parameter or return type may read another parameter, which makes that parameter compile-time, so each call instantiates its own types</li>
+						<li>A <code>{ "{" }</code> or <code>=</code> right after a computed type ends it, so a function's body or a declaration's value is never read as part of the type</li>
+						<li>An <code>{ "if" }</code> or <code>match</code> whose values are all types is itself a type value, so it can also be bound to a <code>const</code></li>
+					</ul>
+				</li>
 			</ul>
 		</li>
 		<li>The location of the type modifier is extremely important:</li>
@@ -90,6 +99,14 @@ func(tP);` }
 		<code class="language-ghoti">
 			{ `const Callback = fn(status: i32, result: ^bool): void;
 const register = fn(cb: Callback): void { ... };` }
+		</code>
+	</pre>
+	<pre>
+		<code class="language-ghoti">
+			{ `const widen = fn(x: if (WIDE) i64 else i32): if (WIDE) i64 else i32 { ... };
+const pick = fn(k: Kind, x: match (k) { .small => u8, .large => u32 }): void { ... }; // k is compile-time
+let b: TYPES[0] = 300;
+let c: blk: { break :blk u8; } = 200;` }
 		</code>
 	</pre>
 	<h2>Pointers vs. References</h2>
