@@ -782,6 +782,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a parameterized `impl` whose target names its constructor through an alias (`impl(T: type) I for alias.Bag(T)` where `alias.gh` has `pub const Bag = bag.Bag;`) never applied, so the type had none of its methods
 - Fixed: the right side of a compile-time `false and` / `true or` was still checked, so `params.len == 0 or params[0] == T` failed for an empty `params` with an out-of-bounds error
 - Fixed: a statement calling a `noreturn` function (`exit(1);`) didn't end its path, so a function returning a value that ended with one was rejected for not returning on all code paths
+- **Breaking:** a `///` doc comment must document something: a declaration (including one inside a top-level `@cfg` block), an aggregate or interface member, or a function parameter
+    - One anywhere else (before a statement in a function body, a `test`, an `impl`, or a `@cfg` block, or with nothing after it) is an error; it used to be dropped silently
+    - A `//!` module doc comment after the first line of code is an error too, rather than a plain comment
+- `///` doc comments on function parameters (including `self`) and on interface members (methods, associated types and `const`s) are kept for hover
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -828,6 +832,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
     - `volatile [N]T` was dropped silently; write `[N]volatile T`
 - Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
+- LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)
+    - Each target CPU feature in `builtin.<arch>.Feature` is documented with LLVM's description and its LLVM spelling
 - Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
 - Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
 - Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from

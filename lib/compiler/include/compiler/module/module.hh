@@ -512,9 +512,9 @@ class module_manager {
     [[nodiscard]] auto any_errored() const noexcept -> bool;
     [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module_t&;
 
-    [[nodiscard]] auto builtin_module() -> module_t& {
-        ASSERT(builtin_module_, "the `builtin` module has not been created yet");
-        return *builtin_module_;
+    [[nodiscard]] auto builtin_module(this auto& self) -> auto& {
+        ASSERT(self.builtin_module_, "the `builtin` module has not been created yet");
+        return *self.builtin_module_;
     }
 
     [[nodiscard]] auto has_builtin_module() const noexcept -> bool {

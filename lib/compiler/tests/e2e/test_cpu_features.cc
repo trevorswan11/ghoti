@@ -54,6 +54,13 @@ TEST_CASE("@cfgValue reads a CPU feature") {
     CHECK(ctx->root_mod.ast.find_top_level_decl("check").has_value());
 }
 
+TEST_CASE("Each synthesized CPU feature carries LLVM's description as its doc") {
+    auto [ctx, idx]{helpers::resolve_for_target("pub const x = 1;", "x86_64-unknown-linux-gnu")};
+    const std::string_view source{ctx->manager.builtin_module().source};
+    CHECK(source.contains("/// Enable SSE2 instructions (LLVM: `sse2`)"));
+    CHECK(source.contains("(LLVM: `sse4.2`)"));
+}
+
 #if GHOTI_ASM_HOST_X86_64
 
 TEST_CASE("builtin.cpu reports the target CPU, at compile time and at runtime") {

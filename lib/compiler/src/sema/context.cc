@@ -434,8 +434,11 @@ constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
                            "    pub const Feature = enum : u16 {{\n",
                            f.name,
                            f.name);
-        for (const auto& name : f.ghoti_names) {
-            out += fmt::format("        {},\n", feature_identifier(name));
+        for (usize i{0}; i < f.ghoti_names.size(); ++i) {
+            out += fmt::format("        /// {} (LLVM: `{}`)\n        {},\n",
+                               f.descriptions[i],
+                               f.llvm_names[i],
+                               feature_identifier(f.ghoti_names[i]));
         }
         out += "    };\n};\n";
     }

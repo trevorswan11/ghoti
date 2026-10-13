@@ -114,6 +114,10 @@ auto doc_comment_for(const mod::module_manager& manager,
         for (const auto& [path, mod] : manager) {
             if (path == def->path) { return lookup(*mod, def->span); }
         }
+        // The compiler-provided `builtin` module lives outside the module table
+        if (manager.has_builtin_module() && manager.builtin_module().path == def->path) {
+            return lookup(manager.builtin_module(), def->span);
+        }
         return lookup(entry, def->span);
     }
 

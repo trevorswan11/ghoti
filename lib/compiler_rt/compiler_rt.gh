@@ -31,8 +31,8 @@ pub const @"f80" = match comptime (@targetArch()) {
     _ => u80,
 };
 
-/// MSVC's linker looks for this symbol in any object that uses floating point
 @cfg (os == .windows and abi == .msvc and !testing) {
+    /// MSVC's linker looks for this symbol in any object that uses floating point
     export let mut _fltused: c_int = 1;
 }
 

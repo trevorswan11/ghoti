@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
@@ -384,6 +385,16 @@ class parser {
     // buffers and skips plain comments, so callers only see significant tokens.
     [[nodiscard]] auto next_significant_token() noexcept -> token_t;
 
+    // Marks doc lines as attached to something that can carry them.
+    auto claim_docs(gsl::span<const pending_doc> lines) -> void {
+        for (const auto& line : lines) { claimed_docs_.insert(offset_of(line.text)); }
+    }
+    [[nodiscard]] auto offset_of(std::string_view text) const noexcept -> usize {
+        return static_cast<usize>(text.data() - input_.data());
+    }
+    // One error per `///` / `//!` that never attached to a declaration, member, or parameter.
+    auto report_misplaced_docs(diagnostics& diagnostics) const -> void;
+
     // Joins pending doc lines into one `\n`-separated block.
     [[nodiscard]] static auto join_docs(gsl::span<const pending_doc> lines) -> std::string {
         return fmt::to_string(fmt::join(lines | std::views::transform(&pending_doc::text), "\n"));
@@ -406,8 +417,13 @@ class parser {
     std::vector<pending_doc> pending_docs_;
     std::vector<pending_doc> pending_module_docs_;
     bool                     module_doc_locked_{false};
-    bool                     infer_next_fn_params_{false};
-    u32                      compile_time_depth_outside_functions_{0};
+
+    // Every `///` (and late `//!`) seen, in source order and keyed by its offset in the input
+    // since a rollback lexes them again. Whatever is never attached is misplaced.
+    ankerl::unordered_dense::map<usize, token_t> doc_tokens_;
+    ankerl::unordered_dense::set<usize>          claimed_docs_;
+    bool                                         infer_next_fn_params_{false};
+    u32                                          compile_time_depth_outside_functions_{0};
 
     // How many `(`, `[` and `{` enclose the current token, and that depth for an open type
     // expression

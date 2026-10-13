@@ -965,6 +965,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
     const auto                           start_token{parser.get_current_token()};
     const syntax::parser::function_scope fn_scope{parser};
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
+    const auto lparen_line{parser.get_current_token().line};
 
     // Parse the definition now that we're at the fn token
     stdx::option<self_parameter>           self;
@@ -1014,6 +1015,16 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                                    syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
                                    modifier_start);
         }
+
+        if (self) { parser.attach_member_doc(self->name, lparen_line); }
+
+        // A param's `///` lines sit below the `(` or the previous param's comma
+        auto       doc_floor{self ? parser.get_current_token().line : lparen_line};
+        const auto attach_param_doc{[&](const discardable_ident_handle& name) {
+            if (name.is<identifier_expr>()) {
+                parser.attach_member_doc(identifier_handle{name}, doc_floor);
+            }
+        }};
 
         // The loop starts either on an LPAREN or COMMA
         bool first{true};
@@ -1086,8 +1097,11 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
             }
 
             parameters.emplace_back(name, param_explicit_type, is_comptime, is_pack, is_comptime);
+            attach_param_doc(name);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
                 TRY(parser.expect_peek(syntax::token_type_t::COMMA));
+                attach_param_doc(name); // a trailing `///` is siphoned only now
+                doc_floor = parser.get_current_token().line;
                 // A comma immediately before `)` is a trailing comma: keep one param per line.
                 params_force_break = parser.peek_token_is(syntax::token_type_t::RPAREN);
                 if (is_pack && !params_force_break) {
@@ -2208,6 +2222,7 @@ auto interface_expr::parse(syntax::parser& parser)
     std::vector<method>      methods;
 
     while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
+        const auto                   doc_floor{parser.get_current_token().line};
         stdx::option<attribute_list> attributes;
         if (parser.peek_token_is(tt::AT_LBRACKET)) {
             parser.advance();
@@ -2231,6 +2246,7 @@ auto interface_expr::parse(syntax::parser& parser)
             parser.advance(); // current == const
             TRY(parser.expect_peek(tt::IDENT));
             identifier_handle name{TRY(identifier_expr::parse(parser))};
+            parser.attach_member_doc(name, doc_floor);
 
             if (parser.peek_token_is(tt::ASSIGN)) {
                 parser.advance(); // current == =
@@ -2263,9 +2279,11 @@ auto interface_expr::parse(syntax::parser& parser)
                     parser.get_peek_token());
             }
             TRY(parser.expect_semicolon());
+            parser.attach_member_doc(name, doc_floor); // a trailing `///` is siphoned only now
         } else if (!is_pub && parser.peek_token_is(tt::IDENT)) {
             parser.advance(); // current == Name
             identifier_handle name{TRY(identifier_expr::parse(parser))};
+            parser.attach_member_doc(name, doc_floor);
             TRY(parser.expect_peek(tt::COLON));
             const auto annotation{TRY(explicit_type::parse(parser))};
 
@@ -2276,6 +2294,7 @@ auto interface_expr::parse(syntax::parser& parser)
             }
             assoc_types.emplace_back(assoc_type{name, annotation, default_type});
             TRY(parser.expect_semicolon());
+            parser.attach_member_doc(name, doc_floor);
         } else {
             return make_syntax_err("Illegal interface member",
                                    syntax::error::ILLEGAL_INTERFACE_MEMBER,

@@ -33,6 +33,18 @@ template <typename Expr> auto first_decl_value(const ast::AST& ast) -> const Exp
     return ast.get_as<Expr>(*decl.value);
 }
 
+// The `MISPLACED_DOC_COMMENT` errors parsing `source` reports.
+auto misplaced_docs(std::string_view source) -> usize {
+    syntax::parser p{source};
+    ghoti::arena   arena;
+    ast::AST       ast;
+    usize          count{0};
+    for (const auto& diag : p.consume(ast, arena)) {
+        if (diag.get_error() == syntax::error::MISPLACED_DOC_COMMENT) { ++count; }
+    }
+    return count;
+}
+
 } // namespace
 
 TEST_CASE("a leading `///` block attaches to the following declaration") {
@@ -71,30 +83,6 @@ const x = 1;
                                     arena)};
     CHECK(ast.module_doc() == "This module does things.\nAnd more things.");
     CHECK(!first_doc(ast));
-}
-
-TEST_CASE("a `//!` after real code is not treated as a module doc") {
-    ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const x = 1;
-//! too late
-const y = 2;
-)",
-                                    arena)};
-    CHECK(ast.module_doc().empty());
-}
-
-TEST_CASE("a `///` on a nested declaration does not leak to the next top-level declaration") {
-    ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const f = fn(): void {
-    /// nested
-    let local = 1;
-    _ = local;
-};
-const g = 2;
-)",
-                                    arena)};
-    const auto&  g{ast.get_as<ast::decl_stmt>(ast.get_roots()[1])};
-    CHECK(!ast.doc_for({ast.location_of(g.name), ast.end_location_of(g.name)}));
 }
 
 TEST_CASE("doc attachment survives an intervening plain comment") {
@@ -231,6 +219,113 @@ const Point = struct {
     const auto& se{first_decl_value<ast::struct_expr>(ast)};
     REQUIRE(se.fields.size() == 1);
     CHECK(!doc_for_name(ast, se.fields[0].name));
+}
+
+TEST_CASE("a `///` that documents nothing is an error") {
+    // Statements inside a function body
+    CHECK(misplaced_docs(R"(const f = fn(): void {
+    /// nested
+    let local = 1;
+    _ = local;
+};
+)") == 1);
+    // A test block, an `impl` block, and a `@cfg` block are not declarations
+    CHECK(misplaced_docs(R"(/// a test
+test "t" {}
+)") == 1);
+    CHECK(misplaced_docs(R"(const S = struct {};
+const I = interface {};
+/// an impl
+impl I for S {}
+)") == 1);
+    CHECK(misplaced_docs(R"(/// a cfg block
+@cfg (os == .linux) {
+    const a = 1;
+}
+)") == 1);
+    // Trailing the file with nothing after it
+    CHECK(misplaced_docs(R"(const a = 1;
+/// dangling
+)") == 1);
+    // A `//!` after code
+    CHECK(misplaced_docs(R"(const x = 1;
+//! too late
+const y = 2;
+)") == 1);
+}
+
+TEST_CASE("a `///` in a logical location is accepted") {
+    CHECK(misplaced_docs(R"(//! module docs
+/// a decl
+const a = 1; /// trailing
+/// an aggregate
+const S = struct {
+    /// a field
+    x: i32,
+    /// a method
+    pub const get = fn(
+        /// the receiver
+        &self,
+    ): i32 {
+        return self.x;
+    };
+};
+/// an interface
+const I = interface {
+    /// an associated type
+    Item: type;
+    /// an associated const
+    const N: usize;
+    /// a method
+    const next = fn(
+        &mut self,
+        /// how many to skip
+        skip: usize,
+    ): Item;
+};
+@cfg (os == .linux) {
+    /// a decl in a cfg block
+    const b = 2;
+}
+)") == 0);
+}
+
+TEST_CASE("a leading or trailing `///` on a parameter attaches to its name") {
+    ghoti::arena arena;
+    auto         ast{helpers::parse(R"(const f = fn(
+    /// the first
+    a: i32,
+    b: i32, /// the second
+): i32 {
+    return a + b;
+};
+)",
+                                    arena)};
+    const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
+    const auto&  fn{ast.get_as<ast::function_expr>(*decl.value)};
+    REQUIRE(fn.parameters.size() == 2);
+    const auto name_of{[&](usize i) { return ast::identifier_handle{fn.parameters[i].name}; }};
+    REQUIRE(doc_for_name(ast, name_of(0)));
+    CHECK(*doc_for_name(ast, name_of(0)) == "the first");
+    REQUIRE(doc_for_name(ast, name_of(1)));
+    CHECK(*doc_for_name(ast, name_of(1)) == "the second");
+}
+
+TEST_CASE("a `///` on an interface member attaches to its name") {
+    ghoti::arena arena;
+    auto         ast{helpers::parse(R"(const I = interface {
+    /// the item
+    Item: type;
+    /// advances
+    const next = fn(&mut self): Item;
+};
+)",
+                                    arena)};
+    const auto&  ie{first_decl_value<ast::interface_expr>(ast)};
+    REQUIRE(doc_for_name(ast, ie.assoc_types[0].name));
+    CHECK(*doc_for_name(ast, ie.assoc_types[0].name) == "the item");
+    REQUIRE(doc_for_name(ast, ie.methods[0].name));
+    CHECK(*doc_for_name(ast, ie.methods[0].name) == "advances");
 }
 
 } // namespace ghoti::tests

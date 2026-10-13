@@ -126,7 +126,9 @@ auto parser::reset(std::string_view input) noexcept -> void {
     pending_docs_.clear();
     pending_module_docs_.clear();
     module_doc_locked_ = false;
-    delimiter_depth_   = 0;
+    doc_tokens_.clear();
+    claimed_docs_.clear();
+    delimiter_depth_ = 0;
     type_expression_depth_.reset();
     advance(2);
 }
@@ -138,10 +140,15 @@ auto parser::next_significant_token() noexcept -> token_t {
         case token_type_t::COMMENT: continue;
         case token_type_t::DOC_COMMENT:
             pending_docs_.emplace_back(token.slice, token.line);
+            doc_tokens_.emplace(offset_of(token.slice), token);
             continue;
         case token_type_t::MODULE_DOC_COMMENT:
-            // A `//!` past the first real token is not module-level; treat it as a plain comment.
-            if (!module_doc_locked_) { pending_module_docs_.emplace_back(token.slice, token.line); }
+            // A `//!` past the first real token documents nothing
+            if (module_doc_locked_) {
+                doc_tokens_.emplace(offset_of(token.slice), token);
+            } else {
+                pending_module_docs_.emplace_back(token.slice, token.line);
+            }
             continue;
         default: return token;
         }
@@ -181,11 +188,25 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
 
     // Splits `pending_docs_` around a just-parsed statement: lines above it lead, a line on its
     // last line trails, lines strictly inside it are nested and dropped, the rest carry forward.
-    const auto attach_docs = [&](ast::node_id node, usize start_line) -> void {
+    // Lines at or above `floor_line` belong to an enclosing statement.
+    const auto attach_docs = [&](this const auto& self,
+                                 ast::node_id     node,
+                                 usize            start_line,
+                                 usize            floor_line = 0) -> void {
+        // A top-level `@cfg` block's items are module-level declarations too
+        if (const auto cfg{ast.get_as_opt<ast::cfg_stmt>(node)}) {
+            for (const auto& arm : cfg->arms) {
+                for (const auto item : arm.items) {
+                    self(*item, ast.location_of(*item).line, start_line);
+                }
+            }
+        }
+
         const auto                end_line{ast.end_location_of(node).line};
         std::vector<pending_doc>  leading;
         stdx::option<pending_doc> trailing;
         std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
+            if (floor_line != 0 && doc.line <= floor_line) { return false; }
             if (doc.line < start_line) {
                 leading.emplace_back(doc);
                 return true;
@@ -208,6 +229,7 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         if (name) {
             ast.attach_doc({ast.location_of(*name), ast.end_location_of(*name)},
                            join_docs(leading));
+            claim_docs(leading);
         }
     };
 
@@ -233,7 +255,21 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
     }
 
     pending_docs_.clear();
+    // A parse error already skips text, so its docs would only add noise
+    if (diagnostics.empty()) { report_misplaced_docs(diagnostics); }
     return diagnostics;
+}
+
+auto parser::report_misplaced_docs(diagnostics& diagnostics) const -> void {
+    for (const auto& [offset, token] : doc_tokens_) {
+        if (claimed_docs_.contains(offset)) { continue; }
+        diagnostics.emplace_back(
+            token.type == token_type_t::MODULE_DOC_COMMENT
+                ? "A `//!` module doc comment must come before any code"
+                : "A `///` doc comment must precede a declaration, member, or parameter",
+            error::MISPLACED_DOC_COMMENT,
+            token);
+    }
 }
 
 auto parser::skip_failed_statement(const checkpoint& stmt_start) -> void {
@@ -284,6 +320,7 @@ auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) ->
     if (owned.empty()) { return; }
 
     ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(owned));
+    claim_docs(owned);
 }
 
 auto parser::enter_nesting() -> stdx::result<depth_guard, diagnostic> {
