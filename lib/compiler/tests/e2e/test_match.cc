@@ -233,7 +233,7 @@ TEST_CASE("'match comptime' capture works per generic instantiation") {
 
 TEST_CASE("'match comptime' folds per generic instantiation") {
     constexpr std::string_view program{R"(
-        const tag = fn(T: type): i32 {
+        const tag = fn(comptime T: type): i32 {
             return match comptime (T) {
                 i32 => 4,
                 i64 => 8,
@@ -408,7 +408,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("Compares a `&self` receiver inside a type constructor") {
         CHECK(helpers::compile_and_run(R"(
-            const Opt = fn(T: type): type {
+            const Opt = fn(comptime T: type): type {
                 return union {
                     some: T,
                     none: void,

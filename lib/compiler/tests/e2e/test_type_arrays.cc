@@ -105,7 +105,7 @@ TEST_CASE("A `comptime let mut` array of `type`s can be rewritten at compile tim
 TEST_CASE("A generic signature's placeholder target never emits parameterized impl bodies") {
     // `empty`'s own `Res([]mut T, Oops)` instantiates `Res` over the still-unbound `T`
     CHECK(helpers::compile_and_run(R"(
-        const Res = fn(T: type, E: type): type {
+        const Res = fn(comptime T: type, comptime E: type): type {
             return union { ok: T, err: E };
         };
 
@@ -129,7 +129,7 @@ TEST_CASE("A generic signature's placeholder target never emits parameterized im
 
         const Oops = enum { bad };
 
-        const empty = fn(T: type): Res([]mut T, Oops) {
+        const empty = fn(comptime T: type): Res([]mut T, Oops) {
             return .{ .err = .bad };
         };
 

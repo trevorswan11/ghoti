@@ -287,7 +287,7 @@ const to_errno = fn(ret: usize): Errno {
     return @fromBackingInt(@intCast(i32, -@bitCast(isize, ret)));
 };
 
-const R = fn(T: type): type {
+const R = fn(comptime T: type): type {
     return std.Result(T, Errno);
 };
 

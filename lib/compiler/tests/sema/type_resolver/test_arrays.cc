@@ -108,7 +108,7 @@ TEST_CASE("an array or slice element cannot be a reference") {
 
 TEST_CASE("a `[N]&mut T` value (via a type parameter) decays to `[N]^mut T`") {
     helpers::resolve_and_check(R"(
-        const gen = fn(T: type, xs: [2]T): [2]T { return xs; };
+        const gen = fn(comptime T: type, xs: [2]T): [2]T { return xs; };
         const takeMut = fn(a: [2]^mut i32): void { *a[0] = 1; };
         const use = fn(): void {
             let mut x: i32 = 0; let mut y: i32 = 0;

@@ -36,7 +36,7 @@ pub const @"f80" = match comptime (@targetArch()) {
     export let mut _fltused: c_int = 1;
 }
 
-pub const normalize = fn(T: type, significand: ^mut auto): i32 {
+pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
     const Z = @typeInfo(@TypeOf(significand)).pointer.child;
     const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
 

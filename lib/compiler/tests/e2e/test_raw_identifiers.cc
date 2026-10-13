@@ -93,7 +93,7 @@ TEST_CASE("Folding reads a raw name as the decl, not the primitive") {
     CHECK(helpers::compile_and_run(R"(
         const @"u8" = struct { a: u64, b: u64 };
         const N: usize = @sizeOf(@"u8");
-        const size = fn(T: type): i32 { return @intCast(@sizeOf(T)); };
+        const size = fn(comptime T: type): i32 { return @intCast(@sizeOf(T)); };
 
         pub const main = fn(): i32 {
             const @"f32" = u8;

@@ -98,7 +98,7 @@ TEST_CASE("Methods, static members, and explicit `self` calls see defaults") {
 
 TEST_CASE("A type parameter may have a default") {
     CHECK(helpers::compile_and_run(R"(
-        const width = fn(x: i32, T: type = i64): usize {
+        const width = fn(x: i32, comptime T: type = i64): usize {
             _ = x;
             return @sizeOf(T);
         };
@@ -111,7 +111,7 @@ TEST_CASE("A type parameter may have a default") {
 
 TEST_CASE("A generic function's defaults follow its type parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const scaled = fn(T: type, x: T, by: T = 3): T {
+        const scaled = fn(comptime T: type, x: T, by: T = 3): T {
             return x * by;
         };
 

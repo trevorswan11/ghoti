@@ -76,7 +76,7 @@ pub const Test = struct {
 };
 
 /// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).
-pub const Flow = fn(C: type, R: type): type {
+pub const Flow = fn(comptime C: type, comptime R: type): type {
     return union {
         @"continue": C, /// Holds the success payload
         @"break": R, /// Holds the early-return residual

@@ -139,6 +139,7 @@ enum class error : u8 {
     ESCAPING_LOCAL_REFERENCE,
     TESTING_FN_OUTSIDE_TEST,
     ILLEGAL_VOLATILE_QUALIFIER,
+    TYPE_PARAM_NOT_COMPTIME,
 };
 
 using diagnostic  = diagnostic<error>;

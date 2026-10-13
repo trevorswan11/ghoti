@@ -43,7 +43,7 @@ TEST_CASE("Initializer collection") {
 
 TEST_CASE("Discard statement collection") {
     helpers::collect_and_check("_ = 0..20;");
-    helpers::collect_and_check("const a = fn(&self, c: type): void { _ = c; };");
+    helpers::collect_and_check("const a = fn(&self, comptime c: type): void { _ = c; };");
 }
 
 TEST_CASE("Prefix expression collection") {

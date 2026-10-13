@@ -5776,13 +5776,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         if (reject_non_runtime_slot(param.explicit_type, param_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
-        // A `type`-typed value is always compile-time known, so `comptime` adds nothing.
-        if (param.is_comptime_written && param_type.get_kind() == type_kind::TYPE &&
+        // A `type` is only ever known at compile time, and saying so keeps every compile-time
+        // parameter spelled the same way
+        if (!param.is_comptime_written && param_type.get_kind() == type_kind::TYPE &&
             param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
             ctx_.diags.emplace_back(
-                "'comptime' is redundant on a parameter of type 'type'; type values are "
-                "always compile-time known",
-                error::REDUNDANT_COMPTIME,
+                fmt::format("A parameter of type 'type' must be written 'comptime {}: type'",
+                            ast::parameter_name(resolving_.ast, param)),
+                error::TYPE_PARAM_NOT_COMPTIME,
                 resolving_.ast.location_of(param.name));
         }
         param_types[param_idx++] = &param_type;

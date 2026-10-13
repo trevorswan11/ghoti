@@ -14,7 +14,7 @@ constexpr std::string_view SIZED{R"(
     pub const Arr = [N]u32;
     pub const Str = [N:0]u8;
     pub const S = struct { pub d: [N]u64, pub x: u8, };
-    pub const Gen = fn(T: type): type { return [N]T; };
+    pub const Gen = fn(comptime T: type): type { return [N]T; };
 )"};
 
 } // namespace

@@ -786,10 +786,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - One anywhere else (before a statement in a function body, a `test`, an `impl`, or a `@cfg` block, or with nothing after it) is an error; it used to be dropped silently
     - A `//!` module doc comment after the first line of code is an error too, rather than a plain comment
 - `///` doc comments on function parameters (including `self`) and on interface members (methods, associated types and `const`s) are kept for hover
+- **Breaking:** a parameter of type `type` must be written `comptime T: type`; a bare `T: type` is an error. This used to be the other way around, where `comptime` on a `type` parameter was reported as redundant, so every compile-time parameter is now spelled the same way
 - Function parameters can have default values: `const area = fn(w: i32, h: i32 = w): i32 { ... };` is called as `area(3)` or `area(3, 4)`
     - A default is any expression, evaluated by each call that leaves its argument off, and can read the parameters before it (other defaults included)
     - Defaults are trailing: every parameter after a defaulted one needs a default too, except a closing `rest...` pack, which gets the arguments past the parameters
-    - `comptime` and `type` parameters can have defaults: `fn(x: i32, T: type = i64): T`
+    - `comptime` parameters can have defaults: `fn(x: i32, comptime T: type = i64): T`
     - Defaults belong to the declaration: a direct call, a method call, `Type.method(obj)`, a call through another module, and a `const` alias of the function (`const g = f;`) see them, while a function value (`let p = f;`, `^fn`, closures, `dyn Fn`) does not, and a function type cannot declare them
     - Calls that leave defaults off fold at compile time like any other call
     - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound

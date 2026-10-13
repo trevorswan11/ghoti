@@ -55,7 +55,7 @@ TEST_CASE("A forwarding wrapper can copy its target's discardability") {
 TEST_CASE("@typeInfo of a generic function reflects its parameter-independent attributes") {
     helpers::resolve_and_check(R"(
         @[inline(.always), discardable, align(16)]
-        const g = fn(T: type, x: T): T { return x; };
+        const g = fn(comptime T: type, x: T): T { return x; };
         const pick = fn(comptime N: usize): usize {
             @branchHint(.cold);
             return N;
@@ -115,7 +115,7 @@ TEST_CASE("@typeInfo of a member function reflects its attributes") {
 
 TEST_CASE("@typeInfo of a type constructor's member reflects that instantiation's attributes") {
     helpers::resolve_and_check(R"(
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 @[inline(if (@sizeOf(T) > 4) .never else .always), discardable(@sizeOf(T) == 1)]

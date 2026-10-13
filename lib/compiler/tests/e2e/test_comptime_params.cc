@@ -222,13 +222,12 @@ TEST_CASE("comptime parameter: @compileError fires only for the offending instan
     )");
 }
 
-TEST_CASE("comptime parameter: `comptime` on a `type` parameter is redundant") {
+TEST_CASE("comptime parameter: a `type` parameter must be written `comptime`") {
     helpers::test_resolver_fail(
-        "const zero = fn(comptime t: type): t { return 0; };",
-        sema::diagnostic{"'comptime' is redundant on a parameter of type 'type'; type values "
-                         "are always compile-time known",
-                         sema::error::REDUNDANT_COMPTIME,
-                         std::pair{0UZ, 25UZ}});
+        "const zero = fn(t: type): t { return 0; };",
+        sema::diagnostic{"A parameter of type 'type' must be written 'comptime t: type'",
+                         sema::error::TYPE_PARAM_NOT_COMPTIME,
+                         std::pair{0UZ, 16UZ}});
 }
 
 TEST_CASE("comptime parameter: an all-comptime signature still works") {

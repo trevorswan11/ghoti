@@ -13,7 +13,7 @@ namespace {
 using helpers::mock_file;
 
 constexpr std::string_view RESULT{R"(
-    pub const Result = fn(T: type, E: type): type {
+    pub const Result = fn(comptime T: type, comptime E: type): type {
         return union { ok: T, err: E };
     };
 )"};
@@ -39,7 +39,7 @@ constexpr std::string_view LEAF{R"(
         pub spare: [2]i64,
     };
 
-    const R = fn(T: type): type { return result.Result(T, Errno); };
+    const R = fn(comptime T: type): type { return result.Result(T, Errno); };
 
     pub const stat = fn(): R(Stat) {
         let mut out: Stat = undefined;

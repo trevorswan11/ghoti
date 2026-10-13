@@ -30,7 +30,7 @@ constexpr std::string_view LEAF{R"(
 
     pub const Level = enum { low = 10, mid = 20, high = 30, _ };
     pub const to_level = fn(v: i32): Level { return @fromBackingInt(Level, v); };
-    pub const Box = fn(T: type): type { return struct { pub val: T }; };
+    pub const Box = fn(comptime T: type): type { return struct { pub val: T }; };
 )"};
 
 // Middle module: re-exports the leaf and also aliases one of its symbols.

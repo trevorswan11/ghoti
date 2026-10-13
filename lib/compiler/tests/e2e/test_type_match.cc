@@ -42,7 +42,7 @@ TEST_CASE("type-match falls through to the catch-all when nothing matches") {
 
 TEST_CASE("a generic `T: type` selects a different arm per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const code = fn(T: type): i32 {
+        const code = fn(comptime T: type): i32 {
             return match (T) {
                 i32  => 1,
                 i64  => 2,
@@ -83,13 +83,13 @@ TEST_CASE("match on slice and array type literals") {
 TEST_CASE("a pointer/slice type passes through a `T: type` parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Point = struct { x: i32 };
-        const tag = fn(T: type): i32 {
+        const tag = fn(comptime T: type): i32 {
             return match (T) { ^Point => 8, Point => 4, i32 => 2, _ => 0 };
         };
         pub const main = fn(): i32 { return tag(^Point) * 10 + tag(Point); };
     )") == 84);
     CHECK(helpers::compile_and_run(R"(
-        const kind = fn(T: type): i32 {
+        const kind = fn(comptime T: type): i32 {
             return match (T) { []u8 => 10, [8]u8 => 20, i32 => 30, _ => 0 };
         };
         pub const main = fn(): i32 {
@@ -116,7 +116,7 @@ TEST_CASE("match on a function-type literal") {
 
 TEST_CASE("a function-type match arm works across multiple generic instantiations") {
     CHECK(helpers::compile_and_run(R"(
-        const kind = fn(T: type): i32 {
+        const kind = fn(comptime T: type): i32 {
             return match (T) {
                 fn(n: i32): void => 1,
                 _             => 0,

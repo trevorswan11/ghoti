@@ -29,7 +29,7 @@ const takes_no_args_or_argv = fn(comptime params: []type): bool {
 };
 
 // Whether a test runner takes the arguments and the tests, and gives the exit code
-const is_test_runner = fn(comptime params: []type, ret: type): bool {
+const is_test_runner = fn(comptime params: []type, comptime ret: type): bool {
     return params.len == 2 and params[0] == []Arg and params[1] == []builtin.Test and ret == i32;
 };
 

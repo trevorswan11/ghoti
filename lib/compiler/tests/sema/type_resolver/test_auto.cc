@@ -464,7 +464,7 @@ TEST_CASE("A generic body-local decl's explicit annotation is re-typed per insta
 
     SECTION("A `T: type` parameter") {
         check_widths(R"(
-            const f = fn(T: type, value: T): auto {
+            const f = fn(comptime T: type, value: T): auto {
                 let mut a: T = value;
                 return a;
             };

@@ -35,7 +35,7 @@ TEST_CASE("`and` binds tighter than `or`") {
 
     SECTION("in an `if comptime` condition") {
         CHECK(helpers::compile_and_run(R"(
-            const pick = fn(T: type): i32 {
+            const pick = fn(comptime T: type): i32 {
                 if comptime (T == bool or @typeInfo(T) == .int and @typeInfo(T).int.bits == 8) {
                     return 1;
                 }

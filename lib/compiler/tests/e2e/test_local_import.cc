@@ -45,7 +45,7 @@ constexpr std::string_view CYCLE_META{R"(
 // Instantiating `same` from this test resolves `util`, whose `wrap` names `lib.Box`
 constexpr std::string_view CYCLE_BOX{R"(
     import "lib.gh" as lib;
-    pub const Box = fn(T: type): type {
+    pub const Box = fn(comptime T: type): type {
         return struct {
             pub v: T,
             pub const same = fn(&self, val: auto): bool {
@@ -61,8 +61,8 @@ constexpr std::string_view CYCLE_BOX{R"(
 
 constexpr std::string_view CYCLE_UTIL{R"(
     import "lib.gh" as lib;
-    pub const wrap = fn(T: type, x: T): lib.Box(T) { return .{ .v = x }; };
-    pub const matches = fn(T: type, V: type): bool { return T == V; };
+    pub const wrap = fn(comptime T: type, x: T): lib.Box(T) { return .{ .v = x }; };
+    pub const matches = fn(comptime T: type, comptime V: type): bool { return T == V; };
 )"};
 
 } // namespace

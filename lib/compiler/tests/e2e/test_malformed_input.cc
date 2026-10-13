@@ -111,7 +111,7 @@ TEST_CASE("array lengths must be non-negative and addressable") {
 
 TEST_CASE("runaway generic type construction is reported, not a stack overflow") {
     helpers::expect_compile_error(R"(
-        const f = fn(T: type): type { return f([]T); };
+        const f = fn(comptime T: type): type { return f([]T); };
         const X = f(i32);
         pub const main = fn(): i32 { let mut x: X = undefined; _ = x; return 0; };
     )");
@@ -157,7 +157,7 @@ TEST_CASE("type operands only take part in type identity comparisons") {
     CHECK(helpers::raised("const f = fn(): bool { return u8 < 5; };",
                           sema::error::TYPE_USED_AS_VALUE));
     CHECK(helpers::compile_and_run(R"(
-        const pick = fn(T: type): i32 { if (T == u8) { return 1; } return 2; };
+        const pick = fn(comptime T: type): i32 { if (T == u8) { return 1; } return 2; };
         pub const main = fn(): i32 { return pick(u8) + pick(i32); };
     )") == 3);
 }
@@ -173,7 +173,7 @@ TEST_CASE("casts need a type target and a value operand") {
     CHECK(helpers::raised("const f = fn(x: u8): i32 { return @intCast(5, x); };",
                           sema::error::TYPE_MISMATCH));
     CHECK(helpers::compile_and_run(R"(
-        const widen = fn(T: type, x: u8): T { return @as(T, x); };
+        const widen = fn(comptime T: type, x: u8): T { return @as(T, x); };
         pub const main = fn(): i32 { return widen(i32, 4); };
     )") == 4);
 }
@@ -206,7 +206,7 @@ TEST_CASE("a constant index past a known length is rejected, but a sentinel slot
 
 TEST_CASE("errors inside a parameterized impl's methods are reported") {
     helpers::expect_compile_error(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         impl(T: type) Box(T) {
             pub const get = fn(&self): Nope { return self.val; };
         }
@@ -258,7 +258,7 @@ TEST_CASE("large aggregates pass and return by value through direct and indirect
 
 TEST_CASE("a type passed to a generic parameter bound to a value type is rejected") {
     CHECK(helpers::raised(R"(
-        const dup = fn(T: type, val: T): T { return val + val; };
+        const dup = fn(comptime T: type, val: T): T { return val + val; };
         pub const main = fn(): i32 { let b = dup(u8, u8); return 0; };
     )",
                           sema::error::TYPE_USED_AS_VALUE));
@@ -266,7 +266,7 @@ TEST_CASE("a type passed to a generic parameter bound to a value type is rejecte
 
 TEST_CASE("errors inside a parameterized impl method are reported once per site") {
     constexpr auto prefix{R"(
-        const P = fn(A: type): type { return struct { a: A }; };
+        const P = fn(comptime A: type): type { return struct { a: A }; };
         const I = interface { pub const l = fn(&self): i32; };
         impl(A: type) I for P(A) { pub const l = fn(&self): i32 { )"};
     constexpr auto suffix{R"( }; }
@@ -290,7 +290,7 @@ TEST_CASE("errors inside a parameterized impl method are reported once per site"
 
 TEST_CASE("a parameterized impl method body types against its concrete instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const P = fn(A: type): type { return struct { a: A }; };
+        const P = fn(comptime A: type): type { return struct { a: A }; };
         const I = interface { pub const l = fn(&self): i32; };
         impl(A: type) I for P(A) {
             pub const l = fn(&self): i32 { return @intCast(i32, self.a[1]) + @intCast(i32, self.a.len); };
@@ -338,11 +338,11 @@ TEST_CASE("`@tagName` requires an enum or tagged union value") {
 
 TEST_CASE("a loop body error inside a generic reports cleanly on every instantiation") {
     CHECK(helpers::raised(R"(
-        const eql = fn(T: type, a: []T, b: []T): bool {
+        const eql = fn(comptime T: type, a: []T, b: []T): bool {
             for (a, b) |x, y| { if (x != missing) { return false; } }
             return true;
         };
-        const starts = fn(T: type, h: []T, n: []T): bool { return eql(T, h[0..n.len], n); };
+        const starts = fn(comptime T: type, h: []T, n: []T): bool { return eql(T, h[0..n.len], n); };
         const D = struct { count_x: f32, count_y: u32 };
         pub const main = fn(): i32 {
             let mut acc: i32 = 0;
@@ -379,7 +379,7 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
     // A value bound to a `type` annotation or passed to a `T: type` parameter
     CHECK(helpers::raised("const p: type = 5;", sema::error::TYPE_MISMATCH));
     CHECK(helpers::raised(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
         pub const main = fn(): i32 { let mut q: i32 = 1; let b: Box(q) = .{ .val = 9 }; return 0; };
     )",
                           sema::error::TYPE_MISMATCH));
@@ -395,7 +395,7 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
                           sema::error::FUNCTION_DECLARATION_MISSING_BODY));
     // An import alias clashing with a parameter
     helpers::expect_compile_error(R"(
-        const Ident = fn(T: type): type { import T; };
+        const Ident = fn(comptime T: type): type { import T; };
         pub const main = fn(): i32 { if (Ident(u8) == u8) { return 42; } return 0; };
     )");
     // A constant written to while its own initializer is folding
@@ -411,7 +411,7 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
 TEST_CASE("scoped expressions work as member-access objects and initializer types") {
     CHECK(helpers::compile_and_run(R"(
         const S = struct { a: i32, pub const g = fn(&self): i32 { return self.a; }; };
-        const Box = fn(_: type): type { return struct { val: i32 }; };
+        const Box = fn(comptime _: type): type { return struct { val: i32 }; };
         pub const main = fn(): i32 {
             let v = (blk: { break :blk S{ .a = 3 }; }).a;
             let w = (match (1) { 1 => S{ .a = 4 }, _ => S{ .a = 5 }, }).a;
@@ -461,7 +461,7 @@ TEST_CASE("a packed field write is type-checked like any store") {
 
 TEST_CASE("an uncalled builtin cannot be a type argument") {
     CHECK(helpers::raised(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         const B = Box(@sizeOf);
     )",
                           sema::error::TYPE_MISMATCH));
@@ -469,7 +469,7 @@ TEST_CASE("an uncalled builtin cannot be a type argument") {
 
 TEST_CASE("a type constructor must return its type") {
     CHECK(helpers::raised(R"(
-        const Vec = fn(T: type): type { struct { item: T }; };
+        const Vec = fn(comptime T: type): type { struct { item: T }; };
         pub const main = fn(): i32 { const a: Vec(i32) = undefined; return 0; };
     )",
                           sema::error::RETURN_TYPE_MISMATCH));

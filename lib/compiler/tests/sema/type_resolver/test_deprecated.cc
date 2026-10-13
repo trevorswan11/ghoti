@@ -52,7 +52,7 @@ TEST_CASE("A deprecated item may use deprecated names without warning") {
     CHECK(warnings_of(R"(
         @[deprecated] const older = fn(): i32 { return 1; };
         @[deprecated] const wrapper = fn(): i32 { return older(); };
-        @[deprecated] const generic = fn(T: type, x: T): i32 { return older(); };
+        @[deprecated] const generic = fn(comptime T: type, x: T): i32 { return older(); };
         @[deprecated] const Legacy = struct {
             pub const make = fn(): i32 { return older(); };
         };
@@ -63,7 +63,7 @@ TEST_CASE("A deprecated item may use deprecated names without warning") {
 TEST_CASE("A deprecated generic's monomorphs stay quiet; only the call site warns") {
     const auto warnings{warnings_of(R"(
         @[deprecated] const older = fn(): i32 { return 1; };
-        @[deprecated] const generic = fn(T: type, x: T): i32 { return older(); };
+        @[deprecated] const generic = fn(comptime T: type, x: T): i32 { return older(); };
         pub const main = fn(): i32 { return generic(i32, 1) + generic(u8, 2); };
     )")};
     helpers::check_errors_against<std::string>(
@@ -110,11 +110,11 @@ TEST_CASE("Initializing a deprecated field warns at the initializer") {
 TEST_CASE("Deprecated uses inside instantiations warn once per site") {
     const auto warnings{warnings_of(R"(
         @[deprecated("use `fresh`")] const stale = fn(): i32 { return 1; };
-        const Boxed = fn(T: type): type {
+        const Boxed = fn(comptime T: type): type {
             return struct { @[deprecated("use value")] old: T = 0, value: T };
         };
-        const generic = fn(T: type, x: T): i32 { return stale(); };
-        const build = fn(T: type): Boxed(T) { return .{ .old = 1, .value = 2 }; };
+        const generic = fn(comptime T: type, x: T): i32 { return stale(); };
+        const build = fn(comptime T: type): Boxed(T) { return .{ .old = 1, .value = 2 }; };
         pub const main = fn(): i32 {
             let a = build(i32);
             let b = build(i64);

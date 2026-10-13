@@ -142,7 +142,7 @@ TEST_CASE("`@Struct`'s `default_value` accepts `^<local const>`") {
 TEST_CASE("`@Struct`'s `default_value` accepts `^<comptime parameter>` inside a generic "
           "`fn(...): type` constructor") {
     CHECK(helpers::compile_and_run(R"(
-        const Point = fn(T: type, comptime default_z: T): type {
+        const Point = fn(comptime T: type, comptime default_z: T): type {
             return @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = T },

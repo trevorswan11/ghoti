@@ -15,7 +15,7 @@ using helpers::mock_file;
 
 TEST_CASE("An `impl` block on a struct whose method returns `Ctor(Self)` compiles") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         const Err = enum : i32 { bad, _ };
 
         const File = struct {
@@ -36,7 +36,7 @@ TEST_CASE("An `impl` block on a struct whose method returns `Ctor(Self)` compile
 
 TEST_CASE("An `impl` target's method param names a not-yet-resolved sibling struct") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         const Err = enum : i32 { bad, _ };
 
         const Mode = enum : u8 { read, write };
@@ -61,7 +61,7 @@ TEST_CASE("An `impl` target's method param names a not-yet-resolved sibling stru
 
 TEST_CASE("A cross-module `using` alias in an `impl` target's method signature resolves") {
     constexpr std::string_view result_gh{
-        R"(pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };)"};
+        R"(pub const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };)"};
     constexpr std::string_view err_gh{R"(pub const Error = enum : i32 { bad, worse, _ };)"};
     constexpr std::string_view file_gh{R"(
         import "result.gh" as result;
@@ -246,7 +246,7 @@ TEST_CASE("A cross-module interface default method the impl does not override is
 TEST_CASE(
     "E2E: an inherited cross-module default method re-types `self.req()?` and an assoc type") {
     constexpr std::string_view res_gh{R"(
-        pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        pub const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
@@ -311,7 +311,7 @@ TEST_CASE(
 
 TEST_CASE("One inherited cross-module default method calls another through `self`") {
     constexpr std::string_view res_gh{R"(
-        pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        pub const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
@@ -379,7 +379,7 @@ TEST_CASE("One inherited cross-module default method calls another through `self
 
 TEST_CASE("A second impl of the same interface still inherits its default methods") {
     constexpr std::string_view res_gh{R"(
-        pub const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        pub const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;
@@ -466,9 +466,9 @@ TEST_CASE("A second impl of the same interface still inherits its default method
 
 TEST_CASE("Two instantiations of a nested `fn(...): type` constructor stay distinct") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const Result = fn(T: type, E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
         const Errno = enum : i32 { bad, _ };
-        const R = fn(T: type): type { return Result(T, Errno); };
+        const R = fn(comptime T: type): type { return Result(T, Errno); };
 
         const Stat = struct { n: u64, pub const size = fn(&self): u64 { return self.n; }; };
 
@@ -486,7 +486,7 @@ TEST_CASE("Two instantiations of a nested `fn(...): type` constructor stay disti
 
 TEST_CASE("A parameterized impl only expands for its own module's type constructor") {
     constexpr std::string_view source{R"(
-        const Result = fn(T: type, E: type): type {{ return union {{ ok: T, err: E }}; }};
+        const Result = fn(comptime T: type, comptime E: type): type {{ return union {{ ok: T, err: E }}; }};
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {{
             const Output = T;
             const Residual = E;
@@ -502,7 +502,7 @@ TEST_CASE("A parameterized impl only expands for its own module's type construct
             pub const from_residual = fn(r: E): @This() {{ return .{{ .err = r }}; }};
         }}
         {}
-        const Option = fn(T: type): type {{ return union {{ some: T, none: void }}; }};
+        const Option = fn(comptime T: type): type {{ return union {{ some: T, none: void }}; }};
         impl(T: type) builtin.Unwrappable for Option(T) {{
             const Output = T;
             const Residual = void;

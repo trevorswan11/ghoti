@@ -88,12 +88,12 @@ TEST_CASE("`comptime` needs an operand") {
 
 TEST_CASE("`comptime` folds per instantiation of a generic") {
     CHECK(helpers::compile_and_run(R"(
-        const width = fn(T: type): usize { return @sizeOf(T) * 8; };
+        const width = fn(comptime T: type): usize { return @sizeOf(T) * 8; };
         const bits = fn(x: auto): usize {
             _ = x;
             return comptime width(@TypeOf(x));
         };
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 pub const size = fn(&self): usize { return comptime width(T); };

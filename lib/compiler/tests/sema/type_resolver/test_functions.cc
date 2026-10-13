@@ -462,7 +462,7 @@ TEST_CASE("Non-callable expression") {
 
 TEST_CASE("An error collected in a generic body is reported, not only its failed instantiation") {
     const auto diags{helpers::resolve_diags(R"(
-        const g = fn(T: type, a: T): T {
+        const g = fn(comptime T: type, a: T): T {
             if (a > 0) { let a = a; }
             return a;
         };

@@ -45,7 +45,7 @@ TEST_CASE("`@typeInfo` reports a function's params/return/variadic/has_self/call
 TEST_CASE("`@typeInfo` reports whether a function type is erased") {
     CHECK(helpers::compile_and_run(R"(
         const add = fn(a: i32, b: i32): i32 { return a + b; };
-        const erased_of = fn(T: type): bool { return @typeInfo(T).function.erased; };
+        const erased_of = fn(comptime T: type): bool { return @typeInfo(T).function.erased; };
         pub const main = fn(): i32 {
             let mut score: i32 = 0;
             if (!erased_of(@TypeOf(add))) { score += 1; }

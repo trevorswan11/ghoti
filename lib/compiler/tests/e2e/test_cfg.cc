@@ -153,7 +153,7 @@ TEST_CASE("A non-generic `if comptime` over a @cfgValue prunes the dead arm") {
 
 TEST_CASE("A generic `if comptime` prunes the dead arm per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const pick = fn(T: type, x: T): i32 {
+        const pick = fn(comptime T: type, x: T): i32 {
             if comptime (T == i32) { return 100; }
             else                    { return x.no_such_method_on_this_type(); }
         };

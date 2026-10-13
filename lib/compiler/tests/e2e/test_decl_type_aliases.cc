@@ -6,7 +6,7 @@ namespace ghoti::tests {
 
 TEST_CASE("A local `const` alias of a type constructor call is a type, not a runtime call") {
     CHECK(helpers::compile_and_run(R"(
-        const Pair = fn(T: type): type { return struct { a: T, b: T }; };
+        const Pair = fn(comptime T: type): type { return struct { a: T, b: T }; };
 
         pub const main = fn(): i32 {
             const P = Pair(i32);
@@ -21,7 +21,7 @@ TEST_CASE("A local `const` alias of a type constructor call is a type, not a run
 
 TEST_CASE("A local `comptime` alias of a type constructor call is a type") {
     CHECK(helpers::compile_and_run(R"(
-        const Pair = fn(T: type): type { return struct { a: T, b: T }; };
+        const Pair = fn(comptime T: type): type { return struct { a: T, b: T }; };
 
         pub const main = fn(): i32 {
             const P = Pair(i32);
@@ -33,7 +33,7 @@ TEST_CASE("A local `comptime` alias of a type constructor call is a type") {
 
 TEST_CASE("Pointer and slice types built over a local constructor alias") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
 
         pub const main = fn(): i32 {
             const B = Box(i32);
@@ -50,9 +50,9 @@ TEST_CASE("Pointer and slice types built over a local constructor alias") {
 
 TEST_CASE("A constructor alias inside a generic body re-resolves per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
 
-        const wrap = fn(T: type, val: T): i32 {
+        const wrap = fn(comptime T: type, val: T): i32 {
             const B = Box(T);
             let b = B{ .v = val };
             return @intCast(i32, @sizeOf(B)) + @intCast(i32, b.v);
@@ -66,7 +66,7 @@ TEST_CASE("A constructor alias inside a generic body re-resolves per instantiati
 
 TEST_CASE("`Result.map_err`-shaped comptime alias in a generic method (#334)") {
     CHECK(helpers::compile_and_run(R"(
-        const Result = fn(T: type, E: type): type {
+        const Result = fn(comptime T: type, comptime E: type): type {
             return union {
                 ok: T,
                 err: E,
@@ -121,7 +121,7 @@ TEST_CASE("`@This()` and `@Int(...)` aliases bind types") {
 TEST_CASE("Module-scope aliases of `void` and of a constructor call are storageless") {
     CHECK(helpers::compile_and_run(R"(
         const V = void;
-        const Pair = fn(T: type): type { return struct { a: T }; };
+        const Pair = fn(comptime T: type): type { return struct { a: T }; };
         const P = Pair(i32);
 
         const nothing = fn(): V {};
@@ -136,7 +136,7 @@ TEST_CASE("Module-scope aliases of `void` and of a constructor call are storagel
 
 TEST_CASE("A generic returning its `T: type` parameter's value is still a value") {
     CHECK(helpers::compile_and_run(R"(
-        const dup = fn(T: type, val: T): T { return val + val; };
+        const dup = fn(comptime T: type, val: T): T { return val + val; };
 
         pub const main = fn(): i32 {
             let a = dup(i32, 20);
@@ -148,10 +148,10 @@ TEST_CASE("A generic returning its `T: type` parameter's value is still a value"
 
 TEST_CASE("`@sizeOf(Ctor(T))` in a generic body folds per instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
 
-        const size = fn(T: type): i32 { return @intCast(i32, @sizeOf(Box(T))); };
-        const size_cx = fn(T: type): i32 {
+        const size = fn(comptime T: type): i32 { return @intCast(i32, @sizeOf(Box(T))); };
+        const size_cx = fn(comptime T: type): i32 {
             const n = @sizeOf(Box(T));
             return @intCast(i32, n);
         };

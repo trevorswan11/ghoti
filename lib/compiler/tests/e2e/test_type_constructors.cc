@@ -10,7 +10,7 @@ namespace ghoti::tests {
 
 TEST_CASE("A generic `union` type constructor is usable as a return type") {
     CHECK(helpers::compile_and_run(R"(
-        const Result = fn(T: type, E: type): type {
+        const Result = fn(comptime T: type, comptime E: type): type {
             return union { ok: T, err: E };
         };
 
@@ -34,7 +34,7 @@ TEST_CASE("A generic `union` type constructor is usable as a return type") {
 
 TEST_CASE("A `fn(comptime T: type): type` returning an existing scalar type is usable as a value") {
     CHECK(helpers::compile_and_run(R"(
-        const Ident = fn(T: type): type { return T; };
+        const Ident = fn(comptime T: type): type { return T; };
 
         pub const main = fn(): i32 {
             if (Ident(u8) == u8) { return 42; }
@@ -45,7 +45,7 @@ TEST_CASE("A `fn(comptime T: type): type` returning an existing scalar type is u
 
 TEST_CASE("A `fn(comptime T: type): type` with an early-return branch over `comptime_int`") {
     CHECK(helpers::compile_and_run(R"(
-        const Log2Int = fn(T: type): type {
+        const Log2Int = fn(comptime T: type): type {
             if (T == comptime_int) return comptime_int;
             return u8;
         };
@@ -72,7 +72,7 @@ TEST_CASE("A later parameter and the return type depend on an earlier parameter'
 
 TEST_CASE("A later parameter's type is a type-constructor call over an earlier parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
 
         const unbox = fn(a: auto, b: Box(@TypeOf(a))): i32 {
             return b.val;
@@ -88,7 +88,7 @@ TEST_CASE("A later parameter's type is a type-constructor call over an earlier p
 
 TEST_CASE("The return type may also be a type-constructor call over an earlier parameter") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
 
         const rewrap = fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
             return b;
@@ -105,7 +105,7 @@ TEST_CASE("The return type may also be a type-constructor call over an earlier p
 
 TEST_CASE("Two structurally distinct instantiations of a generic `struct` constructor") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
 
         const BoxI = Box(i32);
         const BoxF = Box(f64);
@@ -120,7 +120,7 @@ TEST_CASE("Two structurally distinct instantiations of a generic `struct` constr
 
 TEST_CASE("Two instantiations of a generic `union` constructor, matched independently") {
     CHECK(helpers::compile_and_run(R"(
-        const Option = fn(T: type): type { return union { some: T, none: void }; };
+        const Option = fn(comptime T: type): type { return union { some: T, none: void }; };
 
         const OptI = Option(i32);
         const OptB = Option(u8);
@@ -138,7 +138,7 @@ TEST_CASE("Two instantiations of a generic `union` constructor, matched independ
 
 TEST_CASE("Repeated same-argument instantiation shares one type") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { val: T }; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
 
         const B1 = Box(i32);
         const B2 = Box(i32);
@@ -214,7 +214,7 @@ TEST_CASE("@sizeOf / @alignOf resolve a `fn(bool): type` alias selecting a primi
 
 TEST_CASE("A single generic type constructor instantiation with a member function") {
     CHECK(helpers::compile_and_run(R"(
-        const Vec = fn(T: type): type {
+        const Vec = fn(comptime T: type): type {
             return struct {
                 item: T,
                 const make = fn(v: T): @This() { return .{ .item = v }; };
@@ -230,7 +230,7 @@ TEST_CASE("A single generic type constructor instantiation with a member functio
 
 TEST_CASE("Two instantiations of a generic type constructor do not alias their methods") {
     CHECK(helpers::compile_and_run(R"(
-        const Vec = fn(T: type): type {
+        const Vec = fn(comptime T: type): type {
             return struct {
                 item: T,
                 const make    = fn(v: T): @This() { return .{ .item = v }; };
@@ -269,7 +269,7 @@ TEST_CASE("A non-generic `fn(): type` result with member functions") {
 
 TEST_CASE("Type constructor members with `&mut self` and sibling-method calls") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 const make  = fn(x: T): @This() { return .{ .v = x }; };
@@ -313,7 +313,7 @@ TEST_CASE("A cross-module non-generic `fn(): type` with member functions") {
 
 TEST_CASE("A cross-module generic type constructor, two instantiations, methods distinct") {
     constexpr std::string_view VEC{R"(
-        pub const Vec = fn(T: type): type {
+        pub const Vec = fn(comptime T: type): type {
             return struct {
                 item: T,
                 pub const make    = fn(v: T): @This() { return .{ .item = v }; };
@@ -338,8 +338,8 @@ TEST_CASE("A cross-module generic type constructor, two instantiations, methods 
 
 TEST_CASE("Two instantiations of the same constructor passed to another generic") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
-        const boxSize = fn(B: type): i32 { return @intCast(i32, @sizeOf(B)); };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
+        const boxSize = fn(comptime B: type): i32 { return @intCast(i32, @sizeOf(B)); };
 
         pub const main = fn(): i32 {
             return boxSize(Box(i32)) * 10 + boxSize(Box(i64));   // 4*10 + 8
@@ -349,7 +349,7 @@ TEST_CASE("Two instantiations of the same constructor passed to another generic"
 
 TEST_CASE("A generic type constructor without member functions still resolves") {
     CHECK(helpers::compile_and_run(R"(
-        const Pair = fn(A: type, B: type): type { return struct { a: A, b: B }; };
+        const Pair = fn(comptime A: type, comptime B: type): type { return struct { a: A, b: B }; };
 
         pub const main = fn(): i32 {
             let p: Pair(i32, i32) = .{ .a = 4, .b = 3 };
@@ -361,7 +361,7 @@ TEST_CASE("A generic type constructor without member functions still resolves") 
 TEST_CASE("A type constructor's members read its `comptime` value parameters") {
     SECTION("a scalar `comptime` parameter") {
         CHECK(helpers::compile_and_run(R"(
-            const Box = fn(T: type, comptime tag: i32): type {
+            const Box = fn(comptime T: type, comptime tag: i32): type {
                 return struct {
                     val: T,
                     pub const tagged = fn(&self): i32 { return self.val + tag; };
@@ -381,7 +381,7 @@ TEST_CASE("A type constructor's members read its `comptime` value parameters") {
         CHECK(helpers::compile_and_run(R"(
             const dbl = fn(x: i32): i32 { return x * 2; };
 
-            const Wrap = fn(T: type, comptime f: fn(x: i32): i32): type {
+            const Wrap = fn(comptime T: type, comptime f: fn(x: i32): i32): type {
                 return struct {
                     val: T,
                     pub const apply = fn(&self): i32 { return f(self.val); };
@@ -399,7 +399,7 @@ TEST_CASE("A type constructor's members read its `comptime` value parameters") {
 
     SECTION("a local function as a `comptime` function-value parameter") {
         CHECK(helpers::compile_and_run(R"(
-            const Wrap = fn(T: type, comptime f: fn(x: i32): i32): type {
+            const Wrap = fn(comptime T: type, comptime f: fn(x: i32): i32): type {
                 return struct {
                     val: T,
                     pub const apply = fn(&self): i32 { return f(self.val); };
@@ -417,7 +417,7 @@ TEST_CASE("A type constructor's members read its `comptime` value parameters") {
 
     SECTION("two instantiations keep distinct comptime values") {
         CHECK(helpers::compile_and_run(R"(
-            const Box = fn(T: type, comptime tag: i32): type {
+            const Box = fn(comptime T: type, comptime tag: i32): type {
                 return struct {
                     val: T,
                     pub const tagged = fn(&self): i32 { return self.val + tag; };
@@ -439,7 +439,7 @@ TEST_CASE("A type constructor's members read its `comptime` value parameters") {
 TEST_CASE("A parameterized `impl` targeting a `@Struct`-built generic type constructor "
           "attaches its members") {
     CHECK(helpers::compile_and_run(R"(
-        const Point = fn(T: type, comptime default_z: T): type {
+        const Point = fn(comptime T: type, comptime default_z: T): type {
             return @Struct(.{
                 .fields = ^.{
                     .{ .name = "x", .@"type" = T },
@@ -554,7 +554,7 @@ TEST_CASE("A plain generic fn sizes a local `[n]mut T` from a `comptime` paramet
 TEST_CASE("A generic union's own inline method still works after an explicit qualified "
           "constructor call, even when the type also has `impl(T) Trait for Ctor(T)` blocks") {
     CHECK(helpers::compile_and_run_tests(R"(
-        const Option = fn(T: type): type {
+        const Option = fn(comptime T: type): type {
             return union {
                 some: T,
                 none: void,
@@ -594,13 +594,13 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
 
 TEST_CASE("an `if comptime` arm that returns leaves the rest of the body unchecked") {
     CHECK(helpers::compile_and_run(R"(
-        const child = fn(T: type): type {
+        const child = fn(comptime T: type): type {
             const info = @typeInfo(T);
             if comptime (info == .pointer) { return info.pointer.child; }
             @assert(info == .int, "expects an integer or a pointer to one");
             return T;
         };
-        const pick = fn(T: type): i32 {
+        const pick = fn(comptime T: type): i32 {
             if comptime (T == i32) { return 1; }
             @assert(T == bool, "nope");
             return 2;
@@ -611,7 +611,7 @@ TEST_CASE("an `if comptime` arm that returns leaves the rest of the body uncheck
     )") == 8 + 1 + 1 + 2);
     // The assertion still holds where it's reached
     CHECK(helpers::raised(R"(
-        const pick = fn(T: type): i32 {
+        const pick = fn(comptime T: type): i32 {
             if comptime (T == i32) { return 1; }
             @assert(T == bool, "nope");
             return 2;
@@ -624,7 +624,7 @@ TEST_CASE("an `if comptime` arm that returns leaves the rest of the body uncheck
 TEST_CASE("a type constructor reached through an alias or a module folds in a comparison") {
     CHECK(helpers::compile_and_run_tests(R"(
             import "boxes.gh" as boxes;
-            const Box = fn(T: type): type { return struct { v: T }; };
+            const Box = fn(comptime T: type): type { return struct { v: T }; };
             const Alias = Box;
             test "compare" {
                 @expect(Alias(u8) == Alias(u8));
@@ -634,7 +634,7 @@ TEST_CASE("a type constructor reached through an alias or a module folds in a co
         )",
                                          {helpers::mock_file{"boxes.gh",
                                                              R"(
-            pub const Box = fn(T: type): type { return struct { v: T }; };
+            pub const Box = fn(comptime T: type): type { return struct { v: T }; };
             pub const Alias = Box;
         )",
                                                              "boxes"}}) == 0);
@@ -654,7 +654,7 @@ namespace {
 
 TEST_CASE("distinct instances of one type constructor are distinct types") {
     CHECK(type_check_raises(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         pub const main = fn(): i32 {
             let a: Box(u8) = .{ .v = 1 };
             let b: Box(u16) = a;
@@ -663,7 +663,7 @@ TEST_CASE("distinct instances of one type constructor are distinct types") {
     )",
                             sema::error::TYPE_MISMATCH));
     CHECK(type_check_raises(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         const f = fn(b: Box(u16)): i32 { return @as(i32, b.v); };
         pub const main = fn(): i32 {
             let a: Box(u8) = .{ .v = 1 };
@@ -673,7 +673,7 @@ TEST_CASE("distinct instances of one type constructor are distinct types") {
                             sema::error::TYPE_MISMATCH));
     // The same instance reached twice is still one type
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         const f = fn(b: Box(u16)): i32 { return @as(i32, b.v); };
         pub const main = fn(): i32 {
             let a: Box(u16) = .{ .v = 3 };
@@ -685,7 +685,7 @@ TEST_CASE("distinct instances of one type constructor are distinct types") {
 
 TEST_CASE("distinct type constructor instances compare unequal") {
     CHECK(helpers::compile_and_run_tests(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
         const A = Box(u8);
         const B = Box(u16);
         const differ: bool = Box(u8) != Box(u16);
@@ -706,8 +706,8 @@ TEST_CASE("distinct type constructor instances compare unequal") {
 
 TEST_CASE("type constructor instances are named after their arguments") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type { return struct { v: T }; };
-        const Arr = fn(T: type, comptime n: usize): type { return struct { items: [n]T }; };
+        const Box = fn(comptime T: type): type { return struct { v: T }; };
+        const Arr = fn(comptime T: type, comptime n: usize): type { return struct { items: [n]T }; };
         pub const main = fn(): i32 {
             // Box(u8) / Arr(i32, 4) / Box(Box(bool))
             return @intCast(@typeName(Box(u8)).len + @typeName(Arr(i32, 4)).len +
@@ -719,7 +719,7 @@ TEST_CASE("type constructor instances are named after their arguments") {
 TEST_CASE("a type constructor member's signature may name its own constructor") {
     // The member instantiates another instance while this one is still resolving its members
     CHECK(helpers::compile_and_run(R"(
-        const Pair = fn(T: type): type {
+        const Pair = fn(comptime T: type): type {
             return union {
                 one: T,
                 none: void,
@@ -743,13 +743,13 @@ TEST_CASE("a type constructor member's signature may name its own constructor") 
     )") == 15);
     // A dependent return type naming the constructor with the member's own deduced type
     CHECK(helpers::compile_and_run(R"(
-        const ret = fn(T: type): type {
+        const ret = fn(comptime T: type): type {
             const info = @typeInfo(T);
             if comptime (info == .pointer) { return ret(info.pointer.child); }
             if comptime (info == .reference) { return ret(info.reference.child); }
             return info.function.return_type;
         };
-        const Res = fn(T: type, E: type): type {
+        const Res = fn(comptime T: type, comptime E: type): type {
             return union {
                 ok: T,
                 err: E,
@@ -777,7 +777,7 @@ TEST_CASE("a type constructor member's signature may name its own constructor") 
 
 TEST_CASE("a generic type constructor member is instantiated per enclosing instance") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 pub const apply = fn(&self, func: impl Fn(x: i32): auto): auto {
@@ -800,7 +800,7 @@ TEST_CASE("a generic type constructor member is instantiated per enclosing insta
     // Same-named generic members of unrelated constructors in different modules
     CHECK(helpers::compile_and_run(R"(
             import "other.gh" as other;
-            const Box = fn(T: type): type {
+            const Box = fn(comptime T: type): type {
                 return struct {
                     v: T,
                     pub const map = fn(&self, func: impl Fn(x: T): auto): auto { return func(self.v); };
@@ -815,7 +815,7 @@ TEST_CASE("a generic type constructor member is instantiated per enclosing insta
         )",
                                    {helpers::mock_file{"other.gh",
                                                        R"(
-            pub const Wrap = fn(T: type): type {
+            pub const Wrap = fn(comptime T: type): type {
                 return struct {
                     w: T,
                     pub const map = fn(&self, func: impl Fn(x: T): auto): auto { return func(self.w) * 2; };
@@ -828,7 +828,7 @@ TEST_CASE("a generic type constructor member is instantiated per enclosing insta
 TEST_CASE("a folded generic member call sees its own instance's `@This()`") {
     // Instantiating `eq` for a second instance must not leak into a later folded call
     CHECK(helpers::compile_and_run(R"(
-        const Opt = fn(T: type): type {
+        const Opt = fn(comptime T: type): type {
             return union {
                 some: T,
                 none: void,
@@ -854,7 +854,7 @@ TEST_CASE("a folded generic member call sees its own instance's `@This()`") {
 
 TEST_CASE("a folded call types an untyped literal argument as the runtime call does") {
     CHECK(helpers::compile_and_run(R"(
-        const Box = fn(T: type): type {
+        const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
                 pub const is_i32 = fn(&self, val: auto): bool {

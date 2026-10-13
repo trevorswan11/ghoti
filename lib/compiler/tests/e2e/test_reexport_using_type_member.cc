@@ -85,7 +85,7 @@ TEST_CASE("`alias.Enum.MEMBER` folds through a generic-union `match` capture and
         R"(
             import "pkg.gh" as pkg;
             const x = pkg.en;
-            const Result = fn(T: type, F: type): type { return union { ok: T, err: F }; };
+            const Result = fn(comptime T: type, comptime F: type): type { return union { ok: T, err: F }; };
             const g = fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main = fn(): i32 {
                 let miss = match (g()) {

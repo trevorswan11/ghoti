@@ -1107,8 +1107,13 @@ auto parse_function_header(syntax::parser& parser)
                                        parser.get_location_of(**default_value));
             }
             if (default_value && !first_default) { first_default.emplace(*default_value); }
+            // `comptime T: type` is spelled out for consistency, but a `type` binds through
+            // generic instantiation rather than by folding the argument to a value
+            const bool type_param{
+                param_explicit_type.is_valid() && param_explicit_type.get_modifier().is_value() &&
+                param_explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE};
             auto& param{parameters.emplace_back(
-                name, param_explicit_type, is_comptime, is_pack, is_comptime)};
+                name, param_explicit_type, is_comptime && !type_param, is_pack, is_comptime)};
             param.default_value = default_value;
             attach_param_doc(name);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
@@ -2480,7 +2485,7 @@ auto build_default_wrappers(syntax::parser&        parser,
             parser.add_stmt<return_stmt>(name_token, stdx::option<expr_handle>{call}));
 
         // A declaration's wrapper infers its result, since a defaulted parameter it no longer
-        // takes may name it (`fn(T: type = i64): T`)
+        // takes may name it (`fn(comptime T: type = i64): T`)
         if (!keep_return_type) {
             const syntax::token_t auto_token{
                 tt::AUTO_TYPE, "auto", name_token.line, name_token.column};
