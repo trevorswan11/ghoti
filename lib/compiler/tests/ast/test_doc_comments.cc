@@ -8,6 +8,7 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"

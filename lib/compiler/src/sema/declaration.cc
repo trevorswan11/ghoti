@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -25,16 +26,16 @@ using names_t = std::vector<callable_param>;
 // One declaration or annotation in one module. Visiting each once ends a chain that loops back
 // on itself, like `const @"i32": i32 = ...` naming itself
 struct visit {
-    const mod::module_t* owner;
-    usize                index;
-    bool                 annotation;
+    gsl::not_null<const mod::module_t*> owner;
+    usize                               index;
+    bool                                annotation;
 
     auto operator==(const visit&) const noexcept -> bool = default;
 };
 
 struct visit_hash {
     [[nodiscard]] static auto operator()(const visit& v) noexcept -> u64 {
-        return stdx::hasher{reinterpret_cast<u64>(v.owner)}
+        return stdx::hasher{reinterpret_cast<u64>(v.owner.get())}
             .combine(v.index)
             .combine(v.annotation)
             .finalize();

@@ -2965,12 +2965,12 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
     stdx::option<const ast::function_expr&> fn;
     std::string_view                        fn_name;
     // Each declaration is visited once, so a chain that loops back on itself ends
-    ankerl::unordered_dense::set<const ast::decl_stmt*> visited;
+    ankerl::unordered_dense::set<gsl::not_null<const ast::decl_stmt*>> visited;
     while (!fn) {
         if (!declaration || !declaration->owner || !declaration->decl) { return false; }
         const auto& owner{*declaration->owner};
         const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
-        if (!decl || !decl->value || !visited.insert(&*decl).second) { return false; }
+        if (!decl || !decl->value || !visited.insert(decl.get()).second) { return false; }
         if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(*decl->value)}) {
             fn      = literal;
             fn_name = owner.ast.get_as<ast::identifier_expr>(decl->name).name;
