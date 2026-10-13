@@ -842,6 +842,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
 - LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)
     - Each target CPU feature in `builtin.<arch>.Feature` is documented with LLVM's description and its LLVM spelling
+- LSP hover on a function shows its parameters' defaults (`fn(w: i32, h: i32 = w * scale): i32`)
 - Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
 - Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
 - Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from

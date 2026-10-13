@@ -18,7 +18,7 @@ namespace ghoti::sema {
 
 namespace {
 
-using names_t = std::vector<std::string_view>;
+using names_t = std::vector<callable_param>;
 
 // `const @"i32": i32 = ...` names itself, so every alias chain is bounded
 constexpr u32 MAX_ALIAS_DEPTH{8};
@@ -31,7 +31,9 @@ auto names_of_literal(const mod::module_t& owner, const ast::function_expr& fn) 
     for (const auto& param : fn.parameters) {
         names.emplace_back(param.name.is<ast::identifier_expr>()
                                ? owner.ast.get_as<ast::identifier_expr>(param.name).name
-                               : std::string_view{"_"});
+                               : std::string_view{"_"},
+                           param.default_value ? owner.source_of(*param.default_value)
+                                               : std::string_view{});
     }
     return names;
 }
@@ -90,8 +92,19 @@ auto names_of(const declaration_ref& declaration, u32 depth) -> stdx::option<nam
 
 } // namespace
 
-auto callable_param_names(const declaration_ref& declaration) -> stdx::option<names_t> {
+auto callable_params(const declaration_ref& declaration)
+    -> stdx::option<std::vector<callable_param>> {
     return names_of(declaration, 0);
+}
+
+auto callable_param_names(const declaration_ref& declaration)
+    -> stdx::option<std::vector<std::string_view>> {
+    const auto params{callable_params(declaration)};
+    if (!params) { return stdx::none; }
+    std::vector<std::string_view> names;
+    names.reserve(params->size());
+    for (const auto& param : *params) { names.emplace_back(param.name); }
+    return names;
 }
 
 } // namespace ghoti::sema

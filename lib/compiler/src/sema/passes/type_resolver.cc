@@ -14584,23 +14584,6 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
 
 namespace {
 
-// A node's source text, which `end_location_of` ends just past
-auto node_source(const mod::module_t& module, ast::node_id id) -> std::string_view {
-    const std::string_view source{module.source};
-    const auto             offset_of{[&](const source_location& loc) -> usize {
-        usize offset{0};
-        for (usize line{0}; line < loc.line && offset < source.size(); ++line) {
-            const auto newline{source.find('\n', offset)};
-            if (newline == std::string_view::npos) { return source.size(); }
-            offset = newline + 1;
-        }
-        return std::min(offset + loc.column, source.size());
-    }};
-    const auto             start{offset_of(module.ast.location_of(id))};
-    const auto             end{offset_of(module.ast.end_location_of(id))};
-    return start < end ? source.substr(start, end - start) : std::string_view{};
-}
-
 // Whether two spellings differ only in whitespace
 auto same_spelling(std::string_view lhs, std::string_view rhs) -> bool {
     const auto is_space{[](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }};
@@ -14640,14 +14623,14 @@ auto type_resolver::check_impl_defaults(const impl_record&        rec,
                                 iface_name),
                     error::IMPL_SIGNATURE_MISMATCH,
                     cmod.ast.location_of(*have_default));
-            } else if (!same_spelling(node_source(cmod, *have_default),
-                                      node_source(iface.enclosing, *want_default))) {
+            } else if (!same_spelling(cmod.source_of(*have_default),
+                                      iface.enclosing.source_of(*want_default))) {
                 ctx_.diags.emplace_back(
                     fmt::format("method `{}`: parameter {}'s default differs from `{}`'s `{}`",
                                 name,
                                 p + 1,
                                 iface_name,
-                                node_source(iface.enclosing, *want_default)),
+                                iface.enclosing.source_of(*want_default)),
                     error::IMPL_SIGNATURE_MISMATCH,
                     cmod.ast.location_of(*have_default));
             }

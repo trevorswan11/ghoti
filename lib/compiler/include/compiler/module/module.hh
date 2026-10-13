@@ -215,6 +215,9 @@ struct module_t {
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
 
+    // The source text a node was parsed from
+    [[nodiscard]] auto source_of(ast::node_id id) const -> std::string_view;
+
     // Whether this module's own error list holds a diagnostic equal to `diag`
     template <Diagnostic D> [[nodiscard]] auto reports(const D& diag) const -> bool {
         if (is_ok()) { return false; }

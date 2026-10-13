@@ -53,6 +53,23 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     return os;
 }
 
+auto module_t::source_of(ast::node_id id) const -> std::string_view {
+    const std::string_view text{source};
+    const auto             offset_of{[&](const source_location& loc) -> usize {
+        usize offset{0};
+        for (usize line{0}; line < loc.line && offset < text.size(); ++line) {
+            const auto newline{text.find('\n', offset)};
+            if (newline == std::string_view::npos) { return text.size(); }
+            offset = newline + 1;
+        }
+        return std::min(offset + loc.column, text.size());
+    }};
+    // `end_location_of` ends just past the node's last token
+    const auto start{offset_of(ast.location_of(id))};
+    const auto end{offset_of(ast.end_location_of(id))};
+    return start < end ? text.substr(start, end - start) : std::string_view{};
+}
+
 auto module_t::print_diagnostics(std::ostream& os) const -> void {
     PROFILE_FUNCTION();
     if (is_ok()) { return; }
