@@ -53,6 +53,11 @@ struct explicit_function_type {
 [[nodiscard]] auto check_function_type_modifier(type_modifier modifier, const syntax::token_t& at)
     -> stdx::result<void, syntax::diagnostic>;
 
+// Any expression evaluating to a type at compile time
+struct explicit_expr_type {
+    expr_handle expr;
+};
+
 struct explicit_dyn_type {
     struct assoc_binding {
         identifier_handle name;

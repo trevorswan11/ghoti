@@ -30,7 +30,8 @@ using type_variant = stdx::variant<identifier_expr,
                                    union_expr,
                                    interface_expr,
                                    explicit_array_type,
-                                   explicit_dyn_type>;
+                                   explicit_dyn_type,
+                                   explicit_expr_type>;
 
 #define AST_TYPE_VISITOR_NOOP(Class, NodeType) \
     auto Class::visit(ghoti::ast::explicit_type_id, const ghoti::ast::NodeType&) -> void {}

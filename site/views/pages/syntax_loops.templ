@@ -39,8 +39,9 @@ templ SyntaxLoopsPage() {
 		<li>
 			Ranges:
 			<ul>
-				<li><code>lo..hi</code> counts from <code>lo</code> up to but not including <code>hi</code>, and <code>lo..=hi</code> includes <code>hi</code>, even when <code>hi</code> is its type's maximum</li>
-				<li>Ranges only count up: a range whose start is past its end runs zero times, and one whose constant bounds are the wrong way round (<code>5..3</code>) is an error</li>
+				<li><code>lo..hi</code> counts from <code>lo</code> to <code>hi</code>, not including <code>hi</code>, and <code>lo..=hi</code> includes <code>hi</code>, even when <code>hi</code> is its type's maximum or minimum</li>
+				<li>A range whose start is past its end counts down: <code>3..0</code> is 3, 2, 1 and <code>-1..=-8</code> is -1 through -8. The direction is checked when the loop starts, so <code>{ "for (i..n)" }</code> counts down whenever <code>i</code> is greater than <code>n</code></li>
+				<li>Equal bounds run zero times with <code>..</code> and once with <code>..=</code></li>
 				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>{ "for" } comptime</code> unrolls into constants of the default integer type instead)</li>
 				<li>When both bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, like an integer literal does</li>
 			</ul>
@@ -52,6 +53,7 @@ templ SyntaxLoopsPage() {
 for (0..4) |i| { ... } else return b; // The return statement only runs if the loop body does not break
 for (arr, 0..) |x, i| { ... } // Counts alongside arr; with [3]T and [5]T iterables, the body runs 3 times
 for (0..3) |i| { total += i; take_u8(i); xs[i + 1] = 0; } // i is usize, but every value it takes fits an i32 and a u8
+for (10..0) |i| { ... } // Counts down from 10 to 1
 for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures and iterables must match` }
 		</code>
 	</pre>

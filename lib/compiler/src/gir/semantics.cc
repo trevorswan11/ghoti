@@ -190,25 +190,25 @@ namespace {
 auto int_op_of(syntax::token_type_t token) noexcept -> stdx::option<int_op> {
     using tt = syntax::token_type_t;
     switch (token) {
-    case tt::PLUS:              return int_op::ADD;
-    case tt::MINUS:             return int_op::SUB;
-    case tt::STAR:              return int_op::MUL;
-    case tt::SLASH:             return int_op::DIV;
-    case tt::PERCENT:           return int_op::REM;
-    case tt::PLUS_PERCENT:      return int_op::WRAP_ADD;
-    case tt::MINUS_PERCENT:     return int_op::WRAP_SUB;
-    case tt::STAR_PERCENT:      return int_op::WRAP_MUL;
-    case tt::SHL_PERCENT:       return int_op::WRAP_SHL;
-    case tt::PLUS_PIPE:         return int_op::SAT_ADD;
-    case tt::MINUS_PIPE:        return int_op::SAT_SUB;
-    case tt::STAR_PIPE:         return int_op::SAT_MUL;
-    case tt::SHL_PIPE:          return int_op::SAT_SHL;
-    case tt::BW_AND:            return int_op::AND;
-    case tt::BW_OR:             return int_op::OR;
-    case tt::CARET:             return int_op::XOR;
-    case tt::SHL:               return int_op::SHL;
-    case tt::SHR:               return int_op::SHR;
-    default:                    return stdx::none;
+    case tt::PLUS:          return int_op::ADD;
+    case tt::MINUS:         return int_op::SUB;
+    case tt::STAR:          return int_op::MUL;
+    case tt::SLASH:         return int_op::DIV;
+    case tt::PERCENT:       return int_op::REM;
+    case tt::PLUS_PERCENT:  return int_op::WRAP_ADD;
+    case tt::MINUS_PERCENT: return int_op::WRAP_SUB;
+    case tt::STAR_PERCENT:  return int_op::WRAP_MUL;
+    case tt::SHL_PERCENT:   return int_op::WRAP_SHL;
+    case tt::PLUS_PIPE:     return int_op::SAT_ADD;
+    case tt::MINUS_PIPE:    return int_op::SAT_SUB;
+    case tt::STAR_PIPE:     return int_op::SAT_MUL;
+    case tt::SHL_PIPE:      return int_op::SAT_SHL;
+    case tt::BW_AND:        return int_op::AND;
+    case tt::BW_OR:         return int_op::OR;
+    case tt::CARET:         return int_op::XOR;
+    case tt::SHL:           return int_op::SHL;
+    case tt::SHR:           return int_op::SHR;
+    default:                return stdx::none;
     }
 }
 
@@ -466,12 +466,12 @@ auto runtime_checks(int_unary_op op, int_domain domain) noexcept -> int_checks {
 auto float_op_of(syntax::token_type_t token) noexcept -> stdx::option<float_op> {
     using tt = syntax::token_type_t;
     switch (token) {
-    case tt::PLUS:        return float_op::ADD;
-    case tt::MINUS:       return float_op::SUB;
-    case tt::STAR:        return float_op::MUL;
-    case tt::SLASH:       return float_op::DIV;
-    case tt::PERCENT:     return float_op::REM;
-    default:              return stdx::none;
+    case tt::PLUS:    return float_op::ADD;
+    case tt::MINUS:   return float_op::SUB;
+    case tt::STAR:    return float_op::MUL;
+    case tt::SLASH:   return float_op::DIV;
+    case tt::PERCENT: return float_op::REM;
+    default:          return stdx::none;
     }
 }
 

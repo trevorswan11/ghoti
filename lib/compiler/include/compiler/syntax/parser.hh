@@ -41,7 +41,8 @@ class parser {
         explicit checkpoint(const parser& parser) noexcept
             : snapshot_{parser.lexer_}, current_{parser.current_token_}, peek_{parser.peek_token_},
               pending_docs_len_{parser.pending_docs_.size()},
-              pending_module_docs_len_{parser.pending_module_docs_.size()} {}
+              pending_module_docs_len_{parser.pending_module_docs_.size()},
+              delimiter_depth_{parser.delimiter_depth_} {}
 
       private:
         lexer::snapshot snapshot_;
@@ -49,6 +50,7 @@ class parser {
         token_t         peek_;
         usize           pending_docs_len_;
         usize           pending_module_docs_len_;
+        usize           delimiter_depth_;
 
         friend class parser;
     };
@@ -126,6 +128,20 @@ class parser {
       private:
         parser&        parser_;
         stdx::opt_size frame_;
+    };
+
+    // Ends a type expression's operators at a `{` or an assignment at its own bracket depth, so
+    // `fn(): if (c) A else B { ... }` keeps its body and `let x: if (c) A else B = v` its value
+    class type_expression_scope {
+      public:
+        explicit type_expression_scope(parser& p) noexcept
+            : parser_{p}, saved_{std::exchange(p.type_expression_depth_, p.delimiter_depth_)} {}
+        ~type_expression_scope() { parser_.type_expression_depth_ = saved_; }
+        MAKE_PINNED(type_expression_scope);
+
+      private:
+        parser&        parser_;
+        stdx::opt_size saved_;
     };
 
     // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while comptime` header,
@@ -351,6 +367,8 @@ class parser {
 
   private:
     [[nodiscard]] auto starts_extern_type() const noexcept -> bool;
+    // Whether the peeked token ends an open type expression at its own bracket depth
+    [[nodiscard]] auto ends_type_expression() const noexcept -> bool;
 
     // Reverts the parser to the state from the checkpoint.
     auto rollback(const checkpoint& checkpoint) noexcept -> void {
@@ -359,6 +377,7 @@ class parser {
         peek_token_    = checkpoint.peek_;
         pending_docs_.resize(checkpoint.pending_docs_len_);
         pending_module_docs_.resize(checkpoint.pending_module_docs_len_);
+        delimiter_depth_ = checkpoint.delimiter_depth_;
     }
 
     // Like `lexer_.advance()` but siphons off `///` / `//!` comments into the pending-doc
@@ -389,6 +408,11 @@ class parser {
     bool                     module_doc_locked_{false};
     bool                     infer_next_fn_params_{false};
     u32                      compile_time_depth_outside_functions_{0};
+
+    // How many `(`, `[` and `{` enclose the current token, and that depth for an open type
+    // expression
+    usize          delimiter_depth_{0};
+    stdx::opt_size type_expression_depth_;
 };
 
 } // namespace ghoti::syntax

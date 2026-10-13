@@ -342,8 +342,8 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         case syntax::builtin_t::TYPE_OF:
         case syntax::builtin_t::SIZE_OF:
         case syntax::builtin_t::ALIGN_OF:
-        case syntax::builtin_t::BIT_SIZE_OF:            return parser.enter_type_only_operand();
-        default:                                        return stdx::none;
+        case syntax::builtin_t::BIT_SIZE_OF: return parser.enter_type_only_operand();
+        default:                             return stdx::none;
         }
     }()};
 

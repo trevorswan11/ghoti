@@ -65,6 +65,18 @@ TEST_CASE("formatter round-trips type aliases spelled only as types") {
     }
 }
 
+TEST_CASE("formatter round-trips types computed by expressions") {
+    for (const std::string_view src : {
+             "const f = fn(x: if (W) i64 else i32): if (W) i64 else i32 {\n    return x;\n};\n",
+             "let a: blk: {\n    break :blk u8;\n} = 200;\n",
+             "let b: &TYPES[0] = c;\n",
+             "let d: [2]if (W) i64 else i32 = e;\n",
+         }) {
+        CHECK(format_source(src) == src);
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter preserves numeric literal base, separators, and suffix verbatim") {
     CHECK(format_source("let mut a = 0x2Fuz;") == "let mut a = 0x2Fuz;\n");
     CHECK(format_source("let mut a = 0b00_11_00_11;") == "let mut a = 0b00_11_00_11;\n");

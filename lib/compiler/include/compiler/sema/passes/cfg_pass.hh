@@ -80,7 +80,7 @@ class cfg_pass {
     struct shared_state {
         // `@cfgValue` constants mid-evaluation, by module and node index
         ankerl::unordered_dense::set<std::pair<const mod::module_t*, usize>> in_progress;
-        bool                                                               hit_cycle{false};
+        bool                                                                 hit_cycle{false};
 
         // `@cfg` statements searched for imports and the arm each takes; `selected` is false
         // while one is still being selected
