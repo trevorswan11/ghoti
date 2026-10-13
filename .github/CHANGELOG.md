@@ -740,6 +740,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A test build calls the root module's own `test_runner`, else `std.testing`'s when the program uses `std`, else `builtin`'s, rather than relying on which one wins at link time; its signature is checked by the entry code and reported at the `test_runner`
     - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
         - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
+        - Enums that do not implement exit code will try to utilize the `ExitCode` for their backing int
     - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`
 - `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
     - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows

@@ -1,7 +1,7 @@
 import std;
 
 pub const AllocError = enum : u8 {
-    out_of_memory,
+    out_of_memory = 1,
 };
 
 const Alignment = std.mem.Alignment;

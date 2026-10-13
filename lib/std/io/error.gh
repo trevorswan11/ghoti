@@ -2,7 +2,7 @@
 import std;
 
 pub const Error = enum : i32 {
-    not_found,
+    not_found = 1,
     access_denied,
     broken_pipe,
     would_block,

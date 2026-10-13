@@ -23,7 +23,7 @@ test {
 
 const Writer = std.io.Writer;
 
-pub const Error = enum { overflow, bad_spec, bad_arg, unsupported, io };
+pub const Error = enum { overflow = 1, bad_spec, bad_arg, unsupported, io };
 
 pub const Format = interface {
     const format = fn(
