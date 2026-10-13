@@ -46,6 +46,29 @@ auto misplaced_docs(std::string_view source) -> usize {
     return count;
 }
 
+// The doc on the declaration called `name`, looking through `@cfg` blocks at any depth
+auto doc_in_cfg(const ast::AST& ast, std::string_view name) -> stdx::option<std::string_view> {
+    const auto search{
+        [&](this const auto& self, ast::node_id id) -> stdx::option<std::string_view> {
+            if (const auto decl{ast.get_as_opt<ast::decl_stmt>(id)}) {
+                if (ast.get_as<ast::identifier_expr>(decl->name).name == name) {
+                    return doc_for_name(ast, decl->name);
+                }
+            } else if (const auto cfg{ast.get_as_opt<ast::cfg_stmt>(id)}) {
+                for (const auto& arm : cfg->arms) {
+                    for (const auto item : arm.items) {
+                        if (auto doc{self(*item)}) { return doc; }
+                    }
+                }
+            }
+            return stdx::none;
+        }};
+    for (const auto root : ast) {
+        if (auto doc{search(root)}) { return doc; }
+    }
+    return stdx::none;
+}
+
 } // namespace
 
 TEST_CASE("a leading `///` block attaches to the following declaration") {
@@ -334,6 +357,70 @@ TEST_CASE("a `///` on an interface member attaches to its name") {
     CHECK(*doc_for_name(ast, ie.assoc_types[0].name) == "the item");
     REQUIRE(doc_for_name(ast, ie.methods[0].name));
     CHECK(*doc_for_name(ast, ie.methods[0].name) == "advances");
+}
+
+TEST_CASE("`///` inside nested `@cfg` blocks documents the declarations there") {
+    constexpr std::string_view source{R"(@cfg (os == .linux) {
+    @cfg (arch == .x86_64) {
+        /// inner
+        const a = 1;
+    } else @cfg (arch == .aarch64) {
+        /// middle
+        const b = 2;
+    } else {
+        @cfg (abi == .gnu) {
+            /// deepest
+            const c = 3;
+        }
+    }
+    /// outer
+    const d = 4;
+}
+)"};
+    CHECK(misplaced_docs(source) == 0);
+    ghoti::arena arena;
+    auto         ast{helpers::parse(source, arena)};
+    CHECK(doc_in_cfg(ast, "a").value_or("") == "inner");
+    CHECK(doc_in_cfg(ast, "b").value_or("") == "middle");
+    CHECK(doc_in_cfg(ast, "c").value_or("") == "deepest");
+    CHECK(doc_in_cfg(ast, "d").value_or("") == "outer");
+}
+
+TEST_CASE("a `///` on a nested `@cfg` block itself is misplaced and documents nothing inside") {
+    constexpr std::string_view source{R"(@cfg (os == .linux) {
+    /// the block
+    @cfg (arch == .x86_64) {
+        const a = 1;
+    }
+}
+)"};
+    CHECK(misplaced_docs(source) == 1);
+}
+
+TEST_CASE("`///` inside `@cfg` member, field, and variant groups documents those items") {
+    constexpr std::string_view source{R"(const S = struct {
+    @cfg (os == .linux) {
+        /// a linux field
+        fd: i32,
+    } else {
+        /// another field
+        handle: u64,
+    }
+
+    @cfg (os == .linux) {
+        /// a linux member
+        const open = fn(): void {};
+    }
+};
+const E = enum {
+    @cfg (os == .linux) {
+        /// a linux variant
+        epoll,
+    }
+    kqueue,
+};
+)"};
+    CHECK(misplaced_docs(source) == 0);
 }
 
 } // namespace ghoti::tests
