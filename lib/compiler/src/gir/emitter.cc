@@ -6756,7 +6756,7 @@ auto emitter::request_builtin_impl_method(const sema::type& receiver, std::strin
     for (const auto& found : ctx_.impls.methods_of(*ctx_.pool.strip_volatile(*t))) {
         const auto& record{*found.record};
         if (found.method->name != method || !record.enclosing ||
-            &*record.enclosing != &builtin_mod) {
+            record.enclosing.get() != &builtin_mod) {
             continue;
         }
         const auto queued{std::ranges::any_of(pending_builtin_impls_, [&](ast::node_id site) {
