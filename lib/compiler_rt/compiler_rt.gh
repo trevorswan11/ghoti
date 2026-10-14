@@ -55,6 +55,30 @@ pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
     return @bitCast(negated);
 };
 
+/// Allows to access underlying bits as two equally sized lower and higher
+/// signed or unsigned integers.
+pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
+    return extern union {
+        all: T,
+        @cfg (endian == .little) {
+            s: extern struct {
+                low: HalfT,
+                high: HalfT,
+            },
+        } else {
+            s: extern struct {
+                high: HalfT,
+                low: HalfT,
+            },
+        }
+
+        pub const bits = @typeInfo(T).int.bits / 2;
+        pub const HalfTU = @Int(.{ .signedness = .unsigned, .bits = bits });
+        pub const HalfTS = @Int(.{ .signedness = .signed, .bits = bits });
+        pub const HalfT = if comptime (signed_half) HalfTS else HalfTU;
+    };
+};
+
 test {
     import "addf3.gh";
     import "comparef.gh";
