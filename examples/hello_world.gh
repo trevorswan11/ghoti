@@ -1,5 +1,5 @@
 import std;
 
-pub const main = fn(args: [][:0]u8): void {
-    _ = std.io.println("Hello, world!");
+pub const main = fn(args: [][:0]u8): std.Result(void, std.io.Error) {
+    return std.io.println("Hello, world!");
 };
