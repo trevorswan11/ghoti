@@ -81,8 +81,14 @@ class type_resolver {
     // Resolves every queued `test` block, once no module is mid-resolution
     static auto resolve_pending_tests(context& ctx) -> void;
 
+    // A handle dispatches as its raw id, so each visitor only exists for the two id kinds
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
-        resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+        if constexpr (ast::IndexableNodeID<ID>) {
+            const ast::node_id raw{id};
+            resolving_.ast[raw].visit([&](const auto& data) -> void { visit(raw, data); });
+        } else {
+            resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+        }
     }
 
     // An absent node, like an untyped pack's type, resolves to poison
@@ -538,9 +544,9 @@ class type_resolver {
     // Why `arg` can't be called as the `impl Fn(...)` signature `pattern`, if it can't
     auto callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string>;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
-    auto               resolve_slice_copy(ast::node_id                id,
-                                          const ast::assignment_expr& assign,
-                                          ast::expr_handle            dest) -> void;
+    auto resolve_slice_copy(ast::node_id                id,
+                            const ast::assignment_expr& assign,
+                            ast::expr_handle            dest) -> void;
     // The function literal `expr` names, directly or through a `let`/`comptime` local
     [[nodiscard]] auto closure_literal_of(ast::expr_handle expr) -> stdx::option<ast::node_id>;
     [[nodiscard]] auto comptime_closure_value(ast::expr_handle expr)
