@@ -172,10 +172,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     return source;
 }
 
-[[nodiscard]] auto ir_for(std::string_view triple) -> std::string {
-    const bool x86{triple.starts_with("x86_64") || triple.starts_with("i686") ||
-                   triple.starts_with("i386")};
-    const auto source{exported_functions(x86)};
+[[nodiscard]] auto ir_for_source(std::string_view source, std::string_view triple) -> std::string {
     auto [ctx, idx]{helpers::resolve_for_target(source, triple)};
     helpers::check_errors<sema::diagnostics>(ctx->root_mod);
     auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod, false)};
@@ -185,6 +182,22 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     const codegen::optimizer_options opt_opts{.level = codegen::opt_level::O0};
     return UNWRAP(ctx->analyzer.emit_llvm_ir_text(
         gir_mod, target_opts, opt_opts, sema::build_artifact::LIBRARY));
+}
+
+[[nodiscard]] auto ir_for(std::string_view triple) -> std::string {
+    const bool x86{triple.starts_with("x86_64") || triple.starts_with("i686") ||
+                   triple.starts_with("i386")};
+    return ir_for_source(exported_functions(x86), triple);
+}
+
+// The constant `name` returns, from the first `ret` after its definition
+[[nodiscard]] auto returned_constant(std::string_view ir, std::string_view name) -> std::string {
+    const auto at{ir.find(fmt::format(" @{}(", name))};
+    REQUIRE(at != std::string_view::npos);
+    const auto ret{ir.find("\n  ret ", at)};
+    REQUIRE(ret != std::string_view::npos);
+    const auto line{ir.substr(ret + 7, ir.find('\n', ret + 1) - ret - 7)};
+    return std::string{line.substr(line.rfind(' ') + 1)};
 }
 
 // Splits at commas outside any brackets
@@ -686,6 +699,65 @@ TEST_CASE("i386 Windows, macOS, and the BSDs return register-sized structs in re
                              {"give_F1", msvc ? "i32(float)" : "float(float)"},
                              {"give_D1", msvc ? "i64(double)" : "double(double)"},
                          });
+    }
+}
+
+TEST_CASE("i386 SysV expands structs whose f64 and i64 fields sit at 4-byte offsets") {
+    for (const auto* triple :
+         {"i686-unknown-linux-gnu", "i686-unknown-freebsd", "i386-apple-macos"}) {
+        check_signatures(triple,
+                         {
+                             {"take_FD", "i32(float, double)"},
+                             {"take_ID", "i32(i32, double)"},
+                             {"take_LI", "i32(i64, i32)"},
+                             {"take_SFUD", "i32(ptr byval)"},
+                             {"give_FD", "void(ptr sret, float, double)"},
+                             {"late_ID",
+                              "i32(double, double, double, double, double, double, double, i32, "
+                              "double)"},
+                         });
+    }
+}
+
+TEST_CASE("Struct layout aligns f64, i64, and f80 as the target's C does") {
+    constexpr std::string_view source{R"(
+        const FD = extern struct { f: f32, d: f64 };
+        const LI = extern struct { a: i64, b: i32 };
+        const CL = extern struct { c: u8, x: f80 };
+        export const size_FD = fn(): usize { return @sizeOf(FD); };
+        export const align_FD = fn(): usize { return @alignOf(FD); };
+        export const size_LI = fn(): usize { return @sizeOf(LI); };
+        export const align_i64 = fn(): usize { return @alignOf(i64); };
+        export const size_f80 = fn(): usize { return @sizeOf(f80); };
+        export const size_CL = fn(): usize { return @sizeOf(CL); };
+        export const align_CL = fn(): usize { return @alignOf(CL); };
+    )"};
+
+    struct layout {
+        std::string_view triple;
+        std::string_view fd_size, fd_align, li_size, i64_align, f80_size, cl_size, cl_align;
+    };
+    // clang 23's sizeof / _Alignof for the same C structs with f80 as `long double`, except under
+    // MSVC, where `long double` is a double and f80 follows the data layout's `f80:128`
+    for (const auto& want : {
+             layout{"i686-unknown-linux-gnu", "12", "4", "12", "4", "12", "16", "4"},
+             layout{"i686-unknown-freebsd", "12", "4", "12", "4", "12", "16", "4"},
+             layout{"i386-apple-macos", "12", "4", "12", "4", "16", "32", "16"},
+             layout{"i686-w64-windows-gnu", "16", "8", "16", "8", "12", "16", "4"},
+             layout{"i686-pc-windows-msvc", "16", "8", "16", "8", "16", "32", "16"},
+             layout{"x86_64-unknown-linux-gnu", "16", "8", "16", "8", "16", "32", "16"},
+         }) {
+        INFO(want.triple);
+        const auto ir{ir_for_source(source, want.triple)};
+        CHECK(returned_constant(ir, "size_FD") == want.fd_size);
+        CHECK(returned_constant(ir, "align_FD") == want.fd_align);
+        CHECK(returned_constant(ir, "size_LI") == want.li_size);
+        CHECK(returned_constant(ir, "align_i64") == want.i64_align);
+        CHECK(returned_constant(ir, "size_f80") == want.f80_size);
+        CHECK(returned_constant(ir, "size_CL") == want.cl_size);
+        CHECK(returned_constant(ir, "align_CL") == want.cl_align);
+        // The lowered struct takes the data layout's own f64 alignment, with no inserted padding
+        CHECK_FALSE(ir.contains("float, [4 x i8], double"));
     }
 }
 

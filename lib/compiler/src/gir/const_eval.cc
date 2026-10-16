@@ -666,14 +666,21 @@ namespace {
     return bytes;
 }
 
-[[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture, usize ptr_size)
-    -> usize {
-    return const_eval::type_align_of(*capture.storage_type, ptr_size);
+// Integers wider than 32 bits and at most 64 take the target's 64-bit alignment, which is 4 on
+// i386 SysV
+[[nodiscard]] auto int_abi_align(u16 bits, const codegen::type_layout& layout) -> usize {
+    if (bits > 32 && bits <= 64) { return layout.i64_align; }
+    return int_abi_bytes(bits);
 }
 
-[[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture, usize ptr_size)
-    -> usize {
-    return const_eval::type_size_of(*capture.storage_type, ptr_size);
+[[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture,
+                                       const codegen::type_layout&         layout) -> usize {
+    return const_eval::type_align_of(*capture.storage_type, layout);
+}
+
+[[nodiscard]] auto capture_field_size(const sema::types::closure_capture& capture,
+                                      const codegen::type_layout&         layout) -> usize {
+    return const_eval::type_size_of(*capture.storage_type, layout);
 }
 
 // A struct or union still being resolved has no fields yet, so neither does anything holding one
@@ -708,50 +715,52 @@ namespace {
 
 } // namespace
 
-auto const_eval::struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size)
-    -> usize {
-    const auto natural{type_align_of(*st.fields[idx], ptr_size)};
+auto const_eval::struct_field_align(const sema::types::struct_t& st,
+                                    usize                        idx,
+                                    const codegen::type_layout&  layout) -> usize {
+    const auto natural{type_align_of(*st.fields[idx], layout)};
     return std::max(natural, static_cast<usize>(st.explicit_field_alignment(idx)));
 }
 
-auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize {
+auto const_eval::type_align_of(const sema::type& type, const codegen::type_layout& layout)
+    -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::INT:            return int_abi_bytes(sema::int_width(type));
+    case sema::type_kind::INT:            return int_abi_align(sema::int_width(type), layout);
     case sema::type_kind::BOOL:           return 1;
     case sema::type_kind::F16:            return 2;
     case sema::type_kind::F32:            return 4;
     case sema::type_kind::COMPTIME_INT:   return 4; // materializes as i32
     case sema::type_kind::F64:
-    case sema::type_kind::COMPTIME_FLOAT: return 8; // materializes as f64
-    case sema::type_kind::F80:
+    case sema::type_kind::COMPTIME_FLOAT: return layout.f64_align; // materializes as f64
+    case sema::type_kind::F80:            return layout.f80_align;
     case sema::type_kind::F128:           return 16;
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE:
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:
     case sema::type_kind::FUNCTION:
-    case sema::type_kind::SLICE:          return ptr_size;
+    case sema::type_kind::SLICE:          return layout.ptr_bytes;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
-            return type_align_of(arr->underlying, ptr_size);
+            return type_align_of(arr->underlying, layout);
         }
         if (const auto def{type.get_data().as_opt<sema::types::deferred_array>()}) {
-            return type_align_of(def->underlying, ptr_size);
+            return type_align_of(def->underlying, layout);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
                 if (const auto bits{
-                        sema::packed_backing_bits(*st, static_cast<u32>(ptr_size) * 8)}) {
-                    return int_abi_bytes(static_cast<u16>(*bits));
+                        sema::packed_backing_bits(*st, static_cast<u32>(layout.ptr_bytes) * 8)}) {
+                    return int_abi_align(static_cast<u16>(*bits), layout);
                 }
             }
             usize max_align{1};
             for (usize i{0}; i < st->fields.size(); ++i) {
                 if (!st->fields[i]) { continue; }
-                max_align = std::max(max_align, struct_field_align(*st, i, ptr_size));
+                max_align = std::max(max_align, struct_field_align(*st, i, layout));
             }
             return max_align;
         }
@@ -759,15 +768,15 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
     case sema::type_kind::UNION:
         if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
             if (un->is_bit_packed()) {
-                if (const auto bits{
-                        sema::packed_union_backing_bits(*un, static_cast<u32>(ptr_size) * 8)}) {
-                    return int_abi_bytes(static_cast<u16>(*bits));
+                if (const auto bits{sema::packed_union_backing_bits(
+                        *un, static_cast<u32>(layout.ptr_bytes) * 8)}) {
+                    return int_abi_align(static_cast<u16>(*bits), layout);
                 }
             }
             return std::ranges::fold_left(un->fields | std::views::filter([](const auto* f) {
                                               return f != nullptr;
-                                          }) | std::views::transform([ptr_size](const auto* f) {
-                                              return type_align_of(*f, ptr_size);
+                                          }) | std::views::transform([&layout](const auto* f) {
+                                              return type_align_of(*f, layout);
                                           }),
                                           1UZ,
                                           [](usize a, usize b) { return std::max(a, b); });
@@ -775,14 +784,14 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:
         if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-            return type_align_of(en->underlying, ptr_size);
+            return type_align_of(en->underlying, layout);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
     case sema::type_kind::CLOSURE:
         if (const auto cl{type.get_data().as_opt<sema::types::closure_t>()}) {
             return std::ranges::fold_left(cl->captures |
-                                              std::views::transform([ptr_size](const auto& c) {
-                                                  return capture_field_align(c, ptr_size);
+                                              std::views::transform([&layout](const auto& c) {
+                                                  return capture_field_align(c, layout);
                                               }),
                                           1UZ,
                                           [](usize a, usize b) { return std::max(a, b); });
@@ -792,7 +801,7 @@ auto const_eval::type_align_of(const sema::type& type, usize ptr_size) -> usize 
     }
 }
 
-auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
+auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout& layout) -> usize {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
     case sema::type_kind::VOID_:          return 0;
@@ -803,7 +812,7 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     case sema::type_kind::COMPTIME_INT:   return 4; // materializes as i32
     case sema::type_kind::F64:
     case sema::type_kind::COMPTIME_FLOAT: return 8; // materializes as f64
-    case sema::type_kind::F80:
+    case sema::type_kind::F80:            return layout.f80_size;
     case sema::type_kind::F128:           return 16;
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:      {
@@ -813,16 +822,17 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
         const bool        is_fat{(referent && referent->get_kind() == sema::type_kind::DYN) ||
                                  sema::is_fat_callable(type)};
-        return is_fat ? 2 * ptr_size : ptr_size;
+        return is_fat ? 2 * layout.ptr_bytes : layout.ptr_bytes;
     }
-    case sema::type_kind::FUNCTION: return sema::is_erased_fn(type) ? 2 * ptr_size : ptr_size;
+    case sema::type_kind::FUNCTION:
+        return sema::is_erased_fn(type) ? 2 * layout.ptr_bytes : layout.ptr_bytes;
     case sema::type_kind::ISIZE:
-    case sema::type_kind::USIZE:    return ptr_size;
-    case sema::type_kind::SLICE:    return 2 * ptr_size;
+    case sema::type_kind::USIZE: return layout.ptr_bytes;
+    case sema::type_kind::SLICE: return 2 * layout.ptr_bytes;
     case sema::type_kind::ARRAY:
         if (const auto arr{type.get_data().as_opt<sema::types::array>()}) {
-            const auto elem_size{type_size_of(arr->underlying, ptr_size)};
-            const auto elem_align{type_align_of(arr->underlying, ptr_size)};
+            const auto elem_size{type_size_of(arr->underlying, layout)};
+            const auto elem_align{type_align_of(arr->underlying, layout)};
             const auto elem_stride{elem_align > 0
                                        ? (elem_size + elem_align - 1) / elem_align * elem_align
                                        : elem_size};
@@ -835,7 +845,7 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
                 if (const auto bits{
-                        sema::packed_backing_bits(*st, static_cast<u32>(ptr_size) * 8)}) {
+                        sema::packed_backing_bits(*st, static_cast<u32>(layout.ptr_bytes) * 8)}) {
                     return int_abi_bytes(static_cast<u16>(*bits));
                 }
             }
@@ -844,12 +854,12 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             for (usize i{0}; i < st->fields.size(); ++i) {
                 const auto* field{st->fields[i]};
                 if (!field) { continue; }
-                const auto f_align{struct_field_align(*st, i, ptr_size)};
+                const auto f_align{struct_field_align(*st, i, layout)};
                 max_align = std::max(max_align, f_align);
                 if (f_align > 0) {
                     current_offset = (current_offset + f_align - 1) / f_align * f_align;
                 }
-                current_offset += type_size_of(*field, ptr_size);
+                current_offset += type_size_of(*field, layout);
             }
 
             return max_align > 0 ? (current_offset + max_align - 1) / max_align * max_align
@@ -859,8 +869,8 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
     case sema::type_kind::UNION:
         if (const auto un{type.get_data().as_opt<sema::types::union_t>()}) {
             if (un->is_bit_packed()) {
-                if (const auto bits{
-                        sema::packed_union_backing_bits(*un, static_cast<u32>(ptr_size) * 8)}) {
+                if (const auto bits{sema::packed_union_backing_bits(
+                        *un, static_cast<u32>(layout.ptr_bytes) * 8)}) {
                     return int_abi_bytes(static_cast<u16>(*bits));
                 }
             }
@@ -868,15 +878,15 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             usize max_align{1};
             for (const auto* field : un->fields) {
                 if (!field) { continue; }
-                max_align = std::max(max_align, type_align_of(*field, ptr_size));
-                max_size  = std::max(max_size, type_size_of(*field, ptr_size));
+                max_align = std::max(max_align, type_align_of(*field, layout));
+                max_size  = std::max(max_size, type_size_of(*field, layout));
             }
             return max_align > 0 ? (max_size + max_align - 1) / max_align * max_align : max_size;
         }
         UNREACHABLE("type_kind::UNION associated with improper type");
     case sema::type_kind::ENUM:
         if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
-            return type_size_of(en->underlying, ptr_size);
+            return type_size_of(en->underlying, layout);
         }
         UNREACHABLE("type_kind::ENUM associated with improper type");
     case sema::type_kind::CLOSURE:
@@ -884,12 +894,12 @@ auto const_eval::type_size_of(const sema::type& type, usize ptr_size) -> usize {
             usize current_offset{0};
             usize max_align{1};
             for (const auto& capture : cl->captures) {
-                const auto c_align{capture_field_align(capture, ptr_size)};
+                const auto c_align{capture_field_align(capture, layout)};
                 max_align = std::max(max_align, c_align);
                 if (c_align > 0) {
                     current_offset = (current_offset + c_align - 1) / c_align * c_align;
                 }
-                current_offset += capture_field_size(capture, ptr_size);
+                current_offset += capture_field_size(capture, layout);
             }
             return max_align > 0 ? (current_offset + max_align - 1) / max_align * max_align
                                  : current_offset;
@@ -4353,7 +4363,9 @@ auto const_eval::target_pointer_bits() const -> u32 {
     return codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits;
 }
 
-auto const_eval::target_pointer_bytes() const -> usize { return target_pointer_bits() / 8; }
+auto const_eval::target_layout() const -> codegen::type_layout {
+    return codegen::type_layout::resolve(ctx_.target_opts.triple_str);
+}
 
 auto const_eval::cast_operand(const ast::call_expr& call) -> stdx::option<ast::expr_handle> {
     if (call.arguments.empty()) { return stdx::none; }
@@ -4481,8 +4493,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             return layout_loop ? const_value::make_poison() : stdx::option<const_value>{};
         }
 
-        const auto ptr_size{target_pointer_bytes()};
-        const auto sz{type_size_of(*target_type, ptr_size)};
+        const auto sz{type_size_of(*target_type, target_layout())};
         return const_value{static_cast<u64>(sz), usize_type};
     }
     case syntax::builtin_t::ALIGN_OF: {
@@ -4492,8 +4503,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             return layout_loop ? const_value::make_poison() : stdx::option<const_value>{};
         }
 
-        const auto ptr_size{target_pointer_bytes()};
-        const auto al{type_align_of(*target_type, ptr_size)};
+        const auto al{type_align_of(*target_type, target_layout())};
         return const_value{static_cast<u64>(al), usize_type};
     }
     case syntax::builtin_t::BIT_SIZE_OF: {
@@ -4503,8 +4513,8 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             return layout_loop ? const_value::make_poison() : stdx::option<const_value>{};
         }
 
-        const auto ptr_size{target_pointer_bytes()};
-        const auto ptr_bits{static_cast<u32>(ptr_size) * 8};
+        const auto layout{target_layout()};
+        const auto ptr_bits{static_cast<u32>(layout.ptr_bytes) * 8};
 
         const auto kind{target_type->get_kind()};
         if (kind == sema::type_kind::INT) {
@@ -4529,7 +4539,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                 return const_value{static_cast<u64>(*n), usize_type};
             }
         }
-        return const_value{static_cast<u64>(type_size_of(*target_type, ptr_size) * 8), usize_type};
+        return const_value{static_cast<u64>(type_size_of(*target_type, layout) * 8), usize_type};
     }
     case syntax::builtin_t::TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");

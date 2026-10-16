@@ -15,6 +15,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/soft_f80.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/sema/type.hh"
 
@@ -204,12 +205,12 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
                                       const sema::types::struct_t& s,
                                       gsl::span<llvm::Type* const> element_types) -> void {
-    const auto       ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
+    const auto       layout{type_layout::resolve(module_.getDataLayout())};
     std::vector<u64> wanted;
     wanted.reserve(element_types.size());
     for (usize i{0}; i < element_types.size(); ++i) {
         wanted.emplace_back(s.is_packed ? s.explicit_field_alignment(i)
-                                        : gir::const_eval::struct_field_align(s, i, ptr_size));
+                                        : gir::const_eval::struct_field_align(s, i, layout));
     }
     set_padded_body(struct_ty, element_types, wanted, s.is_packed);
 }
@@ -384,14 +385,14 @@ auto type_translator::translate_closure(const sema::types::closure_t& c, const s
     auto* closure_ty{llvm::StructType::create(context_)};
     closure_cache_[&original] = closure_ty;
 
-    const auto               ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
+    const auto               layout{type_layout::resolve(module_.getDataLayout())};
     std::vector<llvm::Type*> element_types;
     std::vector<u64>         wanted;
     element_types.reserve(c.captures.size());
     wanted.reserve(c.captures.size());
     for (const auto& capture : c.captures) {
         element_types.emplace_back(translate(*capture.storage_type));
-        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, ptr_size));
+        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, layout));
     }
     set_padded_body(closure_ty, element_types, wanted, false);
     return closure_ty;

@@ -14,10 +14,12 @@
 #include <gsl/pointers>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
@@ -294,6 +296,12 @@ namespace {
     }
 }
 
+// Scratch context for asking a data layout about scalar types, which need a context to exist
+[[nodiscard]] auto dl_context() -> llvm::LLVMContext& {
+    thread_local llvm::LLVMContext ctx;
+    return ctx;
+}
+
 } // namespace
 
 auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts {
@@ -312,6 +320,25 @@ auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts 
 }
 
 auto target_facts::resolve(stdx::option<std::string_view> triple_str) -> target_facts {
+    return resolve(resolve_target_triple(triple_str));
+}
+
+auto type_layout::resolve(const llvm::DataLayout& dl) -> type_layout {
+    auto& ctx{dl_context()};
+    return type_layout{
+        .ptr_bytes = dl.getPointerSize(),
+        .i64_align = dl.getABITypeAlign(llvm::Type::getInt64Ty(ctx)).value(),
+        .f64_align = dl.getABITypeAlign(llvm::Type::getDoubleTy(ctx)).value(),
+        .f80_size  = dl.getTypeAllocSize(llvm::Type::getX86_FP80Ty(ctx)).getFixedValue(),
+        .f80_align = dl.getABITypeAlign(llvm::Type::getX86_FP80Ty(ctx)).value(),
+    };
+}
+
+auto type_layout::resolve(const llvm::Triple& triple) -> type_layout {
+    return resolve(llvm::DataLayout{triple.computeDataLayout()});
+}
+
+auto type_layout::resolve(stdx::option<std::string_view> triple_str) -> type_layout {
     return resolve(resolve_target_triple(triple_str));
 }
 

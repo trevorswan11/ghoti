@@ -587,9 +587,9 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                     resolving_.ast.location_of(call.function));
             }
         } else if (has_fixed_bit_layout(src) && has_fixed_bit_layout(target)) {
-            const usize ptr_size{target_ptr_bits() / 8};
-            const auto  src_size{gir::const_eval::type_size_of(src, ptr_size)};
-            const auto  target_size{gir::const_eval::type_size_of(target, ptr_size)};
+            const auto layout{target_layout()};
+            const auto src_size{gir::const_eval::type_size_of(src, layout)};
+            const auto target_size{gir::const_eval::type_size_of(target, layout)};
             if (src_size != target_size) {
                 return make_sema_err(
                     fmt::format("`@bitCast` requires equally sized types; '{}' is {} byte(s) but "
@@ -2759,7 +2759,7 @@ auto type_resolver::bit_cast_width(const type& t) const -> stdx::option<u64> {
     }
     if (!has_fixed_bit_layout(t)) { return stdx::none; }
     if (t.get_kind() == type_kind::INT) { return u64{int_width(t)}; }
-    return u64{gir::const_eval::type_size_of(t, target_ptr_bits() / 8) * 8};
+    return u64{gir::const_eval::type_size_of(t, target_layout()) * 8};
 }
 
 auto type_resolver::has_fixed_bit_layout(const type& t) noexcept -> bool {
@@ -2786,6 +2786,10 @@ auto type_resolver::target_has_x86_fp80() const -> bool {
 
 auto type_resolver::target_ptr_bits() const -> u32 {
     return codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits;
+}
+
+auto type_resolver::target_layout() const -> codegen::type_layout {
+    return codegen::type_layout::resolve(ctx_.target_opts.triple_str);
 }
 
 auto type_resolver::target_has_128bit_atomics() const -> bool {

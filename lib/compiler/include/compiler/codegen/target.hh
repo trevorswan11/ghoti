@@ -17,6 +17,7 @@
 
 namespace llvm {
 
+class DataLayout;
 class Module;
 class TargetMachine;
 class Triple;
@@ -79,6 +80,22 @@ struct target_facts {
     [[nodiscard]] static auto resolve(const llvm::Triple& triple) noexcept -> target_facts;
     [[nodiscard]] static auto resolve(stdx::option<std::string_view> triple_str = stdx::none)
         -> target_facts;
+};
+
+// The scalar sizes and alignments that vary by target, read from LLVM's data layout so ghoti's
+// struct layout matches both the LLVM types it lowers to and C (i386 SysV aligns `f64` and
+// 64-bit ints to 4 inside structs, and its `f80` is 12 bytes)
+struct type_layout {
+    usize ptr_bytes;
+    usize i64_align;
+    usize f64_align;
+    usize f80_size;
+    usize f80_align;
+
+    [[nodiscard]] static auto resolve(const llvm::DataLayout& dl) -> type_layout;
+    [[nodiscard]] static auto resolve(const llvm::Triple& triple) -> type_layout;
+    [[nodiscard]] static auto resolve(stdx::option<std::string_view> triple_str = stdx::none)
+        -> type_layout;
 };
 
 // Individual normalizers (also used to build `target_facts`).

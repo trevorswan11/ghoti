@@ -7582,7 +7582,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
 
         return elem
             .transform([this](const sema::type& e) {
-                return static_cast<u64>(const_eval::type_size_of(e, target_ptr_bits_ / 8));
+                return static_cast<u64>(const_eval::type_size_of(e, target_layout_));
             })
             .value_or(1UZ);
     }};

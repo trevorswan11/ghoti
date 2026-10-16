@@ -26,6 +26,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -931,6 +932,7 @@ class type_resolver {
         -> stdx::option<std::string>;
     auto               float_literal_out_of_range(ast::node_id id, std::string message) -> type&;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
+    [[nodiscard]] auto target_layout() const -> codegen::type_layout;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
     // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA
     // they were named after (e.g. `.win64`/`.sysv` need x86_64, `.aapcs` needs 32-bit arm).
