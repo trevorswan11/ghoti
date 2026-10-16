@@ -41,6 +41,8 @@
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
+namespace ghoti::gir { class const_eval; } // namespace ghoti::gir
+
 namespace ghoti::sema {
 
 // Resolves all types and symbol uses without type checking
@@ -708,6 +710,15 @@ class type_resolver {
 
     [[nodiscard]] auto validate_union_arms(ast::node_id, const ast::match_expr&, type&)
         -> stdx::option<diagnostic>;
+    [[nodiscard]] auto validate_scalar_arms(const ast::match_expr& match, type& matcher_type)
+        -> stdx::option<diagnostic>;
+    [[nodiscard]] auto expr_denotes_type(ast::node_id n) -> bool;
+    [[nodiscard]] auto is_type_match(const ast::match_expr& match, type& matcher_type) -> bool;
+    [[nodiscard]] auto arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
+        -> stdx::option<type&>;
+    [[nodiscard]] auto scalar_pattern_mismatch(ast::node_id     value,
+                                               type&            matcher_type,
+                                               gir::const_eval& probe) -> stdx::option<std::string>;
 
     // Resolves a `match` whose scrutinee is a compile-time `type` value
     auto resolve_type_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;

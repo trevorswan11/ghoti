@@ -1318,6 +1318,206 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
     last_type_.emplace(*result_type);
 }
 
+namespace {
+
+// A constant scalar pattern or range, closed on both ends, for overlap detection
+struct arm_interval {
+    i64                       lo;
+    i64                       hi;
+    ast::match_pattern_handle pat;
+};
+
+// The first pattern covering a value an earlier one already covers
+[[nodiscard]] auto first_overlapping_pattern(gsl::span<const arm_interval> intervals)
+    -> stdx::option<ast::match_pattern_handle> {
+    for (usize i{0}; i < intervals.size(); ++i) {
+        for (usize j{i + 1}; j < intervals.size(); ++j) {
+            const auto& a{intervals[i]};
+            const auto& b{intervals[j]};
+            if (a.lo <= b.hi && b.lo <= a.hi) { return b.pat; }
+        }
+    }
+    return stdx::none;
+}
+
+} // namespace
+
+// Whether `n` spells a type: an aggregate or type literal, a primitive, or a type name or alias
+auto type_resolver::expr_denotes_type(ast::node_id n) -> bool {
+    const auto& node{resolving_.ast[n]};
+    if (node.is<ast::struct_expr>() || node.is<ast::enum_expr>() || node.is<ast::union_expr>()) {
+        return true;
+    }
+    if (const auto arr{resolving_.ast.get_as_opt<ast::array_expr>(n)}) { return arr->is_type_expr; }
+    if (const auto fx{resolving_.ast.get_as_opt<ast::function_expr>(n)}) {
+        return fx->is_type_expr;
+    }
+    if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(n)}) {
+        return expr_denotes_type(*addr->rhs);
+    }
+    if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(n)}) {
+        return expr_denotes_type(*ref->rhs);
+    }
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(n)};
+    if (!ident) { return false; }
+    if (syntax::token_type::is_int_type_lexeme(ident->name)) { return true; }
+    const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+    if (!sym) { return false; }
+    if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) { return true; }
+    const auto nd{sym->get_data().as_opt<symbols::node_t>()};
+    if (!nd) { return false; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*nd)};
+    if (!decl || !decl->value ||
+        !(decl->has_modifier(ast::decl_modifiers::LET) ||
+          decl->has_modifier(ast::decl_modifiers::COMPTIME))) {
+        return false;
+    }
+    return expr_denotes_type(**decl->value);
+}
+
+// Whether a `match` selects on a compile-time `type`, checking and emitting only the chosen arm
+auto type_resolver::is_type_match(const ast::match_expr& match, type& matcher_type) -> bool {
+    // `match` on an enum or union type keeps its variant semantics, and empty or incomplete types
+    // keep their "cannot match on" diagnostics
+    const auto denoted_kind{denoted_type(matcher_type).get_kind()};
+    if (denoted_kind == type_kind::ENUM || denoted_kind == type_kind::UNION ||
+        (denoted_kind != type_kind::TYPE && !is_value_type(denoted_kind))) {
+        return false;
+    }
+    if (expr_denotes_type(*match.matcher)) { return true; }
+    // A `T: type` parameter resolves to its argument inside an instantiation, so a first real
+    // arm pattern that is a type also makes a type match
+    for (usize i{0}; i < match.arms.size(); ++i) {
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
+        if (expr_denotes_type(*match.arms[i].primary_pattern())) { return true; }
+        break;
+    }
+    gir::const_eval type_probe{ctx_, resolving_};
+    const auto      cv{type_probe.try_eval(match.matcher)};
+    return cv && cv->is<stdx::option<sema::type&>>();
+}
+
+// Checks a match over an integer, byte, or bool covers every value, and rejects other primitives
+auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& matcher_type)
+    -> stdx::option<diagnostic> {
+    const auto at{resolving_.ast.location_of(match.matcher)};
+    // It's assumed that any sufficiently large type cannot be fully enumerated
+    stdx::option<u16> required_arm_count;
+    switch (matcher_type.get_kind()) {
+    case type_kind::INT:
+        // Only an 8-bit unsigned integer is small enough to enumerate exhaustively
+        if (const auto info{as_integer(matcher_type)};
+            info && info->bits == 8 && !info->is_signed) {
+            required_arm_count.emplace(256);
+        }
+        break;
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::COMPTIME_INT: break;
+    case type_kind::BOOL:         required_arm_count.emplace(2); break;
+    case type_kind::F32:
+    case type_kind::F64:
+    case type_kind::COMPTIME_FLOAT:
+        return diagnostic{"Cannot match on floats due to precision; use an if statement with "
+                          "explicit precision handling",
+                          sema::error::TYPE_MISMATCH,
+                          at};
+    case type_kind::VOID_:
+    case type_kind::UNDEFINED:
+        return diagnostic{"Empty types cannot be matched on", sema::error::TYPE_MISMATCH, at};
+    case type_kind::TYPE:
+    case type_kind::AUTO:
+    case type_kind::OPAQUE:
+    case type_kind::NORETURN:
+    case type_kind::NULLPTR:
+        return diagnostic{fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
+                                      ctx_.type_display_name(matcher_type)),
+                          sema::error::TYPE_MISMATCH,
+                          at};
+    default: UNREACHABLE("Builtin types should never take this type kind");
+    }
+
+    // A range arm can never make an integer or byte match exhaustive on its own
+    const bool has_range_arm{std::ranges::any_of(match.arms, [&](const auto& arm) {
+        return std::ranges::any_of(arm.patterns, [&](const auto& p) {
+            return resolving_.ast.get_as_opt<ast::range_expr>(*p).has_value();
+        });
+    })};
+    if (has_range_arm && matcher_type.get_kind() == type_kind::BOOL) {
+        return diagnostic{"Range patterns are not allowed when matching on 'bool'",
+                          sema::error::ILLEGAL_MATCH_PATTERN,
+                          at};
+    }
+    if (match.catch_all_idx) { return stdx::none; }
+    if (has_range_arm) {
+        return diagnostic{"A 'match' with a range pattern requires a catch-all '_' arm",
+                          sema::error::ILLEGAL_MATCH_PATTERN,
+                          at};
+    }
+    if (!required_arm_count) {
+        return diagnostic{
+            fmt::format("Matching on type '{}' requires a catch all arm with a pattern of '_'",
+                        ctx_.type_display_name(matcher_type)),
+            sema::error::TYPE_MISMATCH,
+            at};
+    }
+    usize listed_pattern_count{0};
+    for (const auto& arm : match.arms) { listed_pattern_count += arm.patterns.size(); }
+    if (*required_arm_count == listed_pattern_count) { return stdx::none; }
+    return diagnostic{fmt::format("Matching on type '{}' requires a catch all arm with a pattern "
+                                  "of '_' or exactly {} patterned arms",
+                                  ctx_.type_display_name(matcher_type),
+                                  *required_arm_count),
+                      sema::error::TYPE_MISMATCH,
+                      at};
+}
+
+// The type an arm's capture binds: the matcher itself, or the payload every listed union
+// variant shares. `none` when the variants carry different payloads
+auto type_resolver::arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
+    -> stdx::option<type&> {
+    const auto union_data{matcher_type.get_data().as_opt<types::union_t>()};
+    if (!union_data) { return matcher_type; }
+    const auto&         table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
+    stdx::option<type&> base_type;
+    for (const auto& pat : arm.patterns) {
+        const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(*pat)};
+        ASSERT(ia, "Union validator failed to error");
+        const auto& pident{resolving_.ast.get_as<ast::identifier_expr>(ia->member)};
+        auto&       pty{union_data->type_at(table.get_proxy(pident.name).index)};
+        if (!base_type) {
+            base_type.emplace(pty);
+        } else if (!sema::is_same_unqualified(*base_type, pty)) {
+            return stdx::none;
+        }
+    }
+    return base_type;
+}
+
+// Why a scalar pattern `value` can't match `matcher_type`, if it can't
+auto type_resolver::scalar_pattern_mismatch(ast::node_id     value,
+                                            type&            matcher_type,
+                                            gir::const_eval& probe) -> stdx::option<std::string> {
+    const auto vt{resolving_.get_sema_type_opt(value)};
+    if (!vt || vt->is_poison() || is_generic_type(*vt, false) ||
+        is_generic_type(matcher_type, false)) {
+        return stdx::none;
+    }
+    if (!is_assignable(*vt, matcher_type)) {
+        return fmt::format("A pattern of type '{}' cannot match a value of type '{}'",
+                           ctx_.type_display_name(*vt),
+                           ctx_.type_display_name(matcher_type));
+    }
+    const auto folded{probe.try_eval(value)};
+    const auto as_int{folded ? folded->as_int_opt() : stdx::none};
+    if (as_int && is_integer(matcher_type.get_kind()) &&
+        !comptime_int_fits(*as_int, matcher_type, target_ptr_bits())) {
+        return fmt::format(
+            "Pattern {} is out of range for '{}'", *as_int, ctx_.type_display_name(matcher_type));
+    }
+    return stdx::none;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
     {
@@ -1340,66 +1540,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
     // A scrutinee that denotes a compile-time `type` takes the type-match path: only the
     // selected arm is checked/emitted, `if comptime`-style.
-    {
-        const auto denotes_type{[&](auto&& self, ast::node_id n) -> bool {
-            const auto& node{resolving_.ast[n]};
-            if (node.template is<ast::struct_expr>() || node.template is<ast::enum_expr>() ||
-                node.template is<ast::union_expr>()) {
-                return true;
-            }
-            if (const auto arr{resolving_.ast.get_as_opt<ast::array_expr>(n)}) {
-                return arr->is_type_expr;
-            }
-            if (const auto fx{resolving_.ast.get_as_opt<ast::function_expr>(n)}) {
-                return fx->is_type_expr;
-            }
-            if (const auto addr{resolving_.ast.get_as_opt<ast::address_of_expr>(n)}) {
-                return self(self, *addr->rhs);
-            }
-            if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(n)}) {
-                return self(self, *ref->rhs);
-            }
-            if (const auto id_e{resolving_.ast.get_as_opt<ast::identifier_expr>(n)}) {
-                if (syntax::token_type::is_int_type_lexeme(id_e->name)) { return true; }
-                const auto sym{ctx_.registry.lookup(table_stack_, id_e->name)};
-                if (!sym) { return false; }
-                if (sym->has_kind() && sym->get_kind() == symbol_kind::TYPE) { return true; }
-                if (const auto nd{sym->get_data().template as_opt<symbols::node_t>()}) {
-                    if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*nd)};
-                        decl && decl->value &&
-                        (decl->has_modifier(ast::decl_modifiers::LET) ||
-                         decl->has_modifier(ast::decl_modifiers::COMPTIME))) {
-                        return self(self, **decl->value);
-                    }
-                }
-            }
-            return false;
-        }};
-
-        bool matcher_denotes_type{denotes_type(denotes_type, *match.matcher)};
-        // A `T: type` parameter resolves to its concrete argument inside an instantiation,
-        // so also treat a `match` whose first real arm pattern is a type as a type match.
-        if (!matcher_denotes_type) {
-            for (usize i{0}; i < match.arms.size(); ++i) {
-                if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
-                matcher_denotes_type = denotes_type(denotes_type, *match.arms[i].primary_pattern());
-                break;
-            }
-        }
-        if (!matcher_denotes_type) {
-            gir::const_eval type_probe{ctx_, resolving_};
-            const auto      cv{type_probe.try_eval(match.matcher)};
-            matcher_denotes_type = cv && cv->is<stdx::option<sema::type&>>();
-        }
-        // `match` on an enum/union type keeps its variant-enumeration semantics. Empty and
-        // incomplete types keep their existing "cannot match on ..." diagnostics.
-        const auto denoted_kind{denoted_type(matcher_type).get_kind()};
-        if (denoted_kind == type_kind::ENUM || denoted_kind == type_kind::UNION ||
-            (denoted_kind != type_kind::TYPE && !is_value_type(denoted_kind))) {
-            matcher_denotes_type = false;
-        }
-        if (matcher_denotes_type) { return resolve_type_match(id, match, matcher_type); }
-    }
+    if (is_type_match(match, matcher_type)) { return resolve_type_match(id, match, matcher_type); }
 
     // The expression must resolve to a single type on pass 3
     stdx::option<type&> effective_matcher_type{matcher_type};
@@ -1443,104 +1584,8 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
         }
     } else if (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) {
-        // It's assumed that any sufficiently large type cannot be fully enumerated
-        stdx::option<u16> required_arm_count;
-        switch (effective_matcher_type->get_kind()) {
-        case type_kind::INT:
-            // Only an 8-bit unsigned integer is small enough to enumerate exhaustively.
-            if (const auto info{as_integer(*effective_matcher_type)};
-                info && info->bits == 8 && !info->is_signed) {
-                required_arm_count.emplace(256);
-            }
-            break;
-        case type_kind::ISIZE:
-        case type_kind::USIZE:
-        case type_kind::COMPTIME_INT: break;
-        case type_kind::BOOL:         required_arm_count.emplace(2); break;
-        case type_kind::F32:
-        case type_kind::F64:
-        case type_kind::COMPTIME_FLOAT:
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 "Cannot match on floats due to precision; use an if statement "
-                                 "with explicit precision handling",
-                                 sema::error::TYPE_MISMATCH,
-                                 resolving_.ast.location_of(match.matcher)));
-        case type_kind::VOID_:
-        case type_kind::UNDEFINED:
-            return last_type_.emplace(ctx_.poison_node(resolving_,
-                                                       id,
-                                                       "Empty types cannot be matched on",
-                                                       sema::error::TYPE_MISMATCH,
-                                                       resolving_.ast.location_of(match.matcher)));
-        case type_kind::TYPE:
-        case type_kind::AUTO:
-        case type_kind::OPAQUE:
-        case type_kind::NORETURN:
-        case type_kind::NULLPTR:
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
-                            ctx_.type_display_name(*effective_matcher_type)),
-                sema::error::TYPE_MISMATCH,
-                resolving_.ast.location_of(match.matcher)));
-        default: UNREACHABLE("Builtin types should never take this type kind");
-        }
-
-        // A range arm can never make an integer/byte match exhaustive on its own.
-        const bool has_range_arm{std::ranges::any_of(match.arms, [&](const auto& arm) {
-            return std::ranges::any_of(arm.patterns, [&](const auto& p) {
-                return resolving_.ast.get_as_opt<ast::range_expr>(*p).has_value();
-            });
-        })};
-        if (has_range_arm) {
-            if (effective_matcher_type->get_kind() == type_kind::BOOL) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "Range patterns are not allowed when matching on 'bool'",
-                                     sema::error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(match.matcher)));
-            }
-            if (!match.catch_all_idx) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "A 'match' with a range pattern requires a catch-all '_' arm",
-                                     sema::error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(match.matcher)));
-            }
-        }
-
-        if (!match.catch_all_idx) {
-            // With a required arm count the total pattern count must match
-            usize listed_pattern_count{0};
-            for (const auto& arm : match.arms) { listed_pattern_count += arm.patterns.size(); }
-            if (required_arm_count && *required_arm_count != listed_pattern_count) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format("Matching on type '{}' requires a catch all arm with "
-                                "a pattern of '_' or exactly {} patterned arms",
-                                ctx_.type_display_name(*effective_matcher_type),
-                                *required_arm_count),
-                    sema::error::TYPE_MISMATCH,
-                    resolving_.ast.location_of(match.matcher)));
-            }
-
-            if (!required_arm_count) {
-                // Otherwise there must always be a catch all arm
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    fmt::format(
-                        "Matching on type '{}' requires a catch all arm with a pattern of '_'",
-                        ctx_.type_display_name(*effective_matcher_type)),
-                    sema::error::TYPE_MISMATCH,
-                    resolving_.ast.location_of(match.matcher)));
-            }
+        if (auto diag{validate_scalar_arms(match, *effective_matcher_type)}) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
         }
     } else {
         return last_type_.emplace(ctx_.poison_node(
@@ -1552,12 +1597,6 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolving_.ast.location_of(match.matcher)));
     }
 
-    // Constant scalar values and range intervals, closed on both ends, for overlap detection.
-    struct arm_interval {
-        i64                       lo;
-        i64                       hi;
-        ast::match_pattern_handle pat;
-    };
     std::vector<arm_interval> const_intervals;
     gir::const_eval           interval_probe{ctx_, resolving_};
     const bool                scalar_match{
@@ -1571,31 +1610,15 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         const scope scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
 
         if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
-            // Unions implicitly unpack the value since the field is guaranteed to be valid
-            stdx::option<type&> base_type;
-            if (const auto union_data{matcher_data.as_opt<types::union_t>()}) {
-                const auto& table{
-                    ctx_.registry.get(effective_matcher_type->get_symbol_table_idx())};
-                // Every listed variant must carry the same payload type to share one capture.
-                for (const auto& pat : arm.patterns) {
-                    const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(*pat)};
-                    ASSERT(ia, "Union validator failed to error");
-                    const auto& pident{resolving_.ast.get_as<ast::identifier_expr>(ia->member)};
-                    auto&       pty{union_data->type_at(table.get_proxy(pident.name).index)};
-                    if (!base_type) {
-                        base_type.emplace(pty);
-                    } else if (!sema::is_same_unqualified(*base_type, pty)) {
-                        return last_type_.emplace(ctx_.poison_node(
-                            resolving_,
-                            id,
-                            "A capture on a multi-variant match arm requires every listed "
-                            "variant to carry the same payload type",
-                            error::ILLEGAL_MATCH_PATTERN,
-                            resolving_.ast.location_of(*arm.capture->payload)));
-                    }
-                }
-            } else {
-                base_type.emplace(*effective_matcher_type);
+            const auto base_type{arm_capture_base(arm, *effective_matcher_type)};
+            if (!base_type) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    "A capture on a multi-variant match arm requires every listed variant to "
+                    "carry the same payload type",
+                    error::ILLEGAL_MATCH_PATTERN,
+                    resolving_.ast.location_of(*arm.capture->payload)));
             }
 
             auto cap_result{
@@ -1674,32 +1697,11 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
 
             // A scalar pattern must be a value the matcher's type can actually hold
             if (scalar_match || effective_matcher_type->get_kind() == type_kind::BOOL) {
-                const auto mismatch{[&](ast::node_id value) -> stdx::option<std::string> {
-                    const auto vt{resolving_.get_sema_type_opt(value)};
-                    if (!vt || vt->is_poison() || is_generic_type(*vt, false) ||
-                        is_generic_type(*effective_matcher_type, false)) {
-                        return stdx::none;
-                    }
-                    if (!is_assignable(*vt, *effective_matcher_type)) {
-                        return fmt::format("A pattern of type '{}' cannot match a value of type "
-                                           "'{}'",
-                                           ctx_.type_display_name(*vt),
-                                           ctx_.type_display_name(*effective_matcher_type));
-                    }
-                    const auto folded{interval_probe.try_eval(value)};
-                    const auto as_int{folded ? folded->as_int_opt() : stdx::none};
-                    if (as_int && is_integer(effective_matcher_type->get_kind()) &&
-                        !comptime_int_fits(*as_int, *effective_matcher_type, target_ptr_bits())) {
-                        return fmt::format("Pattern {} is out of range for '{}'",
-                                           *as_int,
-                                           ctx_.type_display_name(*effective_matcher_type));
-                    }
-                    return stdx::none;
-                }};
                 const auto values{range ? std::vector<ast::node_id>{*range->lhs, *range->rhs}
                                         : std::vector<ast::node_id>{*pattern}};
                 for (const auto value : values) {
-                    if (const auto msg{mismatch(value)}) {
+                    if (const auto msg{scalar_pattern_mismatch(
+                            value, *effective_matcher_type, interval_probe)}) {
                         return last_type_.emplace(
                             ctx_.poison_node(resolving_,
                                              id,
@@ -1782,20 +1784,13 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             resolving_.ast.location_of(*type_arm)));
     }
 
-    // Two arm patterns that both fold to constants may not cover the same value.
-    for (usize i{0}; i < const_intervals.size(); ++i) {
-        for (usize j{i + 1}; j < const_intervals.size(); ++j) {
-            const auto& a{const_intervals[i]};
-            const auto& b{const_intervals[j]};
-            if (a.lo <= b.hi && b.lo <= a.hi) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "This match arm pattern overlaps an earlier arm",
-                                     error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(b.pat)));
-            }
-        }
+    // Two arm patterns that both fold to constants may not cover the same value
+    if (const auto overlap{first_overlapping_pattern(const_intervals)}) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "This match arm pattern overlaps an earlier arm",
+                                                   error::ILLEGAL_MATCH_PATTERN,
+                                                   resolving_.ast.location_of(*overlap)));
     }
 
     if (!first_type || (block_arm && unused_value_nodes_.contains(id.get_index()))) {
