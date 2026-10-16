@@ -417,6 +417,26 @@ class type_resolver {
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
+    auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
+    [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
+    [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;
+    [[nodiscard]] auto instantiate_for_call(const ast::call_expr&             call,
+                                            type&                             callee_type,
+                                            const generic_function_info&      fn_info,
+                                            gsl::span<type*>                  arg_types,
+                                            gsl::span<const gir::const_value> comptime_args)
+        -> stdx::option<generic_instantiation_entry>;
+    template <typename ArgID>
+    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type) -> stdx::option<type&>;
+    [[nodiscard]] auto check_param_bounds(const ast::call_expr&        call,
+                                          const generic_function_info& fn_info,
+                                          gsl::span<type* const>       arg_types,
+                                          gsl::span<type* const>       auto_leaves) -> bool;
+    [[nodiscard]] auto fold_comptime_arg(const ast::call_expr&        call,
+                                         const generic_function_info& fn_info,
+                                         usize                        idx,
+                                         const type*                  arg_type,
+                                         const type* param_type) -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 
