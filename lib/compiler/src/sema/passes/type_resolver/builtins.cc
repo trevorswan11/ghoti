@@ -1,15 +1,44 @@
-#include "internal.hh"
-
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cctype>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include <gsl/pointers>
+#include <gsl/span>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/assert.hh>
 #include <stdx/enum.hh>
+#include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/format.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/ast/traits.hh"
 #include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
+#include "compiler/gir/instruction.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/peer_type.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
+#include "internal.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::sema {
 

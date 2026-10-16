@@ -4411,7 +4411,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     PROFILE_FUNCTION();
     // Diagnostics land on the callee when the call has no node of its own
     const ast::node_id id{call_id.value_or(*call.function)};
-    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto&              usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     const auto eval_type_argument =
         [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {

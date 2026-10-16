@@ -1,7 +1,17 @@
 #include "compiler/codegen/aggregate_copy.hh"
 
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/IR/Argument.h>
+#include <llvm/IR/Constant.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instruction.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
 

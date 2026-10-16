@@ -1052,7 +1052,7 @@ auto parse_function_header(syntax::parser& parser)
                                 : discardable_ident_handle{TRY(identifier_expr::parse(parser))}};
 
             // An untyped pack (`rest...`) has no `: Type` at all; check before requiring one.
-            bool is_pack{false};
+            bool                           is_pack{false};
             stdx::option<explicit_type_id> param_explicit_type;
             if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
                 parser.advance();

@@ -1,7 +1,12 @@
-// The C side of the C ABI interop tests in tests/e2e/test_c_abi.cc. Every aggregate gets four
-// entry points: `check_T` (ghoti passes the canonical value), `make_T` (C returns it), `bump_T`
-// (both directions at once), and `call_T` (C calls a ghoti callback with it). Each returns or
-// compares against values that differ per field, so a misplaced or truncated field never matches.
+/*
+ * The C side of the C ABI interop tests in tests/e2e/test_c_abi.cc. Every aggregate gets four entry points:
+ * - `check_T`: ghoti passes the canonical value
+ * - `make_T`: C returns it
+ * - `bump_T`: both directions at once
+ * -  `call_T`: C calls a ghoti callback with it
+ *
+ * Each returns or compares against values that differ per field, so a misplaced or truncated field never matches.
+ */
 
 #include <stdarg.h>
 #include <stdbool.h>

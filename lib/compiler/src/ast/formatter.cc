@@ -8,6 +8,7 @@
 
 #include <fmt/format.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>

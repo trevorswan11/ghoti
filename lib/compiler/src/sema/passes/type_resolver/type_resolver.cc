@@ -1,8 +1,15 @@
-#include "internal.hh"
+#include <utility>
+
+#include <gsl/util>
+#include <stdx/profiler.hh>
+#include <stdx/types.hh>
+
+#include "compiler/ast/statement.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/passes/type_resolver.hh"
 
 namespace ghoti::sema {
-
-using namespace resolver_detail;
 
 auto type_resolver::resolve_types(mod::module_t& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();

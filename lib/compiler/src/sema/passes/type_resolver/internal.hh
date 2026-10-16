@@ -2,14 +2,8 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
-#include <concepts>
-#include <ranges>
-#include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
-#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
@@ -29,26 +23,17 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
-#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
-#include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
-#include "compiler/ast/visitor.hh"
-#include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
-#include "compiler/gir/instruction.hh"
-#include "compiler/gir/semantics.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
-#include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
-#include "compiler/syntax/operators.hh"
-#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 

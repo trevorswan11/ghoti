@@ -1,7 +1,32 @@
-#include "internal.hh"
+#include <algorithm>
+#include <concepts>
+#include <string_view>
+#include <utility>
+
+#include <gsl/pointers>
+#include <stdx/assert.hh>
+#include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/ast/format.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/ast/traits.hh"
+#include "compiler/ast/visitor.hh"
+#include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/range_steps.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/token_type.hh"
+#include "internal.hh"
+#include "support/diagnostic.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {

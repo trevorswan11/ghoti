@@ -1,8 +1,31 @@
-#include "internal.hh"
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
+#include <gsl/span>
+#include <stdx/option.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/format.hh"
-#include "support/float128.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/passes/type_resolver.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/token.hh"
+#include "compiler/syntax/token_type.hh"
+#include "internal.hh"
+#include "support/diagnostic.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {

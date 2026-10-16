@@ -1,6 +1,8 @@
 #include "compiler/ast/dumper.hh"
 
+#include <iterator>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 #include <fmt/format.h>
@@ -8,12 +10,14 @@
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
 #include <magic_enum/magic_enum_flags.hpp>
+#include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
 #include "compiler/ast/primitive.hh"

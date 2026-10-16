@@ -286,6 +286,7 @@ template <> struct stdx::nullable<ghoti::ast::explicit_type_id> {
     }
 };
 
+// Technically redundant but will catch stdx breaking its optional type dispatch promise
 static_assert(sizeof(stdx::option<ghoti::ast::node_id>) == sizeof(ghoti::ast::node_id));
 static_assert(sizeof(stdx::option<ghoti::ast::explicit_type_id>) ==
               sizeof(ghoti::ast::explicit_type_id));

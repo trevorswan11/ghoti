@@ -1,13 +1,40 @@
-#include "internal.hh"
-
+#include <algorithm>
+#include <concepts>
 #include <limits>
+#include <ranges>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include <fmt/format.h>
 #include <llvm/TargetParser/Triple.h>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
 #include "compiler/sema/alias_chain.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/passes/type_resolver.hh"
+#include "compiler/sema/side_tables.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/token_type.hh"
+#include "internal.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::sema {
 

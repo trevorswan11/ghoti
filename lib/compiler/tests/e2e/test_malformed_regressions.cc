@@ -136,7 +136,6 @@ TEST_CASE("An array's `.len` and `.ptr` can't be assigned") {
 }
 
 TEST_CASE("A block can't be indexed like a value") {
-    // The `if` statement ends at its brace, so `[1]` starts a new statement
     helpers::test_parser_fail(
         "const f = fn(n: i32): i32 { if (n != 3) { return -1; }[1]; return 0; };",
         syntax::diagnostic{

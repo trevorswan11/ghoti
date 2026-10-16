@@ -1,11 +1,34 @@
-#include "internal.hh"
+#include <array>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include <fmt/ranges.h>
+#include <gsl/pointers>
+#include <stdx/assert.hh>
+#include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/format.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/gir/const_eval.hh"
+#include "compiler/gir/const_value.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/peer_type.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
+#include "compiler/syntax/operators.hh"
+#include "compiler/syntax/token_type.hh"
+#include "internal.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"

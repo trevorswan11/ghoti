@@ -36,6 +36,8 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
@@ -363,6 +365,21 @@ class type_resolver {
         usize                                arm_idx{0};
     };
 
+    // One builtin call being resolved, shared by the per-family resolvers below
+    struct builtin_site {
+        const ast::call_expr&          call;
+        const types::builtin_function& builtin;
+        syntax::builtin_t              kind;
+        gsl::not_null<type*>           return_type;
+    };
+
+    // A cast builtin's target and operand, from `@cast(T, x)` or the implicit type of `@cast(x)`
+    struct cast_args {
+        stdx::option<type&>                           target;
+        stdx::option<const ast::call_expr::argument&> operand;
+        source_location                               target_loc;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -373,19 +390,6 @@ class type_resolver {
     resolve_builtin_call(ID id, const ast::call_expr& call, const types::builtin_function& builtin)
         -> stdx::result<void, diagnostic>;
 
-    // One builtin call being resolved, shared by the per-family resolvers below
-    struct builtin_site {
-        const ast::call_expr&          call;
-        const types::builtin_function& builtin;
-        syntax::builtin_t              kind;
-        gsl::not_null<type*>           return_type;
-    };
-    // A cast builtin's target and operand, from `@cast(T, x)` or the implicit type of `@cast(x)`
-    struct cast_args {
-        stdx::option<type&>                           target;
-        stdx::option<const ast::call_expr::argument&> operand;
-        source_location                               target_loc;
-    };
     [[nodiscard]] auto check_builtin_arity(const ast::call_expr&          call,
                                            const types::builtin_function& builtin,
                                            syntax::builtin_t              builtin_id) const
@@ -877,9 +881,9 @@ class type_resolver {
         -> stdx::option<symbol&>;
 
     // Reports an argument a `y: @TypeOf(x)` parameter of the `mangled_name` monomorph can't take
-    auto reject_type_of_args(const ast::call_expr&     call,
-                             const ast::function_expr& fn_expr,
-                             std::string_view          mangled_name) -> bool;
+    auto               reject_type_of_args(const ast::call_expr&     call,
+                                           const ast::function_expr& fn_expr,
+                                           std::string_view          mangled_name) -> bool;
     auto               bind_impl_params(mod::module_t&         fn_mod,
                                         const impl_record&     impl,
                                         comptime_frame&        frame,

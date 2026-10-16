@@ -1,11 +1,37 @@
-#include "internal.hh"
+#include <algorithm>
+#include <ranges>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
+#include <gsl/util>
+#include <stdx/assert.hh>
+#include <stdx/hash.hh>
+#include <stdx/option.hh>
+#include <stdx/profiler.hh>
+#include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/format.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/statement.hh"
+#include "compiler/gir/const_value.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/passes/type_resolver.hh"
+#include "compiler/sema/symbol.hh"
+#include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
+#include "compiler/syntax/builtins.hh"
+#include "internal.hh"
 
 namespace ghoti::sema {
 

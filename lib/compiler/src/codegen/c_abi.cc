@@ -193,7 +193,7 @@ class classifier {
         }
     }
 
-    // An aggregate goes in registers only when all of its eightbytes fit, otherwise on the stack
+    // An aggregate goes in registers only when all of its eight bytes fit, otherwise on the stack
     [[nodiscard]] auto sysv_param(llvm::Type* ty, register_budget& budget) const -> value_plan {
         auto parts{sysv_parts(ty)};
         if (!parts) { return memory(ty, pass_kind::BYVAL); }
