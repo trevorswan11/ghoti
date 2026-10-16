@@ -37,7 +37,7 @@ struct impl_record {
         bool                         inherited{false};
         std::string                  typing_key{};
         stdx::option<mod::module_t&> defining_mod{};
-        ast::node_id                 signature{ast::node_id::make_invalid()};
+        stdx::option<ast::node_id>   signature{};
     };
 
     stdx::option<type&>          interface_type;

@@ -1046,7 +1046,7 @@ auto const_eval::resolve_deferred_array(const sema::types::deferred_array& defer
 auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
     -> stdx::option<sema::type&> {
     PROFILE_FUNCTION();
-    const auto val{eval_call(ast::node_id::make_invalid(), call)};
+    const auto val{eval_call(stdx::none, call)};
     if (!val) { return stdx::none; }
     if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
         if (*type_opt) { return **type_opt; }
@@ -1076,7 +1076,7 @@ auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& 
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
 
-    const auto val{eval_call(ast::node_id::make_invalid(), deferred->call)};
+    const auto val{eval_call(stdx::none, deferred->call)};
     if (!val) { return maybe_deferred; }
 
     // A constructor that folds to a type (`fn(w: bool): type { return i64; }`) is pinned to it
@@ -1221,7 +1221,7 @@ auto const_eval::raw_ref_of(ast::node_id id) -> stdx::option<const_ref> {
 
 auto const_eval::eval_place(ast::node_id id) -> stdx::option<const_ref> {
     PROFILE_FUNCTION();
-    if (!id.is_valid() || call_stack_.empty()) { return stdx::none; }
+    if (call_stack_.empty()) { return stdx::none; }
     const auto type{module_->get_sema_type_opt(id)};
     // A reference stands for the place it refers to
     if (type && type->get_kind() == sema::type_kind::REFERENCE) { return raw_ref_of(id); }
@@ -1517,8 +1517,6 @@ auto const_eval::write_range_target(const ast::index_expr& target,
 
 auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
     PROFILE_FUNCTION();
-    if (!target.is_valid()) { return false; }
-
     // A place this evaluation owns, possibly reached through a reference or pointer
     if (const auto place{eval_place(target)}) { return store_ref(*place, std::move(val)); }
 
@@ -1585,8 +1583,6 @@ auto const_eval::write_target(ast::node_id target, const_value val) -> bool {
 
 auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    if (!id.is_valid()) { return stdx::none; }
-
     return module_->ast[id].visit(
         [](const auto&) -> stdx::option<const_value> { return stdx::none; },
         [&](const ast::int_literal_expr& data) -> stdx::option<const_value> {
@@ -1684,7 +1680,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
                 return const_value{it->second.boolean,
                                    ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
             }
-            return it->second.chosen.is_valid() ? try_eval(it->second.chosen) : stdx::none;
+            return it->second.chosen ? try_eval(*it->second.chosen) : stdx::none;
         },
         [&](const ast::while_loop_expr& data) { return eval_while(id, data); },
         [&](const ast::do_while_loop_expr& data) { return eval_do_while(id, data); },
@@ -2596,7 +2592,7 @@ namespace {
         resolved = *folded;
     }
     // `@branchHint(.cold)` opening the body, read the way the emitter reads it
-    if (literal && literal->body.is_valid()) {
+    if (literal && literal->body) {
         const auto& body{owner.ast.get_as<ast::block_stmt>(*literal->body)};
         const auto  first{body.statements.empty()
                               ? stdx::none
@@ -3846,7 +3842,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         return const_value{ctx_.get_int(static_cast<u16>(width), name.front() == 'i')};
     }};
 
-    const auto tok{id.is_valid() ? id.get_token_type() : syntax::token_type_t::IDENT};
+    const auto tok{id.get_token_type()};
     if (tok == syntax::token_type_t::INT_TYPE) {
         if (const auto int_type{int_type_value(ident.name)}) { return int_type; }
     } else if (std::ranges::contains(syntax::ALL_PRIMITIVES, tok) && ctx_.prelude_index) {
@@ -3861,11 +3857,6 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     if (const auto cx{ctx_.lookup_comptime_binding(ident.name)}) { return *cx; }
     if (const auto it{global_cx_vars_.find(std::string{ident.name})}; it != global_cx_vars_.end()) {
         return it->second;
-    }
-
-    // A synthesized identifier has no token to tell a raw name from the keyword
-    if (!id.is_valid()) {
-        if (const auto int_type{int_type_value(ident.name)}) { return int_type; }
     }
 
     // A bare identifier inside a member body may name a sibling static `const` member.
@@ -3885,17 +3876,15 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         }
     }
 
-    if (id.is_valid()) {
-        if (const auto sema_type{module_->get_sema_type_opt(id)}) {
-            if (sema_type->get_kind() == sema::type_kind::TYPE) {
-                if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
-                    return const_value{meta->instance};
-                }
+    if (const auto sema_type{module_->get_sema_type_opt(id)}) {
+        if (sema_type->get_kind() == sema::type_kind::TYPE) {
+            if (const auto meta{sema_type->get_data().as_opt<sema::types::meta_type>()}) {
+                return const_value{meta->instance};
             }
         }
     }
 
-    const auto table_idx{id.is_valid() ? module_->get_symbol_table_opt(id) : stdx::none};
+    const auto table_idx{module_->get_symbol_table_opt(id)};
     const auto effective_tbl{table_idx ? table_idx : module_->root_table_idx};
     if (!effective_tbl) { return stdx::none; }
     const auto& table{ctx_.registry.get(*effective_tbl)};
@@ -3988,7 +3977,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
     return stdx::none;
 }
 
-auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
+auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& call)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (const auto builtin{call.function->get_builtin()}) {
@@ -4063,10 +4052,10 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
             if (const auto fn_expr{callee_mod->ast.get_as_opt<ast::function_expr>(*decl->value)}) {
                 // Outside any const-evaluated function body (a `comptime` block's own frames are
                 // fine), a constructor call's own node already holds this instantiation's aggregate
-                if (id.is_valid() && return_types_.empty() &&
+                if (id && return_types_.empty() &&
                     fn_expr->explicit_return_type.get_token_type() ==
                         syntax::token_type_t::TYPE_TYPE) {
-                    if (const auto built{module_->get_sema_type_opt(id)}) {
+                    if (const auto built{module_->get_sema_type_opt(*id)}) {
                         const auto kind{built->get_kind()};
                         if (kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
                             kind == sema::type_kind::ENUM) {
@@ -4081,8 +4070,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
 
                 // A generic's body is shared by its instances, so fold it with this call's typing
                 // rather than whichever instance the shared side tables were last left holding
-                const auto target{id.is_valid() ? module_->get_generic_call_target_opt(id)
-                                                : stdx::none};
+                const auto target{id ? module_->get_generic_call_target_opt(*id) : stdx::none};
                 const auto diff{target ? ctx_.instantiation_cache.get_body_type_diff(*target)
                                        : callee_mod->active_body_diff};
                 const mod::body_diff_guard diff_guard{*callee_mod, diff};
@@ -4097,8 +4085,8 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                     ctx_.diags.set_origin_from(diags_before, *callee_mod);
                 }
                 for (usize a{0}; a < call.arguments.size() && a < fn_expr->parameters.size(); ++a) {
-                    if (fn_expr->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
-                        a < args.size() && !args[a].is<const_ref>()) {
+                    if (fn_expr->parameters[a].takes_mut_ref() && a < args.size() &&
+                        !args[a].is<const_ref>()) {
                         if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
                             DISCARD(write_target(*expr_h, args[a]));
                         }
@@ -4290,8 +4278,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 auto* const prev{module_.get()};
                 // A generic method (e.g. an `auto` parameter) is typed per instantiation, so fold
                 // with this call's instance rather than the enclosing type's shared member typing
-                const auto generic_target{id.is_valid() ? prev->get_generic_call_target_opt(id)
-                                                        : stdx::none};
+                const auto generic_target{id ? prev->get_generic_call_target_opt(*id) : stdx::none};
                 if (method_mod != prev) { set_module(*method_mod); }
 
                 const auto prefix{
@@ -4340,7 +4327,7 @@ auto const_eval::eval_call(ast::node_id id, const ast::call_expr& call)
                 const usize arg_offset{method_fn->self && dot && !obj_is_type_ns ? 1UZ : 0UZ};
                 for (usize a{0}; a < call.arguments.size() && a < method_fn->parameters.size();
                      ++a) {
-                    if (method_fn->parameters[a].explicit_type.get_modifier().is_mutable_ref() &&
+                    if (method_fn->parameters[a].takes_mut_ref() &&
                         (arg_offset + a) < args.size() && !args[arg_offset + a].is<const_ref>()) {
                         if (const auto expr_h{call.arguments[a].as_opt<ast::expr_handle>()}) {
                             DISCARD(write_target(*expr_h, args[arg_offset + a]));
@@ -4369,11 +4356,16 @@ auto const_eval::cast_operand(const ast::call_expr& call) -> stdx::option<ast::e
     return *op_h;
 }
 
-auto const_eval::builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+auto const_eval::call_result_type(stdx::option<ast::node_id> call_id) const
     -> stdx::option<sema::type&> {
-    if (id.is_valid()) {
-        if (auto target{module_->get_sema_type_opt(id)}) { return target; }
-    }
+    if (!call_id) { return stdx::none; }
+    return module_->get_sema_type_opt(*call_id);
+}
+
+auto const_eval::builtin_result_type(stdx::option<ast::node_id> call_id,
+                                     const ast::call_expr&      call) const
+    -> stdx::option<sema::type&> {
+    if (auto target{call_result_type(call_id)}) { return target; }
     return module_->get_sema_type_opt(call.function);
 }
 
@@ -4406,10 +4398,12 @@ auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_e
     return **bound;
 }
 
-auto const_eval::eval_builtin(ast::node_id          id,
-                              const ast::call_expr& call,
-                              syntax::builtin_t     builtin_type) -> stdx::option<const_value> {
+auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
+                              const ast::call_expr&      call,
+                              syntax::builtin_t builtin_type) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    // Diagnostics land on the callee when the call has no node of its own
+    const ast::node_id id{call_id.value_or(*call.function)};
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     const auto eval_type_argument =
@@ -4467,9 +4461,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
     switch (builtin_type) {
     case syntax::builtin_t::THIS: {
         // The call node carries the enclosing structural type
-        if (id.is_valid()) {
-            if (const auto here{module_->get_sema_type_opt(id)}) { return const_value{here}; }
-        }
+        if (const auto here{call_result_type(call_id)}) { return const_value{here}; }
         if (const auto target_type{module_->get_sema_type_opt(call.function)}) {
             return const_value{target_type};
         }
@@ -4736,7 +4728,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
 
         // The call's own type decides the format: an untyped operand in a typed context is
         // computed straight into that type
-        auto       result_type{id.is_valid() ? module_->get_sema_type_opt(id) : arg->get_type()};
+        auto       result_type{call_id ? module_->get_sema_type_opt(*call_id) : arg->get_type()};
         const bool concrete{result_type && sema::is_float(result_type->get_kind())};
         const auto format{concrete ? sema::float_format_of(*result_type) : stdx::none};
         const auto result{evaluate_traced(function, *input, format.value_or(float_format::QUAD))};
@@ -4772,7 +4764,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
         const auto bits{*bits_opt};
-        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
         // Leading zeros within the operand's own bit width, not the 64-bit storage word
         const auto clz{static_cast<u64>(std::countl_zero(v)) - (64 - static_cast<u64>(bits))};
         return const_value{clz, res_type};
@@ -4791,7 +4783,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
         if (!bits_opt) { return stdx::none; }
         const auto bits{*bits_opt};
-        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
         // A zero operand has no set bits within its own width
         const auto ctz{std::min(static_cast<u64>(std::countr_zero(v)), static_cast<u64>(bits))};
         return const_value{ctz, res_type};
@@ -4805,7 +4797,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
         if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
         const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        auto&      res_type{module_->get_sema_type_opt(id).value_or(usize_type)};
+        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
         return const_value{static_cast<u64>(std::popcount(v)), res_type};
     }
     case syntax::builtin_t::MIN:
@@ -4827,7 +4819,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             b = as_peer(*b, *peer);
         }
         if (is_integer_arm(*a) && is_integer_arm(*b)) {
-            const auto type{module_->get_sema_type_opt(id)};
+            const auto type{call_result_type(call_id)};
             const auto width{type ? integer_target_width(*type, target_pointer_bits())
                                   : stdx::none};
             if (width && width->first <= 128) {
@@ -4878,7 +4870,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
         if ((tok == syntax::builtin_t::MIN || tok == syntax::builtin_t::MAX) && a->is<f128>() &&
             b->is<f128>()) {
-            const auto type{module_->get_sema_type_opt(id)};
+            const auto type{call_result_type(call_id)};
             const auto format{type ? sema::float_format_of(*type).value_or(float_format::QUAD)
                                    : float_format::QUAD};
             return const_value{
@@ -4893,7 +4885,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto a_h{call.arguments[1].as_opt<ast::expr_handle>()};
         const auto b_h{call.arguments[2].as_opt<ast::expr_handle>()};
         const auto c_h{call.arguments[3].as_opt<ast::expr_handle>()};
-        const auto result_type{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        const auto result_type{call_result_type(call_id)};
         if (!a_h || !b_h || !c_h || !result_type) { return stdx::none; }
 
         // Each operand is a `T`, so it is range-checked and rounded into `T` before the fma
@@ -5007,9 +4999,9 @@ auto const_eval::eval_builtin(ast::node_id          id,
     case syntax::builtin_t::OPTIMIZE_MODE:
         return target_enum_value("OptimizeMode", sema::optimize_mode_name(ctx_.build_mode));
     case syntax::builtin_t::RUNTIME_SAFETY: {
-        const auto scoped{module_->scoped_runtime_safety.find(id.get_index())};
-        const bool enabled{scoped != module_->scoped_runtime_safety.end() ? scoped->second
-                                                                          : ctx_.runtime_safety};
+        const auto& scopes{module_->scoped_runtime_safety};
+        const auto  scoped{call_id ? scopes.find(call_id->get_index()) : scopes.end()};
+        const bool  enabled{scoped != scopes.end() ? scoped->second : ctx_.runtime_safety};
         return const_value{enabled, ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     }
     case syntax::builtin_t::SET_RUNTIME_SAFETY:
@@ -5045,8 +5037,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         return const_value{scoped_symbol_name(*owner->root_table_idx, "test_runner"), *fn_type};
     }
     case syntax::builtin_t::SRC: {
-        const auto   loc{id.is_valid() ? module_->ast.location_of(id)
-                                       : module_->ast.location_of(call.function)};
+        const auto&  loc{module_->ast.location_of(id)};
         const_struct src_struct;
         auto&        t_u32{ctx_.get_int(32, false)};
         src_struct.fields["file"]   = const_value::make_string(ctx_, module_->path.string());
@@ -5088,8 +5079,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
             }
             ctx_.diags.emplace_back(std::move(msg),
                                     sema::error::COMPTIME_EVALUATION_FAILED,
-                                    id.is_valid() ? module_->ast.location_of(id)
-                                                  : module_->ast.location_of(call.function));
+                                    module_->ast.location_of(id));
             return stdx::none;
         }
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
@@ -5130,7 +5120,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto bits{operand->as_int_opt()};
         if (!bits) { return stdx::none; }
-        auto target{builtin_result_type(id, call)};
+        auto target{builtin_result_type(call_id, call)};
         return const_value{static_cast<u64>(static_cast<u128>(*bits)), target};
     }
     case syntax::builtin_t::INT_FROM_PTR: {
@@ -5152,7 +5142,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!op_h) { return stdx::none; }
         auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        auto target{call_result_type(call_id)};
         if (target) { operand->set_type(*target); }
         return operand;
     }
@@ -5163,7 +5153,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{builtin_result_type(id, call)};
+        auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
         if (target->get_kind() == sema::type_kind::COMPTIME_INT) {
             return retyped(*operand, *target);
@@ -5205,7 +5195,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto src_int{operand->as_int_opt()};
         if (!src_int) { return stdx::none; }
-        auto target{builtin_result_type(id, call)};
+        auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
         const auto ptr_bits{target_pointer_bits()};
         if (const auto w{integer_target_width(*target, ptr_bits)}) {
@@ -5235,7 +5225,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!operand) { return stdx::none; }
         const auto src_bool{operand->as_opt<bool>()};
         if (!src_bool) { return stdx::none; }
-        auto target{builtin_result_type(id, call)};
+        auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
         const u64 int_val{*src_bool ? 1ULL : 0ULL};
         return const_value{int_val, target};
@@ -5244,7 +5234,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto op_h{cast_operand(call)};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
-        auto       target{builtin_result_type(id, call)};
+        auto       target{builtin_result_type(call_id, call)};
         if (!operand || !target) { return stdx::none; }
         const auto         format{sema::float_format_of(*target)};
         stdx::option<f128> f;
@@ -5270,7 +5260,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
-        auto       target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        auto       target{call_result_type(call_id)};
         if (!operand || !target) { return stdx::none; }
 
         const auto ptr_bits{target_pointer_bits()};
@@ -5328,7 +5318,7 @@ auto const_eval::eval_builtin(ast::node_id          id,
         if (!op_h) { return stdx::none; }
         const auto operand{try_eval(*op_h)};
         if (!operand || !operand->is<const_enum>()) { return stdx::none; }
-        auto target{id.is_valid() ? module_->get_sema_type_opt(id) : stdx::none};
+        auto target{call_result_type(call_id)};
         if (!target) { return stdx::none; }
         return make_scalar_const(operand->as<const_enum>().value, target);
     }
@@ -5341,11 +5331,12 @@ auto const_eval::eval_builtin(ast::node_id          id,
         const auto operand{try_eval(*op_h)};
         if (!operand) { return stdx::none; }
         if (builtin_type == syntax::builtin_t::BIT_CAST) {
-            if (auto reinterpreted{fold_float_bit_cast(*operand, builtin_result_type(id, call))}) {
+            if (auto reinterpreted{
+                    fold_float_bit_cast(*operand, builtin_result_type(call_id, call))}) {
                 return reinterpreted;
             }
         }
-        auto target{builtin_result_type(id, call)};
+        auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
         // A float `@as` rounds once into the target, like the runtime conversion
         if (const auto f{operand->as_opt<f128>()}; f && builtin_type == syntax::builtin_t::AS) {
@@ -5597,12 +5588,13 @@ namespace {
 
 } // namespace
 
-auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
+auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                                   const ast::function_expr&         fn_expr,
                                   std::vector<const_value>&         args,
                                   stdx::option<const const_struct&> captures)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
+    if (!fn_expr.body) { return stdx::none; }
     // A trailing `rest...` pack binds as a constant array of every remaining argument, so
     // `rest.len`, `rest[k]`, `for comptime (rest)`, and `rest...` forwarding all fold
     const bool  has_pack{!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack};
@@ -5612,8 +5604,7 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
     if (has_pack ? args.size() < fixed_args : args.size() != fixed_args) { return stdx::none; }
 
     if (recursion_depth_ >= max_recursion_depth_) {
-        const auto loc{call_id.is_valid() ? module_->ast.location_of(call_id)
-                                          : module_->ast.location_of(fn_expr.body)};
+        const auto loc{module_->ast.location_of(call_id.value_or(ast::node_id{*fn_expr.body}))};
         ctx_.diags.emplace_back("Compile-time function recursion limit exceeded",
                                 sema::error::COMPTIME_RECURSION_LIMIT_EXCEEDED,
                                 loc);
@@ -5643,8 +5634,7 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
             const auto param_type{module_->get_sema_type_opt(param.name)};
             const auto arg_type{args[arg_idx].get_type()};
             if (param_type && arg_type && binds_number_to_non_number(*arg_type, *param_type)) {
-                const auto at{call_id.is_valid() ? module_->ast.location_of(call_id)
-                                                 : module_->ast.location_of(param.name)};
+                const auto at{module_->ast.location_of(call_id.value_or(ast::node_id{param.name}))};
                 ctx_.diags.emplace_back(
                     fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
                                 arg_idx + 1 - (has_self ? 1 : 0),
@@ -5670,21 +5660,18 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
 
     const usize prev_stack_size{recursion_limit_stack_.size()};
     const u64   fn_frame{push_frame(std::move(frame)).id};
-    return_types_.emplace_back(fn_expr.explicit_return_type.is_valid()
-                                   ? module_->get_sema_type_opt(fn_expr.explicit_return_type)
-                                   : stdx::none);
+    return_types_.emplace_back(module_->get_sema_type_opt(fn_expr.explicit_return_type));
     const auto                   pop_return_type{gsl::finally([&] { return_types_.pop_back(); })};
     const default_counter::guard g{recursion_depth_};
     const bool                   prev_cond_unknown{std::exchange(cond_unknown_, false)};
     const auto                   prev_signal{std::exchange(current_signal_, eval_signal{})};
     const auto                   prev_error_val{std::exchange(current_error_val_, stdx::none)};
-    const auto                   block_res{eval_stmt(fn_expr.body)};
+    const auto                   block_res{eval_stmt(*fn_expr.body)};
     const bool                   unknown{std::exchange(cond_unknown_, prev_cond_unknown)};
     stdx::option<const_value>    fn_result;
     if (current_signal_.kind == eval_signal_kind::RETURN) {
         fn_result = std::move(current_signal_.value);
-    } else if (fn_expr.explicit_return_type.is_valid() &&
-               fn_expr.explicit_return_type.get_token_type() == syntax::token_type_t::VOID_TYPE &&
+    } else if (fn_expr.explicit_return_type.get_token_type() == syntax::token_type_t::VOID_TYPE &&
                !current_signal_.kind) {
         // A `void` body that runs off its end returns normally
         fn_result.emplace(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
@@ -5706,8 +5693,7 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
         const auto& param{fn_expr.parameters[p]};
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
-            if (param.explicit_type.get_modifier().is_mutable_ref() &&
-                (p_offset + p) < args.size()) {
+            if (param.takes_mut_ref() && (p_offset + p) < args.size()) {
                 if (auto it{call_stack_.back().bindings.find(ident.name)};
                     it != call_stack_.back().bindings.end()) {
                     args[p_offset + p] = it->second;
@@ -5719,7 +5705,7 @@ auto const_eval::eval_comptime_fn(ast::node_id                      call_id,
     call_stack_.pop_back();
     // A reference into the callee's own frames would dangle once it returns
     if (fn_result &&
-        reject_escaping_ref(*fn_result, fn_frame, call_id.is_valid() ? call_id : *fn_expr.body)) {
+        reject_escaping_ref(*fn_result, fn_frame, call_id.value_or(ast::node_id{*fn_expr.body}))) {
         fn_result = const_value::make_poison();
     }
     while (recursion_limit_stack_.size() > prev_stack_size) {

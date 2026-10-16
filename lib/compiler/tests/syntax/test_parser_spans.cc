@@ -106,7 +106,7 @@ TEST_CASE("a block_stmt's span ends just past its closing brace") {
 
     REQUIRE(decl.value);
     const auto& fn{ast.get_as<ast::function_expr>(*decl.value)};
-    const auto& end{ast.end_location_of(fn.body)};
+    const auto& end{ast.end_location_of(UNWRAP(fn.body))};
 
     CHECK(end.line == 2);
     CHECK(end.column == 1);

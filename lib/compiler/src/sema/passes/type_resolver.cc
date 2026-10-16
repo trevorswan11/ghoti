@@ -81,7 +81,7 @@ namespace {
 [[nodiscard]] auto inferred_comptime_reason(const mod::module_t&                 owner,
                                             const ast::function_expr::parameter& param)
     -> std::string {
-    if (!param.comptime_read.is_valid()) {
+    if (!param.comptime_read) {
         return "; the parameter is compile-time because this function reads it in a "
                "compile-time position";
     }
@@ -90,7 +90,7 @@ namespace {
                        "{}:{}{}",
                        name,
                        owner.path.string(),
-                       owner.ast.location_of(param.comptime_read),
+                       owner.ast.location_of(*param.comptime_read),
                        param.comptime_read_in_const
                            ? ", in a `const` initializer (use `let` to read it at runtime)"
                            : "");
@@ -275,14 +275,15 @@ template <typename T>
 
 // Whether an annotation spells `mut?` itself (`&mut? T`, `^mut? T`, `[]mut? T`), as opposed to
 // naming a type that merely contains one
-[[nodiscard]] auto spells_poly(const ast::AST& tree, ast::explicit_type_id t) -> bool {
-    if (!t.is_valid()) { return false; }
-    if (t.get_modifier().is_poly()) { return true; }
-    switch (t.get_kind()) {
+[[nodiscard]] auto spells_poly(const ast::AST& tree, stdx::option<ast::explicit_type_id> t)
+    -> bool {
+    if (!t) { return false; }
+    if (t->get_modifier().is_poly()) { return true; }
+    switch (t->get_kind()) {
     case ast::explicit_type_kind::RECURSIVE:
-        return spells_poly(tree, tree.get_as<ast::explicit_type_id>(t));
+        return spells_poly(tree, tree.get_as<ast::explicit_type_id>(*t));
     case ast::explicit_type_kind::ARRAY: {
-        const auto& array{tree.get_as<ast::explicit_array_type>(t)};
+        const auto& array{tree.get_as<ast::explicit_array_type>(*t)};
         return array.poly_elements || spells_poly(tree, array.inner_explicit_type);
     }
     default: return false;
@@ -290,15 +291,16 @@ template <typename T>
 }
 
 // Whether an annotation is `auto` under pointer, reference, slice, and array levels (`&[]auto`)
-[[nodiscard]] auto spells_auto_pattern(const ast::AST& tree, ast::explicit_type_id t) -> bool {
-    if (!t.is_valid()) { return false; }
-    if (t.get_token_type() == syntax::token_type_t::AUTO_TYPE) { return true; }
-    switch (t.get_kind()) {
+[[nodiscard]] auto spells_auto_pattern(const ast::AST& tree, stdx::option<ast::explicit_type_id> t)
+    -> bool {
+    if (!t) { return false; }
+    if (t->get_token_type() == syntax::token_type_t::AUTO_TYPE) { return true; }
+    switch (t->get_kind()) {
     case ast::explicit_type_kind::RECURSIVE:
-        return spells_auto_pattern(tree, tree.get_as<ast::explicit_type_id>(t));
+        return spells_auto_pattern(tree, tree.get_as<ast::explicit_type_id>(*t));
     case ast::explicit_type_kind::ARRAY:
         return spells_auto_pattern(tree,
-                                   tree.get_as<ast::explicit_array_type>(t).inner_explicit_type);
+                                   tree.get_as<ast::explicit_array_type>(*t).inner_explicit_type);
     default: return false;
     }
 }
@@ -3414,7 +3416,7 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
     return stdx::none;
 }
 
-auto type_resolver::resolve_param_type(ast::explicit_type_id param_type) -> void {
+auto type_resolver::resolve_param_type(stdx::option<ast::explicit_type_id> param_type) -> void {
     const mutating_context_guard g{in_param_type_, true};
     resolve(param_type);
 }
@@ -3674,36 +3676,37 @@ auto type_resolver::local_const_fn_ref(ast::expr_handle expr) -> stdx::option<gi
     return make_ref(*decl->value);
 }
 
-auto type_resolver::comptime_closure_value(ast::expr_handle expr)
-    -> stdx::option<gir::const_value> {
-    // Resolve `expr` to the `function_expr` node: either a literal or a `const` local bound to one.
-    ast::node_id fn_node{ast::node_id::make_invalid()};
-    if (resolving_.ast.get_as_opt<ast::function_expr>(expr)) {
-        fn_node = *expr;
-    } else if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)}) {
-        const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
-        if (!sym) { return stdx::none; }
-        const auto node{sym->get_data().as_opt<symbols::node_t>()};
-        if (!node) { return stdx::none; }
-        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
-        if (!decl || !decl->value ||
-            !(decl->has_modifier(ast::decl_modifiers::LET) ||
-              decl->has_modifier(ast::decl_modifiers::COMPTIME)) ||
-            !resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) {
-            return stdx::none;
-        }
-        fn_node = *decl->value;
-    } else {
+auto type_resolver::closure_literal_of(ast::expr_handle expr) -> stdx::option<ast::node_id> {
+    if (resolving_.ast.get_as_opt<ast::function_expr>(expr)) { return *expr; }
+
+    const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(expr)};
+    if (!ident) { return stdx::none; }
+    const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
+    if (!sym) { return stdx::none; }
+    const auto node{sym->get_data().as_opt<symbols::node_t>()};
+    if (!node) { return stdx::none; }
+    const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+    if (!decl || !decl->value ||
+        !(decl->has_modifier(ast::decl_modifiers::LET) ||
+          decl->has_modifier(ast::decl_modifiers::COMPTIME)) ||
+        !resolving_.ast.get_as_opt<ast::function_expr>(*decl->value)) {
         return stdx::none;
     }
+    return ast::node_id{*decl->value};
+}
 
-    const auto cl_type{resolving_.get_sema_type_opt(fn_node)};
+auto type_resolver::comptime_closure_value(ast::expr_handle expr)
+    -> stdx::option<gir::const_value> {
+    const auto fn_node{closure_literal_of(expr)};
+    if (!fn_node) { return stdx::none; }
+
+    const auto cl_type{resolving_.get_sema_type_opt(*fn_node)};
     if (!cl_type || cl_type->get_kind() != type_kind::CLOSURE) { return stdx::none; }
     const auto cl_data{cl_type->get_data().as_opt<types::closure_t>()};
     if (!cl_data) { return stdx::none; }
 
     gir::const_closure result{
-        .fn_node  = fn_node,
+        .fn_node  = *fn_node,
         .module   = &resolving_,
         .captures = {},
     };
@@ -4078,7 +4081,8 @@ auto type_resolver::reject_type_of_args(const ast::call_expr&     call,
         const auto& param{fn_expr.parameters[i]};
         if (param.is_comptime) { continue; }
         const auto slot{runtime_idx++};
-        if (param.explicit_type.get_builtin() != syntax::builtin_t::TYPE_OF ||
+        if (!param.explicit_type ||
+            param.explicit_type->get_builtin() != syntax::builtin_t::TYPE_OF ||
             slot >= request->arg_types.size()) {
             continue;
         }
@@ -4284,13 +4288,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             const auto&        fn_ast{fn_info_opt->module->ast};
 
             const auto find_bound_type_param = [&](usize idx) -> stdx::option<usize> {
-                if (idx >= fn_params.size() || !fn_params[idx].explicit_type.is_valid()) {
-                    return stdx::none;
-                }
+                if (idx >= fn_params.size() || !fn_params[idx].explicit_type) { return stdx::none; }
                 // `^T` and `&T` keep their modifier in the id, with `T` as the payload
-                if (!fn_params[idx].explicit_type.get_modifier().is_value()) { return stdx::none; }
+                if (!fn_params[idx].explicit_type->get_modifier().is_value()) { return stdx::none; }
                 const auto ident{
-                    fn_ast.get_as_opt<ast::identifier_expr>(fn_params[idx].explicit_type)};
+                    fn_ast.get_as_opt<ast::identifier_expr>(*fn_params[idx].explicit_type)};
                 if (!ident) { return stdx::none; }
                 for (usize k{0}; k < idx; ++k) {
                     if (!fn_params[k].name.is<ast::identifier_expr>()) { continue; }
@@ -4432,9 +4434,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
                 // ...and a `T: type` slot can't take a value
-                const bool declared_type_param{i < fn_params.size() &&
-                                               fn_params[i].explicit_type.get_token_type() ==
-                                                   syntax::token_type_t::TYPE_TYPE};
+                const bool declared_type_param{i < fn_params.size() && fn_params[i].spells_type()};
                 if (arg_expr && declared_type_param &&
                     operand_nature(*arg_expr) == operand_nature_t::VALUE) {
                     return last_type_.emplace(ctx_.poison_node(
@@ -5767,7 +5767,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             }
         }
         // An untyped pack (`rest...`) has no type to resolve; it's implicitly generic, like `auto`.
-        if (param.is_pack && !param.explicit_type.is_valid()) {
+        if (param.is_pack && !param.explicit_type) {
             last_type_.emplace(ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]);
         } else {
             resolve_param_type(param.explicit_type);
@@ -5781,7 +5781,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         // A `type` is only ever known at compile time, and saying so keeps every compile-time
         // parameter spelled the same way
         if (!param.is_comptime_written && param_type.get_kind() == type_kind::TYPE &&
-            param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
+            param.spells_type()) {
             ctx_.diags.emplace_back(
                 fmt::format("A parameter of type 'type' must be written 'comptime {}: type'",
                             ast::parameter_name(resolving_.ast, param)),
@@ -5790,7 +5790,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
         param_types[param_idx++] = &param_type;
         resolving_.set_sema_type(param.name, param_type);
-        if (param.name.is<ast::identifier_expr>() && param.explicit_type.is_valid()) {
+        if (param.name.is<ast::identifier_expr>() && param.explicit_type) {
             resolving_.set_identifier_declaration(
                 param.name,
                 declaration_ref{
@@ -5829,10 +5829,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             const auto& pt{*param_types[i]};
             if (is_auto_pattern(pt)) { return true; }
             if (pt.get_kind() == type_kind::TYPE) {
-                if (fn.parameters[i - self_offset].explicit_type.get_token_type() ==
-                    syntax::token_type_t::TYPE_TYPE) {
-                    return true;
-                }
+                if (fn.parameters[i - self_offset].spells_type()) { return true; }
                 continue;
             }
             if (is_generic_type(pt)) { return true; }
@@ -5881,7 +5878,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         .expected_type  = is_auto_return ? stdx::none : stdx::option<type&>{return_type},
     });
 
-    const auto& block{resolving_.ast.get_as<ast::block_stmt>(fn.body)};
+    const auto& block{resolving_.ast.get_as<ast::block_stmt>(*fn.body)};
     const bool  body_failed{resolve_block_statements(block)};
     auto        tracker{std::move(return_trackers_.back())};
     return_trackers_.pop_back();
@@ -5996,8 +5993,9 @@ auto type_resolver::get_resolved_symbol_type(symbol::data_t& symbol_data) -> typ
             ASSERT(resolving_.has_sema_type(sym.name), "Symbol was never typed");
             auto& type{resolving_.get_sema_type(sym.name)};
             // An untyped pack parameter (`rest...`) has no explicit type to compare against
-            if (!sym.explicit_type.is_valid()) { return type; }
-            if (const auto explicit_opt{resolving_.get_sema_type_opt(sym.explicit_type)}) {
+            const stdx::option<ast::explicit_type_id> annotation{sym.explicit_type};
+            if (!annotation) { return type; }
+            if (const auto explicit_opt{resolving_.get_sema_type_opt(*annotation)}) {
                 const auto exp_kind{explicit_opt->get_kind()};
                 ASSERT(type == *explicit_opt || exp_kind == type_kind::AUTO ||
                            exp_kind == type_kind::TYPE || is_generic_type(*explicit_opt) ||
@@ -6408,7 +6406,7 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
     const auto fn_expr{owner_mod->ast.get_as_opt<ast::function_expr>(*decl->value)};
     if (!fn_expr) { return; }
 
-    const auto& block{owner_mod->ast.get_as<ast::block_stmt>(fn_expr->body)};
+    const auto& block{owner_mod->ast.get_as<ast::block_stmt>(*fn_expr->body)};
     const auto  agg_node{returned_aggregate_node(owner_mod->ast, block)};
     if (!agg_node) { return; }
 
@@ -6854,8 +6852,7 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         TRY_RESOLVE(*if_expr.alternate);
         const auto alt_value{arm_value(*if_expr.alternate, *last_type_)};
         // One arm naming a type and the other a value has no single result
-        if (cons_value && alt_value && cons_value->at.is_valid() && alt_value->at.is_valid() &&
-            cons_value->type->get_kind() != type_kind::NORETURN &&
+        if (cons_value && alt_value && cons_value->type->get_kind() != type_kind::NORETURN &&
             alt_value->type->get_kind() != type_kind::NORETURN) {
             const auto cons_nature{operand_nature(ast::expr_handle{cons_value->at})};
             const auto alt_nature{operand_nature(ast::expr_handle{alt_value->at})};
@@ -7113,7 +7110,7 @@ auto type_resolver::visit(ast::node_id id, const ast::cfg_value_expr&) -> void {
         last_type_.emplace(bool_type);
         return;
     }
-    TRY_RESOLVE(it->second.chosen);
+    TRY_RESOLVE(*it->second.chosen);
     auto& chosen_type{*last_type_};
     resolving_.set_sema_type(id, chosen_type);
     last_type_.emplace(chosen_type);
@@ -9792,7 +9789,7 @@ auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const 
             };
         },
         [&](const symbols::parameter& param) -> stdx::option<declaration_ref> {
-            if (!param.explicit_type.is_valid()) { return stdx::none; }
+            if (!param.explicit_type) { return stdx::none; }
             return declaration_ref{
                 .owner      = owner,
                 .decl       = stdx::none,
@@ -9821,9 +9818,9 @@ auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const 
 
 auto type_resolver::thin_if_comptime(const ast::function_expr::parameter& param, type& param_type)
     -> type& {
-    if (!param.is_comptime || !param.explicit_type.is_valid()) { return param_type; }
+    if (!param.is_comptime || !param.explicit_type) { return param_type; }
     auto& thin{ctx_.with_erasure(param_type, false)};
-    if (&thin != &param_type) { resolving_.set_sema_type(param.explicit_type, thin); }
+    if (&thin != &param_type) { resolving_.set_sema_type(*param.explicit_type, thin); }
     return thin;
 }
 
@@ -11378,7 +11375,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
 auto type_resolver::assigns_comptime_type_var(ast::node_id root) -> bool {
     bool       found{false};
     const auto walk{[&](this const auto& self, ast::node_id n) -> void {
-        if (found || !n.is_valid()) { return; }
+        if (found) { return; }
         resolving_.ast[n].visit(
             [&](const ast::assignment_expr& data) {
                 if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(data.lhs)}) {
@@ -11585,9 +11582,8 @@ auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) co
 auto type_resolver::declares_generic_params(const ast::function_expr& fn_expr) const -> bool {
     if (!fn_expr.impl_bounds.empty()) { return true; }
     return std::ranges::any_of(fn_expr.parameters, [&](const ast::function_expr::parameter& p) {
-        if (p.is_comptime || p.is_pack || !p.explicit_type.is_valid()) { return true; }
-        return p.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE ||
-               spells_auto_pattern(resolving_.ast, p.explicit_type);
+        if (p.is_comptime || p.is_pack || !p.explicit_type) { return true; }
+        return p.spells_type() || spells_auto_pattern(resolving_.ast, p.explicit_type);
     });
 }
 
@@ -11986,7 +11982,6 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
     ankerl::unordered_dense::set<std::string_view> local_labels;
 
     auto collect_labels = [&](auto& self, ast::node_id n) -> void {
-        if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::label_expr& data) {
                 if (data.name) {
@@ -12017,7 +12012,6 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
     collect_labels(collect_labels, *body);
 
     auto check_jumps = [&](auto& self, ast::node_id n, usize loop_depth) -> void {
-        if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::return_stmt&) {
                 ctx_.diags.emplace_back("cannot 'return' from inside a 'defer' body",
@@ -12158,7 +12152,6 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
     ankerl::unordered_dense::set<std::string_view> local_labels;
 
     auto collect_labels = [&](auto& self, ast::node_id n) -> void {
-        if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::label_expr& data) {
                 if (data.name) {
@@ -12192,7 +12185,6 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
                            ast::node_id n,
                            usize        loop_depth,
                            usize        runtime_control_flow_depth) -> void {
-        if (!n.is_valid()) { return; }
         resolving_.ast[n].visit(
             [&](const ast::break_stmt& data) {
                 const bool unlabeled_and_local{!data.label && loop_depth == 0};
@@ -12491,7 +12483,7 @@ auto type_resolver::hint_site_of(const ast::block_stmt& block) -> stdx::option<h
         }
         for (const auto id : tree.nodes_of<ast::function_expr>()) {
             const auto& fn{tree.get_as<ast::function_expr>(id)};
-            if (fn.body.is_valid()) {
+            if (fn.body) {
                 hint_sites_.try_emplace(&tree.get_as<ast::block_stmt>(*fn.body),
                                         hint_site::FN_BODY);
             }
@@ -14210,7 +14202,7 @@ auto type_resolver::resolve_param_impl_bodies(
             .is_auto_return = auto_ret,
             .expected_type  = auto_ret ? stdx::none : stdx::option<type&>{ret},
         });
-        const auto&              block{impl_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+        const auto&              block{impl_mod.ast.get_as<ast::block_stmt>(*fn_expr.body)};
         const active_block_guard guard{inst.active_blocks_, block};
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
             inst.active_blocks_.back().current_stmt_idx = idx;
@@ -14854,7 +14846,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         // `sig_node` now carries the per-target concrete signature, so a `?` in the body reads the
         // right return type off it.
         const open_function_guard body_fn_guard{inst.open_function_nodes_, sig_node};
-        for (const auto& stmt : imod.ast.get_as<ast::block_stmt>(fn_expr.body)) {
+        for (const auto& stmt : imod.ast.get_as<ast::block_stmt>(*fn_expr.body)) {
             inst.resolve(stmt);
         }
         inst.return_trackers_.pop_back();
@@ -15949,11 +15941,11 @@ auto type_resolver::instantiate_generic(type&                             callee
                                     expected.params.size(),
                                     expected.is_variadic ? " (variadic)" : ""),
                         error::CLOSURE_SIGNATURE_MISMATCH,
-                        fn_mod.ast.location_of(param.explicit_type));
+                        fn_mod.ast.location_of(*param.explicit_type));
                     return stdx::none;
                 }
             }
-            fn_mod.set_sema_type(param.explicit_type, resolved_param_type);
+            fn_mod.set_sema_type(*param.explicit_type, resolved_param_type);
             const auto p_name{ast::parameter_name(fn_mod.ast, param)};
             if (resolved_param_type.get_kind() == type_kind::TYPE && !p_name.empty()) {
                 const auto val{gir::const_value{denoted_type(*body_p_type)}};
@@ -15962,8 +15954,8 @@ auto type_resolver::instantiate_generic(type&                             callee
                     ctx_.comptime_binding_frames.back().insert_or_assign(p_name, val);
                 }
             }
-        } else {
-            fn_mod.set_sema_type(param.explicit_type, *decl_p_type);
+        } else if (param.explicit_type) {
+            fn_mod.set_sema_type(*param.explicit_type, *decl_p_type);
         }
         fn_mod.set_sema_type(param.name, *body_p_type);
         if (!param.is_comptime) { inst_param_types[i++] = decl_p_type; }
@@ -16008,7 +16000,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     stdx::option<shared_literal_shape> outer_instance_shape;
     if (!building_param_template_ && !track_in_progress &&
         return_type.get_kind() == type_kind::TYPE) {
-        const auto& body{fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+        const auto& body{fn_mod.ast.get_as<ast::block_stmt>(*fn_expr.body)};
         const auto  agg_node{returned_aggregate_node(fn_mod.ast, body)};
         const auto  literal{
             agg_node && agg_node->any<ast::struct_expr, ast::union_expr, ast::enum_expr>()
@@ -16048,7 +16040,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     });
 
     const auto  diags_before{ctx_.diags.size()};
-    const auto& block{fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body)};
+    const auto& block{fn_mod.ast.get_as<ast::block_stmt>(*fn_expr.body)};
 
     bool resolved_poison{false};
     {
@@ -16152,9 +16144,9 @@ auto type_resolver::instantiate_generic(type&                             callee
         for (const auto& param : fn_expr.parameters) {
             if (param.is_comptime) { continue; }
             // An untyped pack (`rest...`) has no annotation, and its elements are values
-            const bool untyped_pack{!param.explicit_type.is_valid()};
+            const bool untyped_pack{!param.explicit_type};
             const auto pty{untyped_pack ? stdx::none
-                                        : fn_mod.get_sema_type_opt(param.explicit_type)};
+                                        : fn_mod.get_sema_type_opt(*param.explicit_type)};
             if (untyped_pack || (pty && pty->get_kind() != type_kind::TYPE)) {
                 std::string_view pn{ast::parameter_name(fn_mod.ast, param)};
                 if (pn.empty()) { pn = "_"; }

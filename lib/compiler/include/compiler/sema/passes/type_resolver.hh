@@ -82,9 +82,13 @@ class type_resolver {
     static auto resolve_pending_tests(context& ctx) -> void;
 
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
-        // An untyped parameter pack (`rest...`) has no type node at all; nothing to resolve.
-        if (!id.is_valid()) { return last_type_.emplace(ctx_.get_poison()); }
         resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+    }
+
+    // An absent node, like an untyped pack's type, resolves to poison
+    auto resolve(stdx::option<ast::explicit_type_id> id) -> void {
+        if (!id) { return last_type_.emplace(ctx_.get_poison()); }
+        resolve(*id);
     }
 
     // Resolves `I` / `T` for every non-parameterized `impl` root and records a skeleton in the
@@ -523,7 +527,7 @@ class type_resolver {
     // Retypes a bare range-counter read to `target` when every value it takes fits there
     auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // Resolves a parameter's declared type, where `auto` may sit inside a slice or array
-    auto resolve_param_type(ast::explicit_type_id param_type) -> void;
+    auto resolve_param_type(stdx::option<ast::explicit_type_id> param_type) -> void;
     // Whether `stmt` is an `if comptime` whose folded arm always leaves the enclosing block
     [[nodiscard]] auto folded_if_exits(ast::node_id stmt) const -> bool;
     // Whether `t` is `auto` under pointer, reference, slice, and array levels (`&[]mut auto`)
@@ -537,6 +541,8 @@ class type_resolver {
     auto               resolve_slice_copy(ast::node_id                id,
                                           const ast::assignment_expr& assign,
                                           ast::expr_handle            dest) -> void;
+    // The function literal `expr` names, directly or through a `let`/`comptime` local
+    [[nodiscard]] auto closure_literal_of(ast::expr_handle expr) -> stdx::option<ast::node_id>;
     [[nodiscard]] auto comptime_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
 
@@ -714,6 +720,10 @@ class type_resolver {
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
     // `reject_unsized_slot`, plus the compile-time-only `@TypeOf(undefined)`
     auto reject_non_runtime_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    auto reject_non_runtime_slot(stdx::option<ast::explicit_type_id> at, const type& slot_type)
+        -> bool {
+        return at && reject_non_runtime_slot(*at, slot_type);
+    }
     // `@TypeOf(undefined)` itself, or an array of it at any depth
     [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;

@@ -151,7 +151,7 @@ auto dumper::visit(node_id, const asm_expr& asm_node) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const call_expr& call) -> void {
+auto dumper::visit(stdx::option<node_id>, const call_expr& call) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "CallExpression");
     const auto has_args{!call.arguments.empty()};
@@ -196,7 +196,7 @@ auto dumper::visit(node_id, const do_while_loop_expr& do_while) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const enum_expr& enum_expr) -> void {
+auto dumper::visit(stdx::option<node_id>, const enum_expr& enum_expr) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "EnumExpression");
 
@@ -310,17 +310,17 @@ auto dumper::visit(node_id, const function_expr& function) -> void {
                                         parameter.is_comptime_written ? " (comptime)" : "",
                                         parameter.is_pack ? " (pack)" : "");
                            {
-                               const bool          no_type{!parameter.explicit_type.is_valid()};
+                               const bool          no_type{!parameter.explicit_type};
                                const indent::guard g_name{indent_, no_type};
                                fmt::print(out_, "{}Name: ", indent_.current_branch());
                                dump(*parameter.name);
                            }
 
                            // An untyped pack (`rest...`) has no type to dump.
-                           if (parameter.explicit_type.is_valid()) {
+                           if (parameter.explicit_type) {
                                const indent::guard g_type{indent_, !parameter.default_value};
                                fmt::print(out_, "{}Type: ", indent_.current_branch());
-                               dump(parameter.explicit_type);
+                               dump(*parameter.explicit_type);
                            }
                            if (parameter.default_value) {
                                const indent::guard g_default{indent_, true};
@@ -488,9 +488,9 @@ auto dumper::visit(node_id, const cfg_value_expr& cfg_value) -> void {
 MAKE_INFIX_DUMP(assignment_expr, AssignmentExpression, Assignee, Value)
 MAKE_INFIX_DUMP(binary_expr, BinaryExpression, LHS, RHS)
 
-auto dumper::visit(node_id id, const dot_expr& node) -> void {
+auto dumper::visit(stdx::option<node_id> id, const dot_expr& node) -> void {
     PROFILE_FUNCTION();
-    const auto token_type{id.is_valid() ? id.get_token_type() : syntax::token_type_t::DOT};
+    const auto token_type{id ? id->get_token_type() : syntax::token_type_t::DOT};
     fmt::println(out_, "DotExpression ({})", magic_enum::enum_name(token_type));
     {
         const indent::guard g{indent_, false};
@@ -705,7 +705,7 @@ auto dumper::visit(node_id, const type_expr& node) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const struct_expr& node) -> void {
+auto dumper::visit(stdx::option<node_id>, const struct_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "StructExpression");
 
@@ -763,7 +763,7 @@ auto dumper::visit(node_id, const struct_expr& node) -> void {
 }
 
 // Safe to call with invalid ID in type dispatch
-auto dumper::visit(node_id, const union_expr& node) -> void {
+auto dumper::visit(stdx::option<node_id>, const union_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "UnionExpression");
 
@@ -807,7 +807,7 @@ auto dumper::visit(node_id, const union_expr& node) -> void {
     dump_aggregate_tail(node);
 }
 
-auto dumper::visit(node_id, const interface_expr& node) -> void {
+auto dumper::visit(stdx::option<node_id>, const interface_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "InterfaceExpression");
 
@@ -1092,7 +1092,7 @@ auto dumper::visit(node_id, const impl_stmt& node) -> void {
             {
                 const indent::guard g_type{indent_, true};
                 fmt::print(out_, "{}Type: ", indent_.current_branch());
-                dump(parameter.explicit_type);
+                dump(*parameter.explicit_type);
             }
         });
     }
@@ -1172,7 +1172,7 @@ auto dumper::visit(node_id, const test_stmt& test) -> void {
     auto dumper::visit(explicit_type_id, const TypeData& type) -> void { \
         PROFILE_FUNCTION();                                              \
         fmt::print(out_, "{}", indent_.current_branch());                \
-        visit(node_id::make_invalid(), type);                            \
+        visit(stdx::none, type);                                         \
     }
 
 auto dumper::visit(explicit_type_id id, const identifier_expr& ident) -> void {

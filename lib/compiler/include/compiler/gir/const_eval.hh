@@ -323,9 +323,11 @@ class const_eval {
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
-    auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;
-    auto eval_builtin(ast::node_id id, const ast::call_expr& call, syntax::builtin_t builtin_type)
+    auto eval_call(stdx::option<ast::node_id> id, const ast::call_expr& call)
         -> stdx::option<const_value>;
+    auto eval_builtin(stdx::option<ast::node_id> call_id,
+                      const ast::call_expr&      call,
+                      syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
@@ -335,8 +337,11 @@ class const_eval {
     // The value operand of a cast-style builtin: `@cast(T, x)` or `@cast(x)`
     [[nodiscard]] static auto cast_operand(const ast::call_expr& call)
         -> stdx::option<ast::expr_handle>;
+    [[nodiscard]] auto call_result_type(stdx::option<ast::node_id> call_id) const
+        -> stdx::option<sema::type&>;
     // A builtin call's resolved type, falling back to the type recorded on its callee
-    [[nodiscard]] auto builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+    [[nodiscard]] auto builtin_result_type(stdx::option<ast::node_id> call_id,
+                                           const ast::call_expr&      call) const
         -> stdx::option<sema::type&>;
 
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
@@ -360,7 +365,7 @@ class const_eval {
     [[nodiscard]] auto callee_params(const ast::call_expr& call) -> gsl::span<sema::type*>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
-    auto eval_comptime_fn(ast::node_id                      call_id,
+    auto eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                           const ast::function_expr&         fn_expr,
                           std::vector<const_value>&         args,
                           stdx::option<const const_struct&> captures = stdx::none)

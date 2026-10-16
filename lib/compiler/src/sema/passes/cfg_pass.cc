@@ -156,14 +156,14 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
                     break;
                 }
                 if (*b) {
-                    record.chosen = guard.value;
+                    record.chosen = ast::node_id{guard.value};
                     result        = eval_term(guard.value);
                     matched       = true;
                     break;
                 }
             }
             if (!matched) {
-                record.chosen = *expr.fallback;
+                record.chosen = ast::node_id{*expr.fallback};
                 result        = eval_term(*expr.fallback);
             }
         }
@@ -846,7 +846,7 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             for (const auto& entry : init.initializers) { recurse_into_expr(entry.value); }
         },
         [&](const ast::function_expr& fn) {
-            if (!fn.is_type_expr) { recurse_into_block(fn.body); }
+            if (fn.body) { recurse_into_block(*fn.body); }
         },
         [&](const ast::if_expr& branch) {
             if (branch.condition) { recurse_into_expr(*branch.condition); }

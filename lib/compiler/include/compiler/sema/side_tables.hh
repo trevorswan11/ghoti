@@ -37,7 +37,6 @@ template <ast::IndexableID ID, typename T> struct side_table {
     template <typename U>
         requires std::convertible_to<U, ID>
     [[nodiscard]] constexpr auto operator[](this auto&& self, U id) noexcept -> auto& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         return self.values[static_cast<ID>(id).get_index()];
     }
 };

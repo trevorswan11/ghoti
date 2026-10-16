@@ -67,7 +67,7 @@ using diagnotic_list_variant =
 struct cfg_value_result {
     bool         boolean{false};
     bool         is_predicate{true};
-    ast::node_id chosen{ast::node_id::make_invalid()};
+    stdx::option<ast::node_id> chosen{};
 };
 
 // Which arm of an `if comptime` the resolver folded to

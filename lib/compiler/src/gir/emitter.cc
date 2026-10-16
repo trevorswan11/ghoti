@@ -406,7 +406,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         if (param.is_comptime || param.is_pack || !param.name.is<ast::identifier_expr>()) {
             continue;
         }
-        const auto decl_ty{fn_mod.get_sema_type_opt(param.explicit_type)};
+        const auto decl_ty{fn_mod.get_sema_type_opt(*param.explicit_type)};
         if (!decl_ty || decl_ty->get_kind() != sema::type_kind::TYPE) { continue; }
         const auto bound_ty{fn_mod.get_sema_type_opt(param.name)};
         if (!bound_ty) { continue; }
@@ -484,7 +484,9 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                 } else if (val.is<std::string>()) {
                     // A string-literal comptime arg bound to a `[]T` slice param needs a real
                     // {ptr, len} fat pointer, not the raw bytes `btype` alone would store.
-                    const auto declared_type{fn_mod.get_sema_type_opt(param.explicit_type)};
+                    const auto declared_type{param.explicit_type
+                                                 ? fn_mod.get_sema_type_opt(*param.explicit_type)
+                                                 : stdx::none};
                     if (declared_type && declared_type->get_kind() == sema::type_kind::SLICE) {
                         bound = emit_string_as_slice(val.as<std::string>(), *declared_type);
                     } else {
@@ -532,7 +534,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         }
 
         const auto saved_scope_prefix{std::exchange(typing_scope_prefix_, req.mangled_name)};
-        emit_block(fn_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(fn_mod.ast.get_as<ast::block_stmt>(*fn_expr.body));
         typing_scope_prefix_ = saved_scope_prefix;
         emit_implicit_return(*req.return_type);
     }
@@ -1331,15 +1333,15 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
 
     // Interface default methods the impl inherits
     for (const auto& m : rec->methods) {
-        if (!m.inherited || !m.defining_mod || !m.signature.is_valid()) { continue; }
-        const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(m.signature)};
+        if (!m.inherited || !m.defining_mod || !m.signature) { continue; }
+        const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(*m.signature)};
         if (!fx || fx->is_type_expr) { continue; }
 
         // Emit each body once against the interface's  module with that typing replayed.
         emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, m.name),
                                  rec->body_scope_idx,
                                  *m.defining_mod,
-                                 m.signature,
+                                 *m.signature,
                                  *fx,
                                  m.fn_type,
                                  m.typing_key);
@@ -1424,7 +1426,7 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
     }
 
     emitting_impl_default_scope_.emplace(impl_scope_idx);
-    emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+    emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
     emitting_impl_default_scope_.reset();
 
     if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()}) {
@@ -1474,7 +1476,7 @@ auto emitter::apply_fn_attributes(gir::function&       fn,
     sema::resolved_attributes resolved;
     if (const auto folded{owner.attributes_of(fn_node)}) { resolved = *folded; }
     if (const auto literal{owner.ast.get_as_opt<ast::function_expr>(fn_node)};
-        literal && literal->body.is_valid()) {
+        literal && literal->body) {
         resolved.cold = branch_hint_of(owner, *literal->body) == ast::branch_hint::COLD;
     }
     fn.set_attributes(resolved);
@@ -1611,7 +1613,7 @@ auto emitter::emit_function(ast::node_id                   id,
                                         });
     }
 
-    emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+    emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
     if (const auto cur_seg{builder_.get_segment()}) {
         if (!cur_seg->has_terminator()) {
             if (fn.get_attributes().naked) {
@@ -1700,7 +1702,7 @@ auto emitter::emit_anonymous_function(ast::node_id id, const ast::function_expr&
         const scope_guard g{scopes_};
         bind_declared_params(fn, fn_expr, active_mod());
 
-        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
         const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
         ASSERT(fn_data, "Function type must contain function type data");
         emit_implicit_return(fn_data->return_type);
@@ -1747,7 +1749,7 @@ auto emitter::emit_named_local_function(std::string_view          name,
 
         bind_declared_params(fn, fn_expr, active_mod());
 
-        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
         const auto fn_data{fn_type.get_data().as_opt<sema::types::function>()};
         ASSERT(fn_data, "Function type must contain function type data");
         emit_implicit_return(fn_data->return_type);
@@ -1825,7 +1827,7 @@ auto emitter::emit_closure_function(ast::node_id                  id,
             ++field_idx;
         }
 
-        emit_block(active_ast().get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
         emit_implicit_return(impl_sig_data->return_type);
     }
 
@@ -1913,7 +1915,7 @@ auto emitter::emit_comptime_closure(const const_closure& cl) -> std::string {
 
         bind_declared_params(fn, fn_expr, def_mod);
 
-        emit_block(def_mod.ast.get_as<ast::block_stmt>(fn_expr.body));
+        emit_block(def_mod.ast.get_as<ast::block_stmt>(*fn_expr.body));
         emit_implicit_return(sig_data->return_type);
     }
 
@@ -2475,7 +2477,6 @@ auto emitter::emit_comptime_value_read(ast::node_id id) -> value {
 
 auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
     PROFILE_FUNCTION();
-    ASSERT(id.is_valid(), "Valid node ID expected in emit_expression_id");
     builder_.set_location(active_ast().location_of(id));
     if (reads_comptime_value(id)) { return emit_comptime_value_read(id); }
 
@@ -2570,9 +2571,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
                     return value{it->second.boolean,
                                  ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
                 }
-                if (it->second.chosen.is_valid()) {
-                    return emit_expression_id_raw(it->second.chosen);
-                }
+                if (it->second.chosen) { return emit_expression_id_raw(*it->second.chosen); }
             }
             return value{undefined_val{}, active_mod().get_sema_type_opt(id)};
         },
@@ -3345,7 +3344,7 @@ namespace {
 // The `.field` / `[k]` steps from the root binding out to the assigned place
 struct place_step {
     stdx::option<std::string_view> field;
-    ast::node_id                   index{ast::node_id::make_invalid()};
+    stdx::option<ast::node_id>     index{};
 };
 
 } // namespace
@@ -3364,7 +3363,7 @@ auto emitter::try_emit_comptime_mut_place_assignment(ast::node_id               
         } else if (const auto idx{active_ast().get_as_opt<ast::index_expr>(cur)}) {
             steps.emplace_back<place_step>({
                 .field = stdx::none,
-                .index = idx->index,
+                .index = ast::node_id{idx->index},
             });
             cur = idx->array;
         } else {
@@ -3411,7 +3410,7 @@ auto emitter::try_emit_comptime_mut_place_assignment(ast::node_id               
             }
         } else {
             auto       arr{place->as_opt<const_array>()};
-            const auto k_val{const_eval_.try_eval(step.index)};
+            const auto k_val{const_eval_.try_eval(*step.index)};
             const auto k{k_val ? k_val->as_uint_opt() : stdx::none};
             if (!arr || !k || *k >= arr->elements.size()) { return not_foldable(); }
             place = &arr->elements[static_cast<usize>(*k)];
@@ -4885,11 +4884,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             bool is_type_arg{false};
             // A parameter declared `: type` accepts only a type value
             if (generic_target_fn && i < generic_target_fn->parameters.size()) {
-                const auto& gp_type{generic_target_fn->parameters[i].explicit_type};
-                if (gp_type.is_valid() &&
-                    gp_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
-                    is_type_arg = true;
-                }
+                if (generic_target_fn->parameters[i].spells_type()) { is_type_arg = true; }
             }
             if (const auto t_opt{active_mod().get_sema_type_opt(*expr_h)}) {
                 if (t_opt->get_kind() == sema::type_kind::TYPE) { is_type_arg = true; }
@@ -6733,7 +6728,7 @@ auto emitter::request_builtin_type_methods(const sema::type& receiver) -> bool {
 
     for (const auto root_id : builtin_mod.ast) {
         const auto decl{builtin_mod.ast.get_as_opt<ast::decl_stmt>(root_id)};
-        if (!decl || !decl->name.is_valid() || !decl->value) { continue; }
+        if (!decl || !decl->value) { continue; }
         const auto declared{builtin_mod.get_sema_type_opt(*decl->value)};
         if (!declared) { continue; }
         const auto& denoted{sema::denoted_type(*declared)};
@@ -6774,7 +6769,7 @@ auto emitter::ensure_builtin_runtime(std::string_view name) -> void {
     auto& builtin_mod{ctx_.modules.builtin_module()};
     for (const auto root_id : builtin_mod.ast) {
         const auto decl{builtin_mod.ast.get_as_opt<ast::decl_stmt>(root_id)};
-        if (!decl || !decl->name.is_valid()) { continue; }
+        if (!decl) { continue; }
         const auto ident{builtin_mod.ast.get_as_opt<ast::identifier_expr>(decl->name)};
         if (!ident || ident->name != name) { continue; }
 
@@ -6829,7 +6824,6 @@ auto emitter::lvalue_of_binding(std::string_view name) -> value {
 
 auto emitter::emit_lvalue(ast::node_id id) -> value {
     PROFILE_FUNCTION();
-    ASSERT(id.is_valid(), "Valid node ID expected in emit_lvalue");
     if (reads_comptime_value(id)) {
         // Only a folded scalar (`ts.len`) has a runtime value to take the address of
         const auto val{emit_comptime_value_read(id)};

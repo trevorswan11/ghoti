@@ -164,7 +164,6 @@ class AST {
 
     template <IndexableID ID>
     [[nodiscard]] constexpr auto location_of(ID id) const noexcept -> const source_location& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
             return *nodes_.locations[id.get_index()];
         } else {
@@ -175,7 +174,6 @@ class AST {
     // The position just past the node's last token; see `data_pool_base::emplace_back`
     template <IndexableID ID>
     [[nodiscard]] constexpr auto end_location_of(ID id) const noexcept -> const source_location& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
             return *nodes_.end_locations[id.get_index()];
         } else {
@@ -185,20 +183,17 @@ class AST {
 
     // How many redundant `( )` pairs enclosed this node in the source.
     [[nodiscard]] constexpr auto paren_depth_of(node_id id) const noexcept -> u8 {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         return nodes_.paren_depths[id.get_index()];
     }
 
     // Records one more `( )` pair around an already-added node.
     constexpr auto add_parenthesization(node_id id) noexcept -> void {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         nodes_.paren_depths[id.get_index()] += 1;
     }
 
     // Returns the node data at the provided id
     template <IndexableID ID>
     [[nodiscard]] constexpr auto operator[](this auto&& self, ID id) noexcept -> auto& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
             return *self.nodes_.pool[id.get_index()];
         } else {

@@ -168,6 +168,10 @@ auto symbol_collector::visit(ast::node_id, const ast::asm_expr& asm_node) -> voi
 
 auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
+    collect_call(call);
+}
+
+auto symbol_collector::collect_call(const ast::call_expr& call) -> void {
     const default_counter::guard g{in_expr_scope_};
 
     // `@expect`, `@require`, and `@skip` only make sense in a `test` block or `@[testing]` helper
@@ -295,8 +299,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
         collect_attribute_args(decl.attributes, true);
     }
 
-    if (!fn.is_type_expr) {
-        const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
+    if (fn.body) {
+        const auto& block{collecting_.ast.get_as<ast::block_stmt>(*fn.body)};
         for (const auto& stmt : block) { collect(stmt); }
     }
 
@@ -364,7 +368,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::cfg_value_expr&) -> voi
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
     if (const auto& result{collecting_.cfg_value_results.find(id.get_index())};
-        result != collecting_.cfg_value_results.end() && result->second.chosen.is_valid()) {
+        result != collecting_.cfg_value_results.end()) {
         collect(result->second.chosen);
     }
 }
@@ -912,7 +916,7 @@ AST_TYPE_VISITOR_NOOP(symbol_collector, dot_expr)
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
-    visit(ast::node_id::make_invalid(), call);
+    collect_call(call);
 }
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_function_type& fn) -> void {
