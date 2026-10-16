@@ -3254,7 +3254,8 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
             field_alignments[i] = static_cast<u64>(requested);
         }
 
-        const auto name_ident{synthesize_ident(*name_v, true)};
+        const auto is_pub{read_desc_field<bool>(*fs, "is_pub").value_or(false)};
+        const auto name_ident{synthesize_ident(*name_v, is_pub)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
         new (&ast_fields[i]) ast::struct_expr::field{
             .name          = name_ident,

@@ -796,6 +796,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Calls that leave defaults off fold at compile time like any other call
     - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound
     - An implementation inherits its interface's defaults and can't write any of its own
+- **Breaking:** a `@Struct` field is private unless its `StructFieldInfo` sets `.is_pub = true`, like a hand-written field; they used to be always public (#383)
+    - `@typeInfo` reports each field's `is_pub`, so `@Struct(@typeInfo(T).@"struct")` keeps `T`'s private fields private
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

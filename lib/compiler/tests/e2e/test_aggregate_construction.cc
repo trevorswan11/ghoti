@@ -1,4 +1,5 @@
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -354,6 +355,75 @@ TEST_CASE("`@Union` constructs a tagged union type from a `UnionInfo` descriptor
             return v.i;
         };
     )") == 55);
+}
+
+namespace {
+
+constexpr std::string_view SYNTHESIZED_SHAPES{R"(
+    pub const Shape = @Struct(.{
+        .fields = ^.{
+            .{ .name = "hidden", .type = i32 },
+            .{ .name = "shown", .type = i32, .is_pub = true },
+        },
+        .is_extern = false,
+        .is_packed = false,
+        .backing_bits = 0,
+    });
+
+    pub const Written = struct { hidden: i32, pub shown: i32 };
+    pub const Copied = @Struct(@typeInfo(Written).@"struct");
+
+    pub const make = fn(): Shape { return .{ .hidden = 30, .shown = 12 }; };
+    pub const read_hidden = fn(s: Shape): i32 { return s.hidden; };
+)"};
+
+} // namespace
+
+TEST_CASE("`@Struct` fields are private unless `is_pub` is set") {
+    const std::vector<mock_file> imports{mock_file{"shapes.gh", SYNTHESIZED_SHAPES, "shapes"}};
+
+    CHECK(helpers::compile_and_run(R"(
+        import "shapes.gh" as shapes;
+        pub const main = fn(): i32 {
+            let s = shapes.make();
+            return s.shown + shapes.read_hidden(s);
+        };
+    )",
+                                   imports) == 42);
+
+    CHECK(helpers::raised(R"(
+        import "shapes.gh" as shapes;
+        pub const main = fn(): i32 { return shapes.make().hidden; };
+    )",
+                          sema::error::ILLEGAL_PRIVATE_ACCESS,
+                          imports));
+}
+
+TEST_CASE("`@typeInfo` reports field visibility so a `@Struct` round-trip keeps it") {
+    const std::vector<mock_file> imports{mock_file{"shapes.gh", SYNTHESIZED_SHAPES, "shapes"}};
+
+    CHECK(helpers::compile_and_run(R"(
+        import "shapes.gh" as shapes;
+        pub const main = fn(): i32 {
+            const fields = @typeInfo(shapes.Written).@"struct".fields;
+            let mut flags: i32 = 0;
+            if (!fields[0].is_pub) { flags += 1; }
+            if (fields[1].is_pub) { flags += 2; }
+            let c: shapes.Copied = .{ .hidden = 1, .shown = 40 };
+            return flags * 10 + c.shown;
+        };
+    )",
+                                   imports) == 70);
+
+    CHECK(helpers::raised(R"(
+        import "shapes.gh" as shapes;
+        pub const main = fn(): i32 {
+            let c: shapes.Copied = .{ .hidden = 1, .shown = 2 };
+            return c.hidden;
+        };
+    )",
+                          sema::error::ILLEGAL_PRIVATE_ACCESS,
+                          imports));
 }
 
 } // namespace ghoti::tests

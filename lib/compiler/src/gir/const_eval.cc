@@ -2858,6 +2858,7 @@ auto const_eval::eval_type_info(sema::type&                                    d
                     : const_value{nullptr_val{}, opaque_ptr_type});
             fs.fields.emplace("alignment",
                               const_value{st.explicit_field_alignment(idx), usize_type});
+            fs.fields.emplace("is_pub", const_value{f.is_public(), bool_type});
             fields.elements.emplace_back(const_value{std::move(fs), field_type});
         }
         const auto ptr_bits{target_pointer_bits()};
