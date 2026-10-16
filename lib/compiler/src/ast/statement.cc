@@ -1,5 +1,7 @@
 #include "compiler/ast/statement.hh"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <string>
 #include <string_view>
@@ -484,7 +486,13 @@ auto expr_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavio
     -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    const auto expr{TRY(parser.parse_expression())};
+    // A statement led by a block-like expression ends with it: `if (c) { ... }` then `*p = 1;`
+    // are two statements, not a product assigned to
+    using tt = syntax::token_type_t;
+    constexpr std::array BLOCK_LIKE{tt::IF, tt::MATCH, tt::LOOP, tt::FOR, tt::WHILE, tt::DO};
+    const auto           block_like{std::ranges::contains(BLOCK_LIKE, start_token.type)};
+    const auto expr{TRY(parser.parse_expression(block_like ? syntax::bind_precedence::LABEL
+                                                           : syntax::bind_precedence::LOWEST))};
 
     using behavior_t = syntax::semicolon_behavior;
     const auto has_semicolon{parser.current_token_is(syntax::token_type_t::SEMICOLON)};

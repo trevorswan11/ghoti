@@ -798,6 +798,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - An implementation inherits its interface's defaults and can't write any of its own
 - **Breaking:** a `@Struct` field is private unless its `StructFieldInfo` sets `.is_pub = true`, like a hand-written field; they used to be always public (#383)
     - `@typeInfo` reports each field's `is_pub`, so `@Struct(@typeInfo(T).@"struct")` keeps `T`'s private fields private
+- Fixed: a statement starting with `if`, `match`, `for`, `while`, `loop`, or `do` now ends at its closing brace; `if (c) { ... }` followed by `*p = 1;` used to parse as `(if ...) * p = 1`
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

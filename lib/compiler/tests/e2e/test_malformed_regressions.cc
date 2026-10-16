@@ -3,6 +3,8 @@
 #include <llvm/IR/Module.h>
 
 #include "compiler/sema/error.hh"
+#include "compiler/syntax/error.hh"
+#include "helpers/ast.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 #include "support/test.hh"
@@ -134,13 +136,11 @@ TEST_CASE("An array's `.len` and `.ptr` can't be assigned") {
 }
 
 TEST_CASE("A block can't be indexed like a value") {
-    helpers::expect_compile_error(R"(
-        pub const main = fn(): i32 {
-            let n: usize = 3;
-            if (n != 3) { return -1; }[1];
-            return 0;
-        };
-    )");
+    // The `if` statement ends at its brace, so `[1]` starts a new statement
+    helpers::test_parser_fail(
+        "const f = fn(n: i32): i32 { if (n != 3) { return -1; }[1]; return 0; };",
+        syntax::diagnostic{
+            "Expected an expression, found ';'", syntax::error::MISSING_PREFIX_PARSER, 0, 57});
 }
 
 TEST_CASE("@cfg inside an if nested in an operand is expanded") {
