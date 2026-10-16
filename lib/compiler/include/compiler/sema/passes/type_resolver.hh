@@ -334,6 +334,10 @@ class type_resolver {
         ~binding_restore_guard() {
             for (auto fn : restores | std::views::reverse) { fn(); }
         }
+        // Types `node` as `t` until the guard ends
+        auto retype(mod::module_t& owner, ast::node_id node, type& t) -> void;
+        // Marks `name` in table `table_idx` a resolved value until the guard ends
+        auto bind_value_symbol(context& ctx, usize table_idx, std::string_view name) -> void;
         MAKE_PINNED(binding_restore_guard);
     };
 
@@ -865,6 +869,15 @@ class type_resolver {
     auto reject_type_of_args(const ast::call_expr&     call,
                              const ast::function_expr& fn_expr,
                              std::string_view          mangled_name) -> bool;
+    auto               bind_impl_params(mod::module_t&         fn_mod,
+                                        const impl_record&     impl,
+                                        comptime_frame&        frame,
+                                        binding_restore_guard& restores) -> void;
+    auto               bind_ctor_member_params(const generic_function_info& fn_info,
+                                               comptime_frame&              frame,
+                                               binding_restore_guard&       restores) -> void;
+    [[nodiscard]] auto instance_self_type(const generic_function_info& fn_info)
+        -> stdx::option<type&>;
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
                              gsl::span<type*>                  concrete_args,

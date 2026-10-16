@@ -395,6 +395,146 @@ auto type_resolver::lend_shape_to_pending_instance(usize literal_idx, const type
 
 namespace {
 
+// The symbol a monomorph is emitted under, distinct per argument types, `comptime` values, and
+// enclosing type (`Box(u8).apply` vs `Box(i64).apply`)
+[[nodiscard]] auto instance_mangled_name(context&                          ctx,
+                                         const generic_function_info&      fn_info,
+                                         gsl::span<type*>                  concrete_args,
+                                         gsl::span<const gir::const_value> comptime_args)
+    -> std::string {
+    auto name{
+        fmt::format("{}__{}",
+                    ctx.instantiation_cache.instance_name(
+                        fn_info.name.value_or("fn"), reinterpret_cast<uptr>(fn_info.fn_expr.get())),
+                    fmt::join(concrete_args | std::views::transform([&](const auto& arg) {
+                                  return mangle_arg_type(ctx.generic_functions, *arg);
+                              }),
+                              "_"))};
+    for (const auto& cx : comptime_args) { name += fmt::format("_cx{}", cx.mangle()); }
+    if (fn_info.enclosing_type) {
+        name +=
+            fmt::format("_in_{}", mangle_arg_type(ctx.generic_functions, *fn_info.enclosing_type));
+    }
+    return name;
+}
+
+// Undoes what instantiating left in `fn_mod`'s shared side tables, since the monomorph's own
+// typing lives in `typing`
+auto restore_shared_typing(mod::module_t&                fn_mod,
+                           const body_typing_snapshot&   snap,
+                           const body_type_diff&         typing,
+                           const body_write_log&         write_log,
+                           stdx::option<body_write_log&> outer_log,
+                           usize                         literal_idx) -> void {
+    // Outside the overlay the literal reads as its template again, not the last instantiation
+    if (const auto templ{snap.attributes.find(literal_idx)}; templ != snap.attributes.end()) {
+        fn_mod.node_attributes.insert_or_assign(literal_idx, templ->second);
+    } else {
+        fn_mod.node_attributes.erase(literal_idx);
+    }
+
+    auto&      tables{fn_mod.sema_side_tables};
+    const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {
+        for (const auto& [idx, ty] : changed) {
+            if (ty && ty->is_poison() && idx < snapshot.size()) { live[idx] = snapshot[idx]; }
+        }
+    }};
+    rollback_poisoned(tables.node_types.values, snap.nodes, typing.node_types);
+    rollback_poisoned(tables.explicit_types.values, snap.types, typing.explicit_types);
+
+    // Nested in another instantiation of this module, this one may have retyped nodes the outer
+    // one already typed, so hand those back for the outer diff to record
+    if (outer_log) {
+        const auto give_back{[](auto&                     live,
+                                const auto&               snapshot,
+                                const std::vector<usize>& ours,
+                                const std::vector<usize>& enclosing) {
+            const ankerl::unordered_dense::set<usize> enclosing_idxs(enclosing.begin(),
+                                                                     enclosing.end());
+            for (const auto idx : ours) {
+                if (idx < snapshot.size() && enclosing_idxs.contains(idx)) {
+                    live[idx] = snapshot[idx];
+                }
+            }
+        }};
+        give_back(tables.node_types.values, snap.nodes, write_log.node_idxs, outer_log->node_idxs);
+        give_back(tables.explicit_types.values,
+                  snap.types,
+                  write_log.explicit_idxs,
+                  outer_log->explicit_idxs);
+    }
+    for (const auto& [idx, target] : typing.call_targets) {
+        if (idx < snap.calls.size()) { tables.generic_call_targets.values[idx] = snap.calls[idx]; }
+    }
+}
+
+// A `fn(...): type` constructor needs every value parameter `comptime`, reporting the first that
+// isn't
+[[nodiscard]] auto check_ctor_params_comptime(context&                  ctx,
+                                              const mod::module_t&      fn_mod,
+                                              const ast::function_expr& fn_expr) -> bool {
+    for (const auto& param : fn_expr.parameters) {
+        if (param.is_comptime) { continue; }
+        // An untyped pack (`rest...`) has no annotation, and its elements are values
+        const bool untyped_pack{!param.explicit_type};
+        const auto pty{untyped_pack ? stdx::none : fn_mod.get_sema_type_opt(*param.explicit_type)};
+        if (!untyped_pack && (!pty || pty->get_kind() == type_kind::TYPE)) { continue; }
+        std::string_view pn{ast::parameter_name(fn_mod.ast, param)};
+        if (pn.empty()) { pn = "_"; }
+        ctx.diags.emplace_back(
+            fmt::format("a `fn(...): type` constructor cannot take a plain value parameter; mark "
+                        "'{}' `comptime` so it is known at instantiation time",
+                        pn),
+            error::TYPE_MISMATCH,
+            fn_mod.ast.location_of(param.name));
+        return false;
+    }
+    return true;
+}
+
+// A type ctor instance's `comptime` values and plain `type` arguments, by parameter name
+[[nodiscard]] auto ctor_bindings_of(const ast::AST&                   tree,
+                                    const ast::function_expr&         fn_expr,
+                                    gsl::span<type*>                  concrete_args,
+                                    gsl::span<const gir::const_value> comptime_args)
+    -> std::vector<std::pair<std::string, gir::const_value>> {
+    std::vector<std::pair<std::string, gir::const_value>> bindings;
+    for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+        const auto& param{fn_expr.parameters[p_idx]};
+        const auto  named{param.name.is<ast::identifier_expr>()};
+        if (param.is_comptime) {
+            if (cx_i < comptime_args.size() && named) {
+                bindings.emplace_back(
+                    std::string{tree.get_as<ast::identifier_expr>(param.name).name},
+                    comptime_args[cx_i]);
+            }
+            ++cx_i;
+        } else if (p_idx < concrete_args.size() && named) {
+            bindings.emplace_back(std::string{tree.get_as<ast::identifier_expr>(param.name).name},
+                                  gir::const_value{denoted_type(*concrete_args[p_idx])});
+        }
+    }
+    return bindings;
+}
+
+// The `impl` block on the generic's enclosing type that declares it as a method, if any
+[[nodiscard]] auto enclosing_impl_of(context& ctx, const generic_function_info& fn_info)
+    -> stdx::option<const impl_record&> {
+    if (!fn_info.enclosing_type) { return stdx::none; }
+    const auto fn_idx{fn_info.node_id.get_index()};
+    for (const auto* r : ctx.impls.records()) {
+        if (r->target_type != fn_info.enclosing_type) { continue; }
+        const bool is_member{std::ranges::any_of(r->methods, [&](const auto& m) {
+            if (m.decl.get_index() == fn_idx) { return true; }
+            if (!r->enclosing) { return false; }
+            const auto decl{r->enclosing->ast.get_as_opt<ast::decl_stmt>(m.decl)};
+            return decl && decl->value && decl->value->get_index() == fn_idx;
+        })};
+        if (is_member) { return *r; }
+    }
+    return stdx::none;
+}
+
 // A generic whose declaration is `@[deprecated]`, so its monomorphs' bodies stay quiet too
 [[nodiscard]] auto declares_deprecated_fn(const mod::module_t& owner, ast::node_id node) -> bool {
     auto decl{owner.ast.get_as_opt<ast::decl_stmt>(node)};
@@ -405,6 +545,86 @@ namespace {
 }
 
 } // namespace
+
+auto type_resolver::binding_restore_guard::retype(mod::module_t& owner, ast::node_id node, type& t)
+    -> void {
+    const auto prev{owner.sema_side_tables.node_types[node]};
+    restores.emplace_back([&owner, node, prev] { owner.sema_side_tables.node_types[node] = prev; });
+    owner.set_sema_type(node, t);
+}
+
+auto type_resolver::binding_restore_guard::bind_value_symbol(context&         ctx,
+                                                             usize            table_idx,
+                                                             std::string_view name) -> void {
+    const auto sym{ctx.registry.get_from_opt(table_idx, name)};
+    if (!sym) { return; }
+    const auto prev_kind{sym->get_kind_opt()};
+    const auto prev_status{sym->get_status()};
+    restores.emplace_back([&ctx, table_idx, name, prev_kind, prev_status] {
+        if (auto s{ctx.registry.get_from_opt(table_idx, name)}) {
+            if (prev_kind) { s->set_kind(*prev_kind); }
+            s->set_status(prev_status);
+        }
+    });
+    sym->set_kind(symbol_kind::VALUE);
+    sym->set_status(symbol_status::RESOLVED);
+}
+
+// Binds a parameterized impl's params to this instance's type arguments and ctor values
+auto type_resolver::bind_impl_params(mod::module_t&         fn_mod,
+                                     const impl_record&     impl,
+                                     comptime_frame&        frame,
+                                     binding_restore_guard& restores) -> void {
+    const auto& impl_stmt{fn_mod.ast.get_as<ast::impl_stmt>(impl.site)};
+    for (usize i{0}; i < impl_stmt.impl_params.size(); ++i) {
+        if (i >= impl.type_arguments.size() || !impl.type_arguments[i]) { continue; }
+        const auto  param_name{impl_stmt.impl_params[i].name};
+        const auto& pname{fn_mod.ast.get_as<ast::identifier_expr>(param_name).name};
+        auto&       concrete_t{denoted_type(*impl.type_arguments[i])};
+        frame.insert_or_assign(pname, gir::const_value{concrete_t});
+        restores.retype(fn_mod, param_name, concrete_t);
+        restores.bind_value_symbol(ctx_, impl.body_scope_idx, pname);
+    }
+    if (impl.gir_prefix.empty()) { return; }
+    if (const auto cx_bindings{ctx_.instantiation_cache.get_type_ctor_bindings(impl.gir_prefix)}) {
+        for (const auto& [pname, val] : *cx_bindings) { frame.insert_or_assign(pname, val); }
+    }
+}
+
+// Binds the enclosing type ctor's parameters for a generic member of one of its instances
+auto type_resolver::bind_ctor_member_params(const generic_function_info& fn_info,
+                                            comptime_frame&              frame,
+                                            binding_restore_guard&       restores) -> void {
+    const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*fn_info.enclosing_type)};
+    if (!prefix) { return; }
+    const auto cx_bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)};
+    if (!cx_bindings) { return; }
+    for (const auto& [pname, val] : *cx_bindings) {
+        frame.insert_or_assign(pname, val);
+        if (!fn_info.enclosing_fn_table_idx) { continue; }
+        const auto vt{val.get_type()};
+        if (!vt) { continue; }
+        const auto table_idx{*fn_info.enclosing_fn_table_idx};
+        const auto s{ctx_.registry.get_from_opt(table_idx, pname)};
+        if (!s) { continue; }
+        const auto p{s->get_data().as_opt<symbols::parameter>()};
+        if (!p) { continue; }
+        restores.retype(*fn_info.module, ast::node_id{p->name}, *vt);
+        restores.bind_value_symbol(ctx_, table_idx, pname);
+    }
+}
+
+// The type `self` has in a monomorph: its enclosing type behind `self`'s pointer or reference
+auto type_resolver::instance_self_type(const generic_function_info& fn_info)
+    -> stdx::option<type&> {
+    const auto& self{fn_info.fn_expr->self};
+    if (!self) { return stdx::none; }
+    if (!fn_info.enclosing_type) { return fn_info.module->get_sema_type_opt(self->name); }
+    auto&      enc{*fn_info.enclosing_type};
+    const auto m{types::mut::from_type_modifier(self->modifier)};
+    if (!m) { return enc; }
+    return self->modifier.is_ptr() ? ctx_.get_pointer(*m, enc) : ctx_.get_reference(*m, enc);
+}
 
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
@@ -430,22 +650,7 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Computed early so a nested `for`/`while comptime`'s per-iteration typing keys can be scoped
     // to this instantiation before its body is resolved
-    auto mangled_name{
-        fmt::format("{}__{}",
-                    ctx_.instantiation_cache.instance_name(
-                        fn_info.name.value_or("fn"), reinterpret_cast<uptr>(fn_info.fn_expr.get())),
-                    fmt::join(concrete_args | std::views::transform([&](const auto& arg) {
-                                  return mangle_arg_type(ctx_.generic_functions, *arg);
-                              }),
-                              "_"))};
-    // Distinct `comptime` argument values must produce distinct symbols.
-    for (const auto& cx : comptime_args) { mangled_name += fmt::format("_cx{}", cx.mangle()); }
-    // A generic member is distinct per enclosing type: `Box(u8).apply` vs `Box(i64).apply`, or
-    // same-named members of unrelated types
-    if (fn_info.enclosing_type) {
-        mangled_name +=
-            fmt::format("_in_{}", mangle_arg_type(ctx_.generic_functions, *fn_info.enclosing_type));
-    }
+    auto mangled_name{instance_mangled_name(ctx_, fn_info, concrete_args, comptime_args)};
 
     // A recursive call with the same arguments names the monomorph its body is still resolving
     if (!building_param_template_) {
@@ -485,106 +690,11 @@ auto type_resolver::instantiate_generic(type&                             callee
         ++cx_i;
     }
 
-    stdx::option<const impl_record&> enclosing_impl;
-    if (fn_info.enclosing_type) {
-        for (const auto* r : ctx_.impls.records()) {
-            if (r->target_type != fn_info.enclosing_type) { continue; }
-            const bool is_member{std::ranges::any_of(r->methods, [&](const auto& m) {
-                if (m.decl.get_index() == fn_info.node_id.get_index()) { return true; }
-                if (!r->enclosing) { return false; }
-                const auto decl{r->enclosing->ast.get_as_opt<ast::decl_stmt>(m.decl)};
-                return decl && decl->value &&
-                       decl->value->get_index() == fn_info.node_id.get_index();
-            })};
-            if (is_member) {
-                enclosing_impl.emplace(r);
-                break;
-            }
-        }
-    }
-
+    const auto enclosing_impl{enclosing_impl_of(ctx_, fn_info)};
     if (enclosing_impl && enclosing_impl->from_parameterized) {
-        const auto& impl_stmt{fn_mod.ast.get_as<ast::impl_stmt>(enclosing_impl->site)};
-        for (usize i{0}; i < impl_stmt.impl_params.size(); ++i) {
-            const auto& pname{
-                fn_mod.ast.get_as<ast::identifier_expr>(impl_stmt.impl_params[i].name).name};
-            if (i < enclosing_impl->type_arguments.size() && enclosing_impl->type_arguments[i]) {
-                auto& concrete_t{denoted_type(*enclosing_impl->type_arguments[i])};
-                binding_frame.insert_or_assign(pname, gir::const_value{concrete_t});
-                {
-                    const auto param_name{impl_stmt.impl_params[i].name};
-                    const auto prev{fn_mod.sema_side_tables.node_types[param_name]};
-                    binding_restores.restores.emplace_back([&fn_mod, param_name, prev] {
-                        fn_mod.sema_side_tables.node_types[param_name] = prev;
-                    });
-                }
-                fn_mod.set_sema_type(impl_stmt.impl_params[i].name, concrete_t);
-                if (const auto s{
-                        ctx_.registry.get_from_opt(enclosing_impl->body_scope_idx, pname)}) {
-                    const auto prev_kind{s->get_kind_opt()};
-                    const auto prev_status{s->get_status()};
-                    binding_restores.restores.emplace_back(
-                        [&ctx_ = ctx_,
-                         table_idx{enclosing_impl->body_scope_idx},
-                         pname,
-                         prev_kind,
-                         prev_status] {
-                            if (auto sym{ctx_.registry.get_from_opt(table_idx, pname)}) {
-                                if (prev_kind) { sym->set_kind(*prev_kind); }
-                                sym->set_status(prev_status);
-                            }
-                        });
-                    s->set_kind(symbol_kind::VALUE);
-                    s->set_status(symbol_status::RESOLVED);
-                }
-            }
-        }
-        if (!enclosing_impl->gir_prefix.empty()) {
-            if (const auto cx_bindings{
-                    ctx_.instantiation_cache.get_type_ctor_bindings(enclosing_impl->gir_prefix)}) {
-                for (const auto& [pname, val] : *cx_bindings) {
-                    binding_frame.insert_or_assign(pname, val);
-                }
-            }
-        }
-    }
-
-    if (!enclosing_impl && fn_info.enclosing_type) {
-        if (const auto prefix{
-                ctx_.generic_functions.get_type_ctor_member_prefix(*fn_info.enclosing_type)}) {
-            if (const auto cx_bindings{ctx_.instantiation_cache.get_type_ctor_bindings(*prefix)}) {
-                for (const auto& [pname, val] : *cx_bindings) {
-                    binding_frame.insert_or_assign(pname, val);
-                    if (!fn_info.enclosing_fn_table_idx) { continue; }
-                    const auto vt{val.get_type()};
-                    if (!vt) { continue; }
-                    const auto table_idx{*fn_info.enclosing_fn_table_idx};
-                    const auto s{ctx_.registry.get_from_opt(table_idx, pname)};
-                    if (!s) { continue; }
-                    const auto p{s->get_data().as_opt<symbols::parameter>()};
-                    if (!p) { continue; }
-                    const ast::node_id decl_node{p->name};
-
-                    const auto prev_node_type{fn_mod.sema_side_tables.node_types[decl_node]};
-                    binding_restores.restores.emplace_back([&fn_mod, decl_node, prev_node_type] {
-                        fn_mod.sema_side_tables.node_types[decl_node] = prev_node_type;
-                    });
-                    fn_mod.set_sema_type(decl_node, *vt);
-
-                    const auto prev_kind{s->get_kind_opt()};
-                    const auto prev_status{s->get_status()};
-                    binding_restores.restores.emplace_back(
-                        [&ctx_ = ctx_, table_idx, pname, prev_kind, prev_status] {
-                            if (auto sym{ctx_.registry.get_from_opt(table_idx, pname)}) {
-                                if (prev_kind) { sym->set_kind(*prev_kind); }
-                                sym->set_status(prev_status);
-                            }
-                        });
-                    s->set_kind(symbol_kind::VALUE);
-                    s->set_status(symbol_status::RESOLVED);
-                }
-            }
-        }
+        bind_impl_params(fn_mod, *enclosing_impl, binding_frame, binding_restores);
+    } else if (!enclosing_impl && fn_info.enclosing_type) {
+        bind_ctor_member_params(fn_info, binding_frame, binding_restores);
     }
 
     const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(binding_frame)};
@@ -600,42 +710,10 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
     inst_stack.push(fn_table_idx);
 
-    if (fn_expr.self) {
-        stdx::option<type&> self_t;
-        if (fn_info.enclosing_type) {
-            auto& enc{*fn_info.enclosing_type};
-            self_t.emplace(enc);
-            if (const auto m{types::mut::from_type_modifier(fn_expr.self->modifier)}) {
-                self_t = fn_expr.self->modifier.is_ptr() ? &ctx_.get_pointer(*m, enc)
-                                                         : &ctx_.get_reference(*m, enc);
-            }
-        } else if (const auto st{fn_mod.get_sema_type_opt(fn_expr.self->name)}) {
-            self_t.emplace(st.get());
-        }
-        if (self_t) {
-            {
-                const auto self_name{fn_expr.self->name};
-                const auto prev{fn_mod.sema_side_tables.node_types[self_name]};
-                binding_restores.restores.emplace_back([&fn_mod, self_name, prev] {
-                    fn_mod.sema_side_tables.node_types[self_name] = prev;
-                });
-            }
-            fn_mod.set_sema_type(fn_expr.self->name, *self_t);
-            if (const auto ident{fn_mod.ast.get_as_opt<ast::identifier_expr>(fn_expr.self->name)}) {
-                if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident->name)}) {
-                    const auto prev_kind{sym->get_kind_opt()};
-                    const auto prev_status{sym->get_status()};
-                    binding_restores.restores.emplace_back(
-                        [&ctx_ = ctx_, fn_table_idx, name{ident->name}, prev_kind, prev_status] {
-                            if (auto s{ctx_.registry.get_from_opt(fn_table_idx, name)}) {
-                                if (prev_kind) { s->set_kind(*prev_kind); }
-                                s->set_status(prev_status);
-                            }
-                        });
-                    sym->set_kind(symbol_kind::VALUE);
-                    sym->set_status(symbol_status::RESOLVED);
-                }
-            }
+    if (const auto self_t{instance_self_type(fn_info)}) {
+        binding_restores.retype(fn_mod, fn_expr.self->name, *self_t);
+        if (const auto ident{fn_mod.ast.get_as_opt<ast::identifier_expr>(fn_expr.self->name)}) {
+            binding_restores.bind_value_symbol(ctx_, fn_table_idx, ident->name);
         }
     }
 
@@ -646,29 +724,10 @@ auto type_resolver::instantiate_generic(type&                             callee
            "Arity should be validated in resolve_call");
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
-        {
-            const auto param_name{param.name};
-            const auto prev{fn_mod.sema_side_tables.node_types[param_name]};
-            binding_restores.restores.emplace_back([&fn_mod, param_name, prev] {
-                fn_mod.sema_side_tables.node_types[param_name] = prev;
-            });
-        }
-        fn_mod.set_sema_type(param.name, *concrete_args[p_idx]);
+        binding_restores.retype(fn_mod, param.name, *concrete_args[p_idx]);
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{fn_mod.ast.get_as<ast::identifier_expr>(param.name)};
-            if (auto sym{ctx_.registry.get_from_opt(fn_table_idx, ident.name)}) {
-                const auto prev_kind{sym->get_kind_opt()};
-                const auto prev_status{sym->get_status()};
-                binding_restores.restores.emplace_back(
-                    [&ctx_ = ctx_, fn_table_idx, name{ident.name}, prev_kind, prev_status] {
-                        if (auto s{ctx_.registry.get_from_opt(fn_table_idx, name)}) {
-                            if (prev_kind) { s->set_kind(*prev_kind); }
-                            s->set_status(prev_status);
-                        }
-                    });
-                sym->set_kind(symbol_kind::VALUE);
-                sym->set_status(symbol_status::RESOLVED);
-            }
+            binding_restores.bind_value_symbol(ctx_, fn_table_idx, ident.name);
         }
     }
 
@@ -890,53 +949,12 @@ auto type_resolver::instantiate_generic(type&                             callee
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
     snap.diff_into(ctx_, fn_mod, typing, &write_log);
-    // Outside the overlay the literal reads as its template again, not the last instantiation
-    const auto literal_idx{fn_mod.fn_literal_node(fn_info.node_id).get_index()};
-    if (const auto templ{snap.attributes.find(literal_idx)}; templ != snap.attributes.end()) {
-        fn_mod.node_attributes.insert_or_assign(literal_idx, templ->second);
-    } else {
-        fn_mod.node_attributes.erase(literal_idx);
-    }
-
-    // The per-inst typing lives in `typing` and must not leak into `fn_mod`'s shared side tables
-    const auto rollback_poisoned{[](auto& live, const auto& snapshot, const auto& changed) {
-        for (const auto& [idx, ty] : changed) {
-            if (ty && ty->is_poison() && idx < snapshot.size()) { live[idx] = snapshot[idx]; }
-        }
-    }};
-    rollback_poisoned(fn_mod.sema_side_tables.node_types.values, snap.nodes, typing.node_types);
-    rollback_poisoned(
-        fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
-
-    // Nested in another instantiation of this module, this one may have retyped nodes the outer
-    // one already typed, so hand those back for the outer diff to record
-    if (prev_write_log) {
-        const auto give_back{[](auto&                     live,
-                                const auto&               snapshot,
-                                const std::vector<usize>& ours,
-                                const std::vector<usize>& enclosing) {
-            const ankerl::unordered_dense::set<usize> enclosing_idxs(enclosing.begin(),
-                                                                     enclosing.end());
-            for (const auto idx : ours) {
-                if (idx < snapshot.size() && enclosing_idxs.contains(idx)) {
-                    live[idx] = snapshot[idx];
-                }
-            }
-        }};
-        give_back(fn_mod.sema_side_tables.node_types.values,
-                  snap.nodes,
-                  write_log.node_idxs,
-                  prev_write_log->node_idxs);
-        give_back(fn_mod.sema_side_tables.explicit_types.values,
-                  snap.types,
-                  write_log.explicit_idxs,
-                  prev_write_log->explicit_idxs);
-    }
-    for (const auto& [idx, target] : typing.call_targets) {
-        if (idx < snap.calls.size()) {
-            fn_mod.sema_side_tables.generic_call_targets.values[idx] = snap.calls[idx];
-        }
-    }
+    restore_shared_typing(fn_mod,
+                          snap,
+                          typing,
+                          write_log,
+                          prev_write_log,
+                          fn_mod.fn_literal_node(fn_info.node_id).get_index());
     ctx_.advance_epoch();
 
     auto tracker{std::move(inst_resolver.return_trackers_.back())};
@@ -962,26 +980,9 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Force comptime param if constructing a type (inspo from zig)
     if (!is_type_ctor && !is_auto_return && return_type.get_kind() == type_kind::TYPE &&
-        tracker.has_returns() && !all_params_are_types) {
-        for (const auto& param : fn_expr.parameters) {
-            if (param.is_comptime) { continue; }
-            // An untyped pack (`rest...`) has no annotation, and its elements are values
-            const bool untyped_pack{!param.explicit_type};
-            const auto pty{untyped_pack ? stdx::none
-                                        : fn_mod.get_sema_type_opt(*param.explicit_type)};
-            if (untyped_pack || (pty && pty->get_kind() != type_kind::TYPE)) {
-                std::string_view pn{ast::parameter_name(fn_mod.ast, param)};
-                if (pn.empty()) { pn = "_"; }
-                ctx_.diags.emplace_back(
-                    fmt::format(
-                        "a `fn(...): type` constructor cannot take a plain value parameter; "
-                        "mark '{}' `comptime` so it is known at instantiation time",
-                        pn),
-                    error::TYPE_MISMATCH,
-                    fn_mod.ast.location_of(param.name));
-                return stdx::none;
-            }
-        }
+        tracker.has_returns() && !all_params_are_types &&
+        !check_ctor_params_comptime(ctx_, fn_mod, fn_expr)) {
+        return stdx::none;
     }
     type* deduced_return_type{(is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_)
                                                                : &return_type};
@@ -1008,27 +1009,8 @@ auto type_resolver::instantiate_generic(type&                             callee
 
                 // Hand this instantiation's `comptime` parameter values, and any plain `type`
                 // parameters to the member emit
-                std::vector<std::pair<std::string, gir::const_value>> ctor_bindings;
-                for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
-                    const auto& param{fn_expr.parameters[p_idx]};
-                    if (param.is_comptime) {
-                        if (cx_i < comptime_args.size() && param.name.is<ast::identifier_expr>()) {
-                            const auto& p_name{
-                                fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-                            ctor_bindings.emplace_back(std::string{p_name}, comptime_args[cx_i]);
-                        }
-                        ++cx_i;
-                        continue;
-                    }
-
-                    if (p_idx < concrete_args.size() && param.name.is<ast::identifier_expr>()) {
-                        const auto& p_name{
-                            fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
-                        ctor_bindings.emplace_back(
-                            std::string{p_name},
-                            gir::const_value{denoted_type(*concrete_args[p_idx])});
-                    }
-                }
+                auto ctor_bindings{
+                    ctor_bindings_of(fn_mod.ast, fn_expr, concrete_args, comptime_args)};
                 deduced_return_type = &clone;
                 if (ctor_bindings.size() == fn_expr.parameters.size()) {
                     ctx_.user_type_names.try_emplace(
