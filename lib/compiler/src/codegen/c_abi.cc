@@ -60,7 +60,7 @@ struct value_plan {
     pass_kind                kind{pass_kind::DIRECT};
     llvm::Type*              original{nullptr};
     std::vector<llvm::Type*> parts;
-    bool                     align_stack_8{false}; // an AAPCS64 HFA keeps 8-byte stack slots
+    u64                      stack_align{0}; // an AAPCS64 HFA's stack slot alignment, if any
 };
 
 struct signature_plan {
@@ -69,17 +69,41 @@ struct signature_plan {
     llvm::FunctionType*     lowered{nullptr};
 };
 
-// One scalar inside an aggregate and its byte offset
+// One scalar inside an aggregate and its byte offset (union members overlap)
 struct leaf {
     u64         offset;
     llvm::Type* type;
 };
 
+// The SysV x86-64 class of one eightbyte
+enum class sysv_class : u8 {
+    NONE,
+    INTEGER,
+    SSE,
+    SSEUP,
+    X87,
+    X87UP,
+    MEMORY,
+};
+
+using sysv_classes = std::array<sysv_class, 2>;
+
+// How two classes sharing an eightbyte combine, in clang's order: INTEGER beats x87
+[[nodiscard]] constexpr auto merge(sysv_class accum, sysv_class field) -> sysv_class {
+    using enum sysv_class;
+    if (accum == field || field == NONE) { return accum; }
+    if (field == MEMORY) { return MEMORY; }
+    if (accum == NONE) { return field; }
+    if (accum == INTEGER || field == INTEGER) { return INTEGER; }
+    if (field == X87 || field == X87UP || accum == X87 || accum == X87UP) { return MEMORY; }
+    return SSE;
+}
+
 class classifier {
   public:
-    explicit classifier(llvm::Module& module)
+    classifier(llvm::Module& module, const union_member_map& unions)
         : layout_{module.getDataLayout()}, context_{module.getContext()},
-          triple_{module.getTargetTriple()} {}
+          triple_{module.getTargetTriple()}, unions_{unions} {}
 
     // How `fn_ty` crosses the C ABI, or none when nothing about it changes
     [[nodiscard]] auto plan(llvm::FunctionType*          fn_ty,
@@ -125,6 +149,11 @@ class classifier {
         return llvm::IntegerType::get(context_, static_cast<u32>(bytes * 8));
     }
 
+    [[nodiscard]] auto union_members_of(llvm::Type* ty) const -> const std::vector<llvm::Type*>* {
+        const auto it{unions_.find(ty)};
+        return it == unions_.end() ? nullptr : &it->second;
+    }
+
     [[nodiscard]] static auto coerced(llvm::Type* original, std::vector<llvm::Type*> parts)
         -> value_plan {
         return {.kind = pass_kind::COERCE, .original = original, .parts = std::move(parts)};
@@ -141,13 +170,8 @@ class classifier {
     [[nodiscard]] auto plan_return(abi_model model, llvm::Type* ty) const -> value_plan {
         if (!is_by_value_aggregate(ty) || alloc_size(ty) == 0) { return direct(ty); }
         switch (model) {
-        case abi_model::WIN64:       return win64(ty);
-        case abi_model::SYSV_X86_64: {
-            auto parts{sysv_parts(ty)};
-            if (!parts) { return memory(ty, pass_kind::INDIRECT); }
-            if (parts->size() == 1) { return coerced(ty, std::move(*parts)); }
-            return coerced(ty, {llvm::StructType::get(context_, *parts)});
-        }
+        case abi_model::WIN64:          return win64(ty);
+        case abi_model::SYSV_X86_64:    return sysv_return(ty);
         case abi_model::AAPCS64:
         case abi_model::DARWIN_AARCH64: return aarch64_return(ty);
         case abi_model::NONE:           break;
@@ -193,23 +217,45 @@ class classifier {
         }
     }
 
+    [[nodiscard]] auto sysv_return(llvm::Type* ty) const -> value_plan {
+        const auto classes{sysv_classify(ty)};
+        if (!classes) { return memory(ty, pass_kind::INDIRECT); }
+        // An x87 value comes back in st0
+        if ((*classes)[0] == sysv_class::X87) {
+            return coerced(ty, {llvm::Type::getX86_FP80Ty(context_)});
+        }
+        auto parts{sysv_parts(ty, *classes)};
+        if (parts.empty()) { return direct(ty); }
+        if (parts.size() == 1) { return coerced(ty, std::move(parts)); }
+        return coerced(ty, {llvm::StructType::get(context_, parts)});
+    }
+
     // An aggregate goes in registers only when all of its eight bytes fit, otherwise on the stack
     [[nodiscard]] auto sysv_param(llvm::Type* ty, register_budget& budget) const -> value_plan {
-        auto parts{sysv_parts(ty)};
-        if (!parts) { return memory(ty, pass_kind::BYVAL); }
-        const auto sse_parts{static_cast<u32>(std::ranges::count_if(
-            *parts, [](llvm::Type* part) { return part->isFPOrFPVectorTy(); }))};
-        const auto int_parts{static_cast<u32>(parts->size()) - sse_parts};
-        if (int_parts > budget.integer || sse_parts > budget.sse) {
+        const auto classes{sysv_classify(ty)};
+        if (!classes) { return memory(ty, pass_kind::BYVAL); }
+        const auto count{[&](sysv_class wanted) {
+            return static_cast<u32>(std::ranges::count(*classes, wanted));
+        }};
+        if (count(sysv_class::X87) + count(sysv_class::X87UP) > 0) {
             return memory(ty, pass_kind::BYVAL);
         }
-        budget.integer -= int_parts;
-        budget.sse -= sse_parts;
-        return coerced(ty, std::move(*parts));
+        const auto int_regs{count(sysv_class::INTEGER)};
+        const auto sse_regs{count(sysv_class::SSE)};
+        if (int_regs > budget.integer || sse_regs > budget.sse) {
+            return memory(ty, pass_kind::BYVAL);
+        }
+        auto parts{sysv_parts(ty, *classes)};
+        if (parts.empty()) { return direct(ty); }
+        budget.integer -= int_regs;
+        budget.sse -= sse_regs;
+        return coerced(ty, std::move(parts));
     }
 
     auto collect_leaves(llvm::Type* ty, u64 base, std::vector<leaf>& out) const -> void {
-        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+        if (const auto* members{union_members_of(ty)}) {
+            for (auto* member : *members) { collect_leaves(member, base, out); }
+        } else if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
             const auto* st_layout{layout_.getStructLayout(st)};
             for (u32 i{0}; i < st->getNumElements(); ++i) {
                 collect_leaves(st->getElementType(i), base + st_layout->getElementOffset(i), out);
@@ -230,74 +276,246 @@ class classifier {
         return leaves;
     }
 
-    // The SysV classification: one register-sized part per eightbyte, or none for memory
-    [[nodiscard]] auto sysv_parts(llvm::Type* ty) const -> stdx::option<std::vector<llvm::Type*>> {
+    // The classes of the eightbyte a scalar starts in and of the one after it
+    [[nodiscard]] auto sysv_leaf_classes(llvm::Type* ty) const -> sysv_classes {
+        using enum sysv_class;
+        const auto size{alloc_size(ty)};
+        if (ty->isX86_FP80Ty()) { return {X87, X87UP}; }
+        if (ty->isFP128Ty()) { return {SSE, SSEUP}; }
+        if (ty->isIntegerTy() && size == 16) { return {INTEGER, INTEGER}; }
+        if (ty->isIntegerTy() || ty->isPointerTy()) { return {size <= 8 ? INTEGER : MEMORY, NONE}; }
+        if (ty->isFloatingPointTy()) { return {SSE, NONE}; }
+        if (auto* vec{llvm::dyn_cast<llvm::FixedVectorType>(ty)}) {
+            if (size <= 4) { return {INTEGER, NONE}; }
+            if (size == 8) {
+                const bool one_i64{vec->getNumElements() == 1 &&
+                                   vec->getElementType()->isIntegerTy(64)};
+                return {one_i64 ? INTEGER : SSE, NONE};
+            }
+            if (size == 16) { return {SSE, SSEUP}; }
+        }
+        return {MEMORY, NONE};
+    }
+
+    // The SysV classification of an aggregate of at most 16 bytes, or none for memory
+    [[nodiscard]] auto sysv_classify(llvm::Type* ty) const -> stdx::option<sysv_classes> {
+        using enum sysv_class;
         const auto size{alloc_size(ty)};
         if (size > 16) { return stdx::none; }
 
-        const auto leaves{leaves_of(ty)};
-        for (const auto& [offset, leaf_ty] : leaves) {
+        sysv_classes classes{NONE, NONE};
+        for (const auto& [offset, leaf_ty] : leaves_of(ty)) {
             const auto leaf_size{alloc_size(leaf_ty)};
             const bool misaligned{offset % layout_.getABITypeAlign(leaf_ty).value() != 0};
-            const bool straddles{(offset / 8) != ((offset + leaf_size - 1) / 8)};
-            const bool x87{leaf_ty->isX86_FP80Ty() || leaf_ty->isFP128Ty()};
-            if (misaligned || straddles || x87) { return stdx::none; }
+            const bool straddles{leaf_size <= 8 && (offset / 8) != ((offset + leaf_size - 1) / 8)};
+            if (misaligned || straddles) { return stdx::none; }
+
+            const auto [first, second]{sysv_leaf_classes(leaf_ty)};
+            const auto eightbyte{offset / 8};
+            classes[eightbyte] = merge(classes[eightbyte], first);
+            if (second != NONE) { classes[eightbyte + 1] = merge(classes[eightbyte + 1], second); }
+            if (classes[0] == MEMORY || classes[1] == MEMORY) { return stdx::none; }
         }
 
+        auto& [lo, hi]{classes};
+        // Darwin predates ABI revision 0.98, so a stray X87UP still travels as SSE there
+        if (hi == X87UP && lo != X87) {
+            if (!triple_.isOSDarwin()) { return stdx::none; }
+            hi = SSE;
+        }
+        if (hi == SSEUP && lo != SSE) { hi = SSE; }
+        return classes;
+    }
+
+    // One register-sized part per classified eightbyte, typed the way clang picks them
+    [[nodiscard]] auto sysv_parts(llvm::Type* ty, const sysv_classes& classes) const
+        -> std::vector<llvm::Type*> {
+        if (classes[0] == sysv_class::SSE && classes[1] == sysv_class::SSEUP) {
+            return {byte_vector_type(ty)};
+        }
+        const auto               size{alloc_size(ty)};
+        const auto               leaves{leaves_of(ty)};
         std::vector<llvm::Type*> parts;
         for (u64 eightbyte{0}; eightbyte * 8 < size; ++eightbyte) {
-            if (auto* part{sysv_eightbyte(leaves, eightbyte, size)}) { parts.emplace_back(part); }
+            const auto offset{eightbyte * 8};
+            if (classes[eightbyte] == sysv_class::INTEGER) {
+                auto* part{integer_type_at(ty, offset, offset, size, leaves)};
+                parts.emplace_back(part);
+                // An `i128` covers both eightbytes
+                if (alloc_size(part) == 16) { break; }
+            } else if (classes[eightbyte] == sysv_class::SSE) {
+                parts.emplace_back(sse_type_at(ty, offset, size - offset));
+            }
         }
         return parts;
     }
 
-    // INTEGER wins over SSE within an eightbyte, and an all-padding eightbyte needs no register
-    [[nodiscard]] auto sysv_eightbyte(const std::vector<leaf>& leaves, u64 index, u64 size) const
-        -> llvm::Type* {
-        const u64         start{index * 8};
-        const u64         span{std::min<u64>(8, size - start)};
-        std::vector<leaf> inside;
-        for (const auto& item : leaves) {
-            if (item.offset >= start && item.offset < start + 8) { inside.emplace_back(item); }
-        }
-        if (inside.empty()) { return nullptr; }
-
-        const bool all_float{std::ranges::all_of(
-            inside, [](const leaf& item) { return item.type->isFPOrFPVectorTy(); })};
-        if (!all_float) {
-            const bool exact_scalar{inside.size() == 1 && inside.front().offset == start &&
-                                    alloc_size(inside.front().type) == span &&
-                                    !inside.front().type->isVectorTy()};
-            return exact_scalar ? inside.front().type : int_of_bytes(span);
-        }
-
-        auto*      first{inside.front().type};
-        const bool uniform{
-            std::ranges::all_of(inside, [&](const leaf& item) { return item.type == first; })};
-        if (uniform && first->isFloatingPointTy() && inside.front().offset == start) {
-            const auto count{span / alloc_size(first)};
-            if (count <= 1) { return first; }
-            return llvm::FixedVectorType::get(first, static_cast<u32>(count));
-        }
-        return inside.size() == 1 ? first : llvm::Type::getDoubleTy(context_);
+    // clang's `BitsContainNoUserData`: no scalar overlaps bytes [begin, end)
+    [[nodiscard]] auto is_padding(const std::vector<leaf>& leaves, u64 begin, u64 end) const
+        -> bool {
+        return std::ranges::none_of(leaves, [&](const leaf& item) {
+            return item.offset < end && item.offset + alloc_size(item.type) > begin;
+        });
     }
 
-    // An AAPCS64 homogeneous floating-point aggregate: one to four members of a single FP type
-    [[nodiscard]] auto homogeneous_member(llvm::Type* ty) const
-        -> stdx::option<std::pair<llvm::Type*, u64>> {
-        constexpr u64 max_hfa_bytes{4 * 16};
-        if (alloc_size(ty) > max_hfa_bytes) { return stdx::none; }
-        const auto leaves{leaves_of(ty)};
-        if (leaves.empty() || leaves.size() > 4) { return stdx::none; }
-        auto*      member{leaves.front().type};
-        const bool fp_member{member->isFloatingPointTy() && !member->isX86_FP80Ty()};
-        const bool vector_member{member->isVectorTy() &&
-                                 (alloc_size(member) == 8 || alloc_size(member) == 16)};
-        if (!fp_member && !vector_member) { return stdx::none; }
-        const bool same{
-            std::ranges::all_of(leaves, [&](const leaf& item) { return item.type == member; })};
-        if (!same || alloc_size(member) * leaves.size() != alloc_size(ty)) { return stdx::none; }
-        return std::pair{member, static_cast<u64>(leaves.size())};
+    // clang's `GetINTEGERTypeAtOffset`: the scalar at `offset` when nothing else shares its
+    // eightbyte, otherwise an integer as wide as what is left of the eightbyte
+    [[nodiscard]] auto integer_type_at(llvm::Type*              ty,
+                                       u64                      offset,
+                                       u64                      source_offset,
+                                       u64                      source_size,
+                                       const std::vector<leaf>& leaves) const -> llvm::Type* {
+        if (offset == 0) {
+            if (ty->isPointerTy() || ty->isIntegerTy(64) || ty->isIntegerTy(128)) { return ty; }
+            if (ty->isIntegerTy(8) || ty->isIntegerTy(16) || ty->isIntegerTy(32)) {
+                const auto used{source_offset + (ty->getIntegerBitWidth() / 8)};
+                if (is_padding(leaves, used, source_offset + 8)) { return ty; }
+            }
+        }
+        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+            const auto* st_layout{layout_.getStructLayout(st)};
+            if (st->getNumElements() > 0 && offset < st_layout->getSizeInBytes()) {
+                const auto index{st_layout->getElementContainingOffset(offset)};
+                return integer_type_at(st->getElementType(index),
+                                       offset - st_layout->getElementOffset(index),
+                                       source_offset,
+                                       source_size,
+                                       leaves);
+            }
+        }
+        if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            const auto stride{alloc_size(arr->getElementType())};
+            return integer_type_at(
+                arr->getElementType(), offset % stride, source_offset, source_size, leaves);
+        }
+        return int_of_bytes(std::min<u64>(source_size - source_offset, 8));
+    }
+
+    // clang's `getFPTypeAtOffset`: the floating-point scalar starting exactly at `offset`
+    [[nodiscard]] auto fp_type_at(llvm::Type* ty, u64 offset) const -> llvm::Type* {
+        if (offset == 0 && ty->isFloatingPointTy()) { return ty; }
+        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+            const auto* st_layout{layout_.getStructLayout(st)};
+            if (st->getNumElements() == 0 || offset >= st_layout->getSizeInBytes()) {
+                return nullptr;
+            }
+            const auto index{st_layout->getElementContainingOffset(offset)};
+            return fp_type_at(st->getElementType(index),
+                              offset - st_layout->getElementOffset(index));
+        }
+        if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            return fp_type_at(arr->getElementType(), offset % alloc_size(arr->getElementType()));
+        }
+        return nullptr;
+    }
+
+    // clang's `GetSSETypeAtOffset`: float pairs share a `<2 x float>`, halves pack into a
+    // vector, and anything else is a `double`
+    [[nodiscard]] auto sse_type_at(llvm::Type* ty, u64 offset, u64 source_size) const
+        -> llvm::Type* {
+        auto* f64{llvm::Type::getDoubleTy(context_)};
+        auto* first{fp_type_at(ty, offset)};
+        if (!first || first->isDoubleTy()) { return f64; }
+
+        const auto first_size{alloc_size(first)};
+        const bool first_half{first->is16bitFPTy()};
+        auto*      second{source_size > first_size ? fp_type_at(ty, offset + first_size) : nullptr};
+        if (!second && first_half && source_size > 4) { second = fp_type_at(ty, offset + 4); }
+        if (!second) { return first; }
+
+        if (first->isFloatTy() && second->isFloatTy()) {
+            return llvm::FixedVectorType::get(first, 2);
+        }
+        if (first_half && second->is16bitFPTy()) {
+            const bool four{source_size > 4 && fp_type_at(ty, offset + 4)};
+            return llvm::FixedVectorType::get(first, four ? 4 : 2);
+        }
+        if (first_half || second->is16bitFPTy()) {
+            return llvm::FixedVectorType::get(llvm::Type::getHalfTy(context_), 4);
+        }
+        return f64;
+    }
+
+    // clang's `GetByteVectorType` for an SSE+SSEUP pair: a lone vector or `f128` inside
+    // single-member wrappers passes as itself, anything else as `<2 x double>`
+    [[nodiscard]] auto byte_vector_type(llvm::Type* ty) const -> llvm::Type* {
+        auto* inner{ty};
+        while (true) {
+            if (const auto* members{union_members_of(inner)}) {
+                if (members->size() != 1) { break; }
+                inner = members->front();
+            } else if (auto* st{llvm::dyn_cast<llvm::StructType>(inner)}) {
+                const auto sized{[&](llvm::Type* element) { return alloc_size(element) > 0; }};
+                const auto elements{st->elements()};
+                if (std::ranges::count_if(elements, sized) != 1) { break; }
+                inner = *std::ranges::find_if(elements, sized);
+            } else if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(inner)};
+                       arr && arr->getNumElements() == 1) {
+                inner = arr->getElementType();
+            } else {
+                break;
+            }
+        }
+        if (alloc_size(inner) == alloc_size(ty) && (inner->isVectorTy() || inner->isFP128Ty())) {
+            return inner;
+        }
+        return llvm::FixedVectorType::get(llvm::Type::getDoubleTy(context_), 2);
+    }
+
+    struct hfa_shape {
+        llvm::Type* base;
+        u64         members;
+    };
+
+    // Floating-point scalars, and 8 or 16 byte vectors, can make up an AAPCS64 HFA
+    [[nodiscard]] auto is_hfa_base(llvm::Type* ty) const -> bool {
+        if (ty->isVectorTy()) { return alloc_size(ty) == 8 || alloc_size(ty) == 16; }
+        return ty->isFloatingPointTy() && !ty->isX86_FP80Ty() && !ty->isPPC_FP128Ty();
+    }
+
+    // clang's `isHomogeneousAggregate` count: struct members add up, union members take the
+    // largest, and every scalar must match `base` in size and vector-ness
+    [[nodiscard]] auto hfa_members(llvm::Type* ty, llvm::Type*& base) const -> stdx::option<u64> {
+        if (const auto* members{union_members_of(ty)}) {
+            u64 most{0};
+            for (auto* member : *members) {
+                const auto count{hfa_members(member, base)};
+                if (!count) { return stdx::none; }
+                most = std::max(most, *count);
+            }
+            return most;
+        }
+        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+            u64 total{0};
+            for (auto* element : st->elements()) {
+                const auto count{hfa_members(element, base)};
+                if (!count) { return stdx::none; }
+                total += *count;
+            }
+            return total;
+        }
+        if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            if (arr->getNumElements() == 0) { return stdx::none; }
+            const auto count{hfa_members(arr->getElementType(), base)};
+            if (!count) { return stdx::none; }
+            return *count * arr->getNumElements();
+        }
+        if (!is_hfa_base(ty)) { return stdx::none; }
+        if (!base) {
+            base = ty;
+        } else if (base->isVectorTy() != ty->isVectorTy() || alloc_size(base) != alloc_size(ty)) {
+            return stdx::none;
+        }
+        return 1;
+    }
+
+    // An AAPCS64 homogeneous floating-point aggregate: one to four members of a single base
+    [[nodiscard]] auto homogeneous_member(llvm::Type* ty) const -> stdx::option<hfa_shape> {
+        llvm::Type* base{nullptr};
+        const auto  count{hfa_members(ty, base)};
+        if (!count || !base || *count == 0 || *count > 4) { return stdx::none; }
+        if (alloc_size(base) * *count != alloc_size(ty)) { return stdx::none; }
+        return hfa_shape{.base = base, .members = *count};
     }
 
     [[nodiscard]] auto aarch64_pair(llvm::Type* ty) const -> llvm::Type* {
@@ -309,8 +527,9 @@ class classifier {
 
     [[nodiscard]] auto aarch64_param(llvm::Type* ty, bool darwin) const -> value_plan {
         if (const auto hfa{homogeneous_member(ty)}) {
-            auto plan{coerced(ty, {llvm::ArrayType::get(hfa->first, hfa->second)})};
-            plan.align_stack_8 = !darwin;
+            auto plan{coerced(ty, {llvm::ArrayType::get(hfa->base, hfa->members)})};
+            // Linux keeps an HFA's stack slot at 8 bytes, or 16 for a 16-byte aligned one
+            if (!darwin) { plan.stack_align = layout_.getABITypeAlign(ty).value() >= 16 ? 16 : 8; }
             return plan;
         }
         const auto size{alloc_size(ty)};
@@ -356,15 +575,16 @@ class classifier {
     const llvm::DataLayout& layout_;
     llvm::LLVMContext&      context_;
     llvm::Triple            triple_;
+    const union_member_map& unions_;
 };
 
 // Moves values between their ghoti and C ABI shapes through stack memory, as clang does, and
 // leaves the round trips for later passes to fold
 class abi_rewriter {
   public:
-    explicit abi_rewriter(llvm::Module& module)
+    abi_rewriter(llvm::Module& module, const union_member_map& unions)
         : module_{module}, layout_{module.getDataLayout()}, context_{module.getContext()},
-          classifier_{module}, copier_{module} {}
+          classifier_{module, unions}, copier_{module} {}
 
     auto run() -> void {
         rewrite_signatures();
@@ -430,7 +650,7 @@ class abi_rewriter {
             attrs.addByValAttr(plan.original);
             attrs.addAlignmentAttr(memory_align(plan.original));
         }
-        if (plan.align_stack_8) { attrs.addStackAlignmentAttr(llvm::Align{8}); }
+        if (plan.stack_align > 0) { attrs.addStackAlignmentAttr(llvm::Align{plan.stack_align}); }
         return llvm::AttributeSet::get(context_, attrs);
     }
 
@@ -642,9 +862,9 @@ class abi_rewriter {
 
 } // namespace
 
-auto lower_c_abi(llvm::Module& module) -> void {
+auto lower_c_abi(llvm::Module& module, const union_member_map& unions) -> void {
     PROFILE_FUNCTION();
-    abi_rewriter{module}.run();
+    abi_rewriter{module, unions}.run();
 }
 
 } // namespace ghoti::codegen

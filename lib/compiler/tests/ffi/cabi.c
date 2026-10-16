@@ -107,6 +107,34 @@ typedef union {
     int32_t i;
     float   f;
 } UIF;
+typedef union {
+    float  a;
+    double d;
+} UFD;
+typedef union {
+    float a;
+    float b[3];
+} UF13;
+typedef union {
+    float  a[3];
+    double d;
+} UF3D;
+typedef struct {
+    float x;
+    union {
+        float a, b;
+    } u;
+} SFU;
+typedef struct {
+    UFD   u;
+    float y;
+} SUF;
+typedef struct {
+    __int128 x;
+} SI;
+
+#define I128_CANONICAL (((__int128)0x0123456789ABCDEF << 64) | 0x0011223344556677)
+#define FLOATS3_EQ(a, b, f) ((a).f[0] == (b).f[0] && (a).f[1] == (b).f[1] && (a).f[2] == (b).f[2])
 
 DEFINE_ABI_SUITE(S1, FIELDS_EQ1(a, b, a), v.a += 1, 11)
 DEFINE_ABI_SUITE(S2, FIELDS_EQ2(a, b, a, b), (v.a += 1, v.b += 1), 11, 22)
@@ -157,6 +185,34 @@ DEFINE_ABI_SUITE(Nested,
                  {11, 22},
                  33'333)
 DEFINE_ABI_SUITE(UIF, FIELDS_EQ1(a, b, i), v.i += 1, .i = 0x12345678)
+DEFINE_ABI_SUITE(UFD, FIELDS_EQ1(a, b, d), v.d += 1, .d = -3.75)
+DEFINE_ABI_SUITE(
+    UF13,
+    FLOATS3_EQ(a, b, b),
+    for (int k = 0; k < 3; ++k) { v.b[k] += 1; },
+    .b = {1.5f, -2.5f, 3.5f})
+DEFINE_ABI_SUITE(
+    UF3D,
+    FLOATS3_EQ(a, b, a),
+    for (int k = 0; k < 3; ++k) { v.a[k] += 1; },
+    .a = {1.5f, -2.5f, 3.5f})
+DEFINE_ABI_SUITE(SFU, (a.x == b.x && a.u.b == b.u.b), (v.x += 1, v.u.b += 1), 1.5f, {.b = -2.5f})
+DEFINE_ABI_SUITE(SUF, (a.u.d == b.u.d && a.y == b.y), (v.u.d += 1, v.y += 1), {.d = 2.5}, -1.5f)
+DEFINE_ABI_SUITE(SI, FIELDS_EQ1(a, b, x), v.x += 1, I128_CANONICAL)
+
+// Only x86-64 has an 80-bit `long double` to match ghoti's `f80`
+#if defined(__x86_64__)
+typedef struct {
+    long double x;
+} SL;
+typedef union {
+    long double a;
+    int64_t     b;
+} ULI;
+
+DEFINE_ABI_SUITE(SL, FIELDS_EQ1(a, b, x), v.x += 1, 1.5L)
+DEFINE_ABI_SUITE(ULI, FIELDS_EQ1(a, b, a), v.a += 1, .a = -2.25L)
+#endif
 
 // Narrow integers must reach C sign or zero extended, whatever the caller left above them
 int32_t widen_i8(int8_t v) { return v; }

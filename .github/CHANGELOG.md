@@ -802,7 +802,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: structs, unions, and arrays passed or returned by value now cross the C ABI the way C does on x86-64 (SysV and Win64) and AArch64 (Linux and Darwin); most of them used to reach C with the wrong values or crash (#379)
     - Narrow integers and `bool` are sign or zero extended wherever the target's C ABI expects the caller to
     - Every function follows these rules, so any function can become a C callback through `extern fn`
+    - Unions classify as C does: an `extern union` of floats travels in SSE registers on x86-64 and as an HFA on AArch64, and `f80`, `f128`, `i128`, and 16-byte vector fields take their two-register C classes
     - Other targets still pass aggregates LLVM's own way
+- Fixed: an `extern union` whose largest member isn't its most aligned one (`extern union { a: [3]f32, d: f64 }`) was missing its tail padding (12 bytes instead of 16) and was only 1-byte aligned in memory, and a constant `extern union` holding a float (`.{ .d = 3.0 }`) was all zeroes
 - Fixed: a module-scope `const` or `let` whose initializer has the wrong type (`let x: i32 = "s";`) is now a type error instead of a codegen crash
 - Fixed: a generic method of a type-constructor instance that takes `self` by value no longer crashes codegen
 - Fixed: `&f` of a function now coerces to an erased `fn(...)` parameter, as `^f` does

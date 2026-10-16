@@ -13,6 +13,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::codegen {
@@ -48,6 +49,9 @@ class type_translator {
     [[nodiscard]] auto struct_field_index(llvm::Type* struct_ty, u32 field) const -> u32;
     // A struct (or array of them) whose `@[align(n)]` fields raise its alignment past LLVM's
     [[nodiscard]] auto explicit_alignment_of(const sema::type& type) -> stdx::option<u64>;
+    [[nodiscard]] auto union_members() const noexcept -> const union_member_map& {
+        return union_members_;
+    }
 
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
@@ -76,6 +80,7 @@ class type_translator {
                          gsl::span<const u64>         wanted_alignments,
                          bool                         is_packed) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
+    auto set_untagged_union_body(llvm::StructType* union_ty, const sema::types::union_t& u) -> void;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
         -> llvm::Type*;
@@ -90,6 +95,7 @@ class type_translator {
     aggregate_identity_cache_t union_identity_cache_;
 
     ankerl::unordered_dense::map<const llvm::Type*, padded_layout> padded_structs_;
+    union_member_map                                               union_members_;
 };
 
 } // namespace ghoti::codegen

@@ -8,8 +8,18 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Module.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
 #include <stdx/types.hh>
 
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/sema/analyzer.hh"
@@ -45,34 +55,54 @@ constexpr std::string_view AGGREGATES{R"(
     const MixDI = extern struct { d: f64, i: i64 };
     const Nested = extern struct { inner: extern struct { a: u8, b: u8 }, tail: u16 };
     const UIF = extern union { i: i32, f: f32 };
+    const UFF = extern union { a: f32, b: f32 };
+    const UFD = extern union { a: f32, d: f64 };
+    const UF2 = extern union { a: [2]f32, b: f32 };
+    const UF3D = extern union { a: [3]f32, d: f64 };
+    const UF13 = extern union { a: f32, b: [3]f32 };
+    const UDD2 = extern union { a: f64, b: [2]f64 };
+    const UF4D2 = extern union { a: [4]f32, d: [2]f64 };
+    const SFU = extern struct { x: f32, u: UFF };
+    const SUF = extern struct { u: UFD, y: f32 };
+    const SFUD = extern struct { x: f32, u: UFD };
+    const UPL = extern union { p: ^u8, x: i64 };
+    const SHF = struct { a: f16, b: f32 };
+    const SQ = struct { x: f128 };
+    const SQ2 = struct { s: SQ };
+    const SI = struct { x: i128 };
+    const SLI = struct { a: i64, b: i128 };
 )"};
 
-constexpr std::array AGGREGATE_NAMES{"S1",
-                                     "S2",
-                                     "S3",
-                                     "S6",
-                                     "S8",
-                                     "S12",
-                                     "S16",
-                                     "S24",
-                                     "A5",
-                                     "F2",
-                                     "F3",
-                                     "F4",
-                                     "D2",
-                                     "D3",
-                                     "MixIF",
-                                     "MixFII",
-                                     "MixDI",
-                                     "Nested",
-                                     "UIF"};
+// `extern` aggregates take an `f80` only where C has one; `extern` rejects `f16`, `f128`, and
+// `i128` everywhere, so those only reach C as fields of plain structs
+constexpr std::string_view X86_AGGREGATES{R"(
+    const SL = extern struct { x: f80 };
+    const UL = extern union { a: f80, b: f80 };
+    const ULD = extern union { a: f80, b: f64 };
+    const ULI = extern union { a: f80, b: i64 };
+    const UFL = extern union { a: f32, b: f80 };
+)"};
 
-[[nodiscard]] auto exported_functions() -> std::string {
+constexpr std::array AGGREGATE_NAMES{"S1",    "S2",     "S3",    "S6",     "S8",    "S12", "S16",
+                                     "S24",   "A5",     "F2",    "F3",     "F4",    "D2",  "D3",
+                                     "MixIF", "MixFII", "MixDI", "Nested", "UIF",   "UFF", "UFD",
+                                     "UF2",   "UF3D",   "UF13",  "UDD2",   "UF4D2", "SFU", "SUF",
+                                     "SFUD",  "UPL",    "SHF",   "SQ",     "SQ2",   "SI",  "SLI"};
+
+constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
+
+[[nodiscard]] auto take_and_give(std::string_view name) -> std::string {
+    return fmt::format("export const take_{0} = fn(v: {0}): i32 {{ _ = v; return 1; }};\n"
+                       "export const give_{0} = fn(v: {0}): {0} {{ return v; }};\n",
+                       name);
+}
+
+[[nodiscard]] auto exported_functions(bool x86) -> std::string {
     std::string source{AGGREGATES};
-    for (const std::string_view name : AGGREGATE_NAMES) {
-        source += fmt::format("export const take_{0} = fn(v: {0}): i32 {{ _ = v; return 1; }};\n"
-                              "export const give_{0} = fn(v: {0}): {0} {{ return v; }};\n",
-                              name);
+    for (const std::string_view name : AGGREGATE_NAMES) { source += take_and_give(name); }
+    if (x86) {
+        source += X86_AGGREGATES;
+        for (const std::string_view name : X86_AGGREGATE_NAMES) { source += take_and_give(name); }
     }
     source += R"(
         export const take_i8 = fn(v: i8): i32 { return v; };
@@ -82,12 +112,20 @@ constexpr std::array AGGREGATE_NAMES{"S1",
         export const late = fn(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, s: S16): i64 {
             return a + b + c + d + e + f + s.a;
         };
+        export const late_SI = fn(a: i64, b: i64, c: i64, d: i64, e: i64, s: SI): i64 {
+            _ = s;
+            return a + b + c + d + e;
+        };
+        export const many_SQ = fn(a: SQ, b: SQ, c: SQ, d: SQ, e: SQ, f: SQ, g: SQ, h: SQ, i: SQ): i32 {
+            _ = a; _ = b; _ = c; _ = d; _ = e; _ = f; _ = g; _ = h; _ = i;
+            return 1;
+        };
     )";
     return source;
 }
 
 [[nodiscard]] auto ir_for(std::string_view triple) -> std::string {
-    const auto source{exported_functions()};
+    const auto source{exported_functions(triple.starts_with("x86_64"))};
     auto [ctx, idx]{helpers::resolve_for_target(source, triple)};
     helpers::check_errors<sema::diagnostics>(ctx->root_mod);
     auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod, false)};
@@ -131,7 +169,8 @@ constexpr std::array AGGREGATE_NAMES{"S1",
         if (c == ' ' && depth == 0) { break; }
     }
     std::string described{param.substr(0, end)};
-    for (const std::string_view attr : {"byval", "sret", "signext", "zeroext", "alignstack(8)"}) {
+    for (const std::string_view attr :
+         {"byval", "sret", "signext", "zeroext", "alignstack(8)", "alignstack(16)"}) {
         if (param.contains(attr)) { described += fmt::format(" {}", attr); }
     }
     return described;
@@ -188,6 +227,75 @@ auto check_signatures(std::string_view triple, const std::vector<expectation>& e
     }
 }
 
+// Shapes ghoti can't spell yet (vectors, and unions holding an `i128` or `f128`), built as LLVM
+// types and lowered directly
+[[nodiscard]] auto raw_ir_for(std::string_view triple) -> std::string {
+    codegen::initialize_all_targets();
+    const auto machine{UNWRAP(codegen::create_target_machine({.triple_str = std::string{triple}}))};
+    llvm::LLVMContext context;
+    llvm::Module      module{"raw_shapes", context};
+    module.setTargetTriple(machine->getTargetTriple());
+    module.setDataLayout(machine->createDataLayout());
+
+    auto* f32{llvm::Type::getFloatTy(context)};
+    auto* f64{llvm::Type::getDoubleTy(context)};
+    auto* f80{llvm::Type::getX86_FP80Ty(context)};
+    auto* f128{llvm::Type::getFP128Ty(context)};
+    auto* i32{llvm::Type::getInt32Ty(context)};
+    auto* i64{llvm::Type::getInt64Ty(context)};
+    auto* i128{llvm::Type::getInt128Ty(context)};
+    auto* v4f{llvm::FixedVectorType::get(f32, 4)};
+    auto* v2f{llvm::FixedVectorType::get(f32, 2)};
+
+    // Each union stores the member clang would, as the type translator lays them out
+    codegen::union_member_map unions;
+    const auto                union_of{[&](llvm::Type* storage, std::vector<llvm::Type*> members) {
+        auto* union_ty{llvm::StructType::create(context, {storage})};
+        unions[union_ty] = std::move(members);
+        return union_ty;
+    }};
+    const std::array<std::pair<std::string_view, llvm::Type*>, 11> shapes{{
+        {"SV", llvm::StructType::get(v4f)},
+        {"SVI", llvm::StructType::get(llvm::FixedVectorType::get(i32, 4))},
+        {"SV2", llvm::StructType::get(v2f, v2f)},
+        {"UVD", union_of(v4f, {v4f, f64})},
+        {"UID", union_of(i128, {i128, f64})},
+        {"UDI2", union_of(i128, {llvm::ArrayType::get(f64, 2), i128})},
+        {"UIL", union_of(i128, {i128, f80})},
+        {"ULI2", union_of(f80, {f80, i128})},
+        {"UQD", union_of(f128, {f128, f64})},
+        {"UQL", union_of(f128, {f128, i64})},
+        {"UQQ", union_of(f128, {f128, f128})},
+    }};
+    for (const auto& [name, ty] : shapes) {
+        for (const bool give : {false, true}) {
+            auto* fn_ty{llvm::FunctionType::get(give ? ty : i32, {ty}, false)};
+            auto* fn{llvm::Function::Create(fn_ty,
+                                            llvm::Function::ExternalLinkage,
+                                            fmt::format("{}_{}", give ? "give" : "take", name),
+                                            module)};
+            llvm::IRBuilder<> builder{llvm::BasicBlock::Create(context, "entry", fn)};
+            builder.CreateRet(give ? static_cast<llvm::Value*>(fn->getArg(0))
+                                   : llvm::ConstantInt::get(i32, 1));
+        }
+    }
+    codegen::lower_c_abi(module, unions);
+
+    std::string              ir;
+    llvm::raw_string_ostream out{ir};
+    module.print(out, nullptr);
+    return ir;
+}
+
+auto check_raw_signatures(std::string_view triple, const std::vector<expectation>& expected)
+    -> void {
+    const auto ir{raw_ir_for(triple)};
+    for (const auto& [function, signature] : expected) {
+        INFO(triple << " @" << function);
+        CHECK(signature_of(ir, function) == signature);
+    }
+}
+
 } // namespace
 
 TEST_CASE("x86-64 SysV aggregates follow the eightbyte classification") {
@@ -222,6 +330,59 @@ TEST_CASE("x86-64 SysV aggregates follow the eightbyte classification") {
                      });
 }
 
+TEST_CASE("x86-64 SysV unions merge their members' classes per eightbyte") {
+    check_signatures("x86_64-unknown-linux-gnu",
+                     {
+                         {"take_UFF", "i32(float)"},
+                         {"give_UFF", "float(float)"},
+                         {"take_UFD", "i32(double)"},
+                         {"take_UF2", "i32(<2 x float>)"},
+                         {"take_UF3D", "i32(double, double)"},
+                         {"give_UF3D", "{ double, double }(double, double)"},
+                         {"take_UF13", "i32(<2 x float>, float)"},
+                         {"give_UF13", "{ <2 x float>, float }(<2 x float>, float)"},
+                         {"take_UDD2", "i32(double, double)"},
+                         {"take_UF4D2", "i32(double, double)"},
+                         {"take_SFU", "i32(<2 x float>)"},
+                         {"give_SUF", "{ double, float }(double, float)"},
+                         {"give_SFUD", "{ float, double }(float, double)"},
+                         {"take_UPL", "i32(ptr)"},
+                         {"take_UIF", "i32(i32)"},
+                         {"give_SHF", "<4 x half>(<4 x half>)"},
+                     });
+}
+
+TEST_CASE("x86-64 SysV f80, f128, and i128 fields take their two-eightbyte classes") {
+    check_signatures("x86_64-unknown-linux-gnu",
+                     {
+                         {"take_SL", "i32(ptr byval)"},
+                         {"give_SL", "x86_fp80(ptr byval)"},
+                         {"give_UL", "x86_fp80(ptr byval)"},
+                         {"take_ULD", "i32(ptr byval)"},
+                         {"give_ULD", "void(ptr sret, ptr byval)"},
+                         {"give_ULI", "void(ptr sret, ptr byval)"},
+                         {"give_UFL", "void(ptr sret, ptr byval)"},
+                         {"give_SQ", "fp128(fp128)"},
+                         {"give_SQ2", "fp128(fp128)"},
+                         {"give_SI", "i128(i128)"},
+                         {"give_SLI", "void(ptr sret, ptr byval)"},
+                         {"late_SI", "i64(i64, i64, i64, i64, i64, ptr byval)"},
+                         {"many_SQ",
+                          "i32(fp128, fp128, fp128, fp128, fp128, fp128, fp128, fp128, "
+                          "ptr byval)"},
+                     });
+}
+
+TEST_CASE("x86-64 Darwin passes an f80 high half beside an integer as SSE") {
+    check_signatures("x86_64-apple-macos",
+                     {
+                         {"take_ULI", "i32(i64, double)"},
+                         {"give_ULI", "{ i64, double }(i64, double)"},
+                         {"give_ULD", "void(ptr sret, ptr byval)"},
+                         {"give_SL", "x86_fp80(ptr byval)"},
+                     });
+}
+
 TEST_CASE("Win64 aggregates pass as an integer or by reference") {
     check_signatures("x86_64-pc-windows-msvc",
                      {
@@ -233,6 +394,11 @@ TEST_CASE("Win64 aggregates pass as an integer or by reference") {
                          {"give_F2", "i64(i64)"},
                          {"take_D2", "i32(ptr)"},
                          {"take_UIF", "i32(i32)"},
+                         {"take_UFD", "i32(i64)"},
+                         {"take_UF13", "i32(ptr)"},
+                         {"give_UF3D", "void(ptr sret, ptr)"},
+                         {"take_SI", "i32(ptr)"},
+                         {"take_SQ", "i32(ptr)"},
                          {"take_i8", "i32(i8)"},
                          {"take_bool", "i32(i1 zeroext)"},
                      });
@@ -264,6 +430,67 @@ TEST_CASE("AAPCS64 aggregates pass as HFAs, integer pairs, or by reference") {
                              {"take_bool", darwin ? "i32(i1 zeroext)" : "i32(i1)"},
                          });
     }
+}
+
+TEST_CASE("AAPCS64 unions of one float type are HFAs") {
+    for (const auto [triple, darwin] :
+         {std::pair{"aarch64-unknown-linux-gnu", false}, std::pair{"arm64-apple-macos", true}}) {
+        const auto hfa{[&](std::string_view array, std::string_view align) {
+            return fmt::format(
+                "i32({}{})", array, darwin ? "" : fmt::format(" alignstack({})", align));
+        }};
+        check_signatures(triple,
+                         {
+                             {"take_UFF", hfa("[1 x float]", "8")},
+                             {"take_UF2", hfa("[2 x float]", "8")},
+                             {"take_UF13", hfa("[3 x float]", "8")},
+                             {"take_UDD2", hfa("[2 x double]", "8")},
+                             {"take_SFU", hfa("[2 x float]", "8")},
+                             {"give_UFD", "i64(i64)"},
+                             {"give_UF3D", "[2 x i64]([2 x i64])"},
+                             {"take_UF4D2", "i32([2 x i64])"},
+                             {"take_SUF", "i32([2 x i64])"},
+                             {"take_SFUD", "i32([2 x i64])"},
+                             {"take_SQ", hfa("[1 x fp128]", "16")},
+                             {"take_SQ2", hfa("[1 x fp128]", "16")},
+                             {"give_SI", "i128(i128)"},
+                             {"late_SI", "i64(i64, i64, i64, i64, i64, i128)"},
+                         });
+    }
+}
+
+TEST_CASE("16-byte vectors and i128 or f128 unions classify as clang does") {
+    check_raw_signatures("x86_64-unknown-linux-gnu",
+                         {
+                             {"take_SV", "i32(<4 x float>)"},
+                             {"give_SV", "<4 x float>(<4 x float>)"},
+                             {"give_SVI", "<4 x i32>(<4 x i32>)"},
+                             {"give_SV2", "{ double, double }(double, double)"},
+                             {"give_UVD", "<2 x double>(<2 x double>)"},
+                             {"take_UID", "i32(i128)"},
+                             {"take_UDI2", "i32(i128)"},
+                             {"give_UIL", "i128(i128)"},
+                             {"give_ULI2", "{ i64, i64 }(i64, i64)"},
+                             {"give_UQD", "<2 x double>(<2 x double>)"},
+                             {"give_UQL", "{ i64, double }(i64, double)"},
+                             {"take_UQQ", "i32(<2 x double>)"},
+                         });
+    check_raw_signatures("aarch64-unknown-linux-gnu",
+                         {
+                             {"take_SV", "i32([1 x <4 x float>] alignstack(16))"},
+                             {"take_SVI", "i32([1 x <4 x i32>] alignstack(16))"},
+                             {"take_SV2", "i32([2 x <2 x float>] alignstack(8))"},
+                             {"give_UVD", "i128(i128)"},
+                             {"take_UID", "i32(i128)"},
+                             {"give_UQD", "i128(i128)"},
+                             {"take_UQL", "i32(i128)"},
+                         });
+    check_raw_signatures("arm64-apple-macos",
+                         {
+                             {"take_SV", "i32([1 x <4 x float>])"},
+                             {"give_UVD", "i128(i128)"},
+                             {"take_UID", "i32(i128)"},
+                         });
 }
 
 } // namespace ghoti::tests

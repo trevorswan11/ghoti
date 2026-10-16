@@ -92,6 +92,11 @@ constexpr std::string_view BUMP_XYZ{".{ .x = v.x + 1.0, .y = v.y + 1.0, .z = v.z
 constexpr std::string_view BUMP_XYZW{
     ".{ .x = v.x + 1.0, .y = v.y + 1.0, .z = v.z + 1.0, .w = v.w + 1.0 }"};
 
+constexpr std::string_view FLOATS3_EQ_A{
+    "{0}.a[0] == {1}.a[0] and {0}.a[1] == {1}.a[1] and {0}.a[2] == {1}.a[2]"};
+constexpr std::string_view FLOATS3_EQ_B{
+    "{0}.b[0] == {1}.b[0] and {0}.b[1] == {1}.b[1] and {0}.b[2] == {1}.b[2]"};
+
 // clang-format off
 const std::vector<aggregate_case> AGGREGATES{
     {"S1", "extern struct { a: u8 }", ".{ .a = 11 }", ".{ .a = 12 }", ".{ .a = v.a + 1 }",
@@ -156,6 +161,30 @@ const std::vector<aggregate_case> AGGREGATES{
      "{0}.inner.a == {1}.inner.a and {0}.inner.b == {1}.inner.b and {0}.tail == {1}.tail"},
     {"UIF", "extern union { i: i32, f: f32 }", ".{ .i = 0x12345678 }", ".{ .i = 0x12345679 }",
      ".{ .i = v.i + 1 }", "{0}.i == {1}.i"},
+    {"UFD", "extern union { a: f32, d: f64 }", ".{ .d = -3.75 }", ".{ .d = -2.75 }",
+     ".{ .d = v.d + 1.0 }", "{0}.d == {1}.d"},
+    {"UF13", "extern union { a: f32, b: [3]f32 }", ".{ .b = .{ 1.5, -2.5, 3.5 } }",
+     ".{ .b = .{ 2.5, -1.5, 4.5 } }", ".{ .b = .{ v.b[0] + 1.0, v.b[1] + 1.0, v.b[2] + 1.0 } }",
+     FLOATS3_EQ_B},
+    {"UF3D", "extern union { a: [3]f32, d: f64 }", ".{ .a = .{ 1.5, -2.5, 3.5 } }",
+     ".{ .a = .{ 2.5, -1.5, 4.5 } }", ".{ .a = .{ v.a[0] + 1.0, v.a[1] + 1.0, v.a[2] + 1.0 } }",
+     FLOATS3_EQ_A},
+    {"SFU", "extern struct { x: f32, u: extern union { a: f32, b: f32 } }",
+     ".{ .x = 1.5, .u = .{ .b = -2.5 } }", ".{ .x = 2.5, .u = .{ .b = -1.5 } }",
+     ".{ .x = v.x + 1.0, .u = .{ .b = v.u.b + 1.0 } }", "{0}.x == {1}.x and {0}.u.b == {1}.u.b"},
+    {"SUF", "extern struct { u: extern union { a: f32, d: f64 }, y: f32 }",
+     ".{ .u = .{ .d = 2.5 }, .y = -1.5 }", ".{ .u = .{ .d = 3.5 }, .y = -0.5 }",
+     ".{ .u = .{ .d = v.u.d + 1.0 }, .y = v.y + 1.0 }", "{0}.u.d == {1}.u.d and {0}.y == {1}.y"},
+    {"SI", "struct { x: i128 }", ".{ .x = 0x0123456789ABCDEF0011223344556677 }",
+     ".{ .x = 0x0123456789ABCDEF0011223344556678 }", ".{ .x = v.x + 1 }", "{0}.x == {1}.x"},
+};
+
+// The fixture only defines these where C's `long double` is ghoti's `f80`
+const std::vector<aggregate_case> F80_AGGREGATES{
+    {"SL", "extern struct { x: f80 }", ".{ .x = 1.5 }", ".{ .x = 2.5 }", ".{ .x = v.x + 1.0 }",
+     "{0}.x == {1}.x"},
+    {"ULI", "extern union { a: f80, b: i64 }", ".{ .a = -2.25 }", ".{ .a = -1.25 }",
+     ".{ .a = v.a + 1.0 }", "{0}.a == {1}.a"},
 };
 // clang-format on
 
@@ -167,6 +196,34 @@ TEST_CASE("Aggregates cross the C ABI by value in both directions") {
                        "8 = C calling a ghoti callback");
         CHECK(run_against_c(suite_program(c)) == 0);
     }
+}
+
+#if defined(__x86_64__) || defined(_M_X64)
+TEST_CASE("f80 aggregates cross the C ABI by value in both directions") {
+    for (const auto& c : F80_AGGREGATES) {
+        INFO(c.name << ": bit 1 = ghoti->C arg, 2 = C->ghoti return, 4 = round trip through C, "
+                       "8 = C calling a ghoti callback");
+        CHECK(run_against_c(suite_program(c)) == 0);
+    }
+}
+#endif
+
+TEST_CASE("An extern union is laid out as C does and keeps any constant member") {
+    CHECK(helpers::compile_and_run(R"(
+const UF = extern union { a: f32, b: [3]f32, d: f64 };
+const G: UF = .{ .d = 3.0 };
+const H: UF = .{ .a = 1.5 };
+const I: UF = .{ .b = .{ 1.0, 2.0, 4.0 } };
+
+pub const main = fn(): i32 {
+    let mut failed: i32 = 0;
+    if (G.d != 3.0) { failed += 1; }
+    if (H.a != 1.5) { failed += 2; }
+    if (I.b[0] != 1.0 or I.b[2] != 4.0) { failed += 4; }
+    if (@sizeOf(UF) != 16 or @alignOf(UF) != 8) { failed += 8; }
+    return failed;
+};
+)") == 0);
 }
 
 TEST_CASE("Aggregates past the by-pointer threshold cross the C ABI") {
