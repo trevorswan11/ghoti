@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
@@ -104,6 +105,14 @@ class llvm_lowering {
                              llvm::BasicBlock&  block,
                              llvm::Instruction* before) -> void;
     auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
+
+    // `signext`/`zeroext` for a narrow integer the target's C ABI extends, if any
+    [[nodiscard]] auto integer_extension(const sema::type& type)
+        -> stdx::option<llvm::Attribute::AttrKind>;
+    // `attrs` with the C ABI's extension on each narrow parameter (from `first_param`) and result
+    [[nodiscard]] auto with_integer_extensions(llvm::AttributeList          attrs,
+                                               const sema::types::function& fn,
+                                               u32 first_param = 0) -> llvm::AttributeList;
 
     // `code(ctx, args...)` for an erased `fn(...)`: the thin signature with a leading `ctx: ptr`
     auto erased_code_type(const sema::types::function& fn) -> llvm::FunctionType*;

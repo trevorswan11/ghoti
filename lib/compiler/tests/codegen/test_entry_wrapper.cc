@@ -309,7 +309,10 @@ TEST_CASE("An executable enters through std/start.gh, which calls main") {
     // The program's `main` is renamed so the entry code's C `main(argc, argv)` can take the name
     auto& ghoti_main_fn{UNWRAP(llvm_mod->getFunction("_ghoti_main"))};
     CHECK(ghoti_main_fn.getReturnType()->isVoidTy());
-    CHECK(ghoti_main_fn.arg_size() == 1);
+    // SysV passes the `args` slice as its pointer and length
+    REQUIRE(ghoti_main_fn.arg_size() == 2);
+    CHECK(ghoti_main_fn.getArg(0)->getType()->isPointerTy());
+    CHECK(ghoti_main_fn.getArg(1)->getType()->isIntegerTy(64));
 
     auto& c_main_fn{UNWRAP(llvm_mod->getFunction("main"))};
     CHECK(c_main_fn.getReturnType()->isIntegerTy(32));

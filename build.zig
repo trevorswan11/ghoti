@@ -177,6 +177,7 @@ pub const ProjectPaths = struct {
     const darwin_sdk = "lib/darwin/";
     const compiler_rt = "lib/compiler_rt/";
     pub const stdlib_entry = "lib/std/std.gh";
+    pub const cabi_fixture = "lib/compiler/tests/ffi/cabi.c";
     pub const site = "site/";
     const third_party = "third-party/";
 };
@@ -505,6 +506,29 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         });
         compiler_tests.root_module.linkLibrary(libcompiler);
+
+        // Real C on the other side of the C ABI interop tests, installed where the tests find it
+        const cabi_fixture = b.addLibrary(.{
+            .name = "cabi_fixture",
+            .linkage = .static,
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = .ReleaseFast,
+                .sanitize_c = .off,
+                .link_libc = false,
+            }),
+        });
+        cabi_fixture.root_module.addCSourceFile(.{
+            .file = b.path(ProjectPaths.cabi_fixture),
+            .flags = &.{ "-std=c23", "-ffreestanding", "-fno-stack-protector", "-fno-builtin" },
+        });
+        const fixture_dir: std.Build.InstallDir = .{ .custom = "tests" };
+        const install_fixture = b.addInstallArtifact(cabi_fixture, .{ .dest_dir = .{ .override = fixture_dir } });
+        const test_fixtures_h = b.addConfigHeader(.{ .include_path = "ghoti/test_fixtures.h" }, .{
+            .GHOTI_CABI_FIXTURE = b.getInstallPath(fixture_dir, cabi_fixture.out_lib_filename),
+        });
+        compiler_tests.root_module.addConfigHeader(test_fixtures_h);
+        compiler_tests.step.dependOn(&install_fixture.step);
         try stdx.DepStamp.add(b, support_tests, &(ProjectPaths.support_deps ++ .{ProjectPaths.support.tests}));
         try stdx.DepStamp.add(b, compiler_tests, &(ProjectPaths.compiler_deps ++ .{ProjectPaths.compiler.tests}));
 

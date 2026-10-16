@@ -799,6 +799,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** a `@Struct` field is private unless its `StructFieldInfo` sets `.is_pub = true`, like a hand-written field; they used to be always public (#383)
     - `@typeInfo` reports each field's `is_pub`, so `@Struct(@typeInfo(T).@"struct")` keeps `T`'s private fields private
 - Fixed: a statement starting with `if`, `match`, `for`, `while`, `loop`, or `do` now ends at its closing brace; `if (c) { ... }` followed by `*p = 1;` used to parse as `(if ...) * p = 1`
+- Fixed: structs, unions, and arrays passed or returned by value now cross the C ABI the way C does on x86-64 (SysV and Win64) and AArch64 (Linux and Darwin); most of them used to reach C with the wrong values or crash (#379)
+    - Narrow integers and `bool` are sign or zero extended wherever the target's C ABI expects the caller to
+    - Every function follows these rules, so any function can become a C callback through `extern fn`
+    - Other targets still pass aggregates LLVM's own way
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

@@ -48,6 +48,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -86,6 +87,22 @@ auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibil
         value.setVisibility(llvm::GlobalValue::ProtectedVisibility);
         break;
     }
+}
+
+// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target
+enum class narrow_int_rule : u8 {
+    NONE,
+    BOOL_ONLY,
+    ALL,
+};
+
+[[nodiscard]] auto narrow_int_rule_for(const llvm::Triple& triple) -> narrow_int_rule {
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSWindows() || triple.isUEFI() ? narrow_int_rule::BOOL_ONLY
+                                                       : narrow_int_rule::ALL;
+    }
+    if (triple.isAArch64() && triple.isOSDarwin()) { return narrow_int_rule::ALL; }
+    return narrow_int_rule::NONE;
 }
 
 auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
@@ -341,6 +358,7 @@ auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Modul
 }
 
 auto llvm_lowering::finalize_runtime_support() -> void {
+    lower_c_abi(*llvm_module_);
     lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
     // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
@@ -1167,6 +1185,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
+    llvm_fn->setAttributes(with_integer_extensions(llvm_fn->getAttributes(), *fn_data));
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
     // Non x86-64 Windows links no runtime that could provide a probe symbol
     if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
@@ -2105,6 +2124,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
                        inst.type->get_kind() == sema::type_kind::NORETURN};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
+    call_inst->setAttributes(
+        with_integer_extensions(call_inst->getAttributes(), *ind_fn_data, is_erased ? 1U : 0U));
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
     call_inst->setCallingConv(
@@ -2163,6 +2184,39 @@ auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_va
         sema::is_fat_callable(*op.type)};
     if (!by_value_aggregate) { return arg_val; }
     return builder_.CreateLoad(types_.translate(*op.type), arg_val, "struct_arg");
+}
+
+auto llvm_lowering::integer_extension(const sema::type& type)
+    -> stdx::option<llvm::Attribute::AttrKind> {
+    if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
+        return integer_extension(en->underlying);
+    }
+    auto* llvm_ty{types_.translate(type)};
+    if (!llvm_ty->isIntegerTy() || llvm_ty->getIntegerBitWidth() >= 32) { return stdx::none; }
+
+    const auto rule{narrow_int_rule_for(llvm::Triple{llvm_module_->getTargetTriple()})};
+    if (rule == narrow_int_rule::NONE) { return stdx::none; }
+    if (type.get_kind() == sema::type_kind::BOOL) { return llvm::Attribute::ZExt; }
+    if (rule == narrow_int_rule::BOOL_ONLY) { return stdx::none; }
+    return sema::is_signed_integer(type) ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
+}
+
+auto llvm_lowering::with_integer_extensions(llvm::AttributeList          attrs,
+                                            const sema::types::function& fn,
+                                            u32 first_param) -> llvm::AttributeList {
+    auto& context{llvm_module_->getContext()};
+    if (const auto ext{integer_extension(fn.return_type)}) {
+        attrs = attrs.addRetAttribute(context, *ext);
+    }
+    u32 idx{first_param};
+    for (const auto* param : fn.params) {
+        if (types_.translate(*param)->isVoidTy()) { continue; }
+        if (const auto ext{integer_extension(*param)}) {
+            attrs = attrs.addParamAttribute(context, idx, *ext);
+        }
+        ++idx;
+    }
+    return attrs;
 }
 
 auto llvm_lowering::erased_code_type(const sema::types::function& fn) -> llvm::FunctionType* {
