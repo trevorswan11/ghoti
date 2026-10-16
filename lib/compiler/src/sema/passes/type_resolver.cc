@@ -3825,7 +3825,7 @@ auto register_type_ctor_members(context&         ctx,
         if (!ty) { continue; }
         auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
         if (&remapped != ty.get()) {
-            typing.node_types.emplace_back(idx, stdx::option<type&>{remapped});
+            typing.node_types.insert_or_assign(idx, stdx::option<type&>{remapped});
         }
     }
     auto& explicit_types{fn_mod.sema_side_tables.explicit_types.values};
@@ -3834,7 +3834,7 @@ auto register_type_ctor_members(context&         ctx,
         if (!ty) { continue; }
         auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
         if (&remapped != ty.get()) {
-            typing.explicit_types.emplace_back(idx, stdx::option<type&>{remapped});
+            typing.explicit_types.insert_or_assign(idx, stdx::option<type&>{remapped});
         }
     }
 
@@ -13978,8 +13978,8 @@ auto type_resolver::instantiate_impls_for(
                 if (typing.find_node_type(decl->value->get_index())) { continue; }
                 if (const auto t{impl_mod.get_sema_type_opt(*decl->value)}) {
                     auto* remapped{remap_one(t.get())};
-                    typing.node_types.emplace_back((*member).get_index(), remapped);
-                    typing.node_types.emplace_back(decl->value->get_index(), remapped);
+                    typing.node_types.insert_or_assign((*member).get_index(), remapped);
+                    typing.node_types.insert_or_assign(decl->value->get_index(), remapped);
                 }
             }
 
