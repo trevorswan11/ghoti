@@ -19,6 +19,7 @@
 #include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/MC/MCSubtargetInfo.h>
@@ -652,6 +653,33 @@ auto create_target_machine(const target_options& options)
     }
 
     return stdx::box<llvm::TargetMachine>{target_machine};
+}
+
+namespace {
+
+// The ABI name the RISC-V backend uses, which without an explicit one follows the widest float
+// extension the machine has, as LLVM's `computeDefaultABI` does
+[[nodiscard]] auto riscv_abi_name(const llvm::TargetMachine& machine) -> std::string {
+    const auto requested{machine.Options.MCOptions.getABIName()};
+    if (!requested.empty()) { return requested.str(); }
+    const std::string base{machine.getTargetTriple().isRISCV64() ? "lp64" : "ilp32"};
+    const auto&       info{machine.getMCSubtargetInfo()};
+    for (const auto* extension : {"e", "d", "f"}) {
+        if (info.checkFeatures(fmt::format("+{}", extension))) { return base + extension; }
+    }
+    return base;
+}
+
+} // namespace
+
+auto configure_module_for_target(llvm::Module& module, const llvm::TargetMachine& machine) -> void {
+    module.setDataLayout(machine.createDataLayout());
+    module.setTargetTriple(machine.getTargetTriple());
+    if (machine.getTargetTriple().isRISCV() && !module.getModuleFlag("target-abi")) {
+        module.addModuleFlag(llvm::Module::Error,
+                             "target-abi",
+                             llvm::MDString::get(module.getContext(), riscv_abi_name(machine)));
+    }
 }
 
 auto emit_object_file(llvm::Module&                module,

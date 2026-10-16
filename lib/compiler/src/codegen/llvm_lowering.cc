@@ -145,11 +145,13 @@ reinterpret_constant(llvm::Constant* source, llvm::Type* ty, u64 offset, const l
     return folded;
 }
 
-// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target
+// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target.
+// RV64 also sign-extends every 32-bit integer, unsigned ones included, to the full register
 enum class narrow_int_rule : u8 {
     NONE,
     BOOL_ONLY,
     ALL,
+    ALL_AND_RV64_WORD,
 };
 
 [[nodiscard]] auto narrow_int_rule_for(const llvm::Triple& triple) -> narrow_int_rule {
@@ -157,7 +159,14 @@ enum class narrow_int_rule : u8 {
         return triple.isOSWindows() || triple.isUEFI() ? narrow_int_rule::BOOL_ONLY
                                                        : narrow_int_rule::ALL;
     }
-    if (triple.isAArch64() && triple.isOSDarwin()) { return narrow_int_rule::ALL; }
+    if (triple.isAArch64()) {
+        return triple.isOSDarwin() ? narrow_int_rule::ALL : narrow_int_rule::NONE;
+    }
+    if (triple.isRISCV64()) { return narrow_int_rule::ALL_AND_RV64_WORD; }
+    if (triple.getArch() == llvm::Triple::x86 || triple.isARM() || triple.isThumb() ||
+        triple.isRISCV32()) {
+        return narrow_int_rule::ALL;
+    }
     return narrow_int_rule::NONE;
 }
 
@@ -289,22 +298,6 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return llvm::ConstantFP::get(ty, converted);
 }
 
-[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv,
-                                    const llvm::Triple& triple) noexcept -> llvm::CallingConv::ID {
-    switch (conv) {
-    case ast::calling_convention::X86_WINAPI:
-        return triple.getArch() == llvm::Triple::x86 ? llvm::CallingConv::X86_StdCall
-                                                     : llvm::CallingConv::C;
-    case ast::calling_convention::C:            return llvm::CallingConv::C;
-    case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
-    case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
-    case ast::calling_convention::X86_STDCALL:  return llvm::CallingConv::X86_StdCall;
-    case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
-    case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
-    default:                                    return llvm::CallingConv::C;
-    }
-}
-
 enum class memory_order_t : u8 { // Mirrors builtin.gh.inc
     relaxed = 0,
     acquire = 1,
@@ -414,7 +407,7 @@ auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Modul
 }
 
 auto llvm_lowering::finalize_runtime_support() -> void {
-    lower_c_abi(*llvm_module_, types_.union_members());
+    lower_c_abi(*llvm_module_, types_.union_members(), types_.padded_structs());
     lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
     // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
@@ -2235,9 +2228,13 @@ auto llvm_lowering::integer_extension(const sema::type& type)
         return integer_extension(en->underlying);
     }
     auto* llvm_ty{types_.translate(type)};
-    if (!llvm_ty->isIntegerTy() || llvm_ty->getIntegerBitWidth() >= 32) { return stdx::none; }
+    if (!llvm_ty->isIntegerTy() || llvm_ty->getIntegerBitWidth() > 32) { return stdx::none; }
 
     const auto rule{narrow_int_rule_for(llvm::Triple{llvm_module_->getTargetTriple()})};
+    if (llvm_ty->getIntegerBitWidth() == 32) {
+        if (rule != narrow_int_rule::ALL_AND_RV64_WORD) { return stdx::none; }
+        return llvm::Attribute::SExt;
+    }
     if (rule == narrow_int_rule::NONE) { return stdx::none; }
     if (type.get_kind() == sema::type_kind::BOOL) { return llvm::Attribute::ZExt; }
     if (rule == narrow_int_rule::BOOL_ONLY) { return stdx::none; }

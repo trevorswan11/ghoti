@@ -309,6 +309,9 @@ auto type_resolver::record_export(const ast::call_expr& call) -> stdx::option<di
                           error::TYPE_MISMATCH,
                           target_loc};
     }
+    if (fn_type) {
+        if (auto problem{unmodelled_c_abi_error(*fn_type, target_loc)}) { return problem; }
+    }
     const auto fn_name{decl ? owner->ast.get_as<ast::identifier_expr>(decl->name).name
                             : std::string_view{}};
     if (decl && decl->has_modifier(ast::decl_modifiers::EXPORT)) {

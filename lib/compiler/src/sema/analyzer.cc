@@ -454,8 +454,7 @@ auto analyzer::emit_llvm_ir(gir::module_t&                    gir_module,
     PROFILE_FUNCTION();
     codegen::llvm_lowering lowering{context, gir_module.get_ast_module().path.string()};
     if (options.target_machine) {
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(options.target_machine->getTargetTriple());
+        codegen::configure_module_for_target(lowering.module(), *options.target_machine);
     }
     auto llvm_mod{lowering.lower(gir_module)};
     TRY(verify_and_optimize(*llvm_mod, options));
@@ -479,8 +478,7 @@ auto analyzer::emit_llvm_ir_executable(gir::module_t&                    gir_mod
     if (options.target_machine) {
         const llvm::Triple triple{options.target_machine->getTargetTriple()};
         TRY(check_freestanding_entry(triple, "an executable"));
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(triple);
+        codegen::configure_module_for_target(lowering.module(), *options.target_machine);
     }
     auto llvm_mod{lowering.lower_executable(gir_module, effective_main_name)};
 
@@ -504,8 +502,7 @@ auto analyzer::emit_llvm_ir_test_executable(gir::module_t&                    gi
     if (options.target_machine) {
         const llvm::Triple triple{options.target_machine->getTargetTriple()};
         TRY(check_freestanding_entry(triple, "a test executable"));
-        lowering.module().setDataLayout(options.target_machine->createDataLayout());
-        lowering.module().setTargetTriple(triple);
+        codegen::configure_module_for_target(lowering.module(), *options.target_machine);
     }
     auto llvm_mod{lowering.lower_test_executable(gir_module, ctx_.user_main_name)};
     TRY(verify_and_optimize(*llvm_mod, options));

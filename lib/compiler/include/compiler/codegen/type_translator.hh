@@ -52,16 +52,14 @@ class type_translator {
     [[nodiscard]] auto union_members() const noexcept -> const union_member_map& {
         return union_members_;
     }
+    [[nodiscard]] auto padded_structs() const noexcept -> const padded_struct_map& {
+        return padded_structs_;
+    }
 
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
     using aggregate_identity_cache_t =
         ankerl::unordered_dense::map<sema::types::key_t, llvm::Type*>;
-
-    struct padded_layout {
-        std::vector<u32> field_indices;
-        u64              alignment;
-    };
 
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
@@ -94,7 +92,7 @@ class type_translator {
     aggregate_identity_cache_t struct_identity_cache_;
     aggregate_identity_cache_t union_identity_cache_;
 
-    ankerl::unordered_dense::map<const llvm::Type*, padded_layout> padded_structs_;
+    padded_struct_map                                              padded_structs_;
     union_member_map                                               union_members_;
 };
 

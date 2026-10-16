@@ -25,6 +25,7 @@
 #include "compiler/ast/kind.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/intrinsics.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
@@ -2803,6 +2804,47 @@ auto type_resolver::target_supports_callconv(ast::calling_convention conv) const
     case ast::calling_convention::AAPCS:        return arch == "arm" || arch == "thumb";
     default:                                    return true;
     }
+}
+
+namespace {
+
+// What the C ABI lowering would have to rewrite: a struct, union, array, slice, or erased callable
+[[nodiscard]] auto passes_aggregate_by_value(const type& t) -> bool {
+    if (is_generic_type(t)) { return false; }
+    return t.get_data().visit(
+        [](const types::struct_t& s) { return !s.is_bit_packed() && !s.fields.empty(); },
+        [](const types::union_t& u) { return !u.is_bit_packed() && !u.fields.empty(); },
+        [](const types::array& arr) { return arr.len > 0 || arr.null_terminated; },
+        [](const types::slice&) { return true; },
+        [](const types::closure_t&) { return true; },
+        [](const types::function& fn) { return fn.erased; },
+        [](const auto&) { return false; });
+}
+
+} // namespace
+
+auto type_resolver::unmodelled_c_abi_error(const type&            fn_type,
+                                           const source_location& location) const
+    -> stdx::option<diagnostic> {
+    const auto fn{fn_type.get_data().as_opt<types::function>()};
+    if (!fn) { return stdx::none; }
+    const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+    if (codegen::has_c_abi_model(triple, codegen::to_llvm_callconv(fn->conv, triple))) {
+        return stdx::none;
+    }
+
+    const type* offender{passes_aggregate_by_value(fn->return_type) ? &fn->return_type : nullptr};
+    for (const auto* param : fn->params) {
+        if (!offender && passes_aggregate_by_value(*param)) { offender = param; }
+    }
+    if (!offender) { return stdx::none; }
+    return diagnostic{fmt::format("'{}' passes '{}' by value, but ghoti doesn't know how C passes "
+                                  "aggregates on '{}' yet; pass a pointer to it instead",
+                                  ctx_.type_display_name(fn_type),
+                                  ctx_.type_display_name(*offender),
+                                  triple.str()),
+                      error::UNSUPPORTED_TARGET,
+                      location};
 }
 
 } // namespace ghoti::sema

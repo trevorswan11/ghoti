@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -10,12 +11,14 @@
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/TargetParser/Triple.h>
@@ -35,6 +38,10 @@ enum class abi_model : u8 {
     SYSV_X86_64,
     AAPCS64,
     DARWIN_AARCH64,
+    X86_32,
+    AAPCS32,
+    AAPCS32_VFP,
+    RISCV,
 };
 
 [[nodiscard]] auto model_for(const llvm::Triple& triple, llvm::CallingConv::ID conv) -> abi_model {
@@ -46,6 +53,23 @@ enum class abi_model : u8 {
     if (triple.isAArch64()) {
         return triple.isOSDarwin() ? abi_model::DARWIN_AARCH64 : abi_model::AAPCS64;
     }
+    // fastcall and the MCU ABI pass aggregates in registers, which only cdecl and stdcall avoid
+    if (triple.getArch() == llvm::Triple::x86) {
+        const bool stack_conv{conv == llvm::CallingConv::C ||
+                              conv == llvm::CallingConv::X86_StdCall};
+        return stack_conv && !triple.isOSIAMCU() ? abi_model::X86_32 : abi_model::NONE;
+    }
+    // Apple and Windows ARM use their own variants (APCS, AAPCS16, Windows AAPCS-VFP)
+    if (triple.isARM() || triple.isThumb()) {
+        if (triple.isOSDarwin() || triple.isOSBinFormatMachO() || triple.isOSWindows()) {
+            return abi_model::NONE;
+        }
+        if (conv == llvm::CallingConv::ARM_AAPCS) { return abi_model::AAPCS32; }
+        if (conv == llvm::CallingConv::ARM_AAPCS_VFP) { return abi_model::AAPCS32_VFP; }
+        if (conv != llvm::CallingConv::C) { return abi_model::NONE; }
+        return triple.isHardFloatABI() ? abi_model::AAPCS32_VFP : abi_model::AAPCS32;
+    }
+    if (triple.isRISCV() && conv == llvm::CallingConv::C) { return abi_model::RISCV; }
     return abi_model::NONE;
 }
 
@@ -60,7 +84,11 @@ struct value_plan {
     pass_kind                kind{pass_kind::DIRECT};
     llvm::Type*              original{nullptr};
     std::vector<llvm::Type*> parts;
-    u64                      stack_align{0}; // an AAPCS64 HFA's stack slot alignment, if any
+    // Where each part sits in the original, when that is not the parts laid out in order. A lone
+    // struct part with more offsets than parts is scattered element by element
+    std::vector<u64> offsets;
+    u64              stack_align{0}; // an HFA's stack slot alignment, if any
+    u64              byval_align{0}; // a `byval` copy's alignment, when not the default
 };
 
 struct signature_plan {
@@ -101,9 +129,18 @@ using sysv_classes = std::array<sysv_class, 2>;
 
 class classifier {
   public:
-    classifier(llvm::Module& module, const union_member_map& unions)
+    classifier(llvm::Module&            module,
+               const union_member_map&  unions,
+               const padded_struct_map& padded)
         : layout_{module.getDataLayout()}, context_{module.getContext()},
-          triple_{module.getTargetTriple()}, unions_{unions} {}
+          triple_{module.getTargetTriple()}, unions_{unions}, padded_{padded} {
+        // i386 returns small structs in registers only where the OS's ABI says so
+        small_struct_in_regs_ = triple_.isOSDarwin() || triple_.isOSWindows() ||
+                                triple_.isOSFreeBSD() || triple_.isOSOpenBSD() ||
+                                triple_.isOSDragonFly();
+        win32_struct_abi_     = triple_.isOSWindows() && !triple_.isOSCygMing();
+        if (triple_.isRISCV()) { read_riscv_abi(module); }
+    }
 
     // How `fn_ty` crosses the C ABI, or none when nothing about it changes
     [[nodiscard]] auto plan(llvm::FunctionType*          fn_ty,
@@ -112,19 +149,22 @@ class classifier {
         -> stdx::option<signature_plan> {
         const auto model{model_for(triple_, conv)};
         if (model == abi_model::NONE) { return stdx::none; }
+        // C varargs, and every argument of a variadic call, follow the base AAPCS
+        const auto call_model{
+            model == abi_model::AAPCS32_VFP && fn_ty->isVarArg() ? abi_model::AAPCS32 : model};
 
         signature_plan  result;
-        register_budget budget;
-        result.ret = plan_return(model, fn_ty->getReturnType());
-        if (result.ret.kind == pass_kind::INDIRECT && budget.integer > 0) { --budget.integer; }
+        register_budget budget{initial_budget(model)};
+        result.ret = plan_return(call_model, fn_ty->getReturnType());
+        if (takes_hidden_return(model, result.ret) && budget.integer > 0) { --budget.integer; }
 
         bool       changed{result.ret.kind != pass_kind::DIRECT};
-        const auto add_param{[&](llvm::Type* ty) {
-            auto& param{result.params.emplace_back(plan_param(model, ty, budget))};
+        const auto add_param{[&](llvm::Type* ty, bool fixed) {
+            auto& param{result.params.emplace_back(plan_param(call_model, ty, budget, fixed))};
             changed = changed || param.kind != pass_kind::DIRECT;
         }};
-        for (auto* param : fn_ty->params()) { add_param(param); }
-        for (auto* extra : variadic_args) { add_param(extra); }
+        for (auto* param : fn_ty->params()) { add_param(param, true); }
+        for (auto* extra : variadic_args) { add_param(extra, false); }
         if (!changed) { return stdx::none; }
 
         result.lowered = lowered_type(result, fn_ty->isVarArg(), fn_ty->getNumParams());
@@ -137,8 +177,54 @@ class classifier {
         u32 sse{8};
     };
 
+    // The RISC-V float ABI, from the `target-abi` flag the target machine recorded
+    auto read_riscv_abi(const llvm::Module& module) -> void {
+        xlen_ = triple_.isRISCV64() ? 64 : 32;
+        std::string_view abi{triple_.isOSLinux() ? (xlen_ == 64 ? "lp64d" : "ilp32d")
+                                                 : (xlen_ == 64 ? "lp64" : "ilp32")};
+        if (const auto* flag{
+                llvm::dyn_cast_or_null<llvm::MDString>(module.getModuleFlag("target-abi"))}) {
+            abi = flag->getString();
+        }
+        flen_       = abi.ends_with('d') ? 64 : abi.ends_with('f') ? 32 : 0;
+        riscv_e_    = abi.ends_with('e');
+        riscv_gprs_ = riscv_e_ ? 6 : 8;
+    }
+
+    [[nodiscard]] auto initial_budget(abi_model model) const -> register_budget {
+        if (model == abi_model::RISCV) {
+            return {.integer = riscv_gprs_, .sse = flen_ > 0 ? 8U : 0U};
+        }
+        return {};
+    }
+
+    // A result in memory takes the first integer register for its address. On RISC-V that is
+    // also true of a scalar wider than two registers, which the backend returns indirectly
+    [[nodiscard]] auto takes_hidden_return(abi_model model, const value_plan& ret) const -> bool {
+        if (ret.kind == pass_kind::INDIRECT) { return true; }
+        if (model != abi_model::RISCV || ret.kind != pass_kind::DIRECT) { return false; }
+        auto* ty{ret.original};
+        return !ty->isVoidTy() && !is_by_value_aggregate(ty) && alloc_size(ty) * 8 > 2 * xlen_;
+    }
+
     [[nodiscard]] auto alloc_size(llvm::Type* ty) const -> u64 {
         return layout_.getTypeAllocSize(ty).getFixedValue();
+    }
+
+    // The C alignment of `ty`, which LLVM understates for anything holding an `@[align(n)]` field
+    [[nodiscard]] auto abi_align(llvm::Type* ty) const -> u64 {
+        u64 align{layout_.getABITypeAlign(ty).value()};
+        if (const auto it{padded_.find(ty)}; it != padded_.end()) {
+            align = std::max(align, it->second.alignment);
+        }
+        if (const auto* members{union_members_of(ty)}) {
+            for (auto* member : *members) { align = std::max(align, abi_align(member)); }
+        } else if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}; st && !st->isPacked()) {
+            for (auto* element : st->elements()) { align = std::max(align, abi_align(element)); }
+        } else if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            align = std::max(align, abi_align(arr->getElementType()));
+        }
+        return align;
     }
 
     [[nodiscard]] static auto is_by_value_aggregate(llvm::Type* ty) -> bool {
@@ -154,17 +240,46 @@ class classifier {
         return it == unions_.end() ? nullptr : &it->second;
     }
 
+    // A struct's real fields and their offsets, skipping the padding the translator inserted
+    [[nodiscard]] auto fields_of(llvm::StructType* st) const -> std::vector<leaf> {
+        const auto*       st_layout{layout_.getStructLayout(st)};
+        std::vector<leaf> fields;
+        const auto        add{[&](u32 i) {
+            fields.emplace_back(st_layout->getElementOffset(i), st->getElementType(i));
+        }};
+        if (const auto it{padded_.find(st)}; it != padded_.end()) {
+            for (const auto i : it->second.field_indices) { add(i); }
+        } else {
+            for (u32 i{0}; i < st->getNumElements(); ++i) { add(i); }
+        }
+        return fields;
+    }
+
+    // The members of an untagged union or the fields of a struct, each at its offset
+    [[nodiscard]] auto record_fields(llvm::Type* ty) const -> stdx::option<std::vector<leaf>> {
+        if (const auto* members{union_members_of(ty)}) {
+            std::vector<leaf> fields;
+            for (auto* member : *members) { fields.emplace_back(0, member); }
+            return fields;
+        }
+        if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) { return fields_of(st); }
+        return stdx::none;
+    }
+
     [[nodiscard]] static auto coerced(llvm::Type* original, std::vector<llvm::Type*> parts)
         -> value_plan {
-        return {.kind = pass_kind::COERCE, .original = original, .parts = std::move(parts)};
+        return {.kind     = pass_kind::COERCE,
+                .original = original,
+                .parts    = std::move(parts),
+                .offsets  = {}};
     }
 
     [[nodiscard]] static auto direct(llvm::Type* original) -> value_plan {
-        return {.kind = pass_kind::DIRECT, .original = original, .parts = {}};
+        return {.kind = pass_kind::DIRECT, .original = original, .parts = {}, .offsets = {}};
     }
 
     [[nodiscard]] static auto memory(llvm::Type* original, pass_kind kind) -> value_plan {
-        return {.kind = kind, .original = original, .parts = {}};
+        return {.kind = kind, .original = original, .parts = {}, .offsets = {}};
     }
 
     [[nodiscard]] auto plan_return(abi_model model, llvm::Type* ty) const -> value_plan {
@@ -174,15 +289,24 @@ class classifier {
         case abi_model::SYSV_X86_64:    return sysv_return(ty);
         case abi_model::AAPCS64:
         case abi_model::DARWIN_AARCH64: return aarch64_return(ty);
-        case abi_model::NONE:           break;
+        case abi_model::X86_32:         return x86_32_return(ty);
+        case abi_model::AAPCS32:        return arm_return(ty, false);
+        case abi_model::AAPCS32_VFP:    return arm_return(ty, true);
+        case abi_model::RISCV:          {
+            register_budget budget{.integer = 2, .sse = flen_ > 0 ? 2U : 0U};
+            return riscv_aggregate(ty, budget, true, true);
+        }
+        case abi_model::NONE: break;
         }
         return direct(ty);
     }
 
-    [[nodiscard]] auto plan_param(abi_model model, llvm::Type* ty, register_budget& budget) const
+    [[nodiscard]] auto
+    plan_param(abi_model model, llvm::Type* ty, register_budget& budget, bool fixed) const
         -> value_plan {
         if (!is_by_value_aggregate(ty) || alloc_size(ty) == 0) {
             if (model == abi_model::SYSV_X86_64) { spend_scalar(ty, budget); }
+            if (model == abi_model::RISCV) { riscv_spend_scalar(ty, budget, fixed); }
             return direct(ty);
         }
         switch (model) {
@@ -190,6 +314,10 @@ class classifier {
         case abi_model::SYSV_X86_64:    return sysv_param(ty, budget);
         case abi_model::AAPCS64:        return aarch64_param(ty, false);
         case abi_model::DARWIN_AARCH64: return aarch64_param(ty, true);
+        case abi_model::X86_32:         return x86_32_param(ty, fixed);
+        case abi_model::AAPCS32:        return arm_param(ty, false);
+        case abi_model::AAPCS32_VFP:    return arm_param(ty, true);
+        case abi_model::RISCV:          return riscv_aggregate(ty, budget, fixed, false);
         case abi_model::NONE:           break;
         }
         return direct(ty);
@@ -233,18 +361,14 @@ class classifier {
     // An aggregate goes in registers only when all of its eight bytes fit, otherwise on the stack
     [[nodiscard]] auto sysv_param(llvm::Type* ty, register_budget& budget) const -> value_plan {
         const auto classes{sysv_classify(ty)};
-        if (!classes) { return memory(ty, pass_kind::BYVAL); }
+        if (!classes) { return sysv_byval(ty); }
         const auto count{[&](sysv_class wanted) {
             return static_cast<u32>(std::ranges::count(*classes, wanted));
         }};
-        if (count(sysv_class::X87) + count(sysv_class::X87UP) > 0) {
-            return memory(ty, pass_kind::BYVAL);
-        }
+        if (count(sysv_class::X87) + count(sysv_class::X87UP) > 0) { return sysv_byval(ty); }
         const auto int_regs{count(sysv_class::INTEGER)};
         const auto sse_regs{count(sysv_class::SSE)};
-        if (int_regs > budget.integer || sse_regs > budget.sse) {
-            return memory(ty, pass_kind::BYVAL);
-        }
+        if (int_regs > budget.integer || sse_regs > budget.sse) { return sysv_byval(ty); }
         auto parts{sysv_parts(ty, *classes)};
         if (parts.empty()) { return direct(ty); }
         budget.integer -= int_regs;
@@ -252,13 +376,19 @@ class classifier {
         return coerced(ty, std::move(parts));
     }
 
+    // A stack copy aligned to at least an eightbyte
+    [[nodiscard]] auto sysv_byval(llvm::Type* ty) const -> value_plan {
+        auto plan{memory(ty, pass_kind::BYVAL)};
+        plan.byval_align = std::max<u64>(abi_align(ty), 8);
+        return plan;
+    }
+
     auto collect_leaves(llvm::Type* ty, u64 base, std::vector<leaf>& out) const -> void {
         if (const auto* members{union_members_of(ty)}) {
             for (auto* member : *members) { collect_leaves(member, base, out); }
         } else if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
-            const auto* st_layout{layout_.getStructLayout(st)};
-            for (u32 i{0}; i < st->getNumElements(); ++i) {
-                collect_leaves(st->getElementType(i), base + st_layout->getElementOffset(i), out);
+            for (const auto& field : fields_of(st)) {
+                collect_leaves(field.type, base + field.offset, out);
             }
         } else if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
             const auto stride{alloc_size(arr->getElementType())};
@@ -467,19 +597,22 @@ class classifier {
         u64         members;
     };
 
-    // Floating-point scalars, and 8 or 16 byte vectors, can make up an AAPCS64 HFA
-    [[nodiscard]] auto is_hfa_base(llvm::Type* ty) const -> bool {
+    // 8 or 16 byte vectors and floating-point scalars can make up an HFA, though AAPCS32 only
+    // takes `float` and `double`
+    [[nodiscard]] auto is_hfa_base(llvm::Type* ty, bool arm32) const -> bool {
         if (ty->isVectorTy()) { return alloc_size(ty) == 8 || alloc_size(ty) == 16; }
+        if (arm32) { return ty->isFloatTy() || ty->isDoubleTy(); }
         return ty->isFloatingPointTy() && !ty->isX86_FP80Ty() && !ty->isPPC_FP128Ty();
     }
 
     // clang's `isHomogeneousAggregate` count: struct members add up, union members take the
     // largest, and every scalar must match `base` in size and vector-ness
-    [[nodiscard]] auto hfa_members(llvm::Type* ty, llvm::Type*& base) const -> stdx::option<u64> {
+    [[nodiscard]] auto hfa_members(llvm::Type* ty, llvm::Type*& base, bool arm32) const
+        -> stdx::option<u64> {
         if (const auto* members{union_members_of(ty)}) {
             u64 most{0};
             for (auto* member : *members) {
-                const auto count{hfa_members(member, base)};
+                const auto count{hfa_members(member, base, arm32)};
                 if (!count) { return stdx::none; }
                 most = std::max(most, *count);
             }
@@ -488,7 +621,7 @@ class classifier {
         if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
             u64 total{0};
             for (auto* element : st->elements()) {
-                const auto count{hfa_members(element, base)};
+                const auto count{hfa_members(element, base, arm32)};
                 if (!count) { return stdx::none; }
                 total += *count;
             }
@@ -496,11 +629,11 @@ class classifier {
         }
         if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
             if (arr->getNumElements() == 0) { return stdx::none; }
-            const auto count{hfa_members(arr->getElementType(), base)};
+            const auto count{hfa_members(arr->getElementType(), base, arm32)};
             if (!count) { return stdx::none; }
             return *count * arr->getNumElements();
         }
-        if (!is_hfa_base(ty)) { return stdx::none; }
+        if (!is_hfa_base(ty, arm32)) { return stdx::none; }
         if (!base) {
             base = ty;
         } else if (base->isVectorTy() != ty->isVectorTy() || alloc_size(base) != alloc_size(ty)) {
@@ -509,27 +642,26 @@ class classifier {
         return 1;
     }
 
-    // An AAPCS64 homogeneous floating-point aggregate: one to four members of a single base
-    [[nodiscard]] auto homogeneous_member(llvm::Type* ty) const -> stdx::option<hfa_shape> {
+    // A homogeneous floating-point aggregate: one to four members of a single base
+    [[nodiscard]] auto homogeneous_member(llvm::Type* ty, bool arm32) const
+        -> stdx::option<hfa_shape> {
         llvm::Type* base{nullptr};
-        const auto  count{hfa_members(ty, base)};
+        const auto  count{hfa_members(ty, base, arm32)};
         if (!count || !base || *count == 0 || *count > 4) { return stdx::none; }
         if (alloc_size(base) * *count != alloc_size(ty)) { return stdx::none; }
         return hfa_shape{.base = base, .members = *count};
     }
 
     [[nodiscard]] auto aarch64_pair(llvm::Type* ty) const -> llvm::Type* {
-        if (layout_.getABITypeAlign(ty).value() >= 16) {
-            return llvm::IntegerType::get(context_, 128);
-        }
+        if (abi_align(ty) >= 16) { return llvm::IntegerType::get(context_, 128); }
         return llvm::ArrayType::get(llvm::Type::getInt64Ty(context_), 2);
     }
 
     [[nodiscard]] auto aarch64_param(llvm::Type* ty, bool darwin) const -> value_plan {
-        if (const auto hfa{homogeneous_member(ty)}) {
+        if (const auto hfa{homogeneous_member(ty, false)}) {
             auto plan{coerced(ty, {llvm::ArrayType::get(hfa->base, hfa->members)})};
             // Linux keeps an HFA's stack slot at 8 bytes, or 16 for a 16-byte aligned one
-            if (!darwin) { plan.stack_align = layout_.getABITypeAlign(ty).value() >= 16 ? 16 : 8; }
+            if (!darwin) { plan.stack_align = abi_align(ty) >= 16 ? 16 : 8; }
             return plan;
         }
         const auto size{alloc_size(ty)};
@@ -539,11 +671,252 @@ class classifier {
     }
 
     [[nodiscard]] auto aarch64_return(llvm::Type* ty) const -> value_plan {
-        if (homogeneous_member(ty)) { return direct(ty); }
+        if (homogeneous_member(ty, false)) { return direct(ty); }
         const auto size{alloc_size(ty)};
         if (size <= 8) { return coerced(ty, {int_of_bytes(size)}); }
         if (size <= 16) { return coerced(ty, {aarch64_pair(ty)}); }
         return memory(ty, pass_kind::INDIRECT);
+    }
+
+    // i386 cdecl: a padding-free struct of 4 and 8 byte scalars up to 16 bytes travels as its
+    // fields, anything else as a 4-byte aligned stack copy
+    [[nodiscard]] auto x86_32_param(llvm::Type* ty, bool fixed) const -> value_plan {
+        // MSVC passes an over-aligned aggregate to a fixed parameter by reference
+        if (win32_struct_abi_ && fixed && abi_align(ty) > 8) {
+            return memory(ty, pass_kind::INDIRECT);
+        }
+        if (const auto fields{x86_32_expansion(ty)}) {
+            auto plan{coerced(ty, {})};
+            for (const auto& [offset, field_ty] : *fields) {
+                plan.parts.emplace_back(field_ty);
+                plan.offsets.emplace_back(offset);
+            }
+            return plan;
+        }
+        auto plan{memory(ty, pass_kind::BYVAL)};
+        plan.byval_align = 4;
+        return plan;
+    }
+
+    // clang's `canExpandIndirectArgument`: every field a 32 or 64-bit scalar, with no padding
+    [[nodiscard]] auto x86_32_expansion(llvm::Type* ty) const -> stdx::option<std::vector<leaf>> {
+        if (alloc_size(ty) > 16) { return stdx::none; }
+        auto fields{record_fields(ty)};
+        if (!fields) { return stdx::none; }
+        u64 total{0};
+        for (const auto& field : *fields) {
+            const auto size{alloc_size(field.type)};
+            const bool scalar{field.type->isIntegerTy() || field.type->isPointerTy() ||
+                              field.type->isFloatingPointTy()};
+            if (!scalar || (size != 4 && size != 8)) { return stdx::none; }
+            total += size;
+        }
+        if (total != alloc_size(ty)) { return stdx::none; }
+        return fields;
+    }
+
+    [[nodiscard]] auto x86_32_return(llvm::Type* ty) const -> value_plan {
+        if (!small_struct_in_regs_ || !x86_32_register_sized(ty)) {
+            return memory(ty, pass_kind::INDIRECT);
+        }
+        // A lone float or pointer comes back as itself, except that MSVC keeps floats in EAX
+        if (auto* element{single_element(ty)};
+            element &&
+            ((!win32_struct_abi_ && element->isFloatingPointTy()) || element->isPointerTy())) {
+            return coerced(ty, {element});
+        }
+        return coerced(ty, {int_of_bytes(alloc_size(ty))});
+    }
+
+    // clang's `shouldReturnTypeInRegister`: 1, 2, 4, or 8 bytes, and so is every field inside
+    [[nodiscard]] auto x86_32_register_sized(llvm::Type* ty) const -> bool {
+        const auto size{alloc_size(ty)};
+        if (size != 1 && size != 2 && size != 4 && size != 8) { return false; }
+        if (ty->isVectorTy()) { return size != 8; }
+        if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            return x86_32_register_sized(arr->getElementType());
+        }
+        const auto fields{record_fields(ty)};
+        if (!fields) { return true; }
+        return std::ranges::all_of(*fields, [&](const leaf& field) {
+            return alloc_size(field.type) == 0 || x86_32_register_sized(field.type);
+        });
+    }
+
+    // clang's `isSingleElementStruct`: the one scalar a record wraps, through single-element
+    // arrays and nested records, when nothing pads it
+    [[nodiscard]] auto single_element(llvm::Type* ty) const -> llvm::Type* {
+        const auto fields{record_fields(ty)};
+        if (!fields) { return nullptr; }
+        llvm::Type* found{nullptr};
+        for (const auto& field : *fields) {
+            if (alloc_size(field.type) == 0) { continue; }
+            if (found) { return nullptr; }
+            auto* inner{field.type};
+            while (auto* arr{llvm::dyn_cast<llvm::ArrayType>(inner)}) {
+                if (arr->getNumElements() != 1) { break; }
+                inner = arr->getElementType();
+            }
+            found = is_by_value_aggregate(inner) ? single_element(inner) : inner;
+            if (!found) { return nullptr; }
+        }
+        return found && alloc_size(found) == alloc_size(ty) ? found : nullptr;
+    }
+
+    // AAPCS: up to 64 bytes in core registers as words (or doublewords when 8-byte aligned),
+    // larger on the stack, and with VFP an HFA in floating-point registers as itself
+    [[nodiscard]] auto arm_param(llvm::Type* ty, bool vfp) const -> value_plan {
+        if (vfp) {
+            if (const auto hfa{homogeneous_member(ty, true)}) { return arm_hfa_param(ty, *hfa); }
+        }
+        const auto size{alloc_size(ty)};
+        const auto align{abi_align(ty)};
+        if (size > 64) {
+            auto plan{memory(ty, pass_kind::BYVAL)};
+            plan.byval_align = std::clamp<u64>(align, 4, 8);
+            return plan;
+        }
+        const u64 word{align <= 4 ? 4U : 8U};
+        return coerced(ty, {llvm::ArrayType::get(int_of_bytes(word), (size + word - 1) / word)});
+    }
+
+    // An over-aligned HFA keeps an 8-byte aligned stack slot
+    [[nodiscard]] auto arm_hfa_param(llvm::Type* ty, const hfa_shape& hfa) const -> value_plan {
+        if (abi_align(ty) <= abi_align(hfa.base) || abi_align(ty) < 8) { return direct(ty); }
+        auto plan{coerced(ty, {ty})};
+        plan.stack_align = 8;
+        return plan;
+    }
+
+    // AAPCS returns at most 4 bytes in r0, as the narrowest integer on little-endian targets
+    [[nodiscard]] auto arm_return(llvm::Type* ty, bool vfp) const -> value_plan {
+        if (vfp && homogeneous_member(ty, true)) { return direct(ty); }
+        const auto size{alloc_size(ty)};
+        if (size > 4) { return memory(ty, pass_kind::INDIRECT); }
+        if (layout_.isBigEndian() || size > 2) {
+            return coerced(ty, {llvm::Type::getInt32Ty(context_)});
+        }
+        return coerced(ty, {int_of_bytes(size)});
+    }
+
+    // One field of a struct that RISC-V passes in floating-point registers
+    struct fp_field {
+        u64         offset;
+        llvm::Type* type;
+    };
+
+    // The registers a RISC-V argument of `bits` takes from the integer budget
+    auto riscv_spend_gprs(u64 bits, u64 align_bits, bool fixed, register_budget& budget) const
+        -> void {
+        u32 needed{1};
+        if (!fixed && align_bits == 2 * xlen_) {
+            needed = 2 + (riscv_e_ && xlen_ == 32 ? 0 : budget.integer % 2);
+        } else if (bits > xlen_ && bits <= 2 * xlen_) {
+            needed = 2;
+        }
+        budget.integer -= std::min(needed, budget.integer);
+    }
+
+    auto riscv_spend_scalar(llvm::Type* ty, register_budget& budget, bool fixed) const -> void {
+        if (ty->isVoidTy()) { return; }
+        const auto bits{alloc_size(ty) * 8};
+        if (fixed && ty->isFloatingPointTy() && bits <= flen_ && budget.sse > 0) {
+            --budget.sse;
+            return;
+        }
+        riscv_spend_gprs(bits, abi_align(ty) * 8, fixed, budget);
+    }
+
+    // clang's `detectFPCCEligibleStructHelper`: gathers at most two scalars, at most one of
+    // them an integer, each no wider than its register
+    [[nodiscard]] auto riscv_gather(llvm::Type* ty, u64 offset, std::vector<fp_field>& fields) const
+        -> bool {
+        if (ty->isIntegerTy() || ty->isFloatingPointTy()) {
+            const auto bits{alloc_size(ty) * 8};
+            if (ty->isIntegerTy() && bits > xlen_) { return false; }
+            if (ty->isFloatingPointTy() && bits > flen_) { return false; }
+            if (ty->isIntegerTy() && !fields.empty() && fields.front().type->isIntegerTy()) {
+                return false;
+            }
+            if (fields.size() == 2) { return false; }
+            fields.emplace_back(offset, ty);
+            return true;
+        }
+        if (auto* arr{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+            const auto stride{alloc_size(arr->getElementType())};
+            for (u64 i{0}; i < arr->getNumElements(); ++i) {
+                if (!riscv_gather(arr->getElementType(), offset + (i * stride), fields)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (!ty->isStructTy()) { return false; }
+        // An empty record contributes nothing, and a union disqualifies the whole struct
+        if (alloc_size(ty) == 0) { return true; }
+        if (union_members_of(ty)) { return false; }
+        for (const auto& field : fields_of(llvm::cast<llvm::StructType>(ty))) {
+            if (!riscv_gather(field.type, offset + field.offset, fields)) { return false; }
+        }
+        return !fields.empty();
+    }
+
+    // A struct that flattens to one float, two floats, or an integer and a float
+    [[nodiscard]] auto riscv_fp_fields(llvm::Type* ty) const
+        -> stdx::option<std::vector<fp_field>> {
+        if (union_members_of(ty)) { return stdx::none; }
+        std::vector<fp_field> fields;
+        if (!riscv_gather(ty, 0, fields) || fields.empty()) { return stdx::none; }
+        if (fields.size() == 1 && !fields.front().type->isFloatingPointTy()) { return stdx::none; }
+        return fields;
+    }
+
+    // RISC-V: fixed arguments flatten into floating-point registers while they last, then
+    // anything up to two registers wide travels as integers and the rest by reference
+    [[nodiscard]] auto
+    riscv_aggregate(llvm::Type* ty, register_budget& budget, bool fixed, bool is_return) const
+        -> value_plan {
+        if (fixed && flen_ > 0) {
+            if (const auto fields{riscv_fp_fields(ty)}) {
+                const auto floats{
+                    static_cast<u32>(std::ranges::count_if(*fields, [](const fp_field& field) {
+                        return field.type->isFloatingPointTy();
+                    }))};
+                const auto ints{static_cast<u32>(fields->size()) - floats};
+                if (ints <= budget.integer && floats <= budget.sse) {
+                    budget.integer -= ints;
+                    budget.sse -= floats;
+                    return riscv_flattened(ty, *fields, is_return);
+                }
+            }
+        }
+        const auto bits{alloc_size(ty) * 8};
+        riscv_spend_gprs(bits, abi_align(ty) * 8, fixed, budget);
+        if (bits > 2 * xlen_) { return memory(ty, pass_kind::INDIRECT); }
+        if (bits <= xlen_) { return coerced(ty, {int_of_bytes(bits / 8)}); }
+        auto* word{llvm::IntegerType::get(context_, xlen_)};
+        if (abi_align(ty) * 8 == 2 * xlen_) {
+            return coerced(ty, {llvm::IntegerType::get(context_, 2 * xlen_)});
+        }
+        return coerced(ty, {llvm::ArrayType::get(word, 2)});
+    }
+
+    // clang's `coerceAndExpandFPCCEligibleStruct`: each field its own argument, and a result
+    // of two comes back as a struct of both, packed when the second sits misaligned
+    [[nodiscard]] auto riscv_flattened(llvm::Type*                  ty,
+                                       const std::vector<fp_field>& fields,
+                                       bool                         is_return) const -> value_plan {
+        auto plan{coerced(ty, {})};
+        for (const auto& field : fields) {
+            plan.parts.emplace_back(field.type);
+            plan.offsets.emplace_back(field.offset);
+        }
+        if (is_return && fields.size() == 2) {
+            const auto& second{fields.back()};
+            const bool  packed{second.offset % abi_align(second.type) != 0};
+            plan.parts = {llvm::StructType::get(context_, plan.parts, packed)};
+        }
+        return plan;
     }
 
     [[nodiscard]] auto lowered_type(const signature_plan& plan, bool is_var_arg, u32 named) const
@@ -576,15 +949,24 @@ class classifier {
     llvm::LLVMContext&      context_;
     llvm::Triple            triple_;
     const union_member_map& unions_;
+    const padded_struct_map& padded_;
+    bool                     small_struct_in_regs_{false};
+    bool                     win32_struct_abi_{false};
+    u32                      xlen_{0};
+    u32                      flen_{0};
+    bool                     riscv_e_{false};
+    u32                      riscv_gprs_{8};
 };
 
 // Moves values between their ghoti and C ABI shapes through stack memory, as clang does, and
 // leaves the round trips for later passes to fold
 class abi_rewriter {
   public:
-    abi_rewriter(llvm::Module& module, const union_member_map& unions)
+    abi_rewriter(llvm::Module&            module,
+                 const union_member_map&  unions,
+                 const padded_struct_map& padded)
         : module_{module}, layout_{module.getDataLayout()}, context_{module.getContext()},
-          classifier_{module, unions}, copier_{module} {}
+          classifier_{module, unions, padded}, copier_{module} {}
 
     auto run() -> void {
         rewrite_signatures();
@@ -617,10 +999,24 @@ class abi_rewriter {
         return {slot, parts_ty};
     }
 
+    // The types at a plan's offsets: its parts, or the elements of its one scattered struct
+    [[nodiscard]] static auto pieces_of(const value_plan& plan) -> std::vector<llvm::Type*> {
+        if (plan.offsets.size() == plan.parts.size()) { return plan.parts; }
+        const auto elements{llvm::cast<llvm::StructType>(plan.parts.front())->elements()};
+        return {elements.begin(), elements.end()};
+    }
+
+    [[nodiscard]] auto piece_address(llvm::IRBuilder<>& builder, llvm::AllocaInst* slot, u64 offset)
+        -> std::pair<llvm::Value*, llvm::Align> {
+        auto* at{builder.CreateConstInBoundsGEP1_64(builder.getInt8Ty(), slot, offset)};
+        return {at, llvm::commonAlignment(slot->getAlign(), offset)};
+    }
+
     [[nodiscard]] auto split(llvm::IRBuilder<>& builder, llvm::Value* value, const value_plan& plan)
         -> std::vector<llvm::Value*> {
         auto [slot, parts_ty]{coercion_slot(*builder.GetInsertBlock()->getParent(), plan)};
         builder.CreateStore(value, slot);
+        if (!plan.offsets.empty()) { return split_scattered(builder, slot, plan); }
         std::vector<llvm::Value*> parts;
         for (u32 i{0}; i < plan.parts.size(); ++i) {
             auto* at{builder.CreateStructGEP(parts_ty, slot, i)};
@@ -629,15 +1025,54 @@ class abi_rewriter {
         return parts;
     }
 
+    [[nodiscard]] auto split_scattered(llvm::IRBuilder<>& builder,
+                                       llvm::AllocaInst*  slot,
+                                       const value_plan&  plan) -> std::vector<llvm::Value*> {
+        const auto                pieces{pieces_of(plan)};
+        std::vector<llvm::Value*> loaded;
+        for (usize i{0}; i < pieces.size(); ++i) {
+            const auto [at, align]{piece_address(builder, slot, plan.offsets[i])};
+            loaded.emplace_back(builder.CreateAlignedLoad(pieces[i], at, align, "abi.part"));
+        }
+        if (pieces.size() == plan.parts.size()) { return loaded; }
+        llvm::Value* whole{llvm::PoisonValue::get(plan.parts.front())};
+        for (u32 i{0}; i < loaded.size(); ++i) {
+            whole = builder.CreateInsertValue(whole, loaded[i], i);
+        }
+        return {whole};
+    }
+
     [[nodiscard]] auto join(llvm::IRBuilder<>&      builder,
                             std::span<llvm::Value*> parts,
                             const value_plan&       plan) -> llvm::Value* {
         auto [slot, parts_ty]{coercion_slot(*builder.GetInsertBlock()->getParent(), plan)};
+        if (!plan.offsets.empty()) {
+            join_scattered(builder, slot, parts, plan);
+            return builder.CreateLoad(plan.original, slot, "abi.joined");
+        }
         for (usize i{0}; i < parts.size(); ++i) {
             builder.CreateStore(parts[i],
                                 builder.CreateStructGEP(parts_ty, slot, static_cast<u32>(i)));
         }
         return builder.CreateLoad(plan.original, slot, "abi.joined");
+    }
+
+    auto join_scattered(llvm::IRBuilder<>&      builder,
+                        llvm::AllocaInst*       slot,
+                        std::span<llvm::Value*> parts,
+                        const value_plan&       plan) -> void {
+        const auto                pieces{pieces_of(plan)};
+        std::vector<llvm::Value*> values{parts.begin(), parts.end()};
+        if (pieces.size() != plan.parts.size()) {
+            values.clear();
+            for (u32 i{0}; i < pieces.size(); ++i) {
+                values.emplace_back(builder.CreateExtractValue(parts.front(), i));
+            }
+        }
+        for (usize i{0}; i < values.size(); ++i) {
+            const auto [at, align]{piece_address(builder, slot, plan.offsets[i])};
+            builder.CreateAlignedStore(values[i], at, align);
+        }
     }
 
     [[nodiscard]] auto memory_align(llvm::Type* ty) const -> llvm::Align {
@@ -648,7 +1083,8 @@ class abi_rewriter {
         llvm::AttrBuilder attrs{context_};
         if (plan.kind == pass_kind::BYVAL) {
             attrs.addByValAttr(plan.original);
-            attrs.addAlignmentAttr(memory_align(plan.original));
+            attrs.addAlignmentAttr(plan.byval_align > 0 ? llvm::Align{plan.byval_align}
+                                                        : memory_align(plan.original));
         }
         if (plan.stack_align > 0) { attrs.addStackAlignmentAttr(llvm::Align{plan.stack_align}); }
         return llvm::AttributeSet::get(context_, attrs);
@@ -709,8 +1145,20 @@ class abi_rewriter {
                 auto* pointer{new_fn.getArg(next++)};
                 pointer->takeName(&old_arg);
                 copier_.redirect_indirect_param(old_arg, *pointer, param.original);
+                if (param.byval_align > 0) {
+                    clamp_reads(*pointer, llvm::Align{param.byval_align});
+                }
                 break;
             }
+            }
+        }
+    }
+
+    // A `byval` copy the ABI aligns below its type is read no more aligned than it arrives
+    static auto clamp_reads(llvm::Argument& pointer, llvm::Align align) -> void {
+        for (auto* user : pointer.users()) {
+            if (auto* load{llvm::dyn_cast<llvm::LoadInst>(user)}) {
+                load->setAlignment(std::min(load->getAlign(), align));
             }
         }
     }
@@ -862,9 +1310,31 @@ class abi_rewriter {
 
 } // namespace
 
-auto lower_c_abi(llvm::Module& module, const union_member_map& unions) -> void {
+auto to_llvm_callconv(ast::calling_convention conv, const llvm::Triple& triple) noexcept
+    -> llvm::CallingConv::ID {
+    switch (conv) {
+    case ast::calling_convention::X86_WINAPI:
+        return triple.getArch() == llvm::Triple::x86 ? llvm::CallingConv::X86_StdCall
+                                                     : llvm::CallingConv::C;
+    case ast::calling_convention::C:            return llvm::CallingConv::C;
+    case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
+    case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
+    case ast::calling_convention::X86_STDCALL:  return llvm::CallingConv::X86_StdCall;
+    case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
+    case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
+    default:                                    return llvm::CallingConv::C;
+    }
+}
+
+auto has_c_abi_model(const llvm::Triple& triple, llvm::CallingConv::ID conv) -> bool {
+    return model_for(triple, conv) != abi_model::NONE;
+}
+
+auto lower_c_abi(llvm::Module&            module,
+                 const union_member_map&  unions,
+                 const padded_struct_map& padded) -> void {
     PROFILE_FUNCTION();
-    abi_rewriter{module, unions}.run();
+    abi_rewriter{module, unions, padded}.run();
 }
 
 } // namespace ghoti::codegen

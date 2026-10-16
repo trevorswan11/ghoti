@@ -95,6 +95,9 @@ struct target_facts {
 [[nodiscard]] auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel;
 [[nodiscard]] auto create_target_machine(const target_options& options)
     -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic>;
+// Gives `module` the machine's data layout and triple. On RISC-V it also records the float ABI
+// as the `target-abi` flag, which the C ABI lowering and the backend both read
+auto configure_module_for_target(llvm::Module& module, const llvm::TargetMachine& machine) -> void;
 
 // One architecture family's CPU features
 struct cpu_feature_family {
