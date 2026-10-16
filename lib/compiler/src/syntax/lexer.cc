@@ -16,6 +16,7 @@
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "compiler/syntax/trvia.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::syntax {
 
@@ -37,11 +38,6 @@ auto classify_comment(token_t token) noexcept -> token_t {
     token.slice = rest;
     return token;
 }
-
-[[nodiscard]] auto is_alpha(char c) noexcept -> bool { return std::isalpha(static_cast<u8>(c)); }
-[[nodiscard]] auto is_digit(char c) noexcept -> bool { return std::isdigit(static_cast<u8>(c)); }
-[[nodiscard]] auto is_alnum(char c) noexcept -> bool { return std::isalnum(static_cast<u8>(c)); }
-[[nodiscard]] auto is_space(char c) noexcept -> bool { return std::isspace(static_cast<u8>(c)); }
 
 } // namespace
 
@@ -83,10 +79,10 @@ auto lexer::advance() noexcept -> token_t {
         token.slice = read_ident(true);
         token.type  = lu_builtin(token.slice);
         return token;
-    } else if (is_alpha(current_byte_) || current_byte_ == '_') {
+    } else if (string_utils::is_alpha(current_byte_) || current_byte_ == '_') {
         if (current_byte_ == '_') {
             const auto next_c{peek_pos_ < input_.size() ? input_[peek_pos_] : '\0'};
-            if (!is_alnum(next_c) && next_c != '_') {
+            if (!string_utils::is_alnum(next_c) && next_c != '_') {
                 token.slice = stdx::string::substr(input_, pos_, 1);
                 token.type  = token_type_t::UNDERSCORE;
                 read_character();
@@ -96,7 +92,7 @@ auto lexer::advance() noexcept -> token_t {
         token.slice = read_ident(false);
         token.type  = lu_ident(token.slice);
         return token;
-    } else if (is_digit(current_byte_)) {
+    } else if (string_utils::is_digit(current_byte_)) {
         return read_number();
     } else if (current_byte_ == '"') {
         return read_string();
@@ -115,7 +111,8 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
     enriched_token result;
 
     // Collect leading trivia
-    while (pos_ < input_.size() && (is_space(current_byte_) || current_byte_ == '/')) {
+    while (pos_ < input_.size() &&
+           (string_utils::is_space(current_byte_) || current_byte_ == '/')) {
         if (current_byte_ == '/' && peek_pos_ < input_.size() && input_[peek_pos_] != '/') {
             break;
         }
@@ -127,8 +124,9 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
         if (current_byte_ == '\n') {
             read_character();
             result.leading_trivia.emplace_back(trivia_kind::NEWLINE, "\n", start_line, start_col);
-        } else if (is_space(current_byte_)) {
-            while (pos_ < input_.size() && is_space(current_byte_) && current_byte_ != '\n') {
+        } else if (string_utils::is_space(current_byte_)) {
+            while (pos_ < input_.size() && string_utils::is_space(current_byte_) &&
+                   current_byte_ != '\n') {
                 read_character();
             }
             result.leading_trivia.emplace_back(
@@ -170,7 +168,7 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
 }
 
 auto lexer::skip_whitespace() noexcept -> void {
-    while (is_space(current_byte_)) { read_character(); }
+    while (string_utils::is_space(current_byte_)) { read_character(); }
 }
 
 auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
@@ -224,9 +222,9 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
         if (!op) { continue; }
         // An operator ending in a word (`&mut`) can't cut a name short: `&mutex` is `&` `mutex`
         const auto last{candidate.back()};
-        if ((is_alpha(last) || last == '_') && pos_ + len < input_.size()) {
+        if ((string_utils::is_alpha(last) || last == '_') && pos_ + len < input_.size()) {
             const auto next{input_[pos_ + len]};
-            if (is_alnum(next) || next == '_') { continue; }
+            if (string_utils::is_alnum(next) || next == '_') { continue; }
         }
         matched_type = *op;
         max_len      = len;
@@ -237,10 +235,11 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
     const auto matched_text{stdx::string::substr(input_, pos_, max_len)};
 
     // A word-operator must be a whole word to allow e.g. origin to work
-    if (!matched_text.empty() && (is_alpha(matched_text.front()) || matched_text.front() == '_') &&
+    if (!matched_text.empty() &&
+        (string_utils::is_alpha(matched_text.front()) || matched_text.front() == '_') &&
         pos_ + max_len < input_.size()) {
         const auto next{input_[pos_ + max_len]};
-        if (is_alnum(next) || next == '_') { return stdx::none; }
+        if (string_utils::is_alnum(next) || next == '_') { return stdx::none; }
     }
 
     return token_t{matched_type, matched_text, start_line, start_col};
@@ -250,8 +249,9 @@ auto lexer::read_ident(bool builtin) noexcept -> std::string_view {
     const auto start{pos_};
 
     auto passed_first{false};
-    while ((builtin && !passed_first && current_byte_ == '@') || is_alpha(current_byte_) ||
-           current_byte_ == '_' || (passed_first && is_digit(current_byte_))) {
+    while ((builtin && !passed_first && current_byte_ == '@') ||
+           string_utils::is_alpha(current_byte_) || current_byte_ == '_' ||
+           (passed_first && string_utils::is_digit(current_byte_))) {
         read_character();
         passed_first = true;
     }
@@ -303,13 +303,13 @@ auto lexer::read_number() noexcept -> token_t {
                 next = input_[p];
             }
 
-            if (!is_digit(next)) { break; }
+            if (!string_utils::is_digit(next)) { break; }
 
             passed_exponent = true;
             read_character();
 
             if (current_byte_ == '+' || current_byte_ == '-') { read_character(); }
-            while (is_digit(current_byte_)) { read_character(); }
+            while (string_utils::is_digit(current_byte_)) { read_character(); }
             last_was_digit = true;
             continue;
         }
@@ -383,7 +383,8 @@ auto lexer::read_number() noexcept -> token_t {
         case 'f':
         case 'F':
             while (pos_ < input_.size() &&
-                   (is_alpha(current_byte_) || (pos_ > suffix_start && is_digit(current_byte_)))) {
+                   (string_utils::is_alpha(current_byte_) ||
+                    (pos_ > suffix_start && string_utils::is_digit(current_byte_)))) {
                 read_character();
             }
             break;
@@ -393,8 +394,10 @@ auto lexer::read_number() noexcept -> token_t {
     const auto suffix{stdx::string::substr(input_, suffix_start, pos_ - suffix_start)};
 
     // Glued trailing characters (`0b102`, `1e`, `12abc`) make the whole literal malformed
-    if (!at_end() && (is_alnum(current_byte_) || current_byte_ == '_')) {
-        while (!at_end() && (is_alnum(current_byte_) || current_byte_ == '_')) { read_character(); }
+    if (!at_end() && (string_utils::is_alnum(current_byte_) || current_byte_ == '_')) {
+        while (!at_end() && (string_utils::is_alnum(current_byte_) || current_byte_ == '_')) {
+            read_character();
+        }
         return {token_type_t::ILLEGAL,
                 stdx::string::substr(input_, start, pos_ - start),
                 start_line,

@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <ios>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -120,6 +122,12 @@ auto exists(const std::filesystem::path& path) -> bool {
 auto is_file(const std::filesystem::path& path) -> bool {
     std::error_code ec;
     return std::filesystem::exists(path, ec) && !std::filesystem::is_directory(path, ec);
+}
+
+[[nodiscard]] auto read_file(const std::filesystem::path& path, std::ios::openmode mode)
+    -> std::string {
+    std::ifstream in{path, mode};
+    return string_utils::read_stream(in);
 }
 
 } // namespace ghoti::path_utils

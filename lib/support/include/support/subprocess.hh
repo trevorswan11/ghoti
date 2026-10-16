@@ -65,6 +65,12 @@ constexpr u32 spawn_child_timeout_exit_code{124};
                                std::chrono::milliseconds timeout = std::chrono::seconds{30})
     -> stdx::option<u32>;
 
+// spawn_child with the child's stdout and stderr both written to the file at `log`, replacing it
+[[nodiscard]] auto spawn_child_logged(const mock_argv&             args,
+                                      const std::filesystem::path& log,
+                                      std::chrono::milliseconds timeout = std::chrono::seconds{30})
+    -> stdx::option<u32>;
+
 // zig-out/tests/*.exe -> zig-out/bin/ghoti(.exe)
 [[nodiscard]] auto ghoti_binary_path() -> std::filesystem::path;
 
