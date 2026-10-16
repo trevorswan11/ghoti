@@ -31,7 +31,7 @@ namespace {
     // A `mut?` method serves both mutabilities, so only a `mut?` method can implement one
     if (required.is_poly() != provided.is_poly()) { return false; }
 
-    // `&mut`/`^mut` requirement needs a mutable impl; pointer vs reference must agree; by-value
+    // `&mut`/`^mut` requirement needs a mutable impl. Pointer vs reference must agree. By-value
     // needs by-value.
     if (req_ptr) { return got_ptr && (required.is_constant() || !provided.is_constant()); }
     if (req_ref) { return got_ref && (required.is_constant() || !provided.is_constant()); }
@@ -40,10 +40,8 @@ namespace {
 
 } // namespace
 
-// Looks `name` up among the methods attached to `target` by `impl` blocks. Returns:
-//   - `none`               : no such extension method is visible
-//   - `ok(fn type)`        : exactly one visible method
-//   - `err(AMBIGUOUS_...)` : more than one visible method with this name
+// Looks `name` up among `target`'s `impl` methods: none when hidden or absent, the fn type for
+// exactly one, and an `AMBIGUOUS_...` error for several
 auto type_resolver::register_impl_param_bounds(const ast::function_expr& fn) -> void {
     if (fn.impl_bounds.empty()) { return; }
     std::vector<param_bound> entries;
@@ -579,7 +577,7 @@ auto type_resolver::instantiate_impls_for(
         // One expansion per (parameterized impl, concrete target).
         if (!ctx_.impls.mark_expanded(concrete, *pimpl)) { continue; }
 
-        // Method signatures are remapped (pure substitution); method bodies are re-resolved below
+        // Method signatures are remapped (pure substitution). Method bodies are re-resolved below
         // against real bindings so `if comptime` / dependent types behave as everywhere else.
         const auto remap_one{[&](type* t) -> type* {
             type* r{&remap_type(ctx_, *t, *tmpl.abstract_target, concrete)};
@@ -602,9 +600,8 @@ auto type_resolver::instantiate_impls_for(
                                       cx_bindings,
                                       typing);
 
-            // Fold each method's remapped signature into the replay so emit sees the concrete
-            // `fn(...)` type; `emit_function` reads the decl-stmt node, so key that and the `fn`
-            // expr.
+            // Replay each method's remapped `fn` type, keyed by the decl stmt `emit_function` reads
+            // and by its `fn` expr
             for (const auto& member : impl_stmt->members) {
                 const auto decl{impl_mod.ast.get_as_opt<ast::decl_stmt>(*member)};
                 if (!decl || !decl->value || !decl->value->is<ast::function_expr>()) { continue; }
@@ -715,9 +712,8 @@ auto type_resolver::resolve_param_impl_bodies(
     const body_typing_snapshot snap{impl_mod};
     const auto                 restore_guard{gsl::finally([&] { snap.restore_to(impl_mod); })};
 
-    // Bind each impl param to its concrete meaning for this monomorphization: a type param to the
-    // ctor argument type (as a resolvable symbol + a `const_eval` frame entry), a `comptime`
-    // param to its folded value.
+    // Binds each impl param for this monomorphization: a type param to its ctor argument type
+    // (as a symbol and a `const_eval` frame entry), a `comptime` param to its folded value
     comptime_frame frame;
     for (usize i{0}; i < impl.impl_params.size(); ++i) {
         const auto& pname{impl_mod.ast.get_as<ast::identifier_expr>(impl.impl_params[i].name).name};
@@ -860,9 +856,8 @@ auto type_resolver::resolve_param_impl_bodies(
             deduced_ret.emplace(denoted_type(evaluator.force_deferred_call(*deduced_ret)));
         }
 
-        // Build the concrete `types::function` signature for the monomorphized method.
-        // Include `self` as the first parameter when `has_self` is true so arity and interface
-        // conformance checks see the full signature with the receiver.
+        // The monomorphized method's `types::function`, with `self` first when `has_self` so arity
+        // and conformance checks see the receiver
         const bool  has_self{fn_expr.self.has_value()};
         const usize num_params{fn_expr.parameters.size() + (has_self ? 1UZ : 0UZ)};
         auto        concrete_param_types{ctx_.pool.get_many_unsafe(num_params)};
@@ -914,12 +909,12 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     -> void {
     PROFILE_FUNCTION();
     // `pimpl` is absent for an unanchored `impl(P) BareType` (no base ctor to key on). We still
-    // resolve the body here so its symbols settle; there is just nothing to expand later.
+    // resolve the body here so its symbols settle. There is just nothing to expand later.
     const auto pimpl{ctx_.impls.param_record_by_site(site, resolving_)};
     if (pimpl) {
         if (ctx_.impls.get_template(*pimpl)) { return; }
         // Resolving the abstract `Ctor(...)` target below re-enters expansion for this same
-        // impl; bail on that recursive entry. Cleared once the template is stored.
+        // impl. Bail on that recursive entry. Cleared once the template is stored.
         if (!ctx_.impls.begin_build(*pimpl)) { return; }
     }
 
@@ -953,7 +948,7 @@ auto type_resolver::build_param_impl_template(const ast::impl_stmt& impl, ast::n
     ctx_.advance_epoch();
 
     // The sentinel/dummy resolution only has to yield the abstract target + a signature per
-    // method; its diags are noise and its `if comptime` folds are redone per instantiation.
+    // method. Its diags are noise and its `if comptime` folds are redone per instantiation.
     const auto                   snap_ifs{resolving_.if_comptime_results};
     const auto                   snap_matches{resolving_.match_arm_results};
     const auto                   diags_before{ctx_.diags.size()};
@@ -1412,9 +1407,8 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         if (!sig_ty || !sig_ty->has_symbol_table_idx()) { continue; }
         const auto fn_table{sig_ty->get_symbol_table_idx()};
 
-        // The interface's signature node is shared by every `impl` of this interface.
-        // Temp overwrite it with this target's concrete `fn` type so the default body
-        // re-resolves against concrete parameter/return types
+        // Every `impl` shares the interface's signature node, so it briefly takes this target's
+        // concrete `fn` type and the default body re-resolves against it
         auto&      abstract_sig{*sig_ty};
         const auto restore_sig{
             gsl::finally([&] { imod.set_sema_type(*m.signature, abstract_sig); })};

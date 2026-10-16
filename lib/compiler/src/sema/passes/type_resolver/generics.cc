@@ -81,10 +81,8 @@ auto register_type_ctor_members(context&         ctx,
         if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
     }
 
-    // `body_typing_snapshot::diff_into` only captures a node whose type changed relative to the
-    // snapshot taken at the start of this instantiation. Directly scan every node in this module
-    // for a type that still transitively points at `src_agg` and pin its `clone`-remapped form into
-    // the diff explicitly, regardless of what `diff_into` captured.
+    // `diff_into` only captures types that changed since the snapshot, so pin the `clone`-remapped
+    // form of every node type that still reaches `src_agg` into the diff explicitly
     auto& node_types{fn_mod.sema_side_tables.node_types.values};
     for (usize idx{0}; idx < node_types.size(); ++idx) {
         auto& ty{node_types[idx]};
@@ -110,9 +108,8 @@ auto register_type_ctor_members(context&         ctx,
     ctx.generic_functions.set_type_ctor_member_prefix(clone, std::string{ctor_mangled});
 }
 
-// The pool entry an instantiation's copy of the anonymous aggregate `src` lives in, keyed by
-// `disc`. It carries its identity before its shape is filled in, except for an `abstract`
-// instance (a parameterized impl's template), which stands for any instance.
+// The pool entry holding an instantiation's copy of the anonymous aggregate `src`, keyed by
+// `disc`, except an `abstract` instance (an impl template) which stands for any instance
 [[nodiscard]] auto anonymous_aggregate_slot(context&         ctx,
                                             const type&      src,
                                             std::string_view disc,
@@ -130,9 +127,8 @@ auto register_type_ctor_members(context&         ctx,
     return slot;
 }
 
-// Copies an anonymous aggregate `sema::type` into its per-instantiation pool entry, so repeated
-// requests for the same instantiation share one type. A `provisional` slot only borrowed the
-// literal's shape while the instance was being built, so it is filled in properly regardless.
+// Copies an anonymous aggregate into its per-instantiation pool entry so repeated requests
+// share one type. A `provisional` slot only borrowed the literal's shape, so it is refilled
 [[nodiscard]] auto clone_anonymous_aggregate(context&         ctx,
                                              type&            src,
                                              std::string_view disc,
@@ -206,9 +202,8 @@ struct shared_literal_shape {
     }
 };
 
-// Whether a ctor's arguments include a stand-in `type` (a parameterized impl's sentinel, an
-// associated-type placeholder, or a still-unbound `type` parameter), making the instance a
-// template for every real one
+// Whether a ctor's arguments include a stand-in `type` (an impl sentinel, an associated-type
+// placeholder, or an unbound `type` parameter), making the instance a template
 [[nodiscard]] auto is_abstract_instance(gsl::span<type*> args) -> bool {
     return std::ranges::any_of(args, [](type* arg) {
         const auto& t{denoted_type(*arg)};
@@ -702,7 +697,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (fn_info.enclosing_type) {
         this_type_guard.emplace(inst_resolver.user_type_stack_, *fn_info.enclosing_type);
     }
-    // `comptime` parameters are erased from the monomorph's signature; a pack contributes one
+    // `comptime` parameters are erased from the monomorph's signature. A pack contributes one
     // slot per trailing argument rather than one for the whole `rest...` declaration.
     const auto     pack_elem_count{has_pack ? concrete_args.size() - fixed_param_count : 0UZ};
     const auto     fixed_rt_count{static_cast<usize>(
@@ -752,7 +747,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                 }
             }
 
-            // An erased `fn(...)` holds the closure as-is; a thin `comptime` slot binds its type
+            // An erased `fn(...)` holds the closure as-is. A thin `comptime` slot binds its type
             if (resolved_param_type.get_kind() == type_kind::FUNCTION &&
                 arg_type->get_kind() == type_kind::CLOSURE) {
                 const auto cl{arg_type->get_data().as_opt<types::closure_t>()};
@@ -913,9 +908,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     rollback_poisoned(
         fn_mod.sema_side_tables.explicit_types.values, snap.types, typing.explicit_types);
 
-    // Nested in another instantiation of this module (e.g. a type-ctor member's signature naming
-    // its own ctor), this one may have retyped nodes the enclosing one already typed. Hand those
-    // back so the enclosing diff records its own typing.
+    // Nested in another instantiation of this module, this one may have retyped nodes the outer
+    // one already typed, so hand those back for the outer diff to record
     if (prev_write_log) {
         const auto give_back{[](auto&                     live,
                                 const auto&               snapshot,

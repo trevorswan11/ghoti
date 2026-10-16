@@ -108,4 +108,9 @@ template <usize Cap = 64>
     return 1;
 }
 
+// The suffix that makes a noun counted `count` times plural: "s" unless there is exactly one
+[[nodiscard]] constexpr auto plural_suffix(usize count) noexcept -> std::string_view {
+    return count == 1 ? "" : "s";
+}
+
 } // namespace ghoti::string_utils

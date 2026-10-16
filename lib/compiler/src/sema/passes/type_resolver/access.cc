@@ -449,7 +449,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
                                  unwrapped_obj.get_kind() == type_kind::SLICE ||
                                  unwrapped_obj.get_data().template is<types::deferred_array>()};
 
-    // Desugared to auto and needs to be deferred like the call handler; the `type` keyword
+    // Desugared to auto and needs to be deferred like the call handler. The `type` keyword
     // itself is no placeholder and has no members
     const bool names_type_keyword{(*dot.object).get_token_type() ==
                                   syntax::token_type_t::TYPE_TYPE};
@@ -564,7 +564,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     pending_impl_method_owner_.reset();
     pending_param_impl_target_.reset();
 
-    // `Type.field` names no value; a struct field needs an instance (union `U.tag` is a tag)
+    // `Type.field` names no value. A struct field needs an instance (union `U.tag` is a tag)
     if (object_type.get_data().is<types::struct_t>() &&
         operand_nature(dot.object) == operand_nature_t::TYPE) {
         const auto& member_name{resolving_.ast.get_as<ast::identifier_expr>(dot.member).name};
@@ -826,7 +826,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
     PROFILE_FUNCTION();
     auto& usize_type{ctx_.get_builtin_resolved_type(type_kind::USIZE)};
 
-    // Anywhere else a range is the array of values it takes; match patterns resolve their
+    // Anywhere else a range is the array of values it takes. Match patterns resolve their
     // endpoints directly
     if (range.lhs && range.rhs && !in_subscript_index_ && !in_for_iterable_) {
         return resolve_range_value(id, range);
@@ -963,7 +963,7 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     }
 
     auto& member_type{*result.value()};
-    // A struct's field only exists inside a value of it, so `.field` alone names nothing; an
+    // A struct's field only exists inside a value of it, so `.field` alone names nothing. An
     // initializer's `.field = v` names the field it sets instead
     if (const auto st{member_owner->get_data().as_opt<types::struct_t>()};
         st && !std::exchange(resolving_init_accessor_, false)) {

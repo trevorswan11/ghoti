@@ -37,6 +37,7 @@
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -644,7 +645,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
         if (const auto illegal{function_local_illegal_modifiers(decl)}; !illegal.empty()) {
             ctx_.diags.emplace_back(
                 fmt::format("Modifier{} '{}' cannot be used on a declaration local to a function",
-                            illegal.size() > 1 ? "s" : "",
+                            string_utils::plural_suffix(illegal.size()),
                             fmt::join(illegal, "', '")),
                 error::ILLEGAL_LOCAL_DECL_MODIFIER,
                 collecting_.ast.location_of(id));

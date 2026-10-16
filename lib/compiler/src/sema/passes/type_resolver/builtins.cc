@@ -25,7 +25,7 @@ auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
     for (const auto& op : node.inputs) { resolve(op.constraint); }
     for (const auto& clobber : node.clobbers) { resolve(clobber); }
     for (const auto& op : node.inputs) {
-        // Only an output may be discarded; an input has to pass something in
+        // Only an output may be discarded. An input has to pass something in
         if (!op.value) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
@@ -81,7 +81,7 @@ auto type_resolver::visit(ast::node_id id, const ast::asm_expr& node) -> void {
         }
         ++bound_output_count;
 
-        // Outputs must name something assignable; deep mutability is a pass-3 concern.
+        // Outputs must name something assignable. Deep mutability is a pass-3 concern.
         const auto kind{(*op.value)->get_kind()};
         const auto assignable{kind == ast::node_kind::IDENTIFIER_EXPRESSION ||
                               kind == ast::node_kind::DOT_EXPRESSION ||
@@ -227,19 +227,145 @@ namespace {
 
 } // namespace
 
-template <ast::IndexableID ID>
-[[nodiscard]] auto type_resolver::resolve_builtin_call(ID                             id,
-                                                       const ast::call_expr&          call,
-                                                       const types::builtin_function& builtin)
-    -> stdx::result<void, diagnostic> {
-    ASSERT(call.function.is<ast::identifier_expr>(), "Builtin function must be a raw ident");
-    // There must be an actual builtin present with a token id
-    const auto builtin_opt{call.function->get_builtin()};
-    ASSERT(builtin_opt, "Cannot resolve non-builtin function");
-    const auto builtin_id{*builtin_opt};
+namespace {
 
-    using syntax::builtin_t;
-    using syntax::token_type_t;
+enum class builtin_family : u8 {
+    CAST,
+    REFLECTION,
+    TYPE_CONSTRUCTION,
+    TARGET,
+    MATH,
+    MEMORY,
+    ATOMIC,
+    C_VARIADIC,
+    PROGRAM,
+};
+
+[[nodiscard]] auto family_of(syntax::builtin_t builtin) -> builtin_family {
+    switch (builtin) {
+    case syntax::builtin_t::ALIGN_CAST:
+    case syntax::builtin_t::PTR_CAST:
+    case syntax::builtin_t::BIT_CAST:
+    case syntax::builtin_t::AS:
+    case syntax::builtin_t::INT_CAST:
+    case syntax::builtin_t::TRUNCATE:
+    case syntax::builtin_t::BOOL_FROM_INT:
+    case syntax::builtin_t::INT_FROM_BOOL:
+    case syntax::builtin_t::BACKING_INT:
+    case syntax::builtin_t::FROM_BACKING_INT:
+    case syntax::builtin_t::INT_FROM_FLOAT:
+    case syntax::builtin_t::FLOAT_FROM_INT:
+    case syntax::builtin_t::FLOAT_CAST:
+    case syntax::builtin_t::DYN_CAST:
+    case syntax::builtin_t::CONST_CAST:
+    case syntax::builtin_t::VOLATILE_CAST:
+    case syntax::builtin_t::INT_FROM_PTR:
+    case syntax::builtin_t::PTR_FROM_INT:
+    case syntax::builtin_t::SLICE_FROM_PTR:           return builtin_family::CAST;
+    case syntax::builtin_t::ALIGN_OF:
+    case syntax::builtin_t::SIZE_OF:
+    case syntax::builtin_t::BIT_SIZE_OF:
+    case syntax::builtin_t::TYPE_OF:
+    case syntax::builtin_t::THIS:
+    case syntax::builtin_t::FN_CTX:
+    case syntax::builtin_t::FIELD_PARENT_PTR:
+    case syntax::builtin_t::TAG_NAME:
+    case syntax::builtin_t::IMPLEMENTS:
+    case syntax::builtin_t::TYPE_NAME:
+    case syntax::builtin_t::TYPE_INFO:
+    case syntax::builtin_t::HAS_FIELD:
+    case syntax::builtin_t::FIELD_TYPE:
+    case syntax::builtin_t::FIELD_DEFAULT:
+    case syntax::builtin_t::FIELD:                    return builtin_family::REFLECTION;
+    case syntax::builtin_t::INT:
+    case syntax::builtin_t::FLOAT:
+    case syntax::builtin_t::POINTER:
+    case syntax::builtin_t::REFERENCE:
+    case syntax::builtin_t::SLICE:
+    case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::FN:
+    case syntax::builtin_t::ENUM:
+    case syntax::builtin_t::STRUCT:
+    case syntax::builtin_t::UNION:                    return builtin_family::TYPE_CONSTRUCTION;
+    case syntax::builtin_t::TARGET_TRIPLE:
+    case syntax::builtin_t::TARGET_OS:
+    case syntax::builtin_t::TARGET_ARCH:
+    case syntax::builtin_t::TARGET_ABI:
+    case syntax::builtin_t::TARGET_FAMILY:
+    case syntax::builtin_t::OPTIMIZE_MODE:
+    case syntax::builtin_t::RUNTIME_SAFETY:
+    case syntax::builtin_t::BRANCH_HINT:
+    case syntax::builtin_t::SET_RUNTIME_SAFETY:
+    case syntax::builtin_t::TARGET_ENDIAN:
+    case syntax::builtin_t::TARGET_PTR_BITS:
+    case syntax::builtin_t::SET_EVAL_RECURSION_LIMIT:
+    case syntax::builtin_t::SET_EVAL_UNROLL_LIMIT:
+    case syntax::builtin_t::EXPORT:
+    case syntax::builtin_t::RETURN_ADDRESS:           return builtin_family::TARGET;
+    case syntax::builtin_t::CLZ:
+    case syntax::builtin_t::CTZ:
+    case syntax::builtin_t::POPCOUNT:
+    case syntax::builtin_t::SQRT:
+    case syntax::builtin_t::SIN:
+    case syntax::builtin_t::COS:
+    case syntax::builtin_t::TAN:
+    case syntax::builtin_t::EXP:
+    case syntax::builtin_t::EXP2:
+    case syntax::builtin_t::LOG:
+    case syntax::builtin_t::LOG2:
+    case syntax::builtin_t::LOG10:
+    case syntax::builtin_t::FLOOR:
+    case syntax::builtin_t::CEIL:
+    case syntax::builtin_t::ABS:
+    case syntax::builtin_t::MUL_ADD:
+    case syntax::builtin_t::MIN:
+    case syntax::builtin_t::MAX:
+    case syntax::builtin_t::DIV_TRUNC:
+    case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::REM:
+    case syntax::builtin_t::MOD:
+    case syntax::builtin_t::ADD_WITH_OVERFLOW:
+    case syntax::builtin_t::SUB_WITH_OVERFLOW:
+    case syntax::builtin_t::MUL_WITH_OVERFLOW:
+    case syntax::builtin_t::SHL_WITH_OVERFLOW:        return builtin_family::MATH;
+    case syntax::builtin_t::MEMCPY:
+    case syntax::builtin_t::MEMSET:
+    case syntax::builtin_t::MEMMOVE:                  return builtin_family::MEMORY;
+    case syntax::builtin_t::ATOMIC_LOAD:
+    case syntax::builtin_t::ATOMIC_STORE:
+    case syntax::builtin_t::ATOMIC_RMW:
+    case syntax::builtin_t::CMPXCHG_WEAK:
+    case syntax::builtin_t::CMPXCHG_STRONG:
+    case syntax::builtin_t::FENCE:                    return builtin_family::ATOMIC;
+    case syntax::builtin_t::C_VA_START:
+    case syntax::builtin_t::C_VA_COPY:
+    case syntax::builtin_t::C_VA_END:
+    case syntax::builtin_t::C_VA_ARG:                 return builtin_family::C_VARIADIC;
+    case syntax::builtin_t::PANIC:
+    case syntax::builtin_t::TRAP:
+    case syntax::builtin_t::SKIP:
+    case syntax::builtin_t::COMPILE_ERROR:
+    case syntax::builtin_t::SRC:
+    case syntax::builtin_t::EMBED:
+    case syntax::builtin_t::ENTRY_MAIN:
+    case syntax::builtin_t::ENTRY_TEST_RUNNER:
+    case syntax::builtin_t::TEST_FUNCTIONS:
+    case syntax::builtin_t::ENUM_LITERAL:
+    case syntax::builtin_t::LLVM_INTRINSIC:
+    case syntax::builtin_t::EXPECT:
+    case syntax::builtin_t::REQUIRE:
+    case syntax::builtin_t::ASSERT:
+    case syntax::builtin_t::VERIFY:                   return builtin_family::PROGRAM;
+    default: UNREACHABLE("Unimplemented builtin type resolution");
+    }
+}
+
+} // namespace
+
+auto type_resolver::check_builtin_arity(const ast::call_expr&          call,
+                                        const types::builtin_function& builtin,
+                                        syntax::builtin_t              builtin_id) const
+    -> stdx::result<void, diagnostic> {
     const auto is_expect_or_require{builtin_id == syntax::builtin_t::EXPECT ||
                                     builtin_id == syntax::builtin_t::REQUIRE};
     const auto is_assert_or_verify{builtin_id == syntax::builtin_t::ASSERT ||
@@ -289,69 +415,70 @@ template <ast::IndexableID ID>
                              error::ARITY_MISMATCH,
                              resolving_.ast.location_of(call.function));
     }
+    return {};
+}
 
-    using syntax::token_type_t;
-    gsl::not_null<type*> return_type = &ctx_.get_poison();
+auto type_resolver::cast_args_of(const ast::call_expr& call, std::string_view name)
+    -> stdx::result<cast_args, diagnostic> {
+    cast_args args;
 
-    struct cast_args {
-        stdx::option<type&>                           target;
-        stdx::option<const ast::call_expr::argument&> operand;
-        source_location                               target_loc;
-    };
-
-    const auto extract_cast_args =
-        [&](std::string_view name) -> stdx::result<cast_args, diagnostic> {
-        cast_args args;
-
-        if (call.arguments.size() == 1) {
-            const auto implicit_type{implicit_type_stack_.peek()};
-            if (!implicit_type || !implicit_type->is_resolved() ||
-                implicit_type->get_kind() == type_kind::AUTO ||
-                implicit_type->get_kind() == type_kind::COMPTIME_INT ||
-                implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
-                return make_sema_err(
-                    fmt::format(
-                        "cannot infer the target type of '{}' here; write '{}(T, x)'", name, name),
-                    error::TYPE_MISMATCH,
-                    resolving_.ast.location_of(call.function));
-            }
-            if (implicit_type->is_poison()) { return args; }
-            args.target.emplace(*implicit_type);
-            args.target_loc = resolving_.ast.location_of(call.function);
-            args.operand.emplace(call.arguments[0]);
-        } else {
-            // A `T: type` parameter is `type`-kinded before it is instantiated
-            const auto& target_arg_type{*get_resolved_call_arg_type(call.arguments[0])};
-            if (!call_arg_denotes_type(call.arguments[0]) && !target_arg_type.is_poison() &&
-                target_arg_type.get_kind() != type_kind::TYPE) {
-                return make_sema_err(
-                    fmt::format("'{}' expects a target type as its first argument", name),
-                    error::TYPE_MISMATCH,
-                    get_call_arg_location(call.arguments[0]));
-            }
-            args.target.emplace(denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
-            args.target_loc = get_call_arg_location(call.arguments[0]);
-            args.operand.emplace(call.arguments[1]);
-        }
-        if (call_arg_denotes_type(*args.operand)) {
+    if (call.arguments.size() == 1) {
+        const auto implicit_type{implicit_type_stack_.peek()};
+        if (!implicit_type || !implicit_type->is_resolved() ||
+            implicit_type->get_kind() == type_kind::AUTO ||
+            implicit_type->get_kind() == type_kind::COMPTIME_INT ||
+            implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
             return make_sema_err(
-                fmt::format("'{}' expects a value to convert, but was given a type", name),
-                error::TYPE_USED_AS_VALUE,
-                get_call_arg_location(*args.operand));
-        }
-        if (get_resolved_call_arg_type(*args.operand)->get_kind() == type_kind::UNDEFINED) {
-            return make_sema_err(
-                fmt::format("'{}' has no value to convert in 'undefined'; assign 'undefined' "
-                            "directly instead",
-                            name),
+                fmt::format(
+                    "cannot infer the target type of '{}' here; write '{}(T, x)'", name, name),
                 error::TYPE_MISMATCH,
-                get_call_arg_location(*args.operand));
+                resolving_.ast.location_of(call.function));
         }
-        return args;
-    };
+        if (implicit_type->is_poison()) { return args; }
+        args.target.emplace(*implicit_type);
+        args.target_loc = resolving_.ast.location_of(call.function);
+        args.operand.emplace(call.arguments[0]);
+    } else {
+        // A `T: type` parameter is `type`-kinded before it is instantiated
+        const auto& target_arg_type{*get_resolved_call_arg_type(call.arguments[0])};
+        if (!call_arg_denotes_type(call.arguments[0]) && !target_arg_type.is_poison() &&
+            target_arg_type.get_kind() != type_kind::TYPE) {
+            return make_sema_err(
+                fmt::format("'{}' expects a target type as its first argument", name),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        args.target.emplace(denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
+        args.target_loc = get_call_arg_location(call.arguments[0]);
+        args.operand.emplace(call.arguments[1]);
+    }
+    if (call_arg_denotes_type(*args.operand)) {
+        return make_sema_err(
+            fmt::format("'{}' expects a value to convert, but was given a type", name),
+            error::TYPE_USED_AS_VALUE,
+            get_call_arg_location(*args.operand));
+    }
+    if (get_resolved_call_arg_type(*args.operand)->get_kind() == type_kind::UNDEFINED) {
+        return make_sema_err(
+            fmt::format("'{}' has no value to convert in 'undefined'; assign 'undefined' "
+                        "directly instead",
+                        name),
+            error::TYPE_MISMATCH,
+            get_call_arg_location(*args.operand));
+    }
+    return args;
+}
 
-    // Indexing can be done freely as arity is already validated
-    switch (builtin_id) {
+// Casts and conversions: `@as`, `@intCast`, `@ptrCast`, and the like
+template <ast::IndexableID ID>
+auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::ALIGN_CAST:
     case syntax::builtin_t::PTR_CAST:   {
         const auto name{builtin_id == syntax::builtin_t::ALIGN_CAST ? "@alignCast" : "@ptrCast"};
@@ -385,7 +512,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::BIT_CAST: {
-        const auto args_res{extract_cast_args("@bitCast")};
+        const auto args_res{cast_args_of(call, "@bitCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -449,7 +576,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::AS: {
-        const auto args_res{extract_cast_args("@as")};
+        const auto args_res{cast_args_of(call, "@as")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -511,7 +638,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::INT_CAST: {
-        const auto args_res{extract_cast_args("@intCast")};
+        const auto args_res{cast_args_of(call, "@intCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -535,7 +662,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::TRUNCATE: {
-        const auto args_res{extract_cast_args("@truncate")};
+        const auto args_res{cast_args_of(call, "@truncate")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -601,7 +728,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::INT_FROM_BOOL: {
-        const auto args_res{extract_cast_args("@intFromBool")};
+        const auto args_res{cast_args_of(call, "@intFromBool")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -645,7 +772,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::FROM_BACKING_INT: {
-        const auto args_res{extract_cast_args("@fromBackingInt")};
+        const auto args_res{cast_args_of(call, "@fromBackingInt")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         type&      target{*args_res->target};
@@ -676,7 +803,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::INT_FROM_FLOAT: {
-        const auto args_res{extract_cast_args("@intFromFloat")};
+        const auto args_res{cast_args_of(call, "@intFromFloat")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -699,7 +826,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::FLOAT_FROM_INT: {
-        const auto args_res{extract_cast_args("@floatFromInt")};
+        const auto args_res{cast_args_of(call, "@floatFromInt")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -723,7 +850,7 @@ template <ast::IndexableID ID>
         break;
     }
     case syntax::builtin_t::FLOAT_CAST: {
-        const auto args_res{extract_cast_args("@floatCast")};
+        const auto args_res{cast_args_of(call, "@floatCast")};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
@@ -821,6 +948,48 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
+    case syntax::builtin_t::PTR_FROM_INT: {
+        auto& requested_output{*get_resolved_call_arg_type(call.arguments[0])};
+        if (requested_output.get_kind() == type_kind::POINTER) {
+            return_type = &requested_output;
+            break;
+        }
+        return make_sema_err(fmt::format("Expected a pointer type; found '{}'",
+                                         ctx_.type_display_name(requested_output)),
+                             error::TYPE_MISMATCH,
+                             get_call_arg_location(call.arguments[0]));
+    }
+    case syntax::builtin_t::SLICE_FROM_PTR: {
+        auto& ptr_type{*get_resolved_call_arg_type(call.arguments[0])};
+        if (const auto ptr_data{ptr_type.get_data().as_opt<types::pointer>()}) {
+            // The resulting slice isn't null terminated since the pointer gives no guarantee,
+            // and mirrors the source pointer's own mutability rather than being const by default
+            const auto mutability{ptr_type.is_constant() ? types::mut::CONSTANT
+                                                         : types::mut::MUTABLE};
+            return_type = &ctx_.get_slice(mutability, false, ptr_data->underlying);
+            break;
+        }
+
+        return make_sema_err(fmt::format("Expected a pointer-yielding expression; found '{}'",
+                                         ctx_.type_display_name(ptr_type)),
+                             error::TYPE_MISMATCH,
+                             get_call_arg_location(call.arguments[0]));
+    }
+    default: UNREACHABLE("Builtin is not a cast builtin");
+    }
+    return {};
+}
+
+// Queries about a type or value: sizes, `@TypeOf`, `@typeInfo`, field access
+template <ast::IndexableID ID>
+auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::ALIGN_OF:
     case syntax::builtin_t::SIZE_OF:
     case syntax::builtin_t::BIT_SIZE_OF: {
@@ -830,23 +999,6 @@ template <ast::IndexableID ID>
     }
     // The result is an unsigned integer with the minimum number of bits needed to represent the
     // operand type's own bit width
-    case syntax::builtin_t::CLZ:
-    case syntax::builtin_t::CTZ:
-    case syntax::builtin_t::POPCOUNT: {
-        auto& operand_type{comptime_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
-        const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
-        if (width == 0) {
-            return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
-                                             syntax::builtin_name(builtin_id),
-                                             ctx_.type_display_name(operand_type)),
-                                 error::TYPE_MISMATCH,
-                                 get_call_arg_location(call.arguments[0]));
-        }
-        const auto result_bits{std::bit_width(static_cast<u64>(width))};
-        return_type = &ctx_.get_int(static_cast<u16>(result_bits), false);
-        break;
-    }
-    // @TypeOf returns a type as per documentation, but it's not the literal `type` type
     case syntax::builtin_t::TYPE_OF: {
         ASSERT(builtin.return_type.get_kind() == type_kind::TYPE);
         // Several operands name the type they would meet at
@@ -904,41 +1056,6 @@ template <ast::IndexableID ID>
             "explicit (non-auto) return type",
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(id));
-    case syntax::builtin_t::RETURN_ADDRESS:
-        if (open_function_nodes_.empty()) {
-            return make_sema_err("@returnAddress() may only be used inside of a function",
-                                 error::ILLEGAL_RETURN_ADDRESS_USAGE,
-                                 resolving_.ast.location_of(id));
-        }
-        return_type = &builtin.return_type;
-        break;
-    case syntax::builtin_t::PTR_FROM_INT: {
-        auto& requested_output{*get_resolved_call_arg_type(call.arguments[0])};
-        if (requested_output.get_kind() == type_kind::POINTER) {
-            return_type = &requested_output;
-            break;
-        }
-        return make_sema_err(fmt::format("Expected a pointer type; found '{}'",
-                                         ctx_.type_display_name(requested_output)),
-                             error::TYPE_MISMATCH,
-                             get_call_arg_location(call.arguments[0]));
-    }
-    case syntax::builtin_t::SLICE_FROM_PTR: {
-        auto& ptr_type{*get_resolved_call_arg_type(call.arguments[0])};
-        if (const auto ptr_data{ptr_type.get_data().as_opt<types::pointer>()}) {
-            // The resulting slice isn't null terminated since the pointer gives no guarantee,
-            // and mirrors the source pointer's own mutability rather than being const by default
-            const auto mutability{ptr_type.is_constant() ? types::mut::CONSTANT
-                                                         : types::mut::MUTABLE};
-            return_type = &ctx_.get_slice(mutability, false, ptr_data->underlying);
-            break;
-        }
-
-        return make_sema_err(fmt::format("Expected a pointer-yielding expression; found '{}'",
-                                         ctx_.type_display_name(ptr_type)),
-                             error::TYPE_MISMATCH,
-                             get_call_arg_location(call.arguments[0]));
-    }
     case syntax::builtin_t::FIELD_PARENT_PTR: {
         auto& parent_type{*get_resolved_call_arg_type(call.arguments[0])};
         if (!parent_type.get_data().is<types::struct_t>()) {
@@ -999,11 +1116,6 @@ template <ast::IndexableID ID>
                 error::TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
-        ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
-        return_type = &builtin.return_type;
-        break;
-    }
-    case syntax::builtin_t::TARGET_TRIPLE: {
         ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
         return_type = &builtin.return_type;
         break;
@@ -1158,6 +1270,21 @@ template <ast::IndexableID ID>
         return_type = &field->field_type;
         break;
     }
+    default: UNREACHABLE("Builtin is not a reflection builtin");
+    }
+    return {};
+}
+
+// Builtins that build a type: `@Int`, `@Pointer`, `@Struct`, and the rest
+template <ast::IndexableID ID>
+auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::INT:
     case syntax::builtin_t::FLOAT:
     case syntax::builtin_t::POINTER:
@@ -1342,6 +1469,34 @@ template <ast::IndexableID ID>
         return_type = meta;
         break;
     }
+    default: UNREACHABLE("Builtin is not a type construction builtin");
+    }
+    return {};
+}
+
+// The target, build mode, and per-scope compiler settings
+template <ast::IndexableID ID>
+auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
+    case syntax::builtin_t::RETURN_ADDRESS:
+        if (open_function_nodes_.empty()) {
+            return make_sema_err("@returnAddress() may only be used inside of a function",
+                                 error::ILLEGAL_RETURN_ADDRESS_USAGE,
+                                 resolving_.ast.location_of(id));
+        }
+        return_type = &builtin.return_type;
+        break;
+    case syntax::builtin_t::TARGET_TRIPLE: {
+        ASSERT(builtin.return_type.get_kind() == type_kind::SLICE);
+        return_type = &builtin.return_type;
+        break;
+    }
     case syntax::builtin_t::TARGET_OS:     return_type = &ctx_.get_builtin_type("Os"); break;
     case syntax::builtin_t::TARGET_ARCH:   return_type = &ctx_.get_builtin_type("Arch"); break;
     case syntax::builtin_t::TARGET_ABI:    return_type = &ctx_.get_builtin_type("Abi"); break;
@@ -1365,10 +1520,10 @@ template <ast::IndexableID ID>
                                  resolving_.ast.location_of(arg));
         }
 
-        const auto site{active_blocks_.empty() || active_blocks_.back().current_stmt_idx != 0
-                            ? stdx::none
-                            : hint_site_of(*active_blocks_.back().block)};
-        if (!site) {
+        const auto placement{active_blocks_.empty() || active_blocks_.back().current_stmt_idx != 0
+                                 ? stdx::none
+                                 : hint_site_of(*active_blocks_.back().block)};
+        if (!placement) {
             return make_sema_err("@branchHint must be the first statement of an 'if'/'else' "
                                  "branch, a 'match' arm, or a function body",
                                  error::TYPE_MISMATCH,
@@ -1376,7 +1531,7 @@ template <ast::IndexableID ID>
         }
         const auto hint{ast::branch_hint_from_name(variant->name)};
         const bool fits_fn_body{hint == ast::branch_hint::COLD || hint == ast::branch_hint::NONE};
-        if (*site == hint_site::FN_BODY && !fits_fn_body) {
+        if (*placement == hint_site::FN_BODY && !fits_fn_body) {
             return make_sema_err("A function body only accepts '@branchHint(.cold)'",
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(arg));
@@ -1410,82 +1565,6 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    case syntax::builtin_t::MEMCPY:
-    case syntax::builtin_t::MEMSET:
-    case syntax::builtin_t::MEMMOVE: {
-        ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
-        const bool is_set{builtin_id == syntax::builtin_t::MEMSET};
-        const auto op_name{syntax::builtin_name(builtin_id)};
-
-        // Peel one `&`/`^` layer, then report {element type, is_writable} for a slice or array.
-        const auto contiguous_of{[](type& t) -> stdx::option<std::pair<type&, bool>> {
-            stdx::option<type&> u{t};
-            if (const auto r{u->get_data().as_opt<types::reference>()}) {
-                u.emplace(r->underlying);
-            } else if (const auto p{u->get_data().as_opt<types::pointer>()}) {
-                u.emplace(p->underlying);
-            }
-            if (const auto s{u->get_data().as_opt<types::slice>()}) {
-                return std::pair<type&, bool>{s->underlying, !u->is_constant()};
-            }
-            if (const auto a{u->get_data().as_opt<types::array>()}) {
-                return std::pair<type&, bool>{a->underlying, !u->is_constant()};
-            }
-            return stdx::none;
-        }};
-
-        auto&      dest_t{*get_resolved_call_arg_type(call.arguments[0])};
-        const auto dest{contiguous_of(dest_t)};
-        if (!dest) {
-            return make_sema_err(
-                fmt::format("'{}' expects a slice or array destination; found '{}'",
-                            op_name,
-                            ctx_.type_display_name(dest_t)),
-                error::TYPE_MISMATCH,
-                get_call_arg_location(call.arguments[0]));
-        }
-        if (!dest->second) {
-            return make_sema_err(
-                fmt::format("'{}' cannot write through an immutable destination; use a `mut` "
-                            "slice or array",
-                            op_name),
-                error::TYPE_MISMATCH,
-                get_call_arg_location(call.arguments[0]));
-        }
-
-        if (is_set) {
-            auto& val_t{*get_resolved_call_arg_type(call.arguments[1])};
-            if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::COMPTIME_INT) {
-                return make_sema_err(
-                    fmt::format("'@memset' fill value must be a byte-valued integer; found '{}'",
-                                ctx_.type_display_name(val_t)),
-                    error::TYPE_MISMATCH,
-                    get_call_arg_location(call.arguments[1]));
-            }
-        } else {
-            auto&      src_t{*get_resolved_call_arg_type(call.arguments[1])};
-            const auto src{contiguous_of(src_t)};
-            if (!src) {
-                return make_sema_err(fmt::format("'{}' expects a slice or array source; found '{}'",
-                                                 op_name,
-                                                 ctx_.type_display_name(src_t)),
-                                     error::TYPE_MISMATCH,
-                                     get_call_arg_location(call.arguments[1]));
-            }
-            if (!is_same_unqualified(dest->first, src->first)) {
-                return make_sema_err(
-                    fmt::format("'{}' requires matching element types; the destination holds "
-                                "'{}' but the source holds '{}'",
-                                op_name,
-                                ctx_.type_display_name(dest->first),
-                                ctx_.type_display_name(src->first)),
-                    error::TYPE_MISMATCH,
-                    get_call_arg_location(call.arguments[1]));
-            }
-        }
-        return_type = &builtin.return_type;
-        break;
-    }
     case syntax::builtin_t::SET_EVAL_RECURSION_LIMIT: {
         if (return_trackers_.empty()) {
             return make_sema_err("@setEvalRecursionLimit can only be used within a function scope",
@@ -1509,6 +1588,37 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
+    default: UNREACHABLE("Builtin is not a target builtin");
+    }
+    return {};
+}
+
+// Integer bit counts, float math, and the checked and wrapping arithmetic
+template <ast::IndexableID ID>
+auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
+    case syntax::builtin_t::CLZ:
+    case syntax::builtin_t::CTZ:
+    case syntax::builtin_t::POPCOUNT: {
+        auto& operand_type{comptime_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
+        const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
+        if (width == 0) {
+            return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
+                                             syntax::builtin_name(builtin_id),
+                                             ctx_.type_display_name(operand_type)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        const auto result_bits{std::bit_width(static_cast<u64>(width))};
+        return_type = &ctx_.get_int(static_cast<u16>(result_bits), false);
+        break;
+    }
+    // @TypeOf returns a type as per documentation, but it's not the literal `type` type
     case syntax::builtin_t::SQRT:
     case syntax::builtin_t::SIN:
     case syntax::builtin_t::COS:
@@ -1624,7 +1734,7 @@ template <ast::IndexableID ID>
         auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
         auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
         auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
-        // A shift's count is not a peer of the value shifted; the others meet at their peer type
+        // A shift's count is not a peer of the value shifted. The others meet at their peer type
         const bool       is_shift{builtin_id == syntax::builtin_t::SHL_WITH_OVERFLOW};
         const std::array operands{peer_operand{&lhs_type}, peer_operand{&rhs_type}};
         const auto       peer{is_shift ? stdx::result<gsl::not_null<type*>, peer_error>{&lhs_type}
@@ -1652,7 +1762,7 @@ template <ast::IndexableID ID>
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
-        // The result slot is a mutable reference (`&mut T`); a `^mut T` pointer is also accepted.
+        // The result slot is a mutable reference (`&mut T`). A `^mut T` pointer is also accepted.
         const auto  out_ref{out_type.get_data().as_opt<types::reference>()};
         const auto  out_ptr{out_type.get_data().as_opt<types::pointer>()};
         const type* out_underlying{out_ref   ? &out_ref->underlying
@@ -1676,6 +1786,113 @@ template <ast::IndexableID ID>
         return_type = &ctx_.get_builtin_resolved_type(type_kind::BOOL);
         break;
     }
+    default: UNREACHABLE("Builtin is not a math builtin");
+    }
+    return {};
+}
+
+// `@memcpy`, `@memset`, and `@memmove`
+template <ast::IndexableID ID>
+auto type_resolver::resolve_memory_builtin(ID, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
+    case syntax::builtin_t::MEMCPY:
+    case syntax::builtin_t::MEMSET:
+    case syntax::builtin_t::MEMMOVE: {
+        ASSERT(builtin.return_type.get_kind() == type_kind::VOID_);
+        const bool is_set{builtin_id == syntax::builtin_t::MEMSET};
+        const auto op_name{syntax::builtin_name(builtin_id)};
+
+        // Peel one `&`/`^` layer, then report {element type, is_writable} for a slice or array.
+        const auto contiguous_of{[](type& t) -> stdx::option<std::pair<type&, bool>> {
+            stdx::option<type&> u{t};
+            if (const auto r{u->get_data().as_opt<types::reference>()}) {
+                u.emplace(r->underlying);
+            } else if (const auto p{u->get_data().as_opt<types::pointer>()}) {
+                u.emplace(p->underlying);
+            }
+            if (const auto s{u->get_data().as_opt<types::slice>()}) {
+                return std::pair<type&, bool>{s->underlying, !u->is_constant()};
+            }
+            if (const auto a{u->get_data().as_opt<types::array>()}) {
+                return std::pair<type&, bool>{a->underlying, !u->is_constant()};
+            }
+            return stdx::none;
+        }};
+
+        auto&      dest_t{*get_resolved_call_arg_type(call.arguments[0])};
+        const auto dest{contiguous_of(dest_t)};
+        if (!dest) {
+            return make_sema_err(
+                fmt::format("'{}' expects a slice or array destination; found '{}'",
+                            op_name,
+                            ctx_.type_display_name(dest_t)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+        if (!dest->second) {
+            return make_sema_err(
+                fmt::format("'{}' cannot write through an immutable destination; use a `mut` "
+                            "slice or array",
+                            op_name),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(call.arguments[0]));
+        }
+
+        if (is_set) {
+            auto& val_t{*get_resolved_call_arg_type(call.arguments[1])};
+            if (!is_integer(val_t.get_kind()) && val_t.get_kind() != type_kind::COMPTIME_INT) {
+                return make_sema_err(
+                    fmt::format("'@memset' fill value must be a byte-valued integer; found '{}'",
+                                ctx_.type_display_name(val_t)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[1]));
+            }
+        } else {
+            auto&      src_t{*get_resolved_call_arg_type(call.arguments[1])};
+            const auto src{contiguous_of(src_t)};
+            if (!src) {
+                return make_sema_err(fmt::format("'{}' expects a slice or array source; found '{}'",
+                                                 op_name,
+                                                 ctx_.type_display_name(src_t)),
+                                     error::TYPE_MISMATCH,
+                                     get_call_arg_location(call.arguments[1]));
+            }
+            if (!is_same_unqualified(dest->first, src->first)) {
+                return make_sema_err(
+                    fmt::format("'{}' requires matching element types; the destination holds "
+                                "'{}' but the source holds '{}'",
+                                op_name,
+                                ctx_.type_display_name(dest->first),
+                                ctx_.type_display_name(src->first)),
+                    error::TYPE_MISMATCH,
+                    get_call_arg_location(call.arguments[1]));
+            }
+        }
+        return_type = &builtin.return_type;
+        break;
+    }
+    default: UNREACHABLE("Builtin is not a memory builtin");
+    }
+    return {};
+}
+
+// Atomic loads, stores, read-modify-writes, exchanges, and fences
+template <ast::IndexableID ID>
+auto type_resolver::resolve_atomic_builtin(ID, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::ATOMIC_LOAD:
     case syntax::builtin_t::ATOMIC_STORE:
     case syntax::builtin_t::ATOMIC_RMW:
@@ -1899,6 +2116,22 @@ template <ast::IndexableID ID>
         }
         break;
     }
+    default: UNREACHABLE("Builtin is not a atomic builtin");
+    }
+    return {};
+}
+
+// C variadic argument access
+template <ast::IndexableID ID>
+auto type_resolver::resolve_c_variadic_builtin(ID, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::C_VA_START:
     case syntax::builtin_t::C_VA_COPY:
     case syntax::builtin_t::C_VA_END:
@@ -1942,6 +2175,22 @@ template <ast::IndexableID ID>
         }
         break;
     }
+    default: UNREACHABLE("Builtin is not a c variadic builtin");
+    }
+    return {};
+}
+
+// Panics, tests, assertions, compile-time errors, entry points, and intrinsics
+template <ast::IndexableID ID>
+auto type_resolver::resolve_program_builtin(ID, builtin_site& site)
+    -> stdx::result<void, diagnostic> {
+    const auto& call{site.call};
+    const auto& builtin{site.builtin};
+    const auto  builtin_id{site.kind};
+    auto&       return_type{site.return_type};
+    using syntax::builtin_t;
+    using syntax::token_type_t;
+    switch (site.kind) {
     case syntax::builtin_t::PANIC: {
         ASSERT(builtin.return_type.get_kind() == type_kind::NORETURN);
         // The message must be compile-time known so it can be validated / interned
@@ -2259,11 +2508,38 @@ template <ast::IndexableID ID>
         return_type = &builtin.return_type;
         break;
     }
-    default: UNREACHABLE("Unimplemented builtin type resolution");
+    default: UNREACHABLE("Builtin is not a program builtin");
+    }
+    return {};
+}
+
+template <ast::IndexableID ID>
+auto type_resolver::resolve_builtin_call(ID                             id,
+                                         const ast::call_expr&          call,
+                                         const types::builtin_function& builtin)
+    -> stdx::result<void, diagnostic> {
+    ASSERT(call.function.is<ast::identifier_expr>(), "Builtin function must be a raw ident");
+    // There must be an actual builtin present with a token id
+    const auto builtin_opt{call.function->get_builtin()};
+    ASSERT(builtin_opt, "Cannot resolve non-builtin function");
+    TRY(check_builtin_arity(call, builtin, *builtin_opt));
+
+    builtin_site site{
+        .call = call, .builtin = builtin, .kind = *builtin_opt, .return_type = &ctx_.get_poison()};
+    switch (family_of(site.kind)) {
+    case builtin_family::CAST:              TRY(resolve_cast_builtin(id, site)); break;
+    case builtin_family::REFLECTION:        TRY(resolve_reflection_builtin(id, site)); break;
+    case builtin_family::TYPE_CONSTRUCTION: TRY(resolve_type_construction_builtin(id, site)); break;
+    case builtin_family::TARGET:            TRY(resolve_target_builtin(id, site)); break;
+    case builtin_family::MATH:              TRY(resolve_math_builtin(id, site)); break;
+    case builtin_family::MEMORY:            TRY(resolve_memory_builtin(id, site)); break;
+    case builtin_family::ATOMIC:            TRY(resolve_atomic_builtin(id, site)); break;
+    case builtin_family::C_VARIADIC:        TRY(resolve_c_variadic_builtin(id, site)); break;
+    case builtin_family::PROGRAM:           TRY(resolve_program_builtin(id, site)); break;
     }
 
-    resolving_.set_sema_type(id, *return_type);
-    last_type_.emplace(*return_type);
+    resolving_.set_sema_type(id, *site.return_type);
+    last_type_.emplace(*site.return_type);
     return {};
 }
 

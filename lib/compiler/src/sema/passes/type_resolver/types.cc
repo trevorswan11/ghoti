@@ -177,7 +177,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     }
 
     // `resolve_ident` re-looks-up the name from scratch, which would just rediscover the
-    // shadowing symbol we already routed around above; resolve the override directly instead.
+    // shadowing symbol we already routed around above. Resolve the override directly instead.
     if (overrode_shadow) {
         resolve_symbol(id, sym);
     } else {
@@ -443,7 +443,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
             &denoted_type(*last_type_.take());
     }
 
-    // `dyn`-safety: every associated type must be pinned here or defaulted; fill defaulted slots
+    // `dyn`-safety: every associated type must be pinned here or defaulted. Fill defaulted slots
     // so `dyn_t.assoc_bindings` is complete for method-signature substitution.
     for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {
         if (bindings[i]) { continue; }

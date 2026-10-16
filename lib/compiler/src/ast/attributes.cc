@@ -154,7 +154,7 @@ check_arity(const attribute_spec& spec, usize arg_count, const syntax::token_t& 
     return make_syntax_err(fmt::format("Attribute '{}' takes {} argument{}; found {}",
                                        spec.name,
                                        expected,
-                                       spec.max_args == 1 ? "" : "s",
+                                       string_utils::plural_suffix(spec.max_args),
                                        arg_count),
                            syntax::error::ATTRIBUTE_ARITY,
                            name_token);

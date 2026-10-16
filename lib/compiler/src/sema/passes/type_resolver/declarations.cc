@@ -285,7 +285,7 @@ template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
 
-    // A pack is usable only as `.len`, `[K]`, `for comptime`'s iterable, or `expr...`; those
+    // A pack is usable only as `.len`, `[K]`, `for comptime`'s iterable, or `expr...`. Those
     // forms intercept before ever reaching here, so a bare mention of the name is out of position.
     if (current_pack_ && name == current_pack_->name) {
         return last_type_.emplace(
@@ -302,7 +302,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
 
     // A primitive keyword names the primitive even where a raw identifier (`@"f128"`) declares
-    // the same name; the raw identifier is an ordinary name
+    // the same name. The raw identifier is an ordinary name
     const auto tok{id.get_token_type()};
     const bool is_primitive_token{std::ranges::contains(syntax::ALL_PRIMITIVES, tok)};
 
@@ -393,13 +393,12 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         } else {
             auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
 
-            // A closure writes through a reference to the binding, so it needs storage it may
-            // change; a `move fn` mutates its own copy instead. Writing through an immutable
-            // slice, pointer, or reference only reads the binding itself
+            // A closure needs a mutable binding to write through, but a `move fn` owns a copy.
+            // Writing through an immutable view only reads the binding
             const auto closure{
                 resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
             const bool immutable{!is_mutable_local(lookup->symbol)};
-            // A binding declared later has no type yet; using it is reported on its own
+            // A binding declared later has no type yet. Using it is reported on its own
             if (usage == capture_usage::MUTATED && immutable &&
                 lookup->symbol.get_status() == symbol_status::RESOLVED) {
                 const auto kind{get_resolved_symbol_type(lookup->symbol.get_data()).get_kind()};
@@ -440,7 +439,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         }
     }
 
-    // A declaration outside every open function resolves on first use as if from its own scope;
+    // A declaration outside every open function resolves on first use as if from its own scope.
     // otherwise its functions would see the open ones' frames and capture from them
     if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
         lookup->depth < function_boundaries_.front()) {
@@ -470,7 +469,7 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_ident, const ast::identifier_expr&)
 
 auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) -> void {
     PROFILE_FUNCTION();
-    // A builtin has no value of its own; only a call to it means anything
+    // A builtin has no value of its own. Only a call to it means anything
     const bool is_callee{std::exchange(resolving_callee_, false)};
     if (!is_callee && id.get_token_type() == syntax::token_type_t::BUILTIN) {
         return last_type_.emplace(
@@ -633,7 +632,7 @@ auto type_resolver::reject_non_runtime_slot(ast::explicit_type_id at, const type
 
 auto type_resolver::reject_storage_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
     if (reject_non_runtime_slot(at, slot_type)) { return true; }
-    // Only a return or a diverging expression has this type; nothing can be stored as it
+    // Only a return or a diverging expression has this type. Nothing can be stored as it
     if (slot_type.get_kind() == type_kind::NORETURN) {
         ctx_.diags.emplace_back("'noreturn' has no values, so nothing can be stored with this type",
                                 error::TYPE_MISMATCH,
@@ -710,7 +709,7 @@ auto type_resolver::frame_local_root(ast::expr_handle returned) -> stdx::option<
     }
     if (!place) { return stdx::none; }
 
-    // Fields and array elements live in their object; a slice, pointer, or reference doesn't
+    // Fields and array elements live in their object. A slice, pointer, or reference doesn't
     const auto is_indirect{[&](ast::node_id n) {
         const auto t{resolving_.get_sema_type_opt(n)};
         if (!t) { return true; }
@@ -737,7 +736,7 @@ auto type_resolver::frame_local_root(ast::expr_handle returned) -> stdx::option<
         [](const symbols::parameter& p) { return !p.is_comptime; },
         [](const symbols::self_parameter& s) { return s.modifier.is_value(); },
         [&](const symbols::node_t& node) {
-            // A `const` folds into read-only storage of its own; only runtime locals die here
+            // A `const` folds into read-only storage of its own. Only runtime locals die here
             const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(node)};
             if (!decl || !decl->has_modifier(ast::decl_modifiers::LET) ||
                 decl->has_modifier(ast::decl_modifiers::COMPTIME)) {
@@ -821,7 +820,7 @@ auto type_resolver::place_mutability(ast::node_id expr) -> types::mutability_mod
         if (object_type && object_type->get_kind() != type_kind::ARRAY) {
             if (const auto m{view_mutability(*object_type)}) { return *m; }
         }
-        // An array's `mut` / `mut?` elements are writable on their own; otherwise its binding
+        // An array's `mut` / `mut?` elements are writable on their own. Otherwise its binding
         // decides
         if (object_type && object_type->get_kind() == type_kind::ARRAY) {
             if (object_type->is_poly()) { return types::mut::POLY; }
@@ -868,13 +867,13 @@ auto type_resolver::call_mutability(const ast::call_expr&           call,
             mutability = types::mut::POLY;
         }
     }};
-    // A view argument has its own mutability; an array (or a receiver) is the place passed
+    // A view argument has its own mutability. An array (or a receiver) is the place passed
     const auto arg_mutability{[&](ast::node_id arg) -> types::mutability_modifiers {
         const auto arg_type{resolving_.get_sema_type_opt(arg)};
         if (arg_type && arg_type->get_kind() != type_kind::ARRAY) {
             if (const auto m{view_mutability(*arg_type)}) { return *m; }
         }
-        // An array's `mut` / `mut?` elements are writable on their own; otherwise its binding
+        // An array's `mut` / `mut?` elements are writable on their own. Otherwise its binding
         // decides
         if (arg_type && arg_type->get_kind() == type_kind::ARRAY &&
             (arg_type->is_poly() || !arg_type->is_constant())) {
@@ -984,7 +983,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
 
-    // An exported symbol is one concrete C-ABI function; a generic has no single body to export
+    // An exported symbol is one concrete C-ABI function. A generic has no single body to export
     if (decl.has_modifier(ast::decl_modifiers::EXPORT) && decl.value) {
         if (const auto fn_expr{resolving_.ast.get_as_opt<ast::function_expr>(*decl.value)};
             fn_expr && declares_generic_params(*fn_expr)) {
@@ -999,9 +998,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }
     }
 
-    // A dedicated instantiation resolver re-types a body a previous monomorphization already
-    // resolved; its body-local decls must resolve again and overwrite their node types rather than
-    // keep the earlier instantiation's
+    // An instantiation resolver re-types a body an earlier monomorphization resolved, so its
+    // body-local decls must resolve again and overwrite their node types
     const bool value_is_deferred_generic_method{[&] {
         if (!decl.value) { return false; }
         const auto fn_expr{resolving_.ast.get_as_opt<ast::function_expr>(*decl.value)};
@@ -1190,7 +1188,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
     if (resolved_type.is_poison()) {
         sym.set_kind(symbol_kind::POISONED);
     } else {
-        // No field-level path covers `extern` fn signatures / globals themselves; check here.
+        // No field-level path covers `extern` fn signatures / globals themselves. Check here.
         if (decl.has_modifier(ast::decl_modifiers::EXTERN)) {
             const auto bad{scan_cabi_offenders(resolved_type, target_has_x86_fp80())};
             if (bad.has_nonabi_scalar) {
@@ -1242,7 +1240,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
-        // `const U = undefined` aliases the literal; there is no runtime value to store
+        // `const U = undefined` aliases the literal. There is no runtime value to store
         const bool binds_undefined{resolved_type.get_kind() == type_kind::UNDEFINED};
         if (binds_undefined && (runtime_binding || decl.has_modifier(ast::decl_modifiers::MUT))) {
             ctx_.poison_symbol(sym,
@@ -1295,7 +1293,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             }
         }
 
-        // Aliases of an existing or constructed type have no storage; aggregate literals keep
+        // Aliases of an existing or constructed type have no storage. Aggregate literals keep
         // their own member emission path
         using storageless_kind = mod::storageless_kind;
         const auto storageless{[&] -> stdx::option<storageless_kind> {
@@ -1346,7 +1344,7 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
 
 auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
-    // An `if`/`match` branch statement yields the branch's value; its call result is not
+    // An `if`/`match` branch statement yields the branch's value. Its call result is not
     // discarded, so skip the unused-result check while resolving one.
     const bool is_branch_value{in_expr_branch_};
     if (!is_branch_value || arm_of_unused_) {
@@ -1421,7 +1419,7 @@ auto type_resolver::visit(ast::node_id id, const ast::test_stmt& test) -> void {
         return last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
     }
     auto& test_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!test_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, test_type.get_symbol_table_idx(), table_idx_};
 

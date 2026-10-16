@@ -4,6 +4,7 @@
 #include "compiler/ast/format.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -149,11 +150,11 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
     if (have_count != want.params.size()) {
         return fmt::format("it takes {} parameter{}, not {}",
                            have_count,
-                           have_count == 1 ? "" : "s",
+                           string_utils::plural_suffix(have_count),
                            want.params.size());
     }
 
-    // An `auto` slot deduces from the argument; anything else must be exactly the same type
+    // An `auto` slot deduces from the argument. Anything else must be exactly the same type
     const auto matches{[&](const type& want_t, type& have_t) {
         if (is_auto_pattern(want_t)) {
             type* leaf{nullptr};
@@ -436,9 +437,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         const bool has_pack_param{fn_info_opt && !fn_info_opt->fn_expr->parameters.empty() &&
                                   fn_info_opt->fn_expr->parameters.back().is_pack};
 
-        // Splice every `expr...` pack expansion into place before counting/typing arguments, so
-        // both this call's own arity and its callee's (if it too takes a pack) see the same flat,
-        // already-expanded list.
+        // Splice every `expr...` pack expansion in first, so this call's arity and a pack-taking
+        // callee's both see the same flat argument list
         const auto expanded_opt{expand_pack_call_args(call)};
         if (!expanded_opt) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
         const auto& expanded{*expanded_opt};
@@ -488,9 +488,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             const bool  self_requires_mut{!self_param.is_constant() &&
                                           (self_param.get_kind() == type_kind::REFERENCE ||
                                            self_param.get_kind() == type_kind::POINTER)};
-            // Semantic safeguard: disallow calling methods that require `&mut self` or `^mut self`
-            // on an rvalue/temporary (e.g. `(Counter{...}).inc()`), which would mutate an ephemeral
-            // value.
+            // A method taking `&mut self` or `^mut self` can't be called on a temporary like
+            // `(Counter{...}).inc()`, which would mutate a value about to vanish
             if (self_requires_mut && !is_lvalue_expression(resolving_, dot_call->object)) {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
@@ -569,7 +568,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                 if constexpr (std::same_as<decltype(arg_id), ast::node_id>) {
                                     resolving_.add_identifier_position(arg_id);
                                 }
-                                // A primitive type; an `@builtin` resolves below
+                                // A primitive type. An `@builtin` resolves below
                                 // and is rejected as uncalled
                                 if (auto b{
                                         sym->symbol.get_data().template as_opt<symbols::builtin>()};
@@ -578,7 +577,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                 }
                                 if (auto node{sym->symbol.get_data()
                                                   .template as_opt<symbols::node_t>()}) {
-                                    // Only a declaration naming a type; a value
+                                    // Only a declaration naming a type. A value
                                     // falls through and is rejected below
                                     if (resolving_.has_sema_type(*node)) {
                                         auto& decl_ty{resolving_.get_sema_type(*node)};
@@ -613,12 +612,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         }
                         return denoted;
                     }
-                    // A `comptime_*` literal argument materializes before it binds a
-                    // generic `T` / `auto` parameter, and a `[n]T` local's still-deferred
-                    // array type folds, keeping instantiations concrete.
+                    // Literals materialize and deferred `[n]T` locals fold before binding a generic
+                    // parameter, so instantiations stay concrete
                     return &comptime_numeric_view(concrete_array_type(*arg_type));
                 });
-                // A poisoned argument yields `none`; record it and move on
+                // A poisoned argument yields `none`. Record it and move on
                 if (!result_arg_type) {
                     concrete_arg_types[i] = nullptr;
                     any_arg_poison        = true;
@@ -740,9 +738,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 return last_type_.emplace(placeholder);
             }
 
-            // Enforce `impl I` / `impl (A + B)` parameter bounds now the arguments are concrete.
-            // A pack parameter's bound applies to every trailing argument it collects, not just
-            // the one at its own AST index.
+            // Enforce `impl I` bounds now the arguments are concrete. A pack's bound covers every
+            // trailing argument it collects
             if (const auto it{ctx_.param_bounds.find(fn_info_opt->fn_expr.get())};
                 it != ctx_.param_bounds.end()) {
                 const auto check_bound_at{[&](usize                        arg_idx,
@@ -788,9 +785,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
             }
 
-            // Fold the argument supplied for each `comptime` parameter to a compile-time value.
-            // Install simulated comptime_frame so argument folding observes preceding `comptime
-            // let mut` mutations.
+            // Fold each `comptime` parameter's argument under a simulated frame, so it sees earlier
+            // `comptime let mut` mutations
             const auto& cx_params{fn_info_opt->fn_expr->parameters};
             const auto  cx_count{static_cast<usize>(
                 std::ranges::count_if(cx_params, [](const auto& p) { return p.is_comptime; }))};
@@ -826,7 +822,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     if (auto cv{evaluator.try_eval(*expr_h)}; cv && !cv->is_poison()) {
                         folded.emplace(std::move(*cv));
                         // A top-level function folds to its name, which the callee's module can't
-                        // look up; pass the function itself
+                        // look up. Pass the function itself
                         if (folded->is<std::string>()) {
                             if (auto ref{declared_fn_ref(*expr_h)}) { folded = std::move(ref); }
                         }
@@ -952,7 +948,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
         bool any_arg_poison{false};
         for (usize i{0}; i < effective_arity; ++i) {
-            // A pack-element slot has no AST node of its own to resolve; it aliases an
+            // A pack-element slot has no AST node of its own to resolve. It aliases an
             // already-typed element of the enclosing pack.
             if (expanded.pack_k[i]) { continue; }
 
@@ -1062,7 +1058,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         auto args_result{resolve_result::OK};
         if (call.function->get_builtin() == syntax::builtin_t::EXPORT &&
             call.arguments.size() == 2) {
-            // The function stands alone; the options are a `builtin.ExportOptions` literal
+            // The function stands alone. The options are a `builtin.ExportOptions` literal
             {
                 const structural_guard shield{implicit_type_stack_, nullptr};
                 args_result = resolve_call_args(
@@ -1245,7 +1241,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                                                    resolving_.ast.location_of(id)));
     }
 
-    // Interface requirements resolve elsewhere; anywhere else a method must have a body
+    // Interface requirements resolve elsewhere. Anywhere else a method must have a body
     if (fn.is_type_expr && fn.self) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
@@ -1338,7 +1334,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         fn_type.unresolve();
     }
 
-    // `pre_register_impls` force-drives an impl target aggregate's decl; The
+    // `pre_register_impls` force-drives an impl target aggregate's decl. The
     // signature is already committed, so a re-entry is a no-op rather than an assertion failure.
     if (fn_type.is_resolved()) {
         resolving_.set_sema_type(id, fn_type);
@@ -1410,7 +1406,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                 sym->set_status(symbol_status::RESOLVING);
             }
         }
-        // An untyped pack (`rest...`) has no type to resolve; it's implicitly generic, like `auto`.
+        // An untyped pack (`rest...`) has no type to resolve. It's implicitly generic, like `auto`.
         if (param.is_pack && !param.explicit_type) {
             last_type_.emplace(ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]);
         } else {
@@ -1463,9 +1459,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                              error::ILLEGAL_POLY_MUTABILITY,
                              resolving_.ast.location_of(fn.explicit_return_type)));
     }
-    // A type-ctor member whose signature instantiates its own ctor (`Result(U, E)` inside `Result`)
-    // has this very node resolved by that nested instance meanwhile; this instance's signature
-    // replaces it below.
+    // A type-ctor member whose signature instantiates its own ctor (`Result(U, E)` in `Result`)
+    // gets this node typed by that nested instance, so this instance's signature replaces it
     const auto self_offset{fn.self.has_value() ? 1UZ : 0UZ};
     const bool any_param_needs_own_instantiation{[&] {
         if (self_offset && is_generic_type(*param_types[0])) { return true; }
@@ -1527,7 +1522,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     auto        tracker{std::move(return_trackers_.back())};
     return_trackers_.pop_back();
     if (body_failed) {
-        // A template's explicit signature stands alone; each instantiation re-resolves the body
+        // A template's explicit signature stands alone. Each instantiation re-resolves the body
         if (building_param_template_ && !is_auto_return) { return last_type_.emplace(fn_type); }
         return resolving_.set_sema_type(id, *last_type_);
     }

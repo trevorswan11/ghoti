@@ -866,7 +866,7 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
     default:                  break;
     }
 
-    // Only a call whose result is thrown away is flagged; a bare `a + b;` is left alone for now.
+    // Only a call whose result is thrown away is flagged. A bare `a + b;` is left alone for now.
     const auto call{resolving_.ast.get_as_opt<ast::call_expr>(*stmt.expression)};
     const auto unwrap{resolving_.ast.get_as_opt<ast::unwrap_expr>(*stmt.expression)};
     if (!call && !unwrap) { return; }

@@ -367,6 +367,53 @@ class type_resolver {
     resolve_builtin_call(ID id, const ast::call_expr& call, const types::builtin_function& builtin)
         -> stdx::result<void, diagnostic>;
 
+    // One builtin call being resolved, shared by the per-family resolvers below
+    struct builtin_site {
+        const ast::call_expr&          call;
+        const types::builtin_function& builtin;
+        syntax::builtin_t              kind;
+        gsl::not_null<type*>           return_type;
+    };
+    // A cast builtin's target and operand, from `@cast(T, x)` or the implicit type of `@cast(x)`
+    struct cast_args {
+        stdx::option<type&>                           target;
+        stdx::option<const ast::call_expr::argument&> operand;
+        source_location                               target_loc;
+    };
+    [[nodiscard]] auto check_builtin_arity(const ast::call_expr&          call,
+                                           const types::builtin_function& builtin,
+                                           syntax::builtin_t              builtin_id) const
+        -> stdx::result<void, diagnostic>;
+    [[nodiscard]] auto cast_args_of(const ast::call_expr& call, std::string_view name)
+        -> stdx::result<cast_args, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_cast_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_reflection_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_type_construction_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_target_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_math_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_memory_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_atomic_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_c_variadic_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_program_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;

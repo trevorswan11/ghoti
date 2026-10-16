@@ -73,7 +73,7 @@ auto type_resolver::redirect_by_declaration(ast::node_id          id,
     const auto named{dot ? ast::node_id{dot->member} : ast::node_id{call.function}};
     if (!ast.get_as_opt<ast::identifier_expr>(named)) { return false; }
 
-    // Only a call naming the declaration sees its defaults, through `const` aliases; a function
+    // Only a call naming the declaration sees its defaults, through `const` aliases. A function
     // value has none. `object` is what reaches the declaring scope (`mod` in `mod.f`)
     stdx::option<ast::expr_handle> object;
     if (dot) { object.emplace(dot->object); }
@@ -282,7 +282,7 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
             !res) {
             return stdx::err<diagnostic>{std::move(res.error())};
         }
-        // Ordinary `visit(enum_expr)` sets these once the variant is fully resolved; nothing
+        // Ordinary `visit(enum_expr)` sets these once the variant is fully resolved. Nothing
         // else does this for a synthetic aggregate that never goes through that visitor.
         auto& variant_sym{ctx_.registry.get(scope_idx).get(stable_name)};
         variant_sym.set_kind(symbol_kind::VALUE);
@@ -390,7 +390,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
             !res) {
             return stdx::err<diagnostic>{std::move(res.error())};
         }
-        // Ordinary `visit(struct_expr)` sets these once the field is fully resolved; nothing else
+        // Ordinary `visit(struct_expr)` sets these once the field is fully resolved. Nothing else
         // does this for a synthetic aggregate that never goes through that visitor.
         auto& field_sym{ctx_.registry.get(scope_idx).get(stable_name)};
         field_sym.set_kind(symbol_kind::VALUE);

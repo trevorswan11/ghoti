@@ -8,6 +8,7 @@
 #include "compiler/sema/unwrap_shape.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -96,7 +97,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
     resolving_.set_sema_type(id, *last_type_);
 }
 
-// The cfg pass has already evaluated this `@cfgValue`; adopt the verdict's type
+// The cfg pass has already evaluated this `@cfgValue`. Adopt the verdict's type
 auto type_resolver::visit(ast::node_id id, const ast::cfg_value_expr&) -> void {
     PROFILE_FUNCTION();
     const auto it{resolving_.cfg_value_results.find(id.get_index())};
@@ -394,7 +395,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     }
     const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR};
 
-    // Two numbers meet at their peer type; an untyped constant takes it on
+    // Two numbers meet at their peer type. An untyped constant takes it on
     const bool peers_operands{!is_shift_op && op != syntax::token_type_t::PLUS_PLUS &&
                               op != syntax::token_type_t::BOOLEAN_AND &&
                               op != syntax::token_type_t::BOOLEAN_OR};
@@ -473,7 +474,7 @@ auto type_resolver::resolve_concat(ast::node_id            id,
                                    type&                   lhs_type_in,
                                    type&                   rhs_type_in) -> void {
     // An identifier naming an array value can still carry a `TYPE`-wrapped meta-type or a
-    // not-yet-concrete `deferred_array` (e.g. a literal array dimension); unwrap/force both.
+    // not-yet-concrete `deferred_array` (e.g. a literal array dimension). Unwrap/force both.
     gir::const_eval evaluator{ctx_, resolving_};
     auto&           lhs_type{evaluator.force_deferred_array(denoted_type(lhs_type_in))};
     auto&           rhs_type{evaluator.force_deferred_array(denoted_type(rhs_type_in))};
@@ -559,11 +560,12 @@ auto type_resolver::validate_struct_initializer(ast::node_id                 ini
     }
 
     if (!struct_validator_.duplicates.empty()) {
-        return diagnostic{fmt::format("Struct initializer contains duplicate field{}: {}",
-                                      plurality(struct_validator_.duplicates),
-                                      fmt::join(struct_validator_.duplicates, ", ")),
-                          error::DUPLICATE_FIELD,
-                          resolving_.ast.location_of(init_id)};
+        return diagnostic{
+            fmt::format("Struct initializer contains duplicate field{}: {}",
+                        string_utils::plural_suffix(struct_validator_.duplicates.size()),
+                        fmt::join(struct_validator_.duplicates, ", ")),
+            error::DUPLICATE_FIELD,
+            resolving_.ast.location_of(init_id)};
     }
 
     // Check for missing fields
@@ -576,11 +578,12 @@ auto type_resolver::validate_struct_initializer(ast::node_id                 ini
     }
 
     if (!struct_validator_.missings.empty()) {
-        return diagnostic{fmt::format("Struct initializer missing required field{}: {}",
-                                      plurality(struct_validator_.missings),
-                                      fmt::join(struct_validator_.missings, ", ")),
-                          error::MISSING_FIELD,
-                          resolving_.ast.location_of(init_id)};
+        return diagnostic{
+            fmt::format("Struct initializer missing required field{}: {}",
+                        string_utils::plural_suffix(struct_validator_.missings.size()),
+                        fmt::join(struct_validator_.missings, ", ")),
+            error::MISSING_FIELD,
+            resolving_.ast.location_of(init_id)};
     }
 
     // Check for extra/unknown fields
@@ -591,11 +594,12 @@ auto type_resolver::validate_struct_initializer(ast::node_id                 ini
     }
 
     if (!struct_validator_.unknowns.empty()) {
-        return diagnostic{fmt::format("Struct initializer contains unknown field{}: {}",
-                                      plurality(struct_validator_.unknowns),
-                                      fmt::join(struct_validator_.unknowns, ", ")),
-                          error::UNKNOWN_FIELD,
-                          resolving_.ast.location_of(init_id)};
+        return diagnostic{
+            fmt::format("Struct initializer contains unknown field{}: {}",
+                        string_utils::plural_suffix(struct_validator_.unknowns.size()),
+                        fmt::join(struct_validator_.unknowns, ", ")),
+            error::UNKNOWN_FIELD,
+            resolving_.ast.location_of(init_id)};
     }
     return {};
 }
@@ -856,9 +860,8 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
 auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -> void {
     PROFILE_FUNCTION();
 
-    // `^.{a, b, c}` sugar: when a bare (untyped) initializer targets a known slice type with a
-    // `const` element, resolve it as `[N]T` instead and yield the slice directly rather than a
-    // pointer-to-array; the emitter decays the (possibly static) backing array into it.
+    // `^.{a, b, c}` against a slice type with `const` elements resolves as `[N]T` and yields the
+    // slice directly. The emitter decays the backing array into it
     if (ref_addr_of_is_mutable(id) != types::mut::MUTABLE) {
         if (const auto init{resolving_.ast.get_as_opt<ast::initializer_expr>(adr_of.rhs)};
             init && !init->object_type) {
@@ -942,7 +945,7 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
 
 auto type_resolver::visit(ast::node_id id, const ast::comptime_expr& cx) -> void {
     PROFILE_FUNCTION();
-    // The operand is compile-time evaluation; the emitter folds it per instantiation
+    // The operand is compile-time evaluation. The emitter folds it per instantiation
     const comptime_evaluation_scope cx_scope{ctx_, true};
     TRY_RESOLVE(*cx.rhs);
     resolving_.set_sema_type(id, *last_type_);
@@ -988,7 +991,7 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
 auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void {
     PROFILE_FUNCTION();
     TRY_RESOLVE(node.rhs);
-    // No unary operator takes a type (`-i64`); the emitter would have no value to apply it to
+    // No unary operator takes a type (`-i64`). The emitter would have no value to apply it to
     if (const auto& operand{*last_type_};
         !operand.is_poison() && decl_value_denotes_type(node.rhs)) {
         return last_type_.emplace(
@@ -1278,7 +1281,7 @@ auto type_resolver::visit(ast::node_id id, const ast::type_expr& node) -> void {
 }
 
 // A `let mut`, or a `const` that folds to something other than a type, cannot annotate a type
-// Folds `expr` purely to inspect it; a failed attempt's diagnostics are not the user's error
+// Folds `expr` purely to inspect it. A failed attempt's diagnostics are not the user's error
 auto type_resolver::probe_fold(ast::expr_handle expr) const -> stdx::option<gir::const_value> {
     const auto      diags_before{ctx_.diags.size()};
     gir::const_eval evaluator{ctx_, resolving_};

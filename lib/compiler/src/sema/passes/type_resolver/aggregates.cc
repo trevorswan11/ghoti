@@ -220,7 +220,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                           : ctx_.poison_node(resolving_, id));
     }
     // Recursive re-entry: a member type names this struct while it is already being resolved
-    // further up the stack; don't kick off a nested resolution
+    // further up the stack. Don't kick off a nested resolution
     if (std::ranges::contains(resolving_aggregate_nodes_, id.get_index())) {
         return last_type_.emplace(struct_type);
     }

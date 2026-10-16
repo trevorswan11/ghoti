@@ -180,7 +180,7 @@ enum class atomic_arg : u8 {
     OP,
 };
 
-// The roles of an atomic builtin's arguments, in order; empty for any other builtin
+// The roles of an atomic builtin's arguments, in order. Empty for any other builtin
 [[nodiscard]] inline auto atomic_arg_roles(stdx::option<syntax::builtin_t> builtin) noexcept
     -> gsl::span<const atomic_arg> {
     using enum atomic_arg;
@@ -236,14 +236,8 @@ enum class atomic_arg : u8 {
     return stdx::none;
 }
 
-[[nodiscard]] constexpr auto plurality(const auto& vec) noexcept -> std::string_view {
-    return vec.size() == 1 ? "" : "s";
-}
-
-// Determines whether an expression denotes a type (e.g. `^mut ^i32`, `&mut i32`, `[]u8`)
-// rather than an rvalue value. This distinction is critical to prevent false-positive
-// `ILLEGAL_RVALUE_CAPTURE` errors when mutable pointer/reference syntax appears in type
-// expressions.
+// Whether an expression denotes a type (`^mut ^i32`, `&mut i32`, `[]u8`) rather than a
+// value, so pointer and reference syntax in a type isn't taken for an rvalue capture
 [[nodiscard]] inline auto is_type_denoting_expr(const context&            ctx,
                                                 const mod::module_t&      mod,
                                                 ast::node_id              id,

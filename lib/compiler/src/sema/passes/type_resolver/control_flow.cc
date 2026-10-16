@@ -9,6 +9,7 @@
 #include "compiler/sema/unwrap_shape.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -16,7 +17,7 @@ using namespace resolver_detail;
 
 namespace {
 
-// Identifiers, fields, elements, or deref off one have real storage; anything else is an rvalue.
+// Identifiers, fields, elements, or deref off one have real storage. Anything else is an rvalue.
 [[nodiscard]] auto is_lvalue_shape(const mod::module_t& module, ast::expr_handle expr) noexcept
     -> bool {
     return module.ast.get_as_opt<ast::identifier_expr>(expr) ||
@@ -114,7 +115,7 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
 
     // The loop itself holds the block index, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     {
         const scope                  s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
@@ -184,9 +185,8 @@ struct comptime_for_driver {
 
 } // namespace
 
-// Unrolls a `for comptime`: resolves the block once per compile-time-known iteration, each under
-// its own `comptime_frame` slot and diffed into a per-iteration `body_type_diff` the emitter
-// replays
+// Unrolls a `for comptime`, resolving the block once per iteration under its own
+// `comptime_frame` slot and diffing each into a `body_type_diff` the emitter replays
 auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_expr& for_expr)
     -> void {
     PROFILE_FUNCTION();
@@ -203,7 +203,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
     check_comptime_loop_jumps(for_expr.block);
 
     auto& loop_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope     s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
     gir::const_eval evaluator{ctx_, resolving_};
@@ -253,9 +253,8 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                 const mutating_context_guard unrolled_g{in_comptime_for_iterable_, true};
                 TRY_RESOLVE(driver_id);
             }
-            // A bare identifier naming a `comptime` array/slice resolves through a `TYPE`-
-            // wrapped meta-type the same way a `comptime T: type` parameter does; unwrap it,
-            // mirroring `resolve_concat`'s operand handling.
+            // A bare identifier naming a `comptime` array or slice resolves through a `TYPE`
+            // wrapped meta-type, like a `comptime T: type` parameter, so unwrap it
             auto& iterable_type{evaluator.force_deferred_array(denoted_type(*last_type_.take()))};
             resolving_.set_sema_type(driver_id, iterable_type);
 
@@ -466,7 +465,7 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
 
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     {
         const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
@@ -616,7 +615,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
         return last_type_.emplace(*poisoned);
     }
 
-    // The template pass has no real impl-param values; leave an `if comptime` unresolved here so
+    // The template pass has no real impl-param values. Leave an `if comptime` unresolved here so
     // config-specific dead arms never poison. `resolve_param_impl_bodies` folds it per instance.
     if (if_expr.comptime_condition && building_param_template_) {
         auto& void_t{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
@@ -733,7 +732,7 @@ auto type_resolver::resolve_unwrap_captures(ast::node_id                        
                                 resolving_.ast.location_of(*payload->payload));
     }
 
-    // The same capture forms as a `match` arm; a temporary condition gets a slot of its own
+    // The same capture forms as a `match` arm. A temporary condition gets a slot of its own
     const auto mutability{place_mutability(condition)};
     auto       payload_type{resolve_capture_modifier(ctx_,
                                                      payload->modifier,
@@ -856,7 +855,7 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
     PROFILE_FUNCTION();
     if (loop.is_comptime) { check_comptime_loop_jumps(loop.block); }
     auto& loop_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
 
@@ -993,11 +992,12 @@ auto type_resolver::validate_enum_arms(ast::node_id           match_id,
     const auto diag{gather_arm_duplicates(match.arms, resolving_, enum_validator_, false)};
     ASSERT(!diag, "Enum validation should not return a diagnostic");
     if (!enum_validator_.duplicates.empty()) {
-        return diagnostic{fmt::format("Match expression contains duplicate enumeration{}: {}",
-                                      plurality(enum_validator_.duplicates),
-                                      fmt::join(enum_validator_.duplicates, ", ")),
-                          error::DUPLICATE_ENUMERATION,
-                          resolving_.ast.location_of(match_id)};
+        return diagnostic{
+            fmt::format("Match expression contains duplicate enumeration{}: {}",
+                        string_utils::plural_suffix(enum_validator_.duplicates.size()),
+                        fmt::join(enum_validator_.duplicates, ", ")),
+            error::DUPLICATE_ENUMERATION,
+            resolving_.ast.location_of(match_id)};
     }
 
     // Check for missing variants only if there's no catch-all
@@ -1015,7 +1015,7 @@ auto type_resolver::validate_enum_arms(ast::node_id           match_id,
         if (!enum_validator_.missings.empty()) {
             return diagnostic{
                 fmt::format("Match expression is non-exhaustive; missing enumeration{}: {}",
-                            plurality(enum_validator_.missings),
+                            string_utils::plural_suffix(enum_validator_.missings.size()),
                             fmt::join(enum_validator_.missings, ", ")),
                 error::MISSING_FIELD,
                 resolving_.ast.location_of(match_id)};
@@ -1031,7 +1031,7 @@ auto type_resolver::validate_enum_arms(ast::node_id           match_id,
 
     if (!enum_validator_.unknowns.empty()) {
         return diagnostic{fmt::format("Match expression contains unknown enumeration{}: {}",
-                                      plurality(enum_validator_.unknowns),
+                                      string_utils::plural_suffix(enum_validator_.unknowns.size()),
                                       fmt::join(enum_validator_.unknowns, ", ")),
                           error::UNKNOWN_ENUMERATION,
                           resolving_.ast.location_of(match_id)};
@@ -1060,11 +1060,12 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
     }
 
     if (!union_validator_.duplicates.empty()) {
-        return diagnostic{fmt::format("Match expression contains duplicate union field{}: {}",
-                                      plurality(union_validator_.duplicates),
-                                      fmt::join(union_validator_.duplicates, ", ")),
-                          error::DUPLICATE_FIELD,
-                          resolving_.ast.location_of(match_id)};
+        return diagnostic{
+            fmt::format("Match expression contains duplicate union field{}: {}",
+                        string_utils::plural_suffix(union_validator_.duplicates.size()),
+                        fmt::join(union_validator_.duplicates, ", ")),
+            error::DUPLICATE_FIELD,
+            resolving_.ast.location_of(match_id)};
     }
 
     // Check for missing fields only if there's a missing catch all
@@ -1080,7 +1081,7 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
         if (!union_validator_.missings.empty()) {
             return diagnostic{
                 fmt::format("Match expression is non-exhaustive; missing union field{}: {}",
-                            plurality(union_validator_.missings),
+                            string_utils::plural_suffix(union_validator_.missings.size()),
                             fmt::join(union_validator_.missings, ", ")),
                 error::MISSING_FIELD,
                 resolving_.ast.location_of(match_id)};
@@ -1096,7 +1097,7 @@ auto type_resolver::validate_union_arms(ast::node_id           match_id,
 
     if (!union_validator_.unknowns.empty()) {
         return diagnostic{fmt::format("Match expression contains unknown union field{}: {}",
-                                      plurality(union_validator_.unknowns),
+                                      string_utils::plural_suffix(union_validator_.unknowns.size()),
                                       fmt::join(union_validator_.unknowns, ", ")),
                           error::UNKNOWN_FIELD,
                           resolving_.ast.location_of(match_id)};
@@ -1248,7 +1249,7 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
                              resolving_.ast.location_of(id)));
     }
 
-    // Only the live arm is type-checked; the rest is dead code.
+    // Only the live arm is type-checked. The rest is dead code.
     const auto& live{match.arms[*selected]};
     {
         auto&       live_table_type{resolving_.get_sema_type(live)};
@@ -1390,7 +1391,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             const auto      cv{type_probe.try_eval(match.matcher)};
             matcher_denotes_type = cv && cv->is<stdx::option<sema::type&>>();
         }
-        // `match` on an enum/union type keeps its variant-enumeration semantics; empty and
+        // `match` on an enum/union type keeps its variant-enumeration semantics. Empty and
         // incomplete types keep their existing "cannot match on ..." diagnostics.
         const auto denoted_kind{denoted_type(matcher_type).get_kind()};
         if (denoted_kind == type_kind::ENUM || denoted_kind == type_kind::UNION ||
@@ -1749,7 +1750,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
             TRY_RESOLVE(arm.dispatch);
         }
 
-        // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value); a
+        // Only an expr_stmt arm can yield a value (blocks never do, per emit_stmt_as_value). A
         // block's own resolved type is just its scope handle, not a value type, so it's ignored.
         if (resolving_.ast.get_as_opt<ast::block_stmt>(arm.dispatch)) { block_arm = true; }
         if (const auto expr_stmt_node{resolving_.ast.get_as_opt<ast::expr_stmt>(arm.dispatch)}) {
@@ -1862,7 +1863,7 @@ auto type_resolver::result_peer(ast::node_id id, gsl::span<const result_value> v
         return instance && *instance ? **instance : ctx_.get_builtin_resolved_type(type_kind::TYPE);
     }
 
-    // Only values can peer; types and scope handles keep the first arm's type
+    // Only values can peer. Types and scope handles keep the first arm's type
     const bool all_values{std::ranges::all_of(operands, [](const peer_operand& value) {
         const auto kind{value.type->get_kind()};
         const bool takes_no_part{kind == type_kind::NORETURN || kind == type_kind::UNDEFINED ||
@@ -1873,7 +1874,7 @@ auto type_resolver::result_peer(ast::node_id id, gsl::span<const result_value> v
 
     const auto peer{peer_type(ctx_, operands)};
     if (peer) { return **peer; }
-    // Arms nothing reads need no common type; the construct is a statement
+    // Arms nothing reads need no common type. The construct is a statement
     if (unused_value_nodes_.contains(id.get_index())) {
         return ctx_.get_builtin_resolved_type(type_kind::VOID_);
     }
@@ -1893,7 +1894,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     if (reject_type_condition(while_loop.condition)) { return; }
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     if (const auto poisoned{resolve_unwrap_captures(id,
                                                     while_loop.condition,
@@ -2034,7 +2035,7 @@ auto type_resolver::visit(ast::node_id id, const ast::block_stmt& block) -> void
                                                    resolving_.ast.location_of(id)));
     }
     auto& block_type{resolving_.get_sema_type(id)};
-    // Poisoned by an earlier error (e.g. a prior unrolling); its scope is gone
+    // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!block_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
     const scope s{table_stack_, block_type.get_symbol_table_idx(), table_idx_};
 
@@ -2502,7 +2503,7 @@ auto type_resolver::deferred_body_jumps(ast::stmt_handle body) -> bool {
 
 auto type_resolver::visit(ast::node_id id, const ast::defer_stmt& defer) -> void {
     PROFILE_FUNCTION();
-    // A jump out of the body is the real mistake; resolving it would only add follow-on errors
+    // A jump out of the body is the real mistake. Resolving it would only add follow-on errors
     if (deferred_body_jumps(defer.deferred)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
@@ -2609,7 +2610,7 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
                 resolving_.ast.location_of(*return_stmt.expression)));
         }
 
-        // Only these two shapes are checked; the AST can't tell origin from pass-through.
+        // Only these two shapes are checked. The AST can't tell origin from pass-through.
         const auto constructs_closure_literal = [&] {
             if (resolving_.ast.get_as_opt<ast::function_expr>(*return_stmt.expression)) {
                 return true;
