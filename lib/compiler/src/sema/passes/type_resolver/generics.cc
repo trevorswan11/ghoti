@@ -710,7 +710,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
     inst_stack.push(fn_table_idx);
 
-    if (const auto self_t{instance_self_type(fn_info)}) {
+    const auto self_t{instance_self_type(fn_info)};
+    if (self_t) {
         binding_restores.retype(fn_mod, fn_expr.self->name, *self_t);
         if (const auto ident{fn_mod.ast.get_as_opt<ast::identifier_expr>(fn_expr.self->name)}) {
             binding_restores.bind_value_symbol(ctx_, fn_table_idx, ident->name);
@@ -949,6 +950,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     // this instantiation's body/signature typing, to be replayed at emit time.
     body_type_diff typing;
     snap.diff_into(ctx_, fn_mod, typing, &write_log);
+    // `self` was bound before the write log started, so the emitter needs its type spelled out
+    if (self_t) { typing.node_types.insert_or_assign(fn_expr.self->name.get_index(), *self_t); }
     restore_shared_typing(fn_mod,
                           snap,
                           typing,

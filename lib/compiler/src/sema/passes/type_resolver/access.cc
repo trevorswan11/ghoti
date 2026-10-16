@@ -374,16 +374,17 @@ auto type_resolver::resolve_structural_access(type&                  object_type
         resolve_symbol(ast::node_id{member}, member_symbol);
         return last_type_.take();
     }
-    if (enum_type) { return ctx_.pool.strip_volatile(enum_type->type_at(member_idx, object_type)); }
-    auto member_type{struct_type  ? struct_type->type_at_opt(member_idx)
-                     : union_type ? union_type->type_at_opt(member_idx)
-                                  : stdx::none};
-    ASSERT(struct_type || union_type, "Error handling failed to catch invalid type");
+    auto member_type{enum_type     ? enum_type->type_at_opt(member_idx, object_type)
+                     : struct_type ? struct_type->type_at_opt(member_idx)
+                     : union_type  ? union_type->type_at_opt(member_idx)
+                                   : stdx::none};
+    ASSERT(enum_type || struct_type || union_type, "Error handling failed to catch invalid type");
     // A member reached from inside its own (still resolving) body goes through its symbol
     if (!member_type) {
         resolve_symbol(ast::node_id{member}, member_symbol);
         return last_type_.take();
     }
+    if (enum_type) { return ctx_.pool.strip_volatile(*member_type); }
     return member_type.get();
 }
 

@@ -1415,8 +1415,11 @@ auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& mat
     case type_kind::USIZE:
     case type_kind::COMPTIME_INT: break;
     case type_kind::BOOL:         required_arm_count.emplace(2); break;
+    case type_kind::F16:
     case type_kind::F32:
     case type_kind::F64:
+    case type_kind::F80:
+    case type_kind::F128:
     case type_kind::COMPTIME_FLOAT:
         return diagnostic{"Cannot match on floats due to precision; use an if statement with "
                           "explicit precision handling",
@@ -1425,6 +1428,7 @@ auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& mat
     case type_kind::VOID_:
     case type_kind::UNDEFINED:
         return diagnostic{"Empty types cannot be matched on", sema::error::TYPE_MISMATCH, at};
+    case type_kind::ENUM_LITERAL:
     case type_kind::TYPE:
     case type_kind::AUTO:
     case type_kind::OPAQUE:

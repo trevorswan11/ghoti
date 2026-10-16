@@ -803,6 +803,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Narrow integers and `bool` are sign or zero extended wherever the target's C ABI expects the caller to
     - Every function follows these rules, so any function can become a C callback through `extern fn`
     - Other targets still pass aggregates LLVM's own way
+- Fixed: a module-scope `const` or `let` whose initializer has the wrong type (`let x: i32 = "s";`) is now a type error instead of a codegen crash
+- Fixed: a generic method of a type-constructor instance that takes `self` by value no longer crashes codegen
+- Fixed: `&f` of a function now coerces to an erased `fn(...)` parameter, as `^f` does
+- Fixed: a compile-time call that returns a reference parameter by value reads through it, instead of crashing a global's initializer
+- Fixed: compiler crashes on a `match` over an `f16`, `f80`, `f128`, or enum literal value, a `@cfg` block in a function signature, and an enum member reached from its own body before it resolves
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

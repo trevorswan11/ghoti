@@ -65,6 +65,13 @@ namespace ghoti::gir {
 
 namespace {
 
+// Whether a value of this kind is a view of a place rather than a value read out of one
+[[nodiscard]] constexpr auto holds_place(sema::type_kind kind) noexcept -> bool {
+    using sema::type_kind;
+    return kind == type_kind::REFERENCE || kind == type_kind::POINTER || kind == type_kind::SLICE ||
+           kind == type_kind::AUTO;
+}
+
 // Compile-time integer results evaluate at 128-bit width but store in the narrowest
 // arm that holds them, so the common (<=64-bit) case is unchanged for every consumer.
 template <typename T>
@@ -5733,6 +5740,17 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                 // A `?` that breaks has already raised its return signal
                 if (!current_signal_.kind) { cond_unknown_ = true; }
                 return stdx::none;
+            }
+            // A reference returned as a plain value is read through, as runtime loads it
+            if (ret_type && !holds_place(ret_type->get_kind())) {
+                if (val->is<const_ref>()) {
+                    val = load_ref(val->as<const_ref>(), *data.expression);
+                } else if (const auto addr{val->as_opt<const_addr>()}) {
+                    if (addr->pointee.size() != 1) { return stdx::none; }
+                    auto pointee{addr->pointee.front()};
+                    val = std::move(pointee);
+                }
+                if (!val) { return stdx::none; }
             }
             current_signal_ = eval_signal{
                 .kind         = eval_signal_kind::RETURN,

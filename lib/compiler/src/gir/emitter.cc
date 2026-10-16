@@ -718,6 +718,8 @@ auto emitter::concrete_callable_type(sema::type& fat_type, sema::type& src_type)
         signature = &cl->signature;
     } else if (const auto p{src_type.get_data().as_opt<sema::types::pointer>()}) {
         signature = &p->underlying;
+    } else if (const auto r{src_type.get_data().as_opt<sema::types::reference>()}) {
+        signature = &r->underlying;
     }
     auto& erased{ctx_.with_erasure(*signature, true)};
     if (const auto p{fat_type.get_data().as_opt<sema::types::pointer>()}) {
@@ -760,8 +762,11 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         const auto fn{t.get_data().as_opt<sema::types::function>()};
         return fn && !fn->erased;
     }};
+    // A pointer or reference to a function is its code address
     const auto ptr_src{src_ty->get_data().as_opt<sema::types::pointer>()};
-    if (is_thin_fn(*src_ty) || (ptr_src && is_thin_fn(ptr_src->underlying))) {
+    const auto ref_src{src_ty->get_data().as_opt<sema::types::reference>()};
+    if (is_thin_fn(*src_ty) || (ptr_src && is_thin_fn(ptr_src->underlying)) ||
+        (ref_src && is_thin_fn(ref_src->underlying))) {
         return value{builder_.emit_make_callable(emit_expression(src), stdx::none, fat_type),
                      fat_type};
     }

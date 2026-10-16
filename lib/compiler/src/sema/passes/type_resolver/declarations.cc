@@ -674,7 +674,11 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
     const auto is_array_like{[](const type& t) {
         return t.get_data().is<types::array>() || t.get_data().is<types::deferred_array>();
     }};
-    if (is_array_like(*value_type) ||
+    const auto declared_kind{declared.get_kind()};
+    const bool array_target{is_array_like(declared) || declared_kind == type_kind::SLICE ||
+                            declared_kind == type_kind::POINTER ||
+                            declared_kind == type_kind::REFERENCE};
+    if ((is_array_like(*value_type) && array_target) ||
         (is_array_like(declared) && value_type->get_kind() == type_kind::UNDEFINED)) {
         return false;
     }

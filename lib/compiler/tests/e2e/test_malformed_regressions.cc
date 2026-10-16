@@ -291,4 +291,126 @@ TEST_CASE("A folded call checks a number passed for an array parameter") {
     )");
 }
 
+TEST_CASE("A match on an enum literal or a wide float is reported, not a crash") {
+    helpers::expect_compile_error(R"(
+        const K = enum { a, b };
+        const g = fn(k: impl K, x: match (k) { .a => u8, .b => u64 }): usize { _ = x; return 1; };
+        pub const main = fn(): i32 { return @intCast(g(.a, 1)); };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            const x: f16 = 1.0;
+            return match (x) { _ => 0 };
+        };
+    )");
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            const x: f128 = 1.0;
+            return match (x) { _ => 0 };
+        };
+    )");
+}
+
+TEST_CASE("A @cfg block in a function signature is spliced before symbol collection") {
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): comptime {
+            @cfg(ptr_bits == 64) { return 64; }
+            else                 { return 32; }
+        };
+    )");
+}
+
+TEST_CASE("An enum member reached from its own body before it resolves is not a crash") {
+    helpers::expect_compile_error(R"(
+        pub const Color = enum {
+            RED,
+            pub const get_default = fn(): Color { return Color.secret_code = fn(): i32RED; };
+            const secret_code = fn(): i32 { return 42; };
+        };
+        pub const main = fn(): i32 { return 0; };
+    )");
+}
+
+TEST_CASE("A module-scope initializer of the wrong type is rejected") {
+    helpers::expect_compile_error(R"(
+        let mut current: fn(n: i32): i32 = "s";
+        pub const main = fn(): i32 { return current(0); };
+    )");
+    helpers::expect_compile_error(R"(
+        let mut current: i32 = "s";
+        pub const main = fn(): i32 { return current; };
+    )");
+    helpers::expect_compile_error(R"(
+        const current: bool = "s";
+        pub const main = fn(): i32 { return @intFromBool(current); };
+    )");
+    CHECK(helpers::compile_and_run(R"(
+        const name: []u8 = "abc";
+        pub const main = fn(): i32 { return @intCast(name.len); };
+    )") == 3);
+}
+
+TEST_CASE("A folded call returning a reference parameter by value reads through it") {
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(y: &i64): i64 { return y; };
+        const c = f(&2);
+        pub const main = fn(): i32 { return @intCast(c); };
+    )") == 2);
+    CHECK(helpers::compile_and_run(R"(
+        const echo = fn(x: auto, y: @TypeOf(auto)): @TypeOf(x) { return y; };
+        const c = echo(1, &2);
+        pub const main = fn(): i32 { return @intCast(c); };
+    )") == 2);
+    CHECK(helpers::compile_and_run(R"(
+        const g: i64 = 5;
+        const f = fn(y: &i64): i64 { return y; };
+        const c = f(&g);
+        pub const main = fn(): i32 { return @intCast(c); };
+    )") == 5);
+}
+
+TEST_CASE("A reference to a function coerces to an erased fn parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const ap = fn(m: fn(x: i32): bool): bool { return m(1); };
+        const is_pos = fn(x: i32): bool { return x > 0; };
+        pub const main = fn(): i32 { return @intFromBool(ap(&is_pos)); };
+    )") == 1);
+    CHECK(helpers::compile_and_run(R"(
+        const ap = fn(comptime U: type, m: fn(x: i32): U): U { return m(4); };
+        const twice = fn(x: i32): i64 { return x * 2; };
+        pub const main = fn(): i32 { return @intCast(ap(i64, &twice)); };
+    )") == 8);
+}
+
+TEST_CASE("A generic member taking self by value is typed for its instance") {
+    CHECK(helpers::compile_and_run(R"(
+        const Container = fn(comptime T: type): type {
+            return struct {
+                val: T,
+                pub const get = fn(self, comptime U: type): U { return @intCast(U, self.val); };
+            };
+        };
+        pub const main = fn(): i32 {
+            let c: Container(i32) = .{ .val = 10 };
+            return @intCast(c.get(i64));
+        };
+    )") == 10);
+    CHECK(helpers::compile_and_run(R"(
+        const Container = fn(comptime T: type): type { return struct { val: T }; };
+        impl(T: type) Container(T) {
+            pub const map = fn(self, comptime U: type, mapper: fn(x: T): U): Container(U) {
+                return .{ .val = mapper(self.val) };
+            };
+        }
+        pub const main = fn(): i32 {
+            let c1: Container(i32) = .{ .val = 10 };
+            const dbl = fn(x: i32): i64 { return @intCast(i64, x * 2); };
+            const is_gt = fn(x: i32): bool { return x > 5; };
+            let c2 = c1.map(i64, dbl);
+            let c3 = c1.map(bool, &is_gt);
+            return @intCast(i32, c2.val) + @intFromBool(c3.val);
+        };
+    )") == 21);
+}
+
 } // namespace ghoti::tests

@@ -795,6 +795,24 @@ auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
     rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
 }
 
+auto cfg_pass::recurse_into_type(ast::explicit_type_id type) -> void {
+    switch (type.get_kind()) {
+    case ast::explicit_type_kind::EXPR:
+        recurse_into_expr(module_.ast.get_as<ast::explicit_expr_type>(type).expr);
+        break;
+    case ast::explicit_type_kind::RECURSIVE:
+        recurse_into_type(module_.ast.get_as<ast::explicit_type_id>(type));
+        break;
+    case ast::explicit_type_kind::ARRAY: {
+        const auto& array{module_.ast.get_as<ast::explicit_array_type>(type)};
+        if (array.dimension) { recurse_into_expr(*array.dimension); }
+        recurse_into_type(array.inner_explicit_type);
+        break;
+    }
+    default: break;
+    }
+}
+
 auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
     PROFILE_FUNCTION();
     for (const auto member : members) {
@@ -846,6 +864,10 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             for (const auto& entry : init.initializers) { recurse_into_expr(entry.value); }
         },
         [&](const ast::function_expr& fn) {
+            for (const auto& param : fn.parameters) {
+                if (param.explicit_type) { recurse_into_type(*param.explicit_type); }
+            }
+            recurse_into_type(fn.explicit_return_type);
             if (fn.body) { recurse_into_block(*fn.body); }
         },
         [&](const ast::if_expr& branch) {
