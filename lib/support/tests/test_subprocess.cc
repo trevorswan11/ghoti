@@ -1,3 +1,4 @@
+#include <fstream>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -5,6 +6,7 @@
 #include "ghoti/config.h"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
+#include "support/tempfile.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests {
@@ -47,6 +49,21 @@ TEST_CASE("spawn_child kills a child that keeps running past its timeout") {
     const mock_argv busy{"sh", "-c", "while :; do :; done"};
 #endif
     CHECK(spawn_child(busy, 500ms) == spawn_child_timeout_exit_code);
+}
+
+TEST_CASE("spawn_child_logged writes the child's stdout and stderr to its log") {
+#if GHOTI_WINDOWS
+    const mock_argv noisy{"cmd", "/c", "echo out& echo err 1>&2& exit 3"};
+#else
+    const mock_argv noisy{"sh", "-c", "echo out; echo err >&2; exit 3"};
+#endif
+    const tempfile log{"spawn_child_logged"};
+    CHECK(spawn_child_logged(noisy, log) == 3U);
+
+    std::ifstream     in{log.path};
+    const std::string text{string_utils::read_stream(in)};
+    CHECK(text.contains("out"));
+    CHECK(text.contains("err"));
 }
 
 #if GHOTI_WINDOWS

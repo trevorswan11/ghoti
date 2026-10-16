@@ -197,6 +197,7 @@ const TestArtifacts = struct {
         cdb_steps: ?*stdx.ArrayList(*std.Build.Step),
         install_dir: ?[]const u8,
         install_only: bool,
+        ghoti: *std.Build.Step.Compile,
     ) !void {
         if (cdb_steps) |cdb| {
             cdb.append(&self.support_tests.step);
@@ -233,7 +234,7 @@ const TestArtifacts = struct {
         full_step.dependOn(&full.step);
 
         // Random-seed differential rounds for a time budget, never part of `test`
-        const fuzz_minutes = b.option(u32, "fuzz-minutes", "Time budget for fuzz-semantics (default: 20)") orelse 20;
+        const fuzz_minutes = b.option(u32, "fuzz-minutes", "Time budget for fuzz-semantics and fuzz-crash (default: 20)") orelse 20;
         const fuzz = b.addRunArtifact(self.compiler_tests);
         fuzz.addArg("[.fuzz-semantics]");
         fuzz.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
@@ -241,6 +242,21 @@ const TestArtifacts = struct {
         fuzz.has_side_effects = true;
         const fuzz_step = b.step("fuzz-semantics", "Check compile-time folding against runtime results on random operands");
         fuzz_step.dependOn(&fuzz.step);
+
+        // Mutated test programs fed to the installed ghoti binary, keeping the ones that crash it
+        const fuzz_replay = b.option([]const u8, "fuzz-replay", "Rerun every .gh file in this directory through fuzz-crash instead of mutating");
+        const install_ghoti = b.addInstallArtifact(ghoti, .{});
+        const crash = b.addRunArtifact(self.driver_tests);
+        crash.addArg(if (fuzz_replay != null) "[.fuzz-replay]" else "[.fuzz-crash]");
+        crash.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        crash.setEnvironmentVariable("GHOTI_REPO_ROOT", b.pathFromRoot("."));
+        crash.setEnvironmentVariable("GHOTI", b.getInstallPath(.bin, ghoti.out_filename));
+        crash.setEnvironmentVariable("GHOTI_FUZZ_MINUTES", b.fmt("{d}", .{fuzz_minutes}));
+        if (fuzz_replay) |dir| crash.setEnvironmentVariable("GHOTI_FUZZ_REPLAY", if (std.fs.path.isAbsolute(dir)) dir else b.pathFromRoot(dir));
+        crash.has_side_effects = true;
+        crash.step.dependOn(&install_ghoti.step);
+        const crash_step = b.step("fuzz-crash", "Feed mutated programs to ghoti and report the ones that crash it");
+        crash_step.dependOn(&crash.step);
 
         // Otherwise `zig build -Dinstall-tests-only=true` silently leaves stale test binaries behind
         if (install_only) b.getInstallStep().dependOn(test_step);
@@ -533,7 +549,7 @@ fn addArtifacts(b: *std.Build, config: struct {
             .compiler_tests = compiler_tests,
             .driver_tests = driver_tests,
         };
-        try tests.?.configure(b, config.cdb_steps, test_install_dir, config.install_tests_only);
+        try tests.?.configure(b, config.cdb_steps, test_install_dir, config.install_tests_only, ghoti);
     }
 
     return .{

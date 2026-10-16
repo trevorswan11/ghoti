@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <ios>
 #include <string>
 #include <string_view>
 
@@ -24,5 +25,8 @@ namespace ghoti::path_utils {
 
 [[nodiscard]] auto exists(const std::filesystem::path& path) -> bool;
 [[nodiscard]] auto is_file(const std::filesystem::path& path) -> bool;
+
+[[nodiscard]] auto read_file(const std::filesystem::path& path,
+                             std::ios::openmode           mode = std::ios::binary) -> std::string;
 
 } // namespace ghoti::path_utils
