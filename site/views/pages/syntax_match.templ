@@ -19,7 +19,7 @@ templ SyntaxMatchPage() {
 				<li>
 					To catch all arms that were not explicitly listed, you can use a catch-all branch where the LHS of the branch is the underscore <code>_</code> token
 					<ul>
-						<li>This branch does not support capturing as the value is already available in the scope</li>
+						<li>This branch may capture the scrutinee (<code>_ =&gt; |v| v * 2</code>); on a tagged union the capture is the whole union, not a payload</li>
 						<li>This branch may come anywhere in the match arm list</li>
 					</ul>
 				</li>

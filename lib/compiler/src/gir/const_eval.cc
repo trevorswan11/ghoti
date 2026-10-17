@@ -3185,13 +3185,9 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
             });
     };
 
-    for (usize i{0}; i < match.arms.size(); ++i) {
-        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
-        const auto& arm{match.arms[i]};
-        const bool  arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
-            return match_pattern(pattern, *matcher_val);
-        })};
-        if (arm_matches) {
+    // Binds an arm's capture: a variant's payload, or the whole scrutinee for the catch-all
+    const auto bind_capture{
+        [&](const ast::match_expr::arm& arm, bool whole) {
             if (arm.capture && arm.capture->payload.is<ast::identifier_expr>() &&
                 (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr()) &&
                 !call_stack_.empty()) {
@@ -3199,7 +3195,8 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
                 const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
                 auto        place{eval_place(match.matcher)};
                 if (!place) { place = ref_to_temporary(*matcher_val); }
-                if (const auto un{matcher_val->as_opt<const_union>()}; un && !un->payload.empty()) {
+                if (const auto un{matcher_val->as_opt<const_union>()};
+                    un && !un->payload.empty() && !whole) {
                     place->path.emplace_back(ref_step::kind::PAYLOAD, un->active_field);
                 }
                 call_stack_.back().bindings.insert_or_assign(
@@ -3209,7 +3206,7 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
             } else if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
                 const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
                 if (!call_stack_.empty()) {
-                    if (const auto un{matcher_val->as_opt<const_union>()}) {
+                    if (const auto un{matcher_val->as_opt<const_union>()}; un && !whole) {
                         if (!un->payload.empty()) {
                             call_stack_.back().bindings.insert_or_assign(ident.name,
                                                                          un->payload.front());
@@ -3221,12 +3218,23 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
                     }
                 }
             }
+        }};
+
+    for (usize i{0}; i < match.arms.size(); ++i) {
+        if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
+        const auto& arm{match.arms[i]};
+        const bool  arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
+            return match_pattern(pattern, *matcher_val);
+        })};
+        if (arm_matches) {
+            bind_capture(arm, false);
             return eval_dispatch(arm.dispatch);
         }
     }
 
     if (match.catch_all_idx) {
         const auto& catch_all_arm{match.arms[*match.catch_all_idx]};
+        bind_capture(catch_all_arm, true);
         return eval_dispatch(catch_all_arm.dispatch);
     }
 

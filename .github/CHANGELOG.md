@@ -903,3 +903,4 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `comptime { ...; return r; }` returns `r` from the enclosing function, including as a `match comptime` arm
 - Fixed: a generic instantiated from inside another generic saw the outer one's `comptime` bindings by name, so a local `const T` in the inner function could read the caller's `T`
 - Fixed: errors raised in a module that had already reported errors were printed against the calling file, sometimes with an `<invalid line>` excerpt
+- A catch-all `match` arm may capture the scrutinee: `_ => |v| v * 2`, or `|&mut v|` to alias it; on a tagged union the capture is the whole union, so it can be matched again

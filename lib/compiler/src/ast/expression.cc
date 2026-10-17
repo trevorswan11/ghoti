@@ -1878,12 +1878,6 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
             TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
         }
 
-        if (catch_all_idx == arm_idx && cap) {
-            return make_syntax_err("Catch-all match arms may not have a capture clause",
-                                   syntax::error::ILLEGAL_MATCH_CATCH_ALL,
-                                   parser.get_location_of(*cap->payload));
-        }
-
         // The resulting statement must be restricted like an if branch
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(

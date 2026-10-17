@@ -1324,7 +1324,8 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
             // capture already gets
             const auto& cap_ident{
                 resolving_.ast.get_as<ast::identifier_expr>(*live.capture->payload)};
-            if (const auto un{scrutinee->as_opt<gir::const_union>()}) {
+            const auto un{scrutinee->as_opt<gir::const_union>()};
+            if (un && !live.primary_pattern().is<ast::discarded>()) {
                 frame.insert_or_assign(cap_ident.name,
                                        !un->payload.empty() ? un->payload.front() : *scrutinee);
             } else {
@@ -1517,7 +1518,8 @@ auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& mat
 auto type_resolver::arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
     -> stdx::option<type&> {
     const auto union_data{matcher_type.get_data().as_opt<types::union_t>()};
-    if (!union_data) { return matcher_type; }
+    // A catch-all arm captures the whole scrutinee, whichever variant it holds
+    if (!union_data || arm.primary_pattern().is<ast::discarded>()) { return matcher_type; }
     const auto&         table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
     stdx::option<type&> base_type;
     for (const auto& pat : arm.patterns) {

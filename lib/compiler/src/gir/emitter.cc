@@ -7352,7 +7352,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                 const auto& cap_ident{
                     active_ast().get_as<ast::identifier_expr>(*chosen.capture->payload)};
                 sema::comptime_frame cx_frame;
-                if (const auto un{scrutinee->as_opt<const_union>()}) {
+                const auto           un{scrutinee->as_opt<const_union>()};
+                if (un && !chosen.primary_pattern().is<ast::discarded>()) {
                     cx_frame.insert_or_assign(
                         cap_ident.name, !un->payload.empty() ? un->payload.front() : *scrutinee);
                 } else {
@@ -7510,7 +7511,8 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                                                    : *underlying};
                 value      field_addr{matcher_addr->data, qualified};
                 const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
-                const bool is_tagged_union_field{ut && !ut->is_untagged};
+                // A catch-all captures the whole union rather than one variant's payload
+                const bool is_tagged_union_field{ut && !ut->is_untagged && !is_discard};
                 if (is_tagged_union_field) {
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
                     const auto payload_ptr{builder_.emit_get_element_ptr(
@@ -7536,6 +7538,21 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
                                                     local_binding{
                                                         .id        = field_addr.data.as<local_id>(),
                                                         .type      = *field_addr.type,
+                                                        .is_alloca = true,
+                                                        .const_val = stdx::none,
+                                                        .is_const  = true,
+                                                    });
+                } else if (ut && !ut->is_untagged) {
+                    // A catch-all's copy of the whole union has storage, so it can be matched
+                    const auto copy{spill_to_temporary(
+                        value{builder_.emit_load(field_addr.data.as<local_id>(), *underlying),
+                              *underlying},
+                        *underlying,
+                        true)};
+                    scopes_.back().bindings.emplace(cap_ident.name,
+                                                    local_binding{
+                                                        .id        = copy.data.as<local_id>(),
+                                                        .type      = *underlying,
                                                         .is_alloca = true,
                                                         .const_val = stdx::none,
                                                         .is_const  = true,
