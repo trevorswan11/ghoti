@@ -1024,7 +1024,7 @@ auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
     case syntax::builtin_t::ALIGN_OF:
     case syntax::builtin_t::SIZE_OF:
     case syntax::builtin_t::BIT_SIZE_OF: {
-        ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
+        ASSERT(builtin.return_type.get_kind() == type_kind::COMPTIME_INT);
         return_type = &builtin.return_type;
         break;
     }
@@ -1592,7 +1592,7 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
     }
     case syntax::builtin_t::TARGET_ENDIAN:   return_type = &ctx_.get_builtin_type("Endian"); break;
     case syntax::builtin_t::TARGET_PTR_BITS: {
-        ASSERT(builtin.return_type.get_kind() == type_kind::USIZE);
+        ASSERT(builtin.return_type.get_kind() == type_kind::COMPTIME_INT);
         return_type = &builtin.return_type;
         break;
     }

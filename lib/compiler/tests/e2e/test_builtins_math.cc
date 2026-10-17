@@ -75,6 +75,18 @@ TEST_CASE("@addWithOverflow / @mulWithOverflow report the flag and write the wra
     )") == 42);
 }
 
+TEST_CASE("layout and target queries take the integer type of their use site") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut a: i32 = -16;
+            const small: u8 = @sizeOf(u64);
+            const signed: i8 = @bitSizeOf(u16) - 20;
+            const ptr: u16 = @targetPtrBits() / 8;
+            return a + @alignOf(u32) + @intCast(i32, small) + signed + @intCast(i32, ptr);
+        };
+    )") == -16 + 4 + 8 - 4 + 8);
+}
+
 TEST_CASE("math builtins still constant-fold") {
     CHECK(helpers::compile_and_run(R"(
         const A = @min(50, 8);
