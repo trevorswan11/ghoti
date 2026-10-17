@@ -152,7 +152,7 @@ namespace {
     return to_domain(l << *in_range, domain);
 }
 
-// Truncating and flooring division; the caller has ruled out zero and `MIN / -1`
+// Truncating, flooring, and exact division; the caller has ruled out zero and `MIN / -1`
 [[nodiscard]] auto divide(int_op op, int_domain domain, u128 l, u128 r) noexcept -> u128 {
     if (!domain.is_signed) {
         const auto ul{unsigned_value(l, domain)};
@@ -166,7 +166,8 @@ namespace {
     auto       remainder{sl % sr};
     const bool adjust{remainder != 0 && ((remainder < 0) != (sr < 0))};
     switch (op) {
-    case int_op::DIV:       return bits_of(quotient, domain);
+    case int_op::DIV:
+    case int_op::DIV_EXACT: return bits_of(quotient, domain);
     case int_op::REM:       return bits_of(remainder, domain);
     case int_op::DIV_FLOOR: return bits_of(adjust ? quotient - 1 : quotient, domain);
     default:                return bits_of(adjust ? remainder + sr : remainder, domain);
@@ -220,6 +221,7 @@ auto int_op_of(syntax::builtin_t builtin) noexcept -> stdx::option<int_op> {
     case bt::MIN:       return int_op::MIN;
     case bt::MAX:       return int_op::MAX;
     case bt::DIV_FLOOR: return int_op::DIV_FLOOR;
+    case bt::DIV_EXACT: return int_op::DIV_EXACT;
     case bt::MOD:       return int_op::MOD;
     default:            return stdx::none;
     }
@@ -268,6 +270,8 @@ auto describe(int_fault fault, int_domain domain, std::string_view type_name) ->
             type_name);
     case int_fault::DIVISION_BY_ZERO: return "Division by zero in compile-time constant expression";
     case int_fault::MODULO_BY_ZERO:   return "Modulo by zero in compile-time constant expression";
+    case int_fault::INEXACT_DIVISION:
+        return "Exact division produced a remainder in compile-time constant expression";
     case int_fault::NEGATIVE_SHIFT:
         return "Negative shift amount in compile-time constant expression";
     case int_fault::SHIFT_TOO_WIDE:
@@ -337,6 +341,7 @@ auto fold_int(int_op op, int_domain domain, u128 lhs, u128 rhs) -> int_result<u1
     case int_op::DIV:
     case int_op::REM:
     case int_op::DIV_FLOOR:
+    case int_op::DIV_EXACT:
     case int_op::MOD:
         if (r == 0) {
             const bool remainder{op == int_op::REM || op == int_op::MOD};
@@ -345,6 +350,9 @@ auto fold_int(int_op op, int_domain domain, u128 lhs, u128 rhs) -> int_result<u1
         if (domain.is_signed && signed_value(l, domain) == signed_min(domain.bits) &&
             signed_value(r, domain) == -1) {
             return stdx::err{int_fault::OVERFLOW_};
+        }
+        if (op == int_op::DIV_EXACT && divide(int_op::REM, domain, l, r) != 0) {
+            return stdx::err{int_fault::INEXACT_DIVISION};
         }
         return divide(op, domain, l, r);
     }
@@ -449,6 +457,7 @@ auto runtime_checks(int_op op, int_domain domain) noexcept -> int_checks {
     case int_op::REM:
     case int_op::DIV_FLOOR:
     case int_op::MOD:       return {.division = true};
+    case int_op::DIV_EXACT: return {.division = true, .exact = true};
     case int_op::SHL:
     case int_op::SHR:       return {.shift_amount = true};
     default:                return {};

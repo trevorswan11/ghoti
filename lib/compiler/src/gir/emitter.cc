@@ -4241,6 +4241,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::MAX:
         case syntax::builtin_t::DIV_TRUNC:
         case syntax::builtin_t::DIV_FLOOR:
+        case syntax::builtin_t::DIV_EXACT:
         case syntax::builtin_t::REM:
         case syntax::builtin_t::MOD:       {
             if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }

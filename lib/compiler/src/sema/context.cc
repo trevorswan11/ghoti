@@ -332,6 +332,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::MAX, params(t_auto, t_auto), t_auto);
     inject_function(bis::DIV_TRUNC, params(t_auto, t_auto), t_auto);
     inject_function(bis::DIV_FLOOR, params(t_auto, t_auto), t_auto);
+    inject_function(bis::DIV_EXACT, params(t_auto, t_auto), t_auto);
     inject_function(bis::REM, params(t_auto, t_auto), t_auto);
     inject_function(bis::MOD, params(t_auto, t_auto), t_auto);
     inject_function(bis::ADD_WITH_OVERFLOW, params(t_auto, t_auto, t_auto), t_bool);

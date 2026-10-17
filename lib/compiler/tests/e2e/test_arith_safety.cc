@@ -60,6 +60,18 @@ TEST_CASE("INT_MIN / -1 traps", "[.panic]") {
     )") != 0);
 }
 
+TEST_CASE("@divExact traps on a remainder (signed and unsigned)", "[.panic]") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { let mut a: i32 = -7; let mut b: i32 = 2; return @divExact(a, b); };
+    )") != 0);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { let mut a: u32 = 7u32; let mut b: u32 = 2u32; return @intCast(i32, @divExact(a, b)); };
+    )") != 0);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 { let mut a: i32 = 6; let mut b: i32 = 0; return @divExact(a, b); };
+    )") != 0);
+}
+
 TEST_CASE("out-of-range shift amount traps", "[.panic]") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 { let mut x: i32 = 1; let mut s: i32 = 40; return x << s; };

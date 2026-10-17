@@ -77,6 +77,7 @@ enum class builtin_t : u8 {
     MAX,
     DIV_TRUNC,
     DIV_FLOOR,
+    DIV_EXACT,
     REM,
     MOD,
     ADD_WITH_OVERFLOW,
@@ -208,6 +209,7 @@ constexpr builtin_def MIN{"@min", builtin_t::MIN};
 constexpr builtin_def MAX{"@max", builtin_t::MAX};
 constexpr builtin_def DIV_TRUNC{"@divTrunc", builtin_t::DIV_TRUNC};
 constexpr builtin_def DIV_FLOOR{"@divFloor", builtin_t::DIV_FLOOR};
+constexpr builtin_def DIV_EXACT{"@divExact", builtin_t::DIV_EXACT};
 constexpr builtin_def REM{"@rem", builtin_t::REM};
 constexpr builtin_def MOD{"@mod", builtin_t::MOD};
 constexpr builtin_def ADD_WITH_OVERFLOW{"@addWithOverflow", builtin_t::ADD_WITH_OVERFLOW};
@@ -342,6 +344,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::MAX,
     builtins::DIV_TRUNC,
     builtins::DIV_FLOOR,
+    builtins::DIV_EXACT,
     builtins::REM,
     builtins::MOD,
     builtins::ADD_WITH_OVERFLOW,

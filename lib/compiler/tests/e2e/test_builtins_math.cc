@@ -33,6 +33,18 @@ TEST_CASE("@divTrunc / @divFloor / @rem / @mod match their sign conventions") {
     )") == 30 + 12 + 2 + 3);
 }
 
+TEST_CASE("@divExact divides operands that divide evenly") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut a: i32 = -42;
+            let mut b: i32 = 6;
+            let mut c: u32 = 84u32;
+            let mut d: u32 = 4u32;
+            return -@divExact(a, b) + @intCast(i32, @divExact(c, d));
+        };
+    )") == 7 + 21);
+}
+
 TEST_CASE("previously compile-time-only integer bit builtins now lower at runtime") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
@@ -68,8 +80,9 @@ TEST_CASE("math builtins still constant-fold") {
         const A = @min(50, 8);
         const B = @divFloor(-7, 2);
         const C = @mod(-7, 2);
-        pub const main = fn(): i32 { return A + (-B) * 9 + C; };
-    )") == 8 + 36 + 1);
+        const D = @divExact(-12, 4);
+        pub const main = fn(): i32 { return A + (-B) * 9 + C - D; };
+    )") == 8 + 36 + 1 + 3);
 }
 
 } // namespace ghoti::tests
