@@ -316,8 +316,9 @@ namespace {
     return collect_diags(*helpers::resolve(src).first);
 }
 
-[[nodiscard]] auto type_check_diags(std::string_view src) -> resolve_result {
-    return collect_diags(*helpers::type_check(src).first);
+[[nodiscard]] auto type_check_diags(std::string_view src, const std::vector<mock_file>& imports)
+    -> resolve_result {
+    return collect_diags(*helpers::type_check(src, imports).first);
 }
 
 } // namespace ghoti::tests::helpers

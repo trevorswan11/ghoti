@@ -1000,6 +1000,8 @@ class type_resolver {
     bool building_param_template_{false};
     // Resolving a generic function's own signature, where its `comptime` parameters are unbound
     bool in_generic_signature_{false};
+    // An instantiation whose failure the caller discards, so it must not poison a foreign module
+    bool tentative_instantiation_{false};
     bool in_comptime_loop_{false};
 
     // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
