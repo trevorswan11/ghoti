@@ -185,6 +185,19 @@ class generic_instantiation_cache {
         return stdx::none;
     }
 
+    // Marks which parameters an argument made implicitly `comptime` in the monomorph `key`
+    auto set_implicit_comptime(std::string key, std::vector<bool> mask) -> void {
+        implicit_comptime_.try_emplace(std::move(key), std::move(mask));
+    }
+
+    // Whether the parameter at `idx` of the monomorph `key` takes its argument at compile time
+    [[nodiscard]] auto binds_comptime(std::string_view key, usize idx, bool declared) const
+        -> bool {
+        if (declared) { return true; }
+        const auto it{implicit_comptime_.find(std::string{key})};
+        return it != implicit_comptime_.end() && idx < it->second.size() && it->second[idx];
+    }
+
     // First write wins
     auto set_type_ctor_bindings(std::string                                           key,
                                 std::vector<std::pair<std::string, gir::const_value>> bindings)
@@ -221,6 +234,11 @@ class generic_instantiation_cache {
     body_type_diff_map                                           body_type_diffs_;
     comptime_arg_map                                             comptime_args_;
     type_ctor_binding_map                                        type_ctor_bindings_;
+    ankerl::unordered_dense::map<std::string,
+                                 std::vector<bool>,
+                                 stdx::string_transparent_hash,
+                                 stdx::string_transparent_eq>
+        implicit_comptime_;
 };
 
 // Every `set_sema_type`/`set_sema_type_if` write `mod::module_t` makes while this is installed as

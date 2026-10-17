@@ -30,6 +30,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
@@ -250,15 +251,22 @@ class type_resolver {
 
         auto               add_return(type& t) -> void { return_types.emplace_back(&t); }
         [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }
-        [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
+        [[nodiscard]] auto deduced_return_type(context& ctx) const -> type& {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
-            auto& first{*return_types.front()};
+            // Every `return` meets at one type, so `return low` (a `comptime_int`) then
+            // `return val` (an `i64`) infers `i64`
+            auto* met{return_types.front().get()};
+            if (return_types.size() > 1) {
+                std::vector<peer_operand> operands;
+                for (const auto t : return_types) { operands.emplace_back(t.get()); }
+                if (const auto peer{peer_type(ctx, operands)}) { met = peer->get(); }
+            }
             // An inferred (`: auto`) return type never stays `comptime_*`: pin it to its peer.
-            if (first.get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
-            if (first.get_kind() == type_kind::COMPTIME_FLOAT) {
+            if (met->get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
+            if (met->get_kind() == type_kind::COMPTIME_FLOAT) {
                 return ctx.get_builtin_resolved_type(type_kind::F64);
             }
-            return first;
+            return *met;
         }
     };
 
@@ -438,7 +446,8 @@ class type_resolver {
                                             gsl::span<const gir::const_value> comptime_args)
         -> stdx::option<generic_instantiation_entry>;
     template <typename ArgID>
-    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type) -> stdx::option<type&>;
+    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type, bool keeps_comptime)
+        -> stdx::option<type&>;
     [[nodiscard]] auto check_param_bounds(const ast::call_expr&        call,
                                           const generic_function_info& fn_info,
                                           gsl::span<type* const>       arg_types,
@@ -448,6 +457,8 @@ class type_resolver {
                                          usize                        idx,
                                          const type*                  arg_type,
                                          const type* param_type) -> stdx::option<gir::const_value>;
+    [[nodiscard]] auto fold_implicit_comptime_arg(const ast::call_expr::argument& arg)
+        -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 

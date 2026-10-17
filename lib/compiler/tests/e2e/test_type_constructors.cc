@@ -859,18 +859,18 @@ TEST_CASE("a folded call types an untyped literal argument as the runtime call d
         const Box = fn(comptime T: type): type {
             return struct {
                 v: T,
-                pub const is_i32 = fn(&self, val: auto): bool {
-                    return @TypeOf(val) == i32;
+                pub const is_untyped = fn(&self, val: auto): bool {
+                    return @TypeOf(val) == comptime_int;
                 };
             };
         };
-        const is_f64 = fn(val: auto): bool { return @TypeOf(val) == f64; };
+        const is_untyped_float = fn(val: auto): bool { return @TypeOf(val) == comptime_float; };
         pub const main = fn(): i32 {
             let b: Box(u8) = .{ .v = 1 };
             let mut out: i32 = 0;
-            if (!!b.is_i32(3)) { out += 1; }
-            if (b.is_i32(3)) { out += 2; }
-            if comptime (is_f64(0.5)) { out += 4; }
+            if (!!b.is_untyped(3)) { out += 1; }
+            if (b.is_untyped(3)) { out += 2; }
+            if comptime (is_untyped_float(0.5)) { out += 4; }
             return out;
         };
     )") == 7);

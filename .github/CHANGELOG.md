@@ -894,3 +894,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - LLVM, LLD and the bundled clang-format are now 23.1.3 (from 21.1.8)
     - Fixed: compiling for riscv64 in `release_fast` crashed the compiler on an add of `0x8000000000000000` to a 128-bit value, an LLVM overflow fixed upstream
     - `-Os` and `-Oz` run LLVM's O2 pipeline and mark every function `optsize` (plus `minsize` for `-Oz`), as clang does; LLVM 23 removed its size-specific pipelines
+- **Breaking:** an untyped number passed to a bare `auto` parameter stays `comptime_int` / `comptime_float`, as in Zig, instead of becoming `i32` / `f64`; the parameter is then implicitly `comptime` for that instantiation
+    - `log2(123456789123456798123456789)` and `std.math.IntFittingRange(0, 1 << 100)` work, since the value no longer has to fit an `i32`
+    - A `y: @TypeOf(x)` or `y: T` parameter follows an `x` / `T` bound that way
+    - A call returning `comptime_int` / `comptime_float` always folds; its instantiation is never emitted as a runtime function
+- An `auto` return type is the peer of every `return`, not the first one's type: `return low` (a `comptime_int`) then `return val` (an `i64`) infers `i64`
+- A statement `if` whose condition is known at compile time only emits the arm it takes, so the dead arm (an `@intCast` the `if` guards) is never checked
+- `comptime { ...; return r; }` returns `r` from the enclosing function, including as a `match comptime` arm
+- Fixed: a generic instantiated from inside another generic saw the outer one's `comptime` bindings by name, so a local `const T` in the inner function could read the caller's `T`
+- Fixed: errors raised in a module that had already reported errors were printed against the calling file, sometimes with an `<invalid line>` excerpt

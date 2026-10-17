@@ -176,7 +176,7 @@ constexpr std::string_view golden_input{R"(
         let mut acc: i32 = 0;
         defer acc = acc + 1;
 
-        let clamped = clamp(p.x, 0, 50);
+        let clamped = clamp(p.x, 0i32, 50i32);
         let mut i: i32 = 0;
         while (i < 3) {
             acc += clamped;

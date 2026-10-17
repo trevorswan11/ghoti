@@ -519,7 +519,7 @@ auto restore_shared_typing(mod::module_t&                fn_mod,
     for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
         const auto  named{param.name.is<ast::identifier_expr>()};
-        if (param.is_comptime) {
+        if (binds_comptime(tree, fn_expr, p_idx, concrete_args)) {
             if (cx_i < comptime_args.size() && named) {
                 bindings.emplace_back(
                     std::string{tree.get_as<ast::identifier_expr>(param.name).name},
@@ -697,7 +697,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     // resolved, so `const_eval` folds it there. `comptime_args` is in parameter order.
     comptime_frame binding_frame;
     for (usize p_idx{0}, cx_i{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
-        if (!fn_expr.parameters[p_idx].is_comptime) { continue; }
+        if (!binds_comptime(fn_mod.ast, fn_expr, p_idx, concrete_args)) { continue; }
         if (cx_i >= comptime_args.size()) { break; }
         if (fn_expr.parameters[p_idx].name.is<ast::identifier_expr>()) {
             const auto& name{
@@ -714,6 +714,15 @@ auto type_resolver::instantiate_generic(type&                             callee
         bind_ctor_member_params(fn_info, binding_frame, binding_restores);
     }
 
+    // A top-level generic sees only its own bindings, never a caller's same-named ones
+    auto                       outer_frames{fn_info.enclosing_fn_table_idx
+                                                ? std::vector<comptime_frame>{}
+                                                : std::exchange(ctx_.comptime_binding_frames, {})};
+    const auto                 frames_restore{gsl::finally([&] {
+        if (!fn_info.enclosing_fn_table_idx) {
+            ctx_.comptime_binding_frames = std::move(outer_frames);
+        }
+    })};
     const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(binding_frame)};
 
     symbol_table_stack inst_stack;
@@ -778,9 +787,10 @@ auto type_resolver::instantiate_generic(type&                             callee
     // `comptime` parameters are erased from the monomorph's signature. A pack contributes one
     // slot per trailing argument rather than one for the whole `rest...` declaration.
     const auto     pack_elem_count{has_pack ? concrete_args.size() - fixed_param_count : 0UZ};
-    const auto     fixed_rt_count{static_cast<usize>(
-        std::ranges::count_if(fn_expr.parameters | std::views::take(fixed_param_count),
-                              [](const auto& p) { return !p.is_comptime; }))};
+    usize          fixed_rt_count{0};
+    for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
+        if (!binds_comptime(fn_mod.ast, fn_expr, p_idx, concrete_args)) { ++fixed_rt_count; }
+    }
     auto           inst_param_types{ctx_.pool.get_many_unsafe(fixed_rt_count + pack_elem_count)};
     comptime_frame type_param_frame;
     usize          i{0};
@@ -859,7 +869,9 @@ auto type_resolver::instantiate_generic(type&                             callee
             fn_mod.set_sema_type(*param.explicit_type, *decl_p_type);
         }
         fn_mod.set_sema_type(param.name, *body_p_type);
-        if (!param.is_comptime) { inst_param_types[i++] = decl_p_type; }
+        if (!binds_comptime(fn_mod.ast, fn_expr, p_idx, concrete_args)) {
+            inst_param_types[i++] = decl_p_type;
+        }
     }
     // A pack element has no `param.explicit_type` of its own to resolve against
     if (has_pack) {
@@ -955,11 +967,15 @@ auto type_resolver::instantiate_generic(type&                             callee
         }
     }
     if (ctx_.diags.size() > diags_before || resolved_poison) {
-        // Attribute diags here to `fn_mod`so they print against the defining file
-        if (ctx_.diags.size() > diags_before && &fn_mod != &resolving_ &&
-            !tentative_instantiation_ && !fn_mod.diagnostics.is<sema::diagnostics>()) {
-            fn_mod.error_out(ctx_.diags.split_off(diags_before),
-                             mod::module_state::POISONED_TYPE_RESOLVED);
+        // Attribute diags here to `fn_mod` so they print against the defining file
+        if (ctx_.diags.size() > diags_before && &fn_mod != &resolving_) {
+            if (!tentative_instantiation_ && !fn_mod.diagnostics.is<sema::diagnostics>()) {
+                fn_mod.error_out(ctx_.diags.split_off(diags_before),
+                                 mod::module_state::POISONED_TYPE_RESOLVED);
+            } else {
+                // `fn_mod` already holds its own list, so the diags stay here pointing into it
+                ctx_.diags.set_origin_from(diags_before, fn_mod);
+            }
         }
         return stdx::none;
     }
@@ -1067,6 +1083,15 @@ auto type_resolver::instantiate_generic(type&                             callee
             ctx_.instantiation_cache.set_comptime_args(
                 mangled_name,
                 std::vector<gir::const_value>(comptime_args.begin(), comptime_args.end()));
+        }
+        std::vector<bool> implicit_comptime(fn_expr.parameters.size(), false);
+        for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
+            implicit_comptime[p_idx] =
+                binds_implicit_comptime(fn_mod.ast, fn_expr, p_idx, concrete_args);
+        }
+        if (std::ranges::contains(implicit_comptime, true)) {
+            ctx_.instantiation_cache.set_implicit_comptime(mangled_name,
+                                                           std::move(implicit_comptime));
         }
         if (!typing.empty()) {
             ctx_.instantiation_cache.set_body_type_diff(mangled_name, std::move(typing));

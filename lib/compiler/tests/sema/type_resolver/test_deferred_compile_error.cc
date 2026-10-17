@@ -72,7 +72,7 @@ TEST_CASE("@compileError: a generic's error also points at the call that instant
         };
     )")};
     CHECK(std::ranges::contains(res.codes, sema::error::COMPILE_ERROR_REACHED));
-    CHECK(res.message_contains("not a bool: f64"));
+    CHECK(res.message_contains("not a bool: comptime_float"));
     CHECK(res.message_contains("Failed to instantiate 'only_bool'"));
 }
 

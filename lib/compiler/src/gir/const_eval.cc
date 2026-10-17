@@ -602,6 +602,7 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
     if (is_outermost) {
         current_signal_ = eval_signal{};
         cond_unknown_   = false;
+        last_returned_  = false;
         if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {
             return cached->second;
         }
@@ -622,7 +623,9 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
         if (res && reject_escaping_ref(*res, synthetic_frame, id)) {
             res = const_value::make_poison();
         }
-        if (res) { memo_cache_.emplace(key, *res); }
+        // A return is a jump the caller has to act on, so it isn't served from the memo
+        last_returned_ = current_signal_.kind == eval_signal_kind::RETURN;
+        if (res && !last_returned_) { memo_cache_.emplace(key, *res); }
         call_stack_.pop_back();
         current_signal_ = eval_signal{};
         cond_unknown_   = false;

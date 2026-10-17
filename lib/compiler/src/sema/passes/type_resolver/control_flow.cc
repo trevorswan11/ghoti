@@ -963,10 +963,14 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
         resolving_.set_sema_type(id, result_type);
         last_type_.emplace(result_type);
     } else {
-        auto& void_type{ctx_.get_builtin_resolved_type(type_kind::VOID_)};
-        label_type.resolve_if<type::data_t>(void_type.get_data());
-        resolving_.set_sema_type(id, void_type);
-        last_type_.emplace(void_type);
+        // `comptime { ...; return r; }` never finishes, so it takes no part in its context's type
+        const bool exits{label.body.is<ast::block_stmt>() &&
+                         always_exits(resolving_.ast, *label.body)};
+        auto&      result_type{
+            ctx_.get_builtin_resolved_type(exits ? type_kind::NORETURN : type_kind::VOID_)};
+        label_type.resolve_if<type::data_t>(result_type.get_data());
+        resolving_.set_sema_type(id, result_type);
+        last_type_.emplace(result_type);
     }
 }
 
@@ -1340,6 +1344,9 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
                 result_type = inner.get();
             }
         }
+    } else if (always_exits(resolving_.ast, *live.dispatch)) {
+        // `=> comptime { ...; return r; }` leaves the function instead of yielding
+        result_type = &ctx_.get_builtin_resolved_type(type_kind::NORETURN);
     }
 
     resolving_.match_arm_results.insert_or_assign(id.get_index(), *selected);

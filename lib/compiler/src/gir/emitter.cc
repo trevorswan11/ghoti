@@ -317,6 +317,8 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     PROFILE_FUNCTION();
     if (gir_module_.has_function(req.mangled_name)) { return; }
     if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
+    // A `comptime_int`/`comptime_float` result only exists at compile time, so every call folds
+    if (sema::is_comptime_numeric(req.return_type->get_kind())) { return; }
 
     mod::module_t& fn_mod{*req.module};
     const auto     fn_expr_opt{fn_mod.ast[req.fn_node_id].visit(
@@ -389,10 +391,15 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     // Re-bind `comptime` parameters so `const_eval` folds them the same way it did at resolution
     sema::comptime_frame                                                              cx_frame;
     ankerl::unordered_dense::map<std::string_view, gsl::not_null<const const_value*>> cx_by_name;
+    const auto binds_comptime{[&](usize p_idx) {
+        return ctx_.instantiation_cache.binds_comptime(
+            req.mangled_name, p_idx, fn_expr.parameters[p_idx].is_comptime);
+    }};
     if (const auto cx_args{ctx_.instantiation_cache.get_comptime_args(req.mangled_name)}) {
         usize cx_i{0};
-        for (const auto& param : fn_expr.parameters) {
-            if (!param.is_comptime || cx_i >= cx_args->size()) { continue; }
+        for (usize p_idx{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+            const auto& param{fn_expr.parameters[p_idx]};
+            if (!binds_comptime(p_idx) || cx_i >= cx_args->size()) { continue; }
             if (param.name.is<ast::identifier_expr>()) {
                 const auto& p_name{fn_mod.ast.get_as<ast::identifier_expr>(param.name).name};
                 cx_frame.insert_or_assign(p_name, (*cx_args)[cx_i]);
@@ -403,8 +410,9 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
     }
 
     // A bare `T: type` parameter has no runtime representation
-    for (const auto& param : fn_expr.parameters) {
-        if (param.is_comptime || param.is_pack || !param.name.is<ast::identifier_expr>()) {
+    for (usize p_idx{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+        const auto& param{fn_expr.parameters[p_idx]};
+        if (binds_comptime(p_idx) || param.is_pack || !param.name.is<ast::identifier_expr>()) {
             continue;
         }
         const auto decl_ty{fn_mod.get_sema_type_opt(*param.explicit_type)};
@@ -442,8 +450,9 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
         usize                    rt_i{0};
         std::vector<std::string> pack_hidden_names; // stable storage for synthesized param names
         pack_hidden_names.reserve(req.arg_types.size());
-        for (const auto& param : fn_expr.parameters) {
-            const auto p_name{ast::parameter_name(fn_mod.ast, param)};
+        for (usize p_idx{0}; p_idx < fn_expr.parameters.size(); ++p_idx) {
+            const auto& param{fn_expr.parameters[p_idx]};
+            const auto  p_name{ast::parameter_name(fn_mod.ast, param)};
 
             // A pack's elements each get a real, individually-named hidden parameter; `rest`
             // itself binds to nothing (`current_pack_` is how `rest.len`/`rest[k]` resolve).
@@ -473,7 +482,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
             }
 
             // `comptime` parameters are erased from the signature
-            if (param.is_comptime) {
+            if (binds_comptime(p_idx)) {
                 if (p_name.empty()) { continue; }
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
@@ -771,6 +780,14 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         return value{builder_.emit_make_callable(emit_expression(src), stdx::none, fat_type),
                      fat_type};
     }
+    return stdx::none;
+}
+
+auto emitter::folded_condition(ast::expr_handle condition) -> stdx::option<bool> {
+    const auto diags_before{ctx_.diags.size()};
+    const auto cv{const_eval_.try_eval(condition)};
+    DISCARD(ctx_.diags.split_off(diags_before));
+    if (const auto known{cv ? cv->as_opt<bool>() : stdx::none}) { return *known; }
     return stdx::none;
 }
 
@@ -1983,7 +2000,9 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
                     ctx_.diags.emplace_back("Comptime block could not be evaluated at compile time",
                                             sema::error::COMPTIME_EVALUATION_FAILED,
                                             active_ast().location_of(stmt_id));
+                    return;
                 }
+                DISCARD(emit_comptime_return(*cv, stmt_id));
                 return;
             }
             emit_block(block);
@@ -2009,6 +2028,43 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const ast::import_stmt&) {});
 }
 
+// A call whose `result` type only exists at compile time folds to its value, as `dest`
+auto emitter::emit_comptime_only_call(ast::node_id id, sema::type& result, sema::type& dest)
+    -> value {
+    const auto diags_before{ctx_.diags.size()};
+    if (const auto cv{const_eval_.try_eval(id)}; cv && !cv->is_poison()) {
+        return materialize_const(sema::is_numeric(dest.get_kind()) ? with_declared_type(*cv, dest)
+                                                                   : *cv);
+    }
+    if (ctx_.diags.size() == diags_before) {
+        ctx_.diags.emplace_back(fmt::format("this call returns '{}', which only exists at compile "
+                                            "time, but it can't be evaluated there",
+                                            ctx_.type_display_name(result)),
+                                sema::error::COMPTIME_EVALUATION_FAILED,
+                                active_ast().location_of(id));
+    }
+    return value{undefined_val{}, dest};
+}
+
+// The declared result of the monomorph `mangled_name`
+auto emitter::instantiation_result(std::string_view mangled_name) -> stdx::option<sema::type&> {
+    for (const auto& req : active_mod().generic_instantiations) {
+        if (req.mangled_name == mangled_name) { return *req.return_type; }
+    }
+    return stdx::none;
+}
+
+// A `comptime` block that ran a `return` returns its value from the enclosing function
+auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at) -> bool {
+    if (!const_eval_.last_eval_returned()) { return false; }
+    stdx::option<value> ret_val;
+    if (!returned.is<void_val>()) { ret_val.emplace(returned.to_gir_value()); }
+    emit_defers_up_to(0);
+    builder_.set_location(active_ast().location_of(at));
+    builder_.emit_return(ret_val);
+    return true;
+}
+
 auto emitter::retype_if_undefined(value v, sema::type& result_type) -> value {
     if (v.is<undefined_val>()) { return value{undefined_val{}, result_type}; }
     return v;
@@ -2031,6 +2087,8 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
                     ctx_.diags.emplace_back("Comptime block could not be evaluated at compile time",
                                             sema::error::COMPTIME_EVALUATION_FAILED,
                                             active_ast().location_of(*stmt));
+                } else {
+                    DISCARD(emit_comptime_return(*cv, *stmt));
                 }
                 return value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
             }
@@ -2444,6 +2502,8 @@ auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret
         } else {
             ret_val.emplace(emit_expression(*ret.expression));
         }
+        // The value already left the function (`return comptime { ...; return r; }`)
+        if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { return; }
     }
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(stmt_id));
@@ -3760,6 +3820,11 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     auto& ret_type{active_mod().get_sema_type_opt(id).value_or(
         ctx_.get_builtin_resolved_type(sema::type_kind::VOID_))};
 
+    // A function returning `comptime_int`/`comptime_float` has no runtime form to call
+    if (!call.function->get_builtin() && sema::is_comptime_numeric(ret_type.get_kind())) {
+        return emit_comptime_only_call(id, ret_type, ret_type);
+    }
+
     // Builtin call handling
     if (const auto builtin{call.function->get_builtin()}) {
         const auto fn_token{*builtin};
@@ -4518,6 +4583,11 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     // The resolver pinned this call's monomorphization (keyed on types *and* comptime values).
     bool resolved_generic_target{false};
     if (const auto generic_target{active_mod().get_generic_call_target_opt(id)}) {
+        // The context may type the call (`k + f(2)`), but the monomorph itself is never emitted
+        if (const auto result{instantiation_result(*generic_target)};
+            result && sema::is_comptime_numeric(result->get_kind())) {
+            return emit_comptime_only_call(id, *result, ret_type);
+        }
         callee_name.emplace(*generic_target);
         resolved_generic_target = true;
     } else if (is_fn_ctx_call) {
@@ -4869,6 +4939,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             generic_target_fn.emplace(*gi->fn_expr);
         }
     }
+    // Whether the monomorph takes the parameter at `p` at compile time, erasing its argument
+    const auto binds_comptime_arg{[&](usize p) {
+        if (!generic_target_fn || p >= generic_target_fn->parameters.size()) { return false; }
+        const bool declared{generic_target_fn->parameters[p].is_comptime};
+        return callee_name ? ctx_.instantiation_cache.binds_comptime(*callee_name, p, declared)
+                           : declared;
+    }};
     // A generic's parameter (`x: auto`, `y: @TypeOf(x)`, `p: &auto`) is only typed in the
     // monomorph, so its argument converts to that
     const auto instantiated_param{[&](usize i) -> stdx::option<sema::type&> {
@@ -4877,8 +4954,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         }
         const auto& params{generic_target_fn->parameters};
         if (params[i].is_pack) { return stdx::none; }
-        const auto runtime_idx{static_cast<usize>(std::ranges::count_if(
-            params | std::views::take(i), [](const auto& p) { return !p.is_comptime; }))};
+        usize runtime_idx{0};
+        for (usize p{0}; p < i; ++p) {
+            if (!binds_comptime_arg(p)) { ++runtime_idx; }
+        }
         for (const auto& req : active_mod().generic_instantiations) {
             if (req.mangled_name != *callee_name) { continue; }
             if (runtime_idx < req.arg_types.size()) { return *req.arg_types[runtime_idx]; }
@@ -4925,10 +5004,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             continue;
         }
-        if (generic_target_fn && i < generic_target_fn->parameters.size() &&
-            generic_target_fn->parameters[i].is_comptime) {
-            continue;
-        }
+        if (binds_comptime_arg(i)) { continue; }
         const auto& arg{call.arguments[arg_source_index[i]]};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             bool is_type_arg{false};
@@ -5114,6 +5190,16 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
                                 : (emit_stmt(*if_expr.alternate), value{void_val{}, sema_type});
         }
         return value{void_val{}, sema_type};
+    }
+
+    // A statement `if` whose condition is known at compile time only emits the arm it takes, so
+    // the dead one (an `@intCast` of a `comptime` argument it guards against) is never checked
+    if (!yields_value && !if_expr.payload_capture) {
+        if (const auto known{folded_condition(*if_expr.condition)}) {
+            if (*known) { return emit_single_arm(if_expr.consequence); }
+            if (if_expr.alternate) { return emit_single_arm(*if_expr.alternate); }
+            return value{void_val{}, sema_type};
+        }
     }
 
     auto fn_opt{builder_.get_function()};
@@ -5981,6 +6067,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
                                     active_ast().location_of(id));
             return value{void_val{}, sema_type};
         }
+        if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
         if (yields_value) { return cv->to_gir_value(); }
         return value{void_val{}, sema_type};
     }

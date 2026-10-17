@@ -81,22 +81,6 @@ namespace {
     }
 }
 
-// The earlier parameter whose name a bare `x: T` annotation at `idx` spells, binding `T`
-[[nodiscard]] auto bound_type_param(const ast::AST&                                tree,
-                                    gsl::span<const ast::function_expr::parameter> params,
-                                    usize idx) -> stdx::option<usize> {
-    if (idx >= params.size() || !params[idx].explicit_type) { return stdx::none; }
-    // `^T` and `&T` keep their modifier in the id, with `T` as the payload
-    if (!params[idx].explicit_type->get_modifier().is_value()) { return stdx::none; }
-    const auto ident{tree.get_as_opt<ast::identifier_expr>(*params[idx].explicit_type)};
-    if (!ident) { return stdx::none; }
-    for (usize k{0}; k < idx; ++k) {
-        if (!params[k].name.is<ast::identifier_expr>()) { continue; }
-        if (tree.get_as<ast::identifier_expr>(params[k].name).name == ident->name) { return k; }
-    }
-    return stdx::none;
-}
-
 // Whether `t` is `auto` under any pointer, reference, slice, or array levels
 [[nodiscard]] auto contains_auto(const type& t) -> bool {
     const auto& d{denoted_type(t)};
@@ -534,6 +518,21 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
     return stdx::none;
 }
 
+// The value of a `comptime_int`/`comptime_float` argument to a bare `auto`, or none when it
+// can't fold here
+auto type_resolver::fold_implicit_comptime_arg(const ast::call_expr::argument& arg)
+    -> stdx::option<gir::const_value> {
+    const auto expr_h{arg.as_opt<ast::expr_handle>()};
+    if (!expr_h) { return stdx::none; }
+    const auto                                    diags_before{ctx_.diags.size()};
+    gir::const_eval                               evaluator{ctx_, resolving_};
+    const gir::const_eval::comptime_context_guard g{evaluator, true};
+    auto                                          cv{evaluator.try_eval(*expr_h)};
+    DISCARD(ctx_.diags.split_off(diags_before));
+    if (!cv || cv->is_poison()) { return stdx::none; }
+    return cv;
+}
+
 // Resolves a builtin call's arguments, each under the type context its builtin gives it
 auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result {
     // Let `.{...}` infer its fields without spelling out `builtin.XInfo{...}`
@@ -640,7 +639,8 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
 
 // The concrete type an argument binds to a generic parameter, or `none` when it is poisoned
 template <typename ArgID>
-auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type) -> stdx::option<type&> {
+auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_comptime)
+    -> stdx::option<type&> {
     if (is_type_parameter_slot(param_type)) {
         if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(arg_id)}) {
             if (auto sym{ctx_.registry.lookup_with_table(table_stack_, ident->name)}) {
@@ -689,6 +689,7 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type) -> stdx::op
         }
         return denoted;
     }
+    if (keeps_comptime && is_comptime_numeric(arg_type->get_kind())) { return *arg_type; }
     // Literals materialize and deferred `[n]T` locals fold before binding a generic
     // parameter, so instantiations stay concrete
     return &comptime_numeric_view(concrete_array_type(*arg_type));
@@ -913,6 +914,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
 
                 const auto&                    arg{call.arguments[expanded.source_index[i]]};
+                // A bare `auto` keeps a `comptime_int`/`comptime_float` argument's type, binding it
+                // at compile time instead of materializing it
+                // So does `y: @TypeOf(x)` once `x` holds one, taking `x`'s type
+                const auto typeof_idx{typeof_bound_param(fn_ast, fn_params, i)};
+                const bool follows_comptime{
+                    typeof_idx && concrete_arg_types[*typeof_idx] &&
+                    is_comptime_numeric(concrete_arg_types[*typeof_idx]->get_kind())};
+                const bool keeps_comptime{
+                    i < fn_params.size() &&
+                    (keeps_comptime_numeric(fn_params[i]) || follows_comptime)};
                 stdx::option<structural_guard> g;
                 if (!is_generic_type(*param_type)) {
                     g.emplace(implicit_type_stack_, *param_type);
@@ -923,10 +934,15 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     // than a member of whatever context surrounds the call
                     g.emplace(implicit_type_stack_,
                               ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL));
+                } else if (keeps_comptime) {
+                    // The call's own context (`return f(5)` in an `i32` function) says nothing
+                    // about what the argument is
+                    g.emplace(implicit_type_stack_, nullptr);
                 }
 
-                auto result_arg_type{
-                    arg.visit([&](auto arg_id) { return generic_arg_type(arg_id, *param_type); })};
+                auto result_arg_type{arg.visit([&](auto arg_id) {
+                    return generic_arg_type(arg_id, *param_type, keeps_comptime);
+                })};
                 // A poisoned argument yields `none`. Record it and move on
                 if (!result_arg_type) {
                     concrete_arg_types[i] = nullptr;
@@ -1018,6 +1034,22 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 }
                 concrete_arg_types[i] =
                     bound_idx && concrete_arg_types[*bound_idx] ? param_type : resolved_type;
+                if (follows_comptime) {
+                    auto& followed{*concrete_arg_types[*typeof_idx]};
+                    if (!sema::is_assignable(*resolved_type, followed)) {
+                        return last_type_.emplace(ctx_.poison_node(
+                            resolving_,
+                            id,
+                            fmt::format("Argument {} of type '{}' is not assignable to parameter "
+                                        "type '{}'",
+                                        i + 1,
+                                        ctx_.type_display_name(*resolved_type),
+                                        ctx_.type_display_name(followed)),
+                            error::TYPE_MISMATCH,
+                            get_call_arg_location(call.arguments[expanded.source_index[i]])));
+                    }
+                    concrete_arg_types[i] = &followed;
+                }
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
@@ -1038,21 +1070,31 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             // Fold each `comptime` parameter's argument under a simulated frame, so it sees earlier
             // `comptime let mut` mutations
-            const auto& cx_params{fn_info_opt->fn_expr->parameters};
-            const auto  cx_count{static_cast<usize>(
-                std::ranges::count_if(cx_params, [](const auto& p) { return p.is_comptime; }))};
-            auto        comptime_args{ctx_.arena.make_span<gir::const_value>(cx_count)};
-            const comptime_frame_guard sim_guard{ctx_.comptime_binding_frames,
-                                                 make_simulated_frame()};
-            for (usize i{0}, cx_i{0}; i < cx_params.size() && i < call.arguments.size(); ++i) {
+            const auto&                   cx_params{fn_info_opt->fn_expr->parameters};
+            std::vector<gir::const_value> folded_args;
+            const comptime_frame_guard    sim_guard{ctx_.comptime_binding_frames,
+                                                    make_simulated_frame()};
+            for (usize i{0}; i < cx_params.size() && i < call.arguments.size(); ++i) {
+                if (binds_implicit_comptime(fn_ast, *fn_info_opt->fn_expr, i, concrete_arg_types)) {
+                    // A value that doesn't fold stays a runtime argument of its default type
+                    if (auto folded{fold_implicit_comptime_arg(call.arguments[i])}) {
+                        folded_args.emplace_back(
+                            gir::with_declared_type(std::move(*folded), *concrete_arg_types[i]));
+                    } else {
+                        concrete_arg_types[i] = &comptime_numeric_view(*concrete_arg_types[i]);
+                    }
+                    continue;
+                }
                 if (!cx_params[i].is_comptime) { continue; }
                 const type* param_t{i + param_offset < params.size() ? params[i + param_offset]
                                                                      : nullptr};
                 auto        folded{
                     fold_comptime_arg(call, *fn_info_opt, i, concrete_arg_types[i], param_t)};
                 if (!folded) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
-                comptime_args[cx_i++] = std::move(*folded);
+                folded_args.emplace_back(std::move(*folded));
             }
+            auto comptime_args{ctx_.arena.make_span<gir::const_value>(folded_args.size())};
+            std::ranges::move(folded_args, comptime_args.begin());
 
             // Copy out of the registry before instantiating: resolving the generic's body may
             // recursively register further generic functions
