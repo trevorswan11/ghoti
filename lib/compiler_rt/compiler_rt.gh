@@ -2,9 +2,9 @@ import std;
 
 import "addf3.gh" as _;
 import "comparef.gh" as _;
-import "divdi3.gh" as _;
 import "mem.gh" as _;
 import "windows.gh" as _;
+// import "udivmod.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -58,7 +58,7 @@ pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
 /// Allows to access underlying bits as two equally sized lower and higher
 /// signed or unsigned integers.
 pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
-    return extern union {
+    return union { // TODO(tcs): Make this untagged
         all: T,
         @cfg (endian == .little) {
             s: extern struct {
@@ -82,6 +82,6 @@ pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
 test {
     import "addf3.gh";
     import "comparef.gh";
-    import "divdi3.gh";
     import "mem.gh";
+    // import "udivmod.gh";
 }
