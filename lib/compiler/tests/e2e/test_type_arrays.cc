@@ -106,7 +106,7 @@ TEST_CASE("A generic signature's placeholder target never emits parameterized im
     // `empty`'s own `Res([]mut T, Oops)` instantiates `Res` over the still-unbound `T`
     CHECK(helpers::compile_and_run(R"(
         const Res = fn(comptime T: type, comptime E: type): type {
-            return union { ok: T, err: E };
+            return union(enum) { ok: T, err: E };
         };
 
         impl(T: type, E: type) builtin.Unwrappable for Res(T, E) {

@@ -271,7 +271,7 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 	<pre>
 		<code class="language-ghoti">
 			{ `const S = &struct { ... };        // Illegal
-const S = ^union { ... };         // Illegal
+const S = ^union(enum) { ... };         // Illegal
 const S = enum { ... };           // Legal` }
 		</code>
 	</pre>

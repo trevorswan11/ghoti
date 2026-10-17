@@ -60,7 +60,7 @@ TEST_CASE("A no-self function member taking arguments is called through implicit
 
 TEST_CASE("Implicit access on the left side of a comparison takes the right side's type") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .a = 1 };
             if (.a == u and .b != u) { return 1; }
@@ -72,7 +72,7 @@ TEST_CASE("Implicit access on the left side of a comparison takes the right side
 TEST_CASE("Member constant on a generic type constructor returned via implicit access") {
     CHECK(helpers::compile_and_run(R"(
         pub const Option = fn(comptime T: type): type {
-            return union {
+            return union(enum) {
                 some: T,
                 none: void,
 

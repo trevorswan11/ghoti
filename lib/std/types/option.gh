@@ -1,7 +1,7 @@
 import std;
 
 pub const Option = fn(comptime T: type): type {
-    return union {
+    return union(enum) {
         some: T,
         none: void,
 

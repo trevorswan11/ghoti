@@ -11,7 +11,7 @@ namespace ghoti::tests {
 
 TEST_CASE("Match over a tagged union dispatches to the active field") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .b = 7 };
             return match (u) {
@@ -24,7 +24,7 @@ TEST_CASE("Match over a tagged union dispatches to the active field") {
 
 TEST_CASE("A plain match arm capture reads the current field value") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32 };
+        const U = union(enum) { a: i32 };
         pub const main = fn(): i32 {
             let u = U{ .a = 5 };
             return match (u) {
@@ -37,7 +37,7 @@ TEST_CASE("A plain match arm capture reads the current field value") {
 TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
     SECTION("pointer payload, union built inline") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: ^mut u8, err: u32 };
+            const U = union(enum) { ok: ^mut u8, err: u32 };
             pub const main = fn(): i32 {
                 let mut x: u8 = 9u8;
                 let p: ^mut u8 = ^mut x;
@@ -50,7 +50,7 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 
     SECTION("pointer payload, returned from a function") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: ^mut u8, err: u32 };
+            const U = union(enum) { ok: ^mut u8, err: u32 };
             const mk = fn(p: ^mut u8): U { return .{ .ok = p }; };
             pub const main = fn(): i32 {
                 let mut x: u8 = 9u8;
@@ -63,7 +63,7 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 
     SECTION("opaque-pointer payload written through after capture") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: ^mut opaque, err: u32 };
+            const U = union(enum) { ok: ^mut opaque, err: u32 };
             const mk = fn(p: ^mut opaque): U { return .{ .ok = p }; };
             pub const main = fn(): i32 {
                 let mut cell: i32 = 0;
@@ -80,7 +80,7 @@ TEST_CASE("A plain match arm capture binds a pointer-typed payload by value") {
 TEST_CASE("Match arm capture mutates the matched union field in place") {
     SECTION("By mutable reference") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             pub const main = fn(): i32 {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -94,7 +94,7 @@ TEST_CASE("Match arm capture mutates the matched union field in place") {
 
     SECTION("By mutable pointer") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             pub const main = fn(): i32 {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -294,7 +294,7 @@ TEST_CASE("A range match arm accepts runtime endpoints") {
 TEST_CASE("A match arm with a diverging block body does not poison the result type") {
     SECTION("Capturing arm returns, other arm yields a value") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: i32 };
+            const U = union(enum) { ok: i32, err: i32 };
             const pick = fn(u: U): i32 {
                 let v = match (u) {
                     .ok  => |h| h + 1,
@@ -325,7 +325,7 @@ TEST_CASE("A match arm with a diverging block body does not poison the result ty
 TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds nothing") {
     SECTION("Over an i32 union arm, in value position") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: i32 };
+            const U = union(enum) { ok: i32, err: i32 };
             const f = fn(x: i32): U {
                 return if (x < 0) U{ .err = x }; else U{ .ok = x };
             };
@@ -337,7 +337,7 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 
     SECTION("Over a void union arm") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: void, err: i32 };
+            const U = union(enum) { ok: void, err: i32 };
             pub const main = fn(): i32 {
                 return match (U{ .ok = {} }) { .ok => |_| 7, .err => |e| e };
             };
@@ -346,7 +346,7 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 
     SECTION("In statement position") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: i32 };
+            const U = union(enum) { ok: i32, err: i32 };
             pub const main = fn(): i32 {
                 let mut out: i32 = 0;
                 match (U{ .ok = 9 }) {
@@ -362,7 +362,7 @@ TEST_CASE("An anonymous `|_|` match arm capture consumes the payload and binds n
 TEST_CASE("A direct `union == .field` comparison checks the active field") {
     SECTION("True when the field is active") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32, b: i32 };
+            const U = union(enum) { a: i32, b: i32 };
             pub const main = fn(): i32 {
                 let mut u = U{ .b = 3 };
                 if (u == .b) { return 42; }
@@ -373,7 +373,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("False when a different field is active") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32, b: i32 };
+            const U = union(enum) { a: i32, b: i32 };
             pub const main = fn(): i32 {
                 let mut u = U{ .b = 3 };
                 if (u == .a) { return 42; }
@@ -384,7 +384,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("!= negates the comparison") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32, b: i32 };
+            const U = union(enum) { a: i32, b: i32 };
             pub const main = fn(): i32 {
                 let mut u = U{ .b = 3 };
                 if (u != .a) { return 42; }
@@ -395,7 +395,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 
     SECTION("Compares through a `&` reference") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { a: i32, b: void };
+            const U = union(enum) { a: i32, b: void };
             const is_b = fn(u: &U): bool { return u == .b; };
             const not_a = fn(u: &mut U): bool { return u != .a; };
             pub const main = fn(): i32 {
@@ -409,7 +409,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
     SECTION("Compares a `&self` receiver inside a type constructor") {
         CHECK(helpers::compile_and_run(R"(
             const Opt = fn(comptime T: type): type {
-                return union {
+                return union(enum) {
                     some: T,
                     none: void,
                     pub const get_or = fn(&self, default: T): T {
@@ -433,7 +433,7 @@ TEST_CASE("A direct `union == .field` comparison checks the active field") {
 TEST_CASE("an `undefined` value arm/branch takes the surrounding result type, not a poison type") {
     SECTION("match arm") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: i32 };
+            const U = union(enum) { ok: i32, err: i32 };
             pub const main = fn(): i32 {
                 let u = U{ .ok = 40 };
                 let v = match (u) { .ok => |x| x, .err => undefined };
@@ -460,7 +460,7 @@ TEST_CASE("a lone call in an `if`/`match` value arm is not a discarded result") 
 
     SECTION("match arm, with capture") {
         ok(R"(
-            const U = union { ok: i32, err: i32 };
+            const U = union(enum) { ok: i32, err: i32 };
             const positive = fn(n: i32): bool { return n > 0; };
             pub const main = fn(): i32 {
                 let u = U{ .ok = 5 };
@@ -505,7 +505,7 @@ TEST_CASE("a by-reference param read across sibling match arms and later blocks"
 
 TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const PtrUnion = union { ptr: ^i32, val: i32 };
+        const PtrUnion = union(enum) { ptr: ^i32, val: i32 };
         pub const main = fn(): i32 {
             let mut x: i32 = 7;
             let u: PtrUnion = .{ .ptr = ^x };
@@ -521,7 +521,7 @@ TEST_CASE("`match` capture of pointer union payload binds slot correctly") {
 TEST_CASE("Match directly on reference types without dereferencing") {
     SECTION("Match on &union with value capture") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: bool };
+            const U = union(enum) { ok: i32, err: bool };
             const check = fn(u: &U): i32 {
                 return match (u) {
                     .ok => |v| v * 2,
@@ -537,7 +537,7 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &mut union with mutation") {
         CHECK(helpers::compile_and_run(R"(
-            const U = union { ok: i32, err: bool };
+            const U = union(enum) { ok: i32, err: bool };
             const mutate = fn(u: &mut U): void {
                 match (u) {
                     .ok => |&mut v| { v += 10; },
@@ -557,7 +557,7 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
     SECTION("Match on &self method in struct/union") {
         CHECK(helpers::compile_and_run(R"(
-            const Opt = union { some: i32, none: void };
+            const Opt = union(enum) { some: i32, none: void };
             impl Opt {
                 pub const is_some = fn(&self): bool {
                     return match (self) {
@@ -609,7 +609,7 @@ TEST_CASE("Match directly on reference types without dereferencing") {
 
 TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to void") {
     CHECK(helpers::compile_and_run(R"(
-        const R = union { ok: void, err: i32 };
+        const R = union(enum) { ok: void, err: i32 };
         pub const main = fn(): i32 {
             let r: R = .{ .ok = {} };
             match (r) {
@@ -623,7 +623,7 @@ TEST_CASE("A match with a void block arm and a bare `@panic` arm resolves to voi
 
 TEST_CASE("A match with a value arm and a bare `@panic` arm resolves to the value's type") {
     CHECK(helpers::compile_and_run(R"(
-        const R = union { ok: i32, err: i32 };
+        const R = union(enum) { ok: i32, err: i32 };
         pub const main = fn(): i32 {
             let r: R = .{ .ok = 7 };
             return match (r) {

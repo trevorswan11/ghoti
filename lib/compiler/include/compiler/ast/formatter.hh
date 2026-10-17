@@ -63,12 +63,12 @@ class formatter {
     [[nodiscard]] auto blank_line_between(node_id before, node_id after) const -> bool;
     [[nodiscard]] auto is_function_or_aggregate_node(node_id id) const -> bool;
 
-    // Shared layout of `struct` / `union`; `keyword_and_space` must be a literal like `"struct "`
+    // Shared layout of `struct` / `union`; `keyword` is the head before the body, like `struct `
     template <typename Node, typename FieldItem, typename FieldEndLine>
-    auto format_field_aggregate(const Node&      node,
-                                std::string_view keyword_and_space,
-                                FieldItem&&      field_item,
-                                FieldEndLine&&   field_end_line) -> syntax::doc_id;
+    auto format_field_aggregate(const Node&    node,
+                                syntax::doc_id keyword,
+                                FieldItem&&    field_item,
+                                FieldEndLine&& field_end_line) -> syntax::doc_id;
 
     [[nodiscard]] auto format_struct(const struct_expr& node) -> syntax::doc_id;
     [[nodiscard]] auto format_union(const union_expr& node) -> syntax::doc_id;

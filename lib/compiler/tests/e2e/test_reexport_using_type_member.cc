@@ -85,7 +85,7 @@ TEST_CASE("`alias.Enum.MEMBER` folds through a generic-union `match` capture and
         R"(
             import "pkg.gh" as pkg;
             const x = pkg.en;
-            const Result = fn(comptime T: type, comptime F: type): type { return union { ok: T, err: F }; };
+            const Result = fn(comptime T: type, comptime F: type): type { return union(enum) { ok: T, err: F }; };
             const g = fn(): Result(i32, x.E) { return .{ .err = x.E.B }; };
             pub const main = fn(): i32 {
                 let miss = match (g()) {
@@ -120,7 +120,7 @@ TEST_CASE(
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "enums.gh" as x;
-            const R = union { ok: x.Alias, err: i32 };
+            const R = union(enum) { ok: x.Alias, err: i32 };
             pub const main = fn(): i32 {
                 let r: R = .{ .ok = x.Alias.B };
                 return match (r) {
@@ -189,7 +189,7 @@ TEST_CASE("@This()-relative member accessed through a local using alias") {
 
 TEST_CASE("A cross-module using alias of a union constructs and matches payload") {
     constexpr std::string_view UNION_MOD{R"(
-        pub const U = union { a: i32, b: bool };
+        pub const U = union(enum) { a: i32, b: bool };
         pub const AliasU = U;
     )"};
     const auto                 exit_code{helpers::compile_and_run(

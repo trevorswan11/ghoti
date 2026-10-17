@@ -836,6 +836,10 @@ class type_resolver {
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto                  check_union_tag_enum(const ast::union_expr& union_expr,
+                                                             type&                  tag_enum,
+                                                             ID                     id) -> stdx::option<diagnostic>;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     auto resolve_required_method_type(const ast::function_expr& fn, type& self_placeholder)
         -> type&;

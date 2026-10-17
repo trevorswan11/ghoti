@@ -495,6 +495,8 @@ VISITOR_TEMPLATE_INIT(symbol_collector, visit, const ast::struct_expr&)
 template <ast::IndexableID ID>
 auto symbol_collector::visit(ID id, const ast::union_expr& union_expr) -> void {
     PROFILE_FUNCTION();
+    // The tag names a type from the enclosing scope, not one of the union's own members
+    if (union_expr.tag_type) { collect(*union_expr.tag_type); }
     const auto scope_idx{visit_scopes(
         type_kind::UNION,
         stdx::iter_pair{union_expr.fields,

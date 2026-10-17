@@ -2504,6 +2504,17 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
 
     if (const auto un{target_val->as_opt<const_union>()}) {
         if (un->active_field == member_name && !un->payload.empty()) { return un->payload.front(); }
+        // Another field of an untagged union reinterprets its bytes, which only runtime holds
+        if (const auto obj_t{module_->get_sema_type_opt(dot.object)}) {
+            auto* obj{obj_t.get()};
+            if (const auto r{obj->get_data().as_opt<sema::types::reference>()}) {
+                obj = &r->underlying;
+            }
+            if (const auto ut{obj->get_data().as_opt<sema::types::union_t>()};
+                ut && ut->is_untagged) {
+                return stdx::none;
+            }
+        }
         ctx_.diags.emplace_back(
             fmt::format("Attempted to access inactive union field '{}' (active field is '{}')",
                         member_name,
@@ -3024,6 +3035,10 @@ auto const_eval::eval_type_info(sema::type&                                    d
         s.fields.emplace("is_extern", const_value{ut.is_c_abi, bool_type});
         s.fields.emplace("is_packed", const_value{ut.is_packed, bool_type});
         s.fields.emplace("tagged", const_value{!ut.is_untagged, bool_type});
+        s.fields.emplace("tag_type",
+                         ut.tag_enum
+                             ? type_value(*ut.tag_enum)
+                             : type_value(ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)));
         return wrap("union", std::move(s), ctx_.get_builtin_type("UnionInfo"));
     }
     default: return tag_only("internal");

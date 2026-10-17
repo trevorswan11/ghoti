@@ -14,7 +14,7 @@ using helpers::mock_file;
 
 constexpr std::string_view RESULT{R"(
     pub const Result = fn(comptime T: type, comptime E: type): type {
-        return union { ok: T, err: E };
+        return union(enum) { ok: T, err: E };
     };
 )"};
 

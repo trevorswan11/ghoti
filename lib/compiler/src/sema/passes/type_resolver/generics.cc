@@ -190,7 +190,8 @@ auto register_type_ctor_members(context&         ctx,
                                           u.enclosing,
                                           u.is_untagged,
                                           u.is_c_abi,
-                                          u.is_packed);
+                                          u.is_packed,
+                                          u.tag_enum);
         },
         [&](const types::enum_t& e) {
             fresh.resolve<types::enum_t>(

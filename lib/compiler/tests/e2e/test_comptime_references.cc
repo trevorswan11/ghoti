@@ -64,7 +64,7 @@ TEST_CASE("a `&mut` reference reaches a nested field and element at compile time
 
 TEST_CASE("a `match` capture by mutable reference writes into the union payload") {
     check_both(R"(
-        const U = union { a: i32, b: void };
+        const U = union(enum) { a: i32, b: void };
         const t = fn(): i32 {
             let mut u: U = .{ .a = 4 };
             match (u) { .a => |&mut x| { x = 9; }, .b => {} }
@@ -142,7 +142,7 @@ TEST_CASE("a reference parameter returned from a call still names the caller's p
 
 TEST_CASE("`&mut` of a runtime `let mut` doesn't fold to a copy of its initializer") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: void };
+        const U = union(enum) { a: i32, b: void };
         const payload = fn(u: &mut U): &mut i32 {
             return match (u) { .a => |&mut v| v, .b => unreachable };
         };

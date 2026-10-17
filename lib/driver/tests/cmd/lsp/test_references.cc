@@ -185,7 +185,7 @@ TEST_CASE("definition_location_at returns none off any identifier") {
 TEST_CASE("definition_location_at resolves `if` / `while` unwrap captures to their declarations") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_unwrap_captures.gh"};
-    CHECK(loader.add(path, R"(const R = union { ok: i32, err: u8 };
+    CHECK(loader.add(path, R"(const R = union(enum) { ok: i32, err: u8 };
 impl builtin.Unwrappable for R {
     const Output = i32;
     const Residual = u8;

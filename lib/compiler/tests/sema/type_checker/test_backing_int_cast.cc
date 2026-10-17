@@ -12,7 +12,7 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
         helpers::type_check_and_verify(R"(
             const E = enum : u8 { x, y };
             const P = packed struct { a: u3, b: u5, };
-            const U = union { a: i32, b: f32, };
+            const U = union(enum) { a: i32, b: f32, };
             pub const test_fn = fn(): void {
                 let e: u8 = @backingInt(E.y);
                 let f: E = @fromBackingInt(1);
@@ -71,7 +71,7 @@ TEST_CASE("@backingInt and @fromBackingInt sema validation") {
     SECTION("@fromBackingInt cannot build a tagged union") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32, b: f32, };
+            const U = union(enum) { a: i32, b: f32, };
             pub const test_fn = fn(): void {
                 let d = @fromBackingInt(U, 1);
             };

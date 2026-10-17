@@ -228,8 +228,8 @@ TEST_CASE("formatter round-trips a comptime parameter modifier") {
 TEST_CASE("formatter keeps small aggregates inline and breaks ones with bodies") {
     CHECK(format_source("const P = struct { x: i32, y: i32 };") ==
           "const P = struct { x: i32, y: i32 };\n");
-    CHECK(format_source("const U = union { a: i32, b: i32 };") ==
-          "const U = union { a: i32, b: i32 };\n");
+    CHECK(format_source("const U = union(enum) { a: i32, b: i32 };") ==
+          "const U = union(enum) { a: i32, b: i32 };\n");
     CHECK(format_source("const E = enum : u64 { A = 1u64, B, C };") ==
           "const E = enum : u64 { A = 1u64, B, C };\n");
 
@@ -278,8 +278,9 @@ const f = fn(): void {};
 }
 
 TEST_CASE("formatter puts a hard line between fields and members in aggregates") {
-    CHECK(format_source("const U = union { a: i32, const b = fn(&self, a: A): C { c; }; };") ==
-          R"(const U = union {
+    CHECK(
+        format_source("const U = union(enum) { a: i32, const b = fn(&self, a: A): C { c; }; };") ==
+        R"(const U = union(enum) {
     a: i32,
 
     const b = fn(&self, a: A): C {
@@ -517,7 +518,7 @@ TEST_CASE("formatter treats a trailing comma in any delimited list as a break hi
     y: i32,
 };
 )");
-    CHECK(format_source("const U = union { a: i32, b: u8, };") == R"(const U = union {
+    CHECK(format_source("const U = union(enum) { a: i32, b: u8, };") == R"(const U = union(enum) {
     a: i32,
     b: u8,
 };
@@ -680,7 +681,7 @@ TEST_CASE("formatter round trip: attribute lists") {
     CHECK(format_source("@[discardable]\nconst log = fn(msg: i32): i32 { return msg; };") ==
           "@[discardable] const log = fn(msg: i32): i32 {\n    return msg;\n};\n");
     round_trips("const S = struct { @[align(8)] a: u8, @[align(4)] pub b: u8 };");
-    round_trips("const U = union { @[align(16)] a: i32, b: u8 };");
+    round_trips("const U = union(enum) { @[align(16)] a: i32, b: u8 };");
     round_trips("@[align(64)] let mut buffer: [4]u8 = undefined;");
     round_trips("const I = interface { @[discardable] pub const close = fn(&self): i32; };");
     round_trips("@[deprecated(\"use y\")] const x = 1;");
@@ -705,11 +706,12 @@ TEST_CASE("formatter round trip: raw identifiers") {
 TEST_CASE("formatter round trip: aggregates") {
     round_trips(
         "struct { let mut a: Foo = bar; const b = fn(^mut this, a: A, b: ^B): C { c; }; };");
-    round_trips("union { a: i32, b: &mut T, };");
+    round_trips("union(enum) { a: i32, b: &mut T, };");
     round_trips("enum : u64 { A = 1u64, B = T, C, };");
     round_trips("enum : i64 { A = 2i64, const b = fn(&self, a: A): C { c; }; };");
-    round_trips("union { a: struct { b: Foo = bar, pub c: i32, let mut d: u32 = undefined; }, "
-                "const b = fn(&self, a: A): C { c; }; };");
+    round_trips(
+        "union(enum) { a: struct { b: Foo = bar, pub c: i32, let mut d: u32 = undefined; }, "
+        "const b = fn(&self, a: A): C { c; }; };");
     round_trips(R"(const S = struct {
     x: i32,
     const make = fn(v: auto): i32 {
@@ -902,7 +904,7 @@ TEST_CASE("formatter round trip: @cfg groups inside aggregate bodies") {
     round_trips("const S = struct { a: i32, @cfg(ptr_bits >= 32) wide: i64, b: i32, };");
     round_trips("const S = struct { a: i32, @cfg(os == .linux) { l: u8 } "
                 "else @cfg(os == .macos) { m: u8 } else { o: u8 } z: i32, };");
-    round_trips("const U = union { @cfg(ptr_bits == 64) { a: u64 } else { a: u32 } };");
+    round_trips("const U = union(enum) { @cfg(ptr_bits == 64) { a: u64 } else { a: u32 } };");
     round_trips("const E = enum { A, @cfg(os == .windows) { B, C } @cfg(os == .linux) D, F, };");
 }
 
@@ -1010,14 +1012,14 @@ TEST_CASE("formatter preserves comments inside aggregates") {
 
     CHECK(format_source(source) == source);
 
-    constexpr std::string_view union_source{R"(const U = union {
+    constexpr std::string_view union_source{R"(const U = union(enum) {
     a: i32, // comment
     b: u8,
 };
 )"};
     round_trips(union_source);
 
-    constexpr std::string_view union_no_trailing_comma{R"(const U = union {
+    constexpr std::string_view union_no_trailing_comma{R"(const U = union(enum) {
     a: i32, // comment
     b: u8
 };

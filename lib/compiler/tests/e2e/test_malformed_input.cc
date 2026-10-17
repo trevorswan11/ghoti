@@ -310,7 +310,7 @@ TEST_CASE("an inline aggregate type in value position has no runtime value") {
         pub const main = fn(): i32 {
             _ = struct {};
             enum { a };
-            let T = blk: { break :blk union { a: i32 }; };
+            let T = blk: { break :blk union(enum) { a: i32 }; };
             return 7;
         };
     )") == 7);
@@ -735,7 +735,7 @@ TEST_CASE("more fuzz-found crashes are errors") {
     )",
                           sema::error::TYPE_MISMATCH));
     helpers::expect_compile_error(R"(
-        const U = union { x: i32, let mut calls: i32 = 0; };
+        const U = union(enum) { x: i32, let mut calls: i32 = 0; };
         const E = enum { a, const K = U.calls; };
         pub const main = fn(): i32 { return E.K; };
     )");

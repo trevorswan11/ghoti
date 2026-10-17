@@ -849,6 +849,13 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         return false;
     }
 
+    // A `union(MyEnum)` reads as its tag
+    if (const auto ut{src.get_data().as_opt<types::union_t>()};
+        ut && ut->tag_enum && dest_kind == type_kind::ENUM &&
+        is_same_unqualified(*ut->tag_enum, dest)) {
+        return true;
+    }
+
     if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {
         if (ut->is_untagged) {
             for (const auto* field : ut->fields) {

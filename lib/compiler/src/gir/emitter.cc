@@ -995,8 +995,63 @@ auto emitter::emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_ty
     return value{undefined_val{}, dest_type};
 }
 
+// A `union(MyEnum)` read as its `MyEnum` tag: the variant its active field names
+auto emitter::emit_union_tag_as_enum(ast::expr_handle expr_id,
+                                     sema::type&      union_type,
+                                     sema::type&      enum_type) -> value {
+    const auto& ut{union_type.get_data().as<sema::types::union_t>()};
+    const auto  variant_of{[&](std::string name) -> value {
+        const auto variant{const_eval_.coerce_enum_literal(
+            const_value{const_enum{std::move(name), 0}}, enum_type)};
+        return variant ? materialize_const(*variant) : value{undefined_val{}, enum_type};
+    }};
+    if (const auto cv{const_eval_.try_eval(*expr_id)}; cv && cv->is<const_union>()) {
+        return variant_of(cv->as<const_union>().active_field);
+    }
+
+    const bool  is_place{active_ast().get_as_opt<ast::identifier_expr>(expr_id) ||
+                         active_ast().get_as_opt<ast::dot_expr>(expr_id) ||
+                         active_ast().get_as_opt<ast::index_expr>(expr_id) ||
+                         active_ast().get_as_opt<ast::dereference_expr>(expr_id)};
+    const auto  addr{is_place ? emit_lvalue(expr_id)
+                              : spill_to_temporary(emit_expression(expr_id), union_type, true)};
+    auto&       i32_type{ctx_.get_int(32, true)};
+    auto&       usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  tag_ptr{builder_.emit_get_element_ptr(
+        addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const value tag{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
+
+    // The fields need not list the variants in order, so each tag index maps to its variant
+    auto&      fn{*builder_.get_function()};
+    const auto result{builder_.emit_alloca(enum_type)};
+    auto&      merge{fn.add_segment()};
+    for (usize i{0}; i < ut.ast_fields.size(); ++i) {
+        auto&      hit{fn.add_segment()};
+        auto&      miss{fn.add_segment()};
+        const auto is_field{builder_.emit_binary(
+            instruction_kind::EQ, tag, value{static_cast<i64>(i), i32_type}, bool_type)};
+        builder_.emit_cond_goto(value{is_field, bool_type}, hit.get_id(), miss.get_id());
+        builder_.set_segment(hit);
+        const auto& name{ut.enclosing.ast.get_as<ast::identifier_expr>(ut.ast_fields[i].name).name};
+        builder_.emit_store(result, variant_of(std::string{name}));
+        builder_.emit_goto(merge.get_id());
+        builder_.set_segment(miss);
+    }
+    builder_.emit_unreachable();
+    builder_.set_segment(merge);
+    return value{builder_.emit_load(result, enum_type), enum_type};
+}
+
 auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value {
     PROFILE_FUNCTION();
+    if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
+        src && dest_type.get_kind() == sema::type_kind::ENUM) {
+        if (const auto ut{src->get_data().as_opt<sema::types::union_t>()};
+            ut && ut->tag_enum && sema::is_same_unqualified(*ut->tag_enum, dest_type)) {
+            return emit_union_tag_as_enum(expr_id, *src, dest_type);
+        }
+    }
     if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
         src && src->get_kind() == sema::type_kind::ENUM_LITERAL && takes_enum_literal(dest_type)) {
         return emit_enum_literal_as(expr_id, dest_type);

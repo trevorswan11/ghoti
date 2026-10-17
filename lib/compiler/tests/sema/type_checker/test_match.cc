@@ -11,7 +11,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Union field, mutable union") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -28,7 +28,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Union field, const union") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let u = U{ .a = 5 };
                 match (u) {
@@ -78,7 +78,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
 TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By mutable reference succeeds") {
         helpers::type_check_and_verify(R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -92,7 +92,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const reference is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -108,7 +108,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
 
     SECTION("By mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let mut u = U{ .a = 5 };
                 match (u) {
@@ -122,7 +122,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const pointer is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(): void {
                 let mut u = U{ .a = 5 };
                 match (u) {

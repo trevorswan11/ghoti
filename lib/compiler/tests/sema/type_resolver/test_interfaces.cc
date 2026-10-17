@@ -232,7 +232,7 @@ TEST_CASE("an interface cannot be stored by value") {
 TEST_CASE("an interface cannot be a field, parameter, return, or element type by value") {
     const auto* iface{"const W = interface { pub const f = fn(&self): void; };"};
     for (const auto* use : {"const S = struct { w: W };",
-                            "const U = union { w: W, n: i32 };",
+                            "const U = union(enum) { w: W, n: i32 };",
                             "const g = fn(w: W): void { _ = w; };",
                             "const g = fn(): W { return undefined; };",
                             "const g = fn(ws: []W): void { _ = ws; };"}) {

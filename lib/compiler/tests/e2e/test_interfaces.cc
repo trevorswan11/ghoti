@@ -581,7 +581,7 @@ TEST_CASE("`impl` works on every aggregate kind (enum, union, extern, packed)") 
         };
         const Dir = enum : i32 { A = 3, B = 7 };
         impl N for Dir { pub const v = fn(&self): i32 { return 1; }; }
-        const Tag = union { i: i32, f: f32 };
+        const Tag = union(enum) { i: i32, f: f32 };
         impl N for Tag { pub const v = fn(&self): i32 { return self.i; }; }
         const Ext = extern struct { a: i32, b: i32 };
         impl N for Ext { pub const v = fn(&self): i32 { return self.a; }; }

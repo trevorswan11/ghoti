@@ -37,7 +37,7 @@ TEST_CASE("Top-level struct const field access") {
 
 TEST_CASE("Top-level tagged union const active field access") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         const V = U{ .val = 42 };
         pub const main = fn(): i32 {
             return V.val;
@@ -47,7 +47,7 @@ TEST_CASE("Top-level tagged union const active field access") {
 
 TEST_CASE("Top-level const initialized by a match with a capturing arm") {
     CHECK(helpers::compile_and_run(R"(
-        const Payload = union { A: i32, B: i32 };
+        const Payload = union(enum) { A: i32, B: i32 };
         const u = Payload{ .A = 5 };
         const y = match (u) {
             .A => |v| v,
@@ -155,7 +155,7 @@ TEST_CASE("Module-scope array of structs indexed and iterated") {
 
 TEST_CASE("Module-scope union const lowering and matching") {
     CHECK(helpers::compile_and_run(R"(
-        const Val = union {
+        const Val = union(enum) {
             int_val: i32,
             bool_val: bool,
         };

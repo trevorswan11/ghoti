@@ -2057,6 +2057,42 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
+
+    // A Ghoti union names its tag; `extern` and `packed` ones have none to name
+    auto                           tag{tag_kind::NONE};
+    stdx::option<explicit_type_id> tag_type;
+    if (is_extern || is_packed) {
+        if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            return make_syntax_err(fmt::format("{} union has no tag, so it cannot name one",
+                                               is_extern ? "An `extern`" : "A `packed`"),
+                                   syntax::error::ILLEGAL_UNION_TAG,
+                                   parser.get_peek_token());
+        }
+    } else {
+        if (!parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            return make_syntax_err("A union names its tag: `union(enum)` for a tagged union, "
+                                   "`union(MyEnum)` to tag it with an enum, `union(void)` for an "
+                                   "untagged one, or `extern union` for the C layout",
+                                   syntax::error::MISSING_UNION_TAG,
+                                   start_token);
+        }
+        parser.advance(); // current == LPAREN
+        const bool inferred{[&] {
+            if (!parser.peek_token_is(syntax::token_type_t::ENUM)) { return false; }
+            const syntax::parser::transaction tx{parser};
+            parser.advance();
+            return parser.peek_token_is(syntax::token_type_t::RPAREN);
+        }()};
+        if (inferred) {
+            parser.advance(); // current == ENUM
+            tag = tag_kind::INFERRED;
+        } else {
+            tag_type.emplace(TRY(explicit_type::parse(parser)));
+            tag = tag_kind::EXPLICIT;
+        }
+        TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
+    }
+
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     std::vector<field>     fields;
     std::vector<cfg_group> cfg_groups;
@@ -2114,7 +2150,9 @@ auto union_expr::parse(syntax::parser& parser, bool is_extern, bool is_packed)
                                        std::move(member_cfg_groups),
                                        is_extern,
                                        is_packed,
-                                       fields_force_break);
+                                       fields_force_break,
+                                       tag,
+                                       tag_type);
 }
 
 auto parse_modified_struct_or_union(syntax::parser& parser)

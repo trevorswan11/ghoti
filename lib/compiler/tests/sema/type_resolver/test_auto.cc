@@ -102,10 +102,10 @@ TEST_CASE("Illegal auto usage in structural types") {
     }
 
     SECTION("Union field cannot have auto") {
-        helpers::test_resolver_fail("const U = union { a: auto, };",
+        helpers::test_resolver_fail("const U = union(enum) { a: auto, };",
                                     sema::diagnostic{"Union field 'a' cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 21UZ}});
+                                                     std::pair{0UZ, 27UZ}});
     }
 }
 

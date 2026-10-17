@@ -92,7 +92,7 @@ using namespace std::string_view_literals;
 constexpr std::array RESTRICTED_INPUTS{
     std::pair{"a = struct { let mut b = 2; };"sv, "struct"sv},
     std::pair{"a = enum { A };"sv, "enum"sv},
-    std::pair{"a = union { b: bool };"sv, "union"sv},
+    std::pair{"a = union(enum) { b: bool };"sv, "union"sv},
 };
 
 TEST_CASE("Restricted non-const top level declarations") {

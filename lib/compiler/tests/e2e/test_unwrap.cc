@@ -10,7 +10,7 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view RESULT_PRELUDE = R"(
-const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
@@ -25,7 +25,7 @@ impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     const From = E;
     pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
 }
-const Option = fn(comptime T: type): type { return union { some: T, none: void }; };
+const Option = fn(comptime T: type): type { return union(enum) { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
@@ -177,7 +177,7 @@ TEST_CASE("`?` composes across call layers") {
 
 TEST_CASE("nominal `?` and `!` work on custom renamed-variant unions") {
     CHECK(helpers::compile_and_run(R"(
-        const Custom = union { item: i32, failure: u8 };
+        const Custom = union(enum) { item: i32, failure: u8 };
         impl builtin.Unwrappable for Custom {
             const Output = i32;
             const Residual = u8;

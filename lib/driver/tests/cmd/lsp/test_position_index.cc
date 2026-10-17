@@ -107,12 +107,12 @@ TEST_CASE("hover-style type resolution works on an enum enumerator's own name") 
 TEST_CASE("hover-style type resolution works on a union field declaration's own name") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_position_index_union_field.gh"};
-    CHECK(loader.add(path, "pub const U = union { x: i32, y: i32 };\n"));
+    CHECK(loader.add(path, "pub const U = union(enum) { x: i32, y: i32 };\n"));
 
     auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
     const auto module{UNWRAP(session->analyze(path))};
 
-    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 22}))};
+    const auto  id{UNWRAP(lsp::identifier_at(*module, {0, 28}))};
     const auto& type{UNWRAP(module->get_sema_type_opt(id))};
     CHECK(type.to_string() == "i32");
 }

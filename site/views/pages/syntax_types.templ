@@ -208,7 +208,7 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand = union {
+			{ `const Hand = union(enum) {
     card: bool,
     pen: i32,
     shoe: void,

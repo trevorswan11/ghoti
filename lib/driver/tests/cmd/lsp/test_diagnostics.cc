@@ -71,7 +71,7 @@ pub const x = older();
 TEST_CASE("a shared session that analyzes two impls of one interface keeps inherited defaults") {
     mod::overlay_loader loader;
     CHECK(loader.add(std::filesystem::path{"reader.gh"}, R"(
-        pub const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+        pub const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
         impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
             const Output = T;
             const Residual = E;

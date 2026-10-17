@@ -24,7 +24,7 @@ TEST_CASE("A catch-all arm captures the scrutinee") {
 
 TEST_CASE("A catch-all arm on a tagged union captures the whole union") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: u8, c: bool };
+        const U = union(enum) { a: i32, b: u8, c: bool };
         const g = fn(u: U): i32 {
             return match (u) {
                 .a => |n| n,

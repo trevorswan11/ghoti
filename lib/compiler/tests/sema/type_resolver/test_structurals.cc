@@ -28,7 +28,7 @@ pub const BarE = enum {
     pub const bar = fn(&self, c: u8): []u8 {};
 };
 
-pub const BarU = union {
+pub const BarU = union(enum) {
     A: i32,
     pub const bar = fn(&self, c: u8): []u8 {};
 };
@@ -244,10 +244,10 @@ TEST_CASE("Incomplete type used during resolution") {
     }
 
     SECTION("Unions") {
-        helpers::test_resolver_fail("const A = union { a: A, };", expected_diag(21));
-        helpers::test_resolver_fail("const A = union { a: @This(), };", expected_diag(21));
-        helpers::test_resolver_fail("const A = union { a: B, }; const B = union { b: A, };",
-                                    expected_b(48));
+        helpers::test_resolver_fail("const A = union(enum) { a: A, };", expected_diag(27));
+        helpers::test_resolver_fail("const A = union(enum) { a: @This(), };", expected_diag(27));
+        helpers::test_resolver_fail(
+            "const A = union(enum) { a: B, }; const B = union(enum) { b: A, };", expected_b(60));
     }
 }
 
@@ -324,10 +324,10 @@ TEST_CASE("Initializer expression in various resolution contexts") {
 
     SECTION("Union & enum type restrictions") {
         helpers::test_resolver_fail(
-            "const U = union { A: i32, B: i32, }; const u = U{ .A = 1, .B = 2 };",
+            "const U = union(enum) { A: i32, B: i32, }; const u = U{ .A = 1, .B = 2 };",
             sema::diagnostic{"Union initializer lists must list exactly one field; found 2",
                              sema::error::ARITY_MISMATCH,
-                             std::pair{0UZ, 48UZ}});
+                             std::pair{0UZ, 54UZ}});
 
         helpers::test_resolver_fail(
             "const E = enum { A, }; const e = E{};",
@@ -415,7 +415,7 @@ TEST_CASE("Struct field access through dereferenced pointer and reference") {
 TEST_CASE("Implicit access as the left operand takes the right operand's type") {
     SECTION("a union") {
         auto [ctx, idx]{helpers::resolve_and_check(
-            "const U = union { a: i32, b: i32 }; const u = U{ .a = 1 }; const r = .a == u;")};
+            "const U = union(enum) { a: i32, b: i32 }; const u = U{ .a = 1 }; const r = .a == u;")};
         const auto [sym, _, node, type]{
             ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("r", idx)};
         CHECK(type.get_kind() == sema::type_kind::BOOL);
@@ -464,7 +464,7 @@ TEST_CASE("A failed @cfg pass still lets type resolution run without a missing-s
     }
 
     SECTION("ill-typed cfg comparison against a string, anonymous aggregate") {
-        CHECK(helpers::raised("union { @cfg(os == \"linux\") a: i32 else b: i32 };",
+        CHECK(helpers::raised("union(enum) { @cfg(os == \"linux\") a: i32 else b: i32 };",
                               sema::error::CFG_COMPARISON_TYPE_MISMATCH));
     }
 

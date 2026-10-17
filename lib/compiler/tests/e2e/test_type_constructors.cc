@@ -13,7 +13,7 @@ namespace ghoti::tests {
 TEST_CASE("A generic `union` type constructor is usable as a return type") {
     CHECK(helpers::compile_and_run(R"(
         const Result = fn(comptime T: type, comptime E: type): type {
-            return union { ok: T, err: E };
+            return union(enum) { ok: T, err: E };
         };
 
         const IntOr = Result(i32, i32);
@@ -122,7 +122,7 @@ TEST_CASE("Two structurally distinct instantiations of a generic `struct` constr
 
 TEST_CASE("Two instantiations of a generic `union` constructor, matched independently") {
     CHECK(helpers::compile_and_run(R"(
-        const Option = fn(comptime T: type): type { return union { some: T, none: void }; };
+        const Option = fn(comptime T: type): type { return union(enum) { some: T, none: void }; };
 
         const OptI = Option(i32);
         const OptB = Option(u8);
@@ -169,7 +169,7 @@ TEST_CASE("A zero-parameter `fn(): type` that builds a fresh struct") {
 
 TEST_CASE("A zero-parameter `fn(): type` that builds a fresh union") {
     CHECK(helpers::compile_and_run(R"(
-        const MakeCell = fn(): type { return union { i: i32, f: f32 }; };
+        const MakeCell = fn(): type { return union(enum) { i: i32, f: f32 }; };
         const Cell = MakeCell();
 
         pub const main = fn(): i32 {
@@ -557,7 +557,7 @@ TEST_CASE("A generic union's own inline method still works after an explicit qua
           "constructor call, even when the type also has `impl(T) Trait for Ctor(T)` blocks") {
     CHECK(helpers::compile_and_run_tests(R"(
         const Option = fn(comptime T: type): type {
-            return union {
+            return union(enum) {
                 some: T,
                 none: void,
 
@@ -722,7 +722,7 @@ TEST_CASE("a type constructor member's signature may name its own constructor") 
     // The member instantiates another instance while this one is still resolving its members
     CHECK(helpers::compile_and_run(R"(
         const Pair = fn(comptime T: type): type {
-            return union {
+            return union(enum) {
                 one: T,
                 none: void,
                 pub const of = fn(v: T): @This() { return .{ .one = v }; };
@@ -752,7 +752,7 @@ TEST_CASE("a type constructor member's signature may name its own constructor") 
             return info.function.return_type;
         };
         const Res = fn(comptime T: type, comptime E: type): type {
-            return union {
+            return union(enum) {
                 ok: T,
                 err: E,
                 pub const of = fn(val: T): @This() { return .{ .ok = val }; };
@@ -831,7 +831,7 @@ TEST_CASE("a folded generic member call sees its own instance's `@This()`") {
     // Instantiating `eq` for a second instance must not leak into a later folded call
     CHECK(helpers::compile_and_run(R"(
         const Opt = fn(comptime T: type): type {
-            return union {
+            return union(enum) {
                 some: T,
                 none: void,
                 pub const eq = fn(&self, val: auto): bool {

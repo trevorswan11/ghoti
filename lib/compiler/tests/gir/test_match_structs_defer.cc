@@ -63,7 +63,7 @@ TEST_CASE("GIR match enum patterns") {
 
 TEST_CASE("GIR match arm capture") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const UnionVal = union {
+        const UnionVal = union(enum) {
             int_val: i32,
             bool_val: bool,
         };

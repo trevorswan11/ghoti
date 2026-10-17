@@ -96,7 +96,7 @@ TEST_CASE("Operator type checking") {
     SECTION("Comparing two unions directly fails") {
         helpers::test_checker_fail(
             R"(
-            const U = union { a: i32 };
+            const U = union(enum) { a: i32 };
             const f = fn(a: U, b: U): bool {
                 return a == b;
             };

@@ -11,7 +11,7 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view RESULT_PRELUDE = R"(
-const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
@@ -26,7 +26,7 @@ impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     const From = E;
     pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
 }
-const Option = fn(comptime T: type): type { return union { some: T, none: void }; };
+const Option = fn(comptime T: type): type { return union(enum) { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
@@ -76,7 +76,7 @@ TEST_CASE("GIR `!` guards the discriminant with a panic_handler call") {
 
 TEST_CASE("GIR reading a tagged-union field is discriminant-guarded") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         const read_a = fn(u: U): i32 { return u.a; };
     )")};
 
