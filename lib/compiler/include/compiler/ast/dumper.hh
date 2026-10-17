@@ -36,7 +36,7 @@ class dumper {
 
   private:
     template <IndexableNodeID ID> auto dump(ID id) -> void {
-        ast_[id].visit([&](const auto& data) -> void { this->visit(id, data); });
+        ast_[id].visit([&](const auto& data) -> void { this->visit(node_id{id}, data); });
     }
 
     auto dump(explicit_type_id id) -> void {
@@ -47,9 +47,9 @@ class dumper {
 
     auto visit(node_id, const array_expr&) -> void;
     auto visit(node_id, const asm_expr&) -> void;
-    auto visit(node_id, const call_expr&) -> void;
+    auto visit(stdx::option<node_id>, const call_expr&) -> void;
     auto visit(node_id, const do_while_loop_expr&) -> void;
-    auto visit(node_id, const enum_expr&) -> void;
+    auto visit(stdx::option<node_id>, const enum_expr&) -> void;
     auto visit(node_id, const for_loop_expr&) -> void;
     auto visit(node_id, const function_expr&) -> void;
     auto visit(node_id, const identifier_expr&) -> void;
@@ -58,7 +58,7 @@ class dumper {
     auto visit(node_id, const infinite_loop_expr&) -> void;
     auto visit(node_id, const assignment_expr&) -> void;
     auto visit(node_id, const binary_expr&) -> void;
-    auto visit(node_id, const dot_expr&) -> void;
+    auto visit(stdx::option<node_id>, const dot_expr&) -> void;
     auto visit(node_id, const range_expr&) -> void;
     auto visit(node_id, const initializer_expr&) -> void;
     auto visit(node_id, const label_expr&) -> void;
@@ -79,9 +79,9 @@ class dumper {
     auto visit(node_id, const nullptr_expr&) -> void;
     auto visit(node_id, const unreachable_expr&) -> void;
     auto visit(node_id, const type_expr&) -> void;
-    auto visit(node_id, const struct_expr&) -> void;
-    auto visit(node_id, const union_expr&) -> void;
-    auto visit(node_id, const interface_expr&) -> void;
+    auto visit(stdx::option<node_id>, const struct_expr&) -> void;
+    auto visit(stdx::option<node_id>, const union_expr&) -> void;
+    auto visit(stdx::option<node_id>, const interface_expr&) -> void;
     auto visit(node_id, const while_loop_expr&) -> void;
     auto visit(node_id, const cfg_value_expr&) -> void;
     auto visit(node_id, const block_stmt&) -> void;

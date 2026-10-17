@@ -21,6 +21,7 @@
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/harness/hooks.hh>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -375,8 +376,8 @@ struct run_result {
         for (usize pos{message.find(marker)}; pos != std::string::npos;
              pos = message.find(marker, pos + marker.size())) {
             const auto start{pos + marker.size()};
-            result.missing_builtins.emplace_back(
-                message.substr(start, message.find_first_of(" \r\n", start) - start));
+            result.missing_builtins.emplace_back(stdx::string::substr(
+                message, start, message.find_first_of(" \r\n", start) - start));
         }
         return result;
     }

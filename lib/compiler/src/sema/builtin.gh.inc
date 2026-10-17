@@ -263,6 +263,8 @@ pub const StructFieldInfo = struct {
     pub default_value: ^opaque = nullptr,
     /// The field's `@[align(n)]`, or 0 when it keeps its type's natural alignment.
     pub alignment: usize = 0,
+    /// Whether the field is `pub`, readable from other modules like a hand-written `pub` field.
+    pub is_pub: bool = false,
 };
 
 pub const StructInfo = struct {

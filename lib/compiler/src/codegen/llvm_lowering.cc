@@ -17,9 +17,11 @@
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
@@ -48,6 +50,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/codegen/aggregate_abi.hh"
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -86,6 +89,85 @@ auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibil
         value.setVisibility(llvm::GlobalValue::ProtectedVisibility);
         break;
     }
+}
+
+// The little-endian bytes of a scalar union payload, zero past its width
+[[nodiscard]] auto union_payload_bytes(const gir::const_value& payload, usize size) -> std::string {
+    std::string bytes(size, '\0');
+    if (const auto iv{payload.as_int_opt()}) {
+        const u64   v{static_cast<u64>(*iv)};
+        const usize copy_len{std::min<usize>(sizeof(v), size)};
+        std::memcpy(bytes.data(), &v, copy_len);
+    } else if (const auto fv{payload.as_opt<f128>()}) {
+        const auto payload_type{payload.get_type()};
+        const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
+        const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
+        const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
+        const std::array<u64, 2> words{encoded.low, encoded.high};
+        const usize              copy_len{std::min<usize>(width / 8, size)};
+        std::memcpy(bytes.data(), words.data(), copy_len);
+    } else if (const auto bv{payload.as_opt<bool>()}) {
+        if (size > 0) { bytes[0] = *bv ? 1 : 0; }
+    }
+    return bytes;
+}
+
+// Reads `source`'s bytes back as a constant of `ty` starting `offset` bytes in, one scalar at a
+// time, with zeroes past its end
+[[nodiscard]] auto
+reinterpret_constant(llvm::Constant* source, llvm::Type* ty, u64 offset, const llvm::DataLayout& dl)
+    -> llvm::Constant* {
+    if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+        const auto*                  layout{dl.getStructLayout(st)};
+        std::vector<llvm::Constant*> elems;
+        for (u32 i{0}; i < st->getNumElements(); ++i) {
+            elems.emplace_back(reinterpret_constant(
+                source, st->getElementType(i), offset + layout->getElementOffset(i), dl));
+        }
+        return llvm::ConstantStruct::get(st, elems);
+    }
+    if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+        const auto stride{dl.getTypeAllocSize(at->getElementType()).getFixedValue()};
+        std::vector<llvm::Constant*> elems;
+        for (u64 i{0}; i < at->getNumElements(); ++i) {
+            elems.emplace_back(
+                reinterpret_constant(source, at->getElementType(), offset + (i * stride), dl));
+        }
+        return llvm::ConstantArray::get(at, elems);
+    }
+    if (offset >= dl.getTypeAllocSize(source->getType()).getFixedValue()) {
+        return llvm::Constant::getNullValue(ty);
+    }
+    auto* folded{llvm::ConstantFoldLoadFromConst(source, ty, llvm::APInt{64, offset}, dl)};
+    if (!folded || llvm::isa<llvm::PoisonValue, llvm::UndefValue>(folded)) {
+        return llvm::Constant::getNullValue(ty);
+    }
+    return folded;
+}
+
+// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target.
+// RV64 also sign-extends every 32-bit integer, unsigned ones included, to the full register
+enum class narrow_int_rule : u8 {
+    NONE,
+    BOOL_ONLY,
+    ALL,
+    ALL_AND_RV64_WORD,
+};
+
+[[nodiscard]] auto narrow_int_rule_for(const llvm::Triple& triple) -> narrow_int_rule {
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSWindows() || triple.isUEFI() ? narrow_int_rule::BOOL_ONLY
+                                                       : narrow_int_rule::ALL;
+    }
+    if (triple.isAArch64()) {
+        return triple.isOSDarwin() ? narrow_int_rule::ALL : narrow_int_rule::NONE;
+    }
+    if (triple.isRISCV64()) { return narrow_int_rule::ALL_AND_RV64_WORD; }
+    if (triple.getArch() == llvm::Triple::x86 || triple.isARM() || triple.isThumb() ||
+        triple.isRISCV32()) {
+        return narrow_int_rule::ALL;
+    }
+    return narrow_int_rule::NONE;
 }
 
 auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
@@ -216,22 +298,6 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return llvm::ConstantFP::get(ty, converted);
 }
 
-[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv,
-                                    const llvm::Triple& triple) noexcept -> llvm::CallingConv::ID {
-    switch (conv) {
-    case ast::calling_convention::X86_WINAPI:
-        return triple.getArch() == llvm::Triple::x86 ? llvm::CallingConv::X86_StdCall
-                                                     : llvm::CallingConv::C;
-    case ast::calling_convention::C:            return llvm::CallingConv::C;
-    case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
-    case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
-    case ast::calling_convention::X86_STDCALL:  return llvm::CallingConv::X86_StdCall;
-    case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
-    case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
-    default:                                    return llvm::CallingConv::C;
-    }
-}
-
 enum class memory_order_t : u8 { // Mirrors builtin.gh.inc
     relaxed = 0,
     acquire = 1,
@@ -341,6 +407,7 @@ auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Modul
 }
 
 auto llvm_lowering::finalize_runtime_support() -> void {
+    lower_c_abi(*llvm_module_, types_.union_members(), types_.padded_structs());
     lower_large_aggregates(*llvm_module_);
     maybe_emit_mingw_main_stub();
     // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
@@ -938,18 +1005,21 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         }
 
         if (ud->is_untagged) {
-            auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
-            if (!at) { return llvm::Constant::getNullValue(ty); }
-            const auto  max_size{static_cast<usize>(at->getNumElements())};
-            std::string bytes(max_size, '\0');
-            if (!un->payload.empty()) {
-                if (const auto iv{un->payload.front().as_int_opt()}) {
-                    u64         v{static_cast<u64>(*iv)};
-                    const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                    std::memcpy(bytes.data(), &v, copy_len);
-                }
+            auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+            if (!st || un->payload.empty() || active_idx >= ud->fields.size()) {
+                return llvm::Constant::getNullValue(ty);
             }
-            return llvm::ConstantDataArray::getString(context_, bytes, false);
+            const auto& payload{un->payload.front()};
+            auto*       member_ty{types_.translate(*ud->fields[active_idx])};
+            auto*       member{const_to_llvm(payload, member_ty)};
+            if (member_ty == st->getElementType(0)) {
+                std::vector<llvm::Constant*> elems{member};
+                if (st->getNumElements() > 1) {
+                    elems.emplace_back(llvm::Constant::getNullValue(st->getElementType(1)));
+                }
+                return llvm::ConstantStruct::get(st, elems);
+            }
+            return reinterpret_constant(member, ty, 0, llvm_module_->getDataLayout());
         }
 
         auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
@@ -964,26 +1034,10 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
         }
 
-        const auto  max_size{static_cast<usize>(payload_arr_ty->getNumElements())};
-        std::string bytes(max_size, '\0');
-        if (!un->payload.empty()) {
-            const auto& p{un->payload.front()};
-            if (const auto iv{p.as_int_opt()}) {
-                u64         v{static_cast<u64>(*iv)};
-                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                std::memcpy(bytes.data(), &v, copy_len);
-            } else if (const auto fv{p.as_opt<f128>()}) {
-                const auto payload_type{p.get_type()};
-                const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
-                const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
-                const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
-                const std::array<u64, 2> words{encoded.low, encoded.high};
-                const usize              copy_len{std::min<usize>(width / 8, max_size)};
-                std::memcpy(bytes.data(), words.data(), copy_len);
-            } else if (const auto bv{p.as_opt<bool>()}) {
-                bytes[0] = *bv ? 1 : 0;
-            }
-        }
+        const auto bytes{
+            un->payload.empty()
+                ? std::string(payload_arr_ty->getNumElements(), '\0')
+                : union_payload_bytes(un->payload.front(), payload_arr_ty->getNumElements())};
         auto* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
@@ -1167,6 +1221,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
+    llvm_fn->setAttributes(with_integer_extensions(llvm_fn->getAttributes(), *fn_data));
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
     // Non x86-64 Windows links no runtime that could provide a probe symbol
     if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
@@ -2105,6 +2160,8 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
                        inst.type->get_kind() == sema::type_kind::NORETURN};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
+    call_inst->setAttributes(
+        with_integer_extensions(call_inst->getAttributes(), *ind_fn_data, is_erased ? 1U : 0U));
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
     call_inst->setCallingConv(
@@ -2163,6 +2220,43 @@ auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_va
         sema::is_fat_callable(*op.type)};
     if (!by_value_aggregate) { return arg_val; }
     return builder_.CreateLoad(types_.translate(*op.type), arg_val, "struct_arg");
+}
+
+auto llvm_lowering::integer_extension(const sema::type& type)
+    -> stdx::option<llvm::Attribute::AttrKind> {
+    if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
+        return integer_extension(en->underlying);
+    }
+    auto* llvm_ty{types_.translate(type)};
+    if (!llvm_ty->isIntegerTy() || llvm_ty->getIntegerBitWidth() > 32) { return stdx::none; }
+
+    const auto rule{narrow_int_rule_for(llvm::Triple{llvm_module_->getTargetTriple()})};
+    if (llvm_ty->getIntegerBitWidth() == 32) {
+        if (rule != narrow_int_rule::ALL_AND_RV64_WORD) { return stdx::none; }
+        return llvm::Attribute::SExt;
+    }
+    if (rule == narrow_int_rule::NONE) { return stdx::none; }
+    if (type.get_kind() == sema::type_kind::BOOL) { return llvm::Attribute::ZExt; }
+    if (rule == narrow_int_rule::BOOL_ONLY) { return stdx::none; }
+    return sema::is_signed_integer(type) ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
+}
+
+auto llvm_lowering::with_integer_extensions(llvm::AttributeList          attrs,
+                                            const sema::types::function& fn,
+                                            u32 first_param) -> llvm::AttributeList {
+    auto& context{llvm_module_->getContext()};
+    if (const auto ext{integer_extension(fn.return_type)}) {
+        attrs = attrs.addRetAttribute(context, *ext);
+    }
+    u32 idx{first_param};
+    for (const auto* param : fn.params) {
+        if (types_.translate(*param)->isVoidTy()) { continue; }
+        if (const auto ext{integer_extension(*param)}) {
+            attrs = attrs.addParamAttribute(context, idx, *ext);
+        }
+        ++idx;
+    }
+    return attrs;
 }
 
 auto llvm_lowering::erased_code_type(const sema::types::function& fn) -> llvm::FunctionType* {

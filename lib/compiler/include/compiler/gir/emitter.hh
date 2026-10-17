@@ -44,7 +44,8 @@ class emitter {
     explicit emitter(sema::context& ctx, mod::module_t& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
           gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
-          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {
+          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits},
+          target_layout_{codegen::type_layout::resolve(ctx.target_opts.triple_str)} {
         const_eval_.set_vtable_root_module(ast_module_);
     }
     ~emitter() = default;
@@ -651,6 +652,7 @@ class emitter {
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};
+    codegen::type_layout                                    target_layout_;
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).

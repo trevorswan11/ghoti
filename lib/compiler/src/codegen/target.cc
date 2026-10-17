@@ -14,11 +14,14 @@
 #include <gsl/pointers>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DiagnosticHandler.h>
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/DiagnosticPrinter.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 #include <llvm/MC/MCSubtargetInfo.h>
@@ -293,6 +296,12 @@ namespace {
     }
 }
 
+// Scratch context for asking a data layout about scalar types, which need a context to exist
+[[nodiscard]] auto dl_context() -> llvm::LLVMContext& {
+    thread_local llvm::LLVMContext ctx;
+    return ctx;
+}
+
 } // namespace
 
 auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts {
@@ -311,6 +320,25 @@ auto target_facts::resolve(const llvm::Triple& triple) noexcept -> target_facts 
 }
 
 auto target_facts::resolve(stdx::option<std::string_view> triple_str) -> target_facts {
+    return resolve(resolve_target_triple(triple_str));
+}
+
+auto type_layout::resolve(const llvm::DataLayout& dl) -> type_layout {
+    auto& ctx{dl_context()};
+    return type_layout{
+        .ptr_bytes = dl.getPointerSize(),
+        .i64_align = dl.getABITypeAlign(llvm::Type::getInt64Ty(ctx)).value(),
+        .f64_align = dl.getABITypeAlign(llvm::Type::getDoubleTy(ctx)).value(),
+        .f80_size  = dl.getTypeAllocSize(llvm::Type::getX86_FP80Ty(ctx)).getFixedValue(),
+        .f80_align = dl.getABITypeAlign(llvm::Type::getX86_FP80Ty(ctx)).value(),
+    };
+}
+
+auto type_layout::resolve(const llvm::Triple& triple) -> type_layout {
+    return resolve(llvm::DataLayout{triple.computeDataLayout()});
+}
+
+auto type_layout::resolve(stdx::option<std::string_view> triple_str) -> type_layout {
     return resolve(resolve_target_triple(triple_str));
 }
 
@@ -652,6 +680,33 @@ auto create_target_machine(const target_options& options)
     }
 
     return stdx::box<llvm::TargetMachine>{target_machine};
+}
+
+namespace {
+
+// The ABI name the RISC-V backend uses, which without an explicit one follows the widest float
+// extension the machine has, as LLVM's `computeDefaultABI` does
+[[nodiscard]] auto riscv_abi_name(const llvm::TargetMachine& machine) -> std::string {
+    const auto requested{machine.Options.MCOptions.getABIName()};
+    if (!requested.empty()) { return requested.str(); }
+    const std::string base{machine.getTargetTriple().isRISCV64() ? "lp64" : "ilp32"};
+    const auto&       info{machine.getMCSubtargetInfo()};
+    for (const auto* extension : {"e", "d", "f"}) {
+        if (info.checkFeatures(fmt::format("+{}", extension))) { return base + extension; }
+    }
+    return base;
+}
+
+} // namespace
+
+auto configure_module_for_target(llvm::Module& module, const llvm::TargetMachine& machine) -> void {
+    module.setDataLayout(machine.createDataLayout());
+    module.setTargetTriple(machine.getTargetTriple());
+    if (machine.getTargetTriple().isRISCV() && !module.getModuleFlag("target-abi")) {
+        module.addModuleFlag(llvm::Module::Error,
+                             "target-abi",
+                             llvm::MDString::get(module.getContext(), riscv_abi_name(machine)));
+    }
 }
 
 auto emit_object_file(llvm::Module&                module,

@@ -62,11 +62,12 @@ auto source_file::get_diagnostic_strings_at(const source_location& loc) const
 
     // The caret sits under the column's character, measured in display columns: a combining
     // mark takes none and a wide character or emoji two. Tabs are copied so they line up.
-    const auto  prefix{substr.substr(0, std::min(true_col, substr.size()))};
+    const auto  prefix{stdx::string::substr(substr, 0, std::min(true_col, substr.size()))};
     std::string caret_line;
     usize       run_start{0};
     const auto  pad_run{[&](usize end) {
-        caret_line.append(display_width(prefix.substr(run_start, end - run_start)), ' ');
+        caret_line.append(display_width(stdx::string::substr(prefix, run_start, end - run_start)),
+                          ' ');
     }};
     for (usize i{0}; i < prefix.size(); ++i) {
         if (prefix[i] != '\t') { continue; }

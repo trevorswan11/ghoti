@@ -892,10 +892,7 @@ auto infer_comptime_params(syntax::parser&                             parser,
     for (auto& param : parameters) {
         if (param.is_pack || !param.name.is<identifier_expr>()) { continue; }
         // A `T: type` param is already compile-time known
-        if (param.explicit_type.is_valid() &&
-            param.explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE) {
-            continue;
-        }
+        if (param.spells_type()) { continue; }
         const auto name{parser.get_ast().get_as<identifier_expr>(param.name).name};
         const auto read{std::ranges::find(
             frame.compile_time_names, name, &syntax::parser::compile_time_read::name)};
@@ -1055,8 +1052,8 @@ auto parse_function_header(syntax::parser& parser)
                                 : discardable_ident_handle{TRY(identifier_expr::parse(parser))}};
 
             // An untyped pack (`rest...`) has no `: Type` at all; check before requiring one.
-            bool is_pack{false};
-            auto param_explicit_type{explicit_type_id::make_invalid()};
+            bool                           is_pack{false};
+            stdx::option<explicit_type_id> param_explicit_type;
             if (parser.peek_token_is(syntax::token_type_t::ELLIPSIS)) {
                 parser.advance();
                 is_pack = true;
@@ -1077,13 +1074,13 @@ auto parse_function_header(syntax::parser& parser)
                 }
 
                 param_explicit_type = *param_type;
-                if (param_explicit_type.is<identifier_expr>()) {
+                if (param_type->is<identifier_expr>()) {
                     // noreturn is not allowed for parameters
-                    if (param_explicit_type.get_token_type() == syntax::token_type_t::NORETURN) {
+                    if (param_type->get_token_type() == syntax::token_type_t::NORETURN) {
                         return make_syntax_err(
                             "Function parameter types may not be marked `noreturn`",
                             syntax::error::FN_PARAMETER_IS_NORETURN,
-                            parser.get_location_of(param_explicit_type));
+                            parser.get_location_of(*param_type));
                     }
                 }
 
@@ -1110,8 +1107,8 @@ auto parse_function_header(syntax::parser& parser)
             // `comptime T: type` is spelled out for consistency, but a `type` binds through
             // generic instantiation rather than by folding the argument to a value
             const bool type_param{
-                param_explicit_type.is_valid() && param_explicit_type.get_modifier().is_value() &&
-                param_explicit_type.get_token_type() == syntax::token_type_t::TYPE_TYPE};
+                param_explicit_type && param_explicit_type->get_modifier().is_value() &&
+                param_explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE};
             auto& param{parameters.emplace_back(
                 name, param_explicit_type, is_comptime && !type_param, is_pack, is_comptime)};
             param.default_value = default_value;
@@ -1183,7 +1180,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                                                             self,
                                                             std::move(parameters),
                                                             return_type,
-                                                            block_handle::make_invalid(),
+                                                            stdx::none,
                                                             variadic,
                                                             is_move,
                                                             true,
@@ -2454,8 +2451,7 @@ auto build_default_wrappers(syntax::parser&        parser,
                 params.emplace_back(param);
             } else {
                 // A `type` is always compile-time, `comptime` written or not
-                const bool compile_time{original.is_comptime ||
-                                        param.explicit_type.get_token_type() == tt::TYPE_TYPE};
+                const bool compile_time{original.is_comptime || param.spells_type()};
                 const auto binding{compile_time ? decl_modifiers::COMPTIME : decl_modifiers::LET};
                 body.emplace_back(parser.add_node<stmt_handle, decl_stmt>(
                     name_token,

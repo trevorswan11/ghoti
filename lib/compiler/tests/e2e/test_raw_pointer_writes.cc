@@ -92,4 +92,21 @@ TEST_CASE("`p[i]` steps over a pointer's struct elements") {
     )") == 23);
 }
 
+TEST_CASE("A statement led by a block-like expression ends at its closing brace") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut x: i32 = 1;
+            let p: ^mut i32 = ^mut x;
+            if (x != 1) { x = 100; }
+            *p = 7;
+            while (x > 100) { x -= 1; }
+            for (0..1) |_| { x += 1; }
+            *p += 2;
+            match (x) { 10 => { x += 1; }, _ => {} }
+            *p += 3;
+            return x;
+        };
+    )") == 14);
+}
+
 } // namespace ghoti::tests

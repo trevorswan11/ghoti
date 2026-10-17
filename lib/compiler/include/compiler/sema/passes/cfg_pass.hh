@@ -172,6 +172,8 @@ class cfg_pass {
     auto recurse_into_bodies(ast::stmt_handle stmt) -> void;
     auto recurse_into_expr(ast::expr_handle expr) -> void;
     auto recurse_into_block(ast::block_handle block) -> void;
+    // Signature types can be expressions (`fn(): if (c) A else B`) holding `@cfg` blocks
+    auto recurse_into_type(ast::explicit_type_id type) -> void;
     auto recurse_into_members(const ast::member_list& members) -> void;
 
   private:

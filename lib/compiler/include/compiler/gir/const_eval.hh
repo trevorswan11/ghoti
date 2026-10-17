@@ -16,6 +16,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/semantics.hh"
 #include "compiler/gir/symbol_scoping.hh"
@@ -24,6 +25,7 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
@@ -153,11 +155,14 @@ class const_eval {
     // Forces a `fn(...): type` deferred-call type to the type it produces
     [[nodiscard]] auto force_deferred_call(sema::type& maybe_deferred) -> sema::type&;
 
-    [[nodiscard]] static auto type_align_of(const sema::type& type, usize ptr_size) -> usize;
+    [[nodiscard]] static auto type_align_of(const sema::type&           type,
+                                            const codegen::type_layout& layout) -> usize;
     // A struct field's alignment: its type's, raised by any `@[align(n)]` on the field
-    [[nodiscard]] static auto
-    struct_field_align(const sema::types::struct_t& st, usize idx, usize ptr_size) -> usize;
-    [[nodiscard]] static auto type_size_of(const sema::type& type, usize ptr_size) -> usize;
+    [[nodiscard]] static auto struct_field_align(const sema::types::struct_t& st,
+                                                 usize                        idx,
+                                                 const codegen::type_layout&  layout) -> usize;
+    [[nodiscard]] static auto type_size_of(const sema::type&           type,
+                                           const codegen::type_layout& layout) -> usize;
     // The type an unannotated type-alias decl (`const X = T;`) names, read off its own node so a
     // generic instantiation's body overlay stays per-instantiation
     [[nodiscard]] static auto
@@ -323,20 +328,25 @@ class const_eval {
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;
-    auto eval_call(ast::node_id id, const ast::call_expr& call) -> stdx::option<const_value>;
-    auto eval_builtin(ast::node_id id, const ast::call_expr& call, syntax::builtin_t builtin_type)
+    auto eval_call(stdx::option<ast::node_id> id, const ast::call_expr& call)
         -> stdx::option<const_value>;
+    auto eval_builtin(stdx::option<ast::node_id> call_id,
+                      const ast::call_expr&      call,
+                      syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
 
     [[nodiscard]] auto target_pointer_bits() const -> u32;
-    [[nodiscard]] auto target_pointer_bytes() const -> usize;
+    [[nodiscard]] auto target_layout() const -> codegen::type_layout;
     // The value operand of a cast-style builtin: `@cast(T, x)` or `@cast(x)`
     [[nodiscard]] static auto cast_operand(const ast::call_expr& call)
         -> stdx::option<ast::expr_handle>;
+    [[nodiscard]] auto call_result_type(stdx::option<ast::node_id> call_id) const
+        -> stdx::option<sema::type&>;
     // A builtin call's resolved type, falling back to the type recorded on its callee
-    [[nodiscard]] auto builtin_result_type(ast::node_id id, const ast::call_expr& call) const
+    [[nodiscard]] auto builtin_result_type(stdx::option<ast::node_id> call_id,
+                                           const ast::call_expr&      call) const
         -> stdx::option<sema::type&>;
 
     // `@typeInfo(T)`: builds the `builtin::TypeInfo` tagged union for `denoted` (already
@@ -360,7 +370,7 @@ class const_eval {
     [[nodiscard]] auto callee_params(const ast::call_expr& call) -> gsl::span<sema::type*>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
-    auto eval_comptime_fn(ast::node_id                      call_id,
+    auto eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                           const ast::function_expr&         fn_expr,
                           std::vector<const_value>&         args,
                           stdx::option<const const_struct&> captures = stdx::none)

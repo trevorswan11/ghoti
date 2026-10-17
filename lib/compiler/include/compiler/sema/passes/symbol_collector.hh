@@ -33,9 +33,14 @@ class symbol_collector {
     static auto collect_symbols(mod::module_t& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto collect(ID id) -> void {
-        // An untyped parameter pack (`rest...`) has no type node at all; nothing to collect.
-        if (!id.is_valid()) { return; }
         collecting_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+    }
+
+    auto collect(stdx::option<ast::explicit_type_id> id) -> void {
+        if (id) { collect(*id); }
+    }
+    auto collect(stdx::option<ast::node_id> id) -> void {
+        if (id) { collect(*id); }
     }
 
   private:
@@ -50,6 +55,9 @@ class symbol_collector {
             for (const auto arg : item.args) { collect(arg); }
         }
     }
+
+    // Shared by a call in expression and in type position
+    auto collect_call(const ast::call_expr& call) -> void;
 
   private:
     auto                                visit(ast::node_id, const ast::array_expr&) -> void;

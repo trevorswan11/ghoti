@@ -61,7 +61,6 @@ auto names_of_literal(const mod::module_t& owner, const ast::function_expr& fn) 
 
 auto names_of_annotation(const mod::module_t& owner, ast::explicit_type_id type, visited_t& visited)
     -> stdx::option<names_t> {
-    if (!type.is_valid()) { return stdx::none; }
     if (const auto fn_type{owner.ast.get_as_opt<ast::explicit_function_type>(type)}) {
         names_t names;
         for (const auto name : fn_type->parameter_names) {

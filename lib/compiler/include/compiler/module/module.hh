@@ -65,9 +65,9 @@ using diagnotic_list_variant =
     stdx::variant<stdx::monostate, syntax::diagnostics, sema::diagnostics>;
 
 struct cfg_value_result {
-    bool         boolean{false};
-    bool         is_predicate{true};
-    ast::node_id chosen{ast::node_id::make_invalid()};
+    bool                       boolean{false};
+    bool                       is_predicate{true};
+    stdx::option<ast::node_id> chosen{};
 };
 
 // Which arm of an `if comptime` the resolver folded to

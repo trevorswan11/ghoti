@@ -430,7 +430,7 @@ auto lexer::read_number() noexcept -> token_t {
 }
 
 auto lexer::read_escape() noexcept -> bool {
-    const auto scan{scan_escape(input_.substr(pos_))};
+    const auto scan{scan_escape(stdx::string::substr(input_, pos_))};
     for (usize i{1}; i < scan.length; ++i) { read_character(); }
     return scan.error.empty();
 }

@@ -234,7 +234,7 @@ constexpr std::array<std::string_view, 8> CRASH_LITERALS{
     constexpr std::string_view lead{"must have "};
     for (auto at{output.find(lead)}; at != std::string_view::npos; at = output.find(lead, at + 1)) {
         const auto from{at + lead.size()};
-        if (output.substr(from, line_end(output, from) - from).find(" type (") !=
+        if (stdx::string::substr(output, from, line_end(output, from) - from).find(" type (") !=
             std::string_view::npos) {
             return at;
         }
@@ -284,10 +284,10 @@ auto raw_strings(std::string_view cc_source) -> std::vector<std::string_view> {
             ++at;
             continue;
         }
-        const auto tag{cc_source.substr(at + 2, open - (at + 2))};
+        const auto tag{stdx::string::substr(cc_source, at + 2, open - (at + 2))};
         const auto close{cc_source.find(fmt::format("){}\"", tag), open + 1)};
         if (close == std::string_view::npos) { break; }
-        bodies.emplace_back(cc_source.substr(open + 1, close - (open + 1)));
+        bodies.emplace_back(stdx::string::substr(cc_source, open + 1, close - (open + 1)));
         at = close + tag.size() + 2;
     }
     return bodies;
@@ -361,7 +361,7 @@ auto tokenize(std::string_view source) -> std::vector<std::string_view> {
     usize                         at{0};
     while (at < source.size()) {
         const auto end{token_end(source, at)};
-        tokens.emplace_back(source.substr(at, end - at));
+        tokens.emplace_back(stdx::string::substr(source, at, end - at));
         at = end;
     }
     return tokens;

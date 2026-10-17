@@ -17,6 +17,7 @@
 
 namespace llvm {
 
+class DataLayout;
 class Module;
 class TargetMachine;
 class Triple;
@@ -81,6 +82,22 @@ struct target_facts {
         -> target_facts;
 };
 
+// The scalar sizes and alignments that vary by target, read from LLVM's data layout so ghoti's
+// struct layout matches both the LLVM types it lowers to and C (i386 SysV aligns `f64` and
+// 64-bit ints to 4 inside structs, and its `f80` is 12 bytes)
+struct type_layout {
+    usize ptr_bytes;
+    usize i64_align;
+    usize f64_align;
+    usize f80_size;
+    usize f80_align;
+
+    [[nodiscard]] static auto resolve(const llvm::DataLayout& dl) -> type_layout;
+    [[nodiscard]] static auto resolve(const llvm::Triple& triple) -> type_layout;
+    [[nodiscard]] static auto resolve(stdx::option<std::string_view> triple_str = stdx::none)
+        -> type_layout;
+};
+
 // Individual normalizers (also used to build `target_facts`).
 [[nodiscard]] auto normalized_target_os(const llvm::Triple& triple) -> std::string_view;
 [[nodiscard]] auto normalized_target_arch(const llvm::Triple& triple) -> std::string_view;
@@ -95,6 +112,9 @@ struct target_facts {
 [[nodiscard]] auto to_llvm_codegen_opt_level(opt_level level) noexcept -> llvm::CodeGenOptLevel;
 [[nodiscard]] auto create_target_machine(const target_options& options)
     -> stdx::result<stdx::box<llvm::TargetMachine>, diagnostic>;
+// Gives `module` the machine's data layout and triple. On RISC-V it also records the float ABI
+// as the `target-abi` flag, which the C ABI lowering and the backend both read
+auto configure_module_for_target(llvm::Module& module, const llvm::TargetMachine& machine) -> void;
 
 // One architecture family's CPU features
 struct cpu_feature_family {

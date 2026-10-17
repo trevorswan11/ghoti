@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -179,7 +180,7 @@ struct scanned_number {
     const auto take_digits{[&](std::string_view& rest) {
         usize count{0};
         while (count < rest.size() && is_digit(rest[count])) { ++count; }
-        const auto digits{rest.substr(0, count)};
+        const auto digits{stdx::string::substr(rest, 0, count)};
         rest.remove_prefix(count);
         return digits;
     }};
@@ -196,7 +197,7 @@ struct scanned_number {
     const bool is_marker{hex ? (text.front() == 'p' || text.front() == 'P')
                              : (text.front() == 'e' || text.front() == 'E')};
     if (!is_marker) { return stdx::none; }
-    const auto exponent{parse_exponent(text.substr(1))};
+    const auto exponent{parse_exponent(stdx::string::substr(text, 1))};
     if (!exponent) { return stdx::none; }
     number.exponent = *exponent;
     return number;
@@ -325,9 +326,9 @@ struct decimal {
             out.append(static_cast<usize>(number.exponent), '0');
         } else if (scientific_exponent >= 0) {
             const auto point{static_cast<usize>(scientific_exponent + 1)};
-            out += digits.substr(0, point);
+            out += stdx::string::substr(digits, 0, point);
             out += '.';
-            out += digits.substr(point);
+            out += stdx::string::substr(digits, point);
         } else {
             out += "0.";
             out.append(static_cast<usize>(-scientific_exponent - 1), '0');
@@ -339,7 +340,7 @@ struct decimal {
     out += digits.front();
     if (count > 1) {
         out += '.';
-        out += digits.substr(1);
+        out += stdx::string::substr(digits, 1);
     }
     const auto magnitude{scientific_exponent < 0 ? -scientific_exponent : scientific_exponent};
     out += scientific_exponent < 0 ? "e-" : "e+";
@@ -407,7 +408,7 @@ class round_trip_interval {
 
 // The nearer of the two `length`-digit neighbors first, preferring an even last digit on a tie
 [[nodiscard]] auto candidates_of(const decimal& exact, usize length) -> std::array<decimal, 2> {
-    const auto dropped{exact.digits.substr(length)};
+    const auto dropped{stdx::string::substr(exact.digits, length)};
     decimal    floor{exact.digits.substr(0, length),
                      exact.exponent + static_cast<i64>(exact.digits.size() - length)};
     decimal    ceil{increment_digits(floor.digits), floor.exponent};
@@ -539,7 +540,7 @@ auto f128::parse(std::string_view text, float_format format) -> float_parse_resu
         text.remove_prefix(1);
     }
     if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-        return parse_hex(text.substr(2), negative, format);
+        return parse_hex(stdx::string::substr(text, 2), negative, format);
     }
     return parse_decimal(text, negative, format);
 }
