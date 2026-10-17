@@ -1081,13 +1081,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 return last_type_.emplace(call_type);
             }
 
-            const auto diags_before_inst{ctx_.diags.size()};
-            auto       inst_res{instantiate_for_call(
-                call, callee_type, fn_info_copy, concrete_arg_types, comptime_args)};
             // A ctor that rejects the unbound stand-in is left to each instantiation of the
             // enclosing generic, where `T` is known
-            if (in_generic_signature_ && is_abstract_instance(concrete_arg_types) &&
-                (!inst_res || ctx_.diags.size() > diags_before_inst)) {
+            const bool tentative{in_generic_signature_ && is_abstract_instance(concrete_arg_types)};
+            const auto diags_before_inst{ctx_.diags.size()};
+            auto       inst_res{[&] {
+                const mutating_context_guard g{tentative_instantiation_,
+                                               tentative || tentative_instantiation_};
+                return instantiate_for_call(
+                    call, callee_type, fn_info_copy, concrete_arg_types, comptime_args);
+            }()};
+            if (tentative && (!inst_res || ctx_.diags.size() > diags_before_inst)) {
                 DISCARD(ctx_.diags.split_off(diags_before_inst));
                 auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
                 resolving_.set_sema_type(id, placeholder);

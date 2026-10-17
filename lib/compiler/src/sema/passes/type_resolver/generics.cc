@@ -761,6 +761,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     inst_resolver.for_generic_instantiation_ = true;
     inst_resolver.typing_scope_prefix_       = mangled_name;
     inst_resolver.building_param_template_   = building_param_template_;
+    inst_resolver.tentative_instantiation_   = tentative_instantiation_;
 
     // Re-type body-local decls this instantiation reaches even if a prior monomorphization of the
     // same generic already resolved them
@@ -956,7 +957,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     if (ctx_.diags.size() > diags_before || resolved_poison) {
         // Attribute diags here to `fn_mod`so they print against the defining file
         if (ctx_.diags.size() > diags_before && &fn_mod != &resolving_ &&
-            !fn_mod.diagnostics.is<sema::diagnostics>()) {
+            !tentative_instantiation_ && !fn_mod.diagnostics.is<sema::diagnostics>()) {
             fn_mod.error_out(ctx_.diags.split_off(diags_before),
                              mod::module_state::POISONED_TYPE_RESOLVED);
         }

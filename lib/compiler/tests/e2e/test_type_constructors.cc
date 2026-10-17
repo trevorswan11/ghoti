@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -958,6 +959,46 @@ TEST_CASE("a rejecting ctor in a generic signature still reports a bad instantia
     SECTION("outside a generic signature, `type` itself is still rejected") {
         const auto res{helpers::resolve_diags(with_rejecting_ctor("const Bad = Log2Int(type);"))};
         CHECK(res.message_contains("Log2Int requires an integer argument type, got type"));
+    }
+}
+
+TEST_CASE("a rejecting ctor from another module works in a generic signature") {
+    const std::string lib{"pub " +
+                          std::string{REJECTING_CTOR.substr(REJECTING_CTOR.find("const"))}};
+    const std::vector imports{helpers::mock_file{"lib.gh", lib, "lib"}};
+
+    SECTION("qualified, as a parameter type") {
+        CHECK(helpers::compile_and_run(R"(
+            import "lib.gh" as lib;
+            const shift = fn(comptime T: type, x: T, s: lib.Log2Int(T)): T { return x << s; };
+            pub const main = fn(): i32 {
+                let mut v: u32 = 3;
+                let mut s: u5 = 2;
+                return @intCast(i32, shift(u32, v, s));
+            };
+        )",
+                                       imports) == 12);
+    }
+    SECTION("through an alias, as a return type") {
+        CHECK(helpers::compile_and_run(R"(
+            import "lib.gh" as lib;
+            const Log2Int = lib.Log2Int;
+            const lg = fn(comptime T: type, x: T): Log2Int(T) {
+                return @intCast(Log2Int(T), @bitSizeOf(T) - 1 - @clz(x));
+            };
+            pub const main = fn(): i32 { let mut v: u32 = 64; return @as(i32, lg(u32, v)); };
+        )",
+                                       imports) == 6);
+    }
+    SECTION("a bad instantiation still fails") {
+        const auto res{helpers::type_check_diags(R"(
+            import "lib.gh" as lib;
+            const Log2Int = lib.Log2Int;
+            const lg = fn(comptime T: type, x: T): Log2Int(T) { _ = x; return 0; };
+            pub const main = fn(): i32 { let mut f: f32 = 1.0; _ = lg(f32, f); return 0; };
+        )",
+                                                 imports)};
+        CHECK(res.message_contains("Failed to instantiate 'Log2Int'"));
     }
 }
 
