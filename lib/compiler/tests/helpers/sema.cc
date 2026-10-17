@@ -182,7 +182,7 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
 auto find_nested_fn(const mod::module_t&      module,
                     const ast::function_expr& outer,
                     std::string_view          name) -> ast::node_id {
-    const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};
+    const auto& block{module.ast.get_as<ast::block_stmt>(UNWRAP(outer.body))};
     for (const auto& stmt : block) {
         if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(stmt)}) {
             const auto& ident{module.ast.get_as<ast::identifier_expr>(decl->name)};

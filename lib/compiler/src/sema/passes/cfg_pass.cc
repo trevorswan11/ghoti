@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +10,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -53,7 +53,7 @@ using syntax::token_type_t;
 
 struct atom_enum_info {
     std::string_view                  type_name;
-    std::span<const std::string_view> members;
+    gsl::span<const std::string_view> members;
 };
 
 [[nodiscard]] auto atom_enum(std::string_view atom) -> stdx::option<atom_enum_info> {
@@ -156,14 +156,14 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
                     break;
                 }
                 if (*b) {
-                    record.chosen = guard.value;
+                    record.chosen = ast::node_id{guard.value};
                     result        = eval_term(guard.value);
                     matched       = true;
                     break;
                 }
             }
             if (!matched) {
-                record.chosen = *expr.fallback;
+                record.chosen = ast::node_id{*expr.fallback};
                 result        = eval_term(*expr.fallback);
             }
         }
@@ -795,6 +795,24 @@ auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
     rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
 }
 
+auto cfg_pass::recurse_into_type(ast::explicit_type_id type) -> void {
+    switch (type.get_kind()) {
+    case ast::explicit_type_kind::EXPR:
+        recurse_into_expr(module_.ast.get_as<ast::explicit_expr_type>(type).expr);
+        break;
+    case ast::explicit_type_kind::RECURSIVE:
+        recurse_into_type(module_.ast.get_as<ast::explicit_type_id>(type));
+        break;
+    case ast::explicit_type_kind::ARRAY: {
+        const auto& array{module_.ast.get_as<ast::explicit_array_type>(type)};
+        if (array.dimension) { recurse_into_expr(*array.dimension); }
+        recurse_into_type(array.inner_explicit_type);
+        break;
+    }
+    default: break;
+    }
+}
+
 auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
     PROFILE_FUNCTION();
     for (const auto member : members) {
@@ -846,7 +864,11 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             for (const auto& entry : init.initializers) { recurse_into_expr(entry.value); }
         },
         [&](const ast::function_expr& fn) {
-            if (!fn.is_type_expr) { recurse_into_block(fn.body); }
+            for (const auto& param : fn.parameters) {
+                if (param.explicit_type) { recurse_into_type(*param.explicit_type); }
+            }
+            recurse_into_type(fn.explicit_return_type);
+            if (fn.body) { recurse_into_block(*fn.body); }
         },
         [&](const ast::if_expr& branch) {
             if (branch.condition) { recurse_into_expr(*branch.condition); }

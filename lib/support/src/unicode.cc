@@ -5,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 namespace ghoti {
@@ -135,7 +136,7 @@ auto display_width(std::string_view text) noexcept -> usize {
     bool  joined{false};
     bool  pending_flag{false};
     for (usize i{0}; i < text.size();) {
-        const auto next{read_code_point(text.substr(i))};
+        const auto next{read_code_point(stdx::string::substr(text, i))};
         i += next.length;
         if (!next.valid) {
             ++width;
@@ -162,7 +163,7 @@ auto display_width(std::string_view text) noexcept -> usize {
 auto utf16_length(std::string_view text) noexcept -> usize {
     usize units{0};
     for (usize i{0}; i < text.size();) {
-        const auto next{read_code_point(text.substr(i))};
+        const auto next{read_code_point(stdx::string::substr(text, i))};
         i += next.length;
         units += next.valid && next.value >= 0x10000 ? 2 : 1;
     }
@@ -173,7 +174,7 @@ auto byte_offset_of_utf16(std::string_view text, usize units) noexcept -> usize 
     usize counted{0};
     usize i{0};
     while (i < text.size() && counted < units) {
-        const auto next{read_code_point(text.substr(i))};
+        const auto next{read_code_point(stdx::string::substr(text, i))};
         counted += next.valid && next.value >= 0x10000 ? 2 : 1;
         i += next.length;
     }

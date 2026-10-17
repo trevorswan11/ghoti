@@ -20,6 +20,7 @@
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
@@ -406,9 +407,9 @@ constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
 
 // A feature name that can't be a bare identifier is written as a raw one: `@"64bit"`
 [[nodiscard]] auto feature_identifier(std::string_view name) -> std::string {
-    const bool int_like{
-        name.size() > 1 && (name.front() == 'i' || name.front() == 'u') &&
-        std::ranges::all_of(name.substr(1), [](char c) { return c >= '0' && c <= '9'; })};
+    const bool int_like{name.size() > 1 && (name.front() == 'i' || name.front() == 'u') &&
+                        std::ranges::all_of(stdx::string::substr(name, 1),
+                                            [](char c) { return c >= '0' && c <= '9'; })};
     const bool plain{!name.empty() && !(name.front() >= '0' && name.front() <= '9') && !int_like &&
                      !syntax::get_keyword_opt(name) && std::ranges::all_of(name, [](char c) {
                          return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||

@@ -53,7 +53,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
             sorted.erase(std::ranges::unique(sorted).begin(), sorted.end());
             dst.reserve(dst.size() + sorted.size());
             for (const auto i : sorted) {
-                if (i < live.size() && live[i]) { dst.emplace_back(i, live[i]); }
+                if (i < live.size() && live[i]) { dst.insert_or_assign(i, live[i]); }
             }
         }};
         collect_from_log(write_log->node_idxs,
@@ -69,7 +69,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
             for (usize i{0}; i < live.size(); ++i) {
                 if (!live[i]) { continue; }
                 if (i >= snap.size() || !snap[i] || snap[i].get() != live[i].get()) {
-                    dst.emplace_back(i, live[i]);
+                    dst.insert_or_assign(i, live[i]);
                 }
             }
         }};
@@ -82,7 +82,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
     for (usize i{0}; i < live_calls.size(); ++i) {
         if (!live_calls[i]) { continue; }
         if (i >= calls.size() || calls[i] != live_calls[i]) {
-            out.call_targets.emplace_back(i, live_calls[i]);
+            out.call_targets.insert_or_assign(i, live_calls[i]);
         }
     }
 
@@ -91,25 +91,27 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
         for (const auto idx : write_log->attribute_idxs) {
             if (const auto resolved{m.node_attributes.find(idx)};
                 resolved != m.node_attributes.end()) {
-                out.attributes.emplace_back(idx, resolved->second);
+                out.attributes.insert_or_assign(idx, resolved->second);
             }
         }
     } else {
         for (const auto& [idx, resolved] : m.node_attributes) {
             const auto prev{attributes.find(idx)};
             if (prev == attributes.end() || prev->second != resolved) {
-                out.attributes.emplace_back(idx, resolved);
+                out.attributes.insert_or_assign(idx, resolved);
             }
         }
     }
 
     for (const auto& [idx, br] : m.if_comptime_results) {
         const auto prev{ifs.find(idx)};
-        if (prev == ifs.end() || prev->second != br) { out.if_branches.emplace_back(idx, br); }
+        if (prev == ifs.end() || prev->second != br) { out.if_branches.insert_or_assign(idx, br); }
     }
     for (const auto& [idx, arm] : m.match_arm_results) {
         const auto prev{matches.find(idx)};
-        if (prev == matches.end() || prev->second != arm) { out.match_arms.emplace_back(idx, arm); }
+        if (prev == matches.end() || prev->second != arm) {
+            out.match_arms.insert_or_assign(idx, arm);
+        }
     }
 
     // Reset back to the pre-res baseline so a sibling replay diffs against the same starting point

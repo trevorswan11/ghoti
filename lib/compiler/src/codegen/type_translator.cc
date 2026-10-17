@@ -1,6 +1,7 @@
 #include "compiler/codegen/type_translator.hh"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include <gsl/span>
@@ -14,6 +15,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/soft_f80.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/sema/type.hh"
 
@@ -203,12 +205,12 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 auto type_translator::set_struct_body(llvm::StructType*            struct_ty,
                                       const sema::types::struct_t& s,
                                       gsl::span<llvm::Type* const> element_types) -> void {
-    const auto       ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
+    const auto       layout{type_layout::resolve(module_.getDataLayout())};
     std::vector<u64> wanted;
     wanted.reserve(element_types.size());
     for (usize i{0}; i < element_types.size(); ++i) {
         wanted.emplace_back(s.is_packed ? s.explicit_field_alignment(i)
-                                        : gir::const_eval::struct_field_align(s, i, ptr_size));
+                                        : gir::const_eval::struct_field_align(s, i, layout));
     }
     set_padded_body(struct_ty, element_types, wanted, s.is_packed);
 }
@@ -284,8 +286,7 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     // See the matching comment in `translate_struct`
     auto mut_invariant_key{original.get_key()};
     mut_invariant_key.set_mut(sema::types::mut::CONSTANT);
-    const bool is_tagged{!u.is_bit_packed() && !u.is_untagged};
-    if (is_tagged) {
+    if (!u.is_bit_packed()) {
         if (const auto it{union_identity_cache_.find(mut_invariant_key)};
             it != union_identity_cache_.end()) {
             union_cache_[&original] = it->second;
@@ -304,23 +305,13 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
         return int_ty;
     }
 
-    if (u.is_untagged) {
-        u64 max_size{0};
-        for (const auto* field : u.fields) {
-            if (field->get_kind() == sema::type_kind::VOID_) { continue; }
-            auto* field_ty{translate(*field)};
-            if (field_ty && !field_ty->isVoidTy()) {
-                max_size = std::max(max_size, dl.getTypeAllocSize(field_ty).getFixedValue());
-            }
-        }
-        auto* arr_ty{llvm::ArrayType::get(get_int8_ty(), std::max(max_size, u64{1}))};
-        union_cache_[&original] = arr_ty;
-        return arr_ty;
-    }
-
     auto* union_ty{llvm::StructType::create(context_)};
     union_cache_[&original]                  = union_ty;
     union_identity_cache_[mut_invariant_key] = union_ty;
+    if (u.is_untagged) {
+        set_untagged_union_body(union_ty, u);
+        return union_ty;
+    }
     u64 max_size{0};
 
     for (const auto* field : u.fields) {
@@ -338,6 +329,47 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     return union_ty;
 }
 
+// Stores the member clang would (the most aligned, then the largest) plus tail padding, and
+// records every member so the C ABI pass can classify all of them
+auto type_translator::set_untagged_union_body(llvm::StructType*           union_ty,
+                                              const sema::types::union_t& u) -> void {
+    const auto&              dl{module_.getDataLayout()};
+    std::vector<llvm::Type*> members;
+    llvm::Type*              storage{nullptr};
+    u64                      storage_align{0};
+    u64                      storage_size{0};
+    u64                      align{1};
+    u64                      size{0};
+    for (const auto* field : u.fields) {
+        if (field->get_kind() == sema::type_kind::VOID_) { continue; }
+        auto* field_ty{translate(*field)};
+        if (!field_ty || field_ty->isVoidTy()) { continue; }
+        const auto field_size{dl.getTypeAllocSize(field_ty).getFixedValue()};
+        if (field_size == 0) { continue; }
+        const auto field_align{u.is_packed ? 1 : f80_storage_align(module_, field_ty)};
+        if (!storage || field_align > storage_align ||
+            (field_align == storage_align && field_size > storage_size)) {
+            storage       = field_ty;
+            storage_align = field_align;
+            storage_size  = field_size;
+        }
+        members.emplace_back(field_ty);
+        align = std::max(align, field_align);
+        size  = std::max(size, field_size);
+    }
+
+    if (!storage) {
+        union_ty->setBody({llvm::ArrayType::get(get_int8_ty(), 1)});
+        return;
+    }
+    std::vector<llvm::Type*> elements{storage};
+    if (const auto total{llvm::alignTo(size, align)}; total > storage_size) {
+        elements.emplace_back(llvm::ArrayType::get(get_int8_ty(), total - storage_size));
+    }
+    union_ty->setBody(elements, u.is_packed);
+    union_members_.insert_or_assign(union_ty, std::move(members));
+}
+
 auto type_translator::translate_enum(const sema::types::enum_t& e) -> llvm::Type* {
     PROFILE_FUNCTION();
     return translate(e.underlying);
@@ -353,14 +385,14 @@ auto type_translator::translate_closure(const sema::types::closure_t& c, const s
     auto* closure_ty{llvm::StructType::create(context_)};
     closure_cache_[&original] = closure_ty;
 
-    const auto               ptr_size{static_cast<usize>(module_.getDataLayout().getPointerSize())};
+    const auto               layout{type_layout::resolve(module_.getDataLayout())};
     std::vector<llvm::Type*> element_types;
     std::vector<u64>         wanted;
     element_types.reserve(c.captures.size());
     wanted.reserve(c.captures.size());
     for (const auto& capture : c.captures) {
         element_types.emplace_back(translate(*capture.storage_type));
-        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, ptr_size));
+        wanted.emplace_back(gir::const_eval::type_align_of(*capture.storage_type, layout));
     }
     set_padded_body(closure_ty, element_types, wanted, false);
     return closure_ty;

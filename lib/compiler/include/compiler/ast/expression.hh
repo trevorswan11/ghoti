@@ -180,12 +180,12 @@ struct self_parameter {
 
 template <> struct stdx::nullable<ghoti::ast::self_parameter> {
     [[nodiscard]] static constexpr auto invalid() noexcept -> ghoti::ast::self_parameter {
-        return {.modifier = {}, .name = ghoti::ast::identifier_handle::make_invalid()};
+        return {.modifier = {}, .name = stdx::nullable<ghoti::ast::identifier_handle>::invalid()};
     }
 
     [[nodiscard]] static constexpr auto is_valid(const ghoti::ast::self_parameter& self) noexcept
         -> bool {
-        return self.name.is_valid();
+        return stdx::nullable<ghoti::ast::identifier_handle>::is_valid(self.name);
     }
 };
 
@@ -200,15 +200,26 @@ namespace ghoti::ast {
 
 struct function_expr {
     struct parameter {
-        discardable_ident_handle name;
-        explicit_type_id         explicit_type;
-        bool                     is_comptime{false};
-        bool                     is_pack{false};             // `rest...` / `rest: impl I...`
-        bool                     is_comptime_written{false}; // `is_comptime` may also be inferred
+        discardable_ident_handle       name;
+        stdx::option<explicit_type_id> explicit_type;
+        bool                           is_comptime{false};
+        bool                           is_pack{false}; // `rest...` / `rest: impl I...`
+        // `is_comptime` may also be inferred
+        bool is_comptime_written{false};
         // Where the body reads an inferred `comptime` param at compile time
-        ast::node_id              comptime_read{ast::node_id::make_invalid()};
-        bool                      comptime_read_in_const{false};
-        stdx::option<expr_handle> default_value{};
+        stdx::option<ast::node_id> comptime_read{};
+        bool                       comptime_read_in_const{false};
+        stdx::option<expr_handle>  default_value{};
+
+        // Whether the parameter is annotated `type`, as in `comptime T: type`
+        [[nodiscard]] constexpr auto spells_type() const noexcept -> bool {
+            return explicit_type &&
+                   explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE;
+        }
+
+        [[nodiscard]] constexpr auto takes_mut_ref() const noexcept -> bool {
+            return explicit_type && explicit_type->get_modifier().is_mutable_ref();
+        }
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -221,7 +232,7 @@ struct function_expr {
     stdx::option<self_parameter> self;
     std::vector<parameter>       parameters;
     explicit_type_id             explicit_return_type;
-    block_handle                 body;
+    stdx::option<block_handle>   body;
     bool                         variadic;
     bool                         is_move{false};
     bool                         is_type_expr{false};

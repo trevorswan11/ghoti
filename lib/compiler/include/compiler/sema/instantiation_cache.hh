@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +21,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/side_tables.hh"
+#include "support/sorted_vector_map.hh"
 
 namespace ghoti::mod { enum class if_branch : u8; } // namespace ghoti::mod
 
@@ -46,12 +46,14 @@ using type_ctor_binding_map =
 // Per-monomorphization body typing, replayed at emit time: `[n]T` with a `comptime n`, and the
 // `@This()` shape of a `fn(T): type` constructor's member functions.
 struct body_type_diff {
-    std::vector<std::pair<usize, stdx::option<type&>>>       node_types;
-    std::vector<std::pair<usize, stdx::option<type&>>>       explicit_types;
-    std::vector<std::pair<usize, mod::if_branch>>            if_branches;
-    std::vector<std::pair<usize, usize>>                     match_arms;
-    std::vector<std::pair<usize, stdx::option<std::string>>> call_targets;
-    std::vector<std::pair<usize, resolved_attributes>>       attributes;
+    template <typename T> using table = sorted_vector_map<usize, T>;
+
+    table<stdx::option<type&>>       node_types;
+    table<stdx::option<type&>>       explicit_types;
+    table<mod::if_branch>            if_branches;
+    table<usize>                     match_arms;
+    table<stdx::option<std::string>> call_targets;
+    table<resolved_attributes>       attributes;
 
     [[nodiscard]] auto empty() const noexcept -> bool {
         return node_types.empty() && explicit_types.empty() && if_branches.empty() &&
@@ -60,53 +62,39 @@ struct body_type_diff {
 
     [[nodiscard]] auto find_attributes(usize idx) const noexcept
         -> stdx::option<const resolved_attributes&> {
-        for (const auto& [node_idx, resolved] : attributes | std::views::reverse) {
-            if (node_idx == idx) { return resolved; }
-        }
-        return stdx::none;
+        return attributes.find(idx);
     }
 
     // An outer `none` means the idx doesn't exist, inner means node has no sema type
     [[nodiscard]] auto find_node_type(usize idx) const noexcept
         -> stdx::option<stdx::option<type&>> {
-        for (auto [node_idx, ty] : node_types | std::views::reverse) {
-            if (node_idx == idx) { return ty; }
-        }
+        if (const auto ty{node_types.find(idx)}) { return *ty; }
         return stdx::none;
     }
 
     // An outer `none` means the idx doesn't exist, inner means the node has no resolved target
     [[nodiscard]] auto find_call_target(usize idx) const noexcept
         -> stdx::option<stdx::option<std::string_view>> {
-        for (const auto& [node_idx, target] : call_targets | std::views::reverse) {
-            if (node_idx == idx) {
-                if (target) { return stdx::option<std::string_view>{*target}; }
-                return stdx::option<std::string_view>{stdx::none};
-            }
-        }
-        return stdx::none;
+        const auto target{call_targets.find(idx)};
+        if (!target) { return stdx::none; }
+        if (*target) { return stdx::option<std::string_view>{**target}; }
+        return stdx::option<std::string_view>{stdx::none};
     }
 
     // An outer `none` means the idx doesn't exist, inner means type has no sema type
     [[nodiscard]] auto find_explicit_type(usize idx) const noexcept
         -> stdx::option<stdx::option<type&>> {
-        for (auto [type_idx, ty] : explicit_types | std::views::reverse) {
-            if (type_idx == idx) { return ty; }
-        }
+        if (const auto ty{explicit_types.find(idx)}) { return *ty; }
         return stdx::none;
     }
 
     [[nodiscard]] auto find_if_branch(usize idx) const noexcept -> stdx::option<mod::if_branch> {
-        for (auto [if_idx, branch] : if_branches | std::views::reverse) {
-            if (if_idx == idx) { return branch; }
-        }
+        if (const auto branch{if_branches.find(idx)}) { return *branch; }
         return stdx::none;
     }
 
     [[nodiscard]] auto find_match_arm(usize idx) const noexcept -> stdx::opt_size {
-        for (auto [match_idx, arm_idx] : match_arms | std::views::reverse) {
-            if (match_idx == idx) { return arm_idx; }
-        }
+        if (const auto arm{match_arms.find(idx)}) { return *arm; }
         return stdx::none;
     }
 };

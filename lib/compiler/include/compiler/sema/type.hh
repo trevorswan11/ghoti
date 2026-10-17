@@ -300,6 +300,14 @@ struct enum_t {
         if (idx < enumeration_count) { return object_type; }
         return *members[idx - enumeration_count];
     }
+    // `none` for a member whose type is still being resolved
+    [[nodiscard]] auto type_at_opt(usize idx, type& object_type) const noexcept
+        -> stdx::option<type&> {
+        if (idx < ast_enumerations.size()) { return object_type; }
+        const auto member{idx - ast_enumerations.size()};
+        if (member >= members.size() || !members[member]) { return stdx::none; }
+        return *members[member];
+    }
 };
 
 struct union_t {

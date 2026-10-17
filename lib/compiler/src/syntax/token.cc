@@ -27,8 +27,8 @@ auto decode_escapes(std::string_view inner) -> std::string {
             continue;
         }
         // The lexer rejects malformed escapes, so the fallback only guards direct construction
-        const auto scan{scan_escape(inner.substr(i))};
-        decoded += scan.error.empty() ? scan.bytes : inner.substr(i, scan.length);
+        const auto scan{scan_escape(stdx::string::substr(inner, i))};
+        decoded += scan.error.empty() ? scan.bytes : stdx::string::substr(inner, i, scan.length);
         i += scan.length;
     }
     return decoded;
@@ -135,7 +135,9 @@ auto decode_code_point(std::string_view text) noexcept -> stdx::option<decoded_c
     } else if (lead >= 0xC0) {
         length = 2;
     }
-    if (length > text.size() || !is_valid_utf8(text.substr(0, length))) { return stdx::none; }
+    if (length > text.size() || !is_valid_utf8(stdx::string::substr(text, 0, length))) {
+        return stdx::none;
+    }
     u32 value{length == 1 ? lead : lead & (0xFFU >> (length + 1))};
     for (usize k{1}; k < length; ++k) {
         value = (value << 6U) | (static_cast<u8>(text[k]) & 0x3FU);

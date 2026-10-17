@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/attributes.hh"
@@ -147,7 +148,8 @@ auto attribute_context_at(std::string_view source, source_location target)
         if (c == ';' || c == '{' || c == '}') { return stdx::none; }
         if (c == '(') {
             if (depth++ == 0) {
-                const auto name{source.substr(last_name_start, last_name_end - last_name_start)};
+                const auto name{
+                    stdx::string::substr(source, last_name_start, last_name_end - last_name_start)};
                 const auto spec{ast::attribute_spec_of(name)};
                 in_args_of = spec ? stdx::option<ast::attribute_kind>{spec->kind} : stdx::none;
             }
@@ -164,7 +166,7 @@ auto attribute_context_at(std::string_view source, source_location target)
 
     return attribute_context{
         .in_args_of = depth > 0 ? in_args_of : stdx::none,
-        .word       = source.substr(word_start, word_end - word_start),
+        .word       = stdx::string::substr(source, word_start, word_end - word_start),
         .after_dot  = word_start > 0 && source[word_start - 1] == '.',
     };
 }

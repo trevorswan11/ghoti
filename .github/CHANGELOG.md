@@ -796,6 +796,22 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Calls that leave defaults off fold at compile time like any other call
     - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound
     - An implementation inherits its interface's defaults and can't write any of its own
+- **Breaking:** a `@Struct` field is private unless its `StructFieldInfo` sets `.is_pub = true`, like a hand-written field; they used to be always public (#383)
+    - `@typeInfo` reports each field's `is_pub`, so `@Struct(@typeInfo(T).@"struct")` keeps `T`'s private fields private
+- Fixed: a statement starting with `if`, `match`, `for`, `while`, `loop`, or `do` now ends at its closing brace; `if (c) { ... }` followed by `*p = 1;` used to parse as `(if ...) * p = 1`
+- Fixed: structs, unions, and arrays passed or returned by value now cross the C ABI the way C does on x86-64 (SysV and Win64), AArch64 (Linux and Darwin), i386 (cdecl and stdcall), 32-bit ARM (AAPCS and AAPCS-VFP, except Apple and Windows), and RISC-V (every LP64 and ILP32 float ABI); most of them used to reach C with the wrong values or crash (#379)
+    - Narrow integers and `bool` (and every 32-bit integer on RV64) are sign or zero extended wherever the target's C ABI expects the caller to
+    - Every function follows these rules, so any function can become a C callback through `extern fn`
+    - Unions classify as C does: an `extern union` of floats travels in SSE registers on x86-64 and as an HFA on AArch64, and `f80`, `f128`, `i128`, and 16-byte vector fields take their two-register C classes
+    - Fields placed by `@[align(n)]` classify by their real offsets and alignment, with the padding before them ignored as C ignores it
+    - Other targets reject an aggregate passed by value where a call can cross into C (an `extern` or `export` declaration, `@export`, or an `extern fn(...)` type) instead of passing it wrongly; ghoti-only calls, including ones taking slices, still compile
+- Fixed: struct layout now takes `f64`, 64-bit integer, and `f80` sizes and alignments from the target, so on i386 Linux, macOS, and the BSDs `f64` and `i64` fields sit at 4-byte offsets and `f80` is 12 bytes (16 on macOS) as in C; `extern struct { f: f32, d: f64 }` used to be 16 bytes there instead of C's 12
+- Fixed: an `extern union` whose largest member isn't its most aligned one (`extern union { a: [3]f32, d: f64 }`) was missing its tail padding (12 bytes instead of 16) and was only 1-byte aligned in memory, and a constant `extern union` holding a float (`.{ .d = 3.0 }`) was all zeroes
+- Fixed: a module-scope `const` or `let` whose initializer has the wrong type (`let x: i32 = "s";`) is now a type error instead of a codegen crash
+- Fixed: a generic method of a type-constructor instance that takes `self` by value no longer crashes codegen
+- Fixed: `&f` of a function now coerces to an erased `fn(...)` parameter, as `^f` does
+- Fixed: a compile-time call that returns a reference parameter by value reads through it, instead of crashing a global's initializer
+- Fixed: compiler crashes on a `match` over an `f16`, `f80`, `f128`, or enum literal value, a `@cfg` block in a function signature, and an enum member reached from its own body before it resolves
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

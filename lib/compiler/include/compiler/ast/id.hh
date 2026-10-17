@@ -69,14 +69,6 @@ class node_id {
         return static_cast<usize>(raw_ & INDEX_MASK);
     }
 
-    [[nodiscard]] static constexpr auto make_invalid() noexcept -> node_id {
-        return node_id{detail::INVALID_ID};
-    }
-
-    [[nodiscard]] constexpr auto is_valid() const noexcept -> bool {
-        return raw_ != detail::INVALID_ID;
-    }
-
     template <NodeData N> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return get_kind() == node_kind_of<N>::value();
     }
@@ -89,6 +81,15 @@ class node_id {
     [[nodiscard]] auto display_name() const noexcept -> std::string_view;
 
   private:
+    // Only `stdx::option` may hold an invalid id, so absence is always spelled `none`
+    [[nodiscard]] static constexpr auto make_invalid() noexcept -> node_id {
+        return node_id{detail::INVALID_ID};
+    }
+
+    [[nodiscard]] constexpr auto is_valid() const noexcept -> bool {
+        return raw_ != detail::INVALID_ID;
+    }
+
     constexpr explicit node_id(u64 raw) noexcept : raw_{raw} {}
 
   private:
@@ -104,6 +105,7 @@ class node_id {
     u64 raw_;
 
     template <node_kind... AllowedKinds> friend class handle;
+    friend struct stdx::nullable<node_id>;
 };
 
 #define MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY(name, modifier)            \
@@ -223,14 +225,6 @@ class explicit_type_id {
         return static_cast<usize>(raw_ & INDEX_MASK);
     }
 
-    [[nodiscard]] static constexpr auto make_invalid() noexcept -> explicit_type_id {
-        return explicit_type_id{detail::INVALID_ID};
-    }
-
-    [[nodiscard]] constexpr auto is_valid() const noexcept -> bool {
-        return raw_ != detail::INVALID_ID;
-    }
-
     template <ExplicitTypeData N> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return get_kind() == explicit_type_kind_of<N>::value();
     }
@@ -241,6 +235,14 @@ class explicit_type_id {
     }
 
   private:
+    [[nodiscard]] static constexpr auto make_invalid() noexcept -> explicit_type_id {
+        return explicit_type_id{detail::INVALID_ID};
+    }
+
+    [[nodiscard]] constexpr auto is_valid() const noexcept -> bool {
+        return raw_ != detail::INVALID_ID;
+    }
+
     constexpr explicit explicit_type_id(const u64& raw) noexcept : raw_{raw} {}
 
   private:
@@ -256,6 +258,8 @@ class explicit_type_id {
 
   private:
     u64 raw_;
+
+    friend struct stdx::nullable<explicit_type_id>;
 };
 
 #undef MAKE_MUTUALLY_EXCLUSIVE_TYPE_QUERY
@@ -281,3 +285,8 @@ template <> struct stdx::nullable<ghoti::ast::explicit_type_id> {
         return id.is_valid();
     }
 };
+
+// Technically redundant but will catch stdx breaking its optional type dispatch promise
+static_assert(sizeof(stdx::option<ghoti::ast::node_id>) == sizeof(ghoti::ast::node_id));
+static_assert(sizeof(stdx::option<ghoti::ast::explicit_type_id>) ==
+              sizeof(ghoti::ast::explicit_type_id));

@@ -26,6 +26,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -36,10 +37,14 @@
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
+
+namespace ghoti::gir { class const_eval; } // namespace ghoti::gir
 
 namespace ghoti::sema {
 
@@ -81,10 +86,20 @@ class type_resolver {
     // Resolves every queued `test` block, once no module is mid-resolution
     static auto resolve_pending_tests(context& ctx) -> void;
 
+    // A handle dispatches as its raw id, so each visitor only exists for the two id kinds
     template <ast::IndexableID ID> auto resolve(ID id) -> void {
-        // An untyped parameter pack (`rest...`) has no type node at all; nothing to resolve.
-        if (!id.is_valid()) { return last_type_.emplace(ctx_.get_poison()); }
-        resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+        if constexpr (ast::IndexableNodeID<ID>) {
+            const ast::node_id raw{id};
+            resolving_.ast[raw].visit([&](const auto& data) -> void { visit(raw, data); });
+        } else {
+            resolving_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+        }
+    }
+
+    // An absent node, like an untyped pack's type, resolves to poison
+    auto resolve(stdx::option<ast::explicit_type_id> id) -> void {
+        if (!id) { return last_type_.emplace(ctx_.get_poison()); }
+        resolve(*id);
     }
 
     // Resolves `I` / `T` for every non-parameterized `impl` root and records a skeleton in the
@@ -324,6 +339,10 @@ class type_resolver {
         ~binding_restore_guard() {
             for (auto fn : restores | std::views::reverse) { fn(); }
         }
+        // Types `node` as `t` until the guard ends
+        auto retype(mod::module_t& owner, ast::node_id node, type& t) -> void;
+        // Marks `name` in table `table_idx` a resolved value until the guard ends
+        auto bind_value_symbol(context& ctx, usize table_idx, std::string_view name) -> void;
         MAKE_PINNED(binding_restore_guard);
     };
 
@@ -347,6 +366,21 @@ class type_resolver {
         usize                                arm_idx{0};
     };
 
+    // One builtin call being resolved, shared by the per-family resolvers below
+    struct builtin_site {
+        const ast::call_expr&          call;
+        const types::builtin_function& builtin;
+        syntax::builtin_t              kind;
+        gsl::not_null<type*>           return_type;
+    };
+
+    // A cast builtin's target and operand, from `@cast(T, x)` or the implicit type of `@cast(x)`
+    struct cast_args {
+        stdx::option<type&>                           target;
+        stdx::option<const ast::call_expr::argument&> operand;
+        source_location                               target_loc;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -357,9 +391,63 @@ class type_resolver {
     resolve_builtin_call(ID id, const ast::call_expr& call, const types::builtin_function& builtin)
         -> stdx::result<void, diagnostic>;
 
+    [[nodiscard]] auto check_builtin_arity(const ast::call_expr&          call,
+                                           const types::builtin_function& builtin,
+                                           syntax::builtin_t              builtin_id) const
+        -> stdx::result<void, diagnostic>;
+    [[nodiscard]] auto cast_args_of(const ast::call_expr& call, std::string_view name)
+        -> stdx::result<cast_args, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_cast_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_reflection_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_type_construction_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_target_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_math_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_memory_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_atomic_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_c_variadic_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto resolve_program_builtin(ID id, builtin_site& site)
+        -> stdx::result<void, diagnostic>;
+
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
+    auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
+    [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
+    [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;
+    [[nodiscard]] auto instantiate_for_call(const ast::call_expr&             call,
+                                            type&                             callee_type,
+                                            const generic_function_info&      fn_info,
+                                            gsl::span<type*>                  arg_types,
+                                            gsl::span<const gir::const_value> comptime_args)
+        -> stdx::option<generic_instantiation_entry>;
+    template <typename ArgID>
+    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type) -> stdx::option<type&>;
+    [[nodiscard]] auto check_param_bounds(const ast::call_expr&        call,
+                                          const generic_function_info& fn_info,
+                                          gsl::span<type* const>       arg_types,
+                                          gsl::span<type* const>       auto_leaves) -> bool;
+    [[nodiscard]] auto fold_comptime_arg(const ast::call_expr&        call,
+                                         const generic_function_info& fn_info,
+                                         usize                        idx,
+                                         const type*                  arg_type,
+                                         const type* param_type) -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 
@@ -523,7 +611,7 @@ class type_resolver {
     // Retypes a bare range-counter read to `target` when every value it takes fits there
     auto adopt_counter_type(ast::node_id expr, type& target) -> bool;
     // Resolves a parameter's declared type, where `auto` may sit inside a slice or array
-    auto resolve_param_type(ast::explicit_type_id param_type) -> void;
+    auto resolve_param_type(stdx::option<ast::explicit_type_id> param_type) -> void;
     // Whether `stmt` is an `if comptime` whose folded arm always leaves the enclosing block
     [[nodiscard]] auto folded_if_exits(ast::node_id stmt) const -> bool;
     // Whether `t` is `auto` under pointer, reference, slice, and array levels (`&[]mut auto`)
@@ -534,9 +622,11 @@ class type_resolver {
     // Why `arg` can't be called as the `impl Fn(...)` signature `pattern`, if it can't
     auto callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string>;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
-    auto               resolve_slice_copy(ast::node_id                id,
-                                          const ast::assignment_expr& assign,
-                                          ast::expr_handle            dest) -> void;
+    auto resolve_slice_copy(ast::node_id                id,
+                            const ast::assignment_expr& assign,
+                            ast::expr_handle            dest) -> void;
+    // The function literal `expr` names, directly or through a `let`/`comptime` local
+    [[nodiscard]] auto closure_literal_of(ast::expr_handle expr) -> stdx::option<ast::node_id>;
     [[nodiscard]] auto comptime_closure_value(ast::expr_handle expr)
         -> stdx::option<gir::const_value>;
 
@@ -625,6 +715,15 @@ class type_resolver {
 
     [[nodiscard]] auto validate_union_arms(ast::node_id, const ast::match_expr&, type&)
         -> stdx::option<diagnostic>;
+    [[nodiscard]] auto validate_scalar_arms(const ast::match_expr& match, type& matcher_type)
+        -> stdx::option<diagnostic>;
+    [[nodiscard]] auto expr_denotes_type(ast::node_id n) -> bool;
+    [[nodiscard]] auto is_type_match(const ast::match_expr& match, type& matcher_type) -> bool;
+    [[nodiscard]] auto arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
+        -> stdx::option<type&>;
+    [[nodiscard]] auto scalar_pattern_mismatch(ast::node_id     value,
+                                               type&            matcher_type,
+                                               gir::const_eval& probe) -> stdx::option<std::string>;
 
     // Resolves a `match` whose scrutinee is a compile-time `type` value
     auto resolve_type_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
@@ -714,6 +813,10 @@ class type_resolver {
     // Reports an interface or bare `dyn I` used as a by-value slot type; returns whether it did
     // `reject_unsized_slot`, plus the compile-time-only `@TypeOf(undefined)`
     auto reject_non_runtime_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    auto reject_non_runtime_slot(stdx::option<ast::explicit_type_id> at, const type& slot_type)
+        -> bool {
+        return at && reject_non_runtime_slot(*at, slot_type);
+    }
     // `@TypeOf(undefined)` itself, or an array of it at any depth
     [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;
     auto reject_unsized_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
@@ -779,9 +882,18 @@ class type_resolver {
         -> stdx::option<symbol&>;
 
     // Reports an argument a `y: @TypeOf(x)` parameter of the `mangled_name` monomorph can't take
-    auto reject_type_of_args(const ast::call_expr&     call,
-                             const ast::function_expr& fn_expr,
-                             std::string_view          mangled_name) -> bool;
+    auto               reject_type_of_args(const ast::call_expr&     call,
+                                           const ast::function_expr& fn_expr,
+                                           std::string_view          mangled_name) -> bool;
+    auto               bind_impl_params(mod::module_t&         fn_mod,
+                                        const impl_record&     impl,
+                                        comptime_frame&        frame,
+                                        binding_restore_guard& restores) -> void;
+    auto               bind_ctor_member_params(const generic_function_info& fn_info,
+                                               comptime_frame&              frame,
+                                               binding_restore_guard&       restores) -> void;
+    [[nodiscard]] auto instance_self_type(const generic_function_info& fn_info)
+        -> stdx::option<type&>;
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
                              gsl::span<type*>                  concrete_args,
@@ -820,10 +932,16 @@ class type_resolver {
         -> stdx::option<std::string>;
     auto               float_literal_out_of_range(ast::node_id id, std::string message) -> type&;
     [[nodiscard]] auto target_ptr_bits() const -> u32;
+    [[nodiscard]] auto target_layout() const -> codegen::type_layout;
     [[nodiscard]] auto target_has_128bit_atomics() const -> bool;
     // `.c` is always portable; the other `callconv(...)` choices are only meaningful for the ISA
     // they were named after (e.g. `.win64`/`.sysv` need x86_64, `.aapcs` needs 32-bit arm).
     [[nodiscard]] auto target_supports_callconv(ast::calling_convention conv) const -> bool;
+    // Why a C boundary (`extern`, `export`, `@export`, or an `extern fn(...)` type) with signature
+    // `fn_type` can't be built
+    [[nodiscard]] auto unmodeled_c_abi_error(const type&            fn_type,
+                                             const source_location& location) const
+        -> stdx::option<diagnostic>;
 
   private:
     mod::module_t&            resolving_;

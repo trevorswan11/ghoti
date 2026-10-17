@@ -8,6 +8,7 @@
 
 #include <fmt/format.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -218,16 +219,16 @@ auto formatter::consume_remaining_comments() -> syntax::doc_id {
 }
 
 auto formatter::format() -> void {
-    auto previous{node_id::make_invalid()};
+    stdx::option<node_id> previous;
     for (const auto id : ast_) {
         const auto& start_loc{ast_.location_of(id)};
         const auto& end_loc{ast_.end_location_of(id)};
 
-        auto leading{consume_leading_comments(start_loc.line, previous.is_valid())};
+        auto leading{consume_leading_comments(start_loc.line, previous.has_value())};
         if (leading != doc_manager_.nil()) { doc_manager_.add_root(leading); }
 
-        if (previous.is_valid() &&
-            (blank_line_between(previous, id) || is_function_or_aggregate_node(previous))) {
+        if (previous &&
+            (blank_line_between(*previous, id) || is_function_or_aggregate_node(*previous))) {
             if (leading == doc_manager_.nil()) { doc_manager_.add_root(doc_manager_.hard_line()); }
         }
 
@@ -942,7 +943,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
         const auto& param{node.parameters[idx]};
         auto        bound{impl_bound_for(idx)};
         // An untyped pack (`rest...`) has no type to render at all.
-        if (param.is_pack && !param.explicit_type.is_valid()) {
+        if (param.is_pack && !param.explicit_type) {
             params.emplace_back(
                 doc_manager_.concat({format(param.name), doc_manager_.text("...")}));
             continue;
@@ -951,7 +952,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
              format(param.name),
              doc_manager_.text(": "),
-             format_param_type(param.explicit_type, bound),
+             format_param_type(*param.explicit_type, bound),
              doc_manager_.text(param.is_pack ? "..." : ""),
              param.default_value
                  ? doc_manager_.concat({doc_manager_.text(" = "), format(*param.default_value)})
@@ -983,7 +984,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
         doc_manager_.text(": "),
         format(node.explicit_return_type),
         doc_manager_.text(" "),
-        format(node.body),
+        format(*node.body),
     });
 }
 
@@ -1415,16 +1416,14 @@ auto formatter::visit(node_id, const cfg_stmt& node) -> syntax::doc_id {
             parts.emplace_back(doc_manager_.text(") "));
         }
 
-        // Lay the body out like a block: pull each item's own comments from the trivia queue and
-        // keep a single author blank line between items (was: items concatenated raw, so interior
-        // comments leaked out to be misattached later and manual spacing was lost).
+        // Laid out like a block, keeping each item's comments and one author blank line between
         std::vector<syntax::doc_id> body;
-        auto                        previous{node_id::make_invalid()};
+        stdx::option<node_id>       previous;
         for (const auto& item : it->items) {
             auto leading{consume_leading_comments(ast_.location_of(*item).line, !body.empty())};
             if (!body.empty()) {
                 body.emplace_back(doc_manager_.hard_line());
-                if (leading == doc_manager_.nil() && blank_line_between(previous, *item)) {
+                if (leading == doc_manager_.nil() && blank_line_between(*previous, *item)) {
                     body.emplace_back(doc_manager_.hard_line());
                 }
             }
@@ -1457,7 +1456,7 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
     auto header_trailing{consume_trailing_comment(block_start.line)};
 
     std::vector<syntax::doc_id> body;
-    auto                        previous{node_id::make_invalid()};
+    stdx::option<node_id>       previous;
 
     for (const auto& stmt : node.statements) {
         const auto& stmt_start{ast_.location_of(*stmt)};
@@ -1467,7 +1466,7 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
 
         if (!body.empty()) {
             body.emplace_back(doc_manager_.hard_line());
-            if (leading == doc_manager_.nil() && blank_line_between(previous, *stmt)) {
+            if (leading == doc_manager_.nil() && blank_line_between(*previous, *stmt)) {
                 body.emplace_back(doc_manager_.hard_line());
             }
         }
@@ -1634,7 +1633,7 @@ auto formatter::visit(node_id, const impl_stmt& node) -> syntax::doc_id {
                 {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
                  format(param.name),
                  doc_manager_.text(": "),
-                 format(param.explicit_type)}));
+                 format(*param.explicit_type)}));
         }
         head.emplace_back(doc_manager_.delimited(
             "(", ")", std::move(params), false, false, node.impl_params_force_break));

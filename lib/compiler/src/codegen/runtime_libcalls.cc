@@ -14,6 +14,7 @@
 #include <llvm/IR/RuntimeLibcalls.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/hash.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/codegen/soft_f80.hh"
@@ -52,7 +53,7 @@ using triple_map = std::map<std::string, name_set, std::less<>>;
 [[nodiscard]] auto is_c23_math_name(std::string_view symbol) -> bool {
     for (const std::string_view suffix : {"f128", "f64x"}) {
         if (!symbol.ends_with(suffix)) { continue; }
-        const auto base{symbol.substr(0, symbol.size() - suffix.size())};
+        const auto base{stdx::string::substr(symbol, 0, symbol.size() - suffix.size())};
         if (base == "fmod") { return true; }
         for (u8 f{0}; f <= static_cast<u8>(math_function::CEIL); ++f) {
             if (base == math_function_name(static_cast<math_function>(f))) { return true; }

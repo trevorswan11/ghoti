@@ -22,6 +22,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
@@ -124,7 +125,7 @@ struct root_error {
 [[nodiscard]] auto main_line(std::string_view source) -> usize {
     const auto at{source.find("pub const main")};
     REQUIRE(at != std::string_view::npos);
-    return static_cast<usize>(std::ranges::count(source.substr(0, at), '\n'));
+    return static_cast<usize>(std::ranges::count(stdx::string::substr(source, 0, at), '\n'));
 }
 
 // A `Result` like `std.Result`, which a test program can't import
@@ -309,7 +310,10 @@ TEST_CASE("An executable enters through std/start.gh, which calls main") {
     // The program's `main` is renamed so the entry code's C `main(argc, argv)` can take the name
     auto& ghoti_main_fn{UNWRAP(llvm_mod->getFunction("_ghoti_main"))};
     CHECK(ghoti_main_fn.getReturnType()->isVoidTy());
-    CHECK(ghoti_main_fn.arg_size() == 1);
+    // SysV passes the `args` slice as its pointer and length
+    REQUIRE(ghoti_main_fn.arg_size() == 2);
+    CHECK(ghoti_main_fn.getArg(0)->getType()->isPointerTy());
+    CHECK(ghoti_main_fn.getArg(1)->getType()->isIntegerTy(64));
 
     auto& c_main_fn{UNWRAP(llvm_mod->getFunction("main"))};
     CHECK(c_main_fn.getReturnType()->isIntegerTy(32));

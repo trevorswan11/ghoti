@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include <nlohmann/json.hpp>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "support/diagnostic.hh"
@@ -32,8 +33,8 @@ position_encoding negotiated_encoding{position_encoding::UTF16};
 [[nodiscard]] auto line_text(std::string_view text, usize line) -> std::string_view {
     const auto start{offset_of(text, {line, 0})};
     const auto end{text.find('\n', start)};
-    auto       result{
-        text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start)};
+    auto       result{stdx::string::substr(
+        text, start, end == std::string_view::npos ? std::string_view::npos : end - start)};
     if (result.ends_with('\r')) { result.remove_suffix(1); }
     return result;
 }
@@ -54,7 +55,7 @@ auto client_position(std::string_view text, source_location loc) -> nlohmann::js
     auto character{loc.column};
     if (negotiated_encoding == position_encoding::UTF16) {
         const auto line{line_text(text, loc.line)};
-        character = utf16_length(line.substr(0, std::min(loc.column, line.size()))) +
+        character = utf16_length(stdx::string::substr(line, 0, std::min(loc.column, line.size()))) +
                     (loc.column > line.size() ? loc.column - line.size() : 0);
     }
     return {{"line", loc.line}, {"character", character}};
