@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <functional>
-#include <map>
 #include <mutex>
 #include <ranges>
 #include <sstream>
@@ -14,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
@@ -50,10 +49,10 @@ struct archive_entry {
 };
 
 struct archive_memo {
-    std::mutex                                        mutex;
-    stdx::nullable_box<tempdir>                       dir;
-    std::map<std::string, archive_entry, std::less<>> entries;
-    usize                                             builds{0};
+    std::mutex                                               mutex;
+    stdx::nullable_box<tempdir>                              dir;
+    ankerl::unordered_dense::map<std::string, archive_entry> entries;
+    usize                                                    builds{0};
 };
 
 [[nodiscard]] auto memo() -> archive_memo& {

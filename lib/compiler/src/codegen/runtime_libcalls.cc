@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <functional>
-#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -14,6 +12,7 @@
 #include <llvm/IR/RuntimeLibcalls.h>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/hash.hh>
+#include <stdx/memory.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
 
@@ -28,25 +27,28 @@ namespace {
 using name_set = ankerl::unordered_dense::
     set<std::string, stdx::string_transparent_hash, stdx::string_transparent_eq>;
 // Node-based so the references handed out stay valid as other triples are added
-using triple_map = std::map<std::string, name_set, std::less<>>;
+using triple_map = ankerl::unordered_dense::map<std::string,
+                                                stdx::box<name_set>,
+                                                stdx::string_transparent_hash,
+                                                stdx::string_transparent_eq>;
 
 [[nodiscard]] auto libcall_names(const llvm::Triple& triple) -> const name_set& {
     static std::mutex mutex;
     static triple_map by_triple;
 
     const std::scoped_lock lock{mutex};
-    if (const auto it{by_triple.find(triple.str())}; it != by_triple.end()) { return it->second; }
+    if (const auto it{by_triple.find(triple.str())}; it != by_triple.end()) { return *it->second; }
 
     const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
-    name_set                               names;
+    auto                                   names{stdx::make_box<name_set>()};
     for (const auto impl : llvm::RTLIB::libcall_impls()) {
         if (!info.isAvailable(impl)) { continue; }
         if (const auto name{llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl)};
             !name.empty()) {
-            names.emplace(name.str());
+            names->emplace(name.str());
         }
     }
-    return by_triple.emplace(triple.str(), std::move(names)).first->second;
+    return *by_triple.emplace(triple.str(), std::move(names)).first->second;
 }
 
 // `sinf128`, `fmodf64x`: the C23 names ghoti calls directly, which LLVM's tables may not list
@@ -72,11 +74,11 @@ auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> 
 auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) -> bool {
     // ghoti links no libc on most targets, so compiler_rt provides the memory routines; where a
     // libc is linked too, it comes first and its definitions win
-    constexpr std::array<std::string_view, 5> memory_routines{
+    static constexpr std::array<std::string_view, 5> memory_routines{
         "memcpy", "memmove", "memset", "memcmp", "bcmp"};
     if (std::ranges::contains(memory_routines, symbol)) { return true; }
     // LLVM lists the allocator among some targets' libcalls, but it is libc's, never compiler_rt's
-    constexpr std::array<std::string_view, 4> allocation_routines{
+    static constexpr std::array<std::string_view, 4> allocation_routines{
         "malloc", "calloc", "realloc", "free"};
     if (std::ranges::contains(allocation_routines, symbol)) { return false; }
     if (triple.isWindowsMSVCEnvironment() && symbol == "_fltused") { return true; }
@@ -93,7 +95,7 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
     -> std::string {
     using llvm::RTLIB::Libcall;
     // f32, f64, f80, f128
-    const auto  variants{[&]() -> std::array<Libcall, 4> {
+    const auto  variants{[&] -> std::array<Libcall, 4> {
         namespace rt = llvm::RTLIB;
         switch (function) {
         case math_function::SIN:  return {rt::SIN_F32, rt::SIN_F64, rt::SIN_F80, rt::SIN_F128};
@@ -138,7 +140,7 @@ auto math_libcall_name(const llvm::Triple& triple, math_function function, float
         }
     }
 
-    constexpr std::array suffixes{"f", "", "l", "f128"};
+    static constexpr std::array suffixes{"f", "", "l", "f128"};
     return fmt::format("{}{}", math_function_name(function), suffixes[index]);
 }
 
@@ -151,11 +153,12 @@ auto fmod_libcall_name(const llvm::Triple& triple, float_format format) -> std::
     if (format == float_format::QUAD) { return "fmodf128"; }
     if (format == float_format::X87 && needs_soft_f80(triple)) { return "__fmodx"; }
     if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) { return "fmodf64x"; }
-    constexpr std::array suffixes{"f", "", "l"};
-    return fmt::format("fmod{}",
-                       suffixes[format == float_format::SINGLE   ? 0UZ
-                                : format == float_format::DOUBLE ? 1UZ
-                                                                 : 2UZ]);
+    const usize index{format == float_format::SINGLE   ? 0UZ
+                      : format == float_format::DOUBLE ? 1UZ
+                                                       : 2UZ};
+
+    static constexpr std::array suffixes{"f", "", "l"};
+    return fmt::format("fmod{}", suffixes[index]);
 }
 
 auto strip_global_prefix(const llvm::Triple& triple, std::string_view symbol) -> std::string_view {
