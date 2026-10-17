@@ -509,6 +509,10 @@ class emitter {
     // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `comptime_int` `v` does not
     // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
     [[nodiscard]] auto coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value;
+    // Diagnoses a constant `<<`/`>>` amount outside `[0, width)`, then gives an untyped one the
+    // shifted type. A `<<%`/`<<|` amount is clamped to the width, where it means the same.
+    [[nodiscard]] auto
+    prepare_shift_amount(value amount, sema::type& shifted, bool checked, ast::node_id at) -> value;
     auto               emit_packed_store(const ast::dot_expr& dot, value field_val) -> void;
     [[nodiscard]] auto emit_packed_field_assign(ast::node_id                id,
                                                 const ast::dot_expr&        dot,

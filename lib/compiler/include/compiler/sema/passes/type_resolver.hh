@@ -998,6 +998,8 @@ class type_resolver {
     std::vector<enclosing_arm> enclosing_arms_;
     // Skips `if`/`match comptime` folding and the throwaway `Ctor(<dummy>)` cache insert
     bool building_param_template_{false};
+    // Resolving a generic function's own signature, where its `comptime` parameters are unbound
+    bool in_generic_signature_{false};
     bool in_comptime_loop_{false};
 
     // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
@@ -872,6 +873,92 @@ TEST_CASE("a folded call types an untyped literal argument as the runtime call d
             return out;
         };
     )") == 7);
+}
+
+// A generic's own signature is resolved once with its `comptime T` unbound. A ctor that rejects
+// that stand-in must wait for each instantiation instead of failing the declaration
+namespace {
+
+constexpr std::string_view REJECTING_CTOR{R"(
+        const Log2Int = fn(comptime T: type): type {
+            return match comptime (@typeInfo(T)) {
+                .comptime_int => comptime_int,
+                .int => |info| blk: {
+                    const bits: u16 = @typeInfo(T).int.bits;
+                    const log2_bits = if (bits <= 1) 1 else 16 - @clz(bits - 1);
+                    break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
+                },
+                _ => @compileError("Log2Int requires an integer argument type, got " ++ @typeName(T)),
+            };
+        };)"};
+
+[[nodiscard]] auto with_rejecting_ctor(std::string_view body) -> std::string {
+    return std::string{REJECTING_CTOR} + std::string{body};
+}
+
+} // namespace
+
+TEST_CASE("a return type may instantiate a ctor that rejects an unbound `comptime T`") {
+    CHECK(helpers::compile_and_run(with_rejecting_ctor(R"(
+        const log2_int = fn(comptime T: type, x: T): Log2Int(T) {
+            const info = @typeInfo(T);
+            if comptime (info != .int or info.int.signedness != .unsigned)
+            @compileError("log2_int requires an unsigned integer, got " ++ @typeName(T));
+            @assert(x != 0);
+            return @intCast(Log2Int(T), info.int.bits - 1 - @clz(x));
+        };
+        pub const main = fn(): i32 {
+            let mut v: u64 = 1024;
+            let mut w: u8 = 3;
+            return @as(i32, log2_int(u64, v)) + @as(i32, log2_int(u8, w));
+        };
+    )")) == 10 + 1);
+}
+
+TEST_CASE("a parameter type may instantiate a ctor that rejects an unbound `comptime T`") {
+    CHECK(helpers::compile_and_run(with_rejecting_ctor(R"(
+        const shift = fn(comptime T: type, x: T, amount: Log2Int(T)): T { return x << amount; };
+        pub const main = fn(): i32 {
+            let mut v: u32 = 3;
+            let mut s: u5 = 4;
+            return @intCast(i32, shift(u32, v, s));
+        };
+    )")) == 48);
+}
+
+TEST_CASE("a never-called generic whose signature rejects its unbound `T` still compiles") {
+    CHECK(helpers::compile_and_run(with_rejecting_ctor(R"(
+        const unused = fn(comptime T: type, amount: Log2Int(T)): Log2Int(T) { return amount; };
+        pub const main = fn(): i32 { return 7; };
+    )")) == 7);
+}
+
+TEST_CASE("a rejecting ctor in a generic signature still reports a bad instantiation") {
+    SECTION("through the return type") {
+        const auto res{helpers::resolve_diags(with_rejecting_ctor(R"(
+            const ret = fn(comptime T: type, x: T): Log2Int(T) { _ = x; return 0; };
+            pub const main = fn(): i32 { let mut f: f32 = 1.0; _ = ret(f32, f); return 0; };
+        )"))};
+        CHECK(res.message_contains("Log2Int requires an integer argument type, got f32"));
+    }
+    SECTION("through a parameter type") {
+        const auto res{helpers::resolve_diags(with_rejecting_ctor(R"(
+            const par = fn(comptime T: type, s: Log2Int(T)): u8 { return @as(u8, s); };
+            pub const main = fn(): i32 { let mut f: f32 = 1.0; _ = par(f32, f); return 0; };
+        )"))};
+        CHECK(res.message_contains("Log2Int requires an integer argument type, got f32"));
+    }
+    SECTION("through an argument that doesn't fit the instantiated parameter") {
+        const auto res{helpers::type_check_diags(with_rejecting_ctor(R"(
+            const par = fn(comptime T: type, s: Log2Int(T)): u8 { return @as(u8, s); };
+            pub const main = fn(): i32 { let mut wide: u8 = 5; _ = par(u8, wide); return 0; };
+        )"))};
+        CHECK(res.message_contains("is not assignable to parameter type 'u3'"));
+    }
+    SECTION("outside a generic signature, `type` itself is still rejected") {
+        const auto res{helpers::resolve_diags(with_rejecting_ctor("const Bad = Log2Int(type);"))};
+        CHECK(res.message_contains("Log2Int requires an integer argument type, got type"));
+    }
 }
 
 } // namespace ghoti::tests

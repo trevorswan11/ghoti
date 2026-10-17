@@ -126,6 +126,17 @@ auto bitwise_shifts() -> std::vector<diff::expr_template> {
             templates.emplace_back(binary(op, type));
         }
         templates.emplace_back(unary("~", type));
+        // An amount of its own type, narrower or wider than the shifted value
+        for (const auto& amount :
+             {diff::int_type("u8"), diff::int_type("i16"), diff::int_type("u64")}) {
+            for (const std::string_view op : {"<<", ">>", "<<%", "<<|"}) {
+                templates.emplace_back<diff::expr_template>({
+                    .text     = fmt::format("{{0}} {} {{1}}", op),
+                    .operands = {type, amount},
+                    .result   = type,
+                });
+            }
+        }
     }
     return templates;
 }

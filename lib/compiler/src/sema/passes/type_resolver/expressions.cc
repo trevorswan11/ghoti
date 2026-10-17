@@ -375,8 +375,9 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     // A range counter on the left takes the right side's type when it holds every value
     const auto shift_token{id.get_token_type()};
     if (shift_token != syntax::token_type_t::SHL && shift_token != syntax::token_type_t::SHR &&
-        is_integer(lhs_type->get_kind()) && !is_same_unqualified(*lhs_type, rhs_type) &&
-        adopt_counter_type(binary.lhs, rhs_type)) {
+        shift_token != syntax::token_type_t::SHL_PERCENT &&
+        shift_token != syntax::token_type_t::SHL_PIPE && is_integer(lhs_type->get_kind()) &&
+        !is_same_unqualified(*lhs_type, rhs_type) && adopt_counter_type(binary.lhs, rhs_type)) {
         lhs_type = &resolving_.get_sema_type(binary.lhs);
     }
 
@@ -416,7 +417,9 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
             error::TYPE_USED_AS_VALUE,
             resolving_.ast.location_of(id)));
     }
-    const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR};
+    const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR ||
+                           op == syntax::token_type_t::SHL_PERCENT ||
+                           op == syntax::token_type_t::SHL_PIPE};
 
     // Two numbers meet at their peer type. An untyped constant takes it on
     const bool peers_operands{!is_shift_op && op != syntax::token_type_t::PLUS_PLUS &&

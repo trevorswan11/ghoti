@@ -341,4 +341,12 @@ scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {}) -> 
     return (decl && marked(decl->attributes)) || (literal && marked(literal->attributes));
 }
 
+// Whether a ctor's arguments include a stand-in `type`, making the instance a template
+[[nodiscard]] inline auto is_abstract_instance(gsl::span<type*> args) -> bool {
+    return std::ranges::any_of(args, [](type* arg) {
+        const auto& t{denoted_type(*arg)};
+        return t.get_kind() == type_kind::TYPE && t.get_data().is<types::builtin_type>();
+    });
+}
+
 } // namespace ghoti::sema::resolver_detail

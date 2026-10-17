@@ -1782,12 +1782,10 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
                                  error::NO_PEER_TYPE,
                                  get_call_arg_location(call.arguments[0]));
         }
-        const bool count_mismatch{is_shift && !is_same_unqualified(lhs_type, rhs_type) &&
-                                  !is_comptime_int(rhs_type.get_kind())};
-        if (!integers || count_mismatch) {
+        // A shift's count may be any integer type
+        if (!integers) {
             return make_sema_err(
-                fmt::format("'{}' expects two integer operands of the same type; found '{}' and "
-                            "'{}'",
+                fmt::format("'{}' expects two integer operands; found '{}' and '{}'",
                             syntax::builtin_name(builtin_id),
                             ctx_.type_display_name(lhs_type),
                             ctx_.type_display_name(rhs_type)),

@@ -770,6 +770,20 @@ auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
     builder_.SetInsertPoint(ok_bb);
 }
 
+auto llvm_lowering::fit_shift_amount(llvm::Value* value, llvm::Value* amount, bool amount_signed)
+    -> llvm::Value* {
+    auto*      value_ty{llvm::cast<llvm::IntegerType>(value->getType())};
+    auto*      amount_ty{llvm::cast<llvm::IntegerType>(amount->getType())};
+    const auto width{value_ty->getBitWidth()};
+    if (amount_ty->getBitWidth() <= width) {
+        // A negative amount sign-extends to one no unsigned compare finds in range
+        return builder_.CreateIntCast(amount, value_ty, amount_signed, "shamt");
+    }
+    auto* limit{llvm::ConstantInt::get(amount_ty, width)};
+    auto* clamped{builder_.CreateSelect(builder_.CreateICmpUGE(amount, limit), limit, amount)};
+    return builder_.CreateTrunc(clamped, value_ty, "shamt");
+}
+
 auto llvm_lowering::emit_division_guards(const gir::instruction& inst,
                                          llvm::Value*            lhs,
                                          llvm::Value*            rhs,
@@ -1785,15 +1799,19 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     if (is_offset_op && op0_ty && op0_ty->get_kind() == sema::type_kind::POINTER) {
         return emit_pointer_offset(inst);
     }
-    const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
+    const bool is_shift{inst.kind == gir::instruction_kind::SHL ||
+                        inst.kind == gir::instruction_kind::SHR};
+    const auto peer_ty{is_shift ? op0_ty : concrete_peer_type(op0_ty, op1_ty)};
     auto*      lhs{lower_value(inst.operands[0], peer_ty)};
-    auto*      rhs{lower_value(inst.operands[1], peer_ty)};
+    auto*      rhs{lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty)};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
 
-    if (!is_flt && lhs->getType() != rhs->getType()) {
+    if (is_shift && !is_flt) {
+        rhs = fit_shift_amount(lhs, rhs, op1_ty && sema::is_signed_integer(*op1_ty));
+    } else if (!is_flt && lhs->getType() != rhs->getType()) {
         if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
             if (auto* rhs_int{llvm::dyn_cast<llvm::IntegerType>(rhs->getType())}) {
                 if (lhs_int->getBitWidth() < rhs_int->getBitWidth()) {
@@ -2845,10 +2863,21 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             llvm::Value* result{nullptr};
             llvm::Value* overflow{nullptr};
             if (*builtin_tok == syntax::builtin_t::SHL_WITH_OVERFLOW) {
-                result = builder_.CreateShl(a, b);
-                auto* back{is_signed ? builder_.CreateAShr(result, b)
-                                     : builder_.CreateLShr(result, b)};
-                overflow = builder_.CreateICmpNE(back, a);
+                // The count keeps its own type. Shifting every bit out leaves 0, which overflowed
+                // unless the value already was 0
+                const bool count_signed{inst.operands[1].type &&
+                                        sema::is_signed_integer(*inst.operands[1].type)};
+                b = fit_shift_amount(a, b, count_signed);
+                auto* zero{llvm::ConstantInt::get(a->getType(), 0)};
+                auto* in_range{builder_.CreateICmpULT(
+                    b, llvm::ConstantInt::get(a->getType(), a->getType()->getIntegerBitWidth()))};
+                auto* amount{builder_.CreateSelect(in_range, b, zero)};
+                auto* shifted{builder_.CreateShl(a, amount)};
+                auto* back{is_signed ? builder_.CreateAShr(shifted, amount)
+                                     : builder_.CreateLShr(shifted, amount)};
+                result   = builder_.CreateSelect(in_range, shifted, zero);
+                overflow = builder_.CreateSelect(
+                    in_range, builder_.CreateICmpNE(back, a), builder_.CreateICmpNE(a, zero));
             } else {
                 llvm::Intrinsic::ID id{};
                 switch (*builtin_tok) {
