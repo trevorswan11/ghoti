@@ -44,6 +44,7 @@ enum class int_op : u8 {
     MIN,
     MAX,
     DIV_FLOOR,
+    DIV_EXACT,
     MOD,
 };
 
@@ -80,6 +81,7 @@ enum class int_fault : u8 {
     OVERFLOW_,
     DIVISION_BY_ZERO,
     MODULO_BY_ZERO,
+    INEXACT_DIVISION,
     NEGATIVE_SHIFT,
     SHIFT_TOO_WIDE,
     OUT_OF_RANGE,
@@ -124,6 +126,7 @@ template <typename T> using int_result = stdx::result<T, int_fault>;
 struct int_checks {
     bool overflow{false};     // the exact result must fit the domain
     bool division{false};     // a zero divisor, and `MIN / -1` when signed
+    bool exact{false};        // the division must leave no remainder
     bool shift_amount{false}; // the amount must be below the width
 };
 
@@ -131,7 +134,7 @@ struct int_checks {
 [[nodiscard]] auto runtime_checks(int_unary_op op, int_domain domain) noexcept -> int_checks;
 
 [[nodiscard]] constexpr auto any(int_checks checks) noexcept -> bool {
-    return checks.overflow || checks.division || checks.shift_amount;
+    return checks.overflow || checks.division || checks.exact || checks.shift_amount;
 }
 
 enum class float_op : u8 {

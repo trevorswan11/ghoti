@@ -156,7 +156,7 @@ auto int_builtins() -> std::vector<diff::expr_template> {
         // Just wide enough to hold the operand's width: `u4` for an 8-bit operand
         const auto count{diff::int_type(fmt::format("u{}", std::bit_width(type.bits)))};
         for (const std::string_view builtin :
-             {"@min", "@max", "@divTrunc", "@divFloor", "@rem", "@mod"}) {
+             {"@min", "@max", "@divTrunc", "@divFloor", "@divExact", "@rem", "@mod"}) {
             templates.emplace_back(call(builtin, type, 2));
         }
         if (type.kind == diff::scalar_kind::SIGNED) {

@@ -2780,6 +2780,23 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return is_signed ? builder_.CreateSDiv(a, b) : builder_.CreateUDiv(a, b);
         }
 
+        case syntax::builtin_t::DIV_EXACT: {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* a{lower_value(inst.operands[0])};
+            auto* b{lower_value(inst.operands[1])};
+            if (!a || !b) { return nullptr; }
+            const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) {
+                emit_division_guards(inst, a, b, is_signed);
+                auto* r{is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b)};
+                emit_arith_guard(builder_.CreateICmpNE(r, llvm::ConstantInt::get(a->getType(), 0)),
+                                 "exact division produced a remainder",
+                                 inst);
+            }
+            // Unchecked, a remainder makes the quotient poison
+            return is_signed ? builder_.CreateExactSDiv(a, b) : builder_.CreateExactUDiv(a, b);
+        }
+
         case syntax::builtin_t::DIV_FLOOR:
         case syntax::builtin_t::MOD:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");

@@ -12,7 +12,7 @@ TEST_CASE("Well-formed integer / float builtins resolve") {
         const f = fn(a: i32, b: i32): i32 { return @min(a, b) + @max(a, b); };
         const g = fn(a: f64, b: f64): f64 { return @min(a, b); };
         const h = fn(a: i32, b: i32): i32 {
-            return @divTrunc(a, b) + @divFloor(a, b) + @rem(a, b) + @mod(a, b);
+            return @divTrunc(a, b) + @divFloor(a, b) + @divExact(a, b) + @rem(a, b) + @mod(a, b);
         };
         const k = fn(a: u32, b: u32): bool {
             let mut out: u32 = 0u32;
@@ -75,6 +75,37 @@ TEST_CASE("Compile-time division / modulo by zero is an error") {
         sema::diagnostic{"Modulo by zero in compile-time constant expression",
                          sema::error::COMPTIME_EVALUATION_FAILED,
                          std::pair{0UZ, 16UZ}});
+
+    helpers::test_checker_fail(
+        "const bad = @divExact(10, 0);",
+        sema::diagnostic{"Division by zero in compile-time constant expression",
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 21UZ}});
+}
+
+TEST_CASE("Compile-time @divExact with a remainder is an error") {
+    helpers::test_checker_fail(
+        "const bad = @divExact(-7, 2);",
+        sema::diagnostic{"Exact division produced a remainder in compile-time constant expression",
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 21UZ}});
+    helpers::test_checker_fail(
+        "const bad = @divExact(7u8, 2u8);",
+        sema::diagnostic{"Exact division produced a remainder in compile-time constant expression",
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 21UZ}});
+}
+
+TEST_CASE("@divExact rejects floating-point operands") {
+    helpers::test_resolver_fail(
+        R"(
+const foo = fn(a: f64, b: f64): f64 {
+    return @divExact(a, b);
+};
+)",
+        sema::diagnostic{"'@divExact' expects two integer operands; found 'f64' and 'f64'",
+                         sema::error::OPERATOR_TYPE_MISMATCH,
+                         std::pair{2UZ, 21UZ}});
 }
 
 } // namespace ghoti::tests

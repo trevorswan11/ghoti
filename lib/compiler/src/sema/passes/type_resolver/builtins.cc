@@ -352,6 +352,7 @@ enum class builtin_family : u8 {
     case syntax::builtin_t::MAX:
     case syntax::builtin_t::DIV_TRUNC:
     case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::DIV_EXACT:
     case syntax::builtin_t::REM:
     case syntax::builtin_t::MOD:
     case syntax::builtin_t::ADD_WITH_OVERFLOW:
@@ -1724,6 +1725,7 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::MAX:
     case syntax::builtin_t::DIV_TRUNC:
     case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::DIV_EXACT:
     case syntax::builtin_t::REM:
     case syntax::builtin_t::MOD:       {
         auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};

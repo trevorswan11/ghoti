@@ -4821,6 +4821,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::MAX:
     case syntax::builtin_t::DIV_TRUNC:
     case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::DIV_EXACT:
     case syntax::builtin_t::REM:
     case syntax::builtin_t::MOD:       {
         VERIFY(call.arguments.size() >= 2, "Arity mismatch not verified during resolution");
@@ -4865,6 +4866,16 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             switch (tok) {
             case syntax::builtin_t::DIV_TRUNC: return const_value{av / bv, a->get_type()};
             case syntax::builtin_t::REM:       return const_value{av % bv, a->get_type()};
+            case syntax::builtin_t::DIV_EXACT: {
+                if (av % bv != 0) {
+                    ctx_.diags.emplace_back(
+                        "Exact division produced a remainder in compile-time constant expression",
+                        sema::error::COMPTIME_EVALUATION_FAILED,
+                        module_->ast.location_of(id));
+                    return const_value::make_poison();
+                }
+                return const_value{av / bv, a->get_type()};
+            }
             case syntax::builtin_t::DIV_FLOOR: {
                 auto q{av / bv};
                 if constexpr (Signed<T>) {
