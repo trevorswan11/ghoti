@@ -1,0 +1,60 @@
+import std;
+
+const math = std.math;
+
+/// Returns the base-2 logarithm of x.
+///
+/// Special Cases:
+///  - log2(+inf)  = +inf
+///  - log2(0)     = -inf
+///  - log2(x)     = nan if x < 0
+///  - log2(nan)   = nan
+pub const log2 = fn(x: auto): @TypeOf(x) {
+    const T = @TypeOf(x);
+    return match comptime (@typeInfo(T)) {
+        .comptime_float, .float => @log2(x),
+        .comptime_int => comptime {
+            @assert(x > 0);
+            comptime let mut x_shifted = x;
+            // First, calculate floorPowerOfTwo(x)
+            comptime let mut shift_amt = 1;
+            while (x_shifted >> (shift_amt << 1) != 0) {
+                shift_amt <<= 1;
+            }
+
+            // Answer is in the range [shift_amt, 2 * shift_amt - 1]
+            // We can find it in O(log(N)) using binary search.
+            comptime let mut result = 0;
+            while (shift_amt != 0) : (shift_amt >>= 1) {
+                if (x_shifted >> shift_amt != 0) {
+                    x_shifted >>= shift_amt;
+                    result += shift_amt;
+                }
+            }
+            return result;
+        },
+        .int => |int_info| math.log2_int(
+            match comptime (int_info.signedness) {
+                .signed => @Int(.{ .signedness = .unsigned, .bits = int_info.bits -| 1 }),
+                .unsigned => T,
+            },
+            @intCast(x),
+        ),
+        _ => @compileError("log2 not implemented for " ++ @typeName(T)),
+    };
+};
+
+test "log2" {
+    @expect(log2(0.2f32) == @log2(0.2));
+    @expect(log2(0.2f64) == @log2(0.2));
+
+    @expect(log2(1i32) == 0);
+    @expect(log2(15i32) == 3);
+    @expect(log2(16i32) == 4);
+
+    comptime {
+        @assert(log2(1) == 0);
+        @assert(log2(15) == 3);
+        @assert(log2(16) == 4);
+    }
+}
