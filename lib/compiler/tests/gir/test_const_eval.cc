@@ -215,7 +215,7 @@ TEST_CASE("Target builtins constant eval") {
     CHECK(os.find_first_of("0123456789") == std::string::npos);
 
     const auto bits_val{eval_of("ptr_bits")};
-    const auto bits{UNWRAP(bits_val.as_opt<u64>())};
+    const auto bits{UNWRAP(bits_val.as_opt<i64>())};
     CHECK((bits == 64 || bits == 32 || bits == 16));
 }
 

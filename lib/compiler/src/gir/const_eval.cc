@@ -4424,6 +4424,11 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     // Diagnostics land on the callee when the call has no node of its own
     const ast::node_id id{call_id.value_or(*call.function)};
     auto&              usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    // Layout and target queries are `comptime_int`, which takes the type of its use site
+    const auto comptime_int{[&](u64 n) -> const_value {
+        return make_scalar_const(static_cast<i128>(n),
+                                 ctx_.get_builtin_resolved_type(sema::type_kind::COMPTIME_INT));
+    }};
 
     const auto eval_type_argument =
         [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
@@ -4494,7 +4499,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         }
 
         const auto sz{type_size_of(*target_type, target_layout())};
-        return const_value{static_cast<u64>(sz), usize_type};
+        return comptime_int(static_cast<u64>(sz));
     }
     case syntax::builtin_t::ALIGN_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -4504,7 +4509,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         }
 
         const auto al{type_align_of(*target_type, target_layout())};
-        return const_value{static_cast<u64>(al), usize_type};
+        return comptime_int(static_cast<u64>(al));
     }
     case syntax::builtin_t::BIT_SIZE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -4518,28 +4523,26 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
 
         const auto kind{target_type->get_kind()};
         if (kind == sema::type_kind::INT) {
-            return const_value{static_cast<u64>(sema::int_width(*target_type)), usize_type};
+            return comptime_int(static_cast<u64>(sema::int_width(*target_type)));
         }
         if (kind == sema::type_kind::ISIZE || kind == sema::type_kind::USIZE) {
-            return const_value{static_cast<u64>(ptr_bits), usize_type};
+            return comptime_int(static_cast<u64>(ptr_bits));
         }
-        if (kind == sema::type_kind::BOOL) { return const_value{u64{1}, usize_type}; }
-        if (sema::is_float(kind)) {
-            return const_value{static_cast<u64>(sema::float_bits(kind)), usize_type};
-        }
+        if (kind == sema::type_kind::BOOL) { return comptime_int(u64{1}); }
+        if (sema::is_float(kind)) { return comptime_int(static_cast<u64>(sema::float_bits(kind))); }
         if (const auto st{target_type->get_data().as_opt<sema::types::struct_t>()};
             st && st->is_bit_packed()) {
             if (const auto n{sema::packed_backing_bits(*st, ptr_bits)}) {
-                return const_value{static_cast<u64>(*n), usize_type};
+                return comptime_int(static_cast<u64>(*n));
             }
         }
         if (const auto ut{target_type->get_data().as_opt<sema::types::union_t>()};
             ut && ut->is_bit_packed()) {
             if (const auto n{sema::packed_union_backing_bits(*ut, ptr_bits)}) {
-                return const_value{static_cast<u64>(*n), usize_type};
+                return comptime_int(static_cast<u64>(*n));
             }
         }
-        return const_value{static_cast<u64>(type_size_of(*target_type, layout) * 8), usize_type};
+        return comptime_int(static_cast<u64>(type_size_of(*target_type, layout) * 8));
     }
     case syntax::builtin_t::TYPE_OF: {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
@@ -5040,8 +5043,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     }
     case syntax::builtin_t::TARGET_PTR_BITS: {
         const auto facts{codegen::target_facts::resolve(ctx_.target_opts.triple_str)};
-        return const_value{u64{facts.ptr_bits},
-                           ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+        return comptime_int(u64{facts.ptr_bits});
     }
     case syntax::builtin_t::ENTRY_MAIN: {
         auto root{ctx_.entry_root};

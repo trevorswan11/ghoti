@@ -59,14 +59,15 @@ templ InternalsBuiltinsPage() {
 		undefined if <code>ptr</code> does not actually point at that field of a live <code>Parent</code>.
 	</p>
 	<h2>Introspection &amp; Metadata</h2>
+	<p><code>{ "@alignOf" }</code>, <code>{ "@sizeOf" }</code>, and <code>{ "@bitSizeOf" }</code> return a <code>comptime_int</code>, so the result takes the integer type its use site asks for, like a literal: <code>{ "const n: u8 = @sizeOf(u32);" }</code> and <code>{ "i + @sizeOf(T)" }</code> with an <code>i32</code> <code>i</code> need no cast.</p>
 	<h3>{ "@alignOf" }</h3>
-	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the alignment of the provided expression in bytes.</p>
 	<h3>{ "@sizeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the size of the provided expression in bytes (its ABI allocation size, so a 9-bit <code>u9</code> reports <code>2</code>).</p>
 	<h3>{ "@bitSizeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@bitSizeOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@bitSizeOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the exact bit width of the provided type or value, which is distinct from <code>{ "@sizeOf" }</code>'s ABI byte size:</p>
 	<ul>
 		<li><code>iN</code> / <code>uN</code> &rarr; <code>N</code></li>

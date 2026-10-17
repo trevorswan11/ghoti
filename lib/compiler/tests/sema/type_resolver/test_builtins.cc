@@ -93,10 +93,10 @@ TEST_CASE("Builtin 'unsafe' casts") {
         "const v: volatile i32 = 23;");
 }
 
-TEST_CASE("Builtin bit/byte operations") {
-    const auto bi{GENERATE(bis::ALIGN_OF, bis::SIZE_OF)};
-    test_builtin_resolve(bi, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::USIZE);
+TEST_CASE("Builtin layout queries are comptime_int") {
+    const auto bi{GENERATE(bis::ALIGN_OF, bis::SIZE_OF, bis::BIT_SIZE_OF)};
+    test_builtin_resolve(bi, "u32", [](helpers::sema_test_context& ctx) -> sema::type& {
+        return ctx.get_type(sema::type_kind::COMPTIME_INT);
     });
 }
 

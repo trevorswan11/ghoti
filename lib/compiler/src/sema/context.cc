@@ -253,6 +253,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     auto& t_void{*pool[{type_kind::VOID_, types::mut::CONSTANT}]};
     auto& t_type{*pool[{type_kind::TYPE, types::mut::CONSTANT}]};
     auto& t_usize{*pool[{type_kind::USIZE, types::mut::CONSTANT}]};
+    auto& t_comptime_int{*pool[{type_kind::COMPTIME_INT, types::mut::CONSTANT}]};
     auto& t_auto{*pool[{type_kind::AUTO, types::mut::CONSTANT}]};
     auto& t_noreturn{*pool[{type_kind::NORETURN, types::mut::CONSTANT}]};
     auto& t_bool{*pool[{type_kind::BOOL, types::mut::CONSTANT}]};
@@ -283,9 +284,9 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::SLICE_FROM_PTR, params(t_auto, t_usize), t_auto);
     inject_function(bis::FIELD_PARENT_PTR, params(t_type, t_c_str, t_auto), t_auto);
 
-    inject_function(bis::ALIGN_OF, params(t_auto), t_usize);
-    inject_function(bis::SIZE_OF, params(t_auto), t_usize);
-    inject_function(bis::BIT_SIZE_OF, params(t_auto), t_usize);
+    inject_function(bis::ALIGN_OF, params(t_auto), t_comptime_int);
+    inject_function(bis::SIZE_OF, params(t_auto), t_comptime_int);
+    inject_function(bis::BIT_SIZE_OF, params(t_auto), t_comptime_int);
     inject_function(bis::TYPE_OF, params(t_auto), t_type);
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);
@@ -349,7 +350,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_ARCH, params(), t_c_str);
     inject_function(bis::TARGET_TRIPLE, params(), t_c_str);
     inject_function(bis::TARGET_ABI, params(), t_c_str);
-    inject_function(bis::TARGET_PTR_BITS, params(), t_usize);
+    inject_function(bis::TARGET_PTR_BITS, params(), t_comptime_int);
     inject_function(bis::TARGET_ENDIAN, params(), t_c_str);
     inject_function(bis::TARGET_FAMILY, params(), t_c_str);
     inject_function(bis::OPTIMIZE_MODE, params(), t_c_str);
