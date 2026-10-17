@@ -2,11 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <gsl/span>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/Attributes.h>
@@ -26,6 +26,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/codegen/aggregate_copy.hh"
 
 namespace ghoti::codegen {
@@ -84,8 +85,7 @@ struct value_plan {
     pass_kind                kind{pass_kind::DIRECT};
     llvm::Type*              original{nullptr};
     std::vector<llvm::Type*> parts;
-    // Where each part sits in the original, when that is not the parts laid out in order. A lone
-    // struct part with more offsets than parts is scattered element by element
+    // Where each part sits in the original, when that is not the parts laid out in order
     std::vector<u64> offsets;
     u64              stack_align{0}; // an HFA's stack slot alignment, if any
     u64              byval_align{0}; // a `byval` copy's alignment, when not the default
@@ -145,7 +145,7 @@ class classifier {
     // How `fn_ty` crosses the C ABI, or none when nothing about it changes
     [[nodiscard]] auto plan(llvm::FunctionType*          fn_ty,
                             llvm::CallingConv::ID        conv,
-                            std::span<llvm::Type* const> variadic_args = {}) const
+                            gsl::span<llvm::Type* const> variadic_args = {}) const
         -> stdx::option<signature_plan> {
         const auto model{model_for(triple_, conv)};
         if (model == abi_model::NONE) { return stdx::none; }
@@ -177,6 +177,18 @@ class classifier {
         u32 sse{8};
     };
 
+    struct hfa_shape {
+        llvm::Type* base;
+        u64         members;
+    };
+
+    // One field of a struct that RISC-V passes in floating-point registers
+    struct fp_field {
+        u64         offset;
+        llvm::Type* type;
+    };
+
+  private:
     // The RISC-V float ABI, from the `target-abi` flag the target machine recorded
     auto read_riscv_abi(const llvm::Module& module) -> void {
         xlen_ = triple_.isRISCV64() ? 64 : 32;
@@ -268,10 +280,12 @@ class classifier {
 
     [[nodiscard]] static auto coerced(llvm::Type* original, std::vector<llvm::Type*> parts)
         -> value_plan {
-        return {.kind     = pass_kind::COERCE,
-                .original = original,
-                .parts    = std::move(parts),
-                .offsets  = {}};
+        return {
+            .kind     = pass_kind::COERCE,
+            .original = original,
+            .parts    = std::move(parts),
+            .offsets  = {},
+        };
     }
 
     [[nodiscard]] static auto direct(llvm::Type* original) -> value_plan {
@@ -592,11 +606,6 @@ class classifier {
         return llvm::FixedVectorType::get(llvm::Type::getDoubleTy(context_), 2);
     }
 
-    struct hfa_shape {
-        llvm::Type* base;
-        u64         members;
-    };
-
     // 8 or 16 byte vectors and floating-point scalars can make up an HFA, though AAPCS32 only
     // takes `float` and `double`
     [[nodiscard]] auto is_hfa_base(llvm::Type* ty, bool arm32) const -> bool {
@@ -799,12 +808,6 @@ class classifier {
         return coerced(ty, {int_of_bytes(size)});
     }
 
-    // One field of a struct that RISC-V passes in floating-point registers
-    struct fp_field {
-        u64         offset;
-        llvm::Type* type;
-    };
-
     // The registers a RISC-V argument of `bits` takes from the integer budget
     auto riscv_spend_gprs(u64 bits, u64 align_bits, bool fixed, register_budget& budget) const
         -> void {
@@ -945,10 +948,10 @@ class classifier {
     }
 
   private:
-    const llvm::DataLayout& layout_;
-    llvm::LLVMContext&      context_;
-    llvm::Triple            triple_;
-    const union_member_map& unions_;
+    const llvm::DataLayout&  layout_;
+    llvm::LLVMContext&       context_;
+    llvm::Triple             triple_;
+    const union_member_map&  unions_;
     const padded_struct_map& padded_;
     bool                     small_struct_in_regs_{false};
     bool                     win32_struct_abi_{false};
@@ -1043,7 +1046,7 @@ class abi_rewriter {
     }
 
     [[nodiscard]] auto join(llvm::IRBuilder<>&      builder,
-                            std::span<llvm::Value*> parts,
+                            gsl::span<llvm::Value*> parts,
                             const value_plan&       plan) -> llvm::Value* {
         auto [slot, parts_ty]{coercion_slot(*builder.GetInsertBlock()->getParent(), plan)};
         if (!plan.offsets.empty()) {
@@ -1059,7 +1062,7 @@ class abi_rewriter {
 
     auto join_scattered(llvm::IRBuilder<>&      builder,
                         llvm::AllocaInst*       slot,
-                        std::span<llvm::Value*> parts,
+                        gsl::span<llvm::Value*> parts,
                         const value_plan&       plan) -> void {
         const auto                pieces{pieces_of(plan)};
         std::vector<llvm::Value*> values{parts.begin(), parts.end()};

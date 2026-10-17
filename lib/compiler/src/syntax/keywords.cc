@@ -10,6 +10,7 @@
 #include <stdx/fixed/hash_table.hh>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/syntax/token.hh"
@@ -45,7 +46,7 @@ auto ascii_spelling(std::string_view name) -> std::string {
     if (ascii) { return std::string{name}; }
     std::string spelled{"@\""};
     for (usize i{0}; i < name.size();) {
-        const auto decoded{decode_code_point(name.substr(i))};
+        const auto decoded{decode_code_point(stdx::string::substr(name, i))};
         if (!decoded) {
             spelled += fmt::format("\\x{:02X}", static_cast<u8>(name[i]));
             ++i;

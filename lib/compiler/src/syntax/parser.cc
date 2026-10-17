@@ -12,6 +12,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/arena.hh"
@@ -39,7 +40,7 @@ namespace {
     usize      column{token.column};
     for (usize i{0}; i < slice.size();) {
         if (i >= opener_len && slice[i] == '\\') {
-            const auto scan{scan_escape(slice.substr(i))};
+            const auto scan{scan_escape(stdx::string::substr(slice, i))};
             if (!scan.error.empty()) {
                 return diagnostic{scan.error, error::UNKNOWN_CHARACTER_ESCAPE, line, column};
             }

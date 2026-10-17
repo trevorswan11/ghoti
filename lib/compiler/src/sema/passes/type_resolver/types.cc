@@ -276,7 +276,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     auto& resolved_fn{
         ctx_.get_function(param_types, return_type, fn.variadic, fn.conv, !fn.is_extern)};
     if (fn.is_extern) {
-        if (auto problem{unmodelled_c_abi_error(resolved_fn, resolving_.ast.location_of(id))}) {
+        if (auto problem{unmodeled_c_abi_error(resolved_fn, resolving_.ast.location_of(id))}) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*problem)));
         }
     }

@@ -22,6 +22,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/codegen/error.hh"
@@ -216,9 +217,9 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
         if (!std::isspace(static_cast<u8>(line.front()))) {
             const auto colon{line.find(':')};
             if (colon == std::string_view::npos) { continue; }
-            auto label{line.substr(0, colon)};
+            auto label{stdx::string::substr(line, 0, colon)};
             if (label.size() >= 2 && label.front() == '"' && label.back() == '"') {
-                label = label.substr(1, label.size() - 2);
+                label = stdx::string::substr(label, 1, label.size() - 2);
             }
             // Column-zero comments such as `# %bb.0:` end in a colon too
             if (label.empty() || !std::ranges::all_of(label, is_identifier_char)) { continue; }
@@ -231,7 +232,7 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
         if (current.empty() || !codegen::is_compiler_rt_symbol(triple, current)) { continue; }
         const auto first{line.find_first_not_of(" \t")};
         if (first == std::string_view::npos) { continue; }
-        const auto body{line.substr(first)};
+        const auto body{stdx::string::substr(line, first)};
         // Directives and comments never call anything
         if (body.starts_with('.') || body.starts_with('#') || body.starts_with(';') ||
             body.starts_with("//")) {
@@ -245,7 +246,8 @@ auto find_self_calling_libcalls(std::string_view               asm_text,
             }
             usize end{i};
             while (end < body.size() && is_identifier_char(body[end])) { ++end; }
-            const auto token{codegen::strip_global_prefix(triple, body.substr(i, end - i))};
+            const auto token{
+                codegen::strip_global_prefix(triple, stdx::string::substr(body, i, end - i))};
             if (token == current && !std::ranges::contains(found, current)) {
                 found.emplace_back(current);
             }

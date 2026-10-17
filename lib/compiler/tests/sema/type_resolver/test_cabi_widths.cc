@@ -81,20 +81,20 @@ TEST_CASE("C-ABI extern signatures and aggregates are accepted") {
 namespace {
 
 // A target whose C ABI lowering ghoti doesn't model
-constexpr std::string_view UNMODELLED{"mips-unknown-linux-gnu"};
+constexpr std::string_view UNmodelED{"mips-unknown-linux-gnu"};
 
 constexpr std::string_view PAIR{"const S = extern struct { a: i32, b: i32 };\n"};
 
-auto check_unmodelled_rejection(std::string_view body, std::string_view message) -> void {
+auto check_unmodeled_rejection(std::string_view body, std::string_view message) -> void {
     const auto source{fmt::format("{}{}", PAIR, body)};
-    auto [ctx, idx]{helpers::resolve_for_target(source, UNMODELLED)};
+    auto [ctx, idx]{helpers::resolve_for_target(source, UNmodelED)};
     const auto& diags{UNWRAP(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>())};
     REQUIRE_FALSE(diags.empty());
     CHECK(diags[0].get_error() == sema::error::UNSUPPORTED_TARGET);
     CHECK(diags[0].get_message().value_or("") == message);
 }
 
-[[nodiscard]] auto unmodelled_message(std::string_view signature, std::string_view offender)
+[[nodiscard]] auto unmodeled_message(std::string_view signature, std::string_view offender)
     -> std::string {
     return fmt::format("'{}' passes '{}' by value, but ghoti doesn't know how C passes aggregates "
                        "on 'mips-unknown-linux-gnu' yet; pass a pointer to it instead",
@@ -104,23 +104,23 @@ auto check_unmodelled_rejection(std::string_view body, std::string_view message)
 
 } // namespace
 
-TEST_CASE("Unmodelled targets reject aggregates passed by value to or from C") {
-    check_unmodelled_rejection("extern const take: fn(s: S): i32;",
-                               unmodelled_message("fn(S): i32", "S"));
-    check_unmodelled_rejection("extern const give: fn(): S;", unmodelled_message("fn(): S", "S"));
-    check_unmodelled_rejection("extern const write: fn(bytes: []u8): void;",
-                               unmodelled_message("fn([]u8): void", "[]u8"));
-    check_unmodelled_rejection("export const take = fn(s: S): i32 { return s.a; };",
-                               unmodelled_message("fn(S): i32", "S"));
-    check_unmodelled_rejection("const take = fn(s: S): i32 { return s.a; };\n"
-                               "@export(take, .{ .name = \"take\" });",
-                               unmodelled_message("fn(S): i32", "S"));
-    check_unmodelled_rejection(
+TEST_CASE("Unmodeled targets reject aggregates passed by value to or from C") {
+    check_unmodeled_rejection("extern const take: fn(s: S): i32;",
+                              unmodeled_message("fn(S): i32", "S"));
+    check_unmodeled_rejection("extern const give: fn(): S;", unmodeled_message("fn(): S", "S"));
+    check_unmodeled_rejection("extern const write: fn(bytes: []u8): void;",
+                              unmodeled_message("fn([]u8): void", "[]u8"));
+    check_unmodeled_rejection("export const take = fn(s: S): i32 { return s.a; };",
+                              unmodeled_message("fn(S): i32", "S"));
+    check_unmodeled_rejection("const take = fn(s: S): i32 { return s.a; };\n"
+                              "@export(take, .{ .name = \"take\" });",
+                              unmodeled_message("fn(S): i32", "S"));
+    check_unmodeled_rejection(
         "const apply = fn(cb: extern fn(s: S): i32): i32 { _ = cb; return 0; };",
-        unmodelled_message("fn(S): i32", "S"));
+        unmodeled_message("fn(S): i32", "S"));
 }
 
-TEST_CASE("Unmodelled targets still compile ghoti-only aggregate passing") {
+TEST_CASE("Unmodeled targets still compile ghoti-only aggregate passing") {
     const auto source{fmt::format("{}{}", PAIR, R"(
         const sum = fn(xs: []i32): i32 {
             let mut total: i32 = 0;
@@ -136,11 +136,11 @@ TEST_CASE("Unmodelled targets still compile ghoti-only aggregate passing") {
             return sum(items[0..]) + s.a;
         };
     )")};
-    auto [ctx, idx]{helpers::type_check_for_target(source, UNMODELLED)};
+    auto [ctx, idx]{helpers::type_check_for_target(source, UNmodelED)};
     helpers::check_errors<sema::diagnostics>(ctx->root_mod);
 }
 
-TEST_CASE("Modelled targets accept aggregates passed by value to C") {
+TEST_CASE("Modeled targets accept aggregates passed by value to C") {
     for (const std::string_view triple : {"x86_64-pc-windows-msvc",
                                           "aarch64-unknown-linux-gnu",
                                           "i686-unknown-linux-gnu",

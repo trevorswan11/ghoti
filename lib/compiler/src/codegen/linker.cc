@@ -362,9 +362,9 @@ auto add_elf_args(std::vector<std::string>&   args,
     std::vector<std::string>   missing;
     for (usize pos{error_output.find(marker)}; pos != std::string_view::npos;
          pos = error_output.find(marker, pos + marker.size())) {
-        auto       rest{error_output.substr(pos + marker.size())};
+        auto       rest{stdx::string::substr(error_output, pos + marker.size())};
         const auto end{rest.find_first_of(" \r\n")};
-        auto       symbol{strip_global_prefix(triple, rest.substr(0, end))};
+        auto       symbol{strip_global_prefix(triple, stdx::string::substr(rest, 0, end))};
         if (is_compiler_rt_symbol(triple, symbol) && !std::ranges::contains(missing, symbol)) {
             missing.emplace_back(symbol);
         }

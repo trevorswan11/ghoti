@@ -1,7 +1,5 @@
 #pragma once
 
-#include <vector>
-
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <gsl/span>
@@ -92,8 +90,8 @@ class type_translator {
     aggregate_identity_cache_t struct_identity_cache_;
     aggregate_identity_cache_t union_identity_cache_;
 
-    padded_struct_map                                              padded_structs_;
-    union_member_map                                               union_members_;
+    padded_struct_map padded_structs_;
+    union_member_map  union_members_;
 };
 
 } // namespace ghoti::codegen

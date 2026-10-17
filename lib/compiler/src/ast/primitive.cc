@@ -163,12 +163,12 @@ auto int_literal_expr::parse(syntax::parser& parser)
 
     // A character literal `'x'` is the untyped code point of its one character or escape
     if (start_token.type == syntax::token_type_t::CHAR) {
-        const auto inner{slice.substr(1, slice.size() - 2)};
+        const auto inner{stdx::string::substr(slice, 1, slice.size() - 2)};
         u32        value{0};
         usize      count{0};
         for (usize i{0}; i < inner.size(); ++count) {
             if (inner[i] == '\\') {
-                const auto scan{syntax::scan_escape(inner.substr(i))};
+                const auto scan{syntax::scan_escape(stdx::string::substr(inner, i))};
                 if (!scan.error.empty()) {
                     return make_syntax_err(scan.error,
                                            syntax::error::UNKNOWN_CHARACTER_ESCAPE,
@@ -179,7 +179,7 @@ auto int_literal_expr::parse(syntax::parser& parser)
                 i += scan.length;
                 continue;
             }
-            const auto decoded{syntax::decode_code_point(inner.substr(i))};
+            const auto decoded{syntax::decode_code_point(stdx::string::substr(inner, i))};
             if (!decoded) {
                 return make_syntax_err("Character literal is not valid UTF-8",
                                        syntax::error::INVALID_UTF8,

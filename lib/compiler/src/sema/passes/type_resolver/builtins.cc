@@ -2827,8 +2827,8 @@ namespace {
 
 } // namespace
 
-auto type_resolver::unmodelled_c_abi_error(const type&            fn_type,
-                                           const source_location& location) const
+auto type_resolver::unmodeled_c_abi_error(const type&            fn_type,
+                                          const source_location& location) const
     -> stdx::option<diagnostic> {
     const auto fn{fn_type.get_data().as_opt<types::function>()};
     if (!fn) { return stdx::none; }

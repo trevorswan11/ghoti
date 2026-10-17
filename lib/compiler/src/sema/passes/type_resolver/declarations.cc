@@ -1236,7 +1236,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
             decl.has_modifier(ast::decl_modifiers::EXPORT)) {
             const auto loc{decl.explicit_type ? resolving_.ast.location_of(*decl.explicit_type)
                                               : resolving_.ast.location_of(id)};
-            if (auto problem{unmodelled_c_abi_error(resolved_type, loc)}) {
+            if (auto problem{unmodeled_c_abi_error(resolved_type, loc)}) {
                 ctx_.poison_symbol(sym, std::move(*problem));
                 resolving_.set_sema_type(decl.name, ctx_.get_poison());
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));

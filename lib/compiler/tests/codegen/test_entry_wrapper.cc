@@ -22,6 +22,7 @@
 #include <llvm/Target/TargetMachine.h>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "catch2/catch_message.hpp"
@@ -124,7 +125,7 @@ struct root_error {
 [[nodiscard]] auto main_line(std::string_view source) -> usize {
     const auto at{source.find("pub const main")};
     REQUIRE(at != std::string_view::npos);
-    return static_cast<usize>(std::ranges::count(source.substr(0, at), '\n'));
+    return static_cast<usize>(std::ranges::count(stdx::string::substr(source, 0, at), '\n'));
 }
 
 // A `Result` like `std.Result`, which a test program can't import

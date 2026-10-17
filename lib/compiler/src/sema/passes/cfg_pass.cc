@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +10,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -53,7 +53,7 @@ using syntax::token_type_t;
 
 struct atom_enum_info {
     std::string_view                  type_name;
-    std::span<const std::string_view> members;
+    gsl::span<const std::string_view> members;
 };
 
 [[nodiscard]] auto atom_enum(std::string_view atom) -> stdx::option<atom_enum_info> {

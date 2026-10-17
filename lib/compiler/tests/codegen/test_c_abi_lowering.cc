@@ -1,7 +1,5 @@
 #include <array>
 #include <cctype>
-#include <memory>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -21,6 +20,8 @@
 #include <llvm/IR/Module.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
+#include <stdx/memory.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/codegen/c_abi.hh"
@@ -196,8 +197,8 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     REQUIRE(at != std::string_view::npos);
     const auto ret{ir.find("\n  ret ", at)};
     REQUIRE(ret != std::string_view::npos);
-    const auto line{ir.substr(ret + 7, ir.find('\n', ret + 1) - ret - 7)};
-    return std::string{line.substr(line.rfind(' ') + 1)};
+    const auto line{stdx::string::substr(ir, ret + 7, ir.find('\n', ret + 1) - ret - 7)};
+    return std::string{stdx::string::substr(line, line.rfind(' ') + 1)};
 }
 
 // Splits at commas outside any brackets
@@ -210,11 +211,11 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
         if (c == '(' || c == '[' || c == '{' || c == '<') { ++depth; }
         if (c == ')' || c == ']' || c == '}' || c == '>') { --depth; }
         if (c == ',' && depth == 0) {
-            pieces.emplace_back(text.substr(start, i - start));
+            pieces.emplace_back(stdx::string::substr(text, start, i - start));
             start = i + 1;
         }
     }
-    if (start < text.size()) { pieces.emplace_back(text.substr(start)); }
+    if (start < text.size()) { pieces.emplace_back(stdx::string::substr(text, start)); }
     for (auto& piece : pieces) {
         while (!piece.empty() && piece.front() == ' ') { piece.remove_prefix(1); }
     }
@@ -231,7 +232,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
         if (c == ')' || c == ']' || c == '}' || c == '>') { --depth; }
         if (c == ' ' && depth == 0) { break; }
     }
-    std::string described{param.substr(0, end)};
+    std::string described{stdx::string::substr(param, 0, end)};
     for (const std::string_view attr :
          {"byval", "sret", "signext", "zeroext", "alignstack(8)", "alignstack(16)"}) {
         if (param.contains(attr)) { described += fmt::format(" {}", attr); }
@@ -248,7 +249,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
         if (ir[end] == ')') { --depth; }
     }
     std::vector<std::string> params;
-    for (const auto param : split_top_level(ir.substr(start, end - 1 - start))) {
+    for (const auto param : split_top_level(stdx::string::substr(ir, start, end - 1 - start))) {
         params.emplace_back(describe_param(param));
     }
     return fmt::format("{}", fmt::join(params, ", "));
@@ -260,7 +261,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     const auto at{ir.find(marker)};
     REQUIRE(at != std::string_view::npos);
     const auto line_start{ir.rfind('\n', at) + 1};
-    auto       head{ir.substr(line_start, at - line_start)};
+    auto       head{stdx::string::substr(ir, line_start, at - line_start)};
 
     // The return type is the last bracket-balanced token before the name
     usize ret_start{head.size()};
@@ -272,7 +273,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
         if (c == ' ' && depth == 0) { break; }
         --ret_start;
     }
-    std::string signature{head.substr(ret_start)};
+    std::string signature{stdx::string::substr(head, ret_start)};
     for (const std::string_view attr : {"signext", "zeroext"}) {
         if (head.contains(attr)) { signature = fmt::format("{} {}", attr, signature); }
     }
@@ -289,14 +290,16 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     while ((at = text.find('%', at)) != std::string::npos) {
         usize end{at + 1};
         while (end < text.size() && is_name_char(text[end])) { ++end; }
-        const auto marker{fmt::format("\n{} = type ", text.substr(at, end - at))};
+        const auto marker{fmt::format("\n{} = type ", stdx::string::substr(text, at, end - at))};
         const auto definition{ir.find(marker)};
         if (definition == std::string_view::npos) {
             at = end;
             continue;
         }
         const auto body_start{definition + marker.size()};
-        text.replace(at, end - at, ir.substr(body_start, ir.find('\n', body_start) - body_start));
+        text.replace(at,
+                     end - at,
+                     stdx::string::substr(ir, body_start, ir.find('\n', body_start) - body_start));
     }
     return text;
 }
@@ -306,7 +309,7 @@ constexpr std::array X86_AGGREGATE_NAMES{"SL", "UL", "ULD", "ULI", "UFL"};
     const auto marker{fmt::format(" @{}(", callee)};
     for (auto at{ir.find(marker)}; at != std::string_view::npos; at = ir.find(marker, at + 1)) {
         const auto line_start{ir.rfind('\n', at) + 1};
-        if (ir.substr(line_start, at - line_start).contains("call ")) {
+        if (stdx::string::substr(ir, line_start, at - line_start).contains("call ")) {
             return params_at(ir, at + marker.size());
         }
     }
@@ -330,10 +333,10 @@ auto check_signatures(std::string_view triple, const std::vector<expectation>& e
 using raw_shape = std::pair<std::string_view, llvm::Type*>;
 
 [[nodiscard]] auto raw_module(llvm::LLVMContext& context, std::string_view triple)
-    -> std::unique_ptr<llvm::Module> {
+    -> stdx::box<llvm::Module> {
     codegen::initialize_all_targets();
     const auto machine{UNWRAP(codegen::create_target_machine({.triple_str = std::string{triple}}))};
-    auto       module{std::make_unique<llvm::Module>("raw_shapes", context)};
+    auto       module{stdx::make_box<llvm::Module>("raw_shapes", context)};
     module->setTargetTriple(machine->getTargetTriple());
     module->setDataLayout(machine->createDataLayout());
     return module;
@@ -341,7 +344,7 @@ using raw_shape = std::pair<std::string_view, llvm::Type*>;
 
 // `take_<name>(v): i32` and `give_<name>(v)` for each shape, lowered and printed
 [[nodiscard]] auto lowered_take_and_give(llvm::Module&                    module,
-                                         std::span<const raw_shape>       shapes,
+                                         gsl::span<const raw_shape>       shapes,
                                          const codegen::union_member_map& unions = {})
     -> std::string {
     auto& context{module.getContext()};

@@ -17,11 +17,10 @@ namespace ghoti::codegen {
 // the one member clang would
 using union_member_map = ankerl::unordered_dense::map<const llvm::Type*, std::vector<llvm::Type*>>;
 
-// A struct the type translator padded with `[N x i8]` elements for `@[align(n)]`: the element
-// index of each real field, and the alignment LLVM's own layout understates
+// A struct the type translator padded with `[N x i8]` elements for `@[align(n)]`
 struct padded_layout {
-    std::vector<u32> field_indices;
-    u64              alignment;
+    std::vector<u32> field_indices; // the element index of each real field
+    u64              alignment;     // the alignment LLVM's own layout understates
 };
 
 using padded_struct_map = ankerl::unordered_dense::map<const llvm::Type*, padded_layout>;

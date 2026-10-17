@@ -938,10 +938,9 @@ class type_resolver {
     // they were named after (e.g. `.win64`/`.sysv` need x86_64, `.aapcs` needs 32-bit arm).
     [[nodiscard]] auto target_supports_callconv(ast::calling_convention conv) const -> bool;
     // Why a C boundary (`extern`, `export`, `@export`, or an `extern fn(...)` type) with signature
-    // `fn_type` can't be built: it passes an aggregate by value on a target whose C ABI ghoti
-    // doesn't model
-    [[nodiscard]] auto unmodelled_c_abi_error(const type&            fn_type,
-                                              const source_location& location) const
+    // `fn_type` can't be built
+    [[nodiscard]] auto unmodeled_c_abi_error(const type&            fn_type,
+                                             const source_location& location) const
         -> stdx::option<diagnostic>;
 
   private:

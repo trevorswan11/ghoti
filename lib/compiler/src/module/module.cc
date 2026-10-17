@@ -17,6 +17,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
@@ -69,7 +70,7 @@ auto module_t::source_of(ast::node_id id) const -> std::string_view {
     // `end_location_of` ends just past the node's last token
     const auto start{offset_of(ast.location_of(id))};
     const auto end{offset_of(ast.end_location_of(id))};
-    return start < end ? text.substr(start, end - start) : std::string_view{};
+    return start < end ? stdx::string::substr(text, start, end - start) : std::string_view{};
 }
 
 auto module_t::print_diagnostics(std::ostream& os) const -> void {
