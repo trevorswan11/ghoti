@@ -847,6 +847,45 @@ auto emitter::constant_as_use_type(value v, ast::node_id at) -> value {
     return v;
 }
 
+auto emitter::prepare_shift_amount(value amount, sema::type& shifted, bool checked, ast::node_id at)
+    -> value {
+    stdx::option<i128> exact;
+    if (const auto big{amount.as_opt<u128>()}) {
+        exact = static_cast<i128>(std::min(*big, static_cast<u128>(128)));
+    } else {
+        exact = folded_int(amount);
+    }
+    if (!exact) { return amount; }
+
+    const semantics::int_domain domain{
+        .bits =
+            static_cast<u16>(shifted.get_kind() == sema::type_kind::INT ? sema::int_width(shifted)
+                                                                        : target_ptr_bits_),
+        .is_signed = sema::is_signed_integer(shifted),
+    };
+    if (checked) {
+        if (const auto folded{semantics::fold_int_shift(semantics::int_op::SHL, domain, 0, *exact)};
+            !folded) {
+            ctx_.diags.emplace_back(
+                semantics::describe(folded.error(), domain, ctx_.type_display_name(shifted)),
+                sema::error::COMPTIME_EVALUATION_FAILED,
+                active_ast().location_of(at));
+        }
+    }
+    if (!amount.type || !sema::is_comptime_numeric(amount.type->get_kind())) { return amount; }
+    const bool in_range{*exact >= 0 && *exact < domain.bits};
+    const auto bits{in_range ? *exact : i128{domain.bits}};
+    if (domain.bits > 64) {
+        amount.data =
+            domain.is_signed ? value::data_t{bits} : value::data_t{static_cast<u128>(bits)};
+    } else {
+        amount.data = domain.is_signed ? value::data_t{static_cast<i64>(bits)}
+                                       : value::data_t{static_cast<u64>(bits)};
+    }
+    amount.type.emplace(shifted);
+    return amount;
+}
+
 auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value {
     const auto folded{folded_int(v)};
     if (folded && !sema::comptime_int_fits(*folded, target, target_ptr_bits_)) {
@@ -2922,7 +2961,7 @@ auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> va
     auto       lhs{to_peer ? emit_coerced_expr(binary.lhs, *operand_peer)
                            : constant_as_use_type(emit_expression(binary.lhs), binary.lhs)};
     auto rhs{to_peer          ? emit_coerced_expr(binary.rhs, *operand_peer)
-             : untyped_amount ? emit_coerced_expr(binary.rhs, *lhs_sema)
+             : untyped_amount ? emit_expression(binary.rhs)
                               : constant_as_use_type(emit_expression(binary.rhs), binary.rhs)};
     // Float arithmetic converts a constant operand of another type to the result's float type;
     // a comparison converts an untyped constant to the float it meets (`@abs(3) < x`)
@@ -3512,7 +3551,11 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         const auto base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
         auto&      target_type{*lhs_lval.type};
         const auto loaded{builder_.emit_load(lhs_lval, target_type)};
-        const auto rhs{emit_coerced_expr(assign.rhs, target_type)};
+        // A shift amount keeps its own integer type
+        const bool is_shift{base_kind == instruction_kind::SHL ||
+                            base_kind == instruction_kind::SHR};
+        const auto rhs{is_shift ? emit_expression(assign.rhs)
+                                : emit_coerced_expr(assign.rhs, target_type)};
         const auto res_val{
             value{emit_checked_binary(base_kind,
                                       value{loaded, target_type},
@@ -6676,9 +6719,13 @@ auto emitter::emit_checked_binary(instruction_kind kind,
                                   value            lhs,
                                   value            rhs,
                                   sema::type&      result_type,
-                                  ast::node_id,
-                                  bool wrapping,
-                                  bool saturating) -> local_id {
+                                  ast::node_id     site,
+                                  bool             wrapping,
+                                  bool             saturating) -> local_id {
+    if ((kind == instruction_kind::SHL || kind == instruction_kind::SHR) &&
+        sema::is_integer(result_type.get_kind())) {
+        rhs = prepare_shift_amount(std::move(rhs), result_type, !wrapping && !saturating, site);
+    }
     // What must be checked is the shared contract's call; floats never trap
     const auto op{semantics::int_op_of(kind, wrapping, saturating)};
     const bool checkable{op && safety_enabled() && sema::is_integer(result_type.get_kind()) &&

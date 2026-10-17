@@ -442,8 +442,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto lhs_t{get_operand_type(inst.operands[0])};
             const auto rhs_t{get_operand_type(inst.operands[1])};
             if (lhs_t && rhs_t && !lhs_t->is_poison() && !rhs_t->is_poison()) {
+                // A shift amount is a bit count of any integer type, not a peer of the value
+                const bool is_shift{inst.kind != gir::instruction_kind::XOR};
                 if (!is_integer(lhs_t->get_kind()) || !is_integer(rhs_t->get_kind()) ||
-                    !is_same_unqualified(*lhs_t, *rhs_t)) {
+                    (!is_shift && !is_same_unqualified(*lhs_t, *rhs_t))) {
                     report_operator_mismatch(inst, *lhs_t, *rhs_t);
                 }
             }

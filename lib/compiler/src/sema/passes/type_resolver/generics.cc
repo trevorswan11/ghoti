@@ -228,15 +228,6 @@ struct shared_literal_shape {
     }
 };
 
-// Whether a ctor's arguments include a stand-in `type` (an impl sentinel, an associated-type
-// placeholder, or an unbound `type` parameter), making the instance a template
-[[nodiscard]] auto is_abstract_instance(gsl::span<type*> args) -> bool {
-    return std::ranges::any_of(args, [](type* arg) {
-        const auto& t{denoted_type(*arg)};
-        return t.get_kind() == type_kind::TYPE && t.get_data().is<types::builtin_type>();
-    });
-}
-
 // Whether an instance of the ctor owning `literal`, other than `slot`, is mid-instantiation
 [[nodiscard]] auto
 other_instance_in_progress(const context& ctx, const type& literal, const type& slot) -> bool {

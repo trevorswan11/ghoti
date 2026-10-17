@@ -178,6 +178,10 @@ class llvm_lowering {
     auto emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value*;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
         -> void;
+    // A shift amount of any integer type, resized to `value`'s width. One past the range of
+    // that width becomes the width itself, so it still reads as out of range
+    auto fit_shift_amount(llvm::Value* value, llvm::Value* amount, bool amount_signed)
+        -> llvm::Value*;
     // A zero divisor, and `MIN / -1` when signed, panic under runtime safety
     auto emit_division_guards(const gir::instruction& inst,
                               llvm::Value*            lhs,

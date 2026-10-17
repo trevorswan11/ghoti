@@ -805,6 +805,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Unions classify as C does: an `extern union` of floats travels in SSE registers on x86-64 and as an HFA on AArch64, and `f80`, `f128`, `i128`, and 16-byte vector fields take their two-register C classes
     - Fields placed by `@[align(n)]` classify by their real offsets and alignment, with the padding before them ignored as C ignores it
     - Other targets reject an aggregate passed by value where a call can cross into C (an `extern` or `export` declaration, `@export`, or an `extern fn(...)` type) instead of passing it wrongly; ghoti-only calls, including ones taking slices, still compile
+- A shift amount may be any integer type, independent of the value shifted: `x >> s` with `x: u64` and `s: u6`, `u32`, or `i8` is a `u64`, for `<< >> <<% <<|`, their compound forms, and `@shlWithOverflow`'s count
+    - A constant amount outside `[0, N)` for `<<` / `>>` is a compile error, even when the shifted value is only known at runtime (`x << 64` with `x: u64`)
+    - `@shlWithOverflow` with a count at or past the width writes `0` and reports an overflow unless the value was `0`
+- Fixed: a generic function whose parameter or return type instantiates a type constructor that rejects a non-integer (`fn(comptime T: type, x: T): Log2Int(T)`, where `Log2Int` reaches `@compileError` for anything else) failed at its declaration, because its own signature was checked with `T` unbound; each instantiation now checks it with `T` known
+- Fixed: `x <<% s` and `x <<| s` took the peer type of both operands rather than `x`'s type
 - `@sizeOf`, `@alignOf`, `@bitSizeOf`, and `@targetPtrBits` return `comptime_int` instead of `usize`, so they coerce to the integer type of their use site (`const n: u8 = @sizeOf(u32);`, `i32_value + @sizeOf(T)`) without a cast
     - Like an integer literal, a `let mut` binding with no annotation now gets `i32`, not `usize`; annotate it to keep `usize`
 - `@divExact(a, b)` divides integers that are known to divide evenly; a remainder is a compile error when folded, a panic under runtime safety, and undefined behavior otherwise

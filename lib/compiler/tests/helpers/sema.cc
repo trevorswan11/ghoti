@@ -313,15 +313,11 @@ namespace {
 }
 
 [[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {
-    auto [ctx, idx]{helpers::resolve(src)};
-    resolve_result out;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
-        for (const auto& d : *diags) {
-            out.codes.emplace_back(d.get_error());
-            if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
-        }
-    }
-    return out;
+    return collect_diags(*helpers::resolve(src).first);
+}
+
+[[nodiscard]] auto type_check_diags(std::string_view src) -> resolve_result {
+    return collect_diags(*helpers::type_check(src).first);
 }
 
 } // namespace ghoti::tests::helpers

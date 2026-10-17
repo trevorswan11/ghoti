@@ -13,6 +13,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/attributes.hh"
@@ -1080,8 +1081,18 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 return last_type_.emplace(call_type);
             }
 
-            auto inst_res{instantiate_for_call(
+            const auto diags_before_inst{ctx_.diags.size()};
+            auto       inst_res{instantiate_for_call(
                 call, callee_type, fn_info_copy, concrete_arg_types, comptime_args)};
+            // A ctor that rejects the unbound stand-in is left to each instantiation of the
+            // enclosing generic, where `T` is known
+            if (in_generic_signature_ && is_abstract_instance(concrete_arg_types) &&
+                (!inst_res || ctx_.diags.size() > diags_before_inst)) {
+                DISCARD(ctx_.diags.split_off(diags_before_inst));
+                auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
+                resolving_.set_sema_type(id, placeholder);
+                return last_type_.emplace(placeholder);
+            }
             if (!inst_res) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
 
             auto& return_type{*inst_res->return_type};
@@ -1414,6 +1425,10 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         param_types[param_idx++] = last_type_.take();
         resolve_symbol_info(fn.self->name, symbol_kind::VALUE);
     }
+
+    // An unbound `comptime` parameter can't instantiate a type ctor that inspects it yet
+    const mutating_context_guard signature_g{in_generic_signature_,
+                                             declares_generic_params(fn) || any_param_comptime(fn)};
 
     // Every parameter contributes to the resolution but not the type key due to unique idx
     for (const auto& param : fn.parameters) {
