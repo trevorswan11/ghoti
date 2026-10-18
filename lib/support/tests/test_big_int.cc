@@ -1,7 +1,9 @@
 #include <limits>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdx/types.hh>
 
 #include "support/big_int.hh"
 #include "support/int128.hh"
