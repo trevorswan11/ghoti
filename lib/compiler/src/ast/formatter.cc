@@ -249,6 +249,16 @@ auto formatter::consume_remaining_comments() -> syntax::doc_id {
     return doc_manager_.concat(std::move(docs));
 }
 
+auto formatter::consume_operator_comment(usize operator_line, node_id rhs) -> syntax::doc_id {
+    if (ast_.location_of(rhs).line <= operator_line) { return doc_manager_.nil(); }
+    return consume_trailing_comment(operator_line);
+}
+
+auto formatter::operand_break(syntax::doc_id operator_comment) -> syntax::doc_id {
+    if (operator_comment == doc_manager_.nil()) { return doc_manager_.line(); }
+    return doc_manager_.concat({operator_comment, doc_manager_.hard_line()});
+}
+
 auto formatter::find_fmt_marker(usize from, usize before_line, std::string_view state) const
     -> stdx::option<usize> {
     for (usize i{from}; i < comments_.size() && comments_[i].line < before_line; ++i) {
@@ -308,6 +318,55 @@ auto formatter::take_verbatim_region(usize       first,
         .items    = last - first + 1,
         .end_line = last_line,
     };
+}
+
+template <typename StartLine, typename EndLine, typename Render>
+auto formatter::format_commented_items(
+    usize count, usize close_line, StartLine&& start_line, EndLine&& end_line, Render&& render)
+    -> commented_items {
+    commented_items list;
+    list.items.reserve(count);
+    list.trailers.reserve(count);
+    for (usize i{0}; i < count; ++i) {
+        // Leading comments go first: rendering the item consumes the comments inside it
+        const auto leading{consume_leading_comments(start_line(i), i != 0)};
+        auto       item{render(i)};
+
+        // A comment on the item's last line belongs to the item only when nothing follows there
+        const auto end{end_line(i)};
+        const auto next{i + 1 < count ? start_line(i + 1) : close_line};
+        const auto trailing{next > end ? consume_trailing_comment(end) : doc_manager_.nil()};
+
+        if (leading != doc_manager_.nil()) { item = doc_manager_.concat({leading, item}); }
+        list.has_comments |= leading != doc_manager_.nil() || trailing != doc_manager_.nil();
+        list.items.emplace_back(item);
+        list.trailers.emplace_back(trailing);
+    }
+    if (count == 0) { return list; }
+
+    // A line comment can't share the closing delimiter's line ahead of it
+    const auto dangling{consume_dangling_comments(close_line, 0)};
+    if (dangling != doc_manager_.nil()) {
+        list.trailers.back() =
+            doc_manager_.concat({list.trailers.back(), doc_manager_.hard_line(), dangling});
+        list.has_comments = true;
+    }
+    return list;
+}
+
+auto formatter::commented_delimited(std::string_view open,
+                                    std::string_view close,
+                                    commented_items  list,
+                                    bool             pad,
+                                    bool             trailing_comma,
+                                    bool             force_break) -> syntax::doc_id {
+    return doc_manager_.delimited(open,
+                                  close,
+                                  std::move(list.items),
+                                  std::move(list.trailers),
+                                  pad,
+                                  trailing_comma,
+                                  force_break || list.has_comments);
 }
 
 auto formatter::format() -> void {
@@ -385,7 +444,7 @@ auto formatter::blank_line_after(node_id                    previous,
 auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
     const auto is_aggregate = [this](auto id) {
         return ast_.get_as_opt<struct_expr>(id) || ast_.get_as_opt<union_expr>(id) ||
-               ast_.get_as_opt<struct_expr>(id) || ast_.get_as_opt<interface_expr>(id);
+               ast_.get_as_opt<enum_expr>(id) || ast_.get_as_opt<interface_expr>(id);
     };
 
     if (ast_.get_as_opt<test_stmt>(id) || ast_.get_as_opt<impl_stmt>(id)) { return true; }
@@ -900,7 +959,7 @@ auto formatter::tail_clause(node_id stmt) -> syntax::doc_id {
     return format(stmt);
 }
 
-auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
+auto formatter::visit(node_id id, const array_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     head.emplace_back(doc_manager_.text("["));
     if (node.size) {
@@ -915,11 +974,14 @@ auto formatter::visit(node_id, const array_expr& node) -> syntax::doc_id {
     head.emplace_back(format(node.item_explicit_type));
     if (node.is_type_expr) { return doc_manager_.concat(std::move(head)); }
 
-    std::vector<syntax::doc_id> items;
-    items.reserve(node.items.size());
-    for (const auto& item : node.items) { items.emplace_back(format(item)); }
+    auto items{format_commented_items(
+        node.items.size(),
+        ast_.end_location_of(id).line,
+        [&](usize i) { return ast_.location_of(node.items[i]).line; },
+        [&](usize i) { return ast_.end_location_of(node.items[i]).line; },
+        [&](usize i) { return format(node.items[i]); })};
     head.emplace_back(
-        doc_manager_.delimited("{", "}", std::move(items), true, true, node.items_force_break));
+        commented_delimited("{", "}", std::move(items), true, true, node.items_force_break));
 
     return doc_manager_.concat(std::move(head));
 }
@@ -996,37 +1058,48 @@ auto formatter::visit(node_id, const asm_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(std::move(head));
 }
 
-auto formatter::visit(node_id, const call_expr& node) -> syntax::doc_id {
-    std::vector<syntax::doc_id> args;
-    args.reserve(node.arguments.size() + 2);
+auto formatter::visit(node_id id, const call_expr& node) -> syntax::doc_id {
     // `@call(modifier, f, args...)`: the modifier and the callee lead the argument list
-    if (node.modifier) {
-        args.emplace_back(format(*node.modifier));
-        args.emplace_back(format(node.function));
-    }
-    for (usize i{0}; i < node.arguments.size(); ++i) {
-        const auto& arg{node.arguments[i]};
-        auto        rendered{arg.visit([&](expr_handle h) { return format(h); },
-                                       [&](explicit_type_id t) { return format(t); })};
+    const usize lead{node.modifier ? 2UZ : 0UZ};
+    const auto  callee{node.modifier ? doc_manager_.text("@call") : format(node.function)};
+
+    const auto arg_line{[&](usize i, bool end) -> usize {
+        if (i < lead) {
+            const node_id lead_id{i == 0 ? node_id{*node.modifier} : node_id{node.function}};
+            return end ? ast_.end_location_of(lead_id).line : ast_.location_of(lead_id).line;
+        }
+        return node.arguments[i - lead].visit(
+            [&](auto h) { return end ? ast_.end_location_of(h).line : ast_.location_of(h).line; });
+    }};
+    const auto render_arg{[&](usize i) -> syntax::doc_id {
+        if (i < lead) { return i == 0 ? format(*node.modifier) : format(node.function); }
+        const auto idx{i - lead};
+        auto       rendered{node.arguments[idx].visit([&](auto h) { return format(h); })};
         // `f(rest...)`: this argument was written with a trailing pack-expansion `...`.
-        if (i < node.pack_expansions.size() && node.pack_expansions[i]) {
+        if (idx < node.pack_expansions.size() && node.pack_expansions[idx]) {
             rendered = doc_manager_.concat({rendered, doc_manager_.text("...")});
         }
-        args.emplace_back(rendered);
-    }
+        return rendered;
+    }};
 
-    const auto callee{node.modifier ? doc_manager_.text("@call") : format(node.function)};
-    if (args.size() == 1 && doc_manager_.contains_hard_break(args[0])) {
+    auto args{format_commented_items(
+        lead + node.arguments.size(),
+        ast_.end_location_of(id).line,
+        [&](usize i) { return arg_line(i, false); },
+        [&](usize i) { return arg_line(i, true); },
+        render_arg)};
+    if (args.items.size() == 1 && !args.has_comments &&
+        doc_manager_.contains_hard_break(args.items[0])) {
         return doc_manager_.concat({
             callee,
             doc_manager_.text("("),
-            args[0],
+            args.items[0],
             doc_manager_.text(")"),
         });
     }
     return doc_manager_.concat({
         callee,
-        doc_manager_.delimited("(", ")", std::move(args), false, true, node.args_force_break),
+        commented_delimited("(", ")", std::move(args), false, true, node.args_force_break),
     });
 }
 
@@ -1113,39 +1186,63 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
         return doc_manager_.nil();
     }};
 
-    std::vector<syntax::doc_id> params;
-    if (node.self) {
-        params.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(modifier_prefix(node.self->modifier)), format(node.self->name)}));
-    }
-    for (usize idx{0}; idx < node.parameters.size(); ++idx) {
+    // The receiver leads, and a C-variadic `...` is taken to sit on the last parameter's line
+    const usize lead{node.self ? 1UZ : 0UZ};
+    const auto  named_count{lead + node.parameters.size()};
+    const auto  named_end_line{[&](usize i) -> usize {
+        if (i < lead) { return ast_.end_location_of(node.self->name).line; }
+        const auto& param{node.parameters[i - lead]};
+        if (param.default_value) { return ast_.end_location_of(*param.default_value).line; }
+        if (param.explicit_type) { return ast_.end_location_of(*param.explicit_type).line; }
+        return ast_.end_location_of(param.name).line;
+    }};
+    const auto  param_line{[&](usize i, bool end) -> usize {
+        if (i == named_count) {
+            return named_count == 0 ? ast_.location_of(node.explicit_return_type).line
+                                    : named_end_line(i - 1);
+        }
+        if (end) { return named_end_line(i); }
+        return i < lead ? ast_.location_of(node.self->name).line
+                        : ast_.location_of(node.parameters[i - lead].name).line;
+    }};
+    const auto  render_param{[&](usize i) -> syntax::doc_id {
+        if (i == named_count) { return doc_manager_.text("..."); }
+        if (i < lead) {
+            return doc_manager_.concat(
+                {doc_manager_.text(modifier_prefix(node.self->modifier)), format(node.self->name)});
+        }
+        const auto  idx{i - lead};
         const auto& param{node.parameters[idx]};
-        auto        bound{impl_bound_for(idx)};
         // An untyped pack (`rest...`) has no type to render at all.
         if (param.is_pack && !param.explicit_type) {
-            params.emplace_back(
-                doc_manager_.concat({format(param.name), doc_manager_.text("...")}));
-            continue;
+            return doc_manager_.concat({format(param.name), doc_manager_.text("...")});
         }
-        params.emplace_back(doc_manager_.concat(
+        return doc_manager_.concat(
             {doc_manager_.text(param.is_comptime_written ? "comptime " : ""),
              format(param.name),
              doc_manager_.text(": "),
-             format_param_type(*param.explicit_type, bound),
+             format_param_type(*param.explicit_type, impl_bound_for(idx)),
              doc_manager_.text(param.is_pack ? "..." : ""),
              param.default_value
                  ? doc_manager_.concat({doc_manager_.text(" = "), format(*param.default_value)})
-                 : doc_manager_.nil()}));
-    }
-    if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
+                 : doc_manager_.nil()});
+    }};
+    // The `)` shares a line with the return type that follows it
+    const auto param_count{named_count + (node.variadic ? 1 : 0)};
+    const auto ret_line{ast_.location_of(node.explicit_return_type).line};
+    auto       params{format_commented_items(
+        param_count,
+        param_count == 0 ? ret_line : std::max(ret_line, param_line(param_count - 1, true)),
+        [&](usize i) { return param_line(i, false); },
+        [&](usize i) { return param_line(i, true); },
+        render_param)};
 
     const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
     if (node.is_type_expr) {
         return doc_manager_.concat({
             doc_manager_.text(node.is_extern ? "extern fn" : "fn"),
-            doc_manager_.delimited(
-                "(", ")", std::move(params), false, true, node.params_force_break),
+            commented_delimited("(", ")", std::move(params), false, true, node.params_force_break),
             callconv_doc,
             doc_manager_.text(": "),
             format(node.explicit_return_type),
@@ -1158,7 +1255,7 @@ auto formatter::visit(node_id, const function_expr& node) -> syntax::doc_id {
             : doc_manager_.nil(),
         node.is_move ? doc_manager_.text("move ") : doc_manager_.nil(),
         doc_manager_.text("fn"),
-        doc_manager_.delimited("(", ")", std::move(params), false, true, node.params_force_break),
+        commented_delimited("(", ")", std::move(params), false, true, node.params_force_break),
         callconv_doc,
         doc_manager_.text(": "),
         format(node.explicit_return_type),
@@ -1282,26 +1379,32 @@ auto formatter::visit(node_id, const infinite_loop_expr& node) -> syntax::doc_id
 }
 
 auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id {
-    return doc_manager_.group(doc_manager_.concat({
-        format(node.lhs),
-        doc_manager_.text(" "),
-        doc_manager_.text(operator_spelling(id.get_token_type())),
-        doc_manager_.nest(doc_manager_.concat({doc_manager_.line(), format(node.rhs)})),
-    }));
+    const auto lhs{format(node.lhs)};
+    const auto comment{consume_operator_comment(ast_.end_location_of(node.lhs).line, node.rhs)};
+    return doc_manager_.group(
+        doc_manager_.concat({
+            lhs,
+            doc_manager_.text(" "),
+            doc_manager_.text(operator_spelling(id.get_token_type())),
+            doc_manager_.nest(doc_manager_.concat({operand_break(comment), format(node.rhs)})),
+        }),
+        comment != doc_manager_.nil());
 }
 
 auto formatter::visit(node_id id, const binary_expr& node) -> syntax::doc_id {
-    auto lhs{format(node.lhs)};
-    auto tail{doc_manager_.nest(doc_manager_.concat({
+    auto       lhs{format(node.lhs)};
+    const auto comment{consume_operator_comment(ast_.end_location_of(node.lhs).line, node.rhs)};
+    auto       tail{doc_manager_.nest(doc_manager_.concat({
         doc_manager_.text(" "),
         doc_manager_.text(operator_spelling(id.get_token_type())),
-        doc_manager_.line(),
+        operand_break(comment),
         format(node.rhs),
     }))};
+    const bool force_break{comment != doc_manager_.nil()};
     if (doc_manager_.contains_hard_break(lhs)) {
-        return doc_manager_.concat({lhs, doc_manager_.group(tail)});
+        return doc_manager_.concat({lhs, doc_manager_.group(tail, force_break)});
     }
-    return doc_manager_.group(doc_manager_.concat({lhs, tail}));
+    return doc_manager_.group(doc_manager_.concat({lhs, tail}), force_break);
 }
 
 auto formatter::member_name(identifier_handle member) -> syntax::doc_id {
@@ -1324,22 +1427,28 @@ auto formatter::visit(node_id id, const range_expr& node) -> syntax::doc_id {
                                 node.rhs ? format(*node.rhs) : doc_manager_.nil()});
 }
 
-auto formatter::visit(node_id, const initializer_expr& node) -> syntax::doc_id {
+auto formatter::visit(node_id id, const initializer_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> parts;
     parts.emplace_back(node.object_type ? format(*node.object_type) : doc_manager_.text("."));
 
-    std::vector<syntax::doc_id> inits;
-    inits.reserve(node.initializers.size());
-    for (const auto& init : node.initializers) {
-        if (init.member) {
-            inits.emplace_back(
-                doc_manager_.concat({format(*init.member), assigned_value(init.value)}));
-        } else {
-            inits.emplace_back(format(init.value));
-        }
-    }
-    parts.emplace_back(doc_manager_.delimited(
-        "{", "}", std::move(inits), true, true, node.initializers_force_break));
+    const auto& inits{node.initializers};
+    auto        items{format_commented_items(
+        inits.size(),
+        ast_.end_location_of(id).line,
+        [&](usize i) {
+            return inits[i].member ? ast_.location_of(*inits[i].member).line
+                                   : ast_.location_of(inits[i].value).line;
+        },
+        [&](usize i) { return ast_.end_location_of(inits[i].value).line; },
+        [&](usize i) {
+            const auto& init{inits[i]};
+            if (!init.member) { return format(init.value); }
+            return doc_manager_.concat(
+                {format(*init.member),
+                 assigned_value(ast_.end_location_of(*init.member).line, init.value)});
+        })};
+    parts.emplace_back(
+        commented_delimited("{", "}", std::move(items), true, true, node.initializers_force_break));
 
     return doc_manager_.concat(std::move(parts));
 }
@@ -1462,8 +1571,19 @@ auto formatter::visit(node_id, const implicit_access_expr& node) -> syntax::doc_
         return doc_manager_.text(txt);                                                    \
     }
 
-auto formatter::assigned_value(node_id value) -> syntax::doc_id {
+auto formatter::assigned_value(usize operator_line, node_id value) -> syntax::doc_id {
+    const auto comment{consume_operator_comment(operator_line, value)};
     const auto value_doc{format(value)};
+    if (comment != doc_manager_.nil()) {
+        return doc_manager_.concat({doc_manager_.text(" ="),
+                                    doc_manager_.nest(doc_manager_.concat(
+                                        {comment,
+                                         doc_manager_.hard_line(),
+                                         doc_manager_.without_trailing_hard_line(value_doc)})),
+                                    value.get_token_type() == syntax::token_type_t::MULTILINE_STRING
+                                        ? doc_manager_.hard_line()
+                                        : doc_manager_.nil()});
+    }
     if (value.get_token_type() != syntax::token_type_t::MULTILINE_STRING) {
         return doc_manager_.concat({doc_manager_.text(" = "), value_doc});
     }
@@ -1559,7 +1679,7 @@ auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     });
 }
 
-auto formatter::visit(node_id, const cfg_value_expr& node) -> syntax::doc_id {
+auto formatter::visit(node_id id, const cfg_value_expr& node) -> syntax::doc_id {
     if (node.predicate) {
         return doc_manager_.concat({
             doc_manager_.text("@cfgValue("),
@@ -1568,20 +1688,29 @@ auto formatter::visit(node_id, const cfg_value_expr& node) -> syntax::doc_id {
         });
     }
 
-    std::vector<syntax::doc_id> arms;
-    arms.reserve(node.guards.size() + 1);
-    for (const auto& guard : node.guards) {
-        arms.emplace_back(doc_manager_.concat(
-            {format(guard.predicate), doc_manager_.text(" => "), format(guard.value)}));
-    }
-    if (node.fallback) {
-        arms.emplace_back(
-            doc_manager_.concat({doc_manager_.text("_ => "), format(*node.fallback)}));
-    }
+    // The fallback's `_` is taken to sit on its value's line
+    const auto& guards{node.guards};
+    auto        arms{format_commented_items(
+        guards.size() + (node.fallback ? 1 : 0),
+        ast_.end_location_of(id).line,
+        [&](usize i) {
+            return i < guards.size() ? ast_.location_of(guards[i].predicate).line
+                                     : ast_.location_of(*node.fallback).line;
+        },
+        [&](usize i) {
+            return ast_.end_location_of(i < guards.size() ? guards[i].value : *node.fallback).line;
+        },
+        [&](usize i) {
+            if (i == guards.size()) {
+                return doc_manager_.concat({doc_manager_.text("_ => "), format(*node.fallback)});
+            }
+            return doc_manager_.concat(
+                {format(guards[i].predicate), doc_manager_.text(" => "), format(guards[i].value)});
+        })};
 
     return doc_manager_.concat({
         doc_manager_.text("@cfgValue"),
-        doc_manager_.delimited("(", ")", std::move(arms), true, true, node.guards_force_break),
+        commented_delimited("(", ")", std::move(arms), true, true, node.guards_force_break),
     });
 }
 
@@ -1732,7 +1861,11 @@ auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),
-        node.value ? assigned_value(*node.value) : doc_manager_.nil(),
+        node.value
+            ? assigned_value(node.explicit_type ? ast_.end_location_of(*node.explicit_type).line
+                                                : ast_.end_location_of(node.name).line,
+                             *node.value)
+            : doc_manager_.nil(),
         doc_manager_.text(";"),
     });
 }
@@ -1871,30 +2004,50 @@ auto formatter::visit(explicit_type_id id, const dot_expr& node) -> syntax::doc_
 }
 
 auto formatter::visit(explicit_type_id id, const call_expr& node) -> syntax::doc_id {
-    std::vector<syntax::doc_id> args;
-    args.reserve(node.arguments.size());
-    for (const auto& arg : node.arguments) {
-        args.emplace_back(arg.visit([&](auto h) { return format(h); }));
-    }
+    const auto callee{format(node.function)};
+    const auto arg_line{[&](usize i, bool end) -> usize {
+        return node.arguments[i].visit(
+            [&](auto h) { return end ? ast_.end_location_of(h).line : ast_.location_of(h).line; });
+    }};
+    auto       args{format_commented_items(
+        node.arguments.size(),
+        ast_.end_location_of(id).line,
+        [&](usize i) { return arg_line(i, false); },
+        [&](usize i) { return arg_line(i, true); },
+        [&](usize i) { return node.arguments[i].visit([&](auto h) { return format(h); }); })};
     return with_modifier(
         id,
-        doc_manager_.concat({format(node.function),
-                             doc_manager_.delimited(
-                                 "(", ")", std::move(args), false, false, node.args_force_break)}));
+        doc_manager_.concat(
+            {callee,
+             commented_delimited("(", ")", std::move(args), false, false, node.args_force_break)}));
 }
 
 auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -> syntax::doc_id {
-    std::vector<syntax::doc_id> params;
-    params.reserve(node.parameter_types.size() + (node.variadic ? 1 : 0));
-    for (usize i{0}; i < node.parameter_types.size(); ++i) {
-        auto entry{i < node.parameter_names.size()
-                       ? doc_manager_.concat({format(node.parameter_names[i]),
-                                              doc_manager_.text(": "),
-                                              format(node.parameter_types[i])})
-                       : format(node.parameter_types[i])};
-        params.emplace_back(std::move(entry));
-    }
-    if (node.variadic) { params.emplace_back(doc_manager_.text("...")); }
+    // A C-variadic `...` is taken to sit on the last parameter's line
+    const auto& types{node.parameter_types};
+    const auto  ret_line{ast_.location_of(node.explicit_return_type).line};
+    const auto  type_end_line{[&](usize i) -> usize {
+        if (i < types.size()) { return ast_.end_location_of(types[i]).line; }
+        return types.empty() ? ret_line : ast_.end_location_of(types.back()).line;
+    }};
+    const auto  type_start_line{[&](usize i) -> usize {
+        if (i == types.size()) { return type_end_line(i); }
+        return i < node.parameter_names.size() ? ast_.location_of(node.parameter_names[i]).line
+                                               : ast_.location_of(types[i]).line;
+    }};
+    const auto  count{types.size() + (node.variadic ? 1 : 0)};
+    auto        params{format_commented_items(
+        count,
+        // The `)` shares a line with the return type, unless that was left implicit
+        count == 0 ? ret_line : std::max(ret_line, type_end_line(count - 1)),
+        type_start_line,
+        type_end_line,
+        [&](usize i) -> syntax::doc_id {
+            if (i == types.size()) { return doc_manager_.text("..."); }
+            if (i >= node.parameter_names.size()) { return format(types[i]); }
+            return doc_manager_.concat(
+                {format(node.parameter_names[i]), doc_manager_.text(": "), format(types[i])});
+        })};
 
     const auto callconv_doc{format_callconv(node.conv, node.has_explicit_conv)};
 
@@ -1906,8 +2059,7 @@ auto formatter::visit(explicit_type_id id, const explicit_function_type& node) -
         id,
         doc_manager_.concat({
             doc_manager_.text(keyword),
-            doc_manager_.delimited(
-                "(", ")", std::move(params), false, false, node.params_force_break),
+            commented_delimited("(", ")", std::move(params), false, false, node.params_force_break),
             callconv_doc,
             doc_manager_.text(": "),
             format(node.explicit_return_type),

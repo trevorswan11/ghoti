@@ -1027,6 +1027,99 @@ TEST_CASE("formatter preserves comments inside aggregates") {
     CHECK(format_source(union_no_trailing_comma) == union_source);
 }
 
+TEST_CASE("formatter keeps comments on the items of an array literal") {
+    round_trips(R"(test "x" {
+    const cases = [_][4]i32{
+        [_]i32{ 0, 1, 0, 0 },
+        [_]i32{ -2, 1, -2, 0 }, //afasdf
+        [_]i32{ -2, -1, 2, 0 },
+    };
+}
+)");
+
+    round_trips(R"(const table = [_]u8{
+    // leading
+    1, // one
+
+    // after a blank line
+    2,
+    // dangling before the brace
+};
+)");
+
+    // The comment forces the break, and the last item gets its comma
+    CHECK(format_source("const a = [_]u8{ 1, // one\n 2 };\n") ==
+          "const a = [_]u8{\n    1, // one\n    2,\n};\n");
+}
+
+TEST_CASE("formatter keeps comments on call arguments, initializers, and parameters") {
+    round_trips(R"(test "x" {
+    foo(
+        a, // first
+        // before b
+        b,
+    );
+    @call(
+        .always_inline, // modifier
+        f,
+        x,
+    );
+    let p = .{
+        .x = 1, // x
+        .y = 2,
+    };
+    const f = fn(
+        a: i32, // a
+        // before b
+        b: i32,
+    ): void {};
+}
+)");
+
+    round_trips(R"(extern("kernel32", "Foo") const Foo: extern fn(
+    code_page: u32, // CP_*
+    flags: u32,
+) callconv(.winapi): i32;
+)");
+
+    round_trips(R"(const v = @cfgValue(
+    os == .windows => 1, // win
+    _ => 2,
+);
+)");
+
+    // A comment after the closing delimiter stays on the statement
+    round_trips("const a = foo(1, 2); // after\n");
+}
+
+TEST_CASE("formatter keeps a comment that follows an operator") {
+    round_trips(R"(test "x" {
+    let c = 1 + // plus
+        2;
+    x = // assign
+        3;
+    const y: i32 = // decl
+        4;
+    let p = .{
+        .a = // field
+            5,
+    };
+}
+)");
+}
+
+TEST_CASE("formatter separates an enum declaration from what follows like other aggregates") {
+    CHECK(format_source("const E = enum { a, b };\nconst z = 1;\n") ==
+          "const E = enum { a, b };\n\nconst z = 1;\n");
+}
+
+TEST_CASE("formatter drops a CRLF line's carriage return from comments") {
+    CHECK(format_source(
+              "const x = 1; // hi\r\n// own line\r\nconst y = [_]u8{\r\n    1, // one\r\n    "
+              "2,\r\n};\r\n") ==
+          "const x = 1; // hi\n// own line\nconst y = [_]u8{\n    1, // one\n    2,\n};\n");
+}
+
 TEST_CASE("formatter preserves standalone comments") {
     CHECK(format_source("// single line comment\n") == "// single line comment\n");
     CHECK(format_source("// comment 1\n// comment 2\n") == "// comment 1\n// comment 2\n");

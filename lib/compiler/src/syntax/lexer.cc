@@ -626,10 +626,10 @@ auto lexer::read_comment() noexcept -> token_t {
     const auto start_col{col_no_};
     while (current_byte_ != '\n' && !at_end()) { read_character(); }
 
-    return {token_type_t::COMMENT,
-            stdx::string::substr(input_, start, pos_ - start),
-            start_line,
-            start_col};
+    // A CRLF line's `\r` belongs to the line break, not the comment text
+    auto slice{stdx::string::substr(input_, start, pos_ - start)};
+    if (slice.ends_with('\r')) { slice.remove_suffix(1); }
+    return {token_type_t::COMMENT, slice, start_line, start_col};
 }
 
 } // namespace ghoti::syntax

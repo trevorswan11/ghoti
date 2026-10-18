@@ -47,6 +47,13 @@ class formatter {
         bool             consumed{false};
     };
 
+    // A `delimited` list's items with their comments, `trailers` lining up with `items`
+    struct commented_items {
+        std::vector<syntax::doc_id> items;
+        std::vector<syntax::doc_id> trailers;
+        bool                        has_comments{false};
+    };
+
     // A `// ghoti fmt: off` region over a run of list items, kept as its original source lines
     struct verbatim_region {
         syntax::doc_id doc;      // leading comments, the author's blank line, then the source
@@ -124,8 +131,9 @@ class formatter {
     [[nodiscard]] auto with_attributes(const stdx::option<attribute_list>& attributes,
                                        syntax::doc_id                      head) -> syntax::doc_id;
     [[nodiscard]] auto tail_clause(node_id stmt) -> syntax::doc_id;
-    // ` = value`, with a multiline string value starting its own line so its lines align
-    [[nodiscard]] auto assigned_value(node_id value) -> syntax::doc_id;
+    // ` = value` for an `=` on `operator_line`, with a multiline string value starting its own
+    // line so its lines align
+    [[nodiscard]] auto assigned_value(usize operator_line, node_id value) -> syntax::doc_id;
     // `|v|` / `|&mut v|`, with a trailing space when a body follows on the same line
     [[nodiscard]] auto format_capture(const capture_t& capture, bool trailing_space = false)
         -> syntax::doc_id;
@@ -206,6 +214,11 @@ class formatter {
     // Comments before the closing brace at (`brace_line`, `brace_col`); one after it is trailing
     auto consume_dangling_comments(usize brace_line, usize brace_col = SIZE_MAX) -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;
+    // The comment ending `operator_line` when the operand `rhs` starts below it, as in `a + // c`
+    auto consume_operator_comment(usize operator_line, node_id rhs) -> syntax::doc_id;
+    // What separates an operator from its operand: `line()`, or the operator's comment and a
+    // hard break
+    auto operand_break(syntax::doc_id operator_comment) -> syntax::doc_id;
 
     // Index of the first unconsumed own-line `// ghoti fmt: <state>` comment before `before_line`
     [[nodiscard]] auto find_fmt_marker(usize from, usize before_line, std::string_view state) const
@@ -223,6 +236,20 @@ class formatter {
                               EndLine&&   end_line,
                               usize       limit_line,
                               bool        allow_leading_blank) -> stdx::option<verbatim_region>;
+    // Renders `count` comma-separated items that close on `close_line`. Each keeps the own-line
+    // comments above it, the comment ending its line goes after its comma, and comments left
+    // before the closing delimiter follow the last item.
+    template <typename StartLine, typename EndLine, typename Render>
+    auto format_commented_items(
+        usize count, usize close_line, StartLine&& start_line, EndLine&& end_line, Render&& render)
+        -> commented_items;
+    // `delimited` over commented items, broken whenever any comment is kept
+    auto commented_delimited(std::string_view open,
+                             std::string_view close,
+                             commented_items  list,
+                             bool             pad,
+                             bool             trailing_comma,
+                             bool             force_break) -> syntax::doc_id;
     // A parameter's type, with an `impl` bound in place of the `auto` it desugared to
     auto format_param_type(explicit_type_id type, syntax::doc_id bound) -> syntax::doc_id;
 
