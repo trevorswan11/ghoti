@@ -787,8 +787,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
     // `comptime` parameters are erased from the monomorph's signature. A pack contributes one
     // slot per trailing argument rather than one for the whole `rest...` declaration.
-    const auto     pack_elem_count{has_pack ? concrete_args.size() - fixed_param_count : 0UZ};
-    usize          fixed_rt_count{0};
+    const auto pack_elem_count{has_pack ? concrete_args.size() - fixed_param_count : 0UZ};
+    usize      fixed_rt_count{0};
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         if (!binds_comptime(fn_mod.ast, fn_expr, p_idx, concrete_args)) { ++fixed_rt_count; }
     }

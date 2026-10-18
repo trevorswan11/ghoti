@@ -509,13 +509,13 @@ struct union_expr {
     using cfg_group        = cfg_item_group<field>;
     using member_cfg_group = cfg_item_group<member_handle>;
 
-    std::vector<field>            fields;
-    std::vector<cfg_group>        cfg_groups;
-    member_list                   members;
-    std::vector<member_cfg_group> member_cfg_groups;
-    bool                          is_extern{false};
-    bool                          is_packed{false};
-    bool                          fields_force_break{false}; // trailing comma in the field list
+    std::vector<field>             fields;
+    std::vector<cfg_group>         cfg_groups;
+    member_list                    members;
+    std::vector<member_cfg_group>  member_cfg_groups;
+    bool                           is_extern{false};
+    bool                           is_packed{false};
+    bool                           fields_force_break{false}; // trailing comma in the field list
     tag_kind                       tag{tag_kind::NONE};
     stdx::option<explicit_type_id> tag_type; // set for `tag_kind::EXPLICIT`
 

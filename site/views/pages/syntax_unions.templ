@@ -13,7 +13,7 @@ templ SyntaxUnionsPage() {
 					<ul>
 						<li>The union reads as its tag, so <code>const k: MyEnum = u;</code> is the variant of the active field</li>
 						<li>A non-exhaustive <code>MyEnum</code> works too: its unnamed values have no field, so the union never holds one, and a <code>match</code> on the union only needs its fields</li>
-						<li><code>{ "@typeInfo" }(U).@"union".tag_type</code> is <code>MyEnum</code>, and <code>void</code> {"for"} any other union</li>
+						<li><code>{ "@typeInfo" }(U).@"union".tag_type</code> is <code>MyEnum</code>, and <code>void</code> { "for" } any other union</li>
 					</ul>
 				</li>
 				<li><code>union(void) { "{ ... }" }</code>: an untagged union with Ghoti's own layout; any field may be read, reinterpreting the same bytes, and it cannot be <code>match</code>ed</li>

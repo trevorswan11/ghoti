@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <fmt/base.h>
+#include <fmt/compile.h>
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/span>
@@ -55,6 +56,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
 #include "support/counter.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -403,8 +405,14 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
 // A `comptime_int` grows as needed, so only a runaway result (`1 << (1 << 40)`) is refused
 constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
 
-constexpr std::string_view COMPTIME_INT_RANGE_EXCEEDED{
-    "Compile-time integer result exceeds the 16777216-bit limit of comptime_int"};
+constexpr auto COMPTIME_INT_RANGE_EXCEEDED{[] {
+    stdx::fixed::vector<char, 128> buf;
+    fmt::format_to(
+        std::back_inserter(buf),
+        FMT_COMPILE("Compile-time integer result exceeds the {}-bit limit of comptime_int"),
+        MAX_COMPTIME_INT_BITS);
+    return buf;
+}()};
 
 // `v` stored as `make_scalar_const` would, keeping an unsigned arm for unsigned operands
 [[nodiscard]] auto from_exact_int(const big_int&            v,
@@ -514,7 +522,11 @@ struct int_width_target {
     }
 
     auto exact{exact_big_int(op_type, *l, *r)};
-    if (!exact) { return on_error(COMPTIME_INT_RANGE_EXCEEDED); }
+    if (!exact) {
+        static constexpr std::string_view msg{COMPTIME_INT_RANGE_EXCEEDED.data(),
+                                              COMPTIME_INT_RANGE_EXCEEDED.size()};
+        return on_error(msg);
+    }
     if (target) {
         const bool checked{target->is_signed && !wrapping && is_overflow_checked_op(op_type)};
         if (checked && !exact->fits(target->bits, true)) {
@@ -3229,39 +3241,37 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     };
 
     // Binds an arm's capture: a variant's payload, or the whole scrutinee for the catch-all
-    const auto bind_capture{
-        [&](const ast::match_expr::arm& arm, bool whole) {
-            if (arm.capture && arm.capture->payload.is<ast::identifier_expr>() &&
-                (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr()) &&
-                !call_stack_.empty()) {
-                // `|&mut v|` refers to the matched place's payload; a temporary gets a slot
-                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
-                auto        place{eval_place(match.matcher)};
-                if (!place) { place = ref_to_temporary(*matcher_val); }
-                if (const auto un{matcher_val->as_opt<const_union>()};
-                    un && !un->payload.empty() && !whole) {
-                    place->path.emplace_back(ref_step::kind::PAYLOAD, un->active_field);
-                }
-                call_stack_.back().bindings.insert_or_assign(
-                    ident.name,
-                    const_value{std::move(*place),
-                                module_->get_sema_type_opt(*arm.capture->payload)});
-            } else if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
-                const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
-                if (!call_stack_.empty()) {
-                    if (const auto un{matcher_val->as_opt<const_union>()}; un && !whole) {
-                        if (!un->payload.empty()) {
-                            call_stack_.back().bindings.insert_or_assign(ident.name,
-                                                                         un->payload.front());
-                        } else {
-                            call_stack_.back().bindings.insert_or_assign(ident.name, *matcher_val);
-                        }
+    const auto bind_capture{[&](const ast::match_expr::arm& arm, bool whole) {
+        if (arm.capture && arm.capture->payload.is<ast::identifier_expr>() &&
+            (arm.capture->modifier.is_ref() || arm.capture->modifier.is_ptr()) &&
+            !call_stack_.empty()) {
+            // `|&mut v|` refers to the matched place's payload; a temporary gets a slot
+            const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
+            auto        place{eval_place(match.matcher)};
+            if (!place) { place = ref_to_temporary(*matcher_val); }
+            if (const auto un{matcher_val->as_opt<const_union>()};
+                un && !un->payload.empty() && !whole) {
+                place->path.emplace_back(ref_step::kind::PAYLOAD, un->active_field);
+            }
+            call_stack_.back().bindings.insert_or_assign(
+                ident.name,
+                const_value{std::move(*place), module_->get_sema_type_opt(*arm.capture->payload)});
+        } else if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
+            const auto& ident{module_->ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
+            if (!call_stack_.empty()) {
+                if (const auto un{matcher_val->as_opt<const_union>()}; un && !whole) {
+                    if (!un->payload.empty()) {
+                        call_stack_.back().bindings.insert_or_assign(ident.name,
+                                                                     un->payload.front());
                     } else {
                         call_stack_.back().bindings.insert_or_assign(ident.name, *matcher_val);
                     }
+                } else {
+                    call_stack_.back().bindings.insert_or_assign(ident.name, *matcher_val);
                 }
             }
-        }};
+        }
+    }};
 
     for (usize i{0}; i < match.arms.size(); ++i) {
         if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
@@ -3579,9 +3589,11 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
                  (is_exact_comptime_int_op(op_type) || is_bitwise_op(op_type)))) {
         stdx::option<int_width_target> target;
         if (width && res_type) {
-            target.emplace(int_width_target{.bits      = width->first,
-                                            .is_signed = width->second,
-                                            .name      = ctx_.type_display_name(*res_type)});
+            target.emplace(int_width_target{
+                .bits      = width->first,
+                .is_signed = width->second,
+                .name      = ctx_.type_display_name(*res_type),
+            });
         }
         return fold_big_int_binary(
             op_type, lhs, rhs, res_type, target, wrapping, bool_type, on_fold_error);

@@ -320,7 +320,7 @@ struct union_t {
     bool                                    is_c_abi{false};
     bool                                    is_packed{false};
     // The enum a `union(MyEnum)` is tagged by, whose variants its fields name
-    type* tag_enum{nullptr};
+    stdx::option<type&> tag_enum{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;

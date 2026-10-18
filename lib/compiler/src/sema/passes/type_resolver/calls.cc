@@ -913,7 +913,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     param_type = concrete_arg_types[*bound_idx];
                 }
 
-                const auto&                    arg{call.arguments[expanded.source_index[i]]};
+                const auto& arg{call.arguments[expanded.source_index[i]]};
                 // A bare `auto` keeps a `comptime_int`/`comptime_float` argument's type, binding it
                 // at compile time instead of materializing it
                 // So does `y: @TypeOf(x)` once `x` holds one, taking `x`'s type
@@ -935,8 +935,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     g.emplace(implicit_type_stack_,
                               ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL));
                 } else if (keeps_comptime) {
-                    // The call's own context (`return f(5)` in an `i32` function) says nothing
-                    // about what the argument is
+                    // The call's own context says nothing about what the argument is
                     g.emplace(implicit_type_stack_, nullptr);
                 }
 

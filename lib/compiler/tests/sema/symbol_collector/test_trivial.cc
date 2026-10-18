@@ -7,7 +7,6 @@
 
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/builtins.hh"
-#include "compiler/syntax/token_type.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
 

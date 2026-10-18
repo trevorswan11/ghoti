@@ -17,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 

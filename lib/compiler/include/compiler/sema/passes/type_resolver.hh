@@ -30,11 +30,11 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
-#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -1004,8 +1004,8 @@ class type_resolver {
     ankerl::unordered_dense::set<usize> callee_dots_;
     bool                                in_expr_branch_{false};
     // Resolving the literal a unary `-` applies to, which may be one past its type's max
-    bool                                negated_literal_{false};
-    bool                                arm_of_unused_{false};
+    bool negated_literal_{false};
+    bool arm_of_unused_{false};
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.
     ankerl::unordered_dense::set<usize> unused_value_nodes_;

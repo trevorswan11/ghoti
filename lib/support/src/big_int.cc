@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <bit>
 #include <compare>
 #include <string>
 #include <string_view>

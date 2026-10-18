@@ -490,9 +490,9 @@ class emitter {
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
     [[nodiscard]] auto emit_comptime_return(const const_value& returned, ast::node_id at) -> bool;
-    [[nodiscard]] auto        emit_union_tag_as_enum(ast::expr_handle expr_id,
-                                                     sema::type&      union_type,
-                                                     sema::type&      enum_type) -> value;
+    [[nodiscard]] auto emit_union_tag_as_enum(ast::expr_handle expr_id,
+                                              sema::type&      union_type,
+                                              sema::type&      enum_type) -> value;
     [[nodiscard]] auto
     emit_comptime_only_call(ast::node_id id, sema::type& result, sema::type& dest) -> value;
     [[nodiscard]] auto instantiation_result(std::string_view mangled_name)
