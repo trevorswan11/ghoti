@@ -114,6 +114,17 @@ struct int_suffix {
 }
 
 // Splits a lexeme into `<prefix><digits>` and a trailing suffix
+// The exact value of a literal's digits, skipping `_` separators
+[[nodiscard]] auto exact_digits(std::string_view digits, syntax::numeric_base base)
+    -> stdx::option<big_int> {
+    std::string kept;
+    kept.reserve(digits.size());
+    for (const char c : digits) {
+        if (c != '_') { kept.push_back(c); }
+    }
+    return big_int::parse(kept, std::to_underlying(base));
+}
+
 [[nodiscard]] auto split_int_lexeme(std::string_view lexeme, syntax::numeric_base base)
     -> std::pair<std::string_view, std::string_view> {
     const usize prefix{base == syntax::numeric_base::DECIMAL ? 0UZ : 2UZ};
@@ -222,19 +233,28 @@ auto int_literal_expr::parse(syntax::parser& parser)
                                                                  : stdx::string::substr(digits, 2)};
     bool       overflow{false};
     const u128 value{parse_u128(digits_only, std::to_underlying(base), overflow)};
-    if (overflow) {
+    // Past 128 bits the literal is still exact, as a `comptime_int` grows as needed
+    if (overflow && !exact_digits(digits_only, base)) {
         return make_syntax_err("Overflow of literal", syntax::error::INTEGER_OVERFLOW, start_token);
     }
 
     return parser.add_expr<int_literal_expr>(start_token,
                                              int_literal_expr{
-                                                 .value     = value,
+                                                 .value     = overflow ? u128{} : value,
                                                  .width     = info->width,
                                                  .is_signed = info->is_signed,
                                                  .is_size   = info->is_size,
                                                  .base      = base,
                                                  .spelling  = slice,
+                                                 .is_big    = overflow,
                                              });
+}
+
+auto int_literal_expr::exact_value() const -> big_int {
+    if (!is_big) { return big_int{value}; }
+    const auto digits{split_int_lexeme(spelling, base).first};
+    return *exact_digits(
+        base == syntax::numeric_base::DECIMAL ? digits : stdx::string::substr(digits, 2), base);
 }
 
 auto float_literal_expr::parse(syntax::parser& parser)

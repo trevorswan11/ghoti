@@ -142,7 +142,7 @@ TEST_CASE("Writing a struct field inside a mut slice element") {
 
 TEST_CASE("Writing a union field through a var local") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .val = 5 };
             u.val = u.val + 10;
@@ -153,7 +153,7 @@ TEST_CASE("Writing a union field through a var local") {
 
 TEST_CASE("Writing a different union field than the active one updates the active variant") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .a = 1 };
             u.b = 99;
@@ -167,7 +167,7 @@ TEST_CASE("Writing a different union field than the active one updates the activ
 
 TEST_CASE("Writing a union field through a const local is rejected") {
     helpers::expect_compile_error(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         pub const main = fn(): i32 {
             let u = U{ .val = 5 };
             u.val = u.val + 10;

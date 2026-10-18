@@ -19,7 +19,7 @@ TEST_CASE("GIR single monomorphized instantiation") {
         };
 
         const test_fn = fn(): i32 {
-            return identity(42);
+            return identity(42i32);
         };
     )")};
 

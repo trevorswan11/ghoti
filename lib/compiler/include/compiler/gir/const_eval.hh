@@ -83,6 +83,10 @@ class const_eval {
         return std::string{bare};
     }
 
+    // Whether the last outermost evaluation left its function with a `return`, as
+    // `comptime { ...; return r; }` does
+    [[nodiscard]] auto last_eval_returned() const noexcept -> bool { return last_returned_; }
+
     // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
     auto clear_memo() noexcept -> void {
         memo_cache_.clear();
@@ -487,6 +491,7 @@ class const_eval {
     stdx::option<const_value>      current_error_val_{};
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
+    bool                                                               last_returned_{false};
     ankerl::unordered_dense::map<std::string, const_value>             global_cx_vars_;
 };
 

@@ -77,7 +77,7 @@ pub const Test = struct {
 
 /// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).
 pub const Flow = fn(comptime C: type, comptime R: type): type {
-    return union {
+    return union(enum) {
         @"continue": C, /// Holds the success payload
         @"break": R, /// Holds the early-return residual
     };
@@ -284,6 +284,8 @@ pub const UnionInfo = struct {
     pub is_extern: bool,
     pub is_packed: bool,
     pub tagged: bool,
+    /// The enum a `union(MyEnum)` is tagged by; `void` for `union(enum)` and untagged unions
+    pub tag_type: type = void,
 };
 
 pub const EnumFieldInfo = struct {
@@ -322,7 +324,7 @@ pub const FnInfo = struct {
 };
 
 /// The keystone reflection value: `@typeInfo(T)` returns one of these.
-pub const TypeInfo = union {
+pub const TypeInfo = union(enum) {
     int: IntInfo,
     float: FloatInfo,
     @"comptime_int": void,

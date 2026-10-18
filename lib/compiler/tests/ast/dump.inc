@@ -327,6 +327,7 @@ ExpressionStatement
 └─ Expr: UnionExpression
     ├─ Extern: false
     ├─ Packed: false
+    ├─ Tag: enum
     └─ Fields:
         ├─ Field:
         │   ├─ Tag: IdentifierExpression: a
@@ -412,6 +413,7 @@ ExpressionStatement
 └─ Expr: UnionExpression
     ├─ Extern: false
     ├─ Packed: false
+    ├─ Tag: enum
     ├─ Fields:
     │   └─ Field:
     │       ├─ Tag: IdentifierExpression: a
@@ -747,6 +749,7 @@ ExpressionStatement
 └─ Expr: UnionExpression
     ├─ Extern: false
     ├─ Packed: false
+    ├─ Tag: enum
     └─ Fields:
         ├─ Field:
         │   ├─ Tag: IdentifierExpression: a
@@ -764,6 +767,7 @@ DeclStatement
 └─ Value: UnionExpression
     ├─ Extern: true
     ├─ Packed: false
+    ├─ Tag: none
     └─ Fields:
         ├─ Field:
         │   ├─ Tag: IdentifierExpression: a

@@ -1,7 +1,7 @@
 import std;
 
 pub const Result = fn(comptime T: type, comptime E: type): type {
-    return union {
+    return union(enum) {
         ok: T,
         err: E,
 
@@ -160,10 +160,13 @@ test "Result.eq on an untyped literal" {
 
 test "Result.eq prefers an exact E over a numeric T" {
     let r: Result(usize, i32) = .fail(3);
-    @expect(r.eq(3)); // `3` is an `i32`, so it compares against the error
+    @expect(r.eq(3i32)); // an `i32` compares against the error
     let ok: Result(usize, i32) = .of(3);
-    @expect(!ok.eq(3));
+    @expect(!ok.eq(3i32));
     @expect(ok.eq(3uz));
+    // An untyped `3` stays `comptime_int` and compares numerically against the payload
+    @expect(ok.eq(3));
+    @expect(!r.eq(3));
 }
 
 test "Result.map transforms ok variant" {

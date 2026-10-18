@@ -155,7 +155,7 @@ TEST_CASE("a leading `///` on an enum variant attaches to that variant's name") 
 
 TEST_CASE("a leading `///` on a union field attaches to that field's name") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const Value = union {
+    auto         ast{helpers::parse(R"(const Value = union(enum) {
     /// Present when the value is an integer.
     int: i64,
     flag: bool,
@@ -218,7 +218,7 @@ TEST_CASE("a trailing same-line `///` attaches to a struct field / enum variant 
 
     SECTION("last field, no trailing comma") {
         ghoti::arena arena;
-        auto         ast{helpers::parse(R"(const U = union {
+        auto         ast{helpers::parse(R"(const U = union(enum) {
     a: u8,
     b: u16 /// the wide one
 };

@@ -105,7 +105,7 @@ TEST_CASE("Struct field with a sized array type") {
 
 TEST_CASE("Tagged union scalar field initializer") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .val = 7 };
             return 0;
@@ -115,7 +115,7 @@ TEST_CASE("Tagged union scalar field initializer") {
 
 TEST_CASE("Tagged union field read") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .val = 42 };
             return u.val;
@@ -125,7 +125,7 @@ TEST_CASE("Tagged union field read") {
 
 TEST_CASE("Tagged union bool field") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { flag: bool, val: i32 };
+        const U = union(enum) { flag: bool, val: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .flag = true };
             return if (u.flag) 1 else 0;
@@ -135,7 +135,7 @@ TEST_CASE("Tagged union bool field") {
 
 TEST_CASE("Tagged union field with an array type") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { items: [3]i32, flag: bool };
+        const U = union(enum) { items: [3]i32, flag: bool };
         pub const main = fn(): i32 {
             let mut u = U{ .items = [3]i32{7, 8, 9} };
             return u.items[0];

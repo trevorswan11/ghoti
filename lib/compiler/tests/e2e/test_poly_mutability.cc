@@ -83,7 +83,7 @@ TEST_CASE("a `mut?` slice parameter follows its argument") {
 
 TEST_CASE("a `match` capture by `&mut?` reborrows the payload") {
     check_both(R"(
-        const U = union { a: i32, b: void };
+        const U = union(enum) { a: i32, b: void };
         const payload = fn(u: &mut? U): &mut? i32 {
             return match (u) { .a => |&mut? v| v, .b => unreachable };
         };
@@ -123,7 +123,7 @@ TEST_CASE("a `mut?` view only takes its mutability from a `mut?` parameter") {
     expect_error("const f = fn(x: &i32): &mut? i32 { return x; };",
                  sema::error::ILLEGAL_POLY_MUTABILITY);
     expect_error("const S = struct { r: &mut? i32 };", sema::error::ILLEGAL_POLY_MUTABILITY);
-    expect_error("const U = union { a: []mut? u8, b: void };",
+    expect_error("const U = union(enum) { a: []mut? u8, b: void };",
                  sema::error::ILLEGAL_POLY_MUTABILITY);
     expect_error("let g: ^mut? i32 = undefined;", sema::error::ILLEGAL_POLY_MUTABILITY);
 }

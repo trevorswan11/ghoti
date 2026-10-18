@@ -191,7 +191,7 @@ TEST_CASE("An over-aligned field is laid out at its aligned offset") {
 }
 
 TEST_CASE("@[align(n)] is not supported on union fields") {
-    CHECK(has_error("const U = union { @[align(8)] a: u8, b: u16 };",
+    CHECK(has_error("const U = union(enum) { @[align(8)] a: u8, b: u16 };",
                     sema::error::ILLEGAL_ATTRIBUTE));
 }
 

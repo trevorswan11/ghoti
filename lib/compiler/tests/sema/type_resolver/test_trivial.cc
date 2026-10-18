@@ -128,7 +128,7 @@ TEST_CASE("Defer body jump rejection") {
 
     helpers::test_resolver_fail(
         R"(
-const R = union { ok: i32, err: i32 };
+const R = union(enum) { ok: i32, err: i32 };
 impl builtin.Unwrappable for R {
     const Output = i32;
     const Residual = i32;

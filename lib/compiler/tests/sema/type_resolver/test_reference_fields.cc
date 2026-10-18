@@ -10,7 +10,7 @@ namespace ghoti::tests {
 
 TEST_CASE("Reference-typed fields are allowed in plain structs and unions") {
     helpers::resolve_and_check("const S = struct { r: &i32, m: &mut i32 };");
-    helpers::resolve_and_check("const U = union { r: &i32, n: i32 };");
+    helpers::resolve_and_check("const U = union(enum) { r: &i32, n: i32 };");
 }
 
 TEST_CASE("A reference-typed field is rejected in an extern struct") {

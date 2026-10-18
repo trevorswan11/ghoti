@@ -394,6 +394,41 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
 VISITOR_TEMPLATE_INIT(type_resolver, visit, const ast::struct_expr&)
 
+// A `union(MyEnum)` has one field per variant of `MyEnum`, each named for its variant. A
+// non-exhaustive enum's unnamed values have no field, so the union can never hold them
+template <ast::IndexableID ID>
+auto type_resolver::check_union_tag_enum(const ast::union_expr& union_expr, type& tag_enum, ID id)
+    -> stdx::option<diagnostic> {
+    const auto& en{tag_enum.get_data().as<types::enum_t>()};
+    const auto  variant_name{[&](const ast::enum_expr::enumeration& e) -> std::string_view {
+        return en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name;
+    }};
+    for (const auto& field : union_expr.fields) {
+        const auto& name{resolving_.ast.get_as<ast::identifier_expr>(field.name).name};
+        if (!std::ranges::any_of(en.ast_enumerations,
+                                 [&](const auto& e) { return variant_name(e) == name; })) {
+            return diagnostic{fmt::format("Union field '{}' is not a variant of its tag enum '{}'",
+                                          name,
+                                          ctx_.type_display_name(tag_enum)),
+                              error::ILLEGAL_UNION_TAG,
+                              resolving_.ast.location_of(field.name)};
+        }
+    }
+    for (const auto& e : en.ast_enumerations) {
+        const auto name{variant_name(e)};
+        if (!std::ranges::any_of(union_expr.fields, [&](const auto& field) {
+                return resolving_.ast.get_as<ast::identifier_expr>(field.name).name == name;
+            })) {
+            return diagnostic{fmt::format("Variant '{}' of the tag enum '{}' has no union field",
+                                          name,
+                                          ctx_.type_display_name(tag_enum)),
+                              error::ILLEGAL_UNION_TAG,
+                              resolving_.ast.location_of(id)};
+        }
+    }
+    return stdx::none;
+}
+
 template <ast::IndexableID ID>
 auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     PROFILE_FUNCTION();
@@ -409,8 +444,30 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         return last_type_.emplace(union_type);
     }
     const aggregate_resolve_guard agg_guard{resolving_aggregate_nodes_, id.get_index()};
-    const scope                   s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
-    const structural_guard        g{user_type_stack_, union_type};
+
+    // `union(MyEnum)` / `union(void)` name their tag from where the union is written
+    type* tag_enum{nullptr};
+    bool  void_tag{false};
+    if (union_expr.tag_type) {
+        TRY_RESOLVE(*union_expr.tag_type);
+        auto& tag{denoted_type(*last_type_.take())};
+        if (tag.get_kind() == type_kind::VOID_) {
+            void_tag = true;
+        } else if (tag.get_kind() == type_kind::ENUM && tag.is_resolved()) {
+            tag_enum = &tag;
+        } else {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("A union's tag must be an enum, or `void` for no tag; found '{}'",
+                            ctx_.type_display_name(tag)),
+                error::ILLEGAL_UNION_TAG,
+                resolving_.ast.location_of(*union_expr.tag_type)));
+        }
+    }
+
+    const scope            s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
+    const structural_guard g{user_type_stack_, union_type};
 
     auto field_types{ctx_.pool.get_many_unsafe(union_expr.fields.size())};
     for (usize i{0}; const auto& field : union_expr.fields) {
@@ -523,15 +580,23 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         }
     }
 
+    if (tag_enum) {
+        if (auto diag{check_union_tag_enum(union_expr, *tag_enum, id)}) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
+        }
+    }
+
     auto member_types{ctx_.pool.get_many_unsafe(union_expr.members.size())};
     committable_resolution<types::union_t> resolution{union_type,
                                                       field_types,
                                                       union_expr.fields,
                                                       member_types,
                                                       resolving_,
-                                                      union_expr.is_extern || union_expr.is_packed,
+                                                      union_expr.is_extern ||
+                                                          union_expr.is_packed || void_tag,
                                                       union_expr.is_extern,
-                                                      union_expr.is_packed};
+                                                      union_expr.is_packed,
+                                                      tag_enum};
     lend_shape_to_pending_instance(id.get_index(), union_type);
     if (!resolve_members(member_types, union_expr.members)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));

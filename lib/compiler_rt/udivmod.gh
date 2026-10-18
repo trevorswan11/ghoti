@@ -119,8 +119,8 @@ pub const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mu
 
     let a: [2]HalfT = @bitCast(dividend); // [0] is low bits, [1] is high bits
     let b: [2]HalfT = @bitCast(divisor); // [0] is low bits, [1] is high bits
-    let mut q: [2]HalfT = undefined;
-    let mut r: [2]HalfT = undefined;
+    let mut q: [2]mut HalfT = undefined;
+    let mut r: [2]mut HalfT = undefined;
 
     // When the divisor fits in 64 bits, an optimized path can be taken
     if (b[1] == 0) {

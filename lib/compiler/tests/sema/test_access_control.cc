@@ -117,7 +117,7 @@ TEST_CASE("Cross-module public vs private enum member access") {
 
 TEST_CASE("Cross-module public vs private union member access") {
     constexpr std::string_view data_gh{R"(
-        pub const Value = union {
+        pub const Value = union(enum) {
             int_val: i32,
             pub const get_zero = fn(): i32 { return 0; };
             const secret_tag = fn(): i32 { return 99; };

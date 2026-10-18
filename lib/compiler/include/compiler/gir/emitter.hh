@@ -489,6 +489,16 @@ class emitter {
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
+    [[nodiscard]] auto emit_comptime_return(const const_value& returned, ast::node_id at) -> bool;
+    [[nodiscard]] auto emit_union_tag_as_enum(ast::expr_handle expr_id,
+                                              sema::type&      union_type,
+                                              sema::type&      enum_type) -> value;
+    [[nodiscard]] auto
+    emit_comptime_only_call(ast::node_id id, sema::type& result, sema::type& dest) -> value;
+    [[nodiscard]] auto instantiation_result(std::string_view mangled_name)
+        -> stdx::option<sema::type&>;
+    // A runtime condition's value when it is known at compile time
+    [[nodiscard]] auto        folded_condition(ast::expr_handle condition) -> stdx::option<bool>;
     [[nodiscard]] static auto is_concrete_float(const value& v) noexcept -> bool;
     [[nodiscard]] static auto is_untyped_number(const value& v) noexcept -> bool;
     // A compile-time number whose type isn't `t`

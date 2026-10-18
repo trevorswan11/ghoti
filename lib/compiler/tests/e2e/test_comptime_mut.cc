@@ -159,7 +159,7 @@ TEST_CASE("assigning through a chain of fields and elements into a `comptime let
 
     // A union field deeper in the chain, read back at runtime and through a folded call
     CHECK(helpers::compile_and_run(R"(
-        const U = union { i: i32, f: f64 };
+        const U = union(enum) { i: i32, f: f64 };
         const W = struct { u: U, xs: [3]i32 };
         const build = fn(): i32 {
             comptime let mut w: W = .{ .u = .{ .i = 1 }, .xs = .{ 1, 2, 3 } };
@@ -190,7 +190,7 @@ TEST_CASE("assigning through a chain of fields and elements into a `comptime let
         };
     )");
     helpers::expect_compile_error(R"(
-        const U = union { i: i32, f: f64 };
+        const U = union(enum) { i: i32, f: f64 };
         const S = struct { u: U };
         pub const main = fn(): i32 {
             comptime let mut s: S = .{ .u = .{ .i = 1 } };

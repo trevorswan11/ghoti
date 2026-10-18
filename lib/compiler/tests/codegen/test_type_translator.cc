@@ -169,7 +169,7 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Value = union {
+        const Value = union(enum) {
             none: void,
             small: i32,
             big: f64,

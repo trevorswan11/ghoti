@@ -102,10 +102,10 @@ TEST_CASE("Illegal auto usage in structural types") {
     }
 
     SECTION("Union field cannot have auto") {
-        helpers::test_resolver_fail("const U = union { a: auto, };",
+        helpers::test_resolver_fail("const U = union(enum) { a: auto, };",
                                     sema::diagnostic{"Union field 'a' cannot have type 'auto'",
                                                      sema::error::ILLEGAL_AUTO_USAGE,
-                                                     std::pair{0UZ, 21UZ}});
+                                                     std::pair{0UZ, 27UZ}});
     }
 }
 
@@ -254,7 +254,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
             const id = fn(x: auto): auto {
                 return x;
             };
-            const r1 = id(42);
+            const r1 = id(42i32);
             const r2 = id(true);
         )")};
 
@@ -276,8 +276,8 @@ TEST_CASE("Generic function instantiation and deduplication") {
             const id = fn(x: auto): auto {
                 return x;
             };
-            const a = id(10);
-            const b = id(20);
+            const a = id(10i32);
+            const b = id(20i32);
         )")};
 
         const auto [a_sym, a_sym_data, a_node, a_type]{
@@ -297,7 +297,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
             const add = fn(a: auto, b: auto): auto {
                 return a + b;
             };
-            const r1 = add(1, 2);
+            const r1 = add(1i32, 2i32);
             const r2 = add(10i64, 20i64);
         )")};
 
@@ -319,7 +319,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
             const choose = fn(flag: bool, x: auto): auto {
                 return x;
             };
-            const r = choose(true, 99);
+            const r = choose(true, 99i32);
         )")};
 
         const auto [r_sym, r_sym_data, r_node, r_type]{
@@ -338,7 +338,7 @@ TEST_CASE("Generic function instantiation error handling") {
             const bad = fn(x: auto): auto {
                 return x.non_existent_field;
             };
-            const res = bad(42);
+            const res = bad(42i32);
         )",
             sema::diagnostic{
                 "Can only access inner objects inside of structs, unions, and enums; found 'i32'",

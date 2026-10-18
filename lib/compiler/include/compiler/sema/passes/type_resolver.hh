@@ -34,6 +34,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -250,15 +251,22 @@ class type_resolver {
 
         auto               add_return(type& t) -> void { return_types.emplace_back(&t); }
         [[nodiscard]] auto has_returns() const noexcept -> bool { return !return_types.empty(); }
-        [[nodiscard]] auto deduced_return_type(context& ctx) const noexcept -> type& {
+        [[nodiscard]] auto deduced_return_type(context& ctx) const -> type& {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
-            auto& first{*return_types.front()};
+            // Every `return` meets at one type, so `return low` (a `comptime_int`) then
+            // `return val` (an `i64`) infers `i64`
+            auto* met{return_types.front().get()};
+            if (return_types.size() > 1) {
+                std::vector<peer_operand> operands;
+                for (const auto t : return_types) { operands.emplace_back(t.get()); }
+                if (const auto peer{peer_type(ctx, operands)}) { met = peer->get(); }
+            }
             // An inferred (`: auto`) return type never stays `comptime_*`: pin it to its peer.
-            if (first.get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
-            if (first.get_kind() == type_kind::COMPTIME_FLOAT) {
+            if (met->get_kind() == type_kind::COMPTIME_INT) { return ctx.get_int(32, true); }
+            if (met->get_kind() == type_kind::COMPTIME_FLOAT) {
                 return ctx.get_builtin_resolved_type(type_kind::F64);
             }
-            return first;
+            return *met;
         }
     };
 
@@ -438,7 +446,8 @@ class type_resolver {
                                             gsl::span<const gir::const_value> comptime_args)
         -> stdx::option<generic_instantiation_entry>;
     template <typename ArgID>
-    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type) -> stdx::option<type&>;
+    [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type, bool keeps_comptime)
+        -> stdx::option<type&>;
     [[nodiscard]] auto check_param_bounds(const ast::call_expr&        call,
                                           const generic_function_info& fn_info,
                                           gsl::span<type* const>       arg_types,
@@ -448,6 +457,8 @@ class type_resolver {
                                          usize                        idx,
                                          const type*                  arg_type,
                                          const type* param_type) -> stdx::option<gir::const_value>;
+    [[nodiscard]] auto fold_implicit_comptime_arg(const ast::call_expr::argument& arg)
+        -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
 
@@ -825,6 +836,10 @@ class type_resolver {
 
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto                  check_union_tag_enum(const ast::union_expr& union_expr,
+                                                             type&                  tag_enum,
+                                                             ID                     id) -> stdx::option<diagnostic>;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     auto resolve_required_method_type(const ast::function_expr& fn, type& self_placeholder)
         -> type&;
@@ -988,7 +1003,9 @@ class type_resolver {
     // `a.b` nodes being resolved as the function of a call, so a `dyn` method is called, not read
     ankerl::unordered_dense::set<usize> callee_dots_;
     bool                                in_expr_branch_{false};
-    bool                                arm_of_unused_{false};
+    // Resolving the literal a unary `-` applies to, which may be one past its type's max
+    bool negated_literal_{false};
+    bool arm_of_unused_{false};
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.
     ankerl::unordered_dense::set<usize> unused_value_nodes_;

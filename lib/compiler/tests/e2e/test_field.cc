@@ -17,7 +17,7 @@ TEST_CASE("`@field` reads a struct's own field by a compile-time name") {
 
 TEST_CASE("`@field` reads a union's own field by a compile-time name") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let u = U{ .a = 42 };
             return @field(u, "a");
