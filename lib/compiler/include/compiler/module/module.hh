@@ -507,7 +507,7 @@ class module_manager {
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
         -> stdx::result<void, diagnostic>;
 
-    // Prints every poisoned/errored module's diagnostics
+    // Prints every poisoned/errored module's diagnostics not already printed by an earlier call
     auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
     auto print_all_warnings(std::ostream& os = std::cerr) const -> void;
 
@@ -538,6 +538,8 @@ class module_manager {
     // Whether `path` is `lib/std/start.gh`, opened like any other file (by the LSP, say)
     [[nodiscard]] auto is_start_path(const std::filesystem::path& path) -> bool;
 
+    auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
+
   private:
     source_loader&                                    loader_;
     module_table                                      modules_;
@@ -545,6 +547,7 @@ class module_manager {
     stdx::box<module_t>                               start_module_;
     stdx::option<stdx::option<std::filesystem::path>> start_path_;
     stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
+    mutable ankerl::unordered_dense::set<const module_t*> printed_diagnostics_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;
