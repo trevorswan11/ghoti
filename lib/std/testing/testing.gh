@@ -29,8 +29,15 @@ extern const __ghoti_test_take_skipped: fn(): bool;
     };
 
     pub const expect_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        std.io.eprint("Test failed: ")!;
+    std.io.eprint("Test failed: ")!;
         std.io.eprint(loc.file)!;
+        let mut stderr = std.io.stderr()!;
+        let mut writer: &mut dyn std.io.Writer = &mut stderr;
+        std.io.eprint(":")!;
+        std.fmt.int.format(writer, loc.line, .{})!;
+        std.io.eprint(":")!;
+        std.fmt.int.format(writer, loc.column, .{})!;
+        
         if (msg.len > 0) {
             std.io.eprint(": (EXPECTED) ")!;
             std.io.eprintln(msg)!;

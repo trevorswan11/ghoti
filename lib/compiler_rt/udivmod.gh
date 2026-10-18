@@ -1,6 +1,7 @@
 //! Ported from:
 //!
 //! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/udivmod.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int.zig
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
@@ -9,20 +10,49 @@ const Log2Int = std.math.Log2Int;
 const symbol = compiler_rt.symbol;
 
 comptime {
-    symbol(__umodti3, "__umodti3");
-    symbol(__modti3, "__modti3");
-    symbol(__udivti3, "__udivti3");
-    symbol(__divti3, "__divti3");
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_idiv, "__aeabi_idiv");
+        symbol(__aeabi_uidiv, "__aeabi_uidiv");
+    }
+
     symbol(__udivmodti4, "__udivmodti4");
+    symbol(__udivmodsi4, "__udivmodsi4");
+    symbol(__udivmoddi4, "__udivmoddi4");
+
+    symbol(__divmodti4, "__divmodti4");
+    symbol(__divmodsi4, "__divmodsi4");
+    symbol(__divmoddi4, "__divmoddi4");
+
+    symbol(__divti3, "__divti3");
+    symbol(__divsi3, "__divsi3");
+    symbol(__divdi3, "__divdi3");
+
+    symbol(__udivti3, "__udivti3");
+    symbol(__udivsi3, "__udivsi3");
+    symbol(__udivdi3, "__udivdi3");
+
+    symbol(__modti3, "__modti3");
+    symbol(__modsi3, "__modsi3");
+    symbol(__moddi3, "__moddi3");
+
+    symbol(__umodti3, "__umodti3");
+    symbol(__umodsi3, "__umodsi3");
+    symbol(__umoddi3, "__umoddi3");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_idiv = fn(n: i32, d: i32) callconv(.aapcs): i32 {
+        return div_i32(n, d);
+    };
+
+    const __aeabi_uidiv = fn(n: u32, d: u32) callconv(.aapcs): u32 {
+        return div_u32(n, d);
+    };
 }
 
 pub const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u128 {
     return udivmod(u128, a, b, maybe_rem);
 };
-
-@cfg (testing) {
-    import "udivmodti4_test.gh" as udivmodti4_test;
-}
 
 @[testing] const test__udivmodti4 = fn(a: u128, b: u128, expected_q: u128, expected_r: u128): void {
     let mut r: u128 = undefined;
@@ -31,8 +61,28 @@ pub const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c)
     @expect(expected_r == r);
 };
 
-test "udivmodti4" {
-    for (udivmodti4_test.cases) |case| {
+test "__udivmodti4" {
+    import "cases/udivmodti4.gh" as udivmodti4_cases;
+    for (udivmodti4_cases.cases) |case| {
+        test__udivmodti4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u64 {
+    return udivmod(u64, a, b, maybe_rem);
+};
+
+@[testing] const test__udivmoddi4 = fn(a: u64, b: u64, expected_q: u64, expected_r: u64): void {
+    let mut r: u64 = undefined;
+    let q = __udivmoddi4(a, b, ^mut r);
+    @expect(expected_q == q);
+    @expect(expected_r == r);
+};
+
+test "__udivmoddi4" {
+    @skip(); // TODO(tcs): Integer divison by zero panic
+    import "cases/udivmoddi4.gh" as udivmoddi4_cases;
+    for (udivmoddi4_cases.cases) |case| {
         test__udivmodti4(case[0], case[1], case[2], case[3]);
     }
 }
@@ -326,3 +376,505 @@ pub const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mu
     }
     return @bitCast(q);
 };
+
+pub const __divmodti4 = fn(a: i128, b: i128, rem: ^mut i128) callconv(.c): i128 {
+    let d = __divti3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmodti4 = fn(a: i128, b: i128, expected_q: i128, expected_r: i128): void {
+    let mut r: i128 = undefined;
+    let q = __divmodti4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmodti4" {
+    const cases = [_][4]i128{
+        [_]i128{ 0, 1, 0, 0 },
+        [_]i128{ 0, -1, 0, 0 },
+        [_]i128{ 2, 1, 2, 0 },
+        [_]i128{ 2, -1, -2, 0 },
+        [_]i128{ -2, 1, -2, 0 },
+        [_]i128{ -2, -1, 2, 0 },
+        [_]i128{ 7, 5, 1, 2 },
+        [_]i128{ -7, 5, -1, -2 },
+        [_]i128{ 19, 5, 3, 4 },
+        [_]i128{ 19, -5, -3, 4 },
+        [_]i128{
+            @bitCast(0x80000000000000000000000000000000u128),
+            8,
+            @bitCast(0xf0000000000000000000000000000000u128),
+            0,
+        },
+        [_]i128{
+            @bitCast(0x80000000000000000000000000000007u128),
+            8,
+            @bitCast(0xf0000000000000000000000000000001u128),
+            -1,
+        },
+    };
+
+    for (cases) |case| {
+        test__divmodti4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __divmoddi4 = fn(a: i64, b: i64, rem: ^mut i64) callconv(.c): i64 {
+    let d = __divdi3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmoddi4 = fn(a: i64, b: i64, expected_q: i64, expected_r: i64): void {
+    let mut r: i64 = undefined;
+    let q: i64 = __divmoddi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmoddi4" {
+    const cases = [_][4]i64{
+        [_]i64{ 0, 1, 0, 0 },
+        [_]i64{ 0, -1, 0, 0 },
+        [_]i64{ 2, 1, 2, 0 },
+        [_]i64{ 2, -1, -2, 0 },
+        [_]i64{ -2, 1, -2, 0 },
+        [_]i64{ -2, -1, 2, 0 },
+        [_]i64{ 7, 5, 1, 2 },
+        [_]i64{ -7, 5, -1, -2 },
+        [_]i64{ 19, 5, 3, 4 },
+        [_]i64{ 19, -5, -3, 4 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 8, @bitCast(0xf000000000000000u64), 0 },
+        [_]i64{ @bitCast(0x8000000000000007u64), 8, @bitCast(0xf000000000000001u64), -1 },
+    };
+
+    for (cases) |case| {
+        test__divmoddi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __divmodsi4 = fn(a: i32, b: i32, rem: ^mut i32) callconv(.c): i32 {
+    let d = __divsi3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmodsi4 = fn(a: i32, b: i32, expected_q: i32, expected_r: i32): void {
+    let mut r: i32 = undefined;
+    let q = __divmodsi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmodsi4" {
+    const cases = [_][4]i32{
+        [_]i32{ 0, 1, 0, 0 },
+        [_]i32{ 0, -1, 0, 0 },
+        [_]i32{ 2, 1, 2, 0 },
+        [_]i32{ 2, -1, -2, 0 },
+        [_]i32{ -2, 1, -2, 0 },
+        [_]i32{ -2, -1, 2, 0 },
+        [_]i32{ 7, 5, 1, 2 },
+        [_]i32{ -7, 5, -1, -2 },
+        [_]i32{ 19, 5, 3, 4 },
+        [_]i32{ 19, -5, -3, 4 },
+        [_]i32{ @bitCast(0x80000000u32), 8, @bitCast(0xf0000000u32), 0 },
+        [_]i32{ @bitCast(0x80000007u32), 8, @bitCast(0xf0000001u32), -1 },
+    };
+
+    for (cases) |case| {
+        test__divmodsi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __udivmodsi4 = fn(a: u32, b: u32, rem: ^mut u32) callconv(.c): u32 {
+    let d = __udivsi3(a, b);
+    *rem = a - d * b;
+    return d;
+};
+
+@[testing] const test__udivmodsi4 = fn(a: u32, b: u32, expected_q: u32, expected_r: u32): void {
+    let mut r: u32 = undefined;
+    let q = __udivmodsi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__udivmodsi4" {
+    import "cases/udivmodsi4.gh" as udivmodsi4_cases;
+    for (udivmodsi4_cases.cases) |case| {
+        test__udivmodsi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __divsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+    return div_i32(n, d);
+};
+
+@[testing] const test__divsi3 = fn(a: i32, b: i32, expected: i32): void {
+    let q = __divsi3(a, b);
+    @expect(q == expected);
+};
+
+test "__divsi3" {
+    const cases = [_][3]i32{
+        [_]i32{ 0, 1, 0 },
+        [_]i32{ 0, -1, 0 },
+        [_]i32{ 2, 1, 2 },
+        [_]i32{ 2, -1, -2 },
+        [_]i32{ -2, 1, -2 },
+        [_]i32{ -2, -1, 2 },
+        [_]i32{ @bitCast(0x80000000u32), 1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -2, 0x40000000 },
+        [_]i32{ @bitCast(0x80000000u32), 2, @bitCast(0xC0000000u32) },
+    };
+
+    for (cases) |case| {
+        test__divsi3(case[0], case[1], case[2]);
+    }
+}
+
+@[inline(.always)] const div_i32 = fn(n: i32, d: i32): i32 {
+    // Set aside the sign of the quotient.
+    let sign: u32 = @bitCast((n ^ d) >> 31);
+
+    let abs_n = abs_i32(n);
+    let abs_d = abs_i32(d);
+
+    // abs(a) / abs(b) then apply sign
+    let res = @bitCast(u32, abs_n) / @bitCast(u32, abs_d);
+    return @bitCast((res ^ sign) -% sign);
+};
+
+@[inline(.always)] const abs_i32 = fn(x: i32): i32 {
+    return (x ^ (x >> 31)) -% (x >> 31);
+};
+
+pub const __divdi3 = fn(n: i64, d: i64) callconv(.c): i64 {
+    return div_i64(n, d);
+};
+
+@[testing] const test__divdi3 = fn(a: i64, b: i64, expected: i64): void {
+    let q = __divdi3(a, b);
+    @expect(q == expected);
+};
+
+test "__divdi3" {
+    const cases = [_][3]i64{
+        [_]i64{ 0, 1, 0 },
+        [_]i64{ 0, -1, 0 },
+        [_]i64{ 2, 1, 2 },
+        [_]i64{ 2, -1, -2 },
+        [_]i64{ -2, 1, -2 },
+        [_]i64{ -2, -1, 2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 1, @bitCast(0x8000000000000000u64) },
+        [_]i64{ @bitCast(0x8000000000000000u64), -1, @bitCast(0x8000000000000000u64) },
+        [_]i64{ @bitCast(0x8000000000000000u64), -2, 0x4000000000000000 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 2, @bitCast(0xC000000000000000u64) },
+    };
+
+    for (cases) |case| {
+        test__divdi3(case[0], case[1], case[2]);
+    }
+}
+
+@[inline(.always)] const div_i64 = fn(n: i64, d: i64): i64 {
+    // Set aside the sign of the quotient.
+    let sign: u64 = @bitCast((n ^ d) >> 63);
+
+    let abs_n = abs_i64(n);
+    let abs_d = abs_i64(d);
+
+    // abs(a) / abs(b) then apply sign
+    let res = __udivmoddi4(@bitCast(abs_n), @bitCast(abs_d), nullptr);
+    return @bitCast((res ^ sign) -% sign);
+};
+
+@[inline(.always)] const abs_i64 = fn(x: i64): i64 {
+    return (x ^ (x >> 63)) -% (x >> 63);
+};
+
+pub const __udivsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+    return div_u32(n, d);
+};
+
+@[testing] const test__udivsi3 = fn(a: u32, b: u32, expected: u32): void {
+    let q = __udivsi3(a, b);
+    @expect(q == expected);
+};
+
+test "__udivsi3" {
+    import "cases/udivsi3.gh" as udivsi3_cases;
+    for (udivsi3_cases.cases) |case| {
+        test__udivsi3(case[0], case[1], case[2]);
+    }
+}
+
+@[inline(.always)] const div_u32 = fn(n: u32, d: u32): u32 {
+    if (d == 0 or n == 0) return 0;
+    const n_uword_bits: c_uint = 32;
+    let mut sr = @bitCast(c_uint, @as(c_int, @clz(d)) - @as(c_int, @clz(n)));
+    // 0 <= sr <= n_uword_bits - 1 or sr large
+    if (sr > n_uword_bits - 1) return 0; // d > r
+    if (sr == n_uword_bits - 1) return n; // d == 1
+    sr += 1;
+
+    // 1 <= sr <= n_uword_bits - 1
+    let mut q: u32 = n << @intCast(n_uword_bits - sr);
+    let mut r: u32 = n >> @intCast(sr);
+    let mut carry: u32 = 0;
+    while (sr > 0) : (sr -= 1) {
+        r = (r << 1) | (q >> @intCast(n_uword_bits - 1));
+        q = (q << 1) | carry;
+        let s = @bitCast(i32, d -% r -% 1) >> @intCast(n_uword_bits - 1);
+        carry = @intCast(s & 1);
+        r -= d & @bitCast(u32, s);
+    }
+    q = (q << 1) | carry;
+    return q;
+};
+
+pub const __udivdi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+    return __udivmoddi4(a, b, nullptr);
+};
+
+pub const __modsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+    return n - __divsi3(n, d) *% d;
+};
+
+@[testing] const test__modsi3 = fn(a: i32, b: i32, expected_r: i32): void {
+    let r = __modsi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__modsi3" {
+    const cases = [_][3]i32{
+        [_]i32{ 0, 1, 0 },
+        [_]i32{ 0, -1, 0 },
+        [_]i32{ 5, 3, 2 },
+        [_]i32{ 5, -3, 2 },
+        [_]i32{ -5, 3, -2 },
+        [_]i32{ -5, -3, -2 },
+        [_]i32{ @bitCast(0x80000000u32), 1, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), 2, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), -2, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), 3, -2 },
+        [_]i32{ @bitCast(0x80000000u32), -3, -2 },
+    };
+
+    for (cases) |case| {
+        test__modsi3(case[0], case[1], case[2]);
+    }
+}
+
+pub const __umodsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+    return n - __udivsi3(n, d) * d;
+};
+
+@[testing] const test__umodsi3 = fn(a: u32, b: u32, expected_r: u32): void {
+    let r = __umodsi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__umodsi3" {
+    const cases = [_][3]u32{
+        [_]u32{ 0x00000000, 0x00000001, 0x00000000 },
+        [_]u32{ 0x00000000, 0x00000002, 0x00000000 },
+        [_]u32{ 0x00000000, 0x00000003, 0x00000000 },
+        [_]u32{ 0x00000000, 0x00000010, 0x00000000 },
+        [_]u32{ 0x00000000, 0x078644FA, 0x00000000 },
+        [_]u32{ 0x00000000, 0x0747AE14, 0x00000000 },
+        [_]u32{ 0x00000000, 0x7FFFFFFF, 0x00000000 },
+        [_]u32{ 0x00000000, 0x80000000, 0x00000000 },
+        [_]u32{ 0x00000000, 0xFFFFFFFD, 0x00000000 },
+        [_]u32{ 0x00000000, 0xFFFFFFFE, 0x00000000 },
+        [_]u32{ 0x00000000, 0xFFFFFFFF, 0x00000000 },
+        [_]u32{ 0x00000001, 0x00000001, 0x00000000 },
+        [_]u32{ 0x00000001, 0x00000002, 0x00000001 },
+        [_]u32{ 0x00000001, 0x00000003, 0x00000001 },
+        [_]u32{ 0x00000001, 0x00000010, 0x00000001 },
+        [_]u32{ 0x00000001, 0x078644FA, 0x00000001 },
+        [_]u32{ 0x00000001, 0x0747AE14, 0x00000001 },
+        [_]u32{ 0x00000001, 0x7FFFFFFF, 0x00000001 },
+        [_]u32{ 0x00000001, 0x80000000, 0x00000001 },
+        [_]u32{ 0x00000001, 0xFFFFFFFD, 0x00000001 },
+        [_]u32{ 0x00000001, 0xFFFFFFFE, 0x00000001 },
+        [_]u32{ 0x00000001, 0xFFFFFFFF, 0x00000001 },
+        [_]u32{ 0x00000002, 0x00000001, 0x00000000 },
+        [_]u32{ 0x00000002, 0x00000002, 0x00000000 },
+        [_]u32{ 0x00000002, 0x00000003, 0x00000002 },
+        [_]u32{ 0x00000002, 0x00000010, 0x00000002 },
+        [_]u32{ 0x00000002, 0x078644FA, 0x00000002 },
+        [_]u32{ 0x00000002, 0x0747AE14, 0x00000002 },
+        [_]u32{ 0x00000002, 0x7FFFFFFF, 0x00000002 },
+        [_]u32{ 0x00000002, 0x80000000, 0x00000002 },
+        [_]u32{ 0x00000002, 0xFFFFFFFD, 0x00000002 },
+        [_]u32{ 0x00000002, 0xFFFFFFFE, 0x00000002 },
+        [_]u32{ 0x00000002, 0xFFFFFFFF, 0x00000002 },
+        [_]u32{ 0x00000003, 0x00000001, 0x00000000 },
+        [_]u32{ 0x00000003, 0x00000002, 0x00000001 },
+        [_]u32{ 0x00000003, 0x00000003, 0x00000000 },
+        [_]u32{ 0x00000003, 0x00000010, 0x00000003 },
+        [_]u32{ 0x00000003, 0x078644FA, 0x00000003 },
+        [_]u32{ 0x00000003, 0x0747AE14, 0x00000003 },
+        [_]u32{ 0x00000003, 0x7FFFFFFF, 0x00000003 },
+        [_]u32{ 0x00000003, 0x80000000, 0x00000003 },
+        [_]u32{ 0x00000003, 0xFFFFFFFD, 0x00000003 },
+        [_]u32{ 0x00000003, 0xFFFFFFFE, 0x00000003 },
+        [_]u32{ 0x00000003, 0xFFFFFFFF, 0x00000003 },
+        [_]u32{ 0x00000010, 0x00000001, 0x00000000 },
+        [_]u32{ 0x00000010, 0x00000002, 0x00000000 },
+        [_]u32{ 0x00000010, 0x00000003, 0x00000001 },
+        [_]u32{ 0x00000010, 0x00000010, 0x00000000 },
+        [_]u32{ 0x00000010, 0x078644FA, 0x00000010 },
+        [_]u32{ 0x00000010, 0x0747AE14, 0x00000010 },
+        [_]u32{ 0x00000010, 0x7FFFFFFF, 0x00000010 },
+        [_]u32{ 0x00000010, 0x80000000, 0x00000010 },
+        [_]u32{ 0x00000010, 0xFFFFFFFD, 0x00000010 },
+        [_]u32{ 0x00000010, 0xFFFFFFFE, 0x00000010 },
+        [_]u32{ 0x00000010, 0xFFFFFFFF, 0x00000010 },
+        [_]u32{ 0x078644FA, 0x00000001, 0x00000000 },
+        [_]u32{ 0x078644FA, 0x00000002, 0x00000000 },
+        [_]u32{ 0x078644FA, 0x00000003, 0x00000000 },
+        [_]u32{ 0x078644FA, 0x00000010, 0x0000000A },
+        [_]u32{ 0x078644FA, 0x078644FA, 0x00000000 },
+        [_]u32{ 0x078644FA, 0x0747AE14, 0x003E96E6 },
+        [_]u32{ 0x078644FA, 0x7FFFFFFF, 0x078644FA },
+        [_]u32{ 0x078644FA, 0x80000000, 0x078644FA },
+        [_]u32{ 0x078644FA, 0xFFFFFFFD, 0x078644FA },
+        [_]u32{ 0x078644FA, 0xFFFFFFFE, 0x078644FA },
+        [_]u32{ 0x078644FA, 0xFFFFFFFF, 0x078644FA },
+        [_]u32{ 0x0747AE14, 0x00000001, 0x00000000 },
+        [_]u32{ 0x0747AE14, 0x00000002, 0x00000000 },
+        [_]u32{ 0x0747AE14, 0x00000003, 0x00000002 },
+        [_]u32{ 0x0747AE14, 0x00000010, 0x00000004 },
+        [_]u32{ 0x0747AE14, 0x078644FA, 0x0747AE14 },
+        [_]u32{ 0x0747AE14, 0x0747AE14, 0x00000000 },
+        [_]u32{ 0x0747AE14, 0x7FFFFFFF, 0x0747AE14 },
+        [_]u32{ 0x0747AE14, 0x80000000, 0x0747AE14 },
+        [_]u32{ 0x0747AE14, 0xFFFFFFFD, 0x0747AE14 },
+        [_]u32{ 0x0747AE14, 0xFFFFFFFE, 0x0747AE14 },
+        [_]u32{ 0x0747AE14, 0xFFFFFFFF, 0x0747AE14 },
+        [_]u32{ 0x7FFFFFFF, 0x00000001, 0x00000000 },
+        [_]u32{ 0x7FFFFFFF, 0x00000002, 0x00000001 },
+        [_]u32{ 0x7FFFFFFF, 0x00000003, 0x00000001 },
+        [_]u32{ 0x7FFFFFFF, 0x00000010, 0x0000000F },
+        [_]u32{ 0x7FFFFFFF, 0x078644FA, 0x00156B65 },
+        [_]u32{ 0x7FFFFFFF, 0x0747AE14, 0x043D70AB },
+        [_]u32{ 0x7FFFFFFF, 0x7FFFFFFF, 0x00000000 },
+        [_]u32{ 0x7FFFFFFF, 0x80000000, 0x7FFFFFFF },
+        [_]u32{ 0x7FFFFFFF, 0xFFFFFFFD, 0x7FFFFFFF },
+        [_]u32{ 0x7FFFFFFF, 0xFFFFFFFE, 0x7FFFFFFF },
+        [_]u32{ 0x7FFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF },
+        [_]u32{ 0x80000000, 0x00000001, 0x00000000 },
+        [_]u32{ 0x80000000, 0x00000002, 0x00000000 },
+        [_]u32{ 0x80000000, 0x00000003, 0x00000002 },
+        [_]u32{ 0x80000000, 0x00000010, 0x00000000 },
+        [_]u32{ 0x80000000, 0x078644FA, 0x00156B66 },
+        [_]u32{ 0x80000000, 0x0747AE14, 0x043D70AC },
+        [_]u32{ 0x80000000, 0x7FFFFFFF, 0x00000001 },
+        [_]u32{ 0x80000000, 0x80000000, 0x00000000 },
+        [_]u32{ 0x80000000, 0xFFFFFFFD, 0x80000000 },
+        [_]u32{ 0x80000000, 0xFFFFFFFE, 0x80000000 },
+        [_]u32{ 0x80000000, 0xFFFFFFFF, 0x80000000 },
+        [_]u32{ 0xFFFFFFFD, 0x00000001, 0x00000000 },
+        [_]u32{ 0xFFFFFFFD, 0x00000002, 0x00000001 },
+        [_]u32{ 0xFFFFFFFD, 0x00000003, 0x00000001 },
+        [_]u32{ 0xFFFFFFFD, 0x00000010, 0x0000000D },
+        [_]u32{ 0xFFFFFFFD, 0x078644FA, 0x002AD6C9 },
+        [_]u32{ 0xFFFFFFFD, 0x0747AE14, 0x01333341 },
+        [_]u32{ 0xFFFFFFFD, 0x7FFFFFFF, 0x7FFFFFFE },
+        [_]u32{ 0xFFFFFFFD, 0x80000000, 0x7FFFFFFD },
+        [_]u32{ 0xFFFFFFFD, 0xFFFFFFFD, 0x00000000 },
+        [_]u32{ 0xFFFFFFFD, 0xFFFFFFFE, 0xFFFFFFFD },
+        [_]u32{ 0xFFFFFFFD, 0xFFFFFFFF, 0xFFFFFFFD },
+        [_]u32{ 0xFFFFFFFE, 0x00000001, 0x00000000 },
+        [_]u32{ 0xFFFFFFFE, 0x00000002, 0x00000000 },
+        [_]u32{ 0xFFFFFFFE, 0x00000003, 0x00000002 },
+        [_]u32{ 0xFFFFFFFE, 0x00000010, 0x0000000E },
+        [_]u32{ 0xFFFFFFFE, 0x078644FA, 0x002AD6CA },
+        [_]u32{ 0xFFFFFFFE, 0x0747AE14, 0x01333342 },
+        [_]u32{ 0xFFFFFFFE, 0x7FFFFFFF, 0x00000000 },
+        [_]u32{ 0xFFFFFFFE, 0x80000000, 0x7FFFFFFE },
+        [_]u32{ 0xFFFFFFFE, 0xFFFFFFFD, 0x00000001 },
+        [_]u32{ 0xFFFFFFFE, 0xFFFFFFFE, 0x00000000 },
+        [_]u32{ 0xFFFFFFFE, 0xFFFFFFFF, 0xFFFFFFFE },
+        [_]u32{ 0xFFFFFFFF, 0x00000001, 0x00000000 },
+        [_]u32{ 0xFFFFFFFF, 0x00000002, 0x00000001 },
+        [_]u32{ 0xFFFFFFFF, 0x00000003, 0x00000000 },
+        [_]u32{ 0xFFFFFFFF, 0x00000010, 0x0000000F },
+        [_]u32{ 0xFFFFFFFF, 0x078644FA, 0x002AD6CB },
+        [_]u32{ 0xFFFFFFFF, 0x0747AE14, 0x01333343 },
+        [_]u32{ 0xFFFFFFFF, 0x7FFFFFFF, 0x00000001 },
+        [_]u32{ 0xFFFFFFFF, 0x80000000, 0x7FFFFFFF },
+        [_]u32{ 0xFFFFFFFF, 0xFFFFFFFD, 0x00000002 },
+        [_]u32{ 0xFFFFFFFF, 0xFFFFFFFE, 0x00000001 },
+        [_]u32{ 0xFFFFFFFF, 0xFFFFFFFF, 0x00000000 },
+    };
+
+    for (cases) |case| {
+        test__umodsi3(case[0], case[1], case[2]);
+    }
+}
+
+pub const __moddi3 = fn(a: i64, b: i64) callconv(.c): i64 {
+    let abs_a = abs_i64(a);
+    let abs_b = abs_i64(b);
+    let mut r: u64 = undefined;
+    _ = __udivmoddi4(@bitCast(abs_a), @bitCast(abs_b), ^mut r);
+    return (@bitCast(i64, r) ^ (a >> 63)) -% (a >> 63);
+};
+
+@[testing] const test__moddi3 = fn(a: i64, b: i64, expected_r: i64): void {
+    let r = __moddi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__moddi3" {
+    const cases = [_][3]i64{
+        [_]i64{ 0, 1, 0 },
+        [_]i64{ 0, -1, 0 },
+        [_]i64{ 5, 3, 2 },
+        [_]i64{ 5, -3, 2 },
+        [_]i64{ -5, 3, -2 },
+        [_]i64{ -5, -3, -2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 1, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -1, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 2, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -2, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 3, -2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -3, -2 },
+    };
+
+    for (cases) |case| {
+        test__moddi3(case[0], case[1], case[2]);
+    }
+}
+
+pub const __umoddi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+    let mut r: u64 = undefined;
+    _ = __udivmoddi4(a, b, ^mut r);
+    return r;
+};
+
+@[testing] const test__umoddi3 = fn(a: u64, b: u64, expected_r: u64): void {
+    let r = __umoddi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__umoddi3" {
+    const cases = [_][3]u64{
+        [_]u64{ 0, 1, 0 },
+        [_]u64{ 2, 1, 0 },
+        [_]u64{ 0x8000000000000000, 1, 0x0 },
+        [_]u64{ 0x8000000000000000, 2, 0x0 },
+        [_]u64{ 0xFFFFFFFFFFFFFFFF, 2, 0x1 },
+    };
+
+    for (cases) |case| {
+        test__umoddi3(case[0], case[1], case[2]);
+    }
+}
