@@ -904,6 +904,18 @@ auto emitter::prepare_shift_amount(value amount, sema::type& shifted, bool check
 }
 
 auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value {
+    // Past 128 bits only a type at least as wide holds it
+    if (const auto big{v.as_opt<big_int>()}) {
+        if (!sema::comptime_int_fits(*big, target, target_ptr_bits_)) {
+            ctx_.diags.emplace_back(fmt::format("integer value {} is out of range for type '{}'",
+                                                *big,
+                                                ctx_.type_display_name(target)),
+                                    sema::error::LITERAL_OUT_OF_RANGE,
+                                    active_ast().location_of(at));
+        }
+        v.type.emplace(target);
+        return v;
+    }
     const auto folded{folded_int(v)};
     if (folded && !sema::comptime_int_fits(*folded, target, target_ptr_bits_)) {
         ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::COMPTIME_INT
@@ -2647,6 +2659,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::int_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
+            if (data.is_big) { return value{data.exact_value(), t}; }
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
                 return value{f128::from_uint(data.value,
@@ -3680,6 +3693,7 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
                                       syntax::token_type::is_wrapping_op(base_tok),
                                       syntax::token_type::is_saturating_op(base_tok)),
                   target_type}};
+        builder_.set_location(target_location);
         builder_.emit_store(lhs_lval, res_val);
         return res_val;
     }

@@ -1003,6 +1003,8 @@ class type_resolver {
     // `a.b` nodes being resolved as the function of a call, so a `dyn` method is called, not read
     ankerl::unordered_dense::set<usize> callee_dots_;
     bool                                in_expr_branch_{false};
+    // Resolving the literal a unary `-` applies to, which may be one past its type's max
+    bool                                negated_literal_{false};
     bool                                arm_of_unused_{false};
     // Expressions whose value nothing reads: a statement, or an arm of such an `if`/`match`.
     // Their arms need no common type.

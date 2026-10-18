@@ -366,5 +366,5 @@ test "IntFittingRange" {
     @expect(IntFittingRange(-1, 4096) == i14);
     @expect(IntFittingRange(-4097, 4095) == i14);
     @expect(IntFittingRange(-1, 4097) == i14);
-    // @expect(IntFittingRange(-1, 123456789123456798123456789) == i88);
+    @expect(IntFittingRange(-1, 123456789123456798123456789) == i88);
 }

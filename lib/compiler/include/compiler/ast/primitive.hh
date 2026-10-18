@@ -9,6 +9,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 
@@ -34,6 +35,11 @@ struct int_literal_expr {
     std::string_view     spelling;
     // A character literal: an untyped code point that defaults to `u21`
     bool is_char{false};
+    // Past 128 bits, so `value` is unused and `exact_value` reads the spelling instead
+    bool is_big{false};
+
+    // The literal's value, however wide
+    [[nodiscard]] auto exact_value() const -> big_int;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

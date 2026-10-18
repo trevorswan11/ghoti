@@ -1422,6 +1422,17 @@ auto llvm_lowering::lower_value(const gir::value&               val,
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(w, ty);
         },
+        [this, &val, expected_type](const big_int& b) -> llvm::Value* {
+            auto* ty{expected_type ? types_.translate(*expected_type)
+                     : val.type    ? types_.translate(*val.type)
+                                   : nullptr};
+            if (!ty || !ty->isIntegerTy()) {
+                ty = llvm::IntegerType::get(context_, static_cast<u32>(b.signed_bits()));
+            }
+            const auto width{ty->getIntegerBitWidth()};
+            const auto words{b.to_words(width)};
+            return llvm::ConstantInt::get(context_, llvm::APInt(width, words));
+        },
         [this, &val, expected_type](f128 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)

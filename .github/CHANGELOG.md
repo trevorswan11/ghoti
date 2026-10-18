@@ -911,3 +911,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Reading another field of an untagged union whose value is known at compile time is left to runtime instead of reporting an inactive field
 - `u0`, the zero-bit unsigned integer: its only value is 0 and it takes no space (`@sizeOf(u0) == 0`); `@Int(.{ .signedness = .unsigned, .bits = 0 })` builds it, and `std.math.Log2Int(u1)` is now `u0`. There is no `i0`
 - `@Int` rejects widths past 65535 and a zero-bit signed integer instead of building a truncated type
+- `comptime_int` is arbitrary precision: it grows past 128 bits (`1 << 200`, `(1 << 127) * 4`), and a literal of any length is exact; only a runaway result past 2^24 bits is an error
+    - An integer type wider than 128 bits (`u256`) holds a constant of its full width, and folds past 128 bits at compile time
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@divExact`, `@rem`, and `@mod` of two untyped integers stay `comptime_int` instead of becoming `i32`
+- Fixed: a suffixed integer literal was not checked against its own type, so `300u8` silently wrapped; it must now fit (`-128i8` still does)

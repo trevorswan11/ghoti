@@ -300,7 +300,7 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 		<li>
 			<code>comptime_int</code> / <code>comptime_float</code>: The type of an unsuffixed integer / real literal and of pure compile-time arithmetic over them
 			<ul>
-				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
+				<li>Compile-time known; a <code>comptime_int</code> is exact at any size (up to 2<sup>24</sup> bits, past which a runaway shift is an error), and a <code>comptime_float</code> folds at <code>f64</code> precision</li>
 				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>comptime_int</code> is a compile error, not a silent wrap</li>
 				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>let mut</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> or <code>let</code> keeps the <code>comptime_int</code> type</li>
 				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@TypeOf" }</code> of an unsuffixed literal yields</li>

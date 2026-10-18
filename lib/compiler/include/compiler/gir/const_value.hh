@@ -16,6 +16,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
@@ -116,6 +117,7 @@ class const_value {
                                  u64,
                                  i128,
                                  u128,
+                                 big_int, // only an integer no 128-bit arm holds
                                  f128,
                                  bool,
                                  std::string,
@@ -173,6 +175,24 @@ class const_value {
         if (is<u128>()) { return static_cast<i128>(as<u128>()); }
         if (is<const_enum>()) { return as<const_enum>().value; }
         return stdx::none;
+    }
+
+    // The exact integer any integer arm holds, however wide
+    [[nodiscard]] auto as_big_int_opt() const -> stdx::option<big_int> {
+        if (const auto b{as_opt<big_int>()}) { return *b; }
+        if (const auto u{as_uint_opt()}; u && !is<const_enum>()) { return big_int{*u}; }
+        if (const auto i{as_int_opt()}; i && !is<const_enum>()) { return big_int{*i}; }
+        return stdx::none;
+    }
+
+    // `v` in the narrowest arm that holds it exactly
+    [[nodiscard]] static auto from_big_int(const big_int& v, stdx::option<sema::type&> t)
+        -> const_value {
+        if (v.fits(64, true)) { return const_value{static_cast<i64>(*v.to_i128()), t}; }
+        if (v.fits(64, false)) { return const_value{static_cast<u64>(*v.to_u128()), t}; }
+        if (const auto i{v.to_i128()}) { return const_value{*i, t}; }
+        if (const auto u{v.to_u128()}) { return const_value{*u, t}; }
+        return const_value{v, t};
     }
 
     // An integer payload rounded into `format`, reading unsigned payloads as unsigned

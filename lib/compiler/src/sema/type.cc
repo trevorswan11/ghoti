@@ -187,6 +187,18 @@ auto comptime_float_fits(f128 value, const type& target) -> bool {
     return !value.is_finite() || fit_float(value, target).is_finite();
 }
 
+auto comptime_int_fits(const big_int& value, const type& target, u32 ptr_bits) noexcept -> bool {
+    switch (target.get_kind()) {
+    case type_kind::INT: {
+        const auto info{as_integer(target)};
+        return !info || value.fits(info->bits, info->is_signed);
+    }
+    case type_kind::ISIZE: return value.fits(ptr_bits, true);
+    case type_kind::USIZE: return value.fits(ptr_bits, false);
+    default:               return true; // not a concrete integer target
+    }
+}
+
 auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
     u16  bits{0};
     bool is_signed{false};

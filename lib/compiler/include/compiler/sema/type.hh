@@ -27,6 +27,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 #include "support/int128.hh"
@@ -715,6 +716,8 @@ inline constexpr u64 C_LONGDOUBLE_INSTANCE{~u64{0}};
 // Whether the compile-time integer `value` (two's-complement, up to 128 bits) is representable
 // in the concrete integer type `target`
 [[nodiscard]] auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool;
+[[nodiscard]] auto
+comptime_int_fits(const big_int& value, const type& target, u32 ptr_bits) noexcept -> bool;
 
 // The format a compile-time float of type `t` is held in; `comptime_float` keeps full `f128`
 [[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;

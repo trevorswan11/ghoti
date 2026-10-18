@@ -400,82 +400,20 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     }
 }
 
+// A `comptime_int` grows as needed, so only a runaway result (`1 << (1 << 40)`) is refused
+constexpr u64 MAX_COMPTIME_INT_BITS{u64{1} << 24};
+
 constexpr std::string_view COMPTIME_INT_RANGE_EXCEEDED{
-    "Compile-time integer result exceeds the 128-bit range of comptime_int"};
+    "Compile-time integer result exceeds the 16777216-bit limit of comptime_int"};
 
-// A `comptime_int` as sign and magnitude, spanning -2^127 through 2^128 - 1
-struct comptime_int_value {
-    bool negative;
-    u128 magnitude;
-};
-
-[[nodiscard]] auto to_comptime_int(const const_value& v) -> comptime_int_value {
-    if (const auto u{v.as_opt<u64>()}) { return {false, *u}; }
-    if (const auto u{v.as_opt<u128>()}) { return {false, *u}; }
-    const auto s{*v.as_int_opt()};
-    return {s < 0, s < 0 ? u128{0} - static_cast<u128>(s) : static_cast<u128>(s)};
-}
-
-// Stores the exact value the way `make_scalar_const` would, or none past the comptime_int range
-[[nodiscard]] auto from_comptime_int(comptime_int_value        v,
-                                     bool                      prefer_unsigned,
-                                     stdx::option<sema::type&> type) -> stdx::option<const_value> {
-    constexpr u128 sign_bit{u128{1} << 127};
-    if (v.negative && v.magnitude != 0) {
-        if (v.magnitude > sign_bit) { return stdx::none; }
-        return make_scalar_const(static_cast<i128>(u128{0} - v.magnitude), type);
+// `v` stored as `make_scalar_const` would, keeping an unsigned arm for unsigned operands
+[[nodiscard]] auto from_exact_int(const big_int&            v,
+                                  bool                      prefer_unsigned,
+                                  stdx::option<sema::type&> type) -> const_value {
+    if (prefer_unsigned && !v.is_negative()) {
+        if (const auto u{v.to_u128()}) { return make_scalar_const(*u, type); }
     }
-    if (prefer_unsigned || v.magnitude >= sign_bit) { return make_scalar_const(v.magnitude, type); }
-    return make_scalar_const(static_cast<i128>(v.magnitude), type);
-}
-
-[[nodiscard]] auto add_comptime_int(comptime_int_value l, comptime_int_value r)
-    -> stdx::option<comptime_int_value> {
-    if (l.negative == r.negative) {
-        const auto sum{l.magnitude + r.magnitude};
-        if (sum < l.magnitude) { return stdx::none; }
-        return comptime_int_value{l.negative, sum};
-    }
-    if (l.magnitude >= r.magnitude) {
-        return comptime_int_value{l.negative, l.magnitude - r.magnitude};
-    }
-    return comptime_int_value{r.negative, r.magnitude - l.magnitude};
-}
-
-// Floors like an arithmetic shift, so a negative value never rounds toward zero
-[[nodiscard]] auto shr_comptime_int(comptime_int_value l, u128 amount) -> comptime_int_value {
-    if (amount >= 128) { return {l.negative, l.negative && l.magnitude != 0 ? u128{1} : u128{0}}; }
-    const auto shift{static_cast<u32>(amount)};
-    const auto kept{l.magnitude >> shift};
-    const bool dropped{(l.magnitude & ((u128{1} << shift) - 1)) != 0};
-    return {l.negative, l.negative && dropped ? kept + 1 : kept};
-}
-
-// `l op r` over the whole comptime_int range, or none when the exact result leaves it. A
-// divisor of zero and a negative shift amount are the caller's to reject
-[[nodiscard]] auto exact_comptime_int(syntax::token_type_t op,
-                                      comptime_int_value   l,
-                                      comptime_int_value   r) -> stdx::option<comptime_int_value> {
-    switch (op) {
-    case syntax::token_type_t::PLUS:  return add_comptime_int(l, r);
-    case syntax::token_type_t::MINUS: return add_comptime_int(l, {!r.negative, r.magnitude});
-    case syntax::token_type_t::STAR:
-        if (l.magnitude != 0 && r.magnitude > ~u128{0} / l.magnitude) { return stdx::none; }
-        return comptime_int_value{l.negative != r.negative, l.magnitude * r.magnitude};
-    case syntax::token_type_t::SLASH:
-        return comptime_int_value{l.negative != r.negative, l.magnitude / r.magnitude};
-    case syntax::token_type_t::PERCENT:
-        return comptime_int_value{l.negative, l.magnitude % r.magnitude};
-    case syntax::token_type_t::SHL: {
-        if (l.magnitude == 0) { return l; }
-        if (r.magnitude >= 128) { return stdx::none; }
-        const auto shift{static_cast<u32>(r.magnitude)};
-        if (shift != 0 && (l.magnitude >> (128 - shift)) != 0) { return stdx::none; }
-        return comptime_int_value{l.negative, l.magnitude << shift};
-    }
-    case syntax::token_type_t::SHR: return shr_comptime_int(l, r.magnitude);
-    default:                        UNREACHABLE("Only + - * / % << >> fold exactly");
-    }
+    return const_value::from_big_int(v, type);
 }
 
 [[nodiscard]] constexpr auto is_exact_comptime_int_op(syntax::token_type_t op) noexcept -> bool {
@@ -483,35 +421,113 @@ struct comptime_int_value {
            op == syntax::token_type_t::SHR;
 }
 
+[[nodiscard]] constexpr auto is_bitwise_op(syntax::token_type_t op) noexcept -> bool {
+    return op == syntax::token_type_t::BW_AND || op == syntax::token_type_t::BW_OR ||
+           op == syntax::token_type_t::CARET;
+}
+
+// `l op r` exactly, or none past `MAX_COMPTIME_INT_BITS`. A zero divisor and a negative shift
+// amount are the caller's to reject
+[[nodiscard]] auto exact_big_int(syntax::token_type_t op, const big_int& l, const big_int& r)
+    -> stdx::option<big_int> {
+    switch (op) {
+    case syntax::token_type_t::PLUS:    return l + r;
+    case syntax::token_type_t::MINUS:   return l - r;
+    case syntax::token_type_t::STAR:    return l * r;
+    case syntax::token_type_t::SLASH:   return l / r;
+    case syntax::token_type_t::PERCENT: return l % r;
+    case syntax::token_type_t::BW_AND:  return l & r;
+    case syntax::token_type_t::BW_OR:   return l | r;
+    case syntax::token_type_t::CARET:   return l ^ r;
+    case syntax::token_type_t::SHL:     {
+        if (l.is_zero()) { return l; }
+        const auto amount{r.to_u128()};
+        if (!amount || *amount > MAX_COMPTIME_INT_BITS ||
+            l.magnitude().bit_length() + static_cast<u64>(*amount) > MAX_COMPTIME_INT_BITS) {
+            return stdx::none;
+        }
+        return l.shl(static_cast<u64>(*amount));
+    }
+    case syntax::token_type_t::SHR: {
+        const auto amount{r.to_u128()};
+        if (!amount || *amount > MAX_COMPTIME_INT_BITS) {
+            return l.is_negative() ? big_int{i128{-1}} : big_int{};
+        }
+        return l.shr(static_cast<u64>(*amount));
+    }
+    default: return stdx::none;
+    }
+}
+
+[[nodiscard]] auto compare_big_int(syntax::token_type_t op, const big_int& l, const big_int& r)
+    -> stdx::option<bool> {
+    switch (op) {
+    case syntax::token_type_t::EQ:    return l == r;
+    case syntax::token_type_t::NEQ:   return l != r;
+    case syntax::token_type_t::LT:    return l < r;
+    case syntax::token_type_t::LT_EQ: return l <= r;
+    case syntax::token_type_t::GT:    return l > r;
+    case syntax::token_type_t::GT_EQ: return l >= r;
+    default:                          return stdx::none;
+    }
+}
+
 // Neither operand pins a concrete width, so the result is an exact `comptime_int`
 [[nodiscard]] auto is_comptime_int_result(stdx::option<sema::type&> res_type) noexcept -> bool {
     return !res_type || res_type->get_kind() == sema::type_kind::COMPTIME_INT;
 }
 
-[[nodiscard]] auto fold_comptime_int_binary(syntax::token_type_t      op_type,
-                                            const const_value&        lhs,
-                                            const const_value&        rhs,
-                                            stdx::option<sema::type&> res_type,
-                                            auto&& on_error) -> stdx::option<const_value> {
-    const auto l{to_comptime_int(lhs)};
-    const auto r{to_comptime_int(rhs)};
-    if (r.magnitude == 0 && op_type == syntax::token_type_t::SLASH) {
+// The type a concrete integer fold wraps or checks its exact result against
+struct int_width_target {
+    u16              bits;
+    bool             is_signed;
+    std::string_view name;
+};
+
+// `l op r` exactly, for what no 128-bit domain covers: a `comptime_int` result, an operand past
+// 128 bits, or a concrete integer wider than 128 bits, which then wraps or checks like runtime
+[[nodiscard]] auto fold_big_int_binary(syntax::token_type_t           op_type,
+                                       const const_value&             lhs,
+                                       const const_value&             rhs,
+                                       stdx::option<sema::type&>      res_type,
+                                       stdx::option<int_width_target> target,
+                                       bool                           wrapping,
+                                       sema::type&                    bool_type,
+                                       auto&& on_error) -> stdx::option<const_value> {
+    const auto l{lhs.as_big_int_opt()};
+    const auto r{rhs.as_big_int_opt()};
+    if (!l || !r) { return stdx::none; }
+    if (const auto cmp{compare_big_int(op_type, *l, *r)}) { return const_value{*cmp, bool_type}; }
+
+    if (r->is_zero() && op_type == syntax::token_type_t::SLASH) {
         return on_error("Division by zero in compile-time constant expression");
     }
-    if (r.magnitude == 0 && op_type == syntax::token_type_t::PERCENT) {
+    if (r->is_zero() && op_type == syntax::token_type_t::PERCENT) {
         return on_error("Modulo by zero in compile-time constant expression");
     }
     const bool shifts{op_type == syntax::token_type_t::SHL || op_type == syntax::token_type_t::SHR};
-    if (shifts && r.negative && r.magnitude != 0) {
+    if (shifts && r->is_negative()) {
         return on_error("Negative shift amount in compile-time constant expression");
     }
+    if (shifts && target && *r >= big_int{u128{target->bits}}) {
+        return on_error(fmt::format("Shift amount {} is out of range for '{}'", *r, target->name));
+    }
 
-    const auto exact{exact_comptime_int(op_type, l, r)};
-    const bool unsigned_operands{!lhs.is<i64>() && !lhs.is<i128>() && !rhs.is<i64>() &&
-                                 !rhs.is<i128>()};
+    auto exact{exact_big_int(op_type, *l, *r)};
     if (!exact) { return on_error(COMPTIME_INT_RANGE_EXCEEDED); }
-    if (auto folded{from_comptime_int(*exact, unsigned_operands, res_type)}) { return folded; }
-    return on_error(COMPTIME_INT_RANGE_EXCEEDED);
+    if (target) {
+        const bool checked{target->is_signed && !wrapping && is_overflow_checked_op(op_type)};
+        if (checked && !exact->fits(target->bits, true)) {
+            return on_error(fmt::format("Signed integer overflow in compile-time constant "
+                                        "expression: the result does not fit '{}'",
+                                        target->name));
+        }
+        // Everything else drops the bits past the width, as runtime does
+        exact = big_int::from_words(exact->to_words(target->bits), target->bits, target->is_signed);
+    }
+    const bool unsigned_operands{!lhs.is<i64>() && !lhs.is<i128>() && !rhs.is<i64>() &&
+                                 !rhs.is<i128>() && !l->is_negative() && !r->is_negative()};
+    return from_exact_int(*exact, unsigned_operands, res_type);
 }
 
 // A concrete integer operand decides the result type over a `comptime_int` one
@@ -525,7 +541,7 @@ struct comptime_int_value {
 }
 
 [[nodiscard]] auto is_integer_arm(const const_value& v) noexcept -> bool {
-    return v.is<i64>() || v.is<u64>() || v.is<i128>() || v.is<u128>();
+    return v.is<i64>() || v.is<u64>() || v.is<i128>() || v.is<u128>() || v.is<big_int>();
 }
 
 // `{bit width, is signed}` for a concrete integer target (`iN`/`uN`/`isize`/`usize`),
@@ -1728,6 +1744,13 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             const auto sema_type{module_->get_sema_type_opt(id)};
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal used in a float context folds to a float value.
+            if (data.is_big) {
+                if (sema::is_float(t.get_kind()) ||
+                    t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
+                    return stdx::none;
+                }
+                return const_value::from_big_int(data.exact_value(), t);
+            }
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
                 const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
                 return make_scalar_const(f128::from_uint(data.value, format), t);
@@ -3550,13 +3573,23 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
                                                    : integer_result_type(lhs, rhs)};
     const auto width{res_type ? integer_target_width(*res_type, ptr_bits) : stdx::none};
 
+    // Past 128 bits, in an operand or the result's type, only exact arithmetic holds the value
+    const bool wide{lhs.is<big_int>() || rhs.is<big_int>() || (width && width->first > 128)};
+    if (wide || (is_comptime_int_result(res_type) &&
+                 (is_exact_comptime_int_op(op_type) || is_bitwise_op(op_type)))) {
+        stdx::option<int_width_target> target;
+        if (width && res_type) {
+            target.emplace(int_width_target{.bits      = width->first,
+                                            .is_signed = width->second,
+                                            .name      = ctx_.type_display_name(*res_type)});
+        }
+        return fold_big_int_binary(
+            op_type, lhs, rhs, res_type, target, wrapping, bool_type, on_fold_error);
+    }
+
     // A concrete integer type folds through the rules its generated code follows
     if (const auto int_op{semantics::int_op_of(op_type)}) {
         if (auto folded{fold_int_in_domain(*int_op, lhs, rhs, id, res_type)}) { return folded; }
-    }
-
-    if (is_comptime_int_result(res_type) && is_exact_comptime_int_op(op_type)) {
-        return fold_comptime_int_binary(op_type, lhs, rhs, res_type, on_fold_error);
     }
 
     // Two's-complement views across the whole 128-bit domain
@@ -3944,14 +3977,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
             return make_scalar_const(*exact, type);
         }
         if (is_integer_arm(*val) && is_comptime_int_result(type)) {
-            const auto v{to_comptime_int(*val)};
-            if (auto negated{from_comptime_int({!v.negative, v.magnitude}, false, type)}) {
-                return negated;
-            }
-            ctx_.diags.emplace_back(std::string{COMPTIME_INT_RANGE_EXCEEDED},
-                                    sema::error::COMPTIME_EVALUATION_FAILED,
-                                    module_->ast.location_of(id));
-            return const_value::make_poison();
+            return const_value::from_big_int(-*val->as_big_int_opt(), type);
         }
         if (val->is<i64>()) {
             return make_scalar_const(-static_cast<i128>(val->as<i64>()), val->get_type());
@@ -3995,6 +4021,9 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     } else if (op_type == syntax::token_type_t::BANG) {
         if (val->is<bool>()) { return const_value{!val->as<bool>(), val->get_type()}; }
     } else if (op_type == syntax::token_type_t::NOT) {
+        if (is_integer_arm(*val) && is_comptime_int_result(val->get_type())) {
+            return const_value::from_big_int(~*val->as_big_int_opt(), val->get_type());
+        }
         if (val->is<i64>()) { return const_value{~val->as<i64>(), val->get_type()}; }
         if (val->is<u64>()) { return const_value{~val->as<u64>(), val->get_type()}; }
     }
@@ -5059,6 +5088,47 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
 
         if (a->is<i64>() && b->is<i64>()) { return fold_int(a->as<i64>(), b->as<i64>()); }
         if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
+        // Mixed or wider-than-64-bit integers fold exactly
+        if (is_integer_arm(*a) && is_integer_arm(*b)) {
+            const auto l{*a->as_big_int_opt()};
+            const auto r{*b->as_big_int_opt()};
+            const auto fail{[&](std::string_view msg) {
+                ctx_.diags.emplace_back(std::string{msg},
+                                        sema::error::COMPTIME_EVALUATION_FAILED,
+                                        module_->ast.location_of(id));
+                return const_value::make_poison();
+            }};
+            const auto exact{
+                [&](const big_int& v) { return const_value::from_big_int(v, a->get_type()); }};
+            if (tok == syntax::builtin_t::MIN) { return exact(l < r ? l : r); }
+            if (tok == syntax::builtin_t::MAX) { return exact(l > r ? l : r); }
+            if (r.is_zero()) {
+                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
+                return fail(is_rem ? "Modulo by zero in compile-time constant expression"
+                                   : "Division by zero in compile-time constant expression");
+            }
+            const auto quotient{l / r};
+            const auto remainder{l % r};
+            const bool inexact{!remainder.is_zero()};
+            switch (tok) {
+            case syntax::builtin_t::DIV_TRUNC: return exact(quotient);
+            case syntax::builtin_t::REM:       return exact(remainder);
+            case syntax::builtin_t::DIV_EXACT:
+                if (inexact) {
+                    return fail("Exact division produced a remainder in compile-time constant "
+                                "expression");
+                }
+                return exact(quotient);
+            case syntax::builtin_t::DIV_FLOOR:
+                return exact(inexact && l.is_negative() != r.is_negative()
+                                 ? quotient - big_int{i128{1}}
+                                 : quotient);
+            case syntax::builtin_t::MOD:
+                return exact(inexact && remainder.is_negative() != r.is_negative() ? remainder + r
+                                                                                   : remainder);
+            default: return stdx::none;
+            }
+        }
         if ((tok == syntax::builtin_t::MIN || tok == syntax::builtin_t::MAX) && a->is<f128>() &&
             b->is<f128>()) {
             const auto type{call_result_type(call_id)};

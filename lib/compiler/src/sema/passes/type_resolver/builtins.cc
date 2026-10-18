@@ -1647,7 +1647,7 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::POPCOUNT: {
         auto& operand_type{comptime_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
         const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
-        if (width == 0) {
+        if (width == 0 && operand_type.get_kind() != type_kind::INT) {
             return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
                                              syntax::builtin_name(builtin_id),
                                              ctx_.type_display_name(operand_type)),
@@ -1765,7 +1765,9 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
                 error::OPERATOR_TYPE_MISMATCH,
                 get_call_arg_location(call.arguments[0]));
         }
-        return_type = ctx_.pool.with_const(operand_type, false);
+        // Two untyped operands stay untyped, so `@max(0, 1 << 100)` is a `comptime_int`
+        auto& result_type{peer && is_comptime_numeric((*peer)->get_kind()) ? **peer : operand_type};
+        return_type = ctx_.pool.with_const(result_type, false);
         break;
     }
     case syntax::builtin_t::ADD_WITH_OVERFLOW:
