@@ -119,6 +119,29 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
     m.match_arm_results   = matches;
 }
 
+auto body_typing_snapshot::diff_iteration_into(context&              ctx,
+                                               mod::module_t&        m,
+                                               body_type_diff&       out,
+                                               const body_write_log& write_log) const -> void {
+    diff_into(ctx, m, out);
+
+    // Entries already present may hold a folded `[n]T` that the live slot no longer does
+    const auto add_written{[](const std::vector<usize>& idxs, const auto& live, auto& dst) {
+        for (const auto i : idxs) {
+            if (i < live.size() && live[i] && !dst.find(i)) { dst.insert_or_assign(i, live[i]); }
+        }
+    }};
+    add_written(write_log.node_idxs, m.sema_side_tables.node_types.values, out.node_types);
+    add_written(
+        write_log.explicit_idxs, m.sema_side_tables.explicit_types.values, out.explicit_types);
+    for (const auto idx : write_log.attribute_idxs) {
+        const auto resolved{m.node_attributes.find(idx)};
+        if (resolved != m.node_attributes.end() && !out.attributes.find(idx)) {
+            out.attributes.insert_or_assign(idx, resolved->second);
+        }
+    }
+}
+
 auto body_typing_snapshot::restore_to(mod::module_t& m) const -> void {
     m.sema_side_tables.node_types.values           = nodes;
     m.sema_side_tables.explicit_types.values       = types;

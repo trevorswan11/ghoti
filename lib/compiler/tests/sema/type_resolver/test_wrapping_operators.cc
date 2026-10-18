@@ -36,23 +36,16 @@ TEST_CASE("wrapping compound '+%=' rejects boolean operands") {
 TEST_CASE("wrapping prefix '-%' rejects float operands") {
     helpers::test_resolver_fail(
         "let mut some_f32: f32 = 1.0f32; const x = -%some_f32;",
-        sema::diagnostic{"operator '-%' expects a signed integer operand; found 'f32'",
+        sema::diagnostic{"operator '-%' expects an integer operand; found 'f32'",
                          sema::error::OPERATOR_TYPE_MISMATCH,
                          std::pair{0UZ, 42UZ}});
-}
-
-TEST_CASE("wrapping prefix '-%' rejects unsigned integer operands") {
-    helpers::test_resolver_fail(
-        "let mut u: u32 = 1u32; const x = -%u;",
-        sema::diagnostic{"operator '-%' expects a signed integer operand; found 'u32'",
-                         sema::error::OPERATOR_TYPE_MISMATCH,
-                         std::pair{0UZ, 33UZ}});
 }
 
 TEST_CASE("wrapping operators accept concrete and comptime integers") {
     helpers::resolve_and_check("const c = 1 +% 2;");
     helpers::resolve_and_check("const f = fn(a: u8, b: u8): u8 { return a +% b; };");
     helpers::resolve_and_check("const f = fn(a: i8): i8 { return -%a; };");
+    helpers::resolve_and_check("const f = fn(a: u32): u32 { return -%a; };");
     helpers::resolve_and_check("const f = fn(a: u8, b: u8): u8 { return a <<% b; };");
 }
 

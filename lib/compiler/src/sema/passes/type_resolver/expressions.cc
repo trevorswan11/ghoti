@@ -1062,18 +1062,18 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
                                  resolving_.ast.location_of(id)));
         }
     } else if (id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) {
-        // Mirrors plain unary '-': signed integers only with overflow safety
+        // Unlike plain unary '-', wrapping negation is well-defined on unsigned integers too
         auto&      operand_type{*last_type_};
         const bool ok{operand_type.get_kind() == type_kind::COMPTIME_INT ||
-                      is_signed_integer(operand_type)};
+                      is_integer(operand_type.get_kind())};
         if (!operand_type.is_poison() && !ok) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("operator '-%' expects a signed integer operand; found '{}'",
-                            ctx_.type_display_name(operand_type)),
-                error::OPERATOR_TYPE_MISMATCH,
-                resolving_.ast.location_of(id)));
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("operator '-%' expects an integer operand; found '{}'",
+                                             ctx_.type_display_name(operand_type)),
+                                 error::OPERATOR_TYPE_MISMATCH,
+                                 resolving_.ast.location_of(id)));
         }
     }
     resolving_.set_sema_type(id, *last_type_);
