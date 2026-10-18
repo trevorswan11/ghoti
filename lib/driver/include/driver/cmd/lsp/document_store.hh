@@ -19,6 +19,7 @@
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
 #include "compiler/module/overlay_loader.hh"
+#include "compiler/module/parse_cache.hh"
 #include "driver/cmd/lsp/session.hh"
 #include "driver/cmd/lsp/workspace_symbols.hh"
 
@@ -46,7 +47,7 @@ class document_store {
         std::ostream&             error_stream,
         std::chrono::milliseconds throttle_interval = DEFAULT_THROTTLE_INTERVAL) noexcept
         : error_stream_{error_stream}, throttle_interval_{throttle_interval},
-          session_{stdx::make_box<analysis_session>(loader_, error_stream_)} {}
+          session_{stdx::make_box<analysis_session>(loader_, error_stream_, &parse_cache_)} {}
 
     // Overlays `text` for `path`, analyzes its module graph, and returns each touched module's
     // path paired with its LSP diagnostics, always rebuilds immediately
@@ -99,10 +100,12 @@ class document_store {
     std::chrono::milliseconds             throttle_interval_;
     std::chrono::steady_clock::time_point last_rebuild_{};
     bool                                  dirty_{false};
-    stdx::box<analysis_session>           session_;
-    std::vector<std::filesystem::path>    known_roots_;
-    workspace_map                         workspace_index_;
-    touched_modules                       pending_diagnostics_;
+    // Parses that outlive each rebuild's session, for every file it still reaches
+    mod::parse_cache                   parse_cache_;
+    stdx::box<analysis_session>        session_;
+    std::vector<std::filesystem::path> known_roots_;
+    workspace_map                      workspace_index_;
+    touched_modules                    pending_diagnostics_;
 };
 
 } // namespace ghoti::lsp

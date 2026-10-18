@@ -38,7 +38,7 @@ auto document_store::register_known_root(const std::filesystem::path& path) -> b
 }
 
 auto document_store::rebuild() -> void {
-    session_ = stdx::make_box<analysis_session>(loader_, error_stream_);
+    session_ = stdx::make_box<analysis_session>(loader_, error_stream_, &parse_cache_);
     for (const auto& root : known_roots_) {
         // A root whose file is gone (deleted, or its drive unmounted) is kept for when it returns
         if (auto res{session_->analyze(root)};
@@ -57,6 +57,8 @@ auto document_store::rebuild() -> void {
         workspace_index_[mod_path] = module_workspace_symbols(*mod);
         pending_diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod));
     }
+    parse_cache_.retain(
+        [this](const std::filesystem::path& path) { return workspace_index_.contains(path); });
     for (const auto& [mod_path, entries] : previous) {
         if (!workspace_index_.contains(mod_path)) {
             pending_diagnostics_.emplace_back(mod_path, nlohmann::json::array());
