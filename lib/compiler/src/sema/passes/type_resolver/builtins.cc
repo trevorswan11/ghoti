@@ -554,7 +554,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                                  error::TYPE_MISMATCH,
                                  args_res->target_loc);
         }
-        auto* src_p{get_resolved_call_arg_type(*args_res->operand).get()};
+        auto* src_p{get_call_arg_value_type(*args_res->operand).get()};
         // An untyped float folds as an `f64`, so that is the bit pattern it has to give
         if (src_p->get_kind() == type_kind::COMPTIME_FLOAT) {
             src_p = &ctx_.get_builtin_resolved_type(type_kind::F64);
@@ -611,7 +611,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
 
         if (target.get_kind() == type_kind::BOOL &&
@@ -680,7 +680,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
@@ -710,7 +710,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         if (!is_integer(src.get_kind())) {
             return make_sema_err(
@@ -745,7 +745,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
     }
     case syntax::builtin_t::BOOL_FROM_INT: {
         const auto& arg{call.arguments[0]};
-        auto&       src{*get_resolved_call_arg_type(arg)};
+        auto&       src{*get_call_arg_value_type(arg)};
         if (src.is_poison()) { break; }
         if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT &&
             src.get_kind() != type_kind::POINTER) {
@@ -770,7 +770,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         if (src.get_kind() != type_kind::BOOL) {
             return make_sema_err(
@@ -845,7 +845,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         if (!is_float(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_FLOAT) {
             return make_sema_err(fmt::format("`@intFromFloat` operand must be a float; found '{}'",
@@ -868,7 +868,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                 error::TYPE_MISMATCH,
                 args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         if (!is_integer(src.get_kind()) && src.get_kind() != type_kind::COMPTIME_INT) {
             return make_sema_err(
@@ -891,7 +891,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                                  error::TYPE_MISMATCH,
                                  args_res->target_loc);
         }
-        auto& src{*get_resolved_call_arg_type(*args_res->operand)};
+        auto& src{*get_call_arg_value_type(*args_res->operand)};
         if (src.is_poison()) { break; }
         const auto src_kind{src.get_kind()};
         if (is_integer(src_kind)) {
@@ -1645,7 +1645,7 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::CLZ:
     case syntax::builtin_t::CTZ:
     case syntax::builtin_t::POPCOUNT: {
-        auto& operand_type{comptime_numeric_view(*get_resolved_call_arg_type(call.arguments[0]))};
+        auto&      operand_type{comptime_numeric_view(*get_call_arg_value_type(call.arguments[0]))};
         const auto width{integer_effective_bits(operand_type, target_ptr_bits())};
         if (width == 0 && operand_type.get_kind() != type_kind::INT) {
             return make_sema_err(fmt::format("'{}' operand must be an integer type; found '{}'",
@@ -1671,7 +1671,7 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::FLOOR:
     case syntax::builtin_t::CEIL:  {
         const auto& arg{call.arguments[0]};
-        auto&       operand{*get_resolved_call_arg_type(arg)};
+        auto&       operand{*get_call_arg_value_type(arg)};
         if (operand.is_poison()) { break; }
         const auto name{syntax::builtin_name(builtin_id)};
         if (call_arg_denotes_type(arg)) {
@@ -1712,14 +1712,14 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     }
     // These return @TypeOf(expression) which is trivial
     case syntax::builtin_t::ABS: {
-        return_type = get_resolved_call_arg_type(call.arguments[0]);
+        return_type = get_call_arg_value_type(call.arguments[0]);
         break;
     }
     case syntax::builtin_t::MUL_ADD: {
-        return_type = get_resolved_call_arg_type(call.arguments[0]);
+        return_type = get_call_arg_value_type(call.arguments[0]);
         // Every operand is a `T`, the first argument
         for (usize i{1}; return_type && i < call.arguments.size(); ++i) {
-            const auto operand_type{get_resolved_call_arg_type(call.arguments[i])};
+            const auto operand_type{get_call_arg_value_type(call.arguments[i])};
             if (operand_type && !is_assignable(*operand_type, *return_type)) {
                 return make_sema_err(fmt::format("'@mulAdd' operands must be '{}'; found '{}'",
                                                  ctx_.type_display_name(*return_type),
@@ -1737,8 +1737,8 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::DIV_EXACT:
     case syntax::builtin_t::REM:
     case syntax::builtin_t::MOD:       {
-        auto&      lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
-        auto&      rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
+        auto&      lhs_type{*get_call_arg_value_type(call.arguments[0])};
+        auto&      rhs_type{*get_call_arg_value_type(call.arguments[1])};
         const bool floats_ok{builtin_id == syntax::builtin_t::MIN ||
                              builtin_id == syntax::builtin_t::MAX};
         const auto accepts{
@@ -1774,8 +1774,8 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
     case syntax::builtin_t::SUB_WITH_OVERFLOW:
     case syntax::builtin_t::MUL_WITH_OVERFLOW:
     case syntax::builtin_t::SHL_WITH_OVERFLOW: {
-        auto& lhs_type{*get_resolved_call_arg_type(call.arguments[0])};
-        auto& rhs_type{*get_resolved_call_arg_type(call.arguments[1])};
+        auto& lhs_type{*get_call_arg_value_type(call.arguments[0])};
+        auto& rhs_type{*get_call_arg_value_type(call.arguments[1])};
         auto& out_type{*get_resolved_call_arg_type(call.arguments[2])};
         // A shift's count is not a peer of the value shifted. The others meet at their peer type
         const bool       is_shift{builtin_id == syntax::builtin_t::SHL_WITH_OVERFLOW};
@@ -2668,6 +2668,13 @@ auto type_resolver::get_resolved_call_arg_type(const ast::call_expr::argument& a
             ASSERT(type, "Call argument was not typed");
             return *type;
         });
+}
+
+auto type_resolver::get_call_arg_value_type(const ast::call_expr::argument& arg)
+    -> gsl::not_null<type*> {
+    const auto t{get_resolved_call_arg_type(arg)};
+    if (const auto ref{t->get_data().as_opt<types::reference>()}) { return &ref->underlying; }
+    return t;
 }
 
 auto type_resolver::get_call_arg_location(const ast::call_expr::argument& arg) -> source_location {
