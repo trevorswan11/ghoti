@@ -1,8 +1,64 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/udivmod.zig
 import std;
 import "compiler_rt.gh" as compiler_rt;
 
 const HalveInt = compiler_rt.HalveInt;
 const Log2Int = std.math.Log2Int;
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__umodti3, "__umodti3");
+    symbol(__modti3, "__modti3");
+    symbol(__udivti3, "__udivti3");
+    symbol(__divti3, "__divti3");
+    symbol(__udivmodti4, "__udivmodti4");
+}
+
+pub const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u128 {
+    return udivmod(u128, a, b, maybe_rem);
+};
+
+@cfg (testing) {
+    import "udivmodti4_test.gh" as udivmodti4_test;
+}
+
+@[testing] const test__udivmodti4 = fn(a: u128, b: u128, expected_q: u128, expected_r: u128): void {
+    let mut r: u128 = undefined;
+    let q = __udivmodti4(a, b, ^mut r);
+    @expect(expected_q == q);
+    @expect(expected_r == r);
+};
+
+test "udivmodti4" {
+    for (udivmodti4_test.cases) |case| {
+        test__udivmodti4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+pub const __divti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+    return div(a, b);
+};
+
+@[testing] const test__divti3 = fn(a: i128, b: i128, expected: i128): void {
+    let x = __divti3(a, b);
+    @expect(x == expected);
+};
+
+test "divti3" {
+    test__divti3(0, 1, 0);
+    test__divti3(0, -1, 0);
+    test__divti3(2, 1, 2);
+    test__divti3(2, -1, -2);
+    test__divti3(-2, 1, -2);
+    test__divti3(-2, -1, 2);
+
+    test__divti3(@bitCast(i128, 0x8 << 124), 1, @bitCast(i128, 0x8 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), -1, @bitCast(i128, 0x8 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), -2, @bitCast(i128, 0x4 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), 2, @bitCast(i128, 0xc << 124));
+}
 
 @[inline(.always)] const div = fn(a: i128, b: i128): i128 {
     let s_a = a >> 127; // s = a < 0 ? -1 : 0
@@ -16,6 +72,49 @@ const Log2Int = std.math.Log2Int;
     return (@bitCast(i128, r) ^ s) -% s; // negate if s == -1
 };
 
+pub const __udivti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+    return udivmod(u128, a, b, nullptr);
+};
+
+pub const __modti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+    return mod(a, b);
+};
+
+@[testing] const test__modti3 = fn(a: i128, b: i128, expected: i128): void {
+    let x = __modti3(a, b);
+    @expect(x == expected);
+};
+
+const make_ti = fn(high: u64, low: u64): i128 {
+    let mut result: u128 = high;
+    result <<= 64;
+    result |= low;
+    return @bitCast(result);
+};
+
+test "modti3" {
+    test__modti3(0, 1, 0);
+    test__modti3(0, -1, 0);
+    test__modti3(5, 3, 2);
+    test__modti3(5, -3, 2);
+    test__modti3(-5, 3, -2);
+    test__modti3(-5, -3, -2);
+
+    test__modti3(0x8000000000000000, 1, 0x0);
+    test__modti3(0x8000000000000000, -1, 0x0);
+    test__modti3(0x8000000000000000, 2, 0x0);
+    test__modti3(0x8000000000000000, -2, 0x0);
+    test__modti3(0x8000000000000000, 3, 2);
+    test__modti3(0x8000000000000000, -3, 2);
+
+    test__modti3(make_ti(0x8000000000000000, 0), 1, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), -1, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), 2, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), -2, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), 3, -2);
+    test__modti3(make_ti(0x8000000000000000, 0), -3, -2);
+}
+
 @[inline(.always)] const mod = fn(a: i128, b: i128): i128 {
     let s_a = a >> 127; // s = a < 0 ? -1 : 0
     let s_b = b >> 127; // s = b < 0 ? -1 : 0
@@ -25,7 +124,13 @@ const Log2Int = std.math.Log2Int;
 
     let mut r: u128 = undefined;
     _ = udivmod(u128, @bitCast(an), @bitCast(bn), ^mut r);
-    return (@bitCast(i128, r)) -% s_a; // negate if s == -1
+    return (@bitCast(i128, r) ^ s_a) -% s_a; // negate if s == -1
+};
+
+pub const __umodti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+    let mut r: u128 = undefined;
+    _ = udivmod(u128, a, b, ^mut r);
+    return r;
 };
 
 /// Returns U / divisor and sets remainder = U % divisor, where U is provided by its high and low limbs.
@@ -92,10 +197,11 @@ const divwide_generic = fn(
 /// Returns U / divisor and sets remainder = U % divisor, where U is provided by its high and low limbs.
 const divwide = fn(comptime T: type, u_high: T, u_low: T, divisor: T, remainder: &mut T): T {
     if comptime (T == u64 and @targetArch() == .x86_64 and @targetOs() != .windows) {
+        let mut quo: T = undefined;
         let mut rem: T = undefined;
-        let quo = asm T {
+        asm {
             template: "divq %2",
-            outputs: ("={rax}" = _, "={rdx}" = rem),
+            outputs: ("={rax}" = quo, "={rdx}" = rem),
             inputs: ("r" = divisor, "{rax}" = u_low, "{rdx}" = u_high),
         };
         remainder = rem;
@@ -131,7 +237,7 @@ pub const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mu
             q[0] = divwide(HalfT, a[1], a[0], b[0], &mut r[0]);
         } else {
             // First divide high part to get rem, then a_hi < b_lo
-            q[1] = q[1] / b[0];
+            q[1] = a[1] / b[0];
             q[0] = divwide(HalfT, a[1] % b[0], a[0], b[0], &mut r[0]);
         }
 
