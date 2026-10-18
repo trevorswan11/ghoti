@@ -25,9 +25,11 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/module/error.hh"
+#include "compiler/module/parse_cache.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "support/diagnostic.hh"
 #include "support/path_utils.hh"
@@ -186,10 +188,20 @@ auto module_manager::try_get(const std::filesystem::path& path)
     if (auto it{modules_.find(path)}; it != modules_.end()) { return it->second.get(); }
     auto source{TRY(loader_.load(path))};
 
-    auto mod{stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)})};
-    syntax::parser p{mod->source};
-    p.enable_default_wrappers();
-    auto diagnostics{p.consume(mod->ast, *arena_)};
+    stdx::box<module_t> mod;
+    syntax::diagnostics diagnostics;
+    if (parse_cache_) {
+        auto parsed{parse_cache_->get(path, std::move(source))};
+        mod = stdx::make_box<module_t>(
+            path, path.parent_path(), source_file{std::string_view{parsed->source}});
+        mod->ast    = parsed->ast.borrow(*arena_);
+        diagnostics = parsed->diagnostics.create_new();
+        for (const auto& d : parsed->diagnostics) { diagnostics.push_back(d); }
+        mod->parsed_from = std::move(parsed);
+    } else {
+        mod = stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)});
+        diagnostics = parse_source(mod->source, mod->ast, *arena_);
+    }
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());

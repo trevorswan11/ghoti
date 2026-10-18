@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <gsl/pointers>
+#include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
@@ -14,13 +15,17 @@
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
 #include "compiler/module/overlay_loader.hh"
+#include "compiler/module/parse_cache.hh"
 #include "compiler/module/stdlib.hh"
 
 namespace ghoti::lsp {
 
-analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& error_stream) noexcept
+analysis_session::analysis_session(mod::overlay_loader&            loader,
+                                   std::ostream&                   error_stream,
+                                   stdx::option<mod::parse_cache&> cache) noexcept
     : manager_{loader}, analyzer_{manager_, error_stream, false, {}, true} {
     PROFILE_FUNCTION();
+    if (cache) { manager_.set_parse_cache(*cache); }
     // The editor checks test blocks too
     analyzer_.set_testing(true);
     const auto stdlib_path{mod::find_stdlib()};

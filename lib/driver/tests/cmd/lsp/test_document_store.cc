@@ -245,4 +245,30 @@ TEST_CASE("a known file that disappears leaves the index and has its diagnostics
     CHECK_FALSE(lsp::has_field(store.workspace_symbols(""), "name", "vanishing"));
 }
 
+TEST_CASE("an unchanged import keeps its diagnostics across rebuilds and reflects its edits") {
+    tempdir dir{"parse_cache_root"};
+    dir.write("dep.gh", R"(
+        pub const S = struct {
+            @cfg(ptr_bits == 7) { unused: NoSuchType }
+            else                { n: i32 }
+        };
+        pub const bad: i32 = true;
+    )");
+    const auto dep{dir.path / "dep.gh"};
+    const auto root{dir.path / "root.gh"};
+
+    // Each edit to the root rebuilds while `dep.gh` stays the same parse
+    lsp::document_store store{std::cerr};
+    for (const auto n : {1, 2, 3}) {
+        const auto touched{store.update(
+            root, fmt::format(R"(import "dep.gh" as dep; pub const s = dep.S{{ .n = {} }};)", n))};
+        CHECK(UNWRAP(find(touched, dep)).size() == 1);
+        CHECK(UNWRAP(find(touched, root)).size() == 1); // the failed import
+    }
+
+    const auto fixed{store.update(dep, "pub const S = struct { n: i32 }; pub const bad: i32 = 1;")};
+    CHECK(UNWRAP(find(fixed, dep)).empty());
+    CHECK(UNWRAP(find(fixed, root)).empty());
+}
+
 } // namespace ghoti::tests

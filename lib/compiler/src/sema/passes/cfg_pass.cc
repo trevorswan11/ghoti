@@ -825,6 +825,26 @@ auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
 
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
     PROFILE_FUNCTION();
+    // An aggregate's gated fields and members are spliced in place
+    const auto flatten = [this](auto& node, auto& items) {
+        flatten_cfg_groups(node.cfg_groups, items);
+        flatten_cfg_groups(node.member_cfg_groups, node.members);
+        recurse_into_members(node.members);
+    };
+    const ast::node_id id{expr};
+    if (id.is<ast::struct_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::struct_expr>(id)};
+        return flatten(node, node.fields);
+    }
+    if (id.is<ast::union_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::union_expr>(id)};
+        return flatten(node, node.fields);
+    }
+    if (id.is<ast::enum_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::enum_expr>(id)};
+        return flatten(node, node.enumerations);
+    }
+
     // Any operand can hold a block-bodied `if`, `match`, loop, or function literal
     module_.ast[expr].visit(
         [&](const ast::binary_expr& bin) {
@@ -897,21 +917,6 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             } else {
                 recurse_into_expr(ast::expr_handle{body});
             }
-        },
-        [&](ast::struct_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.fields);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
-        },
-        [&](ast::union_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.fields);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
-        },
-        [&](ast::enum_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.enumerations);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
         },
         [](const auto&) {});
 }

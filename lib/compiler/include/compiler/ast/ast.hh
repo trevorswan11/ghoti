@@ -191,13 +191,13 @@ class AST {
         nodes_.paren_depths[id.get_index()] += 1;
     }
 
-    // Returns the node data at the provided id
+    // Returns the node data at the provided id. Writes go through `get_as_mut`
     template <IndexableID ID>
-    [[nodiscard]] constexpr auto operator[](this auto&& self, ID id) noexcept -> auto& {
+    [[nodiscard]] constexpr auto operator[](ID id) const noexcept -> const auto& {
         if constexpr (IndexableNodeID<ID>) {
-            return *self.nodes_.pool[id.get_index()];
+            return *nodes_.pool[id.get_index()];
         } else {
-            return *self.explicit_types_.pool[id.get_index()];
+            return *explicit_types_.pool[id.get_index()];
         }
     }
 
@@ -215,11 +215,15 @@ class AST {
     }
 
     // Mutable access to a node's payload. Caller asserts the stored alternative.
-    template <typename Data, IndexableNodeID ID>
-    [[nodiscard]] constexpr auto get_as_mut(ID id) noexcept -> Data& {
+    template <typename Data, IndexableNodeID ID> [[nodiscard]] auto get_as_mut(ID id) -> Data& {
         ASSERT(id.template is<Data>(), "Illegal node data retrieval");
+        own_node(id.get_index());
         return nodes_.pool[id.get_index()]->template as<Data>();
     }
+
+    // A copy sharing this tree's payloads, which must outlive it. New nodes and the payloads
+    // sema rewrites live in `arena`.
+    [[nodiscard]] auto borrow(ghoti::arena& arena) const -> AST;
 
     [[nodiscard]] constexpr auto get_roots(this auto&& self) noexcept -> auto& {
         return self.nodes_.roots;
@@ -277,6 +281,7 @@ class AST {
         doc_comments_.clear();
         module_doc_.clear();
         if (interner_) { interner_->clear(); }
+        shared_nodes_.clear();
     }
 
   private:
@@ -285,12 +290,21 @@ class AST {
         std::string text;
     };
 
+    // Copies a node still shared with the tree this one borrowed from into this tree's arena
+    auto own_node(usize index) -> void {
+        if (index >= shared_nodes_.size() || !shared_nodes_[index]) { return; }
+        nodes_.pool[index]   = get_arena().make<node_variant>(*nodes_.pool[index]);
+        shared_nodes_[index] = false;
+    }
+
   private:
     data_pool<node_id, node_variant>          nodes_;
     data_pool<explicit_type_id, type_variant> explicit_types_;
     std::vector<doc_comment>                  doc_comments_;
     std::string                               module_doc_;
     stdx::option<syntax::string_interner>     interner_;
+    // Per node, whether its payload belongs to the tree this one was borrowed from
+    std::vector<bool> shared_nodes_;
 };
 
 } // namespace ghoti::ast

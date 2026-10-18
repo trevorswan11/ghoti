@@ -30,6 +30,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/module/error.hh"
+#include "compiler/module/parse_cache.hh"
 #include "compiler/module/source_loader.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -150,6 +151,9 @@ struct module_t {
 
     // Reported alongside `diagnostics` but never errors the module out
     sema::diagnostics warnings;
+
+    // The cached parse `ast` borrows its payloads from, if any
+    stdx::rc<const parse_cache::entry> parsed_from;
 
     auto record_node_write(usize idx) noexcept -> void;
     auto record_explicit_write(usize idx) noexcept -> void;
@@ -489,6 +493,9 @@ class module_manager {
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module_manager)
 
+    // Borrows file modules from `cache` instead of parsing them, adding what it lacks
+    auto set_parse_cache(parse_cache& cache) noexcept -> void { parse_cache_ = &cache; }
+
     // Attempts to load the path from the loader and parse its contents.
     //
     // A relative `path` resolves against `parent_path`, which must be absolute or empty
@@ -541,13 +548,14 @@ class module_manager {
     auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
 
   private:
-    source_loader&                                    loader_;
-    module_table                                      modules_;
-    stdx::box<module_t>                               builtin_module_;
-    stdx::box<module_t>                               start_module_;
-    stdx::option<stdx::option<std::filesystem::path>> start_path_;
-    stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
+    source_loader&                                        loader_;
+    module_table                                          modules_;
+    stdx::box<module_t>                                   builtin_module_;
+    stdx::box<module_t>                                   start_module_;
+    stdx::option<stdx::option<std::filesystem::path>>     start_path_;
+    stdx::box<ghoti::arena>                               arena_{stdx::make_box<ghoti::arena>()};
     mutable ankerl::unordered_dense::set<const module_t*> printed_diagnostics_;
+    stdx::option<parse_cache&>                            parse_cache_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

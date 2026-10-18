@@ -127,7 +127,7 @@ TEST_CASE("A failed import's diagnostics print once across repeated reports") {
                                             R"(import "a.gh" as _;)",
                                             mock_file{"a.gh", R"(const x: i32 = true;)", "a"})};
     const auto         first{ss.str()};
-    CHECK(first.find("a.gh") != std::string::npos);
+    CHECK(first.contains("a.gh"));
 
     // A driver reports whatever failed after analysis, which the analyzer already printed
     ctx->manager.print_all_diagnostics(ss);
