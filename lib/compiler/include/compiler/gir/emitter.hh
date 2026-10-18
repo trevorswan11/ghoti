@@ -519,6 +519,9 @@ class emitter {
     // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `comptime_int` `v` does not
     // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
     [[nodiscard]] auto coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value;
+    // Gives a `comptime_int` `@bitCast` operand an integer type as wide as `target`
+    [[nodiscard]] auto widen_untyped_bit_cast_operand(value v, sema::type& target, ast::node_id at)
+        -> value;
     // Diagnoses a constant `<<`/`>>` amount outside `[0, width)`, then gives an untyped one the
     // shifted type. A `<<%`/`<<|` amount is clamped to the width, where it means the same.
     [[nodiscard]] auto

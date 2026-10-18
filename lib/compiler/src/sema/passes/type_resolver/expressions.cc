@@ -215,7 +215,11 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
         }
     }
     {
-        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(lhs_type)};
+        // Assigning to a reference writes its referent, so that is what the value infers as
+        auto&                  dest_type{lhs_type.get_kind() == type_kind::REFERENCE
+                                             ? lhs_type.get_data().as<types::reference>().underlying
+                                             : lhs_type};
+        const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(dest_type)};
         TRY_RESOLVE(assign.rhs);
     }
     if (reject_type_as_value(assign.rhs, lhs_type)) {
