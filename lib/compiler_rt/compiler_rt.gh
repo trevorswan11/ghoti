@@ -4,7 +4,7 @@ import "addf3.gh" as _;
 import "comparef.gh" as _;
 import "mem.gh" as _;
 import "windows.gh" as _;
-// import "udivmod.gh" as _;
+import "udivmod.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -83,5 +83,5 @@ test {
     import "addf3.gh";
     import "comparef.gh";
     import "mem.gh";
-    // import "udivmod.gh";
+    import "udivmod.gh";
 }
