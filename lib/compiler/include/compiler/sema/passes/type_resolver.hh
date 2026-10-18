@@ -461,6 +461,9 @@ class type_resolver {
         -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
         -> gsl::not_null<type*>;
+    // The type an argument reads as a value, which for a reference is its referent
+    [[nodiscard]] auto get_call_arg_value_type(const ast::call_expr::argument& arg)
+        -> gsl::not_null<type*>;
 
     // `none` on a `PACK_EXPANSION_MISPLACED` diagnostic (already recorded on `ctx_.diags`).
     [[nodiscard]] auto expand_pack_call_args(const ast::call_expr& call)

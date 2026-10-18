@@ -339,6 +339,11 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
 
 auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> void {
     PROFILE_FUNCTION();
+    // A reference operand is read through, as the emitter loads it
+    const auto referent_view = [](type& t) -> type& {
+        if (const auto ref{t.get_data().as_opt<types::reference>()}) { return ref->underlying; }
+        return t;
+    };
 
     // `.a == x`: the right side names what `.a` is a member of, so it resolves first
     type* lhs_type{nullptr};
@@ -350,15 +355,15 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
                                      ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
             TRY_RESOLVE(binary.rhs);
         }
-        rhs_first = last_type_.take();
+        rhs_first = &referent_view(*last_type_.take());
         {
             const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*rhs_first)};
             TRY_RESOLVE(binary.lhs);
         }
-        lhs_type = last_type_.take();
+        lhs_type = &referent_view(*last_type_.take());
     } else {
         TRY_RESOLVE(binary.lhs);
-        lhs_type = last_type_.take();
+        lhs_type = &referent_view(*last_type_.take());
         // `false and x` / `true or x` never evaluates `x`, so nothing it would report applies
         if (lhs_decides_logical_op(id.get_token_type(), binary.lhs)) {
             const auto diags_before{ctx_.diags.size()};
@@ -372,7 +377,7 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
             const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
             TRY_RESOLVE(binary.rhs);
         }
-        rhs_first = last_type_.take();
+        rhs_first = &referent_view(*last_type_.take());
     }
     auto& rhs_type{*rhs_first};
 
