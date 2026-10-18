@@ -79,6 +79,14 @@ pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
     };
 };
 
+@[inline(.always)] pub const abs_i32 = fn(x: i32): i32 {
+    return (x ^ (x >> 31)) -% (x >> 31);
+};
+
+@[inline(.always)] pub const abs_i64 = fn(x: i64): i64 {
+    return (x ^ (x >> 63)) -% (x >> 63);
+};
+
 test {
     import "addf3.gh";
     import "comparef.gh";
