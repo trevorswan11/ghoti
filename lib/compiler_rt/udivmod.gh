@@ -102,10 +102,9 @@ pub const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u
 };
 
 test "__udivmoddi4" {
-    @skip(); // TODO(tcs): Integer divison by zero panic
     import "cases/udivmoddi4.gh" as udivmoddi4_cases;
     for (udivmoddi4_cases.cases) |case| {
-        test__udivmodti4(case[0], case[1], case[2], case[3]);
+        test__udivmoddi4(case[0], case[1], case[2], case[3]);
     }
 }
 

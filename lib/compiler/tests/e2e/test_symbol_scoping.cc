@@ -205,4 +205,89 @@ TEST_CASE("An `export`ed name still resolves alongside a colliding internal one"
     CHECK(exit_code == 112);
 }
 
+namespace {
+
+constexpr std::string_view CASES_A{R"(
+    pub const cases = [_][4]u32{
+        [_]u32{ 1, 2, 3, 4 },
+        [_]u32{ 5, 6, 7, 8 },
+    };
+    pub const Point = struct { pub x: i32, pub y: i32 };
+    pub const origin: Point = .{ .x = 1, .y = 2 };
+    pub const limit: i32 = 3;
+)"};
+
+constexpr std::string_view CASES_B{R"(
+    pub const cases = [_][3]u32{
+        [_]u32{ 10, 20, 30 },
+        [_]u32{ 40, 50, 60 },
+    };
+    pub const Point = struct { pub x: i32, pub y: i32 };
+    pub const origin: Point = .{ .x = 30, .y = 40 };
+    pub const limit: i32 = 9;
+)"};
+
+} // namespace
+
+TEST_CASE("Same-named `const` aggregates in two modules keep their own storage") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "ca.gh" as ca;
+            import "cb.gh" as cb;
+
+            pub const main = fn(): i32 {
+                let mut sum: u32 = 0;
+                for (ca.cases) |case| { sum += case[0] + case[3]; }   // 18
+                for (cb.cases) |case| { sum += case[0] + case[2]; }   // 140
+                let o = ca.origin.x + ca.origin.y + cb.origin.x + cb.origin.y;   // 73
+                return @intCast(sum) - 100 + o + *(^ca.limit) * 10 + *(^cb.limit);   // 58 + 73 + 39
+            };
+        )",
+        {
+            helpers::mock_file{"ca.gh", CASES_A, "ca"},
+            helpers::mock_file{"cb.gh", CASES_B, "cb"},
+        })};
+    CHECK(exit_code == helpers::portable_exit_code(170));
+}
+
+TEST_CASE("Same-named `const` aggregates imported in separate test scopes stay distinct") {
+    CHECK(helpers::compile_and_run_tests(
+              R"(
+                test "a" {
+                    import "ca.gh" as a_cases;
+                    let mut sum: u32 = 0;
+                    for (a_cases.cases) |case| { sum += case[0] + case[3]; }
+                    @expect(sum == 18);
+                }
+
+                test "b" {
+                    import "cb.gh" as b_cases;
+                    let mut sum: u32 = 0;
+                    for (b_cases.cases) |case| { sum += case[0] + case[2]; }
+                    @expect(sum == 140);
+                }
+            )",
+              {
+                  helpers::mock_file{"ca.gh", CASES_A, "ca"},
+                  helpers::mock_file{"cb.gh", CASES_B, "cb"},
+              }) == 0);
+}
+
+TEST_CASE("Two structs in one module with a same-named `const` array static member") {
+    CHECK(helpers::compile_and_run(R"(
+        const A = struct {
+            const table = [_]i32{ 1, 2, 3 };
+            const sum = fn(): i32 { return table[0] + table[1] + table[2]; };
+        };
+        const B = struct {
+            const table = [_]i32{ 10, 20 };
+            const sum = fn(): i32 { return table[0] + table[1]; };
+        };
+
+        pub const main = fn(): i32 {
+            return A.sum() + B.sum() + A.table[2] + B.table[1];   // 6 + 30 + 3 + 20
+        };
+    )") == 59);
+}
+
 } // namespace ghoti::tests
