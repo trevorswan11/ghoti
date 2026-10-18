@@ -653,9 +653,12 @@ fn addTooling(b: *std.Build, config: struct {
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "examples", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "tools", .{ .allowed_extensions = &counted_extensions }, &counted_files);
+
+    const KiB = 1024;
+    const MiB = KiB * KiB;
     _ = LOCCounter.init(b, .{
         .counted_files = counted_files.wrapped.items,
-        .file_buf_size = 1000 * 1024,
+        .file_buf_size = 100 * MiB,
     });
 }
 
