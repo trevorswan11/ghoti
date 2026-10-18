@@ -337,6 +337,10 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
                                  u16                       bits,
                                  bool                      is_signed,
                                  stdx::option<sema::type&> res_type) -> const_value {
+    // `u0` wraps everything to its only value
+    if (bits == 0 && res_type && res_type->get_kind() == sema::type_kind::INT) {
+        return make_scalar_const(u128{0}, res_type);
+    }
     // No bit-masking is needed at or past 128 bits: the fold already happened in comptime
     if (bits == 0 || bits >= 128) {
         if (!res_type) { return folded; }
@@ -774,6 +778,7 @@ auto const_eval::resolve_all_deferred_types() -> void { resolve_all_deferred_arr
 namespace {
 
 [[nodiscard]] auto int_abi_bytes(u16 bits) -> usize {
+    if (bits == 0) { return 0; }
     if (bits <= 8) { return 1; }
     if (bits <= 16) { return 2; }
     if (bits <= 32) { return 4; }
@@ -787,7 +792,7 @@ namespace {
 // i386 SysV
 [[nodiscard]] auto int_abi_align(u16 bits, const codegen::type_layout& layout) -> usize {
     if (bits > 32 && bits <= 64) { return layout.i64_align; }
-    return int_abi_bytes(bits);
+    return std::max<usize>(int_abi_bytes(bits), 1);
 }
 
 [[nodiscard]] auto capture_field_align(const sema::types::closure_capture& capture,
@@ -4009,7 +4014,7 @@ auto const_eval::eval_ident(ast::node_id id, const ast::identifier_expr& ident)
             width = width * 10 + static_cast<u64>(c - '0');
             if (width > 65'535) { break; }
         }
-        if (width < 1 || width > 65'535) { return stdx::none; }
+        if (width > 65'535) { return stdx::none; }
         return const_value{ctx_.get_int(static_cast<u16>(width), name.front() == 'i')};
     }};
 
@@ -4782,8 +4787,9 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             if (signedness_v->name != "signed" && signedness_v->name != "unsigned") {
                 return stdx::none;
             }
-            return const_value{
-                ctx_.get_int(static_cast<u16>(*bits_v), signedness_v->name == "signed")};
+            const bool is_signed{signedness_v->name == "signed"};
+            if (*bits_v > 65'535 || (is_signed && *bits_v == 0)) { return stdx::none; }
+            return const_value{ctx_.get_int(static_cast<u16>(*bits_v), is_signed)};
         }
         case syntax::builtin_t::FLOAT: {
             const auto bits_v{desc_field<u64>(*desc, "bits")};

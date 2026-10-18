@@ -343,13 +343,13 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
             width = width * 10 + static_cast<u64>(c - '0');
             if (width > 65'535) { break; }
         }
-        if (width < 1 || width > 65'535) {
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 fmt::format("Integer width must be 1..65535; found '{}'", name),
-                                 error::TYPE_MISMATCH,
-                                 resolving_.ast.location_of(id)));
+        if (width > 65'535) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("Integer width must be at most 65535; found '{}'", name),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
         }
         auto& int_type{ctx_.get_int(static_cast<u16>(width), name.front() == 'i')};
         resolving_.set_sema_type(id, int_type);

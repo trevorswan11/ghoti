@@ -909,3 +909,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `union(void) { ... }` is an untagged union with Ghoti's own layout, so a field can be reinterpreted without the C ABI rules of `extern union`
     - `@typeInfo(U).@"union".tag_type` is the tag enum (`void` otherwise), and `@Union` accepts one
 - Reading another field of an untagged union whose value is known at compile time is left to runtime instead of reporting an inactive field
+- `u0`, the zero-bit unsigned integer: its only value is 0 and it takes no space (`@sizeOf(u0) == 0`); `@Int(.{ .signedness = .unsigned, .bits = 0 })` builds it, and `std.math.Log2Int(u1)` is now `u0`. There is no `i0`
+- `@Int` rejects widths past 65535 and a zero-bit signed integer instead of building a truncated type

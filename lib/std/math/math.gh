@@ -90,7 +90,7 @@ pub const Log2Int = fn(comptime T: type): type {
         .comptime_int => comptime_int,
         .int => |info| blk: {
             const bits: u16 = @typeInfo(T).int.bits;
-            const log2_bits = if (bits <= 1) 1 else 16 - @clz(bits - 1);
+            const log2_bits = if (bits <= 1) 0 else 16 - @clz(bits - 1);
             break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
         },
         _ => @compileError("Log2Int requires an integer argument type, got " ++ @typeName(T)),
@@ -99,6 +99,7 @@ pub const Log2Int = fn(comptime T: type): type {
 
 test "Log2Int construction" {
     @expect(Log2Int(comptime_int) == comptime_int);
+    @expect(Log2Int(u1) == u0);
     @expect(Log2Int(u64) == u6);
     @expect(Log2Int(u65) == u7);
     @expect(Log2Int(u32) == u5);
@@ -115,6 +116,7 @@ pub const log2_int = fn(comptime T: type, x: T): Log2Int(T) {
 };
 
 test "log2_int" {
+    @expect(log2_int(u1, 1) == 0);
     @expect(log2_int(u32, 1) == 0);
     @expect(log2_int(u32, 2) == 1);
     @expect(log2_int(u32, 3) == 1);
@@ -323,6 +325,7 @@ pub const IntFittingRange = fn(comptime from: comptime_int, comptime to: comptim
 };
 
 test "IntFittingRange" {
+    @expect(IntFittingRange(0, 0) == u0);
     @expect(IntFittingRange(0, 1) == u1);
     @expect(IntFittingRange(0, 2) == u2);
     @expect(IntFittingRange(0, 3) == u2);

@@ -205,7 +205,8 @@ auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept ->
     case type_kind::USIZE: bits = static_cast<u16>(ptr_bits); break;
     default:               return true; // not a concrete integer target
     }
-    if (bits == 0) { return false; }
+    // `u0` only holds 0
+    if (bits == 0) { return value == 0; }
     if (bits >= 128) { return true; }
 
     if (is_signed) {

@@ -272,6 +272,8 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 
 // An integer-valued constant whose GIR type is a pointer must materialize as an `inttoptr` constant
 [[nodiscard]] auto int_or_ptr_constant(u128 bits, llvm::Type* ty) -> llvm::Constant* {
+    // `u0`'s only value
+    if (ty->isStructTy()) { return llvm::ConstantAggregateZero::get(ty); }
     if (!ty->isPointerTy()) { return wide_int_constant(bits, ty); }
     if (bits == 0) { return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ty)); }
     auto* int_ty{llvm::Type::getInt64Ty(ty->getContext())};
@@ -1789,9 +1791,27 @@ auto llvm_lowering::emit_pointer_offset(const gir::instruction& inst) -> llvm::V
     return builder_.CreateGEP(types_.translate(pointee), base, offset, "ptr.step");
 }
 
+namespace {
+
+// Whether `t` is `u0`, whose every value is 0 and whose LLVM form holds no bits
+[[nodiscard]] auto is_zero_bit_int(const sema::type* t) -> bool {
+    return t && t->get_kind() == sema::type_kind::INT && sema::int_width(*t) == 0;
+}
+
+// A `u0` operand read as an integer: the constant 0
+[[nodiscard]] auto as_int_operand(llvm::Value* v, const sema::type* t) -> llvm::Value* {
+    if (!is_zero_bit_int(t)) { return v; }
+    return llvm::ConstantInt::get(llvm::Type::getInt1Ty(v->getContext()), 0);
+}
+
+} // namespace
+
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
+    if (is_zero_bit_int(inst.type.raw())) {
+        return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
+    }
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
     const bool is_offset_op{inst.kind == gir::instruction_kind::ADD ||
@@ -1802,8 +1822,9 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     const bool is_shift{inst.kind == gir::instruction_kind::SHL ||
                         inst.kind == gir::instruction_kind::SHR};
     const auto peer_ty{is_shift ? op0_ty : concrete_peer_type(op0_ty, op1_ty)};
-    auto*      lhs{lower_value(inst.operands[0], peer_ty)};
-    auto*      rhs{lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty)};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), op0_ty.raw())};
+    auto*      rhs{
+        as_int_operand(lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty), op1_ty.raw())};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
@@ -1871,6 +1892,9 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Unary instruction requires an operand");
+    if (is_zero_bit_int(inst.type.raw())) {
+        return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
+    }
     auto* val{lower_value(inst.operands[0])};
     ASSERT(val, "Unary operand must lower to a non-null LLVM value");
 
@@ -1899,8 +1923,8 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
     const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
-    auto*      lhs{lower_value(inst.operands[0], peer_ty)};
-    auto*      rhs{lower_value(inst.operands[1], peer_ty)};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), peer_ty.raw())};
+    auto*      rhs{as_int_operand(lower_value(inst.operands[1], peer_ty), peer_ty.raw())};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
 
     // A `^fn(...)` is null exactly when its code half is
@@ -1981,9 +2005,11 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Cast instruction requires an operand");
     ASSERT(inst.type, "Cast instruction requires a target type");
     // The operand must lower as its own type, not the cast's target type
-    auto* val{lower_value(inst.operands[0])};
+    auto* val{as_int_operand(lower_value(inst.operands[0]), inst.operands[0].type.raw())};
     auto* target_ty{types_.translate(*inst.type)};
     ASSERT(val && target_ty, "Cast operand and target type must be valid");
+    // Every value cast to `u0` is 0; whether it fit was checked before the cast
+    if (is_zero_bit_int(inst.type.raw())) { return llvm::ConstantAggregateZero::get(target_ty); }
 
     auto* src_ty{val->getType()};
     switch (inst.kind) {

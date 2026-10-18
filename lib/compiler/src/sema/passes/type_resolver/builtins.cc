@@ -1364,6 +1364,15 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
                     get_call_arg_location(call.arguments[0]));
             }
             const bool is_signed{signedness_v->name == "signed"};
+            if (*bits_v > 65'535 || (is_signed && *bits_v == 0)) {
+                return make_sema_err(
+                    fmt::format("'@Int' has no {} {}-bit integer type; widths are {}..65535",
+                                signedness_v->name,
+                                *bits_v,
+                                is_signed ? 1 : 0),
+                    error::LITERAL_OUT_OF_RANGE,
+                    get_call_arg_location(call.arguments[0]));
+            }
             return_type = wrap_type(ctx_.get_int(static_cast<u16>(*bits_v), is_signed));
             break;
         }
