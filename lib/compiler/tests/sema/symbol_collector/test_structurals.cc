@@ -56,8 +56,8 @@ TEST_CASE("Enum hollow types") {
 }
 
 TEST_CASE("Union hollow types") {
-    auto ctx{
-        test_user_type("const a = union { b: i32, const foo = bar; };", sema::type_kind::UNION, 2)};
+    auto        ctx{test_user_type(
+        "const a = union(enum) { b: i32, const foo = bar; };", sema::type_kind::UNION, 2)};
     const auto& registry{ctx->analyzer.get_registry()};
     const auto& field{UNWRAP(registry.get_from_opt(1, "b"))};
     REQUIRE(field.get_data().as_opt<sema::symbols::union_field>());
@@ -87,8 +87,9 @@ TEST_CASE("Shadowing member/field declarations") {
     helpers::test_collector_fail("const a = struct { a: i32, let mut b = 2; };", expected_diag(19));
     helpers::test_collector_fail("const a = enum {a};", expected_diag(16));
     helpers::test_collector_fail("const a = enum {b const a = 2; };", expected_diag(24));
-    helpers::test_collector_fail("const a = union { a: i32 };", expected_diag(18));
-    helpers::test_collector_fail("const a = union { b: i32 const a = 2; };", expected_diag(31));
+    helpers::test_collector_fail("const a = union(enum) { a: i32 };", expected_diag(24));
+    helpers::test_collector_fail("const a = union(enum) { b: i32 const a = 2; };",
+                                 expected_diag(37));
 }
 
 } // namespace ghoti::tests

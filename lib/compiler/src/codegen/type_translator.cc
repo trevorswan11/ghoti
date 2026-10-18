@@ -24,7 +24,12 @@ namespace ghoti::codegen {
 auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     PROFILE_FUNCTION();
     switch (type.get_kind()) {
-    case sema::type_kind::INT:   return llvm::IntegerType::get(context_, sema::int_width(type));
+    case sema::type_kind::INT: {
+        // `u0` holds only 0 and takes no space, which LLVM spells as an empty struct
+        const auto width{sema::int_width(type)};
+        if (width == 0) { return llvm::StructType::get(context_); }
+        return llvm::IntegerType::get(context_, width);
+    }
     case sema::type_kind::ISIZE:
     case sema::type_kind::USIZE: return get_usize_ty();
     case sema::type_kind::BOOL:  return get_int1_ty();

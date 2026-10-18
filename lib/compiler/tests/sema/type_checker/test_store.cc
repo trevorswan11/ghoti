@@ -31,7 +31,7 @@ TEST_CASE("Type checker store and assignment validation") {
                 "Type mismatch in store: cannot assign 'bool' to 'i32' (conversion from 'bool' to "
                 "'i32' maps false/true to 0/1; use @intFromBool for an explicit conversion)",
                 sema::error::TYPE_MISMATCH,
-                std::pair{3UZ, 20UZ}});
+                std::pair{3UZ, 16UZ}});
     }
 
     SECTION("Store through mutable pointer succeeds") {
@@ -51,7 +51,7 @@ TEST_CASE("Type checker store and assignment validation") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through pointer",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{2UZ, 21UZ}});
+                             std::pair{2UZ, 16UZ}});
     }
 
     SECTION("Store incompatible type through pointer fails") {
@@ -65,7 +65,7 @@ TEST_CASE("Type checker store and assignment validation") {
                 "Type mismatch in store: cannot assign 'bool' to 'i32' (conversion from 'bool' to "
                 "'i32' maps false/true to 0/1; use @intFromBool for an explicit conversion)",
                 sema::error::TYPE_MISMATCH,
-                std::pair{2UZ, 21UZ}});
+                std::pair{2UZ, 16UZ}});
     }
 
     SECTION("Allocating opaque variable fails with ILLEGAL_OPAQUE_TYPE") {
@@ -97,7 +97,7 @@ TEST_CASE("Type checker store and assignment validation") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{2UZ, 23UZ}});
+                             std::pair{2UZ, 16UZ}});
     }
 
     SECTION("Writing an element of a const-element array still fails") {
@@ -110,7 +110,7 @@ TEST_CASE("Type checker store and assignment validation") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{3UZ, 23UZ}});
+                             std::pair{3UZ, 16UZ}});
     }
 
     SECTION("Copying a const-element array into mutable-element storage succeeds") {

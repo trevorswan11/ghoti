@@ -5,6 +5,22 @@ templ SyntaxUnionsPage() {
 	<ul>
 		<li>Unions in ghoti act very similar to tagged unions in other languages</li>
 		<li>
+			Every union names its tag in parentheses after <code>union</code>:
+			<ul>
+				<li><code>union(enum) { "{ ... }" }</code>: a tagged union whose tag is one variant per field</li>
+				<li>
+					<code>union(MyEnum) { "{ ... }" }</code>: a tagged union tagged by <code>MyEnum</code>; it has exactly one field per variant of <code>MyEnum</code>, named for that variant, in any order
+					<ul>
+						<li>The union reads as its tag, so <code>const k: MyEnum = u;</code> is the variant of the active field</li>
+						<li>A non-exhaustive <code>MyEnum</code> works too: its unnamed values have no field, so the union never holds one, and a <code>match</code> on the union only needs its fields</li>
+						<li><code>{ "@typeInfo" }(U).@"union".tag_type</code> is <code>MyEnum</code>, and <code>void</code> { "for" } any other union</li>
+					</ul>
+				</li>
+				<li><code>union(void) { "{ ... }" }</code>: an untagged union with Ghoti's own layout; any field may be read, reinterpreting the same bytes, and it cannot be <code>match</code>ed</li>
+				<li>A bare <code>union { "{ ... }" }</code> is an error, and so is <code>union(enum)</code> spelled with <code>extern</code> or <code>packed</code>, which have no tag</li>
+			</ul>
+		</li>
+		<li>
 			Unions are defined using the standard declaration syntax
 			<ul>
 				<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
@@ -48,7 +64,7 @@ templ SyntaxUnionsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand = union {
+			{ `const Hand = union(enum) {
     card: bool,
     pen: i32,
     shoe: void,

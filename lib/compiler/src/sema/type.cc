@@ -23,6 +23,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
@@ -187,6 +188,18 @@ auto comptime_float_fits(f128 value, const type& target) -> bool {
     return !value.is_finite() || fit_float(value, target).is_finite();
 }
 
+auto comptime_int_fits(const big_int& value, const type& target, u32 ptr_bits) noexcept -> bool {
+    switch (target.get_kind()) {
+    case type_kind::INT: {
+        const auto info{as_integer(target)};
+        return !info || value.fits(info->bits, info->is_signed);
+    }
+    case type_kind::ISIZE: return value.fits(ptr_bits, true);
+    case type_kind::USIZE: return value.fits(ptr_bits, false);
+    default:               return true; // not a concrete integer target
+    }
+}
+
 auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
     u16  bits{0};
     bool is_signed{false};
@@ -205,7 +218,8 @@ auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept ->
     case type_kind::USIZE: bits = static_cast<u16>(ptr_bits); break;
     default:               return true; // not a concrete integer target
     }
-    if (bits == 0) { return false; }
+    // `u0` only holds 0
+    if (bits == 0) { return value == 0; }
     if (bits >= 128) { return true; }
 
     if (is_signed) {
@@ -847,6 +861,13 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         if (dest_kind == type_kind::ENUM || dest_kind == type_kind::ENUM_LITERAL) { return true; }
         if (const auto ut{dest.get_data().as_opt<types::union_t>()}) { return !ut->is_untagged; }
         return false;
+    }
+
+    // A `union(MyEnum)` reads as its tag
+    if (const auto ut{src.get_data().as_opt<types::union_t>()};
+        ut && ut->tag_enum && dest_kind == type_kind::ENUM &&
+        is_same_unqualified(*ut->tag_enum, dest)) {
+        return true;
     }
 
     if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {

@@ -128,7 +128,7 @@ TEST_CASE("Self parameters in structural types") {
     };)",
                           sema::type_kind::REFERENCE);
 
-    check_structural_type(R"(const a = union {
+    check_structural_type(R"(const a = union(enum) {
         b: i32,
         let foo = fn(^self): void {};
     };)",

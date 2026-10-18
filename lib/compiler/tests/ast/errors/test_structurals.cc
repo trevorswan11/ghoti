@@ -56,38 +56,38 @@ TEST_CASE("Illegal struct members") {
 }
 
 TEST_CASE("Illegal union field name") {
-    helpers::test_parser_fail("union { 2: i32 };",
+    helpers::test_parser_fail("union(enum) { 2: i32 };",
                               syntax::diagnostic{"Expected an identifier, found an integer literal",
                                                  syntax::error::UNEXPECTED_TOKEN,
                                                  0,
-                                                 8});
+                                                 14});
 }
 
 TEST_CASE("Illegal union field type") {
     helpers::test_parser_fail(
-        "union { a: 2 };",
-        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 9});
+        "union(enum) { a: 2 };",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 15});
 }
 
 TEST_CASE("Empty union") {
-    helpers::test_parser_fail("union { };",
+    helpers::test_parser_fail("union(enum) { };",
                               syntax::diagnostic{"Unions must be declared with at least one field",
                                                  syntax::error::EMPTY_UNION,
                                                  std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Empty union with decl") {
-    helpers::test_parser_fail("union { const b = fn(&self, a: A): C { c; }; };",
+    helpers::test_parser_fail("union(enum) { const b = fn(&self, a: A): C { c; }; };",
                               syntax::diagnostic{"Unions must be declared with at least one field",
                                                  syntax::error::EMPTY_UNION,
                                                  std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Out of order union") {
-    helpers::test_parser_fail("union { a: i32, const b = fn(&self, a: A): C { c; }; b: i32, };",
-                              syntax::diagnostic{"Expected ';', found ','",
-                                                 syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 59UZ}});
+    helpers::test_parser_fail(
+        "union(enum) { a: i32, const b = fn(&self, a: A): C { c; }; b: i32, };",
+        syntax::diagnostic{
+            "Expected ';', found ','", syntax::error::UNEXPECTED_TOKEN, std::pair{0UZ, 65UZ}});
 }
 
 TEST_CASE("Illegal modified type literal") {
@@ -97,7 +97,7 @@ TEST_CASE("Illegal modified type literal") {
                 std::pair{0UZ, col}};
     };
 
-    helpers::test_parser_fail("const U = &union { a: i32 };", expected_diag(10UZ));
+    helpers::test_parser_fail("const U = &union(enum) { a: i32 };", expected_diag(10UZ));
     helpers::test_parser_fail("const S = ^struct { pub let mut foo = bar; };", expected_diag(10UZ));
     helpers::test_parser_fail("const E = ^enum { a };", expected_diag(10UZ));
     helpers::test_parser_fail("const I = &mut interface { const f = fn(&self): i32; };",

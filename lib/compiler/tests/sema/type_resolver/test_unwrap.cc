@@ -12,7 +12,7 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view RESULT_PRELUDE = R"(
-const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
     const Output = T;
     const Residual = E;
@@ -27,7 +27,7 @@ impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
     const From = E;
     pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
 }
-const Option = fn(comptime T: type): type { return union { some: T, none: void }; };
+const Option = fn(comptime T: type): type { return union(enum) { some: T, none: void }; };
 impl(T: type) builtin.Unwrappable for Option(T) {
     const Output = T;
     const Residual = void;
@@ -104,7 +104,7 @@ TEST_CASE("`?` / `!` on a non-Result operand is rejected") {
 
     helpers::test_resolver_fail(
         R"(
-const U = union { a: i32, b: i32 };
+const U = union(enum) { a: i32, b: i32 };
 const f = fn(u: U): i32 { return u!; };
 )",
         sema::diagnostic{
@@ -162,7 +162,7 @@ const f = fn(o: O): R {
 TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
     SECTION("Custom union implementing Unwrappable and Rewrappable") {
         helpers::resolve_and_check(R"(
-        const MyRes = union { val: i32, fail: u8 };
+        const MyRes = union(enum) { val: i32, fail: u8 };
         impl builtin.Unwrappable for MyRes {
             const Output = i32;
             const Residual = u8;
@@ -189,7 +189,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
 
     SECTION("Cross-function widening of residual") {
         helpers::resolve_and_check(R"(
-        const MyRes = union { val: i32, fail: u8 };
+        const MyRes = union(enum) { val: i32, fail: u8 };
         impl builtin.Unwrappable for MyRes {
             const Output = i32;
             const Residual = u8;
@@ -200,7 +200,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
                 };
             };
         }
-        const BigRes = union { val: i32, fail: u32 };
+        const BigRes = union(enum) { val: i32, fail: u32 };
         impl builtin.Rewrappable for BigRes {
             const From = u32;
             pub const from_residual = fn(r: u32): @This() { return BigRes{ .fail = r }; };
@@ -215,7 +215,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
     SECTION("Narrowing residual is rejected with cast rejection reason") {
         helpers::test_resolver_fail(
             R"(
-const BigRes = union { val: i32, fail: u32 };
+const BigRes = union(enum) { val: i32, fail: u32 };
 impl builtin.Unwrappable for BigRes {
     const Output = i32;
     const Residual = u32;
@@ -226,7 +226,7 @@ impl builtin.Unwrappable for BigRes {
         };
     };
 }
-const SmallRes = union { val: i32, fail: u8 };
+const SmallRes = union(enum) { val: i32, fail: u8 };
 impl builtin.Rewrappable for SmallRes {
     const From = u8;
     pub const from_residual = fn(r: u8): @This() { return SmallRes{ .fail = r }; };

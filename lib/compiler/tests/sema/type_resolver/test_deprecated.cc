@@ -94,7 +94,7 @@ TEST_CASE("Deprecated fields, types and statics warn where they are named") {
 TEST_CASE("Initializing a deprecated field warns at the initializer") {
     const auto warnings{warnings_of(R"(
         const P = struct { @[deprecated("use y")] x: i32 = 0, y: i32 };
-        const U = union { @[deprecated] legacy: i32, current: i32 };
+        const U = union(enum) { @[deprecated] legacy: i32, current: i32 };
         pub const main = fn(): i32 {
             let a: P = .{ .x = 1, .y = 2 };
             let b = P{ .x = 3, .y = 4 };

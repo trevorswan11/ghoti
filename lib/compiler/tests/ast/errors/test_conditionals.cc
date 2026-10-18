@@ -78,12 +78,6 @@ TEST_CASE("Illegal match catch-all") {
         "match (a) { b => c, _ => f, _ => g, };",
         syntax::diagnostic{
             "Duplicate catch-all match arm", syntax::error::ILLEGAL_MATCH_CATCH_ALL, 0, 28});
-
-    helpers::test_parser_fail(
-        "match (a) { _ => |b| c, };",
-        syntax::diagnostic{"Catch-all match arms may not have a capture clause",
-                           syntax::error::ILLEGAL_MATCH_CATCH_ALL,
-                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Catch-all cannot be part of a multi-value match arm") {

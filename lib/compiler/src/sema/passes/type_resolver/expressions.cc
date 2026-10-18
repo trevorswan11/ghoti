@@ -1016,7 +1016,13 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
 
 auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void {
     PROFILE_FUNCTION();
-    TRY_RESOLVE(node.rhs);
+    {
+        const bool negates_literal{(id.get_token_type() == syntax::token_type_t::MINUS ||
+                                    id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) &&
+                                   resolving_.ast[node.rhs].is<ast::int_literal_expr>()};
+        const mutating_context_guard g{negated_literal_, negates_literal};
+        TRY_RESOLVE(node.rhs);
+    }
     // No unary operator takes a type (`-i64`). The emitter would have no value to apply it to
     if (const auto& operand{*last_type_};
         !operand.is_poison() && decl_value_denotes_type(node.rhs)) {
@@ -1211,6 +1217,21 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
             &ctx_.get_builtin_resolved_type(expr.is_signed ? type_kind::ISIZE : type_kind::USIZE);
     } else if (expr.width != 0) {
         resolved = &ctx_.get_int(expr.width, expr.is_signed);
+    }
+    // A suffix names the literal's type, which must hold it
+    if (resolved) {
+        const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+        const auto value{negated_literal_ ? -expr.exact_value() : expr.exact_value()};
+        if (!comptime_int_fits(value, *resolved, ptr_bits)) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("integer literal {} is out of range for type '{}'",
+                                             expr.exact_value(),
+                                             ctx_.type_display_name(*resolved)),
+                                 error::LITERAL_OUT_OF_RANGE,
+                                 resolving_.ast.location_of(id)));
+        }
     } else {
         // An unsuffixed integer literal is `comptime_int` and coerces freely
         resolved = expr.is_char ? &ctx_.get_char_constant()
@@ -1224,8 +1245,11 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
             // Adopt the concrete context only when the literal's magnitude fits it
             const auto ptr_bits{
                 codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
-            if (is_float(implicit_type->get_kind()) ||
-                comptime_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)) {
+            const bool fits{
+                expr.is_big
+                    ? comptime_int_fits(expr.exact_value(), *implicit_type, ptr_bits)
+                    : comptime_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)};
+            if ((is_float(implicit_type->get_kind()) && !expr.is_big) || fits) {
                 resolved = ctx_.pool.strip_volatile(*implicit_type).get();
             }
         }

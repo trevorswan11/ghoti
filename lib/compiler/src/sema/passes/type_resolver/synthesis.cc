@@ -447,6 +447,19 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     if (!is_extern_v) { return field_err("descriptor is missing 'is_extern'"); }
     if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
     if (!tagged_v) { return field_err("descriptor is missing 'tagged'"); }
+    // `tag_type` defaults to `void`, so a descriptor without it is a `union(enum)`
+    type* tag_enum{nullptr};
+    if (const auto tag_v{read_desc_field<sema::type&>(desc, "tag_type")};
+        tag_v && tag_v->get_kind() != type_kind::VOID_) {
+        if (tag_v->get_kind() != type_kind::ENUM) {
+            return field_err(fmt::format("'tag_type' must be an enum or void, found '{}'",
+                                         ctx_.type_display_name(*tag_v)));
+        }
+        if (!*tagged_v || *is_extern_v || *is_packed_v) {
+            return field_err("only a tagged Ghoti union can name a 'tag_type'");
+        }
+        tag_enum = tag_v.get();
+    }
 
     const auto n{fields_arr->elements.size()};
     auto       ast_fields{make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
@@ -484,6 +497,27 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
         field_sym.set_status(symbol_status::RESOLVED);
     }
 
+    if (tag_enum) {
+        const auto& en{tag_enum->get_data().as<types::enum_t>()};
+        const auto  names_variant{[&](std::string_view name) {
+            return std::ranges::any_of(en.ast_enumerations, [&](const auto& e) {
+                return en.enclosing.ast.get_as<ast::identifier_expr>(e.name).name == name;
+            });
+        }};
+        for (usize i{0}; i < n; ++i) {
+            const auto& name{resolving_.ast.get_as<ast::identifier_expr>(ast_fields[i].name).name};
+            if (!names_variant(name)) {
+                return field_err(fmt::format("field '{}' is not a variant of '{}'",
+                                             name,
+                                             ctx_.type_display_name(*tag_enum)));
+            }
+        }
+        if (en.ast_enumerations.size() != n) {
+            return field_err(fmt::format("every variant of '{}' needs a field",
+                                         ctx_.type_display_name(*tag_enum)));
+        }
+    }
+
     auto& union_type{*ctx_.pool[{type_kind::UNION, types::mut::CONSTANT, scope_idx}]};
     union_type.resolve_if<types::union_t>(field_types,
                                           ast_fields,
@@ -491,7 +525,8 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
                                           resolving_,
                                           !*tagged_v,
                                           *is_extern_v,
-                                          *is_packed_v);
+                                          *is_packed_v,
+                                          tag_enum);
     union_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&union_type};
 }

@@ -58,7 +58,7 @@ pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
 /// Allows to access underlying bits as two equally sized lower and higher
 /// signed or unsigned integers.
 pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
-    return union { // TODO(tcs): Make this untagged
+    return union(void) {
         all: T,
         @cfg (endian == .little) {
             s: extern struct {

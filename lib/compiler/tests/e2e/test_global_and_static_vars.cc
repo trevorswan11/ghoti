@@ -43,7 +43,7 @@ TEST_CASE("`var` static members of an enum and a union") {
             const K = 10;
             const tick = fn(): void { E.hits += 1; };
         };
-        const U = union {
+        const U = union(enum) {
             x: i32,
             let mut calls: i32 = 0;
             const bump = fn(): void { @This().calls += 2; };
@@ -81,7 +81,7 @@ TEST_CASE("bare sibling static-member access in enum and union member bodies") {
             let mut n: i32 = 0;
             const go = fn(): i32 { n += 12; return K + n; };
         };
-        const U = union {
+        const U = union(enum) {
             x: i32,
             const M = 10;
             let mut c: i32 = 0;

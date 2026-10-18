@@ -62,7 +62,7 @@ TEST_CASE("`@tagName` of a non-exhaustive enum reports a variant's real name whe
 
 TEST_CASE("`@tagName` of a tagged union reports the currently-active field's name") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, count: i32 };
+        const U = union(enum) { a: i32, count: i32 };
         const active_name = fn(u: U): []u8 { return @tagName(u); };
         pub const main = fn(): i32 {
             let mut u = U{ .count = 5 };
@@ -74,7 +74,7 @@ TEST_CASE("`@tagName` of a tagged union reports the currently-active field's nam
 
 TEST_CASE("`@tagName` of a tagged union tracks a field reassigned through a direct write") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             let mut u = U{ .a = 1 };
             u.b = 2;   // re-tags u as active field 'b'
@@ -107,7 +107,7 @@ TEST_CASE("`@tagName` dispatches at runtime for a raw-identifier enum variant") 
 
 TEST_CASE("`@tagName` of a tagged union reports a raw-identifier field name") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { @"union": i32, @"match": i32 };
+        const U = union(enum) { @"union": i32, @"match": i32 };
         const active = fn(u: U): []u8 { return @tagName(u); };
         pub const main = fn(): i32 {
             let mut u = U{ .@"match" = 7 };
@@ -119,7 +119,7 @@ TEST_CASE("`@tagName` of a tagged union reports a raw-identifier field name") {
 
 TEST_CASE("`@tagName` folds for a raw-identifier tagged-union field") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { @"union": i32, @"match": i32 };
+        const U = union(enum) { @"union": i32, @"match": i32 };
         pub const main = fn(): i32 {
             let u = U{ .@"union" = 3 };
             let s = @tagName(u);

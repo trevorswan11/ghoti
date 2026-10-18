@@ -190,6 +190,74 @@ enum class atomic_arg : u8 {
     return std::ranges::any_of(fn.parameters, [](const auto& p) { return p.is_comptime; });
 }
 
+// The earlier parameter whose name a bare `x: T` annotation at `idx` spells, binding `T`
+[[nodiscard]] inline auto bound_type_param(const ast::AST&                                tree,
+                                           gsl::span<const ast::function_expr::parameter> params,
+                                           usize idx) -> stdx::option<usize> {
+    if (idx >= params.size() || !params[idx].explicit_type) { return stdx::none; }
+    // `^T` and `&T` keep their modifier in the id, with `T` as the payload
+    if (!params[idx].explicit_type->get_modifier().is_value()) { return stdx::none; }
+    const auto ident{tree.get_as_opt<ast::identifier_expr>(*params[idx].explicit_type)};
+    if (!ident) { return stdx::none; }
+    for (usize k{0}; k < idx; ++k) {
+        if (!params[k].name.is<ast::identifier_expr>()) { continue; }
+        if (tree.get_as<ast::identifier_expr>(params[k].name).name == ident->name) { return k; }
+    }
+    return stdx::none;
+}
+
+// The earlier parameter a `y: @TypeOf(x)` parameter's type names
+[[nodiscard]] inline auto typeof_bound_param(const ast::AST&                                tree,
+                                             gsl::span<const ast::function_expr::parameter> params,
+                                             usize idx) -> stdx::option<usize> {
+    if (idx >= params.size() || !params[idx].explicit_type) { return stdx::none; }
+    if (!params[idx].explicit_type->get_modifier().is_value()) { return stdx::none; }
+    const auto call{tree.get_as_opt<ast::call_expr>(*params[idx].explicit_type)};
+    if (!call || call->function->get_builtin() != syntax::builtin_t::TYPE_OF ||
+        call->arguments.size() != 1) {
+        return stdx::none;
+    }
+    const auto arg{call->arguments.front().as_opt<ast::expr_handle>()};
+    const auto ident{arg ? tree.get_as_opt<ast::identifier_expr>(*arg) : stdx::none};
+    if (!ident) { return stdx::none; }
+    for (usize k{0}; k < idx; ++k) {
+        if (!params[k].name.is<ast::identifier_expr>()) { continue; }
+        if (tree.get_as<ast::identifier_expr>(params[k].name).name == ident->name) { return k; }
+    }
+    return stdx::none;
+}
+
+// A bare `auto` parameter, which keeps a `comptime_int`/`comptime_float` argument's type
+[[nodiscard]] inline auto
+keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> bool {
+    return !param.is_pack && param.explicit_type &&
+           param.explicit_type->get_token_type() == syntax::token_type_t::AUTO_TYPE;
+}
+
+// Whether the parameter at `idx` is implicitly `comptime` given its argument types: one typed by
+// its argument (`auto`, `@TypeOf(x)`, `T`) that got a `comptime_int`/`comptime_float`, which only
+// exists at compile time
+[[nodiscard]] inline auto binds_implicit_comptime(const ast::AST&           tree,
+                                                  const ast::function_expr& fn,
+                                                  usize                     idx,
+                                                  gsl::span<type* const>    arg_types) -> bool {
+    const auto& param{fn.parameters[idx]};
+    if (param.is_comptime || param.is_pack || idx >= arg_types.size() || !arg_types[idx] ||
+        !is_comptime_numeric(arg_types[idx]->get_kind())) {
+        return false;
+    }
+    return keeps_comptime_numeric(param) || typeof_bound_param(tree, fn.parameters, idx) ||
+           bound_type_param(tree, fn.parameters, idx);
+}
+
+// Whether the parameter at `idx` takes its argument at compile time in this instantiation
+[[nodiscard]] inline auto binds_comptime(const ast::AST&           tree,
+                                         const ast::function_expr& fn,
+                                         usize                     idx,
+                                         gsl::span<type* const>    arg_types) -> bool {
+    return fn.parameters[idx].is_comptime || binds_implicit_comptime(tree, fn, idx, arg_types);
+}
+
 [[nodiscard]] inline auto any_param_generic(auto&& params) noexcept -> bool {
     for (const auto* p : params) {
         if (is_generic_type(*p)) { return true; }

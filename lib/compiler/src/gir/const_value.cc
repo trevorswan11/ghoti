@@ -17,6 +17,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 
@@ -72,8 +73,8 @@ auto const_value::to_gir_value() const noexcept -> value {
 
 auto const_value::operator==(const const_value& other) const noexcept -> bool {
     if (data_.index() != other.data_.index()) {
-        const auto l_int{as_int_opt()};
-        const auto r_int{other.as_int_opt()};
+        const auto l_int{as_big_int_opt()};
+        const auto r_int{other.as_big_int_opt()};
         if (l_int && r_int) { return *l_int == *r_int; }
         return false;
     }
@@ -97,6 +98,10 @@ auto const_value::hash() const noexcept -> u64 {
                     h.combine(bits.high);
                 },
                 [&](bool v) { h.combine(v ? 1U : 0U); },
+                [&](const big_int& v) {
+                    h.combine(v.is_negative() ? 1U : 0U);
+                    for (const auto limb : v.magnitude().limbs()) { h.combine(limb); }
+                },
                 [&](const stdx::option<sema::type&>& t) {
                     h.combine(t ? reinterpret_cast<u64>(t.get()) : 0U);
                 },
@@ -148,6 +153,7 @@ auto const_value::mangle() const -> std::string {
         [](u64 v) { return fmt::to_string(v); },
         [](i128 v) { return fmt::to_string(v); },
         [](u128 v) { return fmt::to_string(v); },
+        [](const big_int& v) { return v.to_string(); },
         [this](f128 v) {
             const auto format{type_ ? sema::float_format_of(*type_) : stdx::none};
             return v.to_string(format.value_or(float_format::QUAD));

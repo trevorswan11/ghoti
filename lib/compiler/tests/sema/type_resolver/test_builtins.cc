@@ -181,12 +181,16 @@ TEST_CASE("A return type may depend on a parameter whose type depends on an earl
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const chain = fn(a: auto, b: @TypeOf(a)): @TypeOf(b) { return b; };
         const call_chain = chain(1, 2);
+        const typed_chain = chain(1i32, 2);
     )")};
 
-    const auto& i32_type{ctx->get_int_type(32, true)};
+    // An untyped `1` binds `comptime_int`, which the dependent types carry through
     const auto [sym, _, node, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_chain", idx)};
-    CHECK(type == i32_type);
+    CHECK(type == ctx->get_type(sema::type_kind::COMPTIME_INT));
+    const auto [typed_sym, typed_, typed_node, typed_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("typed_chain", idx)};
+    CHECK(typed_type == ctx->get_int_type(32, true));
 }
 
 TEST_CASE("A later parameter's type may be a type-constructor call over an earlier parameter") {

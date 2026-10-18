@@ -13,7 +13,7 @@ using helpers::mock_file;
 
 TEST_CASE("a poisoned aggregate member does not crash a comptime type-ctor instantiation") {
     helpers::expect_compile_error(R"(
-        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
         const R = fn(comptime T: type): type { return Result(T, i32); };
         const S = struct {
             a: u32,
@@ -79,7 +79,7 @@ TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instant
 
 TEST_CASE("the `?` operator works inside a generic function body") {
     CHECK(helpers::compile_and_run(R"(
-        const R = union { ok: i32, err: u8 };
+        const R = union(enum) { ok: i32, err: u8 };
         impl builtin.Unwrappable for R {
             const Output = i32;
             const Residual = u8;
@@ -108,7 +108,7 @@ TEST_CASE("the `?` operator works inside a generic function body") {
 TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const Result = fn(comptime T: type, comptime E: type): type {
-            return union {
+            return union(enum) {
                 ok: T,
                 err: E,
 
@@ -147,7 +147,7 @@ TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation")
 
 TEST_CASE("Multi-method struct with generic Result error checks compiles") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const Result = fn(comptime T: type, comptime E: type): type { return union { ok: T, err: E }; };
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
         const Error = enum : i32 { none, fail, _ };
 
         const File = struct {
@@ -253,7 +253,7 @@ TEST_CASE("generic member functions in an inherent impl block on a generic aggre
 
 TEST_CASE("generic member functions in union and enum impl blocks") {
     CHECK(helpers::compile_and_run(R"(
-        const Opt = union {
+        const Opt = union(enum) {
             val: i32,
             none: void,
         };
@@ -314,7 +314,7 @@ TEST_CASE("generic member functions defined inline inside aggregate definitions"
             };
         };
 
-        const TaggedUnion = union {
+        const TaggedUnion = union(enum) {
             num: i32,
             pub const get_or = fn(&self, comptime T: type, fallback: T): T {
                 return fallback;

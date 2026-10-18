@@ -67,7 +67,7 @@ TEST_CASE("A constructor alias inside a generic body re-resolves per instantiati
 TEST_CASE("`Result.map_err`-shaped comptime alias in a generic method (#334)") {
     CHECK(helpers::compile_and_run(R"(
         const Result = fn(comptime T: type, comptime E: type): type {
-            return union {
+            return union(enum) {
                 ok: T,
                 err: E,
 
@@ -259,7 +259,7 @@ TEST_CASE("Struct and union fields typed by a `type` value store the denoted typ
         const inc = fn(a: i32): i32 { return a + 1; };
         const Callback = fn(a: i32): i32;
         const Holder = struct { f: @TypeOf(inc), g: Callback };
-        const Either = union { f: Callback, n: i32 };
+        const Either = union(enum) { f: Callback, n: i32 };
 
         pub const main = fn(): i32 {
             let h = Holder{ .f = inc, .g = inc };

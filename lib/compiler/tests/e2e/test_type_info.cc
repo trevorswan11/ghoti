@@ -61,7 +61,7 @@ TEST_CASE("the full `builtin.TypeInfo` union (all 18 arms) resolves cleanly") {
 
 TEST_CASE("a same-named sibling member doesn't shadow an outer type once it's itself resolved") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union {
+        const U = union(enum) {
             @"void": bool,
             @"first": void,
         };
@@ -75,7 +75,7 @@ TEST_CASE("a same-named sibling member doesn't shadow an outer type once it's it
 TEST_CASE("a same-named sibling member doesn't shadow an outer type regardless of declaration "
           "order") {
     CHECK(helpers::compile_and_run(R"(
-        const Before = union {
+        const Before = union(enum) {
             other: void,
             @"void": i32,
         };
@@ -85,7 +85,7 @@ TEST_CASE("a same-named sibling member doesn't shadow an outer type regardless o
         };
     )") == 0);
     CHECK(helpers::compile_and_run(R"(
-        const After = union {
+        const After = union(enum) {
             @"void": i32,
             other: void,
         };
@@ -302,7 +302,7 @@ TEST_CASE("`@typeInfo` on a struct tags correctly and reads its own flags") {
 
 TEST_CASE("`@typeInfo` on a union tags correctly and reads `tagged`") {
     CHECK(helpers::compile_and_run(R"(
-        const U = union { a: i32, b: i32 };
+        const U = union(enum) { a: i32, b: i32 };
         pub const main = fn(): i32 {
             return match comptime (@typeInfo(U)) {
                 .@"union" => |u| @intFromBool(u.tagged),

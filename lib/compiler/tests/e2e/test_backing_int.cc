@@ -82,7 +82,7 @@ TEST_CASE("@backingInt and @fromBackingInt round-trip a packed union") {
 
 TEST_CASE("@backingInt of a tagged union is its active tag") {
     CHECK(helpers::compile_and_run(R"(
-        const Shape = union { circle: f32, square: i32, none: void, };
+        const Shape = union(enum) { circle: f32, square: i32, none: void, };
 
         const tag_of = fn(s: Shape): i32 { return @backingInt(s); };
 

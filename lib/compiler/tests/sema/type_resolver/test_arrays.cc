@@ -93,8 +93,8 @@ TEST_CASE("Well-formed arrays with structural types") {
     helpers::resolve_and_check("const A = struct { a: []A, };");
     helpers::resolve_and_check(
         "const A = struct { a: [6]^@This(), const b = fn(c: ^@This()): i32 {}; };");
-    helpers::resolve_and_check("const A = union { a: [4]^@This(), };");
-    helpers::resolve_and_check("const A = union { a: []@This(), };");
+    helpers::resolve_and_check("const A = union(enum) { a: [4]^@This(), };");
+    helpers::resolve_and_check("const A = union(enum) { a: []@This(), };");
 }
 
 TEST_CASE("an array or slice element cannot be a reference") {
@@ -136,8 +136,8 @@ TEST_CASE("Illegal arrays dependent on incomplete types") {
     helpers::test_resolver_fail("const A = struct { a: [3]A, };", expected_diag(25));
     helpers::test_resolver_fail("const A = struct { a: [3]@This(), };", expected_diag(25));
     helpers::test_resolver_fail("const A = struct { a: @TypeOf([3]A), };", expected_diag(33));
-    helpers::test_resolver_fail("const A = union { a: [1]A, };", expected_diag(24));
-    helpers::test_resolver_fail("const A = union { a: @TypeOf([1]A), };", expected_diag(32));
+    helpers::test_resolver_fail("const A = union(enum) { a: [1]A, };", expected_diag(30));
+    helpers::test_resolver_fail("const A = union(enum) { a: @TypeOf([1]A), };", expected_diag(38));
     helpers::test_resolver_fail("const A = struct { a: auto = [_]A{}, };", expected_diag(32));
 }
 

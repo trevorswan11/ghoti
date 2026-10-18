@@ -347,14 +347,14 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
 }
 
 template <typename Node, typename FieldItem, typename FieldEndLine>
-auto formatter::format_field_aggregate(const Node&      node,
-                                       std::string_view keyword_and_space,
-                                       FieldItem&&      field_item,
-                                       FieldEndLine&&   field_end_line) -> syntax::doc_id {
+auto formatter::format_field_aggregate(const Node&    node,
+                                       syntax::doc_id keyword,
+                                       FieldItem&&    field_item,
+                                       FieldEndLine&& field_end_line) -> syntax::doc_id {
     std::vector<syntax::doc_id> head;
     if (node.is_extern) { head.emplace_back(doc_manager_.text("extern ")); }
     if (node.is_packed) { head.emplace_back(doc_manager_.text("packed ")); }
-    head.emplace_back(doc_manager_.text(keyword_and_space));
+    head.emplace_back(keyword);
 
     std::vector<syntax::doc_id> entries;
     const auto                  flush_cfg_groups{[&](usize position) -> void {
@@ -403,7 +403,7 @@ auto formatter::format_field_aggregate(const Node&      node,
 auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
     return format_field_aggregate(
         node,
-        "struct ",
+        doc_manager_.text("struct "),
         [&](const struct_expr::field& field) -> syntax::doc_id {
             std::vector<syntax::doc_id> parts;
             parts.emplace_back(
@@ -426,9 +426,16 @@ auto formatter::format_struct(const struct_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::format_union(const union_expr& node) -> syntax::doc_id {
+    syntax::doc_id keyword{doc_manager_.text("union ")};
+    if (node.tag == union_expr::tag_kind::INFERRED) {
+        keyword = doc_manager_.text("union(enum) ");
+    } else if (node.tag_type) {
+        keyword = doc_manager_.concat(
+            {doc_manager_.text("union("), format(*node.tag_type), doc_manager_.text(") ")});
+    }
     return format_field_aggregate(
         node,
-        "union ",
+        keyword,
         [&](const union_expr::field& field) -> syntax::doc_id {
             return doc_manager_.concat({with_attributes(field.attributes, format(field.name)),
                                         doc_manager_.text(": "),

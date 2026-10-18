@@ -820,6 +820,45 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `&f` of a function now coerces to an erased `fn(...)` parameter, as `^f` does
 - Fixed: a compile-time call that returns a reference parameter by value reads through it, instead of crashing a global's initializer
 - Fixed: compiler crashes on a `match` over an `f16`, `f80`, `f128`, or enum literal value, a `@cfg` block in a function signature, and an enum member reached from its own body before it resolves
+- **Breaking:** an untyped number passed to a bare `auto` parameter stays `comptime_int` / `comptime_float`, as in Zig, instead of becoming `i32` / `f64`; the parameter is then implicitly `comptime` for that instantiation
+    - `log2(123456789123456798123456789)` and `std.math.IntFittingRange(0, 1 << 100)` work, since the value no longer has to fit an `i32`
+    - A `y: @TypeOf(x)` or `y: T` parameter follows an `x` / `T` bound that way
+    - A call returning `comptime_int` / `comptime_float` always folds; its instantiation is never emitted as a runtime function
+- An `auto` return type is the peer of every `return`, not the first one's type: `return low` (a `comptime_int`) then `return val` (an `i64`) infers `i64`
+- A statement `if` whose condition is known at compile time only emits the arm it takes, so the dead arm (an `@intCast` the `if` guards) is never checked
+- `comptime { ...; return r; }` returns `r` from the enclosing function, including as a `match comptime` arm
+- Fixed: a generic instantiated from inside another generic saw the outer one's `comptime` bindings by name, so a local `const T` in the inner function could read the caller's `T`
+- Fixed: errors raised in a module that had already reported errors were printed against the calling file, sometimes with an `<invalid line>` excerpt
+- A catch-all `match` arm may capture the scrutinee: `_ => |v| v * 2`, or `|&mut v|` to alias it; on a tagged union the capture is the whole union, so it can be matched again
+- **Breaking:** a union names its tag: `union(enum) { ... }` is the tagged union a bare `union { ... }` used to be, and a bare `union` no longer parses; `extern union` is unchanged and can't name a tag, nor can `packed union`
+    - `union(MyEnum) { ... }` is tagged by `MyEnum`: it has one field per variant, in any order, and reads as `MyEnum` (`const k: MyEnum = u;`); a non-exhaustive `MyEnum` works, since the union only holds its named variants
+    - `union(void) { ... }` is an untagged union with Ghoti's own layout, so a field can be reinterpreted without the C ABI rules of `extern union`
+    - `@typeInfo(U).@"union".tag_type` is the tag enum (`void` otherwise), and `@Union` accepts one
+- Reading another field of an untagged union whose value is known at compile time is left to runtime instead of reporting an inactive field
+- `u0`, the zero-bit unsigned integer: its only value is 0 and it takes no space (`@sizeOf(u0) == 0`); `@Int(.{ .signedness = .unsigned, .bits = 0 })` builds it, and `std.math.Log2Int(u1)` is now `u0`. There is no `i0`
+- `@Int` rejects widths past 65535 and a zero-bit signed integer instead of building a truncated type
+- `comptime_int` is arbitrary precision: it grows past 128 bits (`1 << 200`, `(1 << 127) * 4`), and a literal of any length is exact; only a runaway result past 2^24 bits is an error
+    - An integer type wider than 128 bits (`u256`) holds a constant of its full width, and folds past 128 bits at compile time
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@divExact`, `@rem`, and `@mod` of two untyped integers stay `comptime_int` instead of becoming `i32`
+- Fixed: a suffixed integer literal was not checked against its own type, so `300u8` silently wrapped; it must now fit (`-128i8` still does)
+- A rejected assignment (to a constant, a non-mutable element, or of the wrong type) points at the start of its target (`q` in `q[1] = 0`) instead of the value being assigned
+- Fixed: `@bitCast` between an integer and an array or struct of the same size (`u128` and `[2]u64`) crashed the compiler with an LLVM assertion; it now goes through memory
+- Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked
+    - **Breaking:** `abi == .androideabi` is removed; it could never hold, since LLVM normalizes `androideabi` to `android`. Arm Android is `abi == .android and arch == .arm`
+- Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
+- x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
+- **Breaking:** `mut` on a type only qualifies what a `^`, `&`, or `[]` reaches, so `mut volatile T` is rejected: a value's mutability is its binding's (`let mut v: volatile i32`), and the `mut` was ignored before
+- **Breaking:** `volatile` applied directly to a pointer, reference, slice, or array type is rejected, and so is a repeated `volatile`
+    - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
+    - `volatile [N]T` was dropped silently; write `[N]volatile T`
+- Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
+- Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
+- Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
+- Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from
+- Fixed: a compile-time-folded `const` let a raw identifier take a primitive's place, so `const @"f80" = f80;` reported that `f80` depends on its own value, `@sizeOf(@"u8")` of a struct named `@"u8"` folded to 1, and a local `@"f32"` replaced `f32`; a primitive keyword always names the primitive, as it already did outside folding
+- Fixed: a generic parameter typed as a pointer or reference to an earlier type parameter (`fn(T: type, p: ^mut T)`, `p: &T`) was checked as if it were `T` itself, so every call was rejected with "not assignable to parameter type 'T'"
+- Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
+- **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -857,25 +896,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
     - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
-- Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
-- Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked
-    - **Breaking:** `abi == .androideabi` is removed; it could never hold, since LLVM normalizes `androideabi` to `android`. Arm Android is `abi == .android and arch == .arm`
-- x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
-- **Breaking:** `mut` on a type only qualifies what a `^`, `&`, or `[]` reaches, so `mut volatile T` is rejected: a value's mutability is its binding's (`let mut v: volatile i32`), and the `mut` was ignored before
-- **Breaking:** `volatile` applied directly to a pointer, reference, slice, or array type is rejected, and so is a repeated `volatile`
-    - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
-    - `volatile [N]T` was dropped silently; write `[N]volatile T`
-- Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
 - LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)
     - Each target CPU feature in `builtin.<arch>.Feature` is documented with LLVM's description and its LLVM spelling
 - LSP hover on a function shows its parameters' defaults (`fn(w: i32, h: i32 = w * scale): i32`)
-- Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
-- Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
-- Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from
-- Fixed: a compile-time-folded `const` let a raw identifier take a primitive's place, so `const @"f80" = f80;` reported that `f80` depends on its own value, `@sizeOf(@"u8")` of a struct named `@"u8"` folded to 1, and a local `@"f32"` replaced `f32`; a primitive keyword always names the primitive, as it already did outside folding
-- Fixed: a generic parameter typed as a pointer or reference to an earlier type parameter (`fn(T: type, p: ^mut T)`, `p: &T`) was checked as if it were `T` itself, so every call was rejected with "not assignable to parameter type 'T'"
-- Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
-- **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`
 - Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
 - **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
 - Fixed: `ghoti fmt` moved a comment between an `if`'s closing brace and its `else` into the `else` block, and one trailing the brace (`} // note`) into the block before it (#369)

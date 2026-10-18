@@ -208,7 +208,7 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand = union {
+			{ `const Hand = union(enum) {
     card: bool,
     pen: i32,
     shoe: void,
@@ -229,6 +229,7 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 			<code>i&lt;N&gt;</code> / <code>u&lt;N&gt;</code>: A signed or unsigned integer of any width <code>N</code> from 1 to 65535 bits &mdash; <code>i1</code>, <code>u3</code>, <code>i17</code>, <code>u32</code>, <code>u100</code>, <code>i128</code>, &hellip; up to <code>u65535</code>
 			<ul>
 				<li>The familiar widths (<code>i8</code>/<code>i16</code>/<code>i32</code>/<code>i64</code> and their <code>u</code> counterparts) are simply the common cases; there is nothing special about them</li>
+				<li><code>u0</code> is the unsigned integer with no bits: its only value is <code>0</code>, and it takes no space (<code>{ "@sizeOf" }(u0) == 0</code>). It is what <code>std.math.Log2Int(u1)</code> and <code>{ "@Int" }(.{ "{" } .signedness = .unsigned, .bits = 0 { "}" })</code> give. There is no <code>i0</code>, since a signed integer needs its sign bit</li>
 				<li>An <code>iN</code>/<code>uN</code> literal is written with a width suffix, e.g. <code>7u8</code>, <code>1i9</code>, <code>255u65535</code></li>
 				<li>An arithmetic operation on <code>uN</code> wraps modulo 2<sup>N</sup>; on <code>iN</code> it is two's-complement over <code>N</code> bits</li>
 				<li>The wrapping operators <code>+% -% *% &lt;&lt;%</code> (binary), their compound forms <code>+%= -%= *%= &lt;&lt;%=</code>, and prefix <code>-%</code> always wrap silently. They never trap, even with <code>--runtime-safety</code> on. Otherwise they behave exactly like the plain operator. See the <a href="/doc/internals/builtins">builtins</a> page for <code>{ "@addWithOverflow" }</code> and friends, the overflow-flag form of the same operation</li>
@@ -299,7 +300,7 @@ let x = b.at(0);        // b is not, so at returns &i32` }
 		<li>
 			<code>comptime_int</code> / <code>comptime_float</code>: The type of an unsuffixed integer / real literal and of pure compile-time arithmetic over them
 			<ul>
-				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
+				<li>Compile-time known; a <code>comptime_int</code> is exact at any size (up to 2<sup>24</sup> bits, past which a runaway shift is an error), and a <code>comptime_float</code> folds at <code>f64</code> precision</li>
 				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>comptime_int</code> is a compile error, not a silent wrap</li>
 				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>let mut</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> or <code>let</code> keeps the <code>comptime_int</code> type</li>
 				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@TypeOf" }</code> of an unsuffixed literal yields</li>

@@ -20,6 +20,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -180,6 +181,7 @@ struct value {
                                  u64,
                                  i128,
                                  u128,
+                                 big_int,
                                  f128,
                                  bool,
                                  std::string,

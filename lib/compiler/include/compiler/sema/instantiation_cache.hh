@@ -164,7 +164,7 @@ class generic_instantiation_cache {
 
     [[nodiscard]] auto get_body_type_diff(std::string_view key) const noexcept
         -> stdx::option<const body_type_diff&> {
-        if (const auto it{body_type_diffs_.find(std::string{key})}; it != body_type_diffs_.end()) {
+        if (const auto it{body_type_diffs_.find(key)}; it != body_type_diffs_.end()) {
             return *it->second;
         }
         return stdx::none;
@@ -179,10 +179,23 @@ class generic_instantiation_cache {
 
     [[nodiscard]] auto get_comptime_args(std::string_view key) const noexcept
         -> stdx::option<const std::vector<gir::const_value>&> {
-        if (const auto it{comptime_args_.find(std::string{key})}; it != comptime_args_.end()) {
+        if (const auto it{comptime_args_.find(key)}; it != comptime_args_.end()) {
             return *it->second;
         }
         return stdx::none;
+    }
+
+    // Marks which parameters an argument made implicitly `comptime` in the monomorph `key`
+    auto set_implicit_comptime(std::string key, std::vector<bool> mask) -> void {
+        implicit_comptime_.try_emplace(std::move(key), std::move(mask));
+    }
+
+    // Whether the parameter at `idx` of the monomorph `key` takes its argument at compile time
+    [[nodiscard]] auto binds_comptime(std::string_view key, usize idx, bool declared) const
+        -> bool {
+        if (declared) { return true; }
+        const auto it{implicit_comptime_.find(key)};
+        return it != implicit_comptime_.end() && idx < it->second.size() && it->second[idx];
     }
 
     // First write wins
@@ -198,8 +211,7 @@ class generic_instantiation_cache {
 
     [[nodiscard]] auto get_type_ctor_bindings(std::string_view key) const noexcept
         -> stdx::option<const std::vector<std::pair<std::string, gir::const_value>>&> {
-        if (const auto it{type_ctor_bindings_.find(std::string{key})};
-            it != type_ctor_bindings_.end()) {
+        if (const auto it{type_ctor_bindings_.find(key)}; it != type_ctor_bindings_.end()) {
             return *it->second;
         }
         return stdx::none;
@@ -208,7 +220,7 @@ class generic_instantiation_cache {
     // The name `definition`'s instances are mangled under. Same-named generics declared apart
     // (two modules' private `helper`s) are numbered so their instances never share a symbol.
     [[nodiscard]] auto instance_name(std::string_view name, uptr definition) -> std::string {
-        auto&      owners{instance_owners_[std::string{name}]};
+        auto&      owners{instance_owners_[name]};
         const auto it{std::ranges::find(owners, definition)};
         const auto index{static_cast<usize>(it - owners.begin())};
         if (it == owners.end()) { owners.emplace_back(definition); }
@@ -217,10 +229,19 @@ class generic_instantiation_cache {
 
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
-    ankerl::unordered_dense::map<std::string, std::vector<uptr>> instance_owners_;
-    body_type_diff_map                                           body_type_diffs_;
-    comptime_arg_map                                             comptime_args_;
-    type_ctor_binding_map                                        type_ctor_bindings_;
+    ankerl::unordered_dense::map<std::string,
+                                 std::vector<uptr>,
+                                 stdx::string_transparent_hash,
+                                 stdx::string_transparent_eq>
+                          instance_owners_;
+    body_type_diff_map    body_type_diffs_;
+    comptime_arg_map      comptime_args_;
+    type_ctor_binding_map type_ctor_bindings_;
+    ankerl::unordered_dense::map<std::string,
+                                 std::vector<bool>,
+                                 stdx::string_transparent_hash,
+                                 stdx::string_transparent_eq>
+        implicit_comptime_;
 };
 
 // Every `set_sema_type`/`set_sema_type_if` write `mod::module_t` makes while this is installed as

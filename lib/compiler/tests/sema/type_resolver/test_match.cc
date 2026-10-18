@@ -53,11 +53,11 @@ TEST_CASE("A match on a type rejects value patterns and captures") {
 }
 
 TEST_CASE("Resolving well-formed union matching") {
-    helpers::resolve_and_check("const U = union { a: i32 }; _ = match (U) { .a => 5 };");
+    helpers::resolve_and_check("const U = union(enum) { a: i32 }; _ = match (U) { .a => 5 };");
     helpers::resolve_and_check(
-        "const U = union { a: i32, b: i64 }; _ = match (U) { .a => 5, .b => 4 };");
+        "const U = union(enum) { a: i32, b: i64 }; _ = match (U) { .a => 5, .b => 4 };");
     helpers::resolve_and_check(
-        "const U = union { a: i32, b: i64 }; _ = match (U) { .a => 5, _ => 4 };");
+        "const U = union(enum) { a: i32, b: i64 }; _ = match (U) { .a => 5, _ => 4 };");
 }
 
 TEST_CASE("Resolving capturing match arms") {
@@ -79,7 +79,7 @@ TEST_CASE("Resolving capturing match arms") {
                      });
 
     test_arm_capture(
-        "const U = union { a: i32 }; _ = match (U) { .a => |a| 5 };",
+        "const U = union(enum) { a: i32 }; _ = match (U) { .a => |a| 5 };",
         "a",
         2,
         [](helpers::sema_test_context& ctx) -> auto& { return ctx.get_int_type(32, true); });
@@ -102,14 +102,16 @@ TEST_CASE("Resolving well-formed builtin-type matching") {
 }
 
 TEST_CASE("Resolving match arm captures with reference/pointer modifiers") {
+    helpers::resolve_and_check("const U = union(enum) { a: i32 }; let mut u = U{ .a = 5 }; _ = "
+                               "match (u) { .a => |&v| v };");
     helpers::resolve_and_check(
-        "const U = union { a: i32 }; let mut u = U{ .a = 5 }; _ = match (u) { .a => |&v| v };");
-    helpers::resolve_and_check("const U = union { a: i32 }; let mut u = U{ .a = 5 }; _ = match "
-                               "(u) { .a => |&mut v| v };");
+        "const U = union(enum) { a: i32 }; let mut u = U{ .a = 5 }; _ = match "
+        "(u) { .a => |&mut v| v };");
+    helpers::resolve_and_check("const U = union(enum) { a: i32 }; let mut u = U{ .a = 5 }; _ = "
+                               "match (u) { .a => |^v| *v };");
     helpers::resolve_and_check(
-        "const U = union { a: i32 }; let mut u = U{ .a = 5 }; _ = match (u) { .a => |^v| *v };");
-    helpers::resolve_and_check("const U = union { a: i32 }; let mut u = U{ .a = 5 }; _ = match "
-                               "(u) { .a => |^mut v| *v };");
+        "const U = union(enum) { a: i32 }; let mut u = U{ .a = 5 }; _ = match "
+        "(u) { .a => |^mut v| *v };");
 
     // Whole-value (non-union) captures accept the same modifiers
     helpers::resolve_and_check("let mut x: i32 = 1; _ = match (x) { 1 => |&mut v| v, _ => 0 };");
@@ -118,20 +120,22 @@ TEST_CASE("Resolving match arm captures with reference/pointer modifiers") {
 TEST_CASE("Illegal mutable capture of an immutable match arm value") {
     SECTION("By mutable reference, union field") {
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; const u = U{ .a = 5 }; _ = match (u) { .a => |&mut v| v "
+            "const U = union(enum) { a: i32 }; const u = U{ .a = 5 }; _ = match (u) { .a => |&mut "
+            "v| v "
             "};",
             sema::diagnostic{"Cannot capture an immutable value by mutable reference",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{0UZ, 79UZ}});
+                             std::pair{0UZ, 85UZ}});
     }
 
     SECTION("By mutable pointer, union field") {
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; const u = U{ .a = 5 }; _ = match (u) { .a => |^mut v| *v "
+            "const U = union(enum) { a: i32 }; const u = U{ .a = 5 }; _ = match (u) { .a => |^mut "
+            "v| *v "
             "};",
             sema::diagnostic{"Cannot capture an immutable value by mutable pointer",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{0UZ, 79UZ}});
+                             std::pair{0UZ, 85UZ}});
     }
 
     SECTION("By mutable reference, whole value") {
@@ -198,11 +202,11 @@ TEST_CASE("Illegal resolved enum matcher type") {
 TEST_CASE("Illegal resolved union matcher type") {
     SECTION("Pattern ast node restriction") {
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; _ = match (U) { 3 => 5 };",
+            "const U = union(enum) { a: i32 }; _ = match (U) { 3 => 5 };",
             sema::diagnostic{
                 "Match arm may only have an implicit access pattern in this context",
                 sema::error::ILLEGAL_MATCH_PATTERN,
-                std::pair{0UZ, 44UZ},
+                std::pair{0UZ, 50UZ},
             });
     }
 
@@ -216,12 +220,12 @@ TEST_CASE("Illegal resolved union matcher type") {
         };
 
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; _ = match (U) { .a => 5, .a => 4 };",
-            expected_diag(": a", 32UZ));
+            "const U = union(enum) { a: i32 }; _ = match (U) { .a => 5, .a => 4 };",
+            expected_diag(": a", 38UZ));
         helpers::test_resolver_fail(
-            "const U = union { a: i32, b: i64 }; _ = match (U) { .a => 5, .a "
+            "const U = union(enum) { a: i32, b: i64 }; _ = match (U) { .a => 5, .a "
             "=> 4, .b => 3, .b => 2 };",
-            expected_diag("s: a, b", 40UZ));
+            expected_diag("s: a, b", 46UZ));
     }
 
     SECTION("Missing fields") {
@@ -234,11 +238,11 @@ TEST_CASE("Illegal resolved union matcher type") {
         };
 
         helpers::test_resolver_fail(
-            "const U = union { a: i32, b: i64 }; _ = match (U) { .a => 5 };",
-            expected_diag(": b", 40UZ));
+            "const U = union(enum) { a: i32, b: i64 }; _ = match (U) { .a => 5 };",
+            expected_diag(": b", 46UZ));
         helpers::test_resolver_fail(
-            "const U = union { a: i32, b: i64, c: f32 }; _ = match (U) { .a => 5 };",
-            expected_diag("s: b, c", 48UZ));
+            "const U = union(enum) { a: i32, b: i64, c: f32 }; _ = match (U) { .a => 5 };",
+            expected_diag("s: b, c", 54UZ));
     }
 
     SECTION("Unknown fields") {
@@ -246,15 +250,15 @@ TEST_CASE("Illegal resolved union matcher type") {
             return {
                 fmt::format("Match expression contains unknown union field{}", suffix),
                 sema::error::UNKNOWN_FIELD,
-                std::pair{0UZ, 32UZ},
+                std::pair{0UZ, 38UZ},
             };
         };
 
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; _ = match (U) { .a => 5, .b => 4 };",
+            "const U = union(enum) { a: i32 }; _ = match (U) { .a => 5, .b => 4 };",
             expected_diag(": b"));
         helpers::test_resolver_fail(
-            "const U = union { a: i32 }; _ = match (U) { .a => 5, .b => 4, .c => 3 };",
+            "const U = union(enum) { a: i32 }; _ = match (U) { .a => 5, .b => 4, .c => 3 };",
             expected_diag("s: b, c"));
     }
 }
@@ -377,18 +381,18 @@ TEST_CASE("Illegal 'match comptime'") {
 TEST_CASE("Resolving multi-value match arms") {
     helpers::resolve_and_check("let mut x: i32 = 0; _ = match (x) { 1, 2, 3 => |v| v, _ => 0 };");
     helpers::resolve_and_check("let mut x: i32 = 0; _ = match (x) { 0, 5..9 => |v| v, _ => 0 };");
-    helpers::resolve_and_check("const U = union { a: i32, b: i32 }; let mut u = U{ .a = 1 }; "
+    helpers::resolve_and_check("const U = union(enum) { a: i32, b: i32 }; let mut u = U{ .a = 1 }; "
                                "_ = match (u) { .a, .b => |v| v };");
 }
 
 TEST_CASE("A multi-variant capture requires one shared payload type") {
     helpers::test_resolver_fail(
-        "const U = union { a: i32, b: bool }; let mut u = U{ .a = 1 }; "
+        "const U = union(enum) { a: i32, b: bool }; let mut u = U{ .a = 1 }; "
         "_ = match (u) { .a, .b => |v| v };",
         sema::diagnostic{"A capture on a multi-variant match arm requires every listed "
                          "variant to carry the same payload type",
                          sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 89UZ}});
+                         std::pair{0UZ, 95UZ}});
 }
 
 TEST_CASE("Multi-value arms still reject overlapping constants") {
