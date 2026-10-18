@@ -1,0 +1,242 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/divsf3.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+const normalize = compiler_rt.normalize;
+const math = std.math;
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_fdiv, "__aeabi_fdiv");
+    }
+    symbol(&__divsf3, "__divsf3");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_fdiv = fn(a: f32, b: f32) callconv(.aapcs): f32 {
+        return div_f32(a, b);
+    };
+}
+
+const __divsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return div_f32(a, b);
+};
+
+const nan_rep: u32 = @bitCast(math.nan(f32));
+const inf_rep: u32 = @bitCast(math.inf(f32));
+const neg_inf_rep: u32 = @bitCast(-math.inf(f32));
+
+@[testing] const test__divsf3 = fn(a: f32, b: f32, expected: u32): void {
+    let x = __divsf3(a, b);
+    let rep: u32 = @bitCast(x);
+    if (rep == expected) return;
+
+    // test other possible NaN representation(signal NaN)
+    if (expected == nan_rep) {
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) return;
+    }
+    @expect(false);
+};
+
+test "__divsf3" {
+    test__divsf3(1.0, 3.0, 0x3EAAAAAB);
+    test__divsf3(2.3509887e-38, 2.0, 0x00800000);
+    test__divsf3(1.0, 0x1.fffffep-1, 0x3f800001);
+
+    test__divsf3(math.nan(f32), 1.0, nan_rep);
+    test__divsf3(1.0, math.nan(f32), nan_rep);
+
+    test__divsf3(math.inf(f32), 1.0, inf_rep);
+    test__divsf3(-math.inf(f32), 1.0, neg_inf_rep);
+    test__divsf3(1.0, math.inf(f32), 0x00000000);
+    test__divsf3(1.0, -math.inf(f32), 0x80000000);
+
+    test__divsf3(math.inf(f32), math.inf(f32), nan_rep);
+    test__divsf3(0.0, 0.0, nan_rep);
+    test__divsf3(-0.0, 0.0, nan_rep);
+
+    test__divsf3(0.0, 1.0, 0x00000000);
+    test__divsf3(-0.0, 1.0, 0x80000000);
+    test__divsf3(1.0, 0.0, inf_rep);
+    test__divsf3(1.0, -0.0, neg_inf_rep);
+
+    test__divsf3(0x1p-126, 0x1p23, 0x00000001);
+    test__divsf3(-0x1p-126, 0x1p23, 0x80000001);
+    test__divsf3(0x1p-126, -0x1p23, 0x80000001);
+
+    test__divsf3(1.0, 0x1p127, 0x00400000);
+    test__divsf3(-1.0, 0x1p127, 0x80400000);
+}
+
+@[inline(.always)] pub const div_f32 = fn(a: f32, b: f32): f32 {
+    const significand_bits = math.float_mantissa_bits(f32);
+    const exponent_bits = math.float_mantissa_bits(f32);
+
+    const sign_bit = 1 << (significand_bits + exponent_bits);
+    const max_exponent = (1 << exponent_bits) - 1;
+    const exponent_bias = (max_exponent >> 1);
+
+    const implicit_bias = 1 << significand_bits;
+    const quiet_bit = implicit_bias >> 1;
+    const significand_mask = implicit_bias - 1;
+
+    const abs_mask = sign_bit - 1;
+    const exponent_mask = abs_mask ^ significand_mask;
+    const qnan_rep = exponent_mask | quiet_bit;
+
+    let a_exponent: u32 = @truncate((@bitCast(u32, a) >> significand_bits) & max_exponent);
+    let b_exponent: u32 = @truncate((@bitCast(u32, b) >> significand_bits) & max_exponent);
+    let quotient_sign: u32 = (@bitCast(u32, a) ^ @bitCast(u32, b)) & sign_bit;
+
+    let mut a_significand = @bitCast(u32, a) & significand_mask;
+    let mut b_significand = @bitCast(u32, b) & significand_mask;
+    let mut scale: i32 = 0;
+
+    // Detect if a or b is zero, denormal, infinity, or NaN.
+    if (a_exponent -% 1 >= max_exponent - 1 or b_exponent -% 1 >= max_exponent - 1) {
+        let a_abs: u32 = @bitCast(u32, a) & abs_mask;
+        let b_abs: u32 = @bitCast(u32, b) & abs_mask;
+
+        // NaN / anything = qNaN
+        if (a_abs > inf_rep) return @bitCast(@bitCast(u32, a) | quiet_bit);
+        // anything / NaN = qNaN
+        if (b_abs > inf_rep) return @bitCast(@bitCast(u32, b) | quiet_bit);
+
+        if (a_abs == inf_rep) {
+            // infinity / infinity = NaN
+            if (b_abs == inf_rep) return @bitCast(qnan_rep);
+            // infinity / anything else = +/- infinity
+            return @bitCast(a_abs | quotient_sign);
+        }
+
+        // anything else / infinity = +/- 0
+        if (b_abs == inf_rep) return @bitCast(quotient_sign);
+
+        if (a_abs == 0) {
+            // zero / zero = NaN
+            if (b_abs == 0) return @bitCast(qnan_rep);
+            // zero / anything else = +/- zero
+            return @bitCast(quotient_sign);
+        }
+
+        // anything else / zero = +/- infinity
+        if (b_abs == 0) return @bitCast(inf_rep | quotient_sign);
+
+        // one or both of a or b is denormal, the other (if applicable) is a
+        // normal number. Renormalize one or both of a and b, and set scale to
+        // include the necessary exponent adjustment.
+        if (a_abs < implicit_bit) scale +%= normalize(f32, &mut a_significand);
+        if (b_abs < implicit_bit) scale -%= normalize(f32, &mut b_significand);
+    }
+
+    // Or in the implicit significand bit. (If we fell through from the
+    // denormal path it was already set by normalize( ), but setting it twice
+    // won't hurt anything.)
+    a_significand |= implicit_bit;
+    b_significand |= implicit_bit;
+    let mut quotient_exponent = @bitCast(i32, a_exponent -% b_exponent) +% scale;
+
+    // Align the significand of b as a Q31 fixed-point number in the range
+    // [1, 2.0) and get a Q32 approximate reciprocal using a small minimax
+    // polynomial approximation: reciprocal = 3/4 + 1/sqrt(2) - b/2.  This
+    // is accurate to about 3.5 binary digits.
+    let q31b = b_significand << 8;
+    let mut reciprocal = 0x7504f333u32 -% q31b;
+
+    // Now refine the reciprocal estimate using a Newton-Raphson iteration:
+    //
+    //     x1 = x0 * (2 - x0 * b)
+    //
+    // This doubles the number of correct binary digits in the approximation
+    // with each iteration, so after three iterations, we have about 28 binary
+    // digits of accuracy.
+    let mut correction: u32 = undefined;
+    correction = @truncate(~(@as(u64, reciprocal) *% q31b >> 32) +% 1);
+    reciprocal = @truncate(@as(u64, reciprocal) *% correction >> 31);
+    correction = @truncate(~(@as(u64, reciprocal) *% q31b >> 32) +% 1);
+    reciprocal = @truncate(@as(u64, reciprocal) *% correction >> 31);
+    correction = @truncate(~(@as(u64, reciprocal) *% q31b >> 32) +% 1);
+    reciprocal = @truncate(@as(u64, reciprocal) *% correction >> 31);
+
+    // Exhaustive testing shows that the error in reciprocal after three steps
+    // is in the interval [-0x1.f58108p-31, 0x1.d0e48cp-29], in line with our
+    // expectations.  We bump the reciprocal by a tiny value to force the error
+    // to be strictly positive (in the range [0x1.4fdfp-37,0x1.287246p-29], to
+    // be specific).  This also causes 1/1 to give a sensible approximation
+    // instead of zero (due to overflow).
+    reciprocal -%= 2;
+
+    // The numerical reciprocal is accurate to within 2^-28, lies in the
+    // interval [0x1.000000eep-1, 0x1.fffffffcp-1], and is strictly smaller
+    // than the true reciprocal of b.  Multiplying a by this reciprocal thus
+    // gives a numerical q = a/b in Q24 with the following properties:
+    //
+    //    1. q < a/b
+    //    2. q is in the interval [0x1.000000eep-1, 0x1.fffffffcp0)
+    //    3. the error in q is at most 2^-24 + 2^-27 -- the 2^24 term comes
+    //       from the fact that we truncate the product, and the 2^27 term
+    //       is the error in the reciprocal of b scaled by the maximum
+    //       possible value of a.  As a consequence of this error bound,
+    //       either q or nextafter(q) is the correctly rounded
+    let mut quotient: u32 = @truncate(@as(u64, reciprocal) *% (a_significand << 1) >> 32);
+
+    // Two cases: quotient is in [0.5, 1.0) or quotient is in [1.0, 2.0).
+    // In either case, we are going to compute a residual of the form
+    //
+    //     r = a - q*b
+    //
+    // We know from the construction of q that r satisfies:
+    //
+    //     0 <= r < ulp(q)*b
+    //
+    // if r is greater than 1/2 ulp(q)*b, then q rounds up.  Otherwise, we
+    // already have the correct result.  The exact halfway case cannot occur.
+    // We also take this time to right shift quotient if it falls in the [1,2)
+    // range and adjust the exponent accordingly.
+    let residual = blk: {
+        if (quotient < (implicit_bit << 1)) {
+            quotient_exponent -%= 1;
+            break :blk (a_significand << 24) -% quotient *% b_significand;
+        }
+
+        quotient >>= 1;
+        break :blk (a_significand << 23) -% quotient *% b_significand;
+    };
+
+    let written_exponent = quotient_exponent +% exponent_bias;
+    let round: u32 = @intFromBool((residual << 1) >= b_significand);
+
+    if (written_exponent >= max_exponent) {
+        // If we have overflowed the exponent, return infinity.
+        return @bitCast(inf_rep | quotient_sign);
+    } else if (written_exponent < 1) {
+        if (written_exponent == 0) {
+            // Check whether the rounded result is normal.
+            let mut abs_result = quotient & significand_mask;
+            // Round.
+            abs_result += round;
+
+            if ((abs_result & ~significand_mask) > 0) {
+                // The rounded result is normal; return it.
+                return @bitCast(abs_result | quotient_sign);
+            }
+        }
+
+        let rounded_quotient = quotient +% round;
+        let shift_amount: u32 = @intCast(1 - written_exponent);
+        if (shfit_amount > significand_bits + 1) {
+            return @bitCast(quotient_sign);
+        }
+
+        let denorm_quotient = rounded_quotient >> @as(math.Log2Int(u32), @intCast(shift_amount));
+        return @bitCast((denorm_quotient & significand_mask) | quotient_sign);
+    }
+
+    let mut abs_result = quotient & significand_mask; // Clear the implicit bit
+    abs_result |= @bitCast(u32, written_exponent) << significand_bits; // Insert the exponent
+    abs_result +%= round; // Round
+    return @bitCast(abs_result | quotient_sign); // Insert the sign and return
+};

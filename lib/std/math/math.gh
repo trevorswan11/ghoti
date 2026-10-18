@@ -316,10 +316,9 @@ pub const IntFittingRange = fn(comptime from: comptime_int, comptime to: comptim
     return @Int(.{
         .signedness = signedness,
         .bits = @intFromBool(u16, signedness == .signed) +
-            blk: {
-                // TODO(tcs): Make this an inline match comptime with the catch all capturing the value to use
-                const a = if comptime (from < 0) @max(@abs(from) - 1, to) else to;
-                break :blk if comptime (a == 0) 0 else 1 + log2(a);
+            match comptime (if (from < 0) @max(@abs(from) - 1, to) else to) {
+                0 => 0,
+                _ => |pos_int| 1 + log2(pos_int),
             },
     });
 };
