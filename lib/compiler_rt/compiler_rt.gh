@@ -5,6 +5,7 @@ import "comparef.gh" as _;
 import "mem.gh" as _;
 import "windows.gh" as _;
 import "udivmod.gh" as _;
+// import "divsf3.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -36,12 +37,12 @@ pub const @"f80" = match comptime (@targetArch()) {
     export let mut _fltused: c_int = 1;
 }
 
-pub const normalize = fn(comptime T: type, significand: ^mut auto): i32 {
-    const Z = @typeInfo(@TypeOf(significand)).pointer.child;
+pub const normalize = fn(comptime T: type, significand: &mut auto): i32 {
+    const Z = @typeInfo(@TypeOf(significand)).reference.child;
     const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
 
     let shift = @clz(*significand) - @clz(integer_bit);
-    *significand <<= @as(std.math.Log2Int(Z), @intCast(shift));
+    significand <<= @as(std.math.Log2Int(Z), @intCast(shift));
     return @as(i32, 1) - shift;
 };
 
@@ -92,4 +93,5 @@ test {
     import "comparef.gh";
     import "mem.gh";
     import "udivmod.gh";
+    // import "divsf3.gh";
 }

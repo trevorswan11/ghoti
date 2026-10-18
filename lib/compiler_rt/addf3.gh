@@ -189,8 +189,8 @@ const __subtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     let mut b_significand = b_rep & significand_mask;
 
     // Normalize any denormals, and adjust the exponent accordingly.
-    if (a_exponent == 0) a_exponent = compiler_rt.normalize(T, ^mut a_significand);
-    if (b_exponent == 0) b_exponent = compiler_rt.normalize(T, ^mut b_significand);
+    if (a_exponent == 0) a_exponent = compiler_rt.normalize(T, &mut a_significand);
+    if (b_exponent == 0) b_exponent = compiler_rt.normalize(T, &mut b_significand);
 
     // The sign of the result is the sign of the larger operand, a. If they
     // have opposite signs, we are performing a subtraction; otherwise addition.
