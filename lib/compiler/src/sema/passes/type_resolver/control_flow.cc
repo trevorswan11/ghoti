@@ -16,6 +16,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
@@ -210,6 +211,34 @@ struct comptime_for_driver {
     type*                          elem_type{nullptr};
     std::vector<gir::const_value>  elem_values; // empty for a pack driver
     stdx::option<std::string_view> name;        // unset for a `_`-discarded capture
+};
+
+// Logs one unrolled iteration's side-table writes, then hands them on to the enclosing log so an
+// enclosing generic instantiation still records them
+class iteration_write_log {
+  public:
+    explicit iteration_write_log(mod::module_t& m) noexcept
+        : mod_{m}, outer_{std::exchange(m.active_write_log, stdx::option<body_write_log&>{log_})} {}
+
+    ~iteration_write_log() noexcept {
+        mod_.active_write_log = outer_;
+        if (!outer_) { return; }
+        const auto append{[](std::vector<usize>& dst, const std::vector<usize>& src) {
+            dst.insert(dst.end(), src.begin(), src.end());
+        }};
+        append(outer_->node_idxs, log_.node_idxs);
+        append(outer_->explicit_idxs, log_.explicit_idxs);
+        append(outer_->attribute_idxs, log_.attribute_idxs);
+    }
+
+    MAKE_PINNED(iteration_write_log);
+
+    [[nodiscard]] auto get() const noexcept -> const body_write_log& { return log_; }
+
+  private:
+    body_write_log                log_;
+    mod::module_t&                mod_;
+    stdx::option<body_write_log&> outer_;
 };
 
 } // namespace
@@ -425,6 +454,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
     for (usize k{0}; k < *count; ++k) {
         ctx_.advance_epoch();
         const body_typing_snapshot snap{resolving_};
+        const iteration_write_log  writes{resolving_};
 
         comptime_frame frame;
         for (usize d{0}; d < num_drivers; ++d) {
@@ -464,7 +494,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         carried.emplace(std::move(after));
 
         body_type_diff typing;
-        snap.diff_into(ctx_, resolving_, typing);
+        snap.diff_iteration_into(ctx_, resolving_, typing, writes.get());
         const auto key{
             fmt::format("{}forloop#{}#{}",
                         typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",
@@ -2038,6 +2068,7 @@ auto type_resolver::resolve_comptime_while_iterations(ast::node_id              
 
         ctx_.advance_epoch();
         const body_typing_snapshot snap{resolving_};
+        const iteration_write_log  writes{resolving_};
         const active_block_guard   guard{active_blocks_, block};
         active_blocks_.back().carried = carried;
         for (usize idx{0}; idx < block.statements.size(); ++idx) {
@@ -2049,7 +2080,7 @@ auto type_resolver::resolve_comptime_while_iterations(ast::node_id              
         carried.emplace(make_simulated_frame());
 
         body_type_diff typing;
-        snap.diff_into(ctx_, resolving_, typing);
+        snap.diff_iteration_into(ctx_, resolving_, typing, writes.get());
         ctx_.instantiation_cache.set_body_type_diff(
             fmt::format("{}whileloop#{}#{}",
                         typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",

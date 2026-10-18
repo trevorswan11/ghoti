@@ -4009,7 +4009,7 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
         }
         if (const auto f{val->as_opt<f128>()}) { return const_value{-*f, val->get_type()}; }
     } else if (op_type == syntax::token_type_t::MINUS_PERCENT) {
-        // '-%' is restricted to signed integers by sema, so only signed arms meaningful here
+        // Concrete unsigned operands fold through the domain path above, so only signed arms remain
         stdx::option<const_value> negated;
         if (val->is<i64>()) {
             negated.emplace(-static_cast<i128>(val->as<i64>()), val->get_type());

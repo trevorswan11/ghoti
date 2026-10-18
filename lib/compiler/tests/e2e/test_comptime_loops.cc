@@ -348,4 +348,61 @@ TEST_CASE("`continue` and labeled jumps fold like their runtime counterparts") {
     )") == 0);
 }
 
+TEST_CASE("comptime loops in a generic fn retype every iteration per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const by_for = fn(comptime T: type, x: T): T {
+            const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
+            let mut y = x;
+            for comptime (0..3) |_| {
+                y = @truncate(@as(Wide, y) * 2);
+            }
+            return y;
+        };
+
+        const by_while = fn(comptime T: type, x: T): T {
+            const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
+            let mut y = x;
+            comptime let mut U: type = T;
+            comptime let mut k = 0;
+            while comptime (k < 3) {
+                U = T;
+                y = @truncate(@as(Wide, y) * 2);
+                k = k + 1;
+            }
+            return y;
+        };
+
+        const by_do_while = fn(comptime T: type, x: T): T {
+            const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
+            let mut y = x;
+            comptime let mut k = 0;
+            do {
+                y = @truncate(@as(Wide, y) * 2);
+                k = k + 1;
+            } while comptime (k < 3);
+            return y;
+        };
+
+        const by_loop = fn(comptime T: type, x: T): T {
+            const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
+            let mut y = x;
+            comptime let mut k = 0;
+            loop comptime {
+                if comptime (k == 3) { break; }
+                y = @truncate(@as(Wide, y) * 2);
+                k = k + 1;
+            }
+            return y;
+        };
+
+        pub const main = fn(): i32 {
+            if (by_for(u32, 1) != 8 or by_for(u64, 1) != 8) return 1;
+            if (by_while(u32, 1) != 8 or by_while(u64, 1) != 8) return 2;
+            if (by_do_while(u32, 1) != 8 or by_do_while(u64, 1) != 8) return 3;
+            if (by_loop(u32, 1) != 8 or by_loop(u64, 1) != 8) return 4;
+            return 42;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

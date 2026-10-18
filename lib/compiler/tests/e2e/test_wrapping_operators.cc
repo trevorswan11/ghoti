@@ -56,6 +56,24 @@ TEST_CASE("prefix -% is well-defined at INT_MIN and matches plain '-' otherwise"
     )") == 0);
 }
 
+TEST_CASE("prefix -% wraps unsigned integers modulo their width") {
+    CHECK(helpers::compile_and_run(R"(
+        const neg = fn(comptime T: type, x: T): T { return -%x; };
+
+        pub const main = fn(): i32 {
+            let mut a: u8 = 1;
+            if (-%a != 255) { return 1; }
+            let mut z: u32 = 0;
+            if (-%z != 0) { return 2; }
+            if (neg(u64, 3) != 0xfffffffffffffffd) { return 3; }
+            if (neg(u128, 1) != 0xffffffffffffffffffffffffffffffff) { return 4; }
+            const c = -%@as(u16, 2);
+            if (c != 65534) { return 5; }
+            return 42;
+        };
+    )") == 42);
+}
+
 TEST_CASE("compound wrapping assignment operators wrap in place") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {

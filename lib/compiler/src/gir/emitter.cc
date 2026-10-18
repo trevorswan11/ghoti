@@ -3159,6 +3159,13 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
         operand.type->get_kind() == sema::type_kind::POINTER) {
         return pointer_to_bool(operand, true);
     }
+    // `NEG` is signed-only, so an unsigned `-%x` is the wrapping `0 -% x` it means
+    if (op_type == syntax::token_type_t::MINUS_PERCENT && sema::is_integer(sema_type->get_kind()) &&
+        !sema::is_signed_integer(*sema_type)) {
+        const auto dest{emit_checked_binary(
+            instruction_kind::SUB, value{u64{0}, *sema_type}, operand, *sema_type, id, true)};
+        return value{dest, sema_type};
+    }
     const auto dest{emit_checked_unary(
         *kind_opt, operand, *sema_type, id, syntax::token_type::is_wrapping_op(op_type))};
     return value{dest, sema_type};

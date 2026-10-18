@@ -268,6 +268,13 @@ struct body_typing_snapshot {
                    body_type_diff&                     out,
                    stdx::option<const body_write_log&> write_log = stdx::none) const -> void;
 
+    // `diff_into` for one unrolled comptime-loop iteration, plus every slot `write_log` saw written
+    // even if it kept the previous iteration's type
+    auto diff_iteration_into(context&              ctx,
+                             mod::module_t&        m,
+                             body_type_diff&       out,
+                             const body_write_log& write_log) const -> void;
+
     // Restores `m`'s side tables and branch cache back to the captured state.
     auto restore_to(mod::module_t& m) const -> void;
 
