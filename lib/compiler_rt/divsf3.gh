@@ -73,22 +73,22 @@ test "__divsf3" {
 
 @[inline(.always)] pub const div_f32 = fn(a: f32, b: f32): f32 {
     const significand_bits = math.float_mantissa_bits(f32);
-    const exponent_bits = math.float_mantissa_bits(f32);
+    const exponent_bits = math.float_exponent_bits(f32);
 
-    const sign_bit = 1 << (significand_bits + exponent_bits);
+    const sign_bit = 1u32 << (significand_bits + exponent_bits);
     const max_exponent = (1 << exponent_bits) - 1;
     const exponent_bias = (max_exponent >> 1);
 
-    const implicit_bias = 1 << significand_bits;
-    const quiet_bit = implicit_bias >> 1;
-    const significand_mask = implicit_bias - 1;
+    const implicit_bit = 1u32 << significand_bits;
+    const quiet_bit = implicit_bit >> 1;
+    const significand_mask = implicit_bit - 1;
 
     const abs_mask = sign_bit - 1;
     const exponent_mask = abs_mask ^ significand_mask;
     const qnan_rep = exponent_mask | quiet_bit;
 
-    let a_exponent: u32 = @truncate((@bitCast(u32, a) >> significand_bits) & max_exponent);
-    let b_exponent: u32 = @truncate((@bitCast(u32, b) >> significand_bits) & max_exponent);
+    let a_exponent: u32 = (@bitCast(u32, a) >> significand_bits) & max_exponent;
+    let b_exponent: u32 = (@bitCast(u32, b) >> significand_bits) & max_exponent;
     let quotient_sign: u32 = (@bitCast(u32, a) ^ @bitCast(u32, b)) & sign_bit;
 
     let mut a_significand = @bitCast(u32, a) & significand_mask;
@@ -227,7 +227,7 @@ test "__divsf3" {
 
         let rounded_quotient = quotient +% round;
         let shift_amount: u32 = @intCast(1 - written_exponent);
-        if (shfit_amount > significand_bits + 1) {
+        if (shift_amount > significand_bits + 1) {
             return @bitCast(quotient_sign);
         }
 
