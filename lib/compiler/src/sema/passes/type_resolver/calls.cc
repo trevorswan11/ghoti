@@ -1595,8 +1595,12 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     });
 
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(*fn.body)};
-    const bool  body_failed{resolve_block_statements(block)};
-    auto        tracker{std::move(return_trackers_.back())};
+    bool        body_failed{false};
+    {
+        const structural_guard shield{implicit_type_stack_, nullptr};
+        body_failed = resolve_block_statements(block);
+    }
+    auto tracker{std::move(return_trackers_.back())};
     return_trackers_.pop_back();
     if (body_failed) {
         // A template's explicit signature stands alone. Each instantiation re-resolves the body
