@@ -837,6 +837,18 @@ auto emitter::is_untyped_number(const value& v) noexcept -> bool {
     return v.type && sema::is_comptime_numeric(v.type->get_kind());
 }
 
+auto emitter::widen_untyped_bit_cast_operand(value v, sema::type& target, ast::node_id at)
+    -> value {
+    // A literal has no width of its own, so it takes all of the target's bits or the rest
+    // of the reinterpreted bytes are garbage
+    if (!v.type || v.type->get_kind() != sema::type_kind::COMPTIME_INT) { return v; }
+    const auto bits{const_eval::type_size_of(target, target_layout_) * 8};
+    if (bits == 0 || bits > std::numeric_limits<u16>::max()) { return v; }
+    const auto folded{folded_int(v)};
+    const bool is_negative{folded && *folded < 0};
+    return coerce_comptime_int(v, ctx_.get_int(static_cast<u16>(bits), is_negative), at);
+}
+
 auto emitter::is_foreign_constant(const value& v, const sema::type& t) noexcept -> bool {
     const bool is_constant_number{v.is<f128>() || v.is<i64>() || v.is<u64>() || v.is<i128>() ||
                                   v.is<u128>()};
@@ -3934,7 +3946,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (is_one_arg || call.arguments.size() >= 2) {
                 const auto op_arg_idx{is_one_arg ? 0UZ : 1UZ};
                 if (const auto op_expr{call.arguments[op_arg_idx].as_opt<ast::expr_handle>()}) {
-                    const auto operand{emit_expression(*op_expr)};
+                    auto operand{emit_expression(*op_expr)};
 
                     auto cast_kind{instruction_kind::WIDEN_CAST};
                     if (fn_token == syntax::builtin_t::INT_CAST) {
@@ -3962,6 +3974,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }
+                    }
+                    if (fn_token == syntax::builtin_t::BIT_CAST) {
+                        operand = widen_untyped_bit_cast_operand(operand, ret_type, *op_expr);
                     }
                     const bool checked{safety_enabled() &&
                                        fn_token == syntax::builtin_t::INT_FROM_FLOAT};
