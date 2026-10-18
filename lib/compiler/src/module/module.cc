@@ -155,17 +155,17 @@ auto module_manager::print_all_warnings(std::ostream& os) const -> void {
     for (const auto& [path, mod] : modules_) { mod->print_warnings(os); }
 }
 
+auto module_manager::print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void {
+    if (!mod.is_poisoned() && !mod.is_errored()) { return; }
+    if (!printed_diagnostics_.insert(&mod).second) { return; }
+    mod.print_diagnostics(os);
+}
+
 auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
-    for (const auto& [path, mod] : modules_) {
-        if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }
-    }
+    for (const auto& [path, mod] : modules_) { print_diagnostics_once(*mod, os); }
     // An error inside an emitted `builtin` declaration is attributed to `builtin` itself
-    if (builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored())) {
-        builtin_module_->print_diagnostics(os);
-    }
-    if (start_module_ && (start_module_->is_poisoned() || start_module_->is_errored())) {
-        start_module_->print_diagnostics(os);
-    }
+    if (builtin_module_) { print_diagnostics_once(*builtin_module_, os); }
+    if (start_module_) { print_diagnostics_once(*start_module_, os); }
 }
 
 auto module_manager::any_errored() const noexcept -> bool {
