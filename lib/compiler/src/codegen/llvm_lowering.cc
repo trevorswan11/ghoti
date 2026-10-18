@@ -2049,7 +2049,25 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
         }
         return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
     }
-    case gir::instruction_kind::BIT_CAST: return builder_.CreateBitCast(val, target_ty, "bitcast");
+    case gir::instruction_kind::BIT_CAST: {
+        if (!src_ty->isAggregateType() && !target_ty->isAggregateType()) {
+            return builder_.CreateBitCast(val, target_ty, "bitcast");
+        }
+        // LLVM can't bitcast an array or struct (`u128` <-> `[2]u64`), so the bytes go through
+        // a slot big enough for either view
+        const auto& layout{llvm_module_->getDataLayout()};
+        auto*       slot_ty{layout.getTypeAllocSize(src_ty) >= layout.getTypeAllocSize(target_ty)
+                                ? src_ty
+                                : target_ty};
+        auto&       entry{builder_.GetInsertBlock()->getParent()->getEntryBlock()};
+        llvm::IRBuilder<> entry_builder{&entry, entry.getFirstInsertionPt()};
+        auto*             slot{entry_builder.CreateAlloca(slot_ty, nullptr, "bitcast.slot")};
+        const auto        align{
+            std::max(layout.getABITypeAlign(src_ty), layout.getABITypeAlign(target_ty))};
+        slot->setAlignment(align);
+        builder_.CreateAlignedStore(val, slot, align);
+        return builder_.CreateAlignedLoad(target_ty, slot, align, "bitcast");
+    }
     case gir::instruction_kind::PTR_CAST:
         return builder_.CreatePointerCast(val, target_ty, "ptrcast");
     case gir::instruction_kind::INT_FROM_PTR:

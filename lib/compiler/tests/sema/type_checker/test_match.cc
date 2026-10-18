@@ -22,7 +22,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 36UZ}});
+                             std::pair{5UZ, 32UZ}});
     }
 
     SECTION("Union field, const union") {
@@ -39,7 +39,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 36UZ}});
+                             std::pair{5UZ, 32UZ}});
     }
 
     SECTION("Whole-value (non-union), mutable scrutinee") {
@@ -55,7 +55,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{4UZ, 35UZ}});
+                             std::pair{4UZ, 31UZ}});
     }
 
     SECTION("Whole-value (non-union), const scrutinee") {
@@ -71,7 +71,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{4UZ, 35UZ}});
+                             std::pair{4UZ, 31UZ}});
     }
 }
 
@@ -103,7 +103,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through reference",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 37UZ}});
+                             std::pair{5UZ, 33UZ}});
     }
 
     SECTION("By mutable pointer succeeds") {
@@ -133,7 +133,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through pointer",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 38UZ}});
+                             std::pair{5UZ, 33UZ}});
     }
 }
 

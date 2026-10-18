@@ -3649,8 +3649,21 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
         lhs_lval.type.emplace(referent_type);
     }
 
+    // A rejected store points at the start of what it writes (`q` in `q[1] = v`), not the value
+    ast::node_id target{*assign.lhs};
+    while (true) {
+        if (const auto index{active_ast().get_as_opt<ast::index_expr>(target)}) {
+            target = *index->array;
+        } else if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(target)}) {
+            target = *dot->object;
+        } else {
+            break;
+        }
+    }
+    const auto target_location{active_ast().location_of(target)};
     if (op_type == syntax::token_type_t::ASSIGN) {
         const value rhs{emit_coerced_expr(assign.rhs, *lhs_lval.type)};
+        builder_.set_location(target_location);
         builder_.emit_store(lhs_lval, rhs);
         return rhs;
     }

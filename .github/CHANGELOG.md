@@ -915,3 +915,5 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - An integer type wider than 128 bits (`u256`) holds a constant of its full width, and folds past 128 bits at compile time
     - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@divExact`, `@rem`, and `@mod` of two untyped integers stay `comptime_int` instead of becoming `i32`
 - Fixed: a suffixed integer literal was not checked against its own type, so `300u8` silently wrapped; it must now fit (`-128i8` still does)
+- A rejected assignment (to a constant, a non-mutable element, or of the wrong type) points at the start of its target (`q` in `q[1] = 0`) instead of the value being assigned
+- Fixed: `@bitCast` between an integer and an array or struct of the same size (`u128` and `[2]u64`) crashed the compiler with an LLVM assertion; it now goes through memory
