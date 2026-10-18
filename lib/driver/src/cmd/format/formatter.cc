@@ -20,11 +20,18 @@
 #include "compiler/syntax/parser.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/format/options.hh"
+#include "driver/platform/win32.hh"
+#include "ghoti/config.h"
 #include "support/string_utils.hh"
 
 namespace ghoti::cmd {
 
 auto formatter::execute() -> stdx::result<void, clap::error> {
+#if GHOTI_WINDOWS
+    // Text-mode stdout would write CRLF line breaks, unlike `--write`
+    win32::set_binary_stdio();
+#endif
+
     if (opts_.reading_stdin) {
         auto source_code{string_utils::read_stream(std::cin)};
         if (std::cin.bad()) {
