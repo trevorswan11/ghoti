@@ -212,7 +212,11 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
                                  error::ILLEGAL_FIELD_ORDER_DEPENDENCY,
                                  resolving_.ast.location_of(id)));
         }
-        resolve(*node);
+        {
+            // The declaration is typed on its own, not by the expected type at this use
+            const structural_guard shield{implicit_type_stack_, nullptr};
+            resolve(*node);
+        }
         // Take the symbol's real type so forward references and mutual recursion resolve.
         if (sym.get_status() == symbol_status::RESOLVED &&
             sym.get_kind() != symbol_kind::POISONED) {
