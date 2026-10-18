@@ -39,6 +39,10 @@ auto doc_manager::hard_line() -> doc_id { return add<docs::hard_line>(); }
 
 auto doc_manager::line_suffix(doc_id child) -> doc_id { return add<docs::line_suffix>(child); }
 
+auto doc_manager::verbatim(std::string_view source_lines) -> doc_id {
+    return add<docs::verbatim>(source_lines);
+}
+
 auto doc_manager::if_break(doc_id when_broken, doc_id when_flat) -> doc_id {
     return add<docs::if_break>(when_broken, when_flat);
 }
@@ -107,7 +111,8 @@ auto doc_manager::contains_hard_break(doc_id id, bool nested) const noexcept -> 
         [&](docs::soft_line) { return false; },
         [&](docs::if_break b) { return contains_hard_break(b.when_flat, nested); },
         [&](docs::align a) { return contains_hard_break(a.child, nested); },
-        [&](docs::line_suffix s) { return contains_hard_break(s.child, nested); });
+        [&](docs::line_suffix s) { return contains_hard_break(s.child, nested); },
+        [&](docs::verbatim v) { return v.text.contains('\n'); });
 }
 
 auto doc_manager::delimited(std::string_view    open,

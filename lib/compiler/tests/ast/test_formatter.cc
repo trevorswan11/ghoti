@@ -1161,6 +1161,116 @@ TEST_CASE("formatter puts a multiline asm template on lines of its own") {
     round_trips(formatted);
 }
 
+TEST_CASE("formatter keeps top-level statements between fmt off and on as written") {
+    CHECK(format_source("const  a=1;\n"
+                        "// ghoti fmt: off\n"
+                        "const  b   = 2;\n"
+                        "const c=[3]i32{ 1,2,   3 };\n"
+                        "// ghoti fmt: on\n"
+                        "const  d=4;\n") == "const a = 1;\n"
+                                            "// ghoti fmt: off\n"
+                                            "const  b   = 2;\n"
+                                            "const c=[3]i32{ 1,2,   3 };\n"
+                                            "// ghoti fmt: on\n"
+                                            "const d = 4;\n");
+
+    // Author blank lines around the region survive, and none appear where there were none
+    constexpr std::string_view spaced{"const a = 1;\n"
+                                      "\n"
+                                      "// ghoti fmt: off\n"
+                                      "const  b = 2;\n"
+                                      "// ghoti fmt: on\n"
+                                      "\n"
+                                      "const d = 4;\n"};
+    CHECK(format_source(spaced) == spaced);
+    CHECK(format_source("const a = 1;\n// ghoti fmt: off\nconst  b = 2;\n// ghoti fmt: on\nconst "
+                        "d = 4;\n") ==
+          "const a = 1;\n// ghoti fmt: off\nconst  b = 2;\n// ghoti fmt: on\nconst d = 4;\n");
+    round_trips(spaced);
+}
+
+TEST_CASE("formatter keeps everything after an unclosed fmt off as written") {
+    constexpr std::string_view src{"const a = 1;\n"
+                                   "// ghoti fmt: off\n"
+                                   "const  b = 2;\n"
+                                   "const f = fn():void{return;};\n"};
+    CHECK(format_source(src) == src);
+}
+
+TEST_CASE("formatter keeps a fmt off region inside a block, with its own indentation") {
+    constexpr std::string_view src{"const f = fn(): void {\n"
+                                   "  let x = 1;\n"
+                                   "        // ghoti fmt: off\n"
+                                   "  let m = [4]i32{\n"
+                                   "      1, 0,\n"
+                                   "      0, 1,\n"
+                                   "  };\n"
+                                   "        // ghoti fmt: on\n"
+                                   "  let   y = 2;\n"
+                                   "};\n"};
+    CHECK(format_source(src) == "const f = fn(): void {\n"
+                                "    let x = 1;\n"
+                                "        // ghoti fmt: off\n"
+                                "  let m = [4]i32{\n"
+                                "      1, 0,\n"
+                                "      0, 1,\n"
+                                "  };\n"
+                                "        // ghoti fmt: on\n"
+                                "    let y = 2;\n"
+                                "};\n");
+    round_trips(src);
+
+    // The closing marker can sit just before the closing brace
+    constexpr std::string_view at_end{"const f = fn(): void {\n"
+                                      "    // ghoti fmt: off\n"
+                                      "    let   x = 1; // kept\n"
+                                      "    // ghoti fmt: on\n"
+                                      "};\n"};
+    CHECK(format_source(at_end) == at_end);
+}
+
+TEST_CASE("formatter keeps aligned fields, variants and members inside fmt off") {
+    constexpr std::string_view fields{"const S = struct {\n"
+                                      "    a: i32,\n"
+                                      "    // ghoti fmt: off\n"
+                                      "    bb:   u8,\n"
+                                      "    ccc:  u16,\n"
+                                      "    // ghoti fmt: on\n"
+                                      "    d: i32,\n"
+                                      "};\n"};
+    CHECK(format_source(fields) == fields);
+    round_trips(fields);
+
+    constexpr std::string_view variants{"const E = enum {\n"
+                                        "    // ghoti fmt: off\n"
+                                        "    a   = 1,\n"
+                                        "    bcd = 22,\n"
+                                        "    // ghoti fmt: on\n"
+                                        "    e = 3,\n"
+                                        "};\n"};
+    CHECK(format_source(variants) == variants);
+    round_trips(variants);
+
+    constexpr std::string_view members{"const S = struct {\n"
+                                       "    x: i32,\n"
+                                       "\n"
+                                       "    // ghoti fmt: off\n"
+                                       "    const  A = 1;\n"
+                                       "    // ghoti fmt: on\n"
+                                       "    const B = 2;\n"
+                                       "};\n"};
+    CHECK(format_source(members) == members);
+    round_trips(members);
+}
+
+TEST_CASE("formatter treats fmt off markers that aren't on their own line as comments") {
+    CHECK(format_source("const  a = 1; // ghoti fmt: off\nconst  b = 2;\n") ==
+          "const a = 1; // ghoti fmt: off\nconst b = 2;\n");
+    // Both markers before a statement have nothing to keep
+    CHECK(format_source("// ghoti fmt: off\n// ghoti fmt: on\nconst  b = 2;\n") ==
+          "// ghoti fmt: off\n// ghoti fmt: on\nconst b = 2;\n");
+}
+
 constexpr std::string_view corpus{
 #include "ast/golden.gh.inc"
 };
