@@ -2,10 +2,13 @@
 
 #include <ostream>
 #include <ranges>
+#include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <stdx/option.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -86,7 +89,18 @@ auto layout_engine::render(doc_id root, std::ostream& os) -> void {
             [&](docs::align a) {
                 stack.emplace_back(a.child, static_cast<u16>(current_width + a.columns), mode);
             },
-            [&](docs::line_suffix s) { stack.emplace_back(s.child, indent_cols, mode); });
+            [&](docs::line_suffix s) { stack.emplace_back(s.child, indent_cols, mode); },
+            [&](docs::verbatim v) {
+                // The source lines carry their own indent
+                pending_cols = 0;
+                for (usize i{0}; const auto line : v.text | std::views::split('\n')) {
+                    if (i++ != 0) { fmt::print(os, "\n"); }
+                    std::string_view text{line.begin(), line.end()};
+                    if (text.ends_with('\r')) { text.remove_suffix(1); }
+                    fmt::print(os, "{}", text);
+                    current_width = static_cast<u32>(display_width(text));
+                }
+            });
     }
 }
 
@@ -138,7 +152,15 @@ auto layout_engine::measure_until_break(doc_id      doc,
                 mode == layout_mode::BREAK ? b.when_broken : b.when_flat, mode, width_left);
         },
         [&](docs::align a) { return measure_until_break(a.child, mode, width_left); },
-        [&](docs::line_suffix) -> stdx::option<bool> { return stdx::none; });
+        [&](docs::line_suffix) -> stdx::option<bool> { return stdx::none; },
+        [&](docs::verbatim v) -> stdx::option<bool> {
+            const auto first_line{stdx::string::substr(v.text, 0, v.text.find('\n'))};
+            if (const auto done{consumed(static_cast<i64>(display_width(first_line)))}) {
+                return done;
+            }
+            if (first_line.size() != v.text.size()) { return true; }
+            return stdx::none;
+        });
 }
 
 auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool {
@@ -165,7 +187,12 @@ auto layout_engine::measure(doc_id doc, i64& width_left) const noexcept -> bool 
         [&](docs::soft_line) { return true; },
         [&](docs::if_break b) { return measure(b.when_flat, width_left); },
         [&](docs::align a) { return measure(a.child, width_left); },
-        [&](docs::line_suffix s) { return measure(s.child, width_left); });
+        [&](docs::line_suffix s) { return measure(s.child, width_left); },
+        [&](docs::verbatim v) {
+            if (v.text.contains('\n')) { return false; }
+            width_left -= static_cast<i64>(display_width(v.text));
+            return width_left >= 0;
+        });
 }
 
 } // namespace ghoti::syntax

@@ -47,6 +47,13 @@ class formatter {
         bool             consumed{false};
     };
 
+    // A `// ghoti fmt: off` region over a run of list items, kept as its original source lines
+    struct verbatim_region {
+        syntax::doc_id doc;      // leading comments, the author's blank line, then the source
+        usize          items;    // list items it covers, starting at the one it was found before
+        usize          end_line; // last source line it covers
+    };
+
   private:
     template <IndexableID ID> auto format(ID id) -> syntax::doc_id {
         auto doc{ast_[id].visit([&](const auto& data) { return this->visit(id, data); })};
@@ -61,6 +68,11 @@ class formatter {
     [[nodiscard]] auto with_modifier(explicit_type_id id, syntax::doc_id base) -> syntax::doc_id;
     [[nodiscard]] auto format_callconv(calling_convention conv, bool is_explicit) -> syntax::doc_id;
     [[nodiscard]] auto blank_line_between(node_id before, node_id after) const -> bool;
+    // As `blank_line_between`, but measured from the end of an off region when `previous` closed
+    // one
+    [[nodiscard]] auto blank_line_after(node_id                    previous,
+                                        const stdx::option<usize>& region_end,
+                                        node_id                    next) const -> bool;
     [[nodiscard]] auto is_function_or_aggregate_node(node_id id) const -> bool;
 
     // Shared layout of `struct` / `union`; `keyword` is the head before the body, like `struct `
@@ -194,6 +206,23 @@ class formatter {
     // Comments before the closing brace at (`brace_line`, `brace_col`); one after it is trailing
     auto consume_dangling_comments(usize brace_line, usize brace_col = SIZE_MAX) -> syntax::doc_id;
     auto consume_remaining_comments() -> syntax::doc_id;
+
+    // Index of the first unconsumed own-line `// ghoti fmt: <state>` comment before `before_line`
+    [[nodiscard]] auto find_fmt_marker(usize from, usize before_line, std::string_view state) const
+        -> stdx::option<usize>;
+    // Lines `first` through `last` of the source, without the final line break
+    [[nodiscard]] auto source_lines(usize first, usize last) const -> std::string_view;
+
+    // Takes the off region opening before list item `first`, if any. It covers items up to
+    // `boundary` that start before its `// ghoti fmt: on`, and reaches that marker when it sits
+    // before the next item, or before `limit_line` once the region runs to `boundary`
+    template <typename StartLine, typename EndLine>
+    auto take_verbatim_region(usize       first,
+                              usize       boundary,
+                              StartLine&& start_line,
+                              EndLine&&   end_line,
+                              usize       limit_line,
+                              bool        allow_leading_blank) -> stdx::option<verbatim_region>;
     // A parameter's type, with an `impl` bound in place of the `auto` it desugared to
     auto format_param_type(explicit_type_id type, syntax::doc_id bound) -> syntax::doc_id;
 
@@ -206,6 +235,7 @@ class formatter {
     std::string_view          source_;
     std::vector<comment_item> comments_;
     usize                     comment_idx_{0};
+    std::vector<usize>        line_starts_;
     // An `impl` parameter's bound, rendered where its desugared `auto` sits (`[]impl I`)
     stdx::option<syntax::doc_id> auto_replacement_;
 };

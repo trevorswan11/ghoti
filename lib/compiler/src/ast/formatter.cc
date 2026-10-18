@@ -1,6 +1,8 @@
 #include "compiler/ast/formatter.hh"
 
+#include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -83,6 +85,26 @@ auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
     }
 }
 
+// Whether `comment` is `// ghoti fmt: <state>`, ignoring surrounding spaces
+[[nodiscard]] auto is_fmt_marker(std::string_view comment, std::string_view state) -> bool {
+    constexpr std::string_view prefix{"ghoti fmt:"};
+    if (!comment.starts_with("//")) { return false; }
+    comment = stdx::string::trim(comment.substr(2));
+    if (!comment.starts_with(prefix)) { return false; }
+    return stdx::string::trim_left(comment.substr(prefix.size())) == state;
+}
+
+// The first `@cfg` group position after item `i`, where an off region over the items must stop
+template <typename Group>
+[[nodiscard]] auto next_cfg_position(const std::vector<Group>& groups, usize item_count, usize i)
+    -> usize {
+    usize position{item_count};
+    for (const auto& group : groups) {
+        if (group.position > i) { position = std::min(position, group.position); }
+    }
+    return position;
+}
+
 // A word operator (`&mut`, and `&mut?`) is spaced off its operand like a keyword
 [[nodiscard]] auto prefix_needs_gap(std::string_view op) -> bool {
     if (op.ends_with("mut?")) { return true; }
@@ -93,6 +115,15 @@ auto asm_option_spelling(asm_expr::option opt) -> std::string_view {
 
 auto formatter::init_trivia() -> void {
     if (source_.empty()) { return; }
+
+    // Line breaks as the lexer counts them: `\n`, `\r\n`, or a lone `\r`
+    line_starts_.emplace_back(0);
+    for (usize i{0}; i < source_.size(); ++i) {
+        const auto c{source_[i]};
+        if (c == '\n' || (c == '\r' && (i + 1 >= source_.size() || source_[i + 1] != '\n'))) {
+            line_starts_.emplace_back(i + 1);
+        }
+    }
 
     syntax::lexer lex{source_};
     usize         prev_line{0};
@@ -218,19 +249,97 @@ auto formatter::consume_remaining_comments() -> syntax::doc_id {
     return doc_manager_.concat(std::move(docs));
 }
 
+auto formatter::find_fmt_marker(usize from, usize before_line, std::string_view state) const
+    -> stdx::option<usize> {
+    for (usize i{from}; i < comments_.size() && comments_[i].line < before_line; ++i) {
+        const auto& c{comments_[i]};
+        if (!c.consumed && !c.is_trailing && is_fmt_marker(c.text, state)) { return i; }
+    }
+    return stdx::none;
+}
+
+auto formatter::source_lines(usize first, usize last) const -> std::string_view {
+    ASSERT(first <= last && last < line_starts_.size(), "Source line out of range");
+    const auto begin{line_starts_[first]};
+    const auto end{last + 1 < line_starts_.size() ? line_starts_[last + 1] : source_.size()};
+    auto       text{stdx::string::substr(source_, begin, end - begin)};
+    if (text.ends_with('\n')) { text.remove_suffix(1); }
+    if (text.ends_with('\r')) { text.remove_suffix(1); }
+    return text;
+}
+
+template <typename StartLine, typename EndLine>
+auto formatter::take_verbatim_region(usize       first,
+                                     usize       boundary,
+                                     StartLine&& start_line,
+                                     EndLine&&   end_line,
+                                     usize       limit_line,
+                                     bool allow_leading_blank) -> stdx::option<verbatim_region> {
+    if (first >= boundary) { return stdx::none; }
+    const auto off{find_fmt_marker(comment_idx_, start_line(first), "off")};
+    if (!off) { return stdx::none; }
+    const auto off_line{comments_[*off].line};
+    const auto on{find_fmt_marker(*off + 1, SIZE_MAX, "on")};
+    const auto on_line{on ? comments_[*on].line : SIZE_MAX};
+    // Both markers before the item leave nothing to keep
+    if (on_line < start_line(first)) { return stdx::none; }
+
+    usize last{first};
+    while (last + 1 < boundary && start_line(last + 1) < on_line) { ++last; }
+    const auto next_start{last + 1 < boundary ? start_line(last + 1) : limit_line};
+    const auto last_line{on_line < next_start ? std::max(end_line(last), on_line) : end_line(last)};
+
+    // Even an empty text would print the pending indent the source lines replace
+    std::vector<syntax::doc_id> docs;
+    const auto                  leading{consume_leading_comments(off_line, allow_leading_blank)};
+    if (leading != doc_manager_.nil()) { docs.emplace_back(leading); }
+    if (comments_[*off].is_leading_blank &&
+        (leading != doc_manager_.nil() || allow_leading_blank)) {
+        docs.emplace_back(doc_manager_.hard_line());
+    }
+    docs.emplace_back(doc_manager_.verbatim(source_lines(off_line, last_line)));
+
+    // Everything inside, the closing marker included, is part of the source text
+    while (comment_idx_ < comments_.size() && comments_[comment_idx_].line <= last_line) {
+        comments_[comment_idx_++].consumed = true;
+    }
+    return verbatim_region{
+        .doc      = doc_manager_.concat(std::move(docs)),
+        .items    = last - first + 1,
+        .end_line = last_line,
+    };
+}
+
 auto formatter::format() -> void {
+    const auto& roots{ast_.get_roots()};
+    const auto  root_start{[&](usize i) { return ast_.location_of(roots[i]).line; }};
+    const auto  root_end{[&](usize i) { return ast_.end_location_of(roots[i]).line; }};
+
     stdx::option<node_id> previous;
-    for (const auto id : ast_) {
+    stdx::option<usize>   region_end;
+    for (usize i{0}; i < roots.size(); ++i) {
+        if (auto region{take_verbatim_region(
+                i, roots.size(), root_start, root_end, SIZE_MAX, previous.has_value())}) {
+            doc_manager_.add_root(region->doc);
+            doc_manager_.add_root(doc_manager_.hard_line());
+            i += region->items - 1;
+            previous   = roots[i];
+            region_end = region->end_line;
+            continue;
+        }
+
+        const auto  id{roots[i]};
         const auto& start_loc{ast_.location_of(id)};
         const auto& end_loc{ast_.end_location_of(id)};
 
         auto leading{consume_leading_comments(start_loc.line, previous.has_value())};
         if (leading != doc_manager_.nil()) { doc_manager_.add_root(leading); }
 
-        if (previous &&
-            (blank_line_between(*previous, id) || is_function_or_aggregate_node(*previous))) {
-            if (leading == doc_manager_.nil()) { doc_manager_.add_root(doc_manager_.hard_line()); }
+        if (previous && leading == doc_manager_.nil() &&
+            blank_line_after(*previous, region_end, id)) {
+            doc_manager_.add_root(doc_manager_.hard_line());
         }
+        region_end = stdx::none;
 
         auto node_doc{format(id)};
         auto trailing{consume_trailing_comment(end_loc.line)};
@@ -264,6 +373,13 @@ auto formatter::with_modifier(explicit_type_id id, syntax::doc_id base) -> synta
 auto formatter::blank_line_between(node_id before, node_id after) const -> bool {
     if (is_function_or_aggregate_node(before)) { return true; }
     return ast_.location_of(after).line > ast_.end_location_of(before).line + 1;
+}
+
+auto formatter::blank_line_after(node_id                    previous,
+                                 const stdx::option<usize>& region_end,
+                                 node_id                    next) const -> bool {
+    if (region_end) { return ast_.location_of(next).line > *region_end + 1; }
+    return blank_line_between(previous, next);
 }
 
 auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
@@ -326,8 +442,25 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
         }
     }};
 
+    const auto member_start_line{[&](usize i) { return ast_.location_of(members[i]).line; }};
+    const auto member_end_line{[&](usize i) { return ast_.end_location_of(members[i]).line; }};
+
+    stdx::option<usize> region_end;
     flush_cfg(0);
     for (usize i{0}; i < members.size(); ++i) {
+        if (auto region{take_verbatim_region(i,
+                                             next_cfg_position(cfg_groups, members.size(), i),
+                                             member_start_line,
+                                             member_end_line,
+                                             0,
+                                             i != 0)}) {
+            entries.emplace_back(region->doc);
+            i += region->items - 1;
+            region_end = region->end_line;
+            flush_cfg(i + 1);
+            continue;
+        }
+
         const auto& member{members[i]};
         // i != 0 only: the field->first-member gap already gets a blank from aggregate_body.
         auto leading{consume_leading_comments(ast_.location_of(member).line, i != 0)};
@@ -338,9 +471,11 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
         }
         if (leading != doc_manager_.nil()) {
             member_doc = doc_manager_.concat({leading, member_doc});
-        } else if (i != 0 && is_function_or_aggregate_node(members[i - 1])) {
+        } else if (region_end ? member_start_line(i) > *region_end + 1
+                              : i != 0 && is_function_or_aggregate_node(members[i - 1])) {
             member_doc = doc_manager_.concat({doc_manager_.hard_line(), member_doc});
         }
+        region_end = stdx::none;
         entries.emplace_back(member_doc);
         flush_cfg(i + 1);
     }
@@ -366,8 +501,26 @@ auto formatter::format_field_aggregate(const Node&    node,
 
     bool force_break{node.fields_force_break || !node.members.empty() || !node.cfg_groups.empty()};
 
+    const auto field_start_line{
+        [&](usize i) { return ast_.location_of(node.fields[i].name).line; }};
+    const auto field_end{[&](usize i) { return field_end_line(node.fields[i]); }};
+
     flush_cfg_groups(0);
     for (usize i{0}; i < node.fields.size(); ++i) {
+        if (auto region{
+                take_verbatim_region(i,
+                                     next_cfg_position(node.cfg_groups, node.fields.size(), i),
+                                     field_start_line,
+                                     field_end,
+                                     0,
+                                     !entries.empty())}) {
+            entries.emplace_back(region->doc);
+            force_break = true;
+            i += region->items - 1;
+            flush_cfg_groups(i + 1);
+            continue;
+        }
+
         const auto& field{node.fields[i]};
         auto leading{consume_leading_comments(ast_.location_of(field.name).line, !entries.empty())};
 
@@ -469,16 +622,35 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     bool force_break{node.enumerations_force_break || !node.members.empty() ||
                      !node.cfg_groups.empty()};
 
+    const auto& variants{node.enumerations};
+    const auto variant_start_line{[&](usize i) { return ast_.location_of(variants[i].name).line; }};
+    const auto variant_end_line{[&](usize i) {
+        return variants[i].value ? ast_.end_location_of(*variants[i].value).line
+                                 : ast_.end_location_of(variants[i].name).line;
+    }};
+
     const auto total_enums{node.enumerations.size() + (node.non_exhaustive ? 1 : 0)};
     flush_cfg_groups(0);
     for (usize i{0}; i < node.enumerations.size(); ++i) {
+        if (auto region{take_verbatim_region(i,
+                                             next_cfg_position(node.cfg_groups, variants.size(), i),
+                                             variant_start_line,
+                                             variant_end_line,
+                                             0,
+                                             !entries.empty())}) {
+            entries.emplace_back(region->doc);
+            force_break = true;
+            i += region->items - 1;
+            flush_cfg_groups(i + 1);
+            continue;
+        }
+
         const auto& enumeration{node.enumerations[i]};
         const auto& start_loc{ast_.location_of(enumeration.name)};
         auto        leading{consume_leading_comments(start_loc.line, !entries.empty())};
 
         auto       enum_doc{variant_item(enumeration)};
-        const auto end_line{enumeration.value ? ast_.end_location_of(*enumeration.value).line
-                                              : ast_.end_location_of(enumeration.name).line};
+        const auto end_line{variant_end_line(i)};
         const auto more_follows{i + 1 < total_enums || !node.members.empty() ||
                                 !node.cfg_groups.empty()};
         auto       trailing{consume_trailing_comment(end_line)};
@@ -1464,8 +1636,23 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
 
     std::vector<syntax::doc_id> body;
     stdx::option<node_id>       previous;
+    stdx::option<usize>         region_end;
 
-    for (const auto& stmt : node.statements) {
+    const auto& stmts{node.statements};
+    const auto  stmt_start_line{[&](usize i) { return ast_.location_of(*stmts[i]).line; }};
+    const auto  stmt_end_line{[&](usize i) { return ast_.end_location_of(*stmts[i]).line; }};
+    for (usize i{0}; i < stmts.size(); ++i) {
+        if (auto region{take_verbatim_region(
+                i, stmts.size(), stmt_start_line, stmt_end_line, block_end.line, !body.empty())}) {
+            if (!body.empty()) { body.emplace_back(doc_manager_.hard_line()); }
+            body.emplace_back(region->doc);
+            i += region->items - 1;
+            previous   = *stmts[i];
+            region_end = region->end_line;
+            continue;
+        }
+
+        const auto& stmt{stmts[i]};
         const auto& stmt_start{ast_.location_of(*stmt)};
         const auto& stmt_end{ast_.end_location_of(*stmt)};
 
@@ -1473,10 +1660,11 @@ auto formatter::visit(node_id id, const block_stmt& node) -> syntax::doc_id {
 
         if (!body.empty()) {
             body.emplace_back(doc_manager_.hard_line());
-            if (leading == doc_manager_.nil() && blank_line_between(*previous, *stmt)) {
+            if (leading == doc_manager_.nil() && blank_line_after(*previous, region_end, *stmt)) {
                 body.emplace_back(doc_manager_.hard_line());
             }
         }
+        region_end = stdx::none;
 
         auto stmt_doc{format(stmt)};
         auto trailing{consume_trailing_comment(stmt_end.line)};
