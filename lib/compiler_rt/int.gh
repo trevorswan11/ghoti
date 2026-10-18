@@ -1,0 +1,69 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+import "udivmod.gh" as udivmod_;
+
+const min_int = std.math.min_int;
+const max_int = std.math.max_int;
+const symbol = compiler_rt.symbol;
+const udivmod = udivmod_.udivmod;
+const __divti3 = udivmod_.__divti3;
+
+@cfg (compiler_rt.want_aeabi) {
+    comptime {
+        symbol(__aeabi_idiv, "__aeabi_idiv");
+    }
+
+    const __aeabi_idiv = fn(n: i32, d: i32) callconv(.aapcs): i32 {
+        return div_i32(n, d);
+    };
+}
+
+comptime {
+    symbol(__divsi3, "__divsi3");
+}
+
+pub const __divsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+    return div_i32(n, d);
+};
+
+@[testing] const test__divsi3 = fn(a: i32, b: i32, expected: i32): void {
+    let q = __divsi3(a, b);
+    @expect(q == expected);
+};
+
+test "__divsi3" {
+    const cases = [_][3]i32{
+        [_]i32{ 0, 1, 0 },
+        [_]i32{ 0, -1, 0 },
+        [_]i32{ 2, 1, 2 },
+        [_]i32{ 2, -1, -2 },
+        [_]i32{ -2, 1, -2 },
+        [_]i32{ -2, -1, 2 },
+        [_]i32{ @bitCast(0x80000000u32), 1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -2, 0x40000000 },
+        [_]i32{ @bitCast(0x80000000u32), 2, @bitCast(0xC0000000u32) },
+    };
+
+    for (cases) |case| {
+        test__divsi3(case[0], case[1], case[2]);
+    }
+}
+
+@[inline(.always)] const div_i32 = fn(n: i32, d: i32): i32 {
+    // Set aside the sign of the quotient.
+    let sign: u32 = @bitCast((n ^ d) >> 31);
+    const abs = fn(x: i32): i32 {
+        return (x ^ (x >> 31)) -% (x >> 31);
+    };
+
+    let abs_n = abs(n);
+    let abs_d = abs(d);
+
+    // abs(a) / abs(b) then apply sign
+    let res = @bitCast(u32, abs_n) / @bitCast(u32, abs_d);
+    return @bitCast((res ^ sign) -% sign);
+};
