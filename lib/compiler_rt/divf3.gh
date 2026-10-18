@@ -1,0 +1,369 @@
+//! Ported from:
+//!
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.8/compiler-rt/lib/builtins/fp_div_impl.inc
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+const normalize = compiler_rt.normalize;
+const math = std.math;
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(&__aeabi_fdiv, "__aeabi_fdiv");
+        symbol(&__aeabi_ddiv, "__aeabi_ddiv");
+    }
+    symbol(&__divsf3, "__divsf3");
+    symbol(&__divdf3, "__divdf3");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_fdiv = fn(a: f32, b: f32) callconv(.aapcs): f32 {
+        return div_f32(a, b);
+    };
+
+    const __aeabi_ddiv = fn(a: f64, b: f64) callconv(.aapcs): f64 {
+        return div_f64(a, b);
+    };
+}
+
+const __divsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return div_f32(a, b);
+};
+
+const nan_rep_f32: u32 = @bitCast(math.nan(f32));
+const inf_rep_f32: u32 = @bitCast(math.inf(f32));
+const neg_inf_rep_f32: u32 = @bitCast(-math.inf(f32));
+
+@[testing] const test__divsf3 = fn(a: f32, b: f32, expected: u32): void {
+    let x = __divsf3(a, b);
+    let rep: u32 = @bitCast(x);
+    if (rep == expected) return;
+
+    // test other possible NaN representation(signal NaN)
+    if (expected == nan_rep_f32) {
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) return;
+    }
+    @expect(false);
+};
+
+test "__divsf3" {
+    test__divsf3(1.0, 3.0, 0x3EAAAAAB);
+    test__divsf3(2.3509887e-38, 2.0, 0x00800000);
+    test__divsf3(1.0, 0x1.fffffep-1, 0x3f800001);
+
+    test__divsf3(math.nan(f32), 1.0, nan_rep_f32);
+    test__divsf3(1.0, math.nan(f32), nan_rep_f32);
+
+    test__divsf3(math.inf(f32), 1.0, inf_rep_f32);
+    test__divsf3(-math.inf(f32), 1.0, neg_inf_rep_f32);
+    test__divsf3(1.0, math.inf(f32), 0x00000000);
+    test__divsf3(1.0, -math.inf(f32), 0x80000000);
+
+    test__divsf3(math.inf(f32), math.inf(f32), nan_rep_f32);
+    test__divsf3(0.0, 0.0, nan_rep_f32);
+    test__divsf3(-0.0, 0.0, nan_rep_f32);
+
+    test__divsf3(0.0, 1.0, 0x00000000);
+    test__divsf3(-0.0, 1.0, 0x80000000);
+    test__divsf3(1.0, 0.0, inf_rep_f32);
+    test__divsf3(1.0, -0.0, neg_inf_rep_f32);
+
+    test__divsf3(0x1p-126, 0x1p23, 0x00000001);
+    test__divsf3(-0x1p-126, 0x1p23, 0x80000001);
+    test__divsf3(0x1p-126, -0x1p23, 0x80000001);
+
+    test__divsf3(1.0, 0x1p127, 0x00400000);
+    test__divsf3(-1.0, 0x1p127, 0x80400000);
+
+    // Exact ties only happen in the denormal range, and round to even.
+    test__divsf3(@bitCast(f32, 1u32), 2.0, 0x00000000);
+    test__divsf3(@bitCast(f32, 3u32), 2.0, 0x00000002);
+    test__divsf3(@bitCast(f32, 5u32), 2.0, 0x00000002);
+}
+
+@[inline(.always)] pub const div_f32 = fn(a: f32, b: f32): f32 {
+    return divf3(f32, a, b);
+};
+
+const __divdf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+    return div_f64(a, b);
+};
+
+const nan_rep_f64: u64 = @bitCast(math.nan(f64));
+const inf_rep_f64: u64 = @bitCast(math.inf(f64));
+const neg_inf_rep_f64: u64 = @bitCast(-math.inf(f64));
+
+@[testing] const test__divdf3 = fn(a: f64, b: f64, expected: u64): void {
+    let x = __divdf3(a, b);
+    let rep: u64 = @bitCast(x);
+    if (rep == expected) return;
+
+    // test other possible NaN representation(signal NaN)
+    if (expected == nan_rep_f64) {
+        if ((rep & 0x7ff0000000000000) == 0x7ff0000000000000 and
+            (rep & 0xfffffffffffff) > 0) return;
+    }
+    @expect(false);
+};
+
+test "__divdf3" {
+    test__divdf3(1.0, 3.0, 0x3fd5555555555555);
+    test__divdf3(4.450147717014403e-308, 2.0, 0x0010000000000000);
+    test__divdf3(1.0, 0x1.fffffffffffffp-1, 0x3ff0000000000001);
+
+    test__divdf3(math.nan(f64), 1.0, nan_rep_f64);
+    test__divdf3(1.0, math.nan(f64), nan_rep_f64);
+
+    test__divdf3(math.inf(f64), 1.0, inf_rep_f64);
+    test__divdf3(-math.inf(f64), 1.0, neg_inf_rep_f64);
+    test__divdf3(1.0, math.inf(f64), 0x0000000000000000);
+    test__divdf3(1.0, -math.inf(f64), 0x8000000000000000);
+
+    test__divdf3(math.inf(f64), math.inf(f64), nan_rep_f64);
+    test__divdf3(0.0, 0.0, nan_rep_f64);
+    test__divdf3(-0.0, 0.0, nan_rep_f64);
+
+    test__divdf3(0.0, 1.0, 0x0000000000000000);
+    test__divdf3(-0.0, 1.0, 0x8000000000000000);
+    test__divdf3(1.0, 0.0, inf_rep_f64);
+    test__divdf3(1.0, -0.0, neg_inf_rep_f64);
+
+    test__divdf3(0x1p-1022, 0x1p52, 0x0000000000000001);
+    test__divdf3(-0x1p-1022, 0x1p52, 0x8000000000000001);
+    test__divdf3(0x1p-1022, -0x1p52, 0x8000000000000001);
+
+    test__divdf3(1.0, 0x1p1023, 0x0008000000000000);
+    test__divdf3(-1.0, 0x1p1023, 0x8008000000000000);
+
+    // Exact ties only happen in the denormal range, and round to even.
+    test__divdf3(@bitCast(f64, 1u64), 2.0, 0x0000000000000000);
+    test__divdf3(@bitCast(f64, 3u64), 2.0, 0x0000000000000002);
+    test__divdf3(@bitCast(f64, 5u64), 2.0, 0x0000000000000002);
+}
+
+@[inline(.always)] pub const div_f64 = fn(a: f64, b: f64): f64 {
+    return divf3(f64, a, b);
+};
+
+/// Newton-Raphson division with IEEE-754 round to nearest, ties to even.
+///
+// It uses 3 iterations for float32, 4 for float64 and 5 for float128,
+// respectively. Due to number of significant bits being roughly doubled
+// every iteration, the two modes are supported: N full-width iterations (as
+// it is done for float32 by default) and (N-1) half-width iteration plus one
+// final full-width iteration. It is expected that half-width integer
+// operations (w.r.t rep_t size) can be performed faster for some hardware but
+// they require error estimations to be computed separately due to larger
+// computational errors caused by truncating intermediate results.
+@[inline(.always)] const divf3 = fn(comptime T: type, a: T, b: T): T {
+    const type_width = @typeInfo(T).float.bits;
+    const half_width = type_width / 2;
+    const Z = @Int(.{ .signedness = .unsigned, .bits = type_width });
+    const ShiftZ = math.Log2Int(Z);
+
+    const half_iterations = match comptime (type_width) {
+        32 => 0,
+        64 => 3,
+        128 => 4,
+        _ => @compileError("divf3 supports f32, f64 and f128"),
+    };
+
+    // Bound P on the reciprocal error after all iterations: |x - 1/b| < P * 2^-W.
+    // See the error estimates in the LLVM source for how these are derived.
+    const reciprocal_precision: Z = match comptime (type_width) {
+        32 => 10,
+        64 => 220,
+        128 => 13922,
+        _ => @compileError("divf3 supports f32, f64 and f128"),
+    };
+
+    const significand_bits = math.float_mantissa_bits(T);
+    const exponent_bits = math.float_exponent_bits(T);
+
+    const sign_bit = @as(Z, 1) << (significand_bits + exponent_bits);
+    const max_exponent = (1 << exponent_bits) - 1;
+    const exponent_bias = max_exponent >> 1;
+
+    const implicit_bit = @as(Z, 1) << significand_bits;
+    const quiet_bit = implicit_bit >> 1;
+    const significand_mask = implicit_bit - 1;
+
+    const abs_mask = sign_bit - 1;
+    const exponent_mask = abs_mask ^ significand_mask;
+    const qnan_rep = exponent_mask | quiet_bit;
+    const inf_rep: Z = @bitCast(math.inf(T));
+
+    let a_rep: Z = @bitCast(a);
+    let b_rep: Z = @bitCast(b);
+
+    let a_exponent: u32 = @intCast((a_rep >> significand_bits) & max_exponent);
+    let b_exponent: u32 = @intCast((b_rep >> significand_bits) & max_exponent);
+    let quotient_sign = (a_rep ^ b_rep) & sign_bit;
+
+    let mut a_significand = a_rep & significand_mask;
+    let mut b_significand = b_rep & significand_mask;
+    let mut scale: i32 = 0;
+
+    // Detect if a or b is zero, denormal, infinity, or NaN.
+    if (a_exponent -% 1 >= max_exponent - 1 or b_exponent -% 1 >= max_exponent - 1) {
+        let a_abs = a_rep & abs_mask;
+        let b_abs = b_rep & abs_mask;
+
+        // NaN / anything = qNaN
+        if (a_abs > inf_rep) return @bitCast(a_rep | quiet_bit);
+        // anything / NaN = qNaN
+        if (b_abs > inf_rep) return @bitCast(b_rep | quiet_bit);
+
+        if (a_abs == inf_rep) {
+            // infinity / infinity = NaN
+            if (b_abs == inf_rep) return @bitCast(qnan_rep);
+            // infinity / anything else = +/- infinity
+            return @bitCast(a_abs | quotient_sign);
+        }
+
+        // anything else / infinity = +/- 0
+        if (b_abs == inf_rep) return @bitCast(quotient_sign);
+
+        if (a_abs == 0) {
+            // zero / zero = NaN
+            if (b_abs == 0) return @bitCast(qnan_rep);
+            // zero / anything else = +/- zero
+            return @bitCast(quotient_sign);
+        }
+
+        // anything else / zero = +/- infinity
+        if (b_abs == 0) return @bitCast(inf_rep | quotient_sign);
+
+        // One or both of a or b is denormal, the other (if applicable) is a
+        // normal number. Renormalize one or both of a and b, and set scale to
+        // include the necessary exponent adjustment.
+        if (a_abs < implicit_bit) scale +%= normalize(T, &mut a_significand);
+        if (b_abs < implicit_bit) scale -%= normalize(T, &mut b_significand);
+    }
+
+    // Set the implicit significand bit. If we fell through from the denormal
+    // path it was already set by normalize(), but setting it twice won't hurt.
+    a_significand |= implicit_bit;
+    b_significand |= implicit_bit;
+
+    let mut written_exponent = @bitCast(i32, a_exponent -% b_exponent) +% scale +% exponent_bias;
+
+    // b as a UQ1.(W-1) fixed-point number in [1.0, 2.0).
+    let b_uq1 = b_significand << (type_width - significand_bits - 1);
+
+    // Reciprocal estimate x as UQ0.W, refined by x' = x * (2 - x * b) starting from the
+    // minimax approximation x0 = 3/4 + 1/sqrt(2) - b/2, which is accurate to about 4.5 bits.
+    let mut x_uq0: Z = undefined;
+    if comptime (half_iterations > 0) {
+        const HalfZ = @Int(.{ .signedness = .unsigned, .bits = half_width });
+        const lo_mask = math.max_int(Z) >> half_width;
+
+        // (3/4 + 1/sqrt(2)) - 1 as UQ0.HW. The b/2 subtraction wraps it back into range.
+        const c_hw = @as(HalfZ, 0x7504F333) << (half_width - 32);
+
+        // The top HW bits of b, truncated, as UQ1.(HW-1).
+        let b_uq1_hw: HalfZ = @truncate(b_significand >> (significand_bits + 1 - half_width));
+        let mut x_uq0_hw = c_hw -% b_uq1_hw;
+
+        for comptime (0..half_iterations) |_| {
+            // "0 - (...)" is equivalent to "2 - (...)" in UQ1.(HW-1).
+            let x_times_b: HalfZ = @truncate(@as(Z, x_uq0_hw) * @as(Z, b_uq1_hw) >> half_width);
+            let corr_uq1_hw = 0 -% x_times_b;
+            x_uq0_hw = @truncate(@as(Z, x_uq0_hw) * @as(Z, corr_uq1_hw) >> (half_width - 1));
+        }
+
+        // An iteration may have overflowed x by one ulp, and the divisor changes from b_hw
+        // to b from here on, so step down before widening.
+        x_uq0_hw -%= 1;
+        x_uq0 = (@as(Z, x_uq0_hw) << half_width) -% 1;
+
+        // One emulated full-width iteration. With x = x_hw * 2^HW - 1 and b = b_hw * 2^HW + b_lo,
+        // the high half of x * b is x_hw * b_hw + (x_hw * b_lo >> HW) - 1 (the -1 for a possible carry).
+        let x_hw = @as(Z, x_uq0_hw);
+        let b_lo = b_uq1 & lo_mask;
+        let corr_uq1 = 0 -% (x_hw * @as(Z, b_uq1_hw) +% (x_hw * b_lo >> half_width) -% 1);
+        let corr_lo = corr_uq1 & lo_mask;
+        let corr_hi = corr_uq1 >> half_width;
+
+        // -2: one because the top bit of corr_uq1 may be set, one for a possible carry.
+        x_uq0 = (x_hw * corr_hi << 1) +% (x_hw * corr_lo >> (half_width - 1)) -% 2;
+        x_uq0 -%= 1;
+    } else {
+        const TwiceZ = @Int(.{ .signedness = .unsigned, .bits = type_width * 2 });
+
+        // (3/4 + 1/sqrt(2)) - 1 as UQ0.W
+        const c = @as(Z, 0x7504F333) << (type_width - 32);
+        x_uq0 = c -% b_uq1;
+
+        for comptime (0..3) |_| {
+            let x_times_b: Z = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, b_uq1) >> type_width);
+            let corr_uq1 = 0 -% x_times_b;
+            x_uq0 = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, corr_uq1) >> (type_width - 1));
+        }
+    }
+
+    // Account for a possible overflow in the last iteration, then step x below 1/b:
+    // 1/b - (2 * P) * 2^-W < x < 1/b
+    x_uq0 -%= 2;
+    x_uq0 -%= reciprocal_precision;
+
+    // q = a/b in UQ1.(SB+1), at most 4 * P * 2^-W below the true quotient.
+    let mut quotient: Z = undefined;
+    let mut quotient_lo: Z = undefined;
+    compiler_rt.wide_multiply(Z, x_uq0, a_significand << 1, &mut quotient, &mut quotient_lo);
+
+    // The quotient is in [0.5, 2.0) as UQ1.(SB+1), adjust it to [1.0, 2.0) as UQ1.SB.
+    // The residual r = a - q*b is computed here for the normal result case.
+    let mut residual_lo: Z = undefined;
+    if (quotient < (implicit_bit << 1)) {
+        if (quotient < implicit_bit) {
+            // In a rare case where quotient is < 0.5, adjust it and the exponent,
+            // then treat them the same way as in [0.5, 1.0).
+            quotient <<= 1;
+            written_exponent -%= 1;
+        }
+
+        // Highest bit is 0, so reinterpret the quotient as UQ1.SB, doubling it.
+        residual_lo = (a_significand << (significand_bits + 1)) -% quotient *% b_significand;
+        written_exponent -%= 1;
+        a_significand <<= 1;
+    } else {
+        // Highest bit is 1, so drop the least significant bit to get UQ1.SB.
+        quotient >>= 1;
+        residual_lo = (a_significand << significand_bits) -% quotient *% b_significand;
+    }
+
+    // If we have overflowed the exponent, return infinity.
+    if (written_exponent >= max_exponent) return @bitCast(inf_rep | quotient_sign);
+
+    // The quotient is now at most the correctly rounded result and may need to be
+    // bumped up once (f32, f64) or up to three times (f128).
+    let mut abs_result: Z = undefined;
+    if (written_exponent > 0) {
+        abs_result = quotient & significand_mask; // Clear the implicit bit
+        abs_result |= @as(Z, @intCast(written_exponent)) << significand_bits; // Insert the exponent
+        residual_lo <<= 1;
+    } else {
+        // Prevent the shift amount from being negative.
+        if (significand_bits + written_exponent < 0) return @bitCast(quotient_sign);
+
+        abs_result = quotient >> @as(ShiftZ, @intCast(1 - written_exponent));
+
+        // Multiplied by two to keep the shift amount non-negative.
+        let a_shift: ShiftZ = @intCast(significand_bits + written_exponent);
+        residual_lo = (a_significand << a_shift) -% (abs_result *% b_significand << 1);
+    }
+
+    // Round, ties to even. Adding the low bit turns the comparison into >= for odd results.
+    residual_lo +%= abs_result & 1;
+    if (residual_lo > b_significand) abs_result += 1;
+    if comptime (type_width == 128) {
+        // Do not round infinity to NaN.
+        if (abs_result < inf_rep and residual_lo > 3 * b_significand) abs_result += 1;
+        if (abs_result < inf_rep and residual_lo > 5 * b_significand) abs_result += 1;
+    }
+
+    // Insert the sign and return
+    return @bitCast(abs_result | quotient_sign);
+};
