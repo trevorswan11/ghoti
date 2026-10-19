@@ -15,6 +15,7 @@ comptime {
     }
     symbol(__divsf3, "__divsf3");
     symbol(__divdf3, "__divdf3");
+    symbol(__divxf3, "__divxf3");
     symbol(__divtf3, "__divtf3");
 }
 
@@ -231,6 +232,109 @@ test "__divtf3" {
     return divf3(f128, a, b);
 };
 
+const __divxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compiler_rt.f80 {
+    return @bitCast(div_f80(@bitCast(a), @bitCast(b)));
+};
+
+@[testing] const test__divxf3 = fn(a: f80, b: f80, expected: u80): void {
+    let rep: u80 = @bitCast(div_f80(a, b));
+    if (rep == expected) return;
+
+    // test other possible NaN representation (signal NaN)
+    const is_nan_f80 = fn(x: u80): bool {
+        return (x & 0x7fff0000000000000000) == 0x7fff0000000000000000 and
+            (x & 0x7fffffffffffffff) > 0;
+    };
+
+    if (is_nan_f80(expected) and is_nan_f80(rep)) return;
+    @expect(false);
+};
+
+test "__divxf3" {
+    const nan_rep: u80 = @bitCast(math.nan(f80));
+    const inf_rep: u80 = @bitCast(math.inf(f80));
+
+    test__divxf3(math.nan(f80), 0x1.23456789abcdefp+5, nan_rep);
+    test__divxf3(0x1.23456789abcdefp+5, math.nan(f80), nan_rep);
+    test__divxf3(math.inf(f80), 0x1.23456789abcdefp+5, inf_rep);
+    test__divxf3(-math.inf(f80), 0x1.23456789abcdefp+5, inf_rep | 0x80000000000000000000);
+    test__divxf3(0x1.23456789abcdefp+5, math.inf(f80), 0x0);
+    test__divxf3(0x1.23456789abcdefp+5, -math.inf(f80), 0x80000000000000000000);
+    test__divxf3(math.inf(f80), math.inf(f80), nan_rep);
+    test__divxf3(0.0, 0.0, nan_rep);
+    test__divxf3(-0.0, 0.0, nan_rep);
+    test__divxf3(0.0, 1.0, 0x0);
+    test__divxf3(-0.0, 1.0, 0x80000000000000000000);
+    test__divxf3(1.0, 0.0, inf_rep);
+    test__divxf3(1.0, -0.0, inf_rep | 0x80000000000000000000);
+
+    test__divxf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.eedcbaba3a94546558237654321fp-1,
+        0x4004d85b94926a03838c,
+    );
+    test__divxf3(
+        0x1.a2b34c56d745382f9abf2c3dfeffp-50,
+        0x1.ed2c3ba15935332532287654321fp-9,
+        0x3fd5d9579fc1464da072,
+    );
+    test__divxf3(
+        0x1.2345f6aaaa786555f42432abcdefp+456,
+        0x1.edacbba9874f765463544dd3621fp+6400,
+        0x28c6970aee2322335ad0,
+    );
+    test__divxf3(
+        0x1.2d3456f789ba6322bc665544edefp-234,
+        0x1.eddcdba39f3c8b7a36564354321fp-4455,
+        0x507b9c2215a9c9331167,
+    );
+    test__divxf3(
+        0x1.2345f6b77b7a8953365433abcdefp+234,
+        0x1.edcba987d6bb3aa467754354321fp-4055,
+        0x50bf9701783cc69b2f38,
+    );
+    test__divxf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.a2b34c56d745382f9abf2c3dfeffp-50,
+        0x4035ffb69cf368dd65df,
+    );
+    test__divxf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.1234567890abcdef987654321123p0,
+        0x4004c33b88f067d2c9b0,
+    );
+    test__divxf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.12394205810257120adae8929f23p+16,
+        0x3ff4c3380834e1f20591,
+    );
+    test__divxf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.febdcefa1231245f9abf2c3dfeffp-50,
+        0x4035d1a18d474f825833,
+    );
+
+    test__divxf3(1.0, 3.0, 0x3ffdaaaaaaaaaaaaaaab);
+    test__divxf3(1.0, 0x1.fffffffffffffffep-1, 0x3fff8000000000000001);
+
+    test__divxf3(6.72420628622418701252535563464350521E-4932, 2.0, 0x00018000000000000000);
+
+    test__divxf3(0x1p-16382, 0x1p63, 0x00000000000000000001);
+    test__divxf3(1.0, 0x1p16383, 0x00004000000000000000);
+    test__divxf3(0x1p-16445, 2.0, 0x00000000000000000000);
+    test__divxf3(0x3p-16445, 2.0, 0x00000000000000000002);
+    test__divxf3(0x5p-16445, 2.0, 0x00000000000000000002);
+
+    test__divxf3(@bitCast(f80, 0x00008000000000000000u80), 1.0, 0x00018000000000000000);
+    test__divxf3(1.0, @bitCast(f80, 0x00008000000000000000u80), 0x7ffd8000000000000000);
+
+    test__divxf3(0x1.0000000000000002p16383, 0x1p-1, inf_rep);
+}
+
+@[inline(.always)] pub const div_f80 = fn(a: f80, b: f80): f80 {
+    return divf3(f80, a, b);
+};
+
 /// Newton-Raphson division with IEEE-754 round to nearest, ties to even.
 ///
 // It uses 3 iterations for float32, 4 for float64 and 5 for float128,
@@ -250,23 +354,30 @@ test "__divtf3" {
     const half_iterations = match comptime (type_width) {
         32 => 0,
         64 => 3,
+        80 => 4,
         128 => 4,
-        _ => @compileError("divf3 supports f32, f64 and f128"),
+        _ => @compileError("divf3 supports f32, f64, f80 and f128"),
     };
 
     // Bound P on the reciprocal error after all iterations: |x - 1/b| < P * 2^-W.
-    // See the error estimates in the LLVM source for how these are derived.
+    // See the error estimates in the LLVM source for how these are derived. LLVM has no f80
+    // case. Its recurrences give U_N < 55 for 4 + 1 iterations, well under the 2^(W-4-SB) = 8192
+    // that keeps a single rounding step enough.
     const reciprocal_precision: Z = match comptime (type_width) {
         32 => 10,
         64 => 220,
+        80 => 64,
         128 => 13922,
-        _ => @compileError("divf3 supports f32, f64 and f128"),
+        _ => @compileError("divf3 supports f32, f64, f80 and f128"),
     };
 
-    const significand_bits = math.float_mantissa_bits(T);
+    // The algorithm works on the fraction with an implicit bit above it. f80 stores that integer
+    // bit explicitly, so its exponent starts one bit higher than the fraction ends.
+    const significand_bits = math.float_fractional_bits(T);
+    const exponent_shift = math.float_mantissa_bits(T);
     const exponent_bits = math.float_exponent_bits(T);
 
-    const sign_bit = @as(Z, 1) << (significand_bits + exponent_bits);
+    const sign_bit = @as(Z, 1) << (exponent_shift + exponent_bits);
     const max_exponent = (1 << exponent_bits) - 1;
     const exponent_bias = max_exponent >> 1;
 
@@ -275,6 +386,7 @@ test "__divtf3" {
     const significand_mask = implicit_bit - 1;
 
     const abs_mask = sign_bit - 1;
+    // Covers f80's integer bit too, which a quiet NaN has set
     const exponent_mask = abs_mask ^ significand_mask;
     const qnan_rep = exponent_mask | quiet_bit;
     const inf_rep: Z = @bitCast(math.inf(T));
@@ -282,8 +394,8 @@ test "__divtf3" {
     let a_rep: Z = @bitCast(a);
     let b_rep: Z = @bitCast(b);
 
-    let a_exponent: u32 = @intCast((a_rep >> significand_bits) & max_exponent);
-    let b_exponent: u32 = @intCast((b_rep >> significand_bits) & max_exponent);
+    let a_exponent: u32 = @intCast((a_rep >> exponent_shift) & max_exponent);
+    let b_exponent: u32 = @intCast((b_rep >> exponent_shift) & max_exponent);
     let quotient_sign = (a_rep ^ b_rep) & sign_bit;
 
     let mut a_significand = a_rep & significand_mask;
@@ -323,8 +435,17 @@ test "__divtf3" {
         // One or both of a or b is denormal, the other (if applicable) is a
         // normal number. Renormalize one or both of a and b, and set scale to
         // include the necessary exponent adjustment.
-        if (a_abs < implicit_bit) scale +%= normalize(T, &mut a_significand);
-        if (b_abs < implicit_bit) scale -%= normalize(T, &mut b_significand);
+        if (a_abs < implicit_bit) {
+            scale +%= normalize(T, &mut a_significand);
+        } else if (a_exponent == 0) {
+            // An f80 pseudo-denormal: integer bit set with a zero exponent, valued as exponent 1
+            scale +%= 1;
+        }
+        if (b_abs < implicit_bit) {
+            scale -%= normalize(T, &mut b_significand);
+        } else if (b_exponent == 0) {
+            scale -%= 1;
+        }
     }
 
     // Set the implicit significand bit. If we fell through from the denormal
@@ -447,6 +568,14 @@ test "__divtf3" {
         // Do not round infinity to NaN.
         if (abs_result < inf_rep and residual_lo > 3 * b_significand) abs_result += 1;
         if (abs_result < inf_rep and residual_lo > 5 * b_significand) abs_result += 1;
+    }
+
+    // The result was built with the exponent right above the fraction, so a rounding carry could
+    // reach it. f80 moves the exponent up a bit and sets the integer bit for a nonzero exponent.
+    if comptime (exponent_shift != significand_bits) {
+        let exponent_field = abs_result >> significand_bits;
+        abs_result = (exponent_field << exponent_shift) | (abs_result & significand_mask);
+        if (exponent_field != 0) abs_result |= implicit_bit;
     }
 
     // Insert the sign and return
