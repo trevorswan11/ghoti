@@ -1183,7 +1183,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
         if (function_type->return_type.get_kind() == type_kind::TYPE && !returns_deferred_array &&
             !any_param_generic(function_type->params)) {
             auto& deferred_type{*ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}]};
-            deferred_type.resolve_if<types::deferred_call>(call);
+            deferred_type.resolve_if<types::deferred_call>(call, resolving_);
 
             resolving_.set_sema_type(id, deferred_type);
             return last_type_.emplace(deferred_type);

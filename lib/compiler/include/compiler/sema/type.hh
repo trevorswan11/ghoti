@@ -445,6 +445,7 @@ struct meta_type {
 
 struct deferred_call {
     const ast::call_expr& call;
+    mod::module_t&        enclosing; // owns `call`'s nodes
 };
 
 struct deferred_array {

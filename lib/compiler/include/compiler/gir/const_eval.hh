@@ -295,9 +295,9 @@ class const_eval {
     // Deep-forces array placeholders reachable by value; `none` if any stays deferred
     [[nodiscard]] auto force_deferred_layout(sema::type& type) -> stdx::option<sema::type&>;
     [[nodiscard]] auto rebuild_array(sema::type& array_type, sema::type& underlying) -> sema::type&;
-    auto               resolve_deferred_call(const ast::call_expr& call) -> sema::type&;
+    auto resolve_deferred_call(const sema::types::deferred_call& deferred) -> sema::type&;
     // As above but yields `none` instead of a diagnostic when the call cannot be evaluated yet.
-    [[nodiscard]] auto try_resolve_deferred_call(const ast::call_expr& call)
+    [[nodiscard]] auto try_resolve_deferred_call(const sema::types::deferred_call& deferred)
         -> stdx::option<sema::type&>;
 
     // Whether `id`'s value is a reference or slice, which a branch hands on without reading
