@@ -779,6 +779,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     inst_resolver.deprecated_scope_depth_ =
         deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
     inst_resolver.instantiating_testing_fn_ = declares_testing_fn(fn_mod, fn_info.node_id);
+    inst_resolver.instantiating_fn_.emplace(fn_expr);
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;

@@ -47,25 +47,6 @@ using namespace resolver_detail;
 
 namespace {
 
-// Why an unmarked parameter is `comptime`: its function reads it at compile time somewhere
-[[nodiscard]] auto inferred_comptime_reason(const mod::module_t&                 owner,
-                                            const ast::function_expr::parameter& param)
-    -> std::string {
-    if (!param.comptime_read) {
-        return "; the parameter is compile-time because this function reads it in a "
-               "compile-time position";
-    }
-    const auto name{owner.ast.get_as<ast::identifier_expr>(*param.name).name};
-    return fmt::format("; '{}' is compile-time because the function reads it at compile time at "
-                       "{}:{}{}",
-                       name,
-                       owner.path.string(),
-                       owner.ast.location_of(*param.comptime_read),
-                       param.comptime_read_in_const
-                           ? ", in a `const` initializer (use `let` to read it at runtime)"
-                           : "");
-}
-
 // Whether an annotation is `auto` under pointer, reference, slice, and array levels (`&[]auto`)
 [[nodiscard]] auto spells_auto_pattern(const ast::AST& tree, stdx::option<ast::explicit_type_id> t)
     -> bool {

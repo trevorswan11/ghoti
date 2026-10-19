@@ -193,8 +193,20 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
             error::TYPE_MISMATCH,
             resolving_.ast.location_of(assign.lhs)));
     }
-    // A `comptime let mut` type takes any other type
     if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(assign.lhs)}) {
+        // A parameter only becomes `comptime` by a read elsewhere, which the store has to name
+        if (const auto param{inferred_comptime_param(ident->name)}) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("Cannot assign to '{}', which is a `comptime` parameter{}",
+                            ident->name,
+                            inferred_comptime_reason(resolving_, *param)),
+                error::ASSIGNMENT_TO_CONST,
+                resolving_.ast.location_of(assign.lhs)));
+        }
+
+        // A `comptime let mut` type takes any other type
         const auto sym{ctx_.registry.lookup(table_stack_, ident->name)};
         if (sym && comptime_type_var_value(*sym)) {
             TRY_RESOLVE(assign.rhs);
@@ -254,6 +266,24 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
 
     // Only pass 3 can verify assignment allowance due to mutability semantics
     resolving_.set_sema_type(id, *last_type_);
+}
+
+auto type_resolver::inferred_comptime_param(std::string_view name) const
+    -> stdx::option<const ast::function_expr::parameter&> {
+    auto fn{instantiating_fn_};
+    if (!open_function_nodes_.empty()) {
+        const auto open{resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
+        fn = open;
+    }
+    if (!fn) { return stdx::none; }
+    for (const auto& param : fn->parameters) {
+        if (!param.is_comptime || param.is_comptime_written ||
+            !param.name.is<ast::identifier_expr>()) {
+            continue;
+        }
+        if (resolving_.ast.get_as<ast::identifier_expr>(param.name).name == name) { return param; }
+    }
+    return stdx::none;
 }
 
 auto type_resolver::resolve_slice_copy(ast::node_id                id,

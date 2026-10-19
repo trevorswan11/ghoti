@@ -54,6 +54,31 @@ namespace {
     return stdx::none;
 }
 
+// An expression whose value never needs binding: an assignment's value already landed, an
+// unused `if`/`match` has its arms checked one by one instead, and a type or function literal
+// has no runtime value to drop
+[[nodiscard]] auto is_statement_form(const ast::AST& tree, ast::expr_handle expr) -> bool {
+    if (const auto cx{tree.get_as_opt<ast::comptime_expr>(expr)}) {
+        return is_statement_form(tree, cx->rhs);
+    }
+    switch (ast::node_id{expr}.get_kind()) {
+    case ast::node_kind::ASSIGNMENT_EXPRESSION:
+    case ast::node_kind::IF_EXPRESSION:
+    case ast::node_kind::MATCH_EXPRESSION:
+    case ast::node_kind::WHILE_LOOP_EXPRESSION:
+    case ast::node_kind::DO_WHILE_LOOP_EXPRESSION:
+    case ast::node_kind::FOR_LOOP_EXPRESSION:
+    case ast::node_kind::INFINITE_LOOP_EXPRESSION:
+    case ast::node_kind::LABEL_EXPRESSION:
+    case ast::node_kind::FUNCTION_EXPRESSION:
+    case ast::node_kind::STRUCT_EXPRESSION:
+    case ast::node_kind::UNION_EXPRESSION:
+    case ast::node_kind::ENUM_EXPRESSION:
+    case ast::node_kind::INTERFACE_EXPRESSION:     return true;
+    default:                                       return false;
+    }
+}
+
 } // namespace
 
 auto type_resolver::fold_attribute_bool(const ast::attribute& item) -> stdx::option<bool> {
@@ -896,10 +921,9 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
     default:                  break;
     }
 
-    // Only a call whose result is thrown away is flagged. A bare `a + b;` is left alone for now.
+    if (is_statement_form(resolving_.ast, stmt.expression)) { return; }
+
     const auto call{resolving_.ast.get_as_opt<ast::call_expr>(*stmt.expression)};
-    const auto unwrap{resolving_.ast.get_as_opt<ast::unwrap_expr>(*stmt.expression)};
-    if (!call && !unwrap) { return; }
     if (call) {
         // `@builtin(...)` calls (`@expect`, `@memcpy`, …) are their own category, not covered.
         if (const auto fn_ty{resolving_.get_sema_type_opt(call->function)};
@@ -907,13 +931,18 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
             return;
         }
         if (callee_is_discardable(*stmt.expression, *call)) { return; }
+        ctx_.diags.emplace_back(
+            "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
+            "'@[discardable]'",
+            error::UNUSED_RESULT,
+            resolving_.ast.location_of(stmt_id));
+        return;
     }
 
-    ctx_.diags.emplace_back(
-        "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
-        "'@[discardable]'",
-        error::UNUSED_RESULT,
-        resolving_.ast.location_of(stmt_id));
+    ctx_.diags.emplace_back("result of this expression is unused; bind it, or `_ =` it to "
+                            "discard it on purpose",
+                            error::UNUSED_RESULT,
+                            resolving_.ast.location_of(stmt_id));
 }
 
 } // namespace ghoti::sema

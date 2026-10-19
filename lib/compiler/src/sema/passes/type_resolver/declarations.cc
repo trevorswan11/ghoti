@@ -1390,16 +1390,14 @@ auto type_resolver::visit(ast::node_id id, const ast::discard_stmt& discard) -> 
 
 auto type_resolver::visit(ast::node_id id, const ast::expr_stmt& expr) -> void {
     PROFILE_FUNCTION();
-    // An `if`/`match` branch statement yields the branch's value. Its call result is not
-    // discarded, so skip the unused-result check while resolving one.
-    const bool is_branch_value{in_expr_branch_};
-    if (!is_branch_value || arm_of_unused_) {
-        unused_value_nodes_.insert(ast::node_id{expr.expression}.get_index());
-    }
+    // An `if`/`match` branch statement yields the branch's value, which is only discarded when
+    // the `if`/`match` itself is
+    const bool is_unused{!in_expr_branch_ || arm_of_unused_};
+    if (is_unused) { unused_value_nodes_.insert(ast::node_id{expr.expression}.get_index()); }
     const mutating_context_guard operand_g{arm_of_unused_, false};
     TRY_RESOLVE(expr.expression);
     resolving_.set_sema_type(expr.expression, *last_type_.take());
-    if (!is_branch_value) { check_unused_result(id, expr); }
+    if (is_unused) { check_unused_result(id, expr); }
     last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::VOID_));
 }
 

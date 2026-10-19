@@ -209,7 +209,9 @@ struct function_expr {
         // Where the body reads an inferred `comptime` param at compile time
         stdx::option<ast::node_id> comptime_read{};
         bool                       comptime_read_in_const{false};
-        stdx::option<expr_handle>  default_value{};
+        // The body assigns to the parameter or takes its address
+        bool                      is_written{false};
+        stdx::option<expr_handle> default_value{};
 
         // Whether the parameter is annotated `type`, as in `comptime T: type`
         [[nodiscard]] constexpr auto spells_type() const noexcept -> bool {
