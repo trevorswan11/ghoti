@@ -2,14 +2,15 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <functional>
 #include <mutex>
 #include <ostream>
 #include <stop_token>
 #include <thread>
 
+#include <stdx/function.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/module/parse_cache.hh"
 #include "driver/cmd/lsp/snapshot.hh"
@@ -22,12 +23,12 @@ namespace ghoti::lsp {
 class analysis_worker {
   public:
     // Called on the worker thread with each analysis that ran to completion
-    using finished_callback = std::function<void(stdx::box<analysis_snapshot>)>;
+    using finished_callback = stdx::function<void(stdx::box<analysis_snapshot>)>;
 
   public:
     analysis_worker(std::ostream& error_stream, finished_callback on_finished);
     ~analysis_worker();
-    MAKE_PINNED(analysis_worker)
+    MAKE_PINNED(analysis_worker);
 
     // Analyzes `inputs` next, abandoning whatever older analysis is underway or waiting
     auto schedule(analysis_inputs inputs) -> void;
@@ -47,8 +48,7 @@ class analysis_worker {
     std::condition_variable_any   wake_;
     stdx::option<analysis_inputs> next_;
     std::atomic<bool>             cancel_{false};
-    // Last, so the thread stops before anything it uses is destroyed
-    std::jthread thread_;
+    std::jthread thread_; // Last, so the thread stops before anything it uses is destroyed
 };
 
 } // namespace ghoti::lsp

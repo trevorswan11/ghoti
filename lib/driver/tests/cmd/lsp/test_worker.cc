@@ -1,10 +1,13 @@
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/memory.hh>
+#include <stdx/types.hh>
 
 #include "compiler/module/overlay_loader.hh"
 #include "compiler/module/parse_cache.hh"
@@ -39,7 +42,7 @@ TEST_CASE("A snapshot cancelled before it is built is never produced") {
     mod::parse_cache        cache;
     const std::atomic<bool> cancelled{true};
     CHECK_FALSE(lsp::analysis_snapshot::build(
-        inputs_for(dir, 1, "pub const x = 1;\n"), cache, std::cerr, &cancelled));
+        inputs_for(dir, 1, "pub const x = 1;\n"), cache, std::cerr, cancelled));
 }
 
 TEST_CASE("A snapshot answers from the text of its own revision") {

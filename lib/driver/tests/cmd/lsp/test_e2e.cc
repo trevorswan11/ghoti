@@ -1763,7 +1763,12 @@ auto start_server(std::string_view debounce_ms) -> stdx::box<piped_process> {
                            {"jsonrpc", "2.0"},
                            {"id", 1},
                            {"method", "initialize"},
-                           {"params", {{"capabilities", nlohmann::json::object()}}},
+                           {
+                               "params",
+                               {
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
                        });
     CHECK(lsp::read_message(proc->stdout_stream(), std::cerr));
     lsp::write_message(proc->stdin_stream(),
@@ -1776,17 +1781,25 @@ auto start_server(std::string_view debounce_ms) -> stdx::box<piped_process> {
 }
 
 auto open_document(piped_process& proc, std::string_view uri, std::string_view text) -> void {
-    lsp::write_message(
-        proc.stdin_stream(),
-        {
-            {"jsonrpc", "2.0"},
-            {"method", "textDocument/didOpen"},
-            {
-                "params",
-                {{"textDocument",
-                  {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}},
-            },
-        });
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
 }
 
 // `start_server` with `uri` opened as `text`, its first diagnostics already read
@@ -1809,8 +1822,19 @@ auto request_hover(piped_process& proc, i32 id, std::string_view uri, i32 line, 
                            {
                                "params",
                                {
-                                   {"textDocument", {{"uri", uri}}},
-                                   {"position", {{"line", line}, {"character", character}}},
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                       },
+                                   },
+                                   {
+                                       "position",
+                                       {
+                                           {"line", line},
+                                           {"character", character},
+                                       },
+                                   },
                                },
                            },
                        });
@@ -1825,8 +1849,21 @@ auto replace_all(piped_process& proc, std::string_view uri, i32 version, std::st
                            {
                                "params",
                                {
-                                   {"textDocument", {{"uri", uri}, {"version", version}}},
-                                   {"contentChanges", {{{"text", text}}}},
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"version", version},
+                                       },
+                                   },
+                                   {
+                                       "contentChanges",
+                                       {
+                                           {
+                                               {"text", text},
+                                           },
+                                       },
+                                   },
                                },
                            },
                        });

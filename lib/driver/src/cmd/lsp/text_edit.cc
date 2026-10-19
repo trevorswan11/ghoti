@@ -28,7 +28,7 @@ auto offset_of(std::string_view text, source_location pos) -> usize {
 
 namespace {
 
-// Compiler locations count bytes, like UTF-8; clients count UTF-16 units unless told otherwise
+// Compiler locations count bytes, like UTF-8; clients count UTF-16 units unless told otherwise.
 // Atomic since the analysis worker converts diagnostics while `initialize` may still be setting it
 std::atomic<position_encoding> negotiated_encoding{position_encoding::UTF16};
 

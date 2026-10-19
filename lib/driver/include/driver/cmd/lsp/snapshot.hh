@@ -42,10 +42,10 @@ class analysis_snapshot {
   public:
     // Analyzes every root in `inputs`, borrowing unchanged files from `cache`.
     // None once `cancel` is set, since the analysis then stopped partway
-    [[nodiscard]] static auto build(analysis_inputs          inputs,
-                                    mod::parse_cache&        cache,
-                                    std::ostream&            error_stream,
-                                    const std::atomic<bool>* cancel = nullptr)
+    [[nodiscard]] static auto build(analysis_inputs                        inputs,
+                                    mod::parse_cache&                      cache,
+                                    std::ostream&                          error_stream,
+                                    stdx::option<const std::atomic<bool>&> cancel = stdx::none)
         -> stdx::option<stdx::box<analysis_snapshot>>;
 
     analysis_snapshot(u64                 revision,
@@ -53,7 +53,7 @@ class analysis_snapshot {
                       std::ostream&       error_stream,
                       mod::parse_cache&   cache) noexcept;
     ~analysis_snapshot() = default;
-    MAKE_PINNED(analysis_snapshot)
+    MAKE_PINNED(analysis_snapshot);
 
     [[nodiscard]] auto revision() const noexcept -> u64 { return revision_; }
 

@@ -4,13 +4,11 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
-#include <functional>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
@@ -18,6 +16,8 @@
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 #include <nlohmann/json.hpp>
+#include <stdx/function.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -25,6 +25,7 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/declaration.hh"
@@ -40,6 +41,7 @@
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "driver/cmd/lsp/snapshot.hh"
 #include "driver/cmd/lsp/text_edit.hh"
 #include "driver/cmd/lsp/worker.hh"
 #include "driver/cmd/lsp/workspace_scan.hh"
@@ -239,7 +241,7 @@ auto cancelled_request_ids(const std::vector<lsp::server_event>& batch)
     -> std::vector<nlohmann::json> {
     std::vector<nlohmann::json> ids;
     for (const auto& event : batch) {
-        const auto* message{std::get_if<lsp::inbound_message>(&event)};
+        const auto message{event.as_opt<lsp::inbound_message>()};
         if (!message || !*message || !(*message)->is_object() ||
             (*message)->value("method", nlohmann::json{}) != "$/cancelRequest") {
             continue;
@@ -304,12 +306,12 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
 auto lsp_server::handle_batch(std::vector<lsp::server_event> batch, state& server) -> bool {
     const auto cancelled_ids{cancelled_request_ids(batch)};
     for (auto& event : batch) {
-        if (auto* snapshot{std::get_if<stdx::box<lsp::analysis_snapshot>>(&event)}) {
+        if (auto snapshot{event.as_opt<stdx::box<lsp::analysis_snapshot>>()}) {
             handle_finished_analysis(std::move(*snapshot), server);
             continue;
         }
 
-        auto& message{std::get<lsp::inbound_message>(event)};
+        auto& message{event.as<lsp::inbound_message>()};
         if (!message) {
             // A body that isn't JSON leaves the stream framed, so the client can keep going
             if (message.error() != lsp::read_failure::INVALID_JSON) { return false; }
@@ -330,7 +332,7 @@ auto lsp_server::handle_batch(std::vector<lsp::server_event> batch, state& serve
     return true;
 }
 
-auto lsp_server::guarded(const nlohmann::json& message, const std::function<void()>& handler)
+auto lsp_server::guarded(const nlohmann::json& message, const stdx::function<void()>& handler)
     -> void {
     try {
         handler();

@@ -84,7 +84,7 @@ class analyzer {
 
     // Stops at the next declaration once `flag` is set, leaving the analysis incomplete
     auto set_cancellation(const std::atomic<bool>& flag) noexcept -> void {
-        ctx_.cancellation = &flag;
+        ctx_.cancellation.emplace(flag);
     }
     auto set_runtime_safety(bool enabled) noexcept -> void { ctx_.runtime_safety = enabled; }
     auto set_deprecation_policy(deprecation_policy policy) noexcept -> void {

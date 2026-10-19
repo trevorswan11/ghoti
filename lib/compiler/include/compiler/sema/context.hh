@@ -193,7 +193,7 @@ struct context {
     param_bound_map& param_bounds;
 
     // Set by another thread once nobody wants this analysis anymore
-    const std::atomic<bool>* cancellation{nullptr};
+    stdx::option<const std::atomic<bool>&> cancellation{};
 
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
 

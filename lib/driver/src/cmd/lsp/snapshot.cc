@@ -13,6 +13,7 @@
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/types.hh>
 
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
@@ -33,10 +34,10 @@ analysis_snapshot::analysis_snapshot(u64                 revision,
     : revision_{revision}, files_{std::move(files)},
       session_{stdx::make_box<analysis_session>(files_, error_stream, cache)} {}
 
-auto analysis_snapshot::build(analysis_inputs          inputs,
-                              mod::parse_cache&        cache,
-                              std::ostream&            error_stream,
-                              const std::atomic<bool>* cancel)
+auto analysis_snapshot::build(analysis_inputs                        inputs,
+                              mod::parse_cache&                      cache,
+                              std::ostream&                          error_stream,
+                              stdx::option<const std::atomic<bool>&> cancel)
     -> stdx::option<stdx::box<analysis_snapshot>> {
     PROFILE_FUNCTION();
     const auto cancelled{[cancel] { return cancel && cancel->load(std::memory_order_relaxed); }};

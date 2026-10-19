@@ -2,12 +2,11 @@
 
 #include <chrono>
 #include <filesystem>
-#include <functional>
 #include <iostream>
 #include <ostream>
+#include <stdx/function.hh>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -15,6 +14,7 @@
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/variant.hh>
 
 #include "driver/clap/error.hh"
 #include "driver/cmd/command.hh"
@@ -26,7 +26,7 @@
 namespace ghoti::lsp {
 
 // What the server loop waits on: a message from the client, or an analysis the worker finished
-using server_event = std::variant<inbound_message, stdx::box<analysis_snapshot>>;
+using server_event = stdx::variant<inbound_message, stdx::box<analysis_snapshot>>;
 
 } // namespace ghoti::lsp
 
@@ -70,12 +70,13 @@ class lsp_server final : public command {
         u64            revision;
     };
 
+  private:
     // Handles events in order, answering requests the client cancelled within the same batch
-    // without running them; returns false once `exit` has been handled
+    // without running them. Returns false once `exit` has been handled
     auto handle_batch(std::vector<lsp::server_event> batch, state& server) -> bool;
 
     // Runs `handler`, answering `message` with an internal error if it throws
-    auto guarded(const nlohmann::json& message, const std::function<void()>& handler) -> void;
+    auto guarded(const nlohmann::json& message, const stdx::function<void()>& handler) -> void;
 
     // Dispatches one already-parsed message; returns false once `exit` has been handled
     auto handle_message(const nlohmann::json& message, state& server) -> bool;

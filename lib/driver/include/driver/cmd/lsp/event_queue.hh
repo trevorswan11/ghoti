@@ -38,6 +38,7 @@ template <typename T> class event_queue {
         return take_front();
     }
 
+    // Does not wait for an event, instead returning an empty payload
     [[nodiscard]] auto try_pop() -> stdx::option<T> {
         const std::scoped_lock lock{mutex_};
         if (events_.empty()) { return stdx::none; }

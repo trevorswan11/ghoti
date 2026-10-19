@@ -71,8 +71,6 @@ class document_store {
     // Diagnostics from installed analyses that haven't been published yet
     [[nodiscard]] auto take_pending_diagnostics() -> touched_modules;
 
-    // Synchronous helpers, which analyze on the calling thread
-
     // Analyzes the current revision now if the installed analysis predates it
     auto rebuild_if_dirty() -> void;
 

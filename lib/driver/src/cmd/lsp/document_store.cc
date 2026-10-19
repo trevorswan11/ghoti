@@ -116,7 +116,7 @@ auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) 
 
 auto document_store::analyze(const std::filesystem::path& path)
     -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
-    if (auto module{current().module_of(path)}) { return &*module; }
+    if (auto module{current().module_of(path)}) { return module.get(); }
     return mod::make_mod_err(mod::error::PATH_DOES_NOT_EXIST);
 }
 
