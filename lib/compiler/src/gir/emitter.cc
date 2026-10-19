@@ -105,8 +105,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
             },
             [&](const ast::block_stmt& block) {
                 if (block.is_comptime) {
+                    const auto diags_before{ctx_.diags.size()};
                     const auto cv{const_eval_.try_eval(id)};
-                    if (!cv) {
+                    if (!cv && ctx_.diags.size() == diags_before) {
                         ctx_.diags.emplace_back(
                             "Comptime block could not be evaluated at compile time",
                             sema::error::COMPTIME_EVALUATION_FAILED,
@@ -118,8 +119,9 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
                 const auto expr_id{expr_st.expression};
                 if (const auto lbl{module.ast.get_as_opt<ast::label_expr>(expr_id)}) {
                     if (lbl->is_comptime(module.ast)) {
+                        const auto diags_before{ctx_.diags.size()};
                         const auto cv{const_eval_.try_eval(expr_id)};
-                        if (!cv) {
+                        if (!cv && ctx_.diags.size() == diags_before) {
                             ctx_.diags.emplace_back(
                                 "Comptime block could not be evaluated at compile time",
                                 sema::error::COMPTIME_EVALUATION_FAILED,
@@ -2082,11 +2084,11 @@ auto emitter::emit_stmt(const ast::stmt_handle& stmt) -> void {
         [&](const auto&) { UNREACHABLE("Unhandled statement node variant in emit_stmt"); },
         [&](const ast::block_stmt& block) {
             if (block.is_comptime) {
+                const auto diags_before{ctx_.diags.size()};
                 const auto cv{const_eval_.try_eval(stmt_id)};
+                if (emit_comptime_skip(stmt_id)) { return; }
                 if (!cv) {
-                    ctx_.diags.emplace_back("Comptime block could not be evaluated at compile time",
-                                            sema::error::COMPTIME_EVALUATION_FAILED,
-                                            active_ast().location_of(stmt_id));
+                    report_comptime_failure(diags_before, "Comptime block", stmt_id);
                     return;
                 }
                 DISCARD(emit_comptime_return(*cv, stmt_id));
@@ -2141,6 +2143,45 @@ auto emitter::instantiation_result(std::string_view mangled_name) -> stdx::optio
     return stdx::none;
 }
 
+auto emitter::emit_skip(value msg, ast::node_id at) -> void {
+    const auto loc{active_ast().location_of(at)};
+    auto&      u32_type{ctx_.get_int(32, false)};
+    auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+
+    std::vector<value> args;
+    args.emplace_back(std::move(msg));
+    args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
+    args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+
+    request_builtin_runtime("skip_handler");
+    builder_.set_location(loc);
+    builder_.emit_builtin_call("@skip", std::move(args), void_type);
+    // A skipped test simply passes: return `true` and stop emitting this path
+    if (const auto current{builder_.get_function()};
+        !current || !current->get_attributes().testing) {
+        builder_.emit_return(value{true, bool_type});
+    }
+}
+
+// A compile-time evaluation that ran `@skip` skips the test where it was evaluated
+auto emitter::emit_comptime_skip(ast::node_id at) -> bool {
+    const auto& msg{const_eval_.last_eval_skipped()};
+    if (!msg) { return false; }
+    emit_skip(const_value::make_string(ctx_, *msg).to_gir_value(), at);
+    return true;
+}
+
+// A failed compile-time evaluation that hasn't said why yet reports that it couldn't fold
+auto emitter::report_comptime_failure(usize diags_before, std::string_view what, ast::node_id at)
+    -> void {
+    if (ctx_.diags.size() != diags_before) { return; }
+    ctx_.diags.emplace_back(fmt::format("{} could not be evaluated at compile time", what),
+                            sema::error::COMPTIME_EVALUATION_FAILED,
+                            active_ast().location_of(at));
+}
+
 // A `comptime` block that ran a `return` returns its value from the enclosing function
 auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at) -> bool {
     if (!const_eval_.last_eval_returned()) { return false; }
@@ -2169,11 +2210,12 @@ auto emitter::emit_stmt_as_value(const ast::stmt_handle& stmt) -> value {
         },
         [&](const ast::block_stmt& block) -> value {
             if (block.is_comptime) {
+                const auto diags_before{ctx_.diags.size()};
                 const auto cv{const_eval_.try_eval(*stmt)};
-                if (!cv) {
-                    ctx_.diags.emplace_back("Comptime block could not be evaluated at compile time",
-                                            sema::error::COMPTIME_EVALUATION_FAILED,
-                                            active_ast().location_of(*stmt));
+                if (emit_comptime_skip(*stmt)) {
+                    // The test already returned
+                } else if (!cv) {
+                    report_comptime_failure(diags_before, "Comptime block", *stmt);
                 } else {
                     DISCARD(emit_comptime_return(*cv, *stmt));
                 }
@@ -4429,28 +4471,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     msg_val.emplace(emit_expression(*expr_h));
                 }
             }
-
-            const auto loc{active_ast().location_of(id)};
-            auto&      u32_type{ctx_.get_int(32, false)};
-            auto&      void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
-            auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-
-            std::vector<value> args;
-            args.emplace_back(msg_val ? std::move(*msg_val)
-                                      : const_value::make_string(ctx_, "").to_gir_value());
-            args.emplace_back(
-                const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-            args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-            args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
-
-            request_builtin_runtime("skip_handler");
-            builder_.emit_builtin_call("@skip", std::move(args), void_type);
-            // A skipped test simply passes: return `true` and stop emitting this path. A
-            // `@[testing]` helper's return is left to lowering, which unwinds to the test.
-            if (const auto current{builder_.get_function()};
-                !current || !current->get_attributes().testing) {
-                builder_.emit_return(value{true, bool_type});
-            }
+            emit_skip(msg_val ? std::move(*msg_val)
+                              : const_value::make_string(ctx_, "").to_gir_value(),
+                      id);
             return value{void_val{}, ret_type};
         }
         case syntax::builtin_t::CLZ:
@@ -6172,11 +6195,11 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
     const bool yields_value{yields_runtime_value(sema_type)};
 
     if (label.is_comptime(active_ast())) {
+        const auto diags_before{ctx_.diags.size()};
         const auto cv{const_eval_.try_eval(id)};
+        if (emit_comptime_skip(id)) { return value{undefined_val{}, sema_type}; }
         if (!cv) {
-            ctx_.diags.emplace_back("Comptime block could not be evaluated at compile time",
-                                    sema::error::COMPTIME_EVALUATION_FAILED,
-                                    active_ast().location_of(id));
+            report_comptime_failure(diags_before, "Comptime block", id);
             return value{void_val{}, sema_type};
         }
         if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
@@ -8715,13 +8738,9 @@ auto emitter::emit_comptime(ast::node_id id, const ast::comptime_expr& cx) -> va
     const sema::comptime_evaluation_scope         cx_scope{ctx_, true};
     const auto                                    diags_before{ctx_.diags.size()};
     const auto                                    cv{const_eval_.try_eval(*cx.rhs)};
+    if (emit_comptime_skip(id)) { return value{undefined_val{}, sema_type}; }
     if (!cv) {
-        if (ctx_.diags.size() == diags_before) {
-            ctx_.diags.emplace_back(
-                "The operand of 'comptime' could not be evaluated at compile time",
-                sema::error::COMPTIME_EVALUATION_FAILED,
-                active_ast().location_of(*cx.rhs));
-        }
+        report_comptime_failure(diags_before, "The operand of 'comptime'", *cx.rhs);
         return value{undefined_val{}, sema_type};
     }
     if (!yields_runtime_value(sema_type)) { return value{void_val{}, sema_type}; }

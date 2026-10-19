@@ -480,6 +480,14 @@ constexpr auto COMPTIME_INT_RANGE_EXCEEDED{[] {
     }
 }
 
+// A test condition is a `bool` or a pointer checked against null, as `if (ptr)` does
+[[nodiscard]] auto test_condition_holds(const const_value& cond) -> stdx::option<bool> {
+    if (const auto b{cond.as_opt<bool>()}) { return *b; }
+    if (cond.is<nullptr_val>()) { return false; }
+    if (cond.is<const_addr>()) { return true; }
+    return stdx::none;
+}
+
 // Neither operand pins a concrete width, so the result is an exact `comptime_int`
 [[nodiscard]] auto is_comptime_int_result(stdx::option<sema::type&> res_type) noexcept -> bool {
     return !res_type || res_type->get_kind() == sema::type_kind::COMPTIME_INT;
@@ -635,6 +643,7 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
         current_signal_ = eval_signal{};
         cond_unknown_   = false;
         last_returned_  = false;
+        last_skipped_.reset();
         if (auto cached{memo_cache_.find(key)}; cached != memo_cache_.end()) {
             return cached->second;
         }
@@ -657,7 +666,11 @@ auto const_eval::try_eval(ast::node_id id) -> stdx::option<const_value> {
         }
         // A return is a jump the caller has to act on, so it isn't served from the memo
         last_returned_ = current_signal_.kind == eval_signal_kind::RETURN;
-        if (res && !last_returned_) { memo_cache_.emplace(key, *res); }
+        if (current_signal_.kind == eval_signal_kind::SKIP) {
+            const auto& msg{current_signal_.value};
+            last_skipped_.emplace(msg && msg->is<std::string>() ? msg->as<std::string>() : "");
+        }
+        if (res && !last_returned_ && !last_skipped_) { memo_cache_.emplace(key, *res); }
         call_stack_.pop_back();
         current_signal_ = eval_signal{};
         cond_unknown_   = false;
@@ -4617,6 +4630,18 @@ auto const_eval::call_local_annotation(ast::node_id use, const ast::identifier_e
     return **bound;
 }
 
+// The compile-time string a builtin takes as its optional argument `idx`, like `@assert`'s message
+auto const_eval::optional_string_arg(const ast::call_expr& call, usize idx)
+    -> stdx::option<std::string> {
+    if (call.arguments.size() <= idx) { return stdx::none; }
+    const auto expr_h{call.arguments[idx].as_opt<ast::expr_handle>()};
+    if (!expr_h) { return stdx::none; }
+    const auto val{try_eval(*expr_h)};
+    if (!val) { return stdx::none; }
+    if (const auto s{val->as_opt<std::string>()}) { return *s; }
+    return stdx::none;
+}
+
 auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                               const ast::call_expr&      call,
                               syntax::builtin_t builtin_type) -> stdx::option<const_value> {
@@ -5341,19 +5366,50 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         const auto arg{try_eval(*expr_h)};
         if (!arg || !arg->is<bool>()) { return stdx::none; }
         if (!arg->as<bool>()) {
-            std::string msg{"Compile-time assertion failed"};
-            if (call.arguments.size() > 1) {
-                if (const auto msg_h{call.arguments[1].as_opt<ast::expr_handle>()}) {
-                    if (const auto m_val{try_eval(*msg_h)}) {
-                        if (const auto s{m_val->as_opt<std::string>()}) { msg = *s; }
-                    }
-                }
-            }
+            auto msg{optional_string_arg(call, 1).value_or("Compile-time assertion failed")};
             ctx_.diags.emplace_back(std::move(msg),
                                     sema::error::COMPTIME_EVALUATION_FAILED,
                                     module_->ast.location_of(id));
             return stdx::none;
         }
+        return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    }
+    case syntax::builtin_t::EXPECT:
+    case syntax::builtin_t::REQUIRE: {
+        // Runtime tests record a failure and keep going, so only an explicit compile-time
+        // context folds these
+        if (!in_evaluation_context()) { return stdx::none; }
+        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
+        const bool is_expect{builtin_type == syntax::builtin_t::EXPECT};
+        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
+        if (!expr_h) { return stdx::none; }
+        const auto arg{try_eval(*expr_h)};
+        if (!arg) { return stdx::none; }
+        const auto passed{test_condition_holds(*arg)};
+        if (!passed) { return stdx::none; }
+
+        auto& result_type{ctx_.get_builtin_resolved_type(is_expect ? sema::type_kind::BOOL
+                                                                   : sema::type_kind::VOID_)};
+        if (!*passed) {
+            auto msg{optional_string_arg(call, 1).value_or(
+                is_expect ? "Compile-time expectation failed" : "Compile-time requirement failed")};
+            ctx_.diags.emplace_back(
+                std::move(msg), sema::error::STATIC_ASSERTION_FAILED, module_->ast.location_of(id));
+            // A failed `@require` stops the evaluation, while `@expect` lets later checks report
+            if (!is_expect) { return stdx::none; }
+            return const_value{false, result_type};
+        }
+        if (is_expect) { return const_value{true, result_type}; }
+        return const_value{void_val{}, result_type};
+    }
+    case syntax::builtin_t::SKIP: {
+        if (!in_evaluation_context()) { return stdx::none; }
+        // Unwinds like a `return` that no call consumes, the emitter then skips the test there
+        current_signal_ = eval_signal{
+            .kind         = eval_signal_kind::SKIP,
+            .target_label = stdx::none,
+            .value = const_value::make_string(ctx_, optional_string_arg(call, 0).value_or("")),
+        };
         return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
     }
     case syntax::builtin_t::SET_EVAL_RECURSION_LIMIT: {
@@ -5941,7 +5997,11 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
     const auto                   block_res{eval_stmt(*fn_expr.body)};
     const bool                   unknown{std::exchange(cond_unknown_, prev_cond_unknown)};
     stdx::option<const_value>    fn_result;
-    if (current_signal_.kind == eval_signal_kind::RETURN) {
+    const bool                   skipped{current_signal_.kind == eval_signal_kind::SKIP};
+    if (skipped) {
+        // `@skip` leaves the whole evaluation, not just this call
+        fn_result.emplace(void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_));
+    } else if (current_signal_.kind == eval_signal_kind::RETURN) {
         fn_result = std::move(current_signal_.value);
     } else if (fn_expr.explicit_return_type.get_token_type() == syntax::token_type_t::VOID_TYPE &&
                !current_signal_.kind) {
@@ -5950,7 +6010,7 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
     } else {
         fn_result = block_res;
     }
-    current_signal_    = prev_signal;
+    if (!skipped) { current_signal_ = prev_signal; }
     current_error_val_ = prev_error_val;
 
     if (has_self && !args.empty()) {

@@ -53,9 +53,9 @@ test "log2" {
     @expect(log2(16i32) == 4);
 
     comptime {
-        @assert(log2(1) == 0);
-        @assert(log2(15) == 3);
-        @assert(log2(16) == 4);
+        @expect(log2(1) == 0);
+        @expect(log2(15) == 3);
+        @expect(log2(16) == 4);
     }
 }
 
