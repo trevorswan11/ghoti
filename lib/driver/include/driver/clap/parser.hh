@@ -52,7 +52,7 @@ class parser {
     cmd::build::raw_options  test_opts_;
     cmd::build::raw_options  run_opts_;
     cmd::format::raw_options fmt_opts_;
-    i32                      lsp_throttle_ms_{300};
+    i32                      lsp_debounce_ms_{150};
     std::vector<std::string> lsp_workspace_excludes_{lsp::DEFAULT_WORKSPACE_EXCLUDES};
     i32 lsp_workspace_file_cap_{static_cast<i32>(lsp::DEFAULT_WORKSPACE_FILE_CAP)};
 
