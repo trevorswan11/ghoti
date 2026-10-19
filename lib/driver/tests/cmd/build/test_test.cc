@@ -513,6 +513,36 @@ TEST_CASE("test command execution") {
         }};
         REQUIRE(cmd.execute());
     }
+
+    // The caller's own `T` must not leak into the callee's dependent return type
+    SECTION("A self-referential dependent return type folds under a caller binding the same name") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_self_deferred_shadow.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                import std;
+                const math = std.math;
+
+                const Significand = fn(comptime T: type): type {{
+                    const bits = math.ceil_power_of_two(u16, math.float_fractional_bits(T) + 1)!;
+                    return @Int(.{{ .signedness = .unsigned, .bits = bits }});
+                }};
+
+                test "significand" {{
+                    @expect(Significand(f32) == u32);
+                    @expect(Significand(f64) == u64);
+                    @expect(Significand(f16) == u16);
+                }}
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = src_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
 }
 
 } // namespace ghoti::tests

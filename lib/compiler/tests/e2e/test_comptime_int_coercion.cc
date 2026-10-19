@@ -177,6 +177,33 @@ TEST_CASE("comptime-fits implicit integer coercion runtime execution") {
             };
         )") == 42);
     }
+
+    SECTION("a comptime_int call result binds a generic parameter of an already-bound type") {
+        CHECK(helpers::compile_and_run(R"(
+            const bits = fn(comptime T: type): comptime_int {
+                return @typeInfo(T).int.bits;
+            };
+            const take = fn(comptime T: type, v: T): T {
+                return v;
+            };
+
+            pub const main = fn(): i32 {
+                const c = bits(u8);
+                const a: u16 = take(u16, bits(u32) + 1);
+                const b: u8 = take(u8, c);
+                return @as(i32, a) + @as(i32, b) - 41;
+            };
+        )") == 0);
+    }
+}
+
+TEST_CASE("a comptime_int call result out of range for a bound generic parameter") {
+    const auto res{helpers::type_check_diags(R"(
+        const big = fn(): comptime_int { return 70000; };
+        const take = fn(comptime T: type, v: T): T { return v; };
+        pub const main = fn(): i32 { _ = take(u16, big()); return 0; };
+    )")};
+    CHECK(res.message_contains("out of range for type 'u16'"));
 }
 
 } // namespace ghoti::tests

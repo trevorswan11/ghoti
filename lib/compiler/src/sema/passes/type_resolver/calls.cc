@@ -920,8 +920,11 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     g.emplace(implicit_type_stack_, nullptr);
                 }
 
-                auto result_arg_type{arg.visit([&](auto arg_id) {
-                    return generic_arg_type(arg_id, *param_type, keeps_comptime);
+                // A slot already bound to a concrete type (`x: T` with `T = u16`) checks a
+                // compile-time number against that type instead of its `i32` default
+                const bool bound_concrete{bound_idx && concrete_arg_types[*bound_idx]};
+                auto       result_arg_type{arg.visit([&](auto arg_id) {
+                    return generic_arg_type(arg_id, *param_type, keeps_comptime || bound_concrete);
                 })};
                 // A poisoned argument yields `none`. Record it and move on
                 if (!result_arg_type) {
@@ -976,8 +979,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                         error::TYPE_MISMATCH,
                         get_call_arg_location(call.arguments[expanded.source_index[i]])));
                 }
-                if (bound_idx && concrete_arg_types[*bound_idx] &&
-                    !sema::is_assignable(*resolved_type, *param_type)) {
+                if (bound_concrete && !sema::is_assignable(*resolved_type, *param_type)) {
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
