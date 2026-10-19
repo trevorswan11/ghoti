@@ -268,6 +268,9 @@ class const_value {
     MAKE_GETTER(origin, stdx::option<math_origin>);
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
+    // `==`, except floats compare by bit pattern: `-0.0` and `0.0` differ, a NaN matches itself.
+    // For keying on a value, where numerically equal floats are still different arguments.
+    [[nodiscard]] auto identical(const const_value& other) const noexcept -> bool;
 
     [[nodiscard]] auto hash() const noexcept -> u64;
     [[nodiscard]] auto mangle() const -> std::string;

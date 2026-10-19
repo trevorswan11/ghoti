@@ -788,4 +788,31 @@ TEST_CASE("An error folding another module's function points into that module") 
     CHECK(found);
 }
 
+TEST_CASE("comptime float arguments `-0.0` and `0.0` get separate instances") {
+    CHECK(helpers::compile_and_run(R"(
+        const explicit = fn(comptime x: f64): u64 { return @bitCast(x); };
+
+        const inferred = fn(x: f32): u32 {
+            const y = x;
+            return @bitCast(y);
+        };
+
+        const Holder = fn(comptime x: f64): type {
+            return struct {
+                pub const bits: u64 = @bitCast(x);
+            };
+        };
+
+        pub const main = fn(): i32 {
+            if (explicit(-0.0) != 0x8000000000000000) { return 1; }
+            if (explicit(0.0) != 0) { return 2; }
+            if (inferred(0.0) != 0) { return 3; }
+            if (inferred(-0.0) != 0x80000000) { return 4; }
+            if (Holder(-0.0).bits != 0x8000000000000000) { return 5; }
+            if (Holder(0.0).bits != 0) { return 6; }
+            return 42;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests
