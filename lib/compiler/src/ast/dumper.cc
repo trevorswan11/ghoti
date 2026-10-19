@@ -31,18 +31,24 @@
 namespace ghoti::ast {
 
 auto dumper::compare_source_asts(std::string_view s1, std::string_view s2) -> bool {
-    syntax::parser p1{s1}, p2{s2};
+    syntax::parser p1{s1};
     ghoti::arena   arena;
-    ast::AST       s1_ast, s2_ast;
-    const auto     diag1{p1.consume(s1_ast, arena)}, diag2{p2.consume(s2_ast, arena)};
-    if (!diag1.empty() || !diag2.empty()) { return false; }
+    ast::AST       s1_ast;
+    if (!p1.consume(s1_ast, arena).empty()) { return false; }
+    return compare_source_asts(s1_ast, s2);
+}
+
+auto dumper::compare_source_asts(const AST& s1_ast, std::string_view s2) -> bool {
+    syntax::parser p2{s2};
+    ghoti::arena   arena;
+    ast::AST       s2_ast;
+    if (!p2.consume(s2_ast, arena).empty()) { return false; }
 
     std::ostringstream s1_oss, s2_oss;
     ast::dumper        dumper1{s1_ast, s1_oss}, dumper2{s2_ast, s2_oss};
     dumper1.dump();
     dumper2.dump();
-    if (s1_oss.view() != s2_oss.view()) { return false; }
-    return true;
+    return s1_oss.view() == s2_oss.view();
 }
 
 auto dumper::visit(node_id, const array_expr& array) -> void {
