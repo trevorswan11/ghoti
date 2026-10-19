@@ -1045,7 +1045,7 @@ auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
         // An operand whose type isn't known yet defers the whole call until it is
         if (any_deferred) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
-            return_type->resolve_if<types::deferred_call>(call);
+            return_type->resolve_if<types::deferred_call>(call, resolving_);
             break;
         }
         const auto peer{peer_type(ctx_, operands)};
@@ -1327,7 +1327,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc && mentions_unbound_type(call.arguments[0])) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
-            return_type->resolve_if<types::deferred_call>(call);
+            return_type->resolve_if<types::deferred_call>(call, resolving_);
             break;
         }
         if (!desc) {

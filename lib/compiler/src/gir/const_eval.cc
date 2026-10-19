@@ -777,14 +777,14 @@ auto const_eval::resolve_all_deferred_calls() -> void {
     for (auto& type_opt : module_->sema_side_tables.explicit_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_call>()}) {
-            type_opt.emplace(resolve_deferred_call(def->call));
+            type_opt.emplace(resolve_deferred_call(*def));
         }
     }
 
     for (auto& type_opt : module_->sema_side_tables.node_types.values) {
         if (!type_opt) { continue; }
         if (const auto def{type_opt->get_data().as_opt<sema::types::deferred_call>()}) {
-            type_opt.emplace(resolve_deferred_call(def->call));
+            type_opt.emplace(resolve_deferred_call(*def));
         }
     }
 }
@@ -1223,10 +1223,16 @@ auto const_eval::resolve_deferred_array(const sema::types::deferred_array& defer
     return ctx_.get_array(mutability, array.null_terminated, static_cast<usize>(len), underlying);
 }
 
-auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
+auto const_eval::try_resolve_deferred_call(const sema::types::deferred_call& deferred)
     -> stdx::option<sema::type&> {
     PROFILE_FUNCTION();
-    const auto val{eval_call(stdx::none, call)};
+    // A type surfacing from another module (`@typeInfo` of its function) has its call's nodes in
+    // that module's AST, so it has to be evaluated there
+    if (&deferred.enclosing != module_) {
+        const_eval foreign{ctx_, deferred.enclosing};
+        return foreign.try_resolve_deferred_call(deferred);
+    }
+    const auto val{eval_call(stdx::none, deferred.call)};
     if (!val) { return stdx::none; }
     if (const auto type_opt{val->as_opt<stdx::option<sema::type&>>()}) {
         if (*type_opt) { return **type_opt; }
@@ -1242,12 +1248,12 @@ auto const_eval::try_resolve_deferred_call(const ast::call_expr& call)
     return stdx::none;
 }
 
-auto const_eval::resolve_deferred_call(const ast::call_expr& call) -> sema::type& {
+auto const_eval::resolve_deferred_call(const sema::types::deferred_call& deferred) -> sema::type& {
     PROFILE_FUNCTION();
-    if (const auto resolved{try_resolve_deferred_call(call)}) { return *resolved; }
+    if (const auto resolved{try_resolve_deferred_call(deferred)}) { return *resolved; }
     ctx_.diags.emplace_back("Failed to evaluate compile-time type constructor function",
                             sema::error::COMPTIME_EVALUATION_FAILED,
-                            module_->ast.location_of(call.function));
+                            deferred.enclosing.ast.location_of(deferred.call.function));
     return ctx_.get_poison();
 }
 
@@ -1255,6 +1261,10 @@ auto const_eval::force_deferred_call(sema::type& maybe_deferred) -> sema::type& 
     PROFILE_FUNCTION();
     const auto deferred{maybe_deferred.get_data().as_opt<sema::types::deferred_call>()};
     if (!deferred) { return maybe_deferred; }
+    if (&deferred->enclosing != module_) {
+        const_eval foreign{ctx_, deferred->enclosing};
+        return foreign.force_deferred_call(maybe_deferred);
+    }
 
     const auto val{eval_call(stdx::none, deferred->call)};
     if (!val) { return maybe_deferred; }
@@ -4678,7 +4688,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         }
         if (!target_type) { return stdx::none; }
         if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(dc->call)}) { target_type.emplace(*r); }
+            if (const auto r{try_resolve_deferred_call(*dc)}) { target_type.emplace(*r); }
         }
         if (target_type->get_kind() == sema::type_kind::TYPE) {
             if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {

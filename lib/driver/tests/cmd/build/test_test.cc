@@ -482,6 +482,37 @@ TEST_CASE("test command execution") {
         REQUIRE(cmd.execute());
         CHECK(path_utils::exists(out_path));
     }
+
+    // `std.meta` folds the dependent return type, whose nodes live in this file and not in meta's
+    SECTION("A dependent return type read through std.meta folds in its own module") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_foreign_deferred.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                import std;
+
+                const widen = fn(comptime T: type, v: T): @Int(.{{
+                    .signedness = .unsigned,
+                    .bits = @typeInfo(T).int.bits + 1,
+                }}) {{
+                    const R = std.meta.return_type(@TypeOf(widen));
+                    return @as(R, v);
+                }};
+
+                test "widen" {{
+                    @expect(widen(u32, 1) == 1u33);
+                    @expect(widen(u4, 9) == 9u5);
+                }}
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = src_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
 }
 
 } // namespace ghoti::tests
