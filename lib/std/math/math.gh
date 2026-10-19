@@ -13,6 +13,9 @@ pub const float_exponent_max = float.float_exponent_max;
 pub const nan = float.nan;
 pub const snan = float.snan;
 pub const inf = float.inf;
+pub const float_min = float.float_min;
+pub const float_max = float.float_max;
+pub const float_eps = float.float_eps;
 
 test {
     import "float.gh";

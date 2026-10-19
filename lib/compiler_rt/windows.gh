@@ -1,4 +1,6 @@
-//! Windows runtime stubs the code generator calls on its own
+//! Windows runtime stubs the code generator calls on its own. References:
+//!
+//! https://github.com/gcc-mirror/gcc/blob/7644f2a3f009da4c32f7acc66c10f947bb455ae6/libgcc/config/i386/cygwin.S#L109
 import "compiler_rt.gh" as compiler_rt;
 
 const symbol = compiler_rt.symbol;
@@ -14,7 +16,6 @@ const symbol = compiler_rt.symbol;
 
     /// This is libgcc's `___chkstk_ms`, which also satisfies MSVC's x64 `__chkstk` contract.
     ///
-    /// https://github.com/gcc-mirror/gcc/blob/7644f2a3f009da4c32f7acc66c10f947bb455ae6/libgcc/config/i386/cygwin.S#L109
     @[naked] const stack_probe = fn() callconv(.c): void {
         asm {
             template:

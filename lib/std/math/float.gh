@@ -158,3 +158,19 @@ test "inf" {
     @expect(inf_u80 == @as(u80, @bitCast(inf(f80))));
     @expect(inf_u128 == @as(u128, @bitCast(inf(f128))));
 }
+
+/// Returns the smallest normal number representable in floating point type T.
+@[inline(.always)] pub const float_min = fn(comptime T: type): T {
+    return reconstruct_float(T, float_exponent_min(T), mantissa_one(T));
+};
+
+/// Returns the largest normal number representable in floating point type T.
+@[inline(.always)] pub const float_max = fn(comptime T: type): T {
+    const all_1s_mantissa = (1 << float_mantissa_bits(T)) - 1;
+    return reconstruct_float(T, float_exponent_max(T), all_1s_mantissa);
+};
+
+/// Returns the machine epsilon of floating point type T.
+@[inline(.always)] pub const float_eps = fn(comptime T: type): T {
+    return reconstruct_float(T, -float_fractional_bits(T), mantissa_one(T));
+};

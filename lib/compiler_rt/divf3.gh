@@ -10,11 +10,12 @@ const math = std.math;
 
 comptime {
     @cfg (compiler_rt.want_aeabi) {
-        symbol(&__aeabi_fdiv, "__aeabi_fdiv");
-        symbol(&__aeabi_ddiv, "__aeabi_ddiv");
+        symbol(__aeabi_fdiv, "__aeabi_fdiv");
+        symbol(__aeabi_ddiv, "__aeabi_ddiv");
     }
-    symbol(&__divsf3, "__divsf3");
-    symbol(&__divdf3, "__divdf3");
+    symbol(__divsf3, "__divsf3");
+    symbol(__divdf3, "__divdf3");
+    symbol(__divtf3, "__divtf3");
 }
 
 @cfg (compiler_rt.want_aeabi) {
@@ -146,6 +147,90 @@ test "__divdf3" {
     return divf3(f64, a, b);
 };
 
+const __divtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
+    return div_f128(a, b);
+};
+
+@[testing] const test__divtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
+    let x = __divtf3(a, b);
+    let rep: u128 = @bitCast(x);
+    let hi: u64 = @truncate(rep >> 64);
+    let lo: u64 = @truncate(rep);
+
+    if (hi == expected_hi and lo == expected_lo) return;
+
+    // test other possible NaN representation (signal NaN)
+    if (expected_hi == 0x7fff800000000000 and expected_lo == 0) {
+        if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
+            ((hi & 0xffffffffffff) > 0 or lo > 0)) return;
+    }
+    @expect(false);
+};
+
+test "__divtf3" {
+    test__divtf3(math.nan(f128), 0x1.23456789abcdefp+5, 0x7fff800000000000, 0);
+    test__divtf3(0x1.23456789abcdefp+5, math.nan(f128), 0x7fff800000000000, 0);
+    test__divtf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0);
+    test__divtf3(-math.inf(f128), 0x1.23456789abcdefp+5, 0xffff000000000000, 0);
+    test__divtf3(0x1.23456789abcdefp+5, math.inf(f128), 0, 0);
+    test__divtf3(0x1.23456789abcdefp+5, -math.inf(f128), 0x8000000000000000, 0);
+    test__divtf3(math.inf(f128), math.inf(f128), 0x7fff800000000000, 0);
+    test__divtf3(0.0, 0.0, 0x7fff800000000000, 0);
+    test__divtf3(-0.0, 0.0, 0x7fff800000000000, 0);
+    test__divtf3(0.0, 1.0, 0, 0);
+    test__divtf3(-0.0, 1.0, 0x8000000000000000, 0);
+    test__divtf3(1.0, 0.0, 0x7fff000000000000, 0);
+    test__divtf3(1.0, -0.0, 0xffff000000000000, 0);
+
+    test__divtf3(
+        0x1.a23b45362464523375893ab4cdefp+5,
+        0x1.eedcbaba3a94546558237654321fp-1,
+        0x4004b0b72924d407,
+        0x0717e84356c6eba2,
+    );
+    test__divtf3(
+        0x1.a2b34c56d745382f9abf2c3dfeffp-50,
+        0x1.ed2c3ba15935332532287654321fp-9,
+        0x3fd5b2af3f828c9b,
+        0x40e51f64cde8b1f2,
+    );
+    test__divtf3(
+        0x1.2345f6aaaa786555f42432abcdefp+456,
+        0x1.edacbba9874f765463544dd3621fp+6400,
+        0x28c62e15dc464466,
+        0xb5a07586348557ac,
+    );
+    test__divtf3(
+        0x1.2d3456f789ba6322bc665544edefp-234,
+        0x1.eddcdba39f3c8b7a36564354321fp-4455,
+        0x507b38442b539266,
+        0x22ce0f1d024e1252,
+    );
+    test__divtf3(
+        0x1.2345f6b77b7a8953365433abcdefp+234,
+        0x1.edcba987d6bb3aa467754354321fp-4055,
+        0x50bf2e02f0798d36,
+        0x5e6fcb6b60044078,
+    );
+    test__divtf3(6.72420628622418701252535563464350521E-4932, 2.0, 0x0001000000000000, 0);
+    test__divtf3(1.0, 0x1.ffffffffffffffffffffffffffffp-1, 0x3FFF000000000000, 1);
+
+    test__divtf3(std.math.float_min(f128), 2.0, 0x0000800000000000, 0x0000000000000000);
+    test__divtf3(std.math.float_min(f128), 4.0, 0x0000400000000000, 0x0000000000000000);
+    // Zig expects ...fffe here, one ulp low: the quotient is within 2^-112 ulp of 2^112 - 1
+    test__divtf3(
+        1.0,
+        0x1.0000000000000000000000000001p16382,
+        0x0000ffffffffffff,
+        0xffffffffffffffff,
+    );
+    test__divtf3(1.2, std.math.float_max(f128), 0x00004ccccccccccc, 0xcccccccccccccccd);
+}
+
+@[inline(.always)] pub const div_f128 = fn(a: f128, b: f128): f128 {
+    return divf3(f128, a, b);
+};
+
 /// Newton-Raphson division with IEEE-754 round to nearest, ties to even.
 ///
 // It uses 3 iterations for float32, 4 for float64 and 5 for float128,
@@ -269,7 +354,7 @@ test "__divdf3" {
         for comptime (0..half_iterations) |_| {
             // "0 - (...)" is equivalent to "2 - (...)" in UQ1.(HW-1).
             let x_times_b: HalfZ = @truncate(@as(Z, x_uq0_hw) * @as(Z, b_uq1_hw) >> half_width);
-            let corr_uq1_hw = 0 -% x_times_b;
+            let corr_uq1_hw = -%x_times_b;
             x_uq0_hw = @truncate(@as(Z, x_uq0_hw) * @as(Z, corr_uq1_hw) >> (half_width - 1));
         }
 
@@ -282,7 +367,7 @@ test "__divdf3" {
         // the high half of x * b is x_hw * b_hw + (x_hw * b_lo >> HW) - 1 (the -1 for a possible carry).
         let x_hw = @as(Z, x_uq0_hw);
         let b_lo = b_uq1 & lo_mask;
-        let corr_uq1 = 0 -% (x_hw * @as(Z, b_uq1_hw) +% (x_hw * b_lo >> half_width) -% 1);
+        let corr_uq1 = -%(x_hw * @as(Z, b_uq1_hw) +% (x_hw * b_lo >> half_width) -% 1);
         let corr_lo = corr_uq1 & lo_mask;
         let corr_hi = corr_uq1 >> half_width;
 
@@ -298,7 +383,7 @@ test "__divdf3" {
 
         for comptime (0..3) |_| {
             let x_times_b: Z = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, b_uq1) >> type_width);
-            let corr_uq1 = 0 -% x_times_b;
+            let corr_uq1 = -%x_times_b;
             x_uq0 = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, corr_uq1) >> (type_width - 1));
         }
     }
