@@ -4804,9 +4804,26 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                 }
                 return module_->get_sema_type_opt(*expr_h);
             }};
+        // `@TypeOf(f)` inside `f`'s own call: the innermost frame binds the parameters its
+        // dependent return type names, which a later evaluation elsewhere would not see
+        const auto pin_own_return_type{[&](sema::type& t) -> sema::type& {
+            const auto fn{t.get_data().as_opt<sema::types::function>()};
+            if (!fn || active_fns_.empty()) { return t; }
+            const auto dc{fn->return_type.get_data().as_opt<sema::types::deferred_call>()};
+            if (!dc || &dc->enclosing != module_) { return t; }
+            const auto own{
+                module_->ast.get_as_opt<ast::call_expr>(active_fns_.back()->explicit_return_type)};
+            if (!own || &*own != &dc->call) { return t; }
+            auto& pinned{force_deferred_call(fn->return_type)};
+            if (&pinned == &fn->return_type) { return t; }
+            return ctx_.get_function_like(
+                fn->params, pinned, fn->has_self, fn->is_variadic, fn->conv, fn->erased);
+        }};
         if (call.arguments.size() == 1) {
             const auto target_type{type_of_operand(call.arguments.front())};
-            if (target_type) { return const_value{target_type}; }
+            if (target_type) {
+                return const_value{stdx::option<sema::type&>{pin_own_return_type(*target_type)}};
+            }
             return stdx::none;
         }
         // Several operands name the type they would meet at
@@ -5999,7 +6016,11 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
     const usize prev_stack_size{recursion_limit_stack_.size()};
     const u64   fn_frame{push_frame(std::move(frame)).id};
     return_types_.emplace_back(module_->get_sema_type_opt(fn_expr.explicit_return_type));
-    const auto                   pop_return_type{gsl::finally([&] { return_types_.pop_back(); })};
+    active_fns_.emplace_back(&fn_expr);
+    const auto                   pop_return_type{gsl::finally([&] {
+        return_types_.pop_back();
+        active_fns_.pop_back();
+    })};
     const default_counter::guard g{recursion_depth_};
     const bool                   prev_cond_unknown{std::exchange(cond_unknown_, false)};
     const auto                   prev_signal{std::exchange(current_signal_, eval_signal{})};

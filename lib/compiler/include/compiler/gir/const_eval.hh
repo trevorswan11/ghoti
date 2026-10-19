@@ -489,6 +489,8 @@ class const_eval {
     std::vector<std::string_view> temporary_names_;
     // The return type of each compile-time call being evaluated, innermost last
     std::vector<stdx::option<sema::type&>> return_types_;
+    // The function each of those calls runs, innermost last
+    std::vector<const ast::function_expr*> active_fns_;
     default_counter                        recursion_depth_;
 
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
