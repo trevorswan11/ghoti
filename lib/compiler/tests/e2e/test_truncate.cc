@@ -34,4 +34,19 @@ TEST_CASE("@truncate const-evaluates at compile time") {
     )") == 0);
 }
 
+TEST_CASE("@truncate to the same width is a no-op reinterpret") {
+    CHECK(helpers::compile_and_run(R"(
+        const id = fn(comptime T: type, x: T): T { return @truncate(T, x); };
+        const SAME: u128 = @truncate(u128, 0xFFu128 << 120);
+        pub const main = fn(): i32 {
+            let wide: u128 = (0xABu128 << 120) | 7;
+            if (id(u128, wide) != wide) { return 1; }
+            if (SAME != 0xFFu128 << 120) { return 2; }
+            let all_ones: u32 = 0xFFFFFFFFu32;
+            let neg: i32 = @truncate(i32, all_ones);
+            return if (neg == -1) 0 else 3;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

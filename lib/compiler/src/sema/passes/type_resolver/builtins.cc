@@ -723,14 +723,6 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         const auto ptr_bits{target_ptr_bits()};
         const auto to_bits{integer_effective_bits(target, ptr_bits)};
         const auto from_bits{integer_effective_bits(src, ptr_bits)};
-        if (to_bits == from_bits) {
-            return make_sema_err(fmt::format("`@truncate` target type '{}' has the same width as "
-                                             "'{}'; use `@bitCast` or `@intCast` instead",
-                                             ctx_.type_display_name(target),
-                                             ctx_.type_display_name(src)),
-                                 error::TYPE_MISMATCH,
-                                 resolving_.ast.location_of(call.function));
-        }
         if (to_bits > from_bits) {
             return make_sema_err(
                 fmt::format("`@truncate` target type '{}' is wider than '{}'; use `@as` instead",
