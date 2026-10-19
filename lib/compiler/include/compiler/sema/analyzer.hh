@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -80,6 +81,11 @@ class analyzer {
     auto set_optimize_mode(optimize_mode mode) noexcept -> void { ctx_.build_mode = mode; }
     // Whether the program is being built as a test executable, for `@cfg(testing)`
     auto set_testing(bool testing) noexcept -> void { ctx_.testing = testing; }
+
+    // Stops at the next declaration once `flag` is set, leaving the analysis incomplete
+    auto set_cancellation(const std::atomic<bool>& flag) noexcept -> void {
+        ctx_.cancellation = &flag;
+    }
     auto set_runtime_safety(bool enabled) noexcept -> void { ctx_.runtime_safety = enabled; }
     auto set_deprecation_policy(deprecation_policy policy) noexcept -> void {
         ctx_.deprecated_policy = policy;

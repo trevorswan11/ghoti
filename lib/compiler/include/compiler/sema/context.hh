@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -191,7 +192,15 @@ struct context {
     // per-instantiation members shares them
     param_bound_map& param_bounds;
 
+    // Set by another thread once nobody wants this analysis anymore
+    const std::atomic<bool>* cancellation{nullptr};
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
+
+    // Whether to stop at the next declaration; what was skipped leaves the analysis incomplete
+    [[nodiscard]] auto cancelled() const noexcept -> bool {
+        return cancellation && cancellation->load(std::memory_order_relaxed);
+    }
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -225,7 +234,8 @@ struct context {
           comptime_evaluation_depth{other.comptime_evaluation_depth},
           user_type_names{other.user_type_names}, exports{other.exports},
           pending_tests{other.pending_tests}, embed_cache{other.embed_cache},
-          env_epoch{other.env_epoch}, param_bounds{other.param_bounds} {}
+          env_epoch{other.env_epoch}, param_bounds{other.param_bounds},
+          cancellation{other.cancellation} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;

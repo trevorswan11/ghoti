@@ -507,6 +507,10 @@ class module_manager {
     [[nodiscard]] auto try_get_library_module(std::string_view name)
         -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
 
+    // The module already loaded for `path`, without loading it if it isn't
+    [[nodiscard]] auto find_file_module(const std::filesystem::path& path)
+        -> stdx::option<module_t&>;
+
     // The library module registered as `name`, if something has already loaded it
     [[nodiscard]] auto find_loaded_library_module(std::string_view name) -> stdx::option<module_t&>;
 
