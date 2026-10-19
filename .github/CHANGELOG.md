@@ -860,6 +860,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
 - **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`
 - Prefix `-%` accepts unsigned integers and wraps modulo the width, so `-%x` is `0 -% x` (`-%@as(u8, 1) == 255`)
+- Fixed: a generic function or type constructor instantiated with `-0.0` and with `0.0` reused whichever instance came first, since the two compare equal; comptime arguments now match by bit pattern
 - Fixed: a `for comptime` or a per-iteration `while comptime` in a generic function kept the first instantiation's types from its second iteration on, so `y = @truncate(...)` in the loop reported "cannot assign 'u64' to 'u32'" once the function was also used with a wider type
 
 ## Standard Library

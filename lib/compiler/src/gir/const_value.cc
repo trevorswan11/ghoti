@@ -81,6 +81,36 @@ auto const_value::operator==(const const_value& other) const noexcept -> bool {
     return data_ == other.data_;
 }
 
+auto const_value::identical(const const_value& other) const noexcept -> bool {
+    const auto all_identical{
+        [](const std::vector<const_value>& l, const std::vector<const_value>& r) {
+            return std::ranges::equal(
+                l, r, [](const const_value& a, const const_value& b) { return a.identical(b); });
+        }};
+
+    if (const auto l{data_.as_opt<f128>()}) {
+        const auto r{other.data_.as_opt<f128>()};
+        return r && l->bits() == r->bits();
+    }
+    if (const auto l{data_.as_opt<const_array>()}) {
+        const auto r{other.data_.as_opt<const_array>()};
+        return r && all_identical(l->elements, r->elements);
+    }
+    if (const auto l{data_.as_opt<const_union>()}) {
+        const auto r{other.data_.as_opt<const_union>()};
+        return r && l->active_field == r->active_field && all_identical(l->payload, r->payload);
+    }
+    if (const auto l{data_.as_opt<const_struct>()}) {
+        const auto r{other.data_.as_opt<const_struct>()};
+        if (!r || l->fields.size() != r->fields.size()) { return false; }
+        return std::ranges::all_of(l->fields, [&](const auto& field) {
+            const auto rf{r->get_field_opt(field.first)};
+            return rf && field.second.identical(*rf);
+        });
+    }
+    return *this == other;
+}
+
 auto const_value::hash() const noexcept -> u64 {
     // Match operator==: any int-like value hashes by its integer regardless of variant arm.
     if (const auto i{as_int_opt()}) {

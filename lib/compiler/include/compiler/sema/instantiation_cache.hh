@@ -120,8 +120,16 @@ struct generic_instantiation_key {
         return h.finalize();
     }
 
-    [[nodiscard]] auto operator==(const generic_instantiation_key& other) const noexcept
-        -> bool = default;
+    // Comptime arguments match by identity, so `f(-0.0)` and `f(0.0)` are separate instances
+    [[nodiscard]] auto operator==(const generic_instantiation_key& other) const noexcept -> bool {
+        return generic_fn_type == other.generic_fn_type && enclosing_type == other.enclosing_type &&
+               std::ranges::equal(arg_types, other.arg_types) &&
+               std::ranges::equal(comptime_args,
+                                  other.comptime_args,
+                                  [](const gir::const_value& l, const gir::const_value& r) {
+                                      return l.identical(r);
+                                  });
+    }
 };
 
 } // namespace ghoti::sema
