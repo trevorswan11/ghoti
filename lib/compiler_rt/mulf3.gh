@@ -1,0 +1,58 @@
+//! Ported from:
+//!
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/compiler-rt/lib/builtins/fp_mul_impl.inc
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulf3.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+
+comptime {
+    // @cfg (compiler_rt.want_aeabi) {
+    //     symbol(__aeabi_fmul, "__aeabi_fmul");
+    //     symbol(__aeabi_dmul, "__aeabi_dmul");
+    // }
+
+    // symbol(__mulsf3, "__mulsf3");
+    // symbol(__muldf3, "__muldf3");
+    // symbol(__mulxf3, "__mulxf3");
+    // symbol(__multf3, "__multf3");
+}
+
+/// Returns `true` if the right shift is inexact (i.e. any bit shifted out is non-zero)
+///
+/// This is analogous to an shr version of `@shlWithOverflow`
+const wide_shr_with_truncation = fn(comptime Z: type, hi: &mut Z, lo: &mut Z, count: u32): bool {
+    const type_width = @typeInfo(Z).int.bits;
+    let mut inexact = false;
+    if (count < type_width) {
+        inexact = (lo << @intCast(type_width -% count)) != 0;
+        lo = (hi << @intCast(type_width -% count)) | (lo >> @intCast(count));
+        hi >>= @intCast(count);
+    } else if (count < 2 * type_width) {
+        inexact = (hi << @intCast(2 * type_width -% count) | lo) != 0;
+        lo = hi >> @intCast(count -% type_width);
+        hi = 0;
+    } else {
+        inexact = (hi | lo) != 0;
+        lo = 0;
+        hi = 0;
+    }
+    return inexact;
+};
+
+// Slightly different from the one in compiler rt (varies by bit widths only)
+const normalize = fn(comptime T: type, significand: &mut PowerOfTwoSignificandZ(T)): i32 {
+    const Z = PowerOfTwoSignificandZ(T);
+    const integer_bit = @as(Z, 1) << math.float_fractional_bits(T);
+
+    let shift = @clz(significand) - @clz(integer_bit);
+    significand <<= @intCast(shift);
+    return 1i32 - shift;
+};
+
+const PowerOfTwoSignificandZ = fn(comptime T: type): type {
+    const bits = math.ceil_power_of_two(u16, math.float_fractional_bits(T) + 1)!;
+    return @Int(.{ .signedness = .unsigned, .bits = bits });
+};
