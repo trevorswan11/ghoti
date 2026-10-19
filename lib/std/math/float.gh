@@ -292,3 +292,21 @@ test "approx_eq_rel" {
         @expect(!approx_eq_rel(comptime_float, 1.0, 0.0, sqrt_eps_value));
     }
 }
+
+pub const @"f80" = struct {
+    pub fraction: u64,
+    pub exp: u16,
+
+    pub const to_float = fn(self): f80 {
+        let int = (@as(u80, self.exp) << 64) | self.fraction;
+        return @bitCast(int);
+    };
+
+    pub const from_float = fn(x: f80): @"f80" {
+        let int = @bitCast(u80, x);
+        return .{
+            .fraction = @truncate(u64, int),
+            .exp = @truncate(u16, int >> 64),
+        };
+    };
+};
