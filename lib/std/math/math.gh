@@ -302,3 +302,69 @@ test "IntFittingRange" {
     @expect(IntFittingRange(-1, 4097) == i14);
     @expect(IntFittingRange(-1, 123456789123456798123456789) == i88);
 }
+
+/// Returns the next power of two (if the value is not already a power of two).
+/// Only unsigned integers can be used. Zero is not an allowed input.
+/// Result is a type with 1 more bit than the input type.
+pub const ceil_power_of_two_promote = fn(
+    comptime T: type,
+    value: T,
+): @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits + 1 }) {
+    const info = @typeInfo(T);
+    comptime @assert(info.int.signedness == .unsigned);
+    @assert(value != 0);
+    const PromotedType = std.meta.return_type(@TypeOf(ceil_power_of_two_promote));
+    const ShiftType = Log2Int(PromotedType);
+    return @as(PromotedType, 1) << @intCast(ShiftType, info.int.bits - @clz(value - 1));
+};
+
+@[testing] const test_ceil_power_of_two_promote = fn(): void {
+    @expect(ceil_power_of_two_promote(u32, 1) == 1u33);
+    @expect(ceil_power_of_two_promote(u32, 2) == 2u33);
+    @expect(ceil_power_of_two_promote(u32, 63) == 64u33);
+    @expect(ceil_power_of_two_promote(u32, 64) == 64u33);
+    @expect(ceil_power_of_two_promote(u32, 65) == 128u33);
+    @expect(ceil_power_of_two_promote(u5, 7) == 8u6);
+    @expect(ceil_power_of_two_promote(u5, 8) == 8u6);
+    @expect(ceil_power_of_two_promote(u5, 9) == 16u6);
+    @expect(ceil_power_of_two_promote(u4, 9) == 16u5);
+};
+
+test "ceil_power_of_two_promote" {
+    test_ceil_power_of_two_promote();
+    comptime test_ceil_power_of_two_promote();
+}
+
+/// Returns the next power of two (if the value is not already a power of two).
+/// Only unsigned integers can be used. Zero is not an allowed input.
+/// If the value doesn't fit, returns an error.
+pub const ceil_power_of_two = fn(comptime T: type, value: T): std.Option(T) {
+    const info = @typeInfo(T);
+    comptime {
+        @assert(info == .int);
+        @assert(info.int.signedness == .unsigned);
+    }
+
+    const PromotedType = @Int(.{ .signedness = .unsigned, .bits = info.int.bits + 1 });
+    const overflow_bit = @as(PromotedType, 1) << info.int.bits;
+    let x = ceil_power_of_two_promote(T, value);
+    if (overflow_bit & x != 0) return .empty;
+    return .of(@intCast(x));
+};
+
+@[testing] const test_ceil_power_of_two = fn(): void {
+    @expect(ceil_power_of_two(u32, 1).eq(1u32));
+    @expect(ceil_power_of_two(u32, 2).eq(2u32));
+    @expect(ceil_power_of_two(u32, 63).eq(64u32));
+    @expect(ceil_power_of_two(u32, 64).eq(64u32));
+    @expect(ceil_power_of_two(u32, 65).eq(128u32));
+    @expect(ceil_power_of_two(u5, 7).eq(8u5));
+    @expect(ceil_power_of_two(u5, 8).eq(8u5));
+    @expect(ceil_power_of_two(u5, 9).eq(16u5));
+    @expect(ceil_power_of_two(u4, 9) == .none);
+};
+
+test "ceil_power_of_two" {
+    test_ceil_power_of_two();
+    comptime test_ceil_power_of_two();
+}
