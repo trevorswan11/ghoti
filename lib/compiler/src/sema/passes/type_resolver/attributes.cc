@@ -923,14 +923,19 @@ auto type_resolver::check_unused_result(ast::node_id stmt_id, const ast::expr_st
 
     if (is_statement_form(resolving_.ast, stmt.expression)) { return; }
 
-    const auto call{resolving_.ast.get_as_opt<ast::call_expr>(*stmt.expression)};
+    // `comptime f()` is still a call, the same discard rules apply to it
+    auto call_id{ast::node_id{*stmt.expression}};
+    if (const auto cx{resolving_.ast.get_as_opt<ast::comptime_expr>(call_id)}) {
+        call_id = *cx->rhs;
+    }
+    const auto call{resolving_.ast.get_as_opt<ast::call_expr>(call_id)};
     if (call) {
         // `@builtin(...)` calls (`@expect`, `@memcpy`, …) are their own category, not covered.
         if (const auto fn_ty{resolving_.get_sema_type_opt(call->function)};
             fn_ty && fn_ty->get_data().is<types::builtin_function>()) {
             return;
         }
-        if (callee_is_discardable(*stmt.expression, *call)) { return; }
+        if (callee_is_discardable(call_id, *call)) { return; }
         ctx_.diags.emplace_back(
             "result of this call is unused; bind it, pass it on, `_ =` it, or mark the callee "
             "'@[discardable]'",

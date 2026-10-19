@@ -714,6 +714,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
     - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
     - A helper is only called directly, from a test or another `@[testing]` function
+- `@expect`, `@require`, and `@skip` work at compile time, so a test checks a `comptime` value with the testing builtins instead of `@assert`: `comptime { @expect(max(1, 2) == 2); }`
+    - A failing `@expect` is a compile error and the rest of the evaluation still runs and reports; a failing `@require` stops it
+    - A compile-time `@skip`, directly or through a `@[testing]` helper (`comptime skip_unless(ready)`), skips the test it was evaluated in
+    - A `const` initializer is compile time, so `const ok = @expect(...)` checks at compile time while `let ok = @expect(...)` stays a runtime check
 - `@[no_builtins]` keeps the optimizer from turning a function's loops into calls to `memcpy`, `memset`, and other library routines, as freestanding code implementing them needs
     - `@typeInfo(f).function.no_builtins` reflects it
 - CPU features are visible to ghoti code

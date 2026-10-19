@@ -87,6 +87,11 @@ class const_eval {
     // `comptime { ...; return r; }` does
     [[nodiscard]] auto last_eval_returned() const noexcept -> bool { return last_returned_; }
 
+    // The message of the `@skip` the last outermost evaluation ran, as `comptime @skip()` does
+    [[nodiscard]] auto last_eval_skipped() const noexcept -> const stdx::option<std::string>& {
+        return last_skipped_;
+    }
+
     // Node-indexed memoization is unsound across generic instantiations that share AST nodes.
     auto clear_memo() noexcept -> void {
         memo_cache_.clear();
@@ -258,6 +263,7 @@ class const_eval {
         RETURN,
         BREAK,
         CONTINUE,
+        SKIP,
     };
 
     struct eval_signal {
@@ -334,9 +340,11 @@ class const_eval {
         -> stdx::option<const_value>;
     auto eval_call(stdx::option<ast::node_id> id, const ast::call_expr& call)
         -> stdx::option<const_value>;
-    auto eval_builtin(stdx::option<ast::node_id> call_id,
-                      const ast::call_expr&      call,
-                      syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    auto               eval_builtin(stdx::option<ast::node_id> call_id,
+                                    const ast::call_expr&      call,
+                                    syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    [[nodiscard]] auto optional_string_arg(const ast::call_expr& call, usize idx)
+        -> stdx::option<std::string>;
 
     [[nodiscard]] auto target_enum_value(std::string_view enum_name, std::string_view member)
         -> const_value;
@@ -492,6 +500,7 @@ class const_eval {
 
     ankerl::unordered_dense::map<memo_key, const_value, memo_key_hash> memo_cache_;
     bool                                                               last_returned_{false};
+    stdx::option<std::string>                                          last_skipped_;
     ankerl::unordered_dense::map<std::string, const_value>             global_cx_vars_;
 };
 

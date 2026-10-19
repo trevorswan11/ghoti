@@ -93,6 +93,6 @@ test "Return type names a dependent return type" {
 
 test "Return type folds at compile time" {
     comptime {
-        @assert(return_type(fn(): bool) == bool);
+        @expect(return_type(fn(): bool) == bool);
     }
 }

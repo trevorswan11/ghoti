@@ -492,6 +492,10 @@ class emitter {
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
     [[nodiscard]] auto emit_comptime_return(const const_value& returned, ast::node_id at) -> bool;
+    auto               emit_skip(value msg, ast::node_id at) -> void;
+    [[nodiscard]] auto emit_comptime_skip(ast::node_id at) -> bool;
+    auto report_comptime_failure(usize diags_before, std::string_view what, ast::node_id at)
+        -> void;
     [[nodiscard]] auto emit_union_tag_as_enum(ast::expr_handle expr_id,
                                               sema::type&      union_type,
                                               sema::type&      enum_type) -> value;

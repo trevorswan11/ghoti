@@ -222,11 +222,11 @@ test "approx_eq_abs" {
         // also can't represent a max/min, `NaN` or `Inf` values.
         const eps_value = 1e-4;
 
-        @assert(approx_eq_abs(comptime_float, 0.0, 0.0, eps_value));
-        @assert(approx_eq_abs(comptime_float, -0.0, -0.0, eps_value));
-        @assert(approx_eq_abs(comptime_float, 0.0, -0.0, eps_value));
-        @assert(!approx_eq_abs(comptime_float, 1.0 + 2 * eps_value, 1.0, eps_value));
-        @assert(approx_eq_abs(comptime_float, 1.0 + 1 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, 0.0, 0.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, -0.0, -0.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, 0.0, -0.0, eps_value));
+        @expect(!approx_eq_abs(comptime_float, 1.0 + 2 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, 1.0 + 1 * eps_value, 1.0, eps_value));
     }
 }
 
@@ -283,7 +283,7 @@ test "approx_eq_rel" {
         const eps_value = 1e-4;
         const sqrt_eps_value = sqrt.sqrt(eps_value);
 
-        @assert(approx_eq_rel(comptime_float, 1.0, 1.0, sqrt_eps_value));
-        @assert(!approx_eq_rel(comptime_float, 1.0, 0.0, sqrt_eps_value));
+        @expect(approx_eq_rel(comptime_float, 1.0, 1.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(comptime_float, 1.0, 0.0, sqrt_eps_value));
     }
 }
