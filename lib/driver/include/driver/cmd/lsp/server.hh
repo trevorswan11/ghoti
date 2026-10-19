@@ -9,21 +9,24 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
 #include "driver/clap/error.hh"
 #include "driver/cmd/command.hh"
 #include "driver/cmd/lsp/document_store.hh"
+#include "driver/cmd/lsp/rpc.hh"
 #include "driver/cmd/lsp/workspace_scan.hh"
 
 namespace ghoti::cmd {
 
 enum : i32 {
-    PARSE_ERROR      = -32'700,
-    INVALID_REQUEST  = -32'600,
-    METHOD_NOT_FOUND = -32'601,
-    INTERNAL_ERROR   = -32'603,
+    PARSE_ERROR       = -32'700,
+    INVALID_REQUEST   = -32'600,
+    METHOD_NOT_FOUND  = -32'601,
+    INTERNAL_ERROR    = -32'603,
+    REQUEST_CANCELLED = -32'800,
 };
 
 // A JSON-RPC/LSP server over stdio
@@ -36,10 +39,10 @@ class lsp_server final : public command {
   public:
     explicit lsp_server(
         std::ostream&             error_stream       = std::cerr,
-        std::chrono::milliseconds throttle_interval  = lsp::DEFAULT_THROTTLE_INTERVAL,
+        std::chrono::milliseconds debounce_interval  = lsp::DEFAULT_DEBOUNCE_INTERVAL,
         std::vector<std::string>  workspace_excludes = lsp::DEFAULT_WORKSPACE_EXCLUDES,
         usize                     workspace_file_cap = lsp::DEFAULT_WORKSPACE_FILE_CAP) noexcept
-        : command{error_stream}, throttle_interval_{throttle_interval},
+        : command{error_stream}, debounce_interval_{debounce_interval},
           workspace_excludes_{std::move(workspace_excludes)},
           workspace_file_cap_{workspace_file_cap} {}
 
@@ -47,6 +50,10 @@ class lsp_server final : public command {
     [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
 
   private:
+    // Handles messages in order, answering requests the client cancelled within the same batch
+    // without running them; returns false once `exit` has been handled
+    auto handle_batch(std::vector<lsp::inbound_message> batch, lsp::document_store& store) -> bool;
+
     // Dispatches one already-parsed message; returns false once `exit` has been handled
     auto handle_message(const nlohmann::json& message, lsp::document_store& store) -> bool;
     auto handle_initialize(const nlohmann::json& message) -> void;
@@ -69,9 +76,14 @@ class lsp_server final : public command {
     // Publishes whatever `store` accumulated from its most recent dirty-triggered rebuild
     auto publish_pending_diagnostics(lsp::document_store& store) -> void;
 
+    // Rebuilds once the client has been quiet for `debounce_interval_`
+    auto schedule_rebuild() -> void;
+
   private:
     bool                               shutdown_received_{false};
-    std::chrono::milliseconds          throttle_interval_;
+    std::chrono::milliseconds          debounce_interval_;
+    // When the debounced rebuild is due, if an edit is waiting for one
+    stdx::option<std::chrono::steady_clock::time_point> rebuild_due_;
     std::vector<std::string>           workspace_excludes_;
     usize                              workspace_file_cap_;
     std::vector<std::filesystem::path> workspace_roots_;

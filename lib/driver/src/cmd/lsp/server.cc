@@ -1,10 +1,13 @@
 #include "driver/cmd/lsp/server.hh"
 
+#include <algorithm>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -30,6 +33,7 @@
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
+#include "driver/cmd/lsp/event_queue.hh"
 #include "driver/cmd/lsp/formatting.hh"
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/references.hh"
@@ -203,6 +207,33 @@ auto render_hover_type(const sema::type&                                      ty
         "{}fn({}): {}", prefix, fmt::join(params, ", "), fn->return_type.to_string());
 }
 
+// The id of a request, absent for a notification
+auto request_id(const nlohmann::json& message) -> stdx::option<nlohmann::json> {
+    if (!message.is_object() || !message.contains("id") || !message.contains("method")) {
+        return stdx::none;
+    }
+    return message["id"];
+}
+
+auto is_exit(const nlohmann::json& message) -> bool {
+    return message.is_object() && message.value("method", nlohmann::json{}) == "exit";
+}
+
+// The ids every `$/cancelRequest` in `batch` names
+auto cancelled_request_ids(const std::vector<lsp::inbound_message>& batch)
+    -> std::vector<nlohmann::json> {
+    std::vector<nlohmann::json> ids;
+    for (const auto& message : batch) {
+        if (!message || !message->is_object() ||
+            message->value("method", nlohmann::json{}) != "$/cancelRequest") {
+            continue;
+        }
+        const auto& params{message->value("params", nlohmann::json::object())};
+        if (const auto id{params.find("id")}; id != params.end()) { ids.emplace_back(*id); }
+    }
+    return ids;
+}
+
 } // namespace
 
 auto lsp_server::execute() -> stdx::result<void, clap::error> {
@@ -210,30 +241,73 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
     win32::set_binary_stdio();
 #endif
 
-    lsp::document_store store{error_stream_, throttle_interval_};
+    // The reader stops on its own after the last message the loop below acts on
+    lsp::event_queue<lsp::inbound_message> inbox;
+    const std::jthread                     reader{[&] {
+        while (true) {
+            auto       message{lsp::read_framed_message(std::cin, error_stream_)};
+            const auto last{message ? is_exit(*message)
+                                    : message.error() != lsp::read_failure::INVALID_JSON};
+            inbox.push(std::move(message));
+            if (last) { return; }
+        }
+    }};
+
+    lsp::document_store store{error_stream_};
     while (true) {
-        auto message{lsp::read_framed_message(std::cin, error_stream_)};
-        if (!message) {
-            // A body that isn't JSON leaves the stream framed, so the client can keep going
-            if (message.error() != lsp::read_failure::INVALID_JSON) { break; }
-            lsp::write_message(std::cout, make_error_response(nullptr, PARSE_ERROR, "parse error"));
+        auto first{rebuild_due_ ? inbox.pop_until(*rebuild_due_)
+                                : stdx::option<lsp::inbound_message>{inbox.pop()}};
+        if (!first) {
+            rebuild_due_ = stdx::none;
+            store.rebuild_if_dirty();
+            publish_pending_diagnostics(store);
             continue;
         }
-        try {
-            if (!handle_message(*message, store)) { break; }
-        } catch (const std::exception& ex) {
-            fmt::println(error_stream_, "lsp: error handling message: {}", ex.what());
-            if (message->is_object() && message->contains("id")) {
-                lsp::write_message(
-                    std::cout,
-                    make_error_response((*message)["id"], INTERNAL_ERROR, "internal error"));
-            }
-        }
+
+        std::vector<lsp::inbound_message> batch;
+        batch.emplace_back(std::move(*first));
+        while (auto next{inbox.try_pop()}) { batch.emplace_back(std::move(*next)); }
+        if (!handle_batch(std::move(batch), store)) { break; }
     }
 
     // Per the spec, `exit` without a prior `shutdown` should report a non-zero exit code
     if (!shutdown_received_) { return stdx::err{clap::error::UNEXPECTED_ERROR}; }
     return {};
+}
+
+auto lsp_server::handle_batch(std::vector<lsp::inbound_message> batch, lsp::document_store& store)
+    -> bool {
+    const auto cancelled_ids{cancelled_request_ids(batch)};
+    for (auto& message : batch) {
+        if (!message) {
+            // A body that isn't JSON leaves the stream framed, so the client can keep going
+            if (message.error() != lsp::read_failure::INVALID_JSON) { return false; }
+            lsp::write_message(std::cout, make_error_response(nullptr, PARSE_ERROR, "parse error"));
+            continue;
+        }
+
+        if (const auto id{request_id(*message)};
+            id && std::ranges::find(cancelled_ids, *id) != cancelled_ids.end()) {
+            lsp::write_message(std::cout,
+                               make_error_response(*id, REQUEST_CANCELLED, "request cancelled"));
+            continue;
+        }
+
+        try {
+            if (!handle_message(*message, store)) { return false; }
+        } catch (const std::exception& ex) {
+            fmt::println(error_stream_, "lsp: error handling message: {}", ex.what());
+            if (const auto id{request_id(*message)}) {
+                lsp::write_message(std::cout,
+                                   make_error_response(*id, INTERNAL_ERROR, "internal error"));
+            }
+        }
+    }
+    return true;
+}
+
+auto lsp_server::schedule_rebuild() -> void {
+    rebuild_due_ = std::chrono::steady_clock::now() + debounce_interval_;
 }
 
 auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_store& store) -> bool {
@@ -333,11 +407,9 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
 auto lsp_server::handle_initialized(const nlohmann::json&, lsp::document_store& store) -> void {
     if (workspace_roots_.empty()) { return; }
 
-    const auto discovered{
-        lsp::discover_workspace_files(workspace_roots_, workspace_excludes_, workspace_file_cap_)};
-    for (auto& [touched_path, diagnostics] : store.seed_known_roots(discovered)) {
-        publish_diagnostics(touched_path, diagnostics);
-    }
+    store.add_known_roots(
+        lsp::discover_workspace_files(workspace_roots_, workspace_excludes_, workspace_file_cap_));
+    schedule_rebuild();
 }
 
 auto lsp_server::handle_shutdown(const nlohmann::json& message) -> void {
@@ -351,10 +423,8 @@ auto lsp_server::handle_did_open(const nlohmann::json& message, lsp::document_st
     const auto  path{path_utils::uri_to_path(doc.at("uri").get<std::string>())};
     if (!path) { return; }
 
-    for (auto& [touched_path, diagnostics] :
-         store.update(*path, doc.at("text").get<std::string>())) {
-        publish_diagnostics(touched_path, diagnostics);
-    }
+    store.edit(*path, doc.at("text").get<std::string>());
+    schedule_rebuild();
 }
 
 auto lsp_server::handle_did_change(const nlohmann::json& message, lsp::document_store& store)
@@ -366,9 +436,8 @@ auto lsp_server::handle_did_change(const nlohmann::json& message, lsp::document_
     if (!path || changes.empty()) { return; }
 
     auto text{lsp::apply_content_changes(store.text_of(*path).value_or(std::string{}), changes)};
-    for (const auto& [touched_path, diagnostics] : store.update_throttled(*path, std::move(text))) {
-        publish_diagnostics(touched_path, diagnostics);
-    }
+    store.edit(*path, std::move(text));
+    schedule_rebuild();
 }
 
 auto lsp_server::handle_did_close(const nlohmann::json& message, lsp::document_store& store)

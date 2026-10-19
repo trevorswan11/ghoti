@@ -356,8 +356,8 @@ TEST_CASE("test subcommand parser") {
     }
 }
 
-TEST_CASE("lsp rejects negative throttle and file-cap values") {
-    for (const auto* flag : {"--throttle-ms", "--workspace-file-cap"}) {
+TEST_CASE("lsp rejects negative debounce and file-cap values") {
+    for (const auto* flag : {"--debounce-ms", "--workspace-file-cap"}) {
         mock_argv          args{"ghoti", "lsp", flag, "-1"};
         std::ostringstream error_ss;
         clap::parser       parser{args.argc(), args.argv(), error_ss, false};

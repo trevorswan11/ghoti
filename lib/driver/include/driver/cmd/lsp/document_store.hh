@@ -30,7 +30,7 @@ enum class document_sync_kind : i32 {
     INCREMENTAL = 2,
 };
 
-inline constexpr std::chrono::milliseconds DEFAULT_THROTTLE_INTERVAL{300};
+inline constexpr std::chrono::milliseconds DEFAULT_DEBOUNCE_INTERVAL{150};
 
 // Tracks open editor buffers as overlays and re-runs a full analysis pass on every change.
 //
@@ -43,10 +43,8 @@ class document_store {
         ankerl::unordered_dense::map<std::filesystem::path, std::vector<workspace_symbol_entry>>;
 
   public:
-    explicit document_store(
-        std::ostream&             error_stream,
-        std::chrono::milliseconds throttle_interval = DEFAULT_THROTTLE_INTERVAL) noexcept
-        : error_stream_{error_stream}, throttle_interval_{throttle_interval},
+    explicit document_store(std::ostream& error_stream) noexcept
+        : error_stream_{error_stream},
           session_{stdx::make_box<analysis_session>(loader_, error_stream_, &parse_cache_)} {}
 
     // Overlays `text` for `path`, analyzes its module graph, and returns each touched module's
@@ -54,14 +52,18 @@ class document_store {
     [[nodiscard]] auto update(const std::filesystem::path& path, std::string text)
         -> touched_modules;
 
-    // Same as `update`, but skips the rebuild if the last rebuild  happened < `throttle_interval_`
-    // ago
-    [[nodiscard]] auto update_throttled(const std::filesystem::path& path, std::string text)
-        -> touched_modules;
+    // Overlays `text` for `path` and leaves the rebuild to `rebuild_if_dirty` or the next read
+    auto edit(const std::filesystem::path& path, std::string text) -> void;
 
     // Registers every path as a known root with no overlay text, then forces an immediate rebuild
     [[nodiscard]] auto seed_known_roots(std::vector<std::filesystem::path> paths)
         -> touched_modules;
+
+    // Registers every path as a known root with no overlay text, leaving the rebuild for later
+    auto add_known_roots(std::vector<std::filesystem::path> paths) -> void;
+
+    // Rebuilds now if an edit left the graph stale
+    auto rebuild_if_dirty() -> void;
 
     // Drops the overlay for `path`, reverting future analysis to its on-disk contents. Does NOT
     // remove `path` from the known-roots set
@@ -71,7 +73,7 @@ class document_store {
     [[nodiscard]] auto text_of(const std::filesystem::path& path) -> stdx::option<std::string>;
 
     // Analyzes `path` against the persistent module graph for hover/go-to-def/completion queries.
-    // Rebuilds first if a prior `update_throttled()` call left the graph stale
+    // Rebuilds first if a prior `edit()` call left the graph stale
     [[nodiscard]] auto analyze(const std::filesystem::path& path)
         -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>;
 
@@ -88,18 +90,16 @@ class document_store {
     // Registers `path` as a known root (normalized, deduplicated); returns whether it was new
     auto register_known_root(const std::filesystem::path& path) -> bool;
 
+    // Overlays `text` for `path` and registers it as a known root; returns whether it succeeded
+    auto overlay(const std::filesystem::path& path, const std::string& text) -> bool;
+
     // Discards `session_` and reanalyzes every known root, refreshing `workspace_index_`
     auto rebuild() -> void;
 
-    // Rebuilds now if `dirty_`, regardless of the throttle interval
-    auto rebuild_if_dirty() -> void;
-
   private:
-    mod::overlay_loader                   loader_;
-    std::ostream&                         error_stream_;
-    std::chrono::milliseconds             throttle_interval_;
-    std::chrono::steady_clock::time_point last_rebuild_{};
-    bool                                  dirty_{false};
+    mod::overlay_loader loader_;
+    std::ostream&       error_stream_;
+    bool                dirty_{false};
     // Parses that outlive each rebuild's session, for every file it still reaches
     mod::parse_cache                   parse_cache_;
     stdx::box<analysis_session>        session_;

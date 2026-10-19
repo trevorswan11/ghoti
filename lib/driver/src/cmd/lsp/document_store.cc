@@ -1,7 +1,6 @@
 #include "driver/cmd/lsp/document_store.hh"
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -65,8 +64,7 @@ auto document_store::rebuild() -> void {
         }
     }
 
-    last_rebuild_ = std::chrono::steady_clock::now();
-    dirty_        = false;
+    dirty_ = false;
 }
 
 auto document_store::rebuild_if_dirty() -> void {
@@ -77,44 +75,40 @@ auto document_store::take_pending_diagnostics() -> touched_modules {
     return std::exchange(pending_diagnostics_, {});
 }
 
-auto document_store::update(const std::filesystem::path& path, std::string text)
-    -> touched_modules {
+auto document_store::overlay(const std::filesystem::path& path, const std::string& text) -> bool {
     if (auto res{loader_.add(path, text)}; !res) {
         fmt::println(error_stream_,
                      "lsp: failed to overlay '{}': {}",
                      path.string(),
                      magic_enum::enum_name(res.error()));
-        return {};
+        return false;
     }
     register_known_root(path);
+    return true;
+}
+
+auto document_store::update(const std::filesystem::path& path, std::string text)
+    -> touched_modules {
+    if (!overlay(path, text)) { return {}; }
 
     // Rebuild from scratch and reanalyze every known root, not just `path`
     rebuild();
     return take_pending_diagnostics();
 }
 
-auto document_store::update_throttled(const std::filesystem::path& path, std::string text)
-    -> touched_modules {
-    if (auto res{loader_.add(path, text)}; !res) {
-        fmt::println(error_stream_,
-                     "lsp: failed to overlay '{}': {}",
-                     path.string(),
-                     magic_enum::enum_name(res.error()));
-        return {};
-    }
-    register_known_root(path);
-    dirty_ = true;
+auto document_store::edit(const std::filesystem::path& path, std::string text) -> void {
+    if (overlay(path, text)) { dirty_ = true; }
+}
 
-    if (std::chrono::steady_clock::now() - last_rebuild_ < throttle_interval_) { return {}; }
-
+auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
+    add_known_roots(std::move(paths));
     rebuild();
     return take_pending_diagnostics();
 }
 
-auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
+auto document_store::add_known_roots(std::vector<std::filesystem::path> paths) -> void {
     for (const auto& path : paths) { register_known_root(path); }
-    rebuild();
-    return take_pending_diagnostics();
+    dirty_ = true;
 }
 
 auto document_store::close(const std::filesystem::path& path) -> void { loader_.remove(path); }
