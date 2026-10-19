@@ -117,6 +117,15 @@ auto module_manager::try_get_library_module(std::string_view name)
     return try_get(it->second);
 }
 
+auto module_manager::find_file_module(const std::filesystem::path& path)
+    -> stdx::option<module_t&> {
+    const auto normalized{loader_.normalize(path)};
+    if (!normalized) { return stdx::none; }
+    const auto loaded{modules_.find(*normalized)};
+    if (loaded == modules_.end()) { return stdx::none; }
+    return *loaded->second;
+}
+
 auto module_manager::find_loaded_library_module(std::string_view name) -> stdx::option<module_t&> {
     const auto path{module_lut_.find(name)};
     if (path == module_lut_.end()) { return stdx::none; }

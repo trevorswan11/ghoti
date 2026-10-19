@@ -31,6 +31,7 @@ auto type_resolver::resolve_types(mod::module_t& module, context& ctx) -> mod::m
     type_resolver resolver{module, ctx};
     resolver.pre_register_impls();
     for (const auto& node : module.ast) {
+        if (ctx.cancelled()) { break; }
         if (ctx.testing && module.ast.get_as_opt<ast::test_stmt>(node)) {
             module.deferred_tests.emplace_back(node);
             continue;
@@ -63,7 +64,10 @@ auto type_resolver::resolve_pending_tests(context& ctx) -> void {
 
         context       test_ctx{ctx};
         type_resolver resolver{module, test_ctx};
-        for (const auto& node : tests) { resolver.resolve(node); }
+        for (const auto& node : tests) {
+            if (ctx.cancelled()) { break; }
+            resolver.resolve(node);
+        }
         if (!test_ctx.diags.empty()) {
             module.absorb_sema_diagnostics(std::move(test_ctx.diags));
             module.state = mod::module_state::POISONED_TYPE_RESOLVED;

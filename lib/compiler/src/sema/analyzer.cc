@@ -308,6 +308,8 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
 
     collect_symbols(*module);
     resolve_types(*module);
+    // A cancelled analysis skipped declarations, so nothing past this point can rely on it
+    if (ctx_.cancelled()) { return gir::module_t{*module, ctx_.arena}; }
     modules_.print_all_warnings(error_stream_);
 
     if (module->is_poisoned() || reaches_failed_module(*module)) {

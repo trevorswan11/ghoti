@@ -1,10 +1,8 @@
-#include <chrono> // IWYU pragma: keep
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
-#include <thread>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
@@ -17,8 +15,6 @@
 #include "driver/cmd/lsp/rpc.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
-
-using namespace std::chrono_literals;
 
 namespace ghoti::tests {
 
@@ -79,13 +75,18 @@ TEST_CASE("document_store workspace_symbols filters case-insensitively by substr
     CHECK_FALSE(lsp::has_field(matched, "name", "other"));
 }
 
-TEST_CASE("document_store workspace_symbols keeps entries for a closed document") {
-    lsp::document_store         store{std::cerr};
-    const std::filesystem::path path{"test_document_store_workspace_closed.gh"};
-    CHECK(!store.update(path, "pub const still_here = 1;\n").empty());
-    store.close(path);
+TEST_CASE("document_store workspace_symbols falls back to a closed document's saved contents") {
+    tempdir dir{"workspace_closed"};
+    dir.write("closed.gh", "pub const on_disk = 1;\n");
+    const auto path{dir.path / "closed.gh"};
 
-    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "still_here"));
+    lsp::document_store store{std::cerr};
+    CHECK(!store.update(path, "pub const unsaved = 1;\n").empty());
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "unsaved"));
+
+    store.close(path);
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "on_disk"));
+    CHECK_FALSE(lsp::has_field(store.workspace_symbols(""), "name", "unsaved"));
 }
 
 TEST_CASE("document_store finds references in a file that imports the queried definition") {
@@ -172,34 +173,34 @@ TEST_CASE("document_store only finds references in files it has actually opened 
     CHECK(lsp::find_references(store.manager(), definition).empty());
 }
 
-TEST_CASE("update_throttled skips the rebuild when called again inside the throttle window") {
-    lsp::document_store         store{std::cerr, 1'000ms};
-    const std::filesystem::path path{"test_ds_throttle_skip.gh"};
+TEST_CASE("an edit defers its rebuild until something reads the graph") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path path{"test_ds_edit_deferred.gh"};
 
-    CHECK(!store.update_throttled(path, "pub const x = 5;\n").empty()); // first call rebuilds
-    CHECK(store.update_throttled(path, "pub const x = 6;\n").empty());  // second is throttled
-}
+    store.edit(path, "pub const x = 5;\n");
+    CHECK(store.take_pending_diagnostics().empty());
 
-TEST_CASE("update_throttled rebuilds again once the throttle interval has elapsed") {
-    lsp::document_store         store{std::cerr, 1ms};
-    const std::filesystem::path path{"test_ds_throttle_elapsed.gh"};
-
-    CHECK(!store.update_throttled(path, "pub const x = 5;\n").empty());
-    std::this_thread::sleep_for(10ms); // 10x margin over the 1ms interval
-    CHECK(!store.update_throttled(path, "pub const x = 6;\n").empty());
-}
-
-TEST_CASE("a throttled-and-skipped update_throttled call still leaves reads fresh") {
-    lsp::document_store         store{std::cerr, 1'000ms};
-    const std::filesystem::path path{"test_ds_throttle_dirty_read.gh"};
-
-    CHECK(!store.update_throttled(path, "pub const x = 5;\n").empty());
-    CHECK(store.update_throttled(path, "pub const x = 6; pub const y = 1;\n").empty());
-
-    // The rebuild was skipped, but analyze()/workspace_symbols() must still see the latest text
+    // The edit's rebuild runs on this read, and it must already see the latest text
+    store.edit(path, "pub const x = 6; pub const y = 1;\n");
     const auto module{UNWRAP(store.analyze(path))};
     CHECK(module->identifier_positions.size() > 0);
     CHECK(lsp::has_field(store.workspace_symbols(""), "name", "y"));
+    CHECK(find(store.take_pending_diagnostics(), path));
+}
+
+TEST_CASE("rebuild_if_dirty only rebuilds after an edit") {
+    lsp::document_store         store{std::cerr};
+    const std::filesystem::path path{"test_ds_rebuild_if_dirty.gh"};
+
+    store.rebuild_if_dirty();
+    CHECK(store.take_pending_diagnostics().empty());
+
+    store.edit(path, "pub const x = ;\n");
+    store.rebuild_if_dirty();
+    CHECK(UNWRAP(find(store.take_pending_diagnostics(), path)).size() == 1);
+
+    store.rebuild_if_dirty();
+    CHECK(store.take_pending_diagnostics().empty());
 }
 
 TEST_CASE("seed_known_roots discovers cross-file references without ever opening either file") {

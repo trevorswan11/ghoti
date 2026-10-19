@@ -73,7 +73,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     if (repl_cmd->parsed()) { return stdx::make_box<cmd::shell>(error_stream_); }
     if (lsp_cmd->parsed()) {
         return stdx::make_box<cmd::lsp_server>(error_stream_,
-                                               std::chrono::milliseconds{lsp_throttle_ms_},
+                                               std::chrono::milliseconds{lsp_debounce_ms_},
                                                lsp_workspace_excludes_,
                                                static_cast<usize>(lsp_workspace_file_cap_));
     }
@@ -123,10 +123,10 @@ auto parser::setup_repl_subcmd() -> gsl::not_null<CLI::App*> {
 
 auto parser::setup_lsp_subcmd() -> gsl::not_null<CLI::App*> {
     auto* sub{app_.add_subcommand("lsp", "Run the ghoti language server over stdio")};
-    sub->add_option("--throttle-ms",
-                    lsp_throttle_ms_,
-                    "Minimum milliseconds between full workspace reanalysis passes")
-        ->default_val(lsp_throttle_ms_)
+    sub->add_option("--debounce-ms",
+                    lsp_debounce_ms_,
+                    "Quiet milliseconds after an edit before the workspace is reanalyzed")
+        ->default_val(lsp_debounce_ms_)
         ->check(CLI::NonNegativeNumber);
     sub->add_option("--workspace-exclude",
                     lsp_workspace_excludes_,

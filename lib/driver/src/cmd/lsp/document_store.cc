@@ -1,7 +1,6 @@
 #include "driver/cmd/lsp/document_store.hh"
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -16,16 +15,10 @@
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
-#include <stdx/string.hh>
-#include <stdx/utility.hh>
 
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
-#include "driver/cmd/lsp/diagnostics.hh"
-#include "driver/cmd/lsp/session.hh"
-#include "driver/cmd/lsp/workspace_symbols.hh"
-#include "support/path_utils.hh"
-#include "support/string_utils.hh"
+#include "driver/cmd/lsp/snapshot.hh"
 
 namespace ghoti::lsp {
 
@@ -37,87 +30,27 @@ auto document_store::register_known_root(const std::filesystem::path& path) -> b
     return true;
 }
 
-auto document_store::rebuild() -> void {
-    session_ = stdx::make_box<analysis_session>(loader_, error_stream_, &parse_cache_);
-    for (const auto& root : known_roots_) {
-        // A root whose file is gone (deleted, or its drive unmounted) is kept for when it returns
-        if (auto res{session_->analyze(root)};
-            !res && res.error().get_error() != mod::error::PATH_DOES_NOT_EXIST) {
-            fmt::println(error_stream_,
-                         "lsp: failed to reanalyze known root '{}': {}",
-                         root.string(),
-                         res.error());
-        }
-    }
-
-    // Only what this analysis reached is indexed; a file that vanished has its diagnostics cleared
-    pending_diagnostics_.clear();
-    auto previous{std::exchange(workspace_index_, {})};
-    for (const auto& [mod_path, mod] : session_->get_manager()) {
-        workspace_index_[mod_path] = module_workspace_symbols(*mod);
-        pending_diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod));
-    }
-    parse_cache_.retain(
-        [this](const std::filesystem::path& path) { return workspace_index_.contains(path); });
-    for (const auto& [mod_path, entries] : previous) {
-        if (!workspace_index_.contains(mod_path)) {
-            pending_diagnostics_.emplace_back(mod_path, nlohmann::json::array());
-        }
-    }
-
-    last_rebuild_ = std::chrono::steady_clock::now();
-    dirty_        = false;
-}
-
-auto document_store::rebuild_if_dirty() -> void {
-    if (dirty_) { rebuild(); }
-}
-
-auto document_store::take_pending_diagnostics() -> touched_modules {
-    return std::exchange(pending_diagnostics_, {});
-}
-
-auto document_store::update(const std::filesystem::path& path, std::string text)
-    -> touched_modules {
+auto document_store::edit(const std::filesystem::path& path, std::string text) -> void {
     if (auto res{loader_.add(path, text)}; !res) {
         fmt::println(error_stream_,
                      "lsp: failed to overlay '{}': {}",
                      path.string(),
                      magic_enum::enum_name(res.error()));
-        return {};
+        return;
     }
     register_known_root(path);
-
-    // Rebuild from scratch and reanalyze every known root, not just `path`
-    rebuild();
-    return take_pending_diagnostics();
+    ++revision_;
 }
 
-auto document_store::update_throttled(const std::filesystem::path& path, std::string text)
-    -> touched_modules {
-    if (auto res{loader_.add(path, text)}; !res) {
-        fmt::println(error_stream_,
-                     "lsp: failed to overlay '{}': {}",
-                     path.string(),
-                     magic_enum::enum_name(res.error()));
-        return {};
-    }
-    register_known_root(path);
-    dirty_ = true;
-
-    if (std::chrono::steady_clock::now() - last_rebuild_ < throttle_interval_) { return {}; }
-
-    rebuild();
-    return take_pending_diagnostics();
-}
-
-auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
+auto document_store::add_known_roots(std::vector<std::filesystem::path> paths) -> void {
     for (const auto& path : paths) { register_known_root(path); }
-    rebuild();
-    return take_pending_diagnostics();
+    ++revision_;
 }
 
-auto document_store::close(const std::filesystem::path& path) -> void { loader_.remove(path); }
+auto document_store::close(const std::filesystem::path& path) -> void {
+    loader_.remove(path);
+    ++revision_;
+}
 
 auto document_store::text_of(const std::filesystem::path& path) -> stdx::option<std::string> {
     auto text{loader_.load(path)};
@@ -125,42 +58,72 @@ auto document_store::text_of(const std::filesystem::path& path) -> stdx::option<
     return std::move(*text);
 }
 
-auto document_store::analyze(const std::filesystem::path& path)
-    -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
-    rebuild_if_dirty();
-    return session_->analyze(path);
+auto document_store::inputs() const -> analysis_inputs {
+    return {.revision = revision_, .files = loader_, .roots = known_roots_};
 }
 
-auto document_store::manager() -> const mod::module_manager& {
-    rebuild_if_dirty();
-    return session_->get_manager();
-}
+auto document_store::install(stdx::box<analysis_snapshot> snapshot) -> void {
+    if (snapshot_ && (*snapshot_)->revision() >= snapshot->revision()) { return; }
 
-auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json {
-    rebuild_if_dirty();
-
-    auto out = nlohmann::json::array();
-
-    for (const auto& [path, entries] : workspace_index_) {
-        const auto uri{path_utils::path_to_uri(path)};
-        const auto text{text_of(path).value_or(std::string{})};
-        for (const auto& entry : entries) {
-            if (!query.empty() && !string_utils::contains_ci(entry.name, query)) { continue; }
-            out.push_back({
-                {"name", entry.name},
-                {"kind", std::to_underlying(entry.kind)},
-                {
-                    "location",
-                    {
-                        {"uri", uri},
-                        {"range", range_of(entry.range, text)},
-                    },
-                },
-            });
+    // Anything the previous analysis reached but this one doesn't has its diagnostics cleared
+    pending_diagnostics_ = snapshot->diagnostics();
+    if (snapshot_) {
+        for (const auto& [mod_path, entries] : (*snapshot_)->workspace_index()) {
+            if (!snapshot->workspace_index().contains(mod_path)) {
+                pending_diagnostics_.emplace_back(mod_path, nlohmann::json::array());
+            }
         }
     }
+    snapshot_ = std::move(snapshot);
+}
 
-    return out;
+auto document_store::snapshot() noexcept -> stdx::option<analysis_snapshot&> {
+    if (!snapshot_) { return stdx::none; }
+    return **snapshot_;
+}
+
+auto document_store::is_current() const noexcept -> bool {
+    return snapshot_ ? (*snapshot_)->revision() == revision_ : revision_ == 0;
+}
+
+auto document_store::take_pending_diagnostics() -> touched_modules {
+    return std::exchange(pending_diagnostics_, {});
+}
+
+auto document_store::rebuild_if_dirty() -> void {
+    if (is_current()) { return; }
+    install(*analysis_snapshot::build(inputs(), parse_cache_, error_stream_));
+}
+
+auto document_store::current() -> analysis_snapshot& {
+    rebuild_if_dirty();
+    if (!snapshot_) { install(*analysis_snapshot::build(inputs(), parse_cache_, error_stream_)); }
+    return **snapshot_;
+}
+
+auto document_store::update(const std::filesystem::path& path, std::string text)
+    -> touched_modules {
+    edit(path, std::move(text));
+    rebuild_if_dirty();
+    return take_pending_diagnostics();
+}
+
+auto document_store::seed_known_roots(std::vector<std::filesystem::path> paths) -> touched_modules {
+    add_known_roots(std::move(paths));
+    rebuild_if_dirty();
+    return take_pending_diagnostics();
+}
+
+auto document_store::analyze(const std::filesystem::path& path)
+    -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
+    if (auto module{current().module_of(path)}) { return module.get(); }
+    return mod::make_mod_err(mod::error::PATH_DOES_NOT_EXIST);
+}
+
+auto document_store::manager() -> const mod::module_manager& { return current().manager(); }
+
+auto document_store::workspace_symbols(std::string_view query) -> nlohmann::json {
+    return current().workspace_symbols(query);
 }
 
 } // namespace ghoti::lsp

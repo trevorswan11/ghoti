@@ -17,6 +17,9 @@ enum class read_failure : u8 {
     INVALID_JSON,    // a well-framed body that is not JSON: the next message is still readable
 };
 
+// One message off the wire, or why the wire had none
+using inbound_message = stdx::result<nlohmann::json, read_failure>;
+
 // Reads one Content-Length framed JSON-RPC message
 [[nodiscard]] auto read_framed_message(std::istream& in, std::ostream& error_stream)
     -> stdx::result<nlohmann::json, read_failure>;
