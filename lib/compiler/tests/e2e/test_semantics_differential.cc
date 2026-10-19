@@ -194,8 +194,7 @@ auto int_casts() -> std::vector<diff::expr_template> {
                 .operands = {from},
                 .result   = to,
             });
-            // Same-width `@truncate` is rejected in favor of `@bitCast`/`@intCast`
-            if (to.bits < from.bits) {
+            if (to.bits <= from.bits) {
                 templates.emplace_back<diff::expr_template>({
                     .text     = fmt::format("@truncate({}, {{0}})", to.name),
                     .operands = {from},
