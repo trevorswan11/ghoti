@@ -32,6 +32,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
@@ -327,6 +328,7 @@ class emitter {
     auto bind_declared_params(gir::function&            fn,
                               const ast::function_expr& fn_expr,
                               const mod::module_t&      owner) -> void;
+    auto spill_written_param(const gir::function& fn, std::string_view name) -> void;
     auto emit_implicit_return(sema::type& return_type) -> void;
     auto emit_c_va_builtin(const ast::call_expr& call,
                            syntax::builtin_t     builtin,

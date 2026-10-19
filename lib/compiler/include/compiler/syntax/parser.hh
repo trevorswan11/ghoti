@@ -91,17 +91,21 @@ class parser {
         u32                            array_length_depth{0};
         u32                            const_initializer_depth{0};
         std::vector<compile_time_read> compile_time_names;
+        // Names the body assigns to or takes the address of
+        std::vector<std::string_view> written_names;
     };
 
     class function_scope {
       public:
         explicit function_scope(parser& p) : parser_{p} {
-            p.comptime_param_frames_.emplace_back(
-                comptime_param_frame{.infer = std::exchange(p.infer_next_fn_params_, false),
-                                     .compile_time_depth      = 0,
-                                     .array_length_depth      = 0,
-                                     .const_initializer_depth = 0,
-                                     .compile_time_names      = {}});
+            p.comptime_param_frames_.emplace_back(comptime_param_frame{
+                .infer                   = std::exchange(p.infer_next_fn_params_, false),
+                .compile_time_depth      = 0,
+                .array_length_depth      = 0,
+                .const_initializer_depth = 0,
+                .compile_time_names      = {},
+                .written_names           = {},
+            });
         }
         ~function_scope() { parser_.comptime_param_frames_.pop_back(); }
         MAKE_PINNED(function_scope);
@@ -381,6 +385,11 @@ class parser {
         if (frame.infer && (frame.compile_time_depth > 0 || frame.array_length_depth > 0)) {
             frame.compile_time_names.emplace_back(name, at, frame.const_initializer_depth > 0);
         }
+    }
+
+    auto note_binding_write(std::string_view name) -> void {
+        if (comptime_param_frames_.empty()) { return; }
+        comptime_param_frames_.back().written_names.emplace_back(name);
     }
 
     [[nodiscard]] auto in_test_block() const noexcept -> bool { return test_block_depth_; }

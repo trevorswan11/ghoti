@@ -639,6 +639,9 @@ class type_resolver {
     auto resolve_slice_copy(ast::node_id                id,
                             const ast::assignment_expr& assign,
                             ast::expr_handle            dest) -> void;
+    // The innermost open function's parameter `name` when it is `comptime` only by inference
+    [[nodiscard]] auto inferred_comptime_param(std::string_view name) const
+        -> stdx::option<const ast::function_expr::parameter&>;
     // The function literal `expr` names, directly or through a `let`/`comptime` local
     [[nodiscard]] auto closure_literal_of(ast::expr_handle expr) -> stdx::option<ast::node_id>;
     [[nodiscard]] auto comptime_closure_value(ast::expr_handle expr)
@@ -1035,6 +1038,8 @@ class type_resolver {
     u32 deprecated_scope_depth_{0};
     // An instantiation resolver re-typing a `@[testing]` generic's body, which has no open function
     bool instantiating_testing_fn_{false};
+    // The generic whose body this freestanding instantiation resolver walks
+    stdx::option<const ast::function_expr&> instantiating_fn_{};
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

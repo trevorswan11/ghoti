@@ -58,6 +58,62 @@ TEST_CASE("Consuming a call result satisfies the must-use check") {
     }
 }
 
+TEST_CASE("A dropped non-call value is an error") {
+    const auto with_main{[](std::string_view body) {
+        return fmt::format(R"(
+            const make = fn(): i32 {{ return 7; }};
+            pub const main = fn(): i32 {{
+                let mut r: i32 = 3;
+                {}
+                return r;
+            }};
+        )",
+                           body);
+    }};
+
+    SECTION("a comparison mistyped for a compound assignment") {
+        const auto out{helpers::resolve_diags(with_main("r >= 1;"))};
+        CHECK(std::ranges::contains(out.codes, sema::error::UNUSED_RESULT));
+        CHECK(out.message_contains("result of this expression is unused; bind it, or `_ =` it"));
+    }
+    SECTION("arithmetic") { CHECK(has_error(with_main("r + 1;"), sema::error::UNUSED_RESULT)); }
+    SECTION("a unary operator") { CHECK(has_error(with_main("-r;"), sema::error::UNUSED_RESULT)); }
+    SECTION("a bare name") { CHECK(has_error(with_main("r;"), sema::error::UNUSED_RESULT)); }
+    SECTION("a literal") { CHECK(has_error(with_main("5;"), sema::error::UNUSED_RESULT)); }
+    SECTION("a call result in an arm of an unused if") {
+        CHECK(has_error(with_main("if (r > 0) make();"), sema::error::UNUSED_RESULT));
+    }
+    SECTION("a value in an arm of an unused match") {
+        CHECK(has_error(with_main("match (r) { 0 => r + 1, _ => r = 2, };"),
+                        sema::error::UNUSED_RESULT));
+    }
+}
+
+TEST_CASE("Statements that only do control flow or store need no binding") {
+    const auto ok{[](std::string_view body) {
+        auto [ctx, idx]{helpers::resolve(fmt::format(R"(
+            const noop = fn(): void {{}};
+            pub const main = fn(): i32 {{
+                let mut r: i32 = 3;
+                {}
+                return r;
+            }};
+        )",
+                                                     body))};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("an assignment") { ok("r = 1; r -= 1;"); }
+    SECTION("an if whose arms store") { ok("if (r > 0) r -= 1 else r += 1;"); }
+    SECTION("an if whose arm is a block") { ok("if (r > 0) { r -= 1; }"); }
+    SECTION("an if whose arm is a void call") { ok("if (r > 0) noop();"); }
+    SECTION("a match whose arms store") { ok("match (r) { 0 => r = 1, _ => noop(), };"); }
+    SECTION("a while loop") { ok("while (r > 0) : (r -= 1) {}"); }
+    SECTION("a for loop") { ok("for (0..3) |i| { r += @intCast(i); }"); }
+    SECTION("a discard") { ok("_ = r + 1;"); }
+    SECTION("an if used as a value") { ok("let v = if (r > 0) r else 0; _ = v;"); }
+}
+
 TEST_CASE("A @[discardable] callee may be dropped with no diagnostic") {
     const auto ok{[](std::string_view body) {
         auto [ctx, idx]{helpers::resolve(body)};

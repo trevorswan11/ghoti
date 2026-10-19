@@ -903,6 +903,17 @@ auto infer_comptime_params(syntax::parser&                             parser,
     }
 }
 
+// The emitter gives a written param its slot up front, so no earlier read sees the raw value
+auto mark_written_params(syntax::parser&                             parser,
+                         const syntax::parser::comptime_param_frame& frame,
+                         std::vector<function_expr::parameter>&      parameters) -> void {
+    for (auto& param : parameters) {
+        if (!param.name.is<identifier_expr>()) { continue; }
+        const auto name{parser.get_ast().get_as<identifier_expr>(param.name).name};
+        param.is_written = std::ranges::contains(frame.written_names, name);
+    }
+}
+
 } // namespace
 
 auto parse_move_function_expr(syntax::parser& parser)
@@ -1196,6 +1207,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle body{TRY(block_stmt::parse(parser))};
     infer_comptime_params(parser, fn_scope.frame(), parameters);
+    mark_written_params(parser, fn_scope.frame(), parameters);
     const auto fn{parser.add_expr<function_expr>(start_token,
                                                  self,
                                                  std::move(parameters),
@@ -1465,6 +1477,23 @@ auto cfg_value_expr::parse(syntax::parser& parser)
 
 namespace {
 
+// The binding a store or address-of lands in: `x` in `x.a[i] = v` or `^mut x.a`
+auto note_written_root(syntax::parser& parser, expr_handle target) -> void {
+    const auto& tree{parser.get_ast()};
+    while (true) {
+        if (const auto dot{tree.get_as_opt<dot_expr>(target)}) {
+            target = dot->object;
+        } else if (const auto index{tree.get_as_opt<index_expr>(target)}) {
+            target = index->array;
+        } else {
+            break;
+        }
+    }
+    if (const auto ident{tree.get_as_opt<identifier_expr>(target)}) {
+        parser.note_binding_write(ident->name);
+    }
+}
+
 template <NodeData Expr>
 [[nodiscard]] auto parse_infix(syntax::parser& parser, expr_handle lhs)
     -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -1484,6 +1513,7 @@ template <NodeData Expr>
     const auto lhs_start{parser.get_location_of(*lhs)};
     parser.advance();
     const auto rhs{TRY(parser.parse_expression(current_precedence))};
+    if constexpr (std::same_as<Expr, assignment_expr>) { note_written_root(parser, lhs); }
     return parser.add_expr<Expr>(lhs_start, op_token, lhs, rhs);
 }
 
@@ -1917,6 +1947,7 @@ template <NodeData Expr>
     // Pointer/reference types are formed over a named type, never a type literal in place
     constexpr bool forms_type{std::same_as<Expr, reference_expr> ||
                               std::same_as<Expr, address_of_expr>};
+    if constexpr (forms_type) { note_written_root(parser, operand); }
     if (forms_type && operand.template any<struct_expr, union_expr, enum_expr, interface_expr>()) {
         return make_syntax_err(
             "A struct, union, enum, or interface literal cannot take a type modifier",

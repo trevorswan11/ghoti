@@ -540,6 +540,7 @@ auto emitter::emit_generic_instantiation(const sema::generic_instantiation_reque
                                                     .is_alloca = p_spilled,
                                                     .const_val = stdx::none,
                                                 });
+                if (param.is_written && !p_spilled) { spill_written_param(fn, p_name); }
             }
         }
 
@@ -1792,7 +1793,14 @@ auto emitter::bind_declared_params(gir::function&            fn,
                                             .is_alloca = p_spilled,
                                             .const_val = stdx::none,
                                         });
+        if (param.is_written && !p_spilled) { spill_written_param(fn, p_name); }
     }
+}
+
+// A loop condition emitted before the body's store must already read the slot
+auto emitter::spill_written_param(const gir::function& fn, std::string_view name) -> void {
+    if (fn.get_attributes().naked) { return; }
+    lvalue_of_binding(name);
 }
 
 // A body that falls off its end still needs a terminator; a non-void one yields `undefined`

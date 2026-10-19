@@ -606,7 +606,13 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
         if (resolve_block_statements(block)) { return fail_scoped_body(); }
     }
 
-    if (for_expr.non_break) { TRY_RESOLVE(*for_expr.non_break); }
+    if (for_expr.non_break) {
+        // A loop's `else` yields its value like an `if` arm, discarded only with the loop
+        const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
+        TRY_RESOLVE(*for_expr.non_break);
+    }
     resolving_.set_sema_type(
         id, loop_type.is_poison() ? ctx_.get_builtin_resolved_type(type_kind::VOID_) : loop_type);
     last_type_.emplace(resolving_.get_sema_type(id));
@@ -1996,6 +2002,9 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
         if (const auto idx{capture_scope(while_loop.else_capture)}) {
             capture_s.emplace(table_stack_, *idx, table_idx_);
         }
+        const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
         TRY_RESOLVE(*while_loop.non_break);
     }
     resolving_.set_sema_type(

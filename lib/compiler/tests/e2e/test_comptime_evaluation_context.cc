@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "compiler/sema/error.hh"
@@ -149,6 +151,24 @@ TEST_CASE("an inferred comptime parameter's error points at the read, suggesting
             return @intCast(to_lo(x));
         };
     )") == 42);
+}
+
+TEST_CASE("assigning to an inferred comptime parameter names the read that inferred it") {
+    const auto out{helpers::resolve_diags(R"(
+        const step = fn(comptime T: type, value: T): T {
+            if comptime (@typeInfo(T).int.bits <= 2) {
+                return if comptime (value == 0) 0 else 1;
+            } else {
+                value -= 1;
+                return value;
+            }
+        };
+        const run = fn(): u32 { return step(u32, 3); };
+    )")};
+    CHECK(std::ranges::contains(out.codes, sema::error::ASSIGNMENT_TO_CONST));
+    CHECK(out.message_contains("Cannot assign to 'value', which is a `comptime` parameter; "
+                               "'value' is compile-time because the function reads it at compile "
+                               "time at"));
 }
 
 } // namespace ghoti::tests
