@@ -14,6 +14,7 @@ pub const nan = float.nan;
 pub const snan = float.snan;
 pub const inf = float.inf;
 pub const float_min = float.float_min;
+pub const float_true_min = float.float_true_min;
 pub const float_max = float.float_max;
 pub const float_eps = float.float_eps;
 pub const approx_eq_abs = float.approx_eq_abs;

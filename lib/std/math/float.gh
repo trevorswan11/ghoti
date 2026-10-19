@@ -166,6 +166,11 @@ test "inf" {
     return reconstruct_float(T, float_exponent_min(T), mantissa_one(T));
 };
 
+/// Returns the smallest subnormal number representable in floating point type T.
+@[inline(.always)] pub const float_true_min = fn(comptime T: type): T {
+    return reconstruct_float(T, float_exponent_min(T) - 1, 1);
+};
+
 /// Returns the largest normal number representable in floating point type T.
 @[inline(.always)] pub const float_max = fn(comptime T: type): T {
     const all_1s_mantissa = (1 << float_mantissa_bits(T)) - 1;
