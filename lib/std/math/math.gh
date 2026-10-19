@@ -16,6 +16,8 @@ pub const inf = float.inf;
 pub const float_min = float.float_min;
 pub const float_max = float.float_max;
 pub const float_eps = float.float_eps;
+pub const approx_eq_abs = float.approx_eq_abs;
+pub const approx_eq_rel = float.approx_eq_rel;
 
 test {
     import "float.gh";
@@ -24,9 +26,21 @@ test {
 import "log2.gh" as log2_;
 
 pub const log2 = log2_.log2;
+pub const Log2Int = log2_.Log2Int;
+pub const log2_int = log2_.log2_int;
+pub const Log2IntCeil = log2_.Log2IntCeil;
+pub const log2_int_ceil = log2_.log2_int_ceil;
 
 test {
     import "log2.gh";
+}
+
+import "sqrt.gh" as sqrt_;
+pub const sqrt = sqrt_.sqrt;
+pub const sqrt_int = sqrt_.sqrt_int;
+
+test {
+    import "sqrt.gh";
 }
 
 /// Asserts that `int` is strictly positive
@@ -84,88 +98,6 @@ test "int_cast" {
     @expect(int_cast(u8, 255u32)! == 255u8);
     @expect(@TypeOf(int_cast(u8, 255)!) == u8);
     @expect(@TypeOf(int_cast(u8, 255u32)!) == u8);
-}
-
-/// Returns an unsigned int type that can hold the number of bits in T - 1.
-/// Suitable for 0-based bit indices of T.
-pub const Log2Int = fn(comptime T: type): type {
-    return match comptime (@typeInfo(T)) {
-        .comptime_int => comptime_int,
-        .int => |info| blk: {
-            const bits: u16 = @typeInfo(T).int.bits;
-            const log2_bits = if (bits <= 1) 0 else 16 - @clz(bits - 1);
-            break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
-        },
-        _ => @compileError("Log2Int requires an integer argument type, got " ++ @typeName(T)),
-    };
-};
-
-test "Log2Int construction" {
-    @expect(Log2Int(comptime_int) == comptime_int);
-    @expect(Log2Int(u1) == u0);
-    @expect(Log2Int(u64) == u6);
-    @expect(Log2Int(u65) == u7);
-    @expect(Log2Int(u32) == u5);
-}
-
-/// Return the log base 2 of integer value x, rounding down to the nearest integer.
-pub const log2_int = fn(comptime T: type, x: T): Log2Int(T) {
-    const info = @typeInfo(T);
-    if comptime (info != .int or info.int.signedness != .unsigned) {
-        @compileError("log2_int requires an unsigned integer, got " ++ @typeName(T));
-    }
-    @assert(x != 0);
-    return @intCast(Log2Int(T), info.int.bits - 1 - @clz(x));
-};
-
-test "log2_int" {
-    @expect(log2_int(u1, 1) == 0);
-    @expect(log2_int(u32, 1) == 0);
-    @expect(log2_int(u32, 2) == 1);
-    @expect(log2_int(u32, 3) == 1);
-    @expect(log2_int(u32, 4) == 2);
-    @expect(log2_int(u32, 5) == 2);
-    @expect(log2_int(u32, 6) == 2);
-    @expect(log2_int(u32, 7) == 2);
-    @expect(log2_int(u32, 8) == 3);
-    @expect(log2_int(u32, 9) == 3);
-    @expect(log2_int(u32, 10) == 3);
-}
-
-pub const Log2IntCeil = fn(comptime T: type): type {
-    return match comptime (@typeInfo(T)) {
-        .comptime_int => comptime_int,
-        .int => |info| blk: {
-            const bits: u16 = @typeInfo(T).int.bits;
-            const log2_bits = if (bits <= 1) 1 else 16 - @clz(bits);
-            break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
-        },
-        _ => @compileError("Log2IntCeil requires an integer argument type, got " ++ @typeName(T)),
-    };
-};
-
-pub const log2_int_ceil = fn(comptime T: type, x: T): Log2IntCeil(T) {
-    const info = @typeInfo(T);
-    if comptime (info != .int or info.int.signedness != .unsigned) {
-        @compileError("log2_int_ceil requires an unsigned integer, got " ++ @typeName(T));
-    }
-    @assert(x != 0);
-    if (x == 1) return 0;
-    let log2_val: Log2IntCeil(T) = log2_int(T, x - 1);
-    return log2_val + 1;
-};
-
-test "log2_int_ceil" {
-    @expect(log2_int_ceil(u32, 1) == 0);
-    @expect(log2_int_ceil(u32, 2) == 1);
-    @expect(log2_int_ceil(u32, 3) == 2);
-    @expect(log2_int_ceil(u32, 4) == 2);
-    @expect(log2_int_ceil(u32, 5) == 3);
-    @expect(log2_int_ceil(u32, 6) == 3);
-    @expect(log2_int_ceil(u32, 7) == 3);
-    @expect(log2_int_ceil(u32, 8) == 3);
-    @expect(log2_int_ceil(u32, 9) == 4);
-    @expect(log2_int_ceil(u32, 10) == 4);
 }
 
 /// Returns the maximum value of integer type T.

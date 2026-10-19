@@ -1,3 +1,5 @@
+import "sqrt.gh" as sqrt;
+
 @[inline(.always)] pub const is_nan = fn(val: auto): bool {
     return val != val;
 };
@@ -174,3 +176,114 @@ test "inf" {
 @[inline(.always)] pub const float_eps = fn(comptime T: type): T {
     return reconstruct_float(T, -float_fractional_bits(T), mantissa_one(T));
 };
+
+/// Performs an approximate comparison of two floating point values `x` and `y`.
+/// Returns true if the absolute difference between them is less or equal than
+/// the specified tolerance.
+///
+/// The `tolerance` parameter is the absolute tolerance used when determining if
+/// the two numbers are close enough; a good value for this parameter is a small
+/// multiple of `floatEps(T)`.
+///
+/// Note that this function is recommended for comparing small numbers
+/// around zero; using `approxEqRel` is suggested otherwise.
+///
+/// NaN values are never considered equal to any value.
+pub const approx_eq_abs = fn(comptime T: type, x: T, y: T, tolerance: T): bool {
+    comptime @assert(@typeInfo(T) == .float or @typeInfo(T) == .comptime_float);
+    @assert(tolerance >= 0);
+
+    // Fast path for equal values (and signed zeros and infinites).
+    if (x == y) return true;
+    if (is_nan(x) or is_nan(y)) return false;
+    return @abs(x - y) <= tolerance;
+};
+
+test "approx_eq_abs" {
+    @skip("`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__letf2`, `__eqtf2`");
+    for comptime ([_]type{ f16, f32, f64, f128 }) |T| {
+        const eps_value = float_eps(T);
+        const min_value = float_min(T);
+
+        @expect(approx_eq_abs(T, 0.0, 0.0, eps_value));
+        @expect(approx_eq_abs(T, -0.0, -0.0, eps_value));
+        @expect(approx_eq_abs(T, 0.0, -0.0, eps_value));
+        @expect(!approx_eq_abs(T, 1.0 + 2 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(T, 1.0 + 1 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(T, min_value, 0.0, eps_value * 2));
+        @expect(approx_eq_abs(T, -min_value, 0.0, eps_value * 2));
+    }
+
+    comptime {
+        // `comptime_float` is guaranteed to have the same precision and operations of
+        // the largest other floating point type, which is f128 but it doesn't have a
+        // defined layout so we can't rely on `@bitCast` to construct the smallest
+        // possible epsilon value like we do in the tests above. In the same vein, we
+        // also can't represent a max/min, `NaN` or `Inf` values.
+        const eps_value = 1e-4;
+
+        @assert(approx_eq_abs(comptime_float, 0.0, 0.0, eps_value));
+        @assert(approx_eq_abs(comptime_float, -0.0, -0.0, eps_value));
+        @assert(approx_eq_abs(comptime_float, 0.0, -0.0, eps_value));
+        @assert(!approx_eq_abs(comptime_float, 1.0 + 2 * eps_value, 1.0, eps_value));
+        @assert(approx_eq_abs(comptime_float, 1.0 + 1 * eps_value, 1.0, eps_value));
+    }
+}
+
+/// Performs an approximate comparison of two floating point values `x` and `y`.
+/// Returns true if the absolute difference between them is less or equal than
+/// `max(|x|, |y|) * tolerance`, where `tolerance` is a positive number greater
+/// than zero.
+///
+/// The `tolerance` parameter is the relative tolerance used when determining if
+/// the two numbers are close enough; a good value for this parameter is usually
+/// `sqrt(floatEps(T))`, meaning that the two numbers are considered equal if at
+/// least half of the digits are equal.
+///
+/// Note that for comparisons of small numbers around zero this function won't
+/// give meaningful results, use `approxEqAbs` instead.
+///
+/// NaN values are never considered equal to any value.
+pub const approx_eq_rel = fn(comptime T: type, x: T, y: T, tolerance: T): bool {
+    comptime @assert(@typeInfo(T) == .float or @typeInfo(T) == .comptime_float);
+    @assert(tolerance >= 0);
+
+    // Fast path for equal values (and signed zeros and infinites).
+    if (x == y) return true;
+    if (is_nan(x) or is_nan(y)) return false;
+    return @abs(x - y) <= @max(@abs(x), @abs(y)) * tolerance;
+};
+
+test "approx_eq_rel" {
+    @skip(
+        "`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__gttf2`, `__eqtf2`, `__multf3`, `__letf2`",
+    );
+    for comptime ([_]type{ f16, f32, f64, f128 }) |T| {
+        const eps_value = float_eps(T);
+        const sqrt_eps_value = sqrt.sqrt(eps_value);
+        const nan_value = nan(T);
+        const inf_value = inf(T);
+        const min_value = float_min(T);
+
+        @expect(approx_eq_rel(T, 1.0, 1.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, 1.0, 0.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, 1.0, nan_value, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, nan_value, nan_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, inf_value, inf_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, min_value, min_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, -min_value, -min_value, sqrt_eps_value));
+    }
+
+    comptime {
+        // `comptime_float` is guaranteed to have the same precision and operations of
+        // the largest other floating point type, which is f128 but it doesn't have a
+        // defined layout so we can't rely on `@bitCast` to construct the smallest
+        // possible epsilon value like we do in the tests above. In the same vein, we
+        // also can't represent a max/min, `NaN` or `Inf` values.
+        const eps_value = 1e-4;
+        const sqrt_eps_value = sqrt.sqrt(eps_value);
+
+        @assert(approx_eq_rel(comptime_float, 1.0, 1.0, sqrt_eps_value));
+        @assert(!approx_eq_rel(comptime_float, 1.0, 0.0, sqrt_eps_value));
+    }
+}
