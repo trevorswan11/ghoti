@@ -34,6 +34,9 @@ class dumper {
 
     [[nodiscard]] static auto compare_source_asts(std::string_view s1, std::string_view s2) -> bool;
 
+    // Same check against an already parsed `s1`, so only `s2` is parsed
+    [[nodiscard]] static auto compare_source_asts(const AST& s1_ast, std::string_view s2) -> bool;
+
   private:
     template <IndexableNodeID ID> auto dump(ID id) -> void {
         ast_[id].visit([&](const auto& data) -> void { this->visit(node_id{id}, data); });
