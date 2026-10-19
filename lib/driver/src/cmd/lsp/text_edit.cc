@@ -1,6 +1,7 @@
 #include "driver/cmd/lsp/text_edit.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <string_view>
 
@@ -28,7 +29,8 @@ auto offset_of(std::string_view text, source_location pos) -> usize {
 namespace {
 
 // Compiler locations count bytes, like UTF-8; clients count UTF-16 units unless told otherwise
-position_encoding negotiated_encoding{position_encoding::UTF16};
+// Atomic since the analysis worker converts diagnostics while `initialize` may still be setting it
+std::atomic<position_encoding> negotiated_encoding{position_encoding::UTF16};
 
 [[nodiscard]] auto line_text(std::string_view text, usize line) -> std::string_view {
     const auto start{offset_of(text, {line, 0})};
@@ -42,10 +44,12 @@ position_encoding negotiated_encoding{position_encoding::UTF16};
 } // namespace
 
 auto set_position_encoding(position_encoding encoding) noexcept -> void {
-    negotiated_encoding = encoding;
+    negotiated_encoding.store(encoding, std::memory_order_relaxed);
 }
 
-auto current_position_encoding() noexcept -> position_encoding { return negotiated_encoding; }
+auto current_position_encoding() noexcept -> position_encoding {
+    return negotiated_encoding.load(std::memory_order_relaxed);
+}
 
 auto position_encoding_name(position_encoding encoding) noexcept -> std::string_view {
     return encoding == position_encoding::UTF8 ? "utf-8" : "utf-16";

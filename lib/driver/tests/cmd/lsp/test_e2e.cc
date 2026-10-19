@@ -1752,9 +1752,8 @@ TEST_CASE("ghoti lsp counts UTF-16 units by default and bytes when the client of
 
 namespace {
 
-// An initialized child server with `uri` opened as `text`, its first diagnostics already read
-auto start_with_document(std::string_view debounce_ms, std::string_view uri, std::string_view text)
-    -> stdx::box<piped_process> {
+// An initialized child server that debounces edits by `debounce_ms`
+auto start_server(std::string_view debounce_ms) -> stdx::box<piped_process> {
     auto proc{stdx::make_box<piped_process>(
         mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", std::string{debounce_ms}})};
     REQUIRE(proc->is_running());
@@ -1773,8 +1772,12 @@ auto start_with_document(std::string_view debounce_ms, std::string_view uri, std
                            {"method", "initialized"},
                            {"params", nlohmann::json::object()},
                        });
+    return proc;
+}
+
+auto open_document(piped_process& proc, std::string_view uri, std::string_view text) -> void {
     lsp::write_message(
-        proc->stdin_stream(),
+        proc.stdin_stream(),
         {
             {"jsonrpc", "2.0"},
             {"method", "textDocument/didOpen"},
@@ -1784,9 +1787,33 @@ auto start_with_document(std::string_view debounce_ms, std::string_view uri, std
                   {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}},
             },
         });
+}
+
+// `start_server` with `uri` opened as `text`, its first diagnostics already read
+auto start_with_document(std::string_view debounce_ms, std::string_view uri, std::string_view text)
+    -> stdx::box<piped_process> {
+    auto proc{start_server(debounce_ms)};
+    open_document(*proc, uri, text);
     const auto opened = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
     CHECK(opened.at("method") == "textDocument/publishDiagnostics");
     return proc;
+}
+
+auto request_hover(piped_process& proc, i32 id, std::string_view uri, i32 line, i32 character)
+    -> void {
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", id},
+                           {"method", "textDocument/hover"},
+                           {
+                               "params",
+                               {
+                                   {"textDocument", {{"uri", uri}}},
+                                   {"position", {{"line", line}, {"character", character}}},
+                               },
+                           },
+                       });
 }
 
 auto replace_all(piped_process& proc, std::string_view uri, i32 version, std::string_view text)
@@ -1827,6 +1854,57 @@ TEST_CASE("ghoti lsp publishes a debounced edit's diagnostics with no request af
     CHECK(published.at("params").at("diagnostics").size() == 1);
 
     shut_down(*proc);
+}
+
+TEST_CASE("ghoti lsp answers a query right after an edit without waiting out the debounce") {
+    constexpr std::string_view uri{"file:///test_e2e_parked.gh"};
+    auto                       proc{start_server("600000")};
+
+    // The hover needs the opened text analyzed, which starts at once instead of in ten minutes
+    open_document(*proc, uri, "pub const x = 5;\npub const y = x + 1;\n");
+    request_hover(*proc, 2, uri, 1, 14);
+
+    // The analysis's diagnostics come before the answer that waited on it
+    const auto published = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(published.at("method") == "textDocument/publishDiagnostics");
+    const auto hover = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(hover.at("id") == 2);
+    CHECK(hover.at("result").at("contents").at("value") == "comptime_int");
+
+    shut_down(*proc);
+}
+
+TEST_CASE("ghoti lsp answers a request it was asked to cancel exactly once") {
+    constexpr std::string_view uri{"file:///test_e2e_cancel.gh"};
+    auto                       proc{start_with_document("0", uri, "pub const x = 5;\n")};
+
+    replace_all(*proc, uri, 2, "pub const x = 6;\n");
+    request_hover(*proc, 7, uri, 0, 10);
+    lsp::write_message(proc->stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "$/cancelRequest"},
+                           {"params", {{"id", 7}}},
+                       });
+
+    // Cancelled, or answered if the cancellation came too late; either way only once
+    usize answers{0};
+    lsp::write_message(proc->stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 99}, {"method", "shutdown"}});
+    while (true) {
+        const auto message = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+        if (!message.contains("id")) { continue; }
+        if (message.at("id") == 99) { break; }
+        CHECK(message.at("id") == 7);
+        if (message.contains("error")) {
+            CHECK(message.at("error").at("code") == cmd::REQUEST_CANCELLED);
+        }
+        ++answers;
+    }
+    CHECK(answers == 1);
+
+    lsp::write_message(proc->stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc->close_stdin_and_wait()) == 0);
 }
 
 } // namespace ghoti::tests

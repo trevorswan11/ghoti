@@ -75,13 +75,18 @@ TEST_CASE("document_store workspace_symbols filters case-insensitively by substr
     CHECK_FALSE(lsp::has_field(matched, "name", "other"));
 }
 
-TEST_CASE("document_store workspace_symbols keeps entries for a closed document") {
-    lsp::document_store         store{std::cerr};
-    const std::filesystem::path path{"test_document_store_workspace_closed.gh"};
-    CHECK(!store.update(path, "pub const still_here = 1;\n").empty());
-    store.close(path);
+TEST_CASE("document_store workspace_symbols falls back to a closed document's saved contents") {
+    tempdir dir{"workspace_closed"};
+    dir.write("closed.gh", "pub const on_disk = 1;\n");
+    const auto path{dir.path / "closed.gh"};
 
-    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "still_here"));
+    lsp::document_store store{std::cerr};
+    CHECK(!store.update(path, "pub const unsaved = 1;\n").empty());
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "unsaved"));
+
+    store.close(path);
+    CHECK(lsp::has_field(store.workspace_symbols(""), "name", "on_disk"));
+    CHECK_FALSE(lsp::has_field(store.workspace_symbols(""), "name", "unsaved"));
 }
 
 TEST_CASE("document_store finds references in a file that imports the queried definition") {
