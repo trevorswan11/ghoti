@@ -55,6 +55,7 @@ class big_uint {
     auto shift_left_one(bool low_bit) -> void;
     auto trim() -> void;
 
+  private:
     std::vector<u64> limbs_;
 };
 
