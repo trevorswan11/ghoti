@@ -8,7 +8,6 @@ const math = std.math;
 const symbol = compiler_rt.symbol;
 
 const Unordered = match comptime (@targetArch()) {
-    .avr => i8,
     .aarch64 => i32,
     _ => if comptime (@bitSizeOf(c_long) >= @bitSizeOf(usize)) c_long else c_longlong,
 };
@@ -30,41 +29,42 @@ comptime {
         symbol(__aeabi_dcmpge, "__aeabi_dcmpge");
         symbol(__aeabi_dcmpun, "__aeabi_dcmpun");
     }
-    // symbol(__cmpsf2, "__cmpsf2");
-    // symbol(__cmpsf2, "__eqsf2");
-    // symbol(__cmpsf2, "__nesf2");
-    // symbol(__cmpsf2, "__ltsf2");
-    // symbol(__cmpsf2, "__lesf2");
-    // symbol(__gesf2, "__gtsf2");
-    // symbol(__gesf2, "__gesf2");
-    // symbol(__unordsf2, "__unordsf2");
 
-    // symbol(__cmpdf2, "__cmpdf2");
-    // symbol(__cmpdf2, "__eqdf2");
-    // symbol(__cmpdf2, "__nedf2");
-    // symbol(__cmpdf2, "__ltdf2");
-    // symbol(__cmpdf2, "__ledf2");
-    // symbol(__gedf2, "__gtdf2");
-    // symbol(__gedf2, "__gedf2");
-    // symbol(__unorddf2, "__unorddf2");
+    symbol(__cmpsf2, "__cmpsf2");
+    symbol(__cmpsf2, "__eqsf2");
+    symbol(__cmpsf2, "__nesf2");
+    symbol(__cmpsf2, "__ltsf2");
+    symbol(__cmpsf2, "__lesf2");
+    symbol(__gesf2, "__gtsf2");
+    symbol(__gesf2, "__gesf2");
+    symbol(__unordsf2, "__unordsf2");
 
-    // symbol(__cmpxf2, "__cmpxf2");
-    // symbol(__cmpxf2, "__eqxf2");
-    // symbol(__cmpxf2, "__nexf2");
-    // symbol(__cmpxf2, "__ltxf2");
-    // symbol(__cmpxf2, "__lexf2");
-    // symbol(__gexf2, "__gtxf2");
-    // symbol(__gexf2, "__gexf2");
-    // symbol(__unordxf2, "__unordxf2");
+    symbol(__cmpdf2, "__cmpdf2");
+    symbol(__cmpdf2, "__eqdf2");
+    symbol(__cmpdf2, "__nedf2");
+    symbol(__cmpdf2, "__ltdf2");
+    symbol(__cmpdf2, "__ledf2");
+    symbol(__gedf2, "__gtdf2");
+    symbol(__gedf2, "__gedf2");
+    symbol(__unorddf2, "__unorddf2");
 
-    // symbol(__cmptf2, "__cmptf2");
-    // symbol(__cmptf2, "__eqtf2");
-    // symbol(__cmptf2, "__netf2");
-    // symbol(__cmptf2, "__lttf2");
-    // symbol(__cmptf2, "__letf2");
-    // symbol(__getf2, "__gttf2");
-    // symbol(__getf2, "__getf2");
-    // symbol(__unordtf2, "__unordtf2");
+    symbol(__cmpxf2, "__cmpxf2");
+    symbol(__cmpxf2, "__eqxf2");
+    symbol(__cmpxf2, "__nexf2");
+    symbol(__cmpxf2, "__ltxf2");
+    symbol(__cmpxf2, "__lexf2");
+    symbol(__gexf2, "__gtxf2");
+    symbol(__gexf2, "__gexf2");
+    symbol(__unordxf2, "__unordxf2");
+
+    symbol(__cmptf2, "__cmptf2");
+    symbol(__cmptf2, "__eqtf2");
+    symbol(__cmptf2, "__netf2");
+    symbol(__cmptf2, "__lttf2");
+    symbol(__cmptf2, "__letf2");
+    symbol(__getf2, "__gttf2");
+    symbol(__getf2, "__getf2");
+    symbol(__unordtf2, "__unordtf2");
 }
 
 @cfg (compiler_rt.want_aeabi) {
@@ -117,6 +117,18 @@ comptime {
     };
 }
 
+const __cmpsf2 = fn(a: f32, b: f32) callconv(.c): Order {
+    return cmp_f32(a, b).unwrap_or(.gt);
+};
+
+const __gesf2 = fn(a: f32, b: f32) callconv(.c): Order {
+    return cmp_f32(a, b).unwrap_or(.lt);
+};
+
+const __unordsf2 = fn(a: f32, b: f32) callconv(.c): Unordered {
+    return @intFromBool(unord_f32(a, b));
+};
+
 @[inline(.always)] pub const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
     return cmpf2(f32, a, b);
 };
@@ -165,6 +177,18 @@ test "compare f32" {
         }
     }
 }
+
+const __cmpdf2 = fn(a: f64, b: f64) callconv(.c): Order {
+    return cmp_f64(a, b).unwrap_or(.gt);
+};
+
+const __gedf2 = fn(a: f64, b: f64) callconv(.c): Order {
+    return cmp_f64(a, b).unwrap_or(.lt);
+};
+
+const __unorddf2 = fn(a: f64, b: f64) callconv(.c): Unordered {
+    return @intFromBool(unord_f64(a, b));
+};
 
 @[inline(.always)] pub const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
     return cmpf2(f64, a, b);
@@ -215,6 +239,18 @@ test "compare f64" {
     }
 }
 
+const __cmpxf2 = fn(a: f80, b: f80) callconv(.c): Order {
+    return cmp_f80(a, b).unwrap_or(.gt);
+};
+
+const __gexf2 = fn(a: f80, b: f80) callconv(.c): Order {
+    return cmp_f80(a, b).unwrap_or(.lt);
+};
+
+const __unordxf2 = fn(a: f80, b: f80) callconv(.c): Unordered {
+    return @intFromBool(unord_f80(a, b));
+};
+
 @[inline(.always)] pub const cmp_f80 = fn(a: f80, b: f80): std.Option(Order) {
     const significand_bits = math.float_mantissa_bits(f80);
     const int_bit = 0x8000000000000000;
@@ -255,6 +291,18 @@ test "compare f64" {
 
 @[inline(.always)] pub const unord_f80 = fn(a: f80, b: f80): bool {
     return unord(f80, a, b);
+};
+
+const __cmptf2 = fn(a: f128, b: f128) callconv(.c): Order {
+    return cmp_f128(a, b).unwrap_or(.gt);
+};
+
+const __getf2 = fn(a: f128, b: f128) callconv(.c): Order {
+    return cmp_f128(a, b).unwrap_or(.lt);
+};
+
+const __unordtf2 = fn(a: f128, b: f128) callconv(.c): Unordered {
+    return @intFromBool(unord_f128(a, b));
 };
 
 @[inline(.always)] pub const cmp_f128 = fn(a: f128, b: f128): std.Option(Order) {
