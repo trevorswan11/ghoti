@@ -257,8 +257,8 @@ const __unordxf2 = fn(a: f80, b: f80) callconv(.c): Unordered {
     const sign_bit = 0x8000;
     const special_exp = 0x7FFF;
 
-    let a_rep = math.f80.from_float(a);
-    let b_rep = math.f80.from_float(b);
+    let a_rep: math.f80 = .from_float(a);
+    let b_rep: math.f80 = .from_float(b);
 
     // If either a or b is NaN, they are unordered.
     if ((a_rep.exp & special_exp == special_exp and a_rep.fraction ^ int_bit != 0) or
