@@ -19,6 +19,7 @@ pub const float_max = float.float_max;
 pub const float_eps = float.float_eps;
 pub const approx_eq_abs = float.approx_eq_abs;
 pub const approx_eq_rel = float.approx_eq_rel;
+pub const @"f80" = float.f80;
 
 test {
     import "float.gh";
