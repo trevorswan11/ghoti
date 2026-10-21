@@ -671,6 +671,27 @@ TEST_CASE("Same-named private generics in different modules keep their own insta
                                     )"}}) == 23);
 }
 
+TEST_CASE("A comptime_int generic another module instantiated first still folds in a generic") {
+    CHECK(helpers::compile_and_run(R"(
+        import "limits.gh" as limits;
+        const low_half = fn(comptime T: type, v: T): T { return v & limits.max_of(u32); };
+        pub const main = fn(): i32 {
+            if (low_half(u64, 0x1234567890) != 0x34567890) { return 1; }
+            return limits.warm();
+        };
+    )",
+                                   {{"limits.gh", R"(
+                                        pub const max_of = fn(comptime T: type): comptime_int {
+                                            const bits = @typeInfo(T).int.bits;
+                                            return (1 << bits) - 1;
+                                        };
+                                        pub const warm = fn(): i32 {
+                                            let x: u64 = 7;
+                                            return @intCast((x & max_of(u32)) - 7);
+                                        };
+                                    )"}}) == 0);
+}
+
 TEST_CASE("A parameter type may reflect on an earlier type parameter") {
     CHECK(helpers::compile_and_run(R"(
         const shift = fn(comptime T: type, bits: ^mut @Int(.{

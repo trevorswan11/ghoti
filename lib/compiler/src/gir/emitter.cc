@@ -241,8 +241,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
         for (const auto root_id : ast_module_.ast) {
             emit_top_level_stmt(ast_module_, root_id, /*emit_tests=*/true);
         }
-        for (const auto& inst : ast_module_.generic_instantiations) {
-            emit_generic_instantiation(inst);
+        for (const auto& name : ast_module_.generic_instantiations) {
+            emit_generic_instantiation(name);
         }
         for (const auto& tcm : ast_module_.type_ctor_member_emits) {
             emit_type_ctor_member(ast_module_, tcm);
@@ -265,8 +265,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
             for (const auto root_id : other_mod->ast) {
                 emit_top_level_stmt(*other_mod, root_id, emit_tests);
             }
-            for (const auto& inst : other_mod->generic_instantiations) {
-                emit_generic_instantiation(inst);
+            for (const auto& name : other_mod->generic_instantiations) {
+                emit_generic_instantiation(name);
             }
             for (const auto& tcm : other_mod->type_ctor_member_emits) {
                 emit_type_ctor_member(*other_mod, tcm);
@@ -315,9 +315,13 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
     return std::move(gir_module_);
 }
 
-auto emitter::emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void {
+auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void {
     PROFILE_FUNCTION();
-    if (gir_module_.has_function(req.mangled_name)) { return; }
+    if (gir_module_.has_function(mangled_name)) { return; }
+    const auto request{ctx_.instantiation_cache.get_request(mangled_name)};
+    if (!request) { return; }
+    // A copy, since emitting the body may record further requests
+    const sema::generic_instantiation_request req{*request};
     if (req.return_type->get_kind() == sema::type_kind::TYPE) { return; }
     // A `comptime_int`/`comptime_float` result only exists at compile time, so every call folds
     if (sema::is_comptime_numeric(req.return_type->get_kind())) { return; }
@@ -1596,7 +1600,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
                                  return fmt::format("anonymous_test{}", anon_test_desc_counter_++);
                              })};
 
-    const auto loc{active_ast().location_of(id)};
+    const auto loc{active_ast().location_of(id).one_based()};
     const auto unique_fn_name{fmt::format("__ghoti_test_fn_{}", anon_test_fn_counter_++)};
 
     auto& fn{add_gir_function(unique_fn_name, test_fn_type, true, false)};
@@ -2137,8 +2141,8 @@ auto emitter::emit_comptime_only_call(ast::node_id id, sema::type& result, sema:
 
 // The declared result of the monomorph `mangled_name`
 auto emitter::instantiation_result(std::string_view mangled_name) -> stdx::option<sema::type&> {
-    for (const auto& req : active_mod().generic_instantiations) {
-        if (req.mangled_name == mangled_name) { return *req.return_type; }
+    if (const auto req{ctx_.instantiation_cache.get_request(mangled_name)}) {
+        return *req->return_type;
     }
     return stdx::none;
 }
@@ -2152,8 +2156,8 @@ auto emitter::emit_skip(value msg, ast::node_id at) -> void {
     std::vector<value> args;
     args.emplace_back(std::move(msg));
     args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-    args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-    args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.one_based().line), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.one_based().column), u32_type});
 
     request_builtin_runtime("skip_handler");
     builder_.set_location(loc);
@@ -4334,7 +4338,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         }
         case syntax::builtin_t::SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
-            const auto         loc{active_ast().location_of(id)};
+            const auto         loc{active_ast().location_of(*call.function).one_based()};
             auto&              u32_type{ctx_.get_int(32, false)};
             std::vector<value> args;
             args.emplace_back(
@@ -4399,7 +4403,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
 
-            const auto loc{active_ast().location_of(id)};
+            const auto loc{active_ast().location_of(*call.function).one_based()};
             auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
@@ -4446,7 +4450,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
 
-            const auto loc{active_ast().location_of(id)};
+            const auto loc{active_ast().location_of(*call.function).one_based()};
             auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
@@ -4473,7 +4477,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             emit_skip(msg_val ? std::move(*msg_val)
                               : const_value::make_string(ctx_, "").to_gir_value(),
-                      id);
+                      *call.function);
             return value{void_val{}, ret_type};
         }
         case syntax::builtin_t::CLZ:
@@ -5093,10 +5097,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         for (usize p{0}; p < i; ++p) {
             if (!binds_comptime_arg(p)) { ++runtime_idx; }
         }
-        for (const auto& req : active_mod().generic_instantiations) {
-            if (req.mangled_name != *callee_name) { continue; }
-            if (runtime_idx < req.arg_types.size()) { return *req.arg_types[runtime_idx]; }
-            break;
+        if (const auto req{ctx_.instantiation_cache.get_request(*callee_name)};
+            req && runtime_idx < req->arg_types.size()) {
+            return *req->arg_types[runtime_idx];
         }
         return stdx::none;
     }};
@@ -5192,9 +5195,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     }
 
     // Fallback match by arg types only, for calls the resolver did not pin above.
-    for (const auto& req : ast_module_.generic_instantiations) {
+    for (const auto& name : ast_module_.generic_instantiations) {
         if (resolved_generic_target) { break; }
-        bool fn_match{false};
+        const auto request{ctx_.instantiation_cache.get_request(name)};
+        if (!request) { continue; }
+        const auto& req{*request};
+        bool        fn_match{false};
         if (fn_type_opt && *req.generic_fn_type == *fn_type_opt) {
             fn_match = true;
         } else if (const auto info{ctx_.generic_functions.get_opt(*req.generic_fn_type)};
@@ -6593,7 +6599,7 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
 }
 
 auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> void {
-    const auto loc{active_ast().location_of(site)};
+    const auto loc{active_ast().location_of(site).one_based()};
     auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
     auto&      cstr_type{ctx_.get_slice(sema::types::mut::CONSTANT, true, ctx_.get_int(8, false))};

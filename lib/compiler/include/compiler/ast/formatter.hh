@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <ostream>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include <stdx/option.hh>
@@ -20,6 +19,7 @@
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/doc.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::ast {
 
@@ -44,6 +44,7 @@ class formatter {
         usize            col;
         bool             is_trailing{false};
         bool             is_leading_blank{false};
+        bool             is_trailing_blank{false}; // a blank line before the token after it
         bool             consumed{false};
     };
 
@@ -98,31 +99,34 @@ class formatter {
                         const member_list&                                members,
                         const std::vector<cfg_item_group<member_handle>>& cfg_groups) -> void;
 
-    [[nodiscard]] auto format_member_cfg_group(const cfg_item_group<member_handle>& group)
-        -> syntax::doc_id;
+    [[nodiscard]] auto format_member_cfg_group(const cfg_item_group<member_handle>& group,
+                                               bool allow_leading_blank) -> syntax::doc_id;
     [[nodiscard]] auto aggregate_body(std::vector<syntax::doc_id> entries,
                                       usize                       comma_count,
                                       bool force_break = false) -> syntax::doc_id;
 
-    template <typename Group, typename ItemFmt>
-    [[nodiscard]] auto format_aggregate_cfg_group(const Group& group, ItemFmt item_fmt)
-        -> syntax::doc_id {
-        std::vector<syntax::doc_id> parts;
-        for (usize a{0}; a < group.arms.size(); ++a) {
-            const auto& arm{group.arms[a]};
-            if (a != 0) { parts.emplace_back(doc_manager_.text(" else ")); }
-            if (arm.predicate) {
-                parts.emplace_back(doc_manager_.text("@cfg ("));
-                parts.emplace_back(format(*arm.predicate));
-                parts.emplace_back(doc_manager_.text(") "));
-            }
-            std::vector<syntax::doc_id> items;
-            items.reserve(arm.items.size());
-            for (const auto& item : arm.items) { items.emplace_back(item_fmt(item)); }
-            parts.emplace_back(doc_manager_.delimited("{", "}", std::move(items), true, true));
-        }
-        return doc_manager_.concat(std::move(parts));
-    }
+    // A field or variant `@cfg` group, `item_start` / `item_end` giving an item's source lines
+    template <typename Group, typename ItemFmt, typename ItemStart, typename ItemEnd>
+    [[nodiscard]] auto format_aggregate_cfg_group(const Group& group,
+                                                  bool         allow_leading_blank,
+                                                  ItemFmt&&    item_fmt,
+                                                  ItemStart&&  item_start,
+                                                  ItemEnd&&    item_end) -> syntax::doc_id;
+
+    // `a, b, c => ` heading a match or `@cfgValue` arm, `force_break` from a trailing comma
+    [[nodiscard]] auto alternatives_head(std::vector<syntax::doc_id> alternatives, bool force_break)
+        -> syntax::doc_id;
+    // `@cfg (pred) ` before an arm, or ` else ` / ` else @cfg (pred) ` after the first
+    [[nodiscard]] auto cfg_arm_head(bool first, const stdx::option<expr_handle>& predicate)
+        -> syntax::doc_id;
+    // The comments of a body-less braced arm, or `{}` when it has none
+    [[nodiscard]] auto empty_cfg_arm(const stdx::option<source_location>& close) -> syntax::doc_id;
+    // Surrounds a `@cfg` group with the comments before its first line and after its last
+    template <typename Group, typename Render>
+    [[nodiscard]] auto with_cfg_group_comments(const Group& group,
+                                               usize        end_line,
+                                               bool         allow_leading_blank,
+                                               Render&&     render) -> syntax::doc_id;
 
     [[nodiscard]] auto decl_prefix(const decl_stmt& node) -> syntax::doc_id;
     [[nodiscard]] auto attribute_list_doc(const attribute_list& list) -> syntax::doc_id;

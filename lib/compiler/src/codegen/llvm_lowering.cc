@@ -292,6 +292,16 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 [[nodiscard]] auto float_constant(f128 value, llvm::Type* ty) -> llvm::Constant* {
     auto* scalar_ty{ty->getScalarType()};
     VERIFY(scalar_ty->isFloatingPointTy(), "A float payload must lower to a float type");
+    // `APFloat::convert` quiets a signaling NaN, so a NaN is built from its exact encoding
+    if (value.is_nan() && !scalar_ty->isPPC_FP128Ty() && !scalar_ty->isBFloatTy()) {
+        const auto               format{scalar_ty->isHalfTy() ? float_format::HALF
+                                                              : llvm_float_format(scalar_ty)};
+        const auto               bits{value.encode(format)};
+        const std::array<u64, 2> nan_words{bits.low, bits.high};
+        const auto width{static_cast<u32>(scalar_ty->getPrimitiveSizeInBits().getFixedValue())};
+        const llvm::APFloat nan{scalar_ty->getFltSemantics(), llvm::APInt{width, nan_words}};
+        return llvm::ConstantFP::get(ty, nan);
+    }
     const std::array<u64, 2> words{value.bits().low, value.bits().high};
     llvm::APFloat            converted{llvm::APFloat::IEEEquad(), llvm::APInt{128, words}};
     bool                     loses_info{false};
@@ -744,7 +754,7 @@ auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::inst
     auto* msg_ty{panic_fn->getFunctionType()->getParamType(0)};
     auto* loc_ty{llvm::cast<llvm::StructType>(panic_fn->getFunctionType()->getParamType(1))};
 
-    const auto   loc{inst.location.value_or(source_location{})};
+    const auto   loc{inst.location.value_or(source_location{}).one_based()};
     llvm::Value* loc_arg{llvm::UndefValue::get(loc_ty)};
     loc_arg = builder_.CreateInsertValue(
         loc_arg, make_slice(llvm_module_->getName(), loc_ty->getElementType(0)), {0U});

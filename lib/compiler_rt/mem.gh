@@ -23,7 +23,7 @@ const word_size = @sizeOf(usize);
     return (word_size - (p & (word_size - 1))) & (word_size - 1);
 };
 
-@[no_builtins] pub const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     copy_forward(dst, src, n);
     return dst;
 };
@@ -48,7 +48,7 @@ test "memcpy copies every byte, aligned or not" {
     }
 }
 
-@[no_builtins] pub const memmove = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] const memmove = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     // Copying away from the overlap keeps every source byte intact until it is read
     if (@intFromPtr(dst) <= @intFromPtr(src) or @intFromPtr(dst) >= @intFromPtr(src) + n) {
         copy_forward(dst, src, n);
@@ -80,7 +80,7 @@ test "memmove handles overlap in both directions" {
     }
 }
 
-@[no_builtins] pub const memset = fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] const memset = fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
     let byte = @truncate(u8, @bitCast(c_uint, c));
     let mut i: usize = 0;
     let head = if (n < to_word_boundary(@intFromPtr(dst))) n
@@ -116,7 +116,7 @@ test "memset fills with the low byte of its argument" {
     }
 }
 
-@[no_builtins] pub const memcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] const memcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
     while (i < n) : (i += 1) {
         if (a[i] != b[i]) {
@@ -127,7 +127,7 @@ test "memset fills with the low byte of its argument" {
 };
 
 /// Like `memcmp`, but only says whether the ranges differ
-@[no_builtins] pub const bcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] const bcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
     if (co_aligned(@intFromPtr(a), @intFromPtr(b))) {
         let head = if (n < to_word_boundary(@intFromPtr(a))) n

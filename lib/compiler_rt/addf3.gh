@@ -33,7 +33,7 @@ comptime {
     symbol(__subtf3, "__subtf3");
 }
 
-pub const add_f32 = fn(a: f32, b: f32): f32 {
+const add_f32 = fn(a: f32, b: f32): f32 {
     return addf3(f32, a, b);
 };
 
@@ -41,7 +41,7 @@ const __addsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
     return add_f32(a, b);
 };
 
-pub const sub_f32 = fn(a: f32, b: f32): f32 {
+const sub_f32 = fn(a: f32, b: f32): f32 {
     return add_f32(a, compiler_rt.fneg(b));
 };
 
@@ -49,7 +49,7 @@ const __subsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
     return sub_f32(a, b);
 };
 
-pub const add_f64 = fn(a: f64, b: f64): f64 {
+const add_f64 = fn(a: f64, b: f64): f64 {
     return addf3(f64, a, b);
 };
 
@@ -57,7 +57,7 @@ const __adddf3 = fn(a: f64, b: f64) callconv(.c): f64 {
     return add_f64(a, b);
 };
 
-pub const sub_f64 = fn(a: f64, b: f64): f64 {
+const sub_f64 = fn(a: f64, b: f64): f64 {
     return add_f64(a, compiler_rt.fneg(b));
 };
 
@@ -65,7 +65,7 @@ const __subdf3 = fn(a: f64, b: f64) callconv(.c): f64 {
     return sub_f64(a, b);
 };
 
-pub const add_f80 = fn(a: f80, b: f80): f80 {
+const add_f80 = fn(a: f80, b: f80): f80 {
     return addf3(f80, a, b);
 };
 
@@ -73,7 +73,7 @@ const __addxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
     return @bitCast(add_f80(@bitCast(a), @bitCast(b)));
 };
 
-pub const sub_f80 = fn(a: f80, b: f80): f80 {
+const sub_f80 = fn(a: f80, b: f80): f80 {
     return add_f80(a, compiler_rt.fneg(b));
 };
 
@@ -81,7 +81,7 @@ const __subxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
     return @bitCast(sub_f80(@bitCast(a), @bitCast(b)));
 };
 
-pub const add_f128 = fn(a: f128, b: f128): f128 {
+const add_f128 = fn(a: f128, b: f128): f128 {
     return addf3(f128, a, b);
 };
 
@@ -89,7 +89,7 @@ const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return add_f128(a, b);
 };
 
-pub const sub_f128 = fn(a: f128, b: f128): f128 {
+const sub_f128 = fn(a: f128, b: f128): f128 {
     return add_f128(a, compiler_rt.fneg(b));
 };
 
@@ -272,203 +272,203 @@ const __subtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return @bitCast(result);
 };
 
-@[testing] const test__addtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
+@[testing] const test__addtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): bool {
     let x = add_f128(a, b);
 
     let rep: u128 = @bitCast(x);
     let hi: u64 = @intCast(rep >> 64);
     let lo: u64 = @truncate(rep);
 
-    if (hi == expected_hi and lo == expected_lo) return;
+    if (hi == expected_hi and lo == expected_lo) return true;
 
     // test other possible NaN representation (signal NaN)
     if (expected_hi == 0x7fff800000000000 and expected_lo == 0x0) {
         if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
             ((hi & 0xffffffffffff) > 0 or lo > 0)) {
-            return;
+            return true;
         }
     }
 
-    @expect(false);
+    return false;
 };
 
 const qnan128 = math.nan(f128);
 
 test "addtf3" {
-    test__addtf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0);
+    @expect(test__addtf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0));
 
     // NaN + any = NaN
-    test__addtf3(
+    @expect(test__addtf3(
         @bitCast(f128, (0x7fff000000000000u128 << 64) | 0x800030000000u128),
         0x1.23456789abcdefp+5,
         0x7fff800000000000,
         0x0,
-    );
+    ));
 
     // inf + inf = inf
-    test__addtf3(math.inf(f128), math.inf(f128), 0x7fff000000000000, 0x0);
+    @expect(test__addtf3(math.inf(f128), math.inf(f128), 0x7fff000000000000, 0x0));
 
     // inf + any = inf
-    test__addtf3(
+    @expect(test__addtf3(
         math.inf(f128),
         0x1.2335653452436234723489432abcdefp+5,
         0x7fff000000000000,
         0x0,
-    );
+    ));
 
     // any + any
-    test__addtf3(
+    @expect(test__addtf3(
         0x1.23456734245345543849abcdefp+5,
         0x1.edcba52449872455634654321fp-1,
         0x40042afc95c8b579,
         0x61e58dd6c51eb77c,
-    );
-    test__addtf3(
+    ));
+    @expect(test__addtf3(
         0x1.edcba52449872455634654321fp-1,
         0x1.23456734245345543849abcdefp+5,
         0x40042afc95c8b579,
         0x61e58dd6c51eb77c,
-    );
+    ));
 }
 
-@[testing] const test__subtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
+@[testing] const test__subtf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): bool {
     let x = sub_f128(a, b);
 
     let rep: u128 = @bitCast(x);
     let hi: u64 = @intCast(rep >> 64);
     let lo: u64 = @truncate(rep);
 
-    if (hi == expected_hi and lo == expected_lo) return;
+    if (hi == expected_hi and lo == expected_lo) return true;
 
     // test other possible NaN representation (signal NaN)
     if (expected_hi == 0x7fff800000000000 and expected_lo == 0x0) {
         if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
             ((hi & 0xffffffffffff) > 0 or lo > 0)) {
-            return;
+            return true;
         }
     }
 
-    @expect(false);
+    return false;
 };
 
 test "subtf3" {
     // qNaN - any = qNaN
-    test__subtf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0);
+    @expect(test__subtf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0));
 
     // NaN + any = NaN
-    test__subtf3(
+    @expect(test__subtf3(
         @bitCast(f128, (0x7fff000000000000u128 << 64) | 0x800030000000u128),
         0x1.23456789abcdefp+5,
         0x7fff800000000000,
         0x0,
-    );
+    ));
 
     // inf - any = inf
-    test__subtf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0x0);
+    @expect(test__subtf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0x0));
 
     // any + any
-    test__subtf3(
+    @expect(test__subtf3(
         0x1.234567829a3bcdef5678ade36734p+5,
         0x1.ee9d7c52354a6936ab8d7654321fp-1,
         0x40041b8af1915166,
         0xa44a7bca780a166c,
-    );
-    test__subtf3(
+    ));
+    @expect(test__subtf3(
         0x1.ee9d7c52354a6936ab8d7654321fp-1,
         0x1.234567829a3bcdef5678ade36734p+5,
         0xc0041b8af1915166,
         0xa44a7bca780a166c,
-    );
+    ));
 }
 
 const qnan80 = math.nan(f80);
 
-@[testing] const test__addxf3 = fn(a: f80, b: f80, expected: u80): void {
+@[testing] const test__addxf3 = fn(a: f80, b: f80, expected: u80): bool {
     let x = add_f80(a, b);
     let rep: u80 = @bitCast(x);
 
-    if (rep == expected) return;
-    if (math.is_nan(@bitCast(f80, expected)) and math.is_nan(x)) return;
-    @expect(false);
+    if (rep == expected) return true;
+    if (math.is_nan(@bitCast(f80, expected)) and math.is_nan(x)) return true;
+    return false;
 };
 
 test "addxf3" {
     // NaN + any = NaN
-    test__addxf3(qnan80, 0x1.23456789abcdefp+5, @bitCast(qnan80));
-    test__addxf3(
+    @expect(test__addxf3(qnan80, 0x1.23456789abcdefp+5, @bitCast(qnan80)));
+    @expect(test__addxf3(
         @bitCast(0x7fff_8000_8000_3000_0000u80),
         0x1.23456789abcdefp+5,
         @bitCast(qnan80),
-    );
+    ));
 
     // any + NaN = NaN
-    test__addxf3(0x1.23456789abcdefp+5, qnan80, @bitCast(qnan80));
-    test__addxf3(
+    @expect(test__addxf3(0x1.23456789abcdefp+5, qnan80, @bitCast(qnan80)));
+    @expect(test__addxf3(
         0x1.23456789abcdefp+5,
         @bitCast(0x7fff_8000_8000_3000_0000),
         @bitCast(qnan80),
-    );
+    ));
 
     // NaN + inf = NaN
-    test__addxf3(qnan80, math.inf(f80), @bitCast(qnan80));
+    @expect(test__addxf3(qnan80, math.inf(f80), @bitCast(qnan80)));
 
     // inf + NaN = NaN
-    test__addxf3(math.inf(f80), qnan80, @bitCast(qnan80));
+    @expect(test__addxf3(math.inf(f80), qnan80, @bitCast(qnan80)));
 
     // inf + inf = inf
-    test__addxf3(math.inf(f80), math.inf(f80), @bitCast(math.inf(f80)));
+    @expect(test__addxf3(math.inf(f80), math.inf(f80), @bitCast(math.inf(f80))));
 
     // inf + -inf = NaN
-    test__addxf3(math.inf(f80), -math.inf(f80), @bitCast(qnan80));
+    @expect(test__addxf3(math.inf(f80), -math.inf(f80), @bitCast(qnan80)));
 
     // -inf + inf = NaN
-    test__addxf3(-math.inf(f80), math.inf(f80), @bitCast(qnan80));
+    @expect(test__addxf3(-math.inf(f80), math.inf(f80), @bitCast(qnan80)));
 
     // inf + any = inf
-    test__addxf3(
+    @expect(test__addxf3(
         math.inf(f80),
         0x1.2335653452436234723489432abcdefp+5,
         @bitCast(math.inf(f80)),
-    );
+    ));
 
     // any + inf = inf
-    test__addxf3(
+    @expect(test__addxf3(
         0x1.2335653452436234723489432abcdefp+5,
         math.inf(f80),
         @bitCast(math.inf(f80)),
-    );
+    ));
 
     // any + any
-    test__addxf3(0x1.23456789abcdp+5, 0x1.dcba987654321p+5, 0x4005_BFFFFFFFFFFFC400);
-    test__addxf3(
+    @expect(test__addxf3(0x1.23456789abcdp+5, 0x1.dcba987654321p+5, 0x4005_BFFFFFFFFFFFC400));
+    @expect(test__addxf3(
         0x1.23456734245345543849abcdefp+5,
         0x1.edcba52449872455634654321fp-1,
         0x4004_957E_4AE4_5ABC_B0F3,
-    );
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.0p-63, 0x3FFF_FFFFFFFFFFFFFFFF); // exact
-    test__addxf3(0x1.ffff_ffff_ffff_fffep+0, 0x0.0p0, 0x3FFF_FFFFFFFFFFFFFFFF); // exact
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.4p-63, 0x3FFF_FFFFFFFFFFFFFFFF); // round down
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.8p-63, 0x4000_8000000000000000); // round up to even
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.cp-63, 0x4000_8000000000000000); // round up
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x2.0p-63, 0x4000_8000000000000000); // exact
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x2.1p-63, 0x4000_8000000000000000); // round down
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x3.0p-63, 0x4000_8000000000000000); // round down to even
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x3.1p-63, 0x4000_8000000000000001); // round up
-    test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x4.0p-63, 0x4000_8000000000000001); // exact
+    ));
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.0p-63, 0x3FFF_FFFFFFFFFFFFFFFF)); // exact
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffep+0, 0x0.0p0, 0x3FFF_FFFFFFFFFFFFFFFF)); // exact
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.4p-63, 0x3FFF_FFFFFFFFFFFFFFFF)); // round down
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.8p-63, 0x4000_8000000000000000)); // round up to even
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x1.cp-63, 0x4000_8000000000000000)); // round up
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x2.0p-63, 0x4000_8000000000000000)); // exact
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x2.1p-63, 0x4000_8000000000000000)); // round down
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x3.0p-63, 0x4000_8000000000000000)); // round down to even
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x3.1p-63, 0x4000_8000000000000001)); // round up
+    @expect(test__addxf3(0x1.ffff_ffff_ffff_fffcp+0, 0x4.0p-63, 0x4000_8000000000000001)); // exact
 
-    test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.0p-63, 0x3FFF_8800000000000000); // exact
-    test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.7p-63, 0x3FFF_8800000000000000); // round down
-    test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.8p-63, 0x3FFF_8800000000000000); // round down to even
-    test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.9p-63, 0x3FFF_8800000000000001); // round up
-    test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x2.0p-63, 0x3FFF_8800000000000001); // exact
-    test__addxf3(
+    @expect(test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.0p-63, 0x3FFF_8800000000000000)); // exact
+    @expect(test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.7p-63, 0x3FFF_8800000000000000)); // round down
+    @expect(test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.8p-63, 0x3FFF_8800000000000000)); // round down to even
+    @expect(test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x1.9p-63, 0x3FFF_8800000000000001)); // round up
+    @expect(test__addxf3(0x1.0fff_ffff_ffff_fffep+0, 0x2.0p-63, 0x3FFF_8800000000000001)); // exact
+    @expect(test__addxf3(
         0x0.ffff_ffff_ffff_fffcp-16382,
         0x0.0000_0000_0000_0002p-16382,
         0x0000_7FFFFFFFFFFFFFFF,
-    ); // exact
-    test__addxf3(
+    )); // exact
+    @expect(test__addxf3(
         0x0.1fff_ffff_ffff_fffcp-16382,
         0x0.0000_0000_0000_0002p-16382,
         0x0000_0FFFFFFFFFFFFFFF,
-    ); // exact
+    )); // exact
 }

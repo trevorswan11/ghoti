@@ -36,25 +36,25 @@ const __mulsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
 
 const nan_rep_f32: u32 = @bitCast(math.nan(f32));
 
-@[testing] const test__mulsf3 = fn(a: u32, b: u32, expected: u32): void {
+@[testing] const test__mulsf3 = fn(a: u32, b: u32, expected: u32): bool {
     let rep: u32 = @bitCast(__mulsf3(@bitCast(a), @bitCast(b)));
-    if (rep == expected) return;
+    if (rep == expected) return true;
 
     // Any NaN encoding is accepted when the canonical NaN is expected
     if (expected == nan_rep_f32) {
-        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) return;
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) return true;
     }
-    @expect(false);
+    return false;
 };
 
 test "__mulsf3" {
     import "cases/mulsf3.gh" as mulsf3_cases;
     for (mulsf3_cases.cases) |case| {
-        test__mulsf3(case[0], case[1], case[2]);
+        @expect(test__mulsf3(case[0], case[1], case[2]));
     }
 }
 
-pub const mul_f32 = fn(a: f32, b: f32): f32 {
+const mul_f32 = fn(a: f32, b: f32): f32 {
     return mulf3(f32, a, b);
 };
 
@@ -64,26 +64,26 @@ const __muldf3 = fn(a: f64, b: f64) callconv(.c): f64 {
 
 const nan_rep_f64: u64 = @bitCast(math.nan(f64));
 
-@[testing] const test__muldf3 = fn(a: u64, b: u64, expected: u64): void {
+@[testing] const test__muldf3 = fn(a: u64, b: u64, expected: u64): bool {
     let rep: u64 = @bitCast(__muldf3(@bitCast(a), @bitCast(b)));
-    if (rep == expected) return;
+    if (rep == expected) return true;
 
     // Any NaN encoding is accepted when the canonical NaN is expected
     if (expected == nan_rep_f64) {
         if ((rep & 0x7ff0000000000000) == 0x7ff0000000000000 and
-            (rep & 0xfffffffffffff) > 0) return;
+            (rep & 0xfffffffffffff) > 0) return true;
     }
-    @expect(false);
+    return false;
 };
 
 test "__muldf3" {
     import "cases/muldf3.gh" as muldf3_cases;
     for (muldf3_cases.cases) |case| {
-        test__muldf3(case[0], case[1], case[2]);
+        @expect(test__muldf3(case[0], case[1], case[2]));
     }
 }
 
-pub const mul_f64 = fn(a: f64, b: f64): f64 {
+const mul_f64 = fn(a: f64, b: f64): f64 {
     return mulf3(f64, a, b);
 };
 
@@ -93,13 +93,12 @@ const __mulxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
 
 const qnan80 = math.nan(f80);
 
-@[testing] const test__mulxf3 = fn(a: f80, b: f80, expected: u80): void {
+@[testing] const test__mulxf3 = fn(a: f80, b: f80, expected: u80): bool {
     let x = mul_f80(a, b);
     let rep: u80 = @bitCast(x);
 
-    if (rep == expected) return;
-    if (math.is_nan(@bitCast(f80, expected)) and math.is_nan(x)) return;
-    @expect(false);
+    if (rep == expected) return true;
+    return math.is_nan(@bitCast(f80, expected)) and math.is_nan(x);
 };
 
 // Ported from:
@@ -107,80 +106,80 @@ const qnan80 = math.nan(f80);
 // https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulf3_test.zig
 test "__mulxf3" {
     // NaN * any = NaN
-    test__mulxf3(qnan80, 0x1.23456789abcdefp+5, @bitCast(qnan80));
-    test__mulxf3(
+    @expect(test__mulxf3(qnan80, 0x1.23456789abcdefp+5, @bitCast(qnan80)));
+    @expect(test__mulxf3(
         @bitCast(0x7fff_8000_8000_3000_0000u80),
         0x1.23456789abcdefp+5,
         @bitCast(qnan80),
-    );
+    ));
 
     // any * NaN = NaN
-    test__mulxf3(0x1.23456789abcdefp+5, qnan80, @bitCast(qnan80));
-    test__mulxf3(
+    @expect(test__mulxf3(0x1.23456789abcdefp+5, qnan80, @bitCast(qnan80)));
+    @expect(test__mulxf3(
         0x1.23456789abcdefp+5,
         @bitCast(0x7fff_8000_8000_3000_0000u80),
         @bitCast(qnan80),
-    );
+    ));
 
     // NaN * inf = NaN
-    test__mulxf3(qnan80, math.inf(f80), @bitCast(qnan80));
+    @expect(test__mulxf3(qnan80, math.inf(f80), @bitCast(qnan80)));
 
     // inf * NaN = NaN
-    test__mulxf3(math.inf(f80), qnan80, @bitCast(qnan80));
+    @expect(test__mulxf3(math.inf(f80), qnan80, @bitCast(qnan80)));
 
     // inf * inf = inf
-    test__mulxf3(math.inf(f80), math.inf(f80), @bitCast(math.inf(f80)));
+    @expect(test__mulxf3(math.inf(f80), math.inf(f80), @bitCast(math.inf(f80))));
 
     // inf * -inf = -inf
-    test__mulxf3(math.inf(f80), -math.inf(f80), @bitCast(-math.inf(f80)));
+    @expect(test__mulxf3(math.inf(f80), -math.inf(f80), @bitCast(-math.inf(f80))));
 
     // -inf * inf = -inf
-    test__mulxf3(-math.inf(f80), math.inf(f80), @bitCast(-math.inf(f80)));
+    @expect(test__mulxf3(-math.inf(f80), math.inf(f80), @bitCast(-math.inf(f80))));
 
     // inf * any = inf
-    test__mulxf3(
+    @expect(test__mulxf3(
         math.inf(f80),
         0x1.2335653452436234723489432abcdefp+5,
         @bitCast(math.inf(f80)),
-    );
+    ));
 
     // any * inf = inf
-    test__mulxf3(
+    @expect(test__mulxf3(
         0x1.2335653452436234723489432abcdefp+5,
         math.inf(f80),
         @bitCast(math.inf(f80)),
-    );
+    ));
 
     // any * any
-    test__mulxf3(0x1.0p+0, 0x1.dcba987654321p+5, 0x4004_ee5d_4c3b_2a19_0800);
-    test__mulxf3(0x1.0000_0000_0000_0004p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0003); // exact
+    @expect(test__mulxf3(0x1.0p+0, 0x1.dcba987654321p+5, 0x4004_ee5d_4c3b_2a19_0800));
+    @expect(test__mulxf3(0x1.0000_0000_0000_0004p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0003)); // exact
 
-    test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+5, 0x4004_8000_0000_0000_0001); // exact
-    test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.7ffep+5, 0x4004_BFFF_0000_0000_0001); // round down
-    test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0002); // round up to even
-    test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8002p+5, 0x4004_C001_0000_0000_0002); // round up
-    test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+6, 0x4005_8000_0000_0000_0001); // exact
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+5, 0x4004_8000_0000_0000_0001)); // exact
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.7ffep+5, 0x4004_BFFF_0000_0000_0001)); // round down
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0002)); // round up to even
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8002p+5, 0x4004_C001_0000_0000_0002)); // round up
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+6, 0x4005_8000_0000_0000_0001)); // exact
 
-    test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001p+0, 0x3FFF_8000_0001_0000_0000); // round down to even
-    test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001_0002p+0, 0x3FFF_8000_0001_0001_0001); // round up
+    @expect(test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001p+0, 0x3FFF_8000_0001_0000_0000)); // round down to even
+    @expect(test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001_0002p+0, 0x3FFF_8000_0001_0001_0001)); // round up
 
     // denormal -> normal
-    test__mulxf3(0x0.8000_0000_0000_0000p-16382, 2.0, 0x0001_8000_0000_0000_0000);
-    test__mulxf3(
+    @expect(test__mulxf3(0x0.8000_0000_0000_0000p-16382, 2.0, 0x0001_8000_0000_0000_0000));
+    @expect(test__mulxf3(
         0x0.7fff_ffff_ffff_fffep-16382,
         0x2.0000_0000_0000_0008p0,
         0x0001_8000_0000_0000_0000,
-    );
+    ));
 
     // denormal -> denormal
-    test__mulxf3(
+    @expect(test__mulxf3(
         0x0.7fff_ffff_ffff_fffep-16382,
         0x1.0000_0000_0000_0000p0,
         0x0000_3FFF_FFFF_FFFF_FFFF,
-    );
+    ));
 }
 
-pub const mul_f80 = fn(a: f80, b: f80): f80 {
+const mul_f80 = fn(a: f80, b: f80): f80 {
     return mulf3(f80, a, b);
 };
 
@@ -190,19 +189,19 @@ const __multf3 = fn(a: f128, b: f128) callconv(.c): f128 {
 
 const qnan128: f128 = @bitCast(0x7fff800000000000u128 << 64);
 
-@[testing] const test__multf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): void {
+@[testing] const test__multf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): bool {
     let rep: u128 = @bitCast(__multf3(a, b));
     let hi: u64 = @truncate(rep >> 64);
     let lo: u64 = @truncate(rep);
 
-    if (hi == expected_hi and lo == expected_lo) return;
+    if (hi == expected_hi and lo == expected_lo) return true;
 
     // test other possible NaN representation (signal NaN)
     if (expected_hi == 0x7fff800000000000 and expected_lo == 0x0) {
         if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
-            ((hi & 0xffffffffffff) > 0 or lo > 0)) return;
+            ((hi & 0xffffffffffff) > 0 or lo > 0)) return true;
     }
-    @expect(false);
+    return false;
 };
 
 // Ported from:
@@ -212,76 +211,80 @@ const qnan128: f128 = @bitCast(0x7fff800000000000u128 << 64);
 // https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/compiler-rt/test/builtins/Unit/multf3_test.c
 test "__multf3" {
     // qNaN * any = qNaN
-    test__multf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0);
+    @expect(test__multf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0));
 
     // NaN * any = NaN
-    test__multf3(
+    @expect(test__multf3(
         @bitCast(f128, (0x7fff000000000000u128 << 64) | (0x800030000000u128 << 64)),
         0x1.23456789abcdefp+5,
         0x7fff800000000000,
         0x0,
-    );
+    ));
 
     // inf * any = inf
-    test__multf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0x0);
+    @expect(test__multf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0x0));
 
     // any * any
-    test__multf3(
+    @expect(test__multf3(
         @bitCast(0x40042eab345678439abcdefea5678234u128),
         @bitCast(0x3ffeedcb34a235253948765432134675u128),
         0x400423e7f9e3c9fc,
         0xd906c2c2a85777c4,
-    );
-    test__multf3(
+    ));
+    @expect(test__multf3(
         @bitCast(0x3fcd353e45674d89abacc3a2ebf3ff50u128),
         @bitCast(0x3ff6ed8764648369535adf4be3214568u128),
         0x3fc52a163c6223fc,
         0xc94c4bf0430768b4,
-    );
-    test__multf3(
+    ));
+    @expect(test__multf3(
         0x1.234425696abcad34a35eeffefdcbap+456,
         0x451.ed98d76e5d46e5f24323dff21ffp+600,
         0x44293a91de5e0e94,
         0xe8ed17cc2cdf64ac,
-    );
-    test__multf3(
+    ));
+    @expect(test__multf3(
         @bitCast(0x3f154356473c82a9fabf2d22ace345dfu128),
         @bitCast(0x3e38eda98765476743ab21da23d45679u128),
         0x3d4f37c1a3137cae,
         0xfc6807048bc2836a,
-    );
+    ));
 
     // underflow
-    test__multf3(0x1.23456734245345p-10000, 0x1.edcba524498724p-6497, 0x0, 0x0);
+    @expect(test__multf3(0x1.23456734245345p-10000, 0x1.edcba524498724p-6497, 0x0, 0x0));
 
     // carry between lo and hi in widening multiply
-    test__multf3(
+    @expect(test__multf3(
         0x0.7fffffffffffffffffffffffffffp-16382,
         0x1.7fffffffffffffffffffffffffffp+1,
         0x00017fffffffffff,
         0xfffffffffffffffc,
-    );
+    ));
 
     // denormal operands
-    test__multf3(0x0.0000000000000000000000000001p-16382, 0x1p16383, 0x3f90000000000000, 0x0);
-    test__multf3(0x1p16383, 0x0.0000000000000000000000000001p-16382, 0x3f90000000000000, 0x0);
+    @expect(
+        test__multf3(0x0.0000000000000000000000000001p-16382, 0x1p16383, 0x3f90000000000000, 0x0),
+    );
+    @expect(
+        test__multf3(0x1p16383, 0x0.0000000000000000000000000001p-16382, 0x3f90000000000000, 0x0),
+    );
 
-    test__multf3(
+    @expect(test__multf3(
         0x1.0000_0000_0000_0000_0000_0000_0001p+0,
         0x1.8p+5,
         0x4004_8000_0000_0000,
         0x0000_0000_0000_0002,
-    );
-    test__multf3(
+    ));
+    @expect(test__multf3(
         0x1.0000_0000_0000_0000_0000_0000_0002p+0,
         0x1.8p+5,
         0x4004_8000_0000_0000,
         0x0000_0000_0000_0003,
-    );
-    test__multf3(2.0, math.float_true_min(f128), 0x0, 0x2);
+    ));
+    @expect(test__multf3(2.0, math.float_true_min(f128), 0x0, 0x2));
 }
 
-pub const mul_f128 = fn(a: f128, b: f128): f128 {
+const mul_f128 = fn(a: f128, b: f128): f128 {
     return mulf3(f128, a, b);
 };
 

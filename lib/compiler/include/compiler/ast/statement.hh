@@ -17,6 +17,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
@@ -46,8 +47,9 @@ struct break_stmt {
 
 struct cfg_stmt {
     struct arm {
-        stdx::option<expr_handle> predicate;
-        std::vector<stmt_handle>  items;
+        stdx::option<expr_handle>     predicate;
+        std::vector<stmt_handle>      items;
+        stdx::option<source_location> close; // the `}` of a braced body, for its comments
     };
 
     std::vector<arm> arms;

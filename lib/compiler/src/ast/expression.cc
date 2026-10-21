@@ -498,8 +498,10 @@ parse_aggregate_cfg_group(syntax::parser& parser,
     using arm   = typename group::arm;
 
     // Current token is `)` (just after a predicate) or `else`; peek is `{` or an item.
-    const auto parse_body = [&] -> stdx::result<std::vector<Item>, syntax::diagnostic> {
-        std::vector<Item> items;
+    const auto parse_arm =
+        [&](stdx::option<expr_handle> predicate) -> stdx::result<arm, syntax::diagnostic> {
+        arm   parsed{.predicate = predicate, .items = {}, .close = stdx::none};
+        auto& items{parsed.items};
         if (parser.peek_token_is(tt::LBRACE)) {
             parser.advance(); // current == {
             while (!parser.peek_token_is(tt::RBRACE) && !parser.peek_token_is(tt::END)) {
@@ -513,26 +515,28 @@ parse_aggregate_cfg_group(syntax::parser& parser,
                 }
             }
             TRY(parser.expect_peek(tt::RBRACE));
+            const auto& close{parser.get_current_token()};
+            parsed.close.emplace(close.line, close.column);
         } else {
             items.emplace_back(TRY(parse_one(parser)));
             if constexpr (std::same_as<Item, member_handle>) { parser.append_synthesized(items); }
             if (parser.peek_token_is(tt::COMMA)) { parser.advance(); }
         }
-        return items;
+        return parsed;
     };
 
     std::vector<arm> arms;
-    arms.emplace_back(
-        arm{stdx::option<expr_handle>{TRY(parser.parse_cfg_predicate())}, TRY(parse_body())});
+    const auto       predicate{TRY(parser.parse_cfg_predicate())};
+    arms.emplace_back(TRY(parse_arm(predicate)));
 
     while (parser.peek_token_is(tt::ELSE)) {
         parser.advance(); // current == else
         if (parser.peek_token_is(tt::BUILTIN_CFG)) {
             parser.advance(); // current == @cfg
-            auto predicate{TRY(parser.parse_cfg_predicate())};
-            arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_body())});
+            const auto else_predicate{TRY(parser.parse_cfg_predicate())};
+            arms.emplace_back(TRY(parse_arm(else_predicate)));
         } else {
-            arms.emplace_back(arm{stdx::none, TRY(parse_body())});
+            arms.emplace_back(TRY(parse_arm(stdx::none)));
             break; // a predicate-less `else` terminates the chain
         }
     }
@@ -1416,7 +1420,27 @@ auto cfg_value_expr::parse(syntax::parser& parser)
     stdx::option<expr_handle> fallback;
     bool                      force_break{false};
 
-    // Parses one `<pred> => <val>` or `_ => <val>` arm
+    // Parses the rest of a `<pred>, <pred>, ... => <val>` arm after its first predicate
+    const auto parse_guard_rest = [&](expr_handle first) -> stdx::result<void, syntax::diagnostic> {
+        std::vector<expr_handle> predicates{first};
+        bool                     arm_force_break{false};
+        while (parser.peek_token_is(token_type_t::COMMA)) {
+            parser.advance(); // current = ,
+            if (parser.peek_token_is(token_type_t::FAT_ARROW)) {
+                arm_force_break = true; // trailing comma: keep one predicate per line
+                break;
+            }
+            parser.advance(); // predicate's first token
+            predicates.emplace_back(TRY(parser.parse_expression()));
+        }
+        TRY(parser.expect_peek(token_type_t::FAT_ARROW));
+        parser.advance();
+        const auto value{TRY(parser.parse_expression())};
+        guards.emplace_back(guard{std::move(predicates), value, arm_force_break});
+        return {};
+    };
+
+    // Parses one guard arm or the `_ => <val>` fallback
     const auto parse_guard_arm = [&] -> stdx::result<void, syntax::diagnostic> {
         if (parser.current_token_is(token_type_t::UNDERSCORE)) {
             if (fallback) {
@@ -1429,25 +1453,20 @@ auto cfg_value_expr::parse(syntax::parser& parser)
             fallback.emplace(TRY(parser.parse_expression()));
             return {};
         }
-        const auto predicate{TRY(parser.parse_expression())};
-        TRY(parser.expect_peek(token_type_t::FAT_ARROW));
-        parser.advance();
-        const auto value{TRY(parser.parse_expression())};
-        guards.emplace_back(guard{predicate, value});
-        return {};
+        const auto first{TRY(parser.parse_expression())};
+        return parse_guard_rest(first);
     };
 
     if (!parser.current_token_is(token_type_t::UNDERSCORE)) {
         const auto first{TRY(parser.parse_expression())};
-        if (!parser.peek_token_is(token_type_t::FAT_ARROW)) {
-            TRY(parser.expect_peek(token_type_t::RPAREN));
+        if (parser.peek_token_is(token_type_t::RPAREN)) {
+            parser.advance();
             return parser.add_expr<cfg_value_expr>(start_token,
                                                    stdx::option<expr_handle>{first},
                                                    std::vector<guard>{},
                                                    stdx::option<expr_handle>{});
         }
-        parser.advance(2); // current = =>, then value's first token
-        guards.emplace_back(guard{first, TRY(parser.parse_expression())});
+        TRY(parse_guard_rest(first));
     } else {
         TRY(parse_guard_arm());
     }

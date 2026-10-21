@@ -96,7 +96,8 @@ struct module_t {
     sema::side_tables                                sema_side_tables;
     stdx::opt_size                                   root_table_idx;
     module_state                                     state{module_state::PARSED};
-    std::vector<sema::generic_instantiation_request> generic_instantiations;
+    // Mangled names of the monomorphs this module requested, in emit order
+    std::vector<std::string> generic_instantiations;
 
     // Member functions of `fn(...): type` constructor results defined in this module
     std::vector<sema::type_ctor_member_emit> type_ctor_member_emits;

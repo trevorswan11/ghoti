@@ -165,6 +165,17 @@ TEST_CASE("cfg: @cfgValue guard arms must agree in type") {
     CHECK(run_cfg(src).has_code(sema::error::CFG_VALUE_GUARD_TYPE_MISMATCH));
 }
 
+TEST_CASE("cfg: a nested @cfgValue arm value must agree in type with its siblings") {
+    constexpr std::string_view src{R"(
+        const BAD = @cfgValue(
+            ptr_bits == 32, ptr_bits == 64 => @cfgValue(_ => 8),
+            _ => false,
+        );
+        @cfg(ptr_bits == 64) { let x = 1; } else { let y = 1; }
+    )"};
+    CHECK(run_cfg(src).has_code(sema::error::CFG_VALUE_GUARD_TYPE_MISMATCH));
+}
+
 TEST_CASE("cfg: @cfgValue guard form requires a fallback") {
     constexpr std::string_view src{R"(
         const BAD = @cfgValue(ptr_bits == 64 => 8, ptr_bits == 32 => 4);

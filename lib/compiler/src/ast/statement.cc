@@ -90,25 +90,27 @@ auto break_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavi
 namespace {
 
 // Parses a `@cfg` arm body: either a braced `{ <item>* }` group or a single bare item
-[[nodiscard]] auto parse_cfg_body(syntax::parser& parser)
-    -> stdx::result<std::vector<stmt_handle>, syntax::diagnostic> {
+[[nodiscard]] auto parse_cfg_arm(syntax::parser& parser, stdx::option<expr_handle> predicate)
+    -> stdx::result<cfg_stmt::arm, syntax::diagnostic> {
     using syntax::token_type_t;
-    std::vector<stmt_handle> items;
+    cfg_stmt::arm arm{.predicate = predicate, .items = {}, .close = stdx::none};
 
     if (parser.current_token_is(token_type_t::LBRACE)) {
         while (!parser.peek_token_is(token_type_t::RBRACE) &&
                !parser.peek_token_is(token_type_t::END)) {
             parser.advance();
             if (parser.current_token_is(token_type_t::SEMICOLON)) { continue; }
-            items.emplace_back(TRY(parser.parse_statement()));
-            parser.append_synthesized(items);
+            arm.items.emplace_back(TRY(parser.parse_statement()));
+            parser.append_synthesized(arm.items);
         }
         TRY(parser.expect_peek(token_type_t::RBRACE));
+        const auto& close{parser.get_current_token()};
+        arm.close.emplace(close.line, close.column);
     } else {
-        items.emplace_back(TRY(parser.parse_statement()));
-        parser.append_synthesized(items);
+        arm.items.emplace_back(TRY(parser.parse_statement()));
+        parser.append_synthesized(arm.items);
     }
-    return items;
+    return arm;
 }
 
 } // namespace
@@ -122,7 +124,7 @@ auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax
 
     const auto predicate{TRY(parser.parse_cfg_predicate())};
     parser.advance();
-    arms.emplace_back(arm{stdx::option<expr_handle>{predicate}, TRY(parse_cfg_body(parser))});
+    arms.emplace_back(TRY(parse_cfg_arm(parser, predicate)));
 
     while (parser.peek_token_is(token_type_t::ELSE)) {
         parser.advance(); // current = else
@@ -130,11 +132,10 @@ auto cfg_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, syntax
             parser.advance(); // current = @cfg
             const auto else_predicate{TRY(parser.parse_cfg_predicate())};
             parser.advance();
-            arms.emplace_back(
-                arm{stdx::option<expr_handle>{else_predicate}, TRY(parse_cfg_body(parser))});
+            arms.emplace_back(TRY(parse_cfg_arm(parser, else_predicate)));
         } else {
             parser.advance(); // current = body's first token
-            arms.emplace_back(arm{stdx::none, TRY(parse_cfg_body(parser))});
+            arms.emplace_back(TRY(parse_cfg_arm(parser, stdx::none)));
             break; // a predicate-less `else` terminates the chain
         }
     }

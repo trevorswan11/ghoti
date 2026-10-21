@@ -20,6 +20,7 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
@@ -30,6 +31,7 @@
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
 #include "compiler/syntax/trvia.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti::ast {
 
@@ -130,7 +132,8 @@ auto formatter::init_trivia() -> void {
     bool          first{true};
 
     while (true) {
-        auto enriched{lex.advance_enriched()};
+        auto       enriched{lex.advance_enriched()};
+        const auto leading_start{comments_.size()};
 
         for (const auto& t : enriched.leading_trivia) {
             if (t.kind == syntax::trivia_kind::LINE_COMMENT) {
@@ -142,6 +145,7 @@ auto formatter::init_trivia() -> void {
                     .col              = t.col,
                     .is_trailing      = false,
                     .is_leading_blank = has_blank,
+                    .is_trailing_blank = false,
                     .consumed         = false,
                 });
                 prev_line = t.line;
@@ -150,6 +154,10 @@ auto formatter::init_trivia() -> void {
         }
 
         if (enriched.token.type == syntax::token_type_t::END) { break; }
+
+        if (comments_.size() > leading_start && enriched.token.line > comments_.back().line + 1) {
+            comments_.back().is_trailing_blank = true;
+        }
 
         prev_line = enriched.token.line;
         first     = false;
@@ -162,6 +170,7 @@ auto formatter::init_trivia() -> void {
                     .col              = t.col,
                     .is_trailing      = true,
                     .is_leading_blank = false,
+                    .is_trailing_blank = false,
                     .consumed         = false,
                 });
                 prev_line = t.line;
@@ -175,6 +184,7 @@ auto formatter::consume_leading_comments(usize before_line, bool allow_leading_b
     if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
 
     std::vector<syntax::doc_id> docs;
+    bool                        blank_after{false};
     while (comment_idx_ < comments_.size()) {
         const auto& c{comments_[comment_idx_]};
         if (c.line >= before_line) { break; }
@@ -187,10 +197,12 @@ auto formatter::consume_leading_comments(usize before_line, bool allow_leading_b
             }
             docs.emplace_back(doc_manager_.text(c.text));
             docs.emplace_back(doc_manager_.hard_line());
+            blank_after = c.is_trailing_blank;
         }
         ++comment_idx_;
     }
     if (docs.empty()) { return doc_manager_.nil(); }
+    if (blank_after) { docs.emplace_back(doc_manager_.hard_line()); }
     return doc_manager_.concat(std::move(docs));
 }
 
@@ -464,29 +476,144 @@ auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
     return false;
 }
 
-auto formatter::format_member_cfg_group(const cfg_item_group<member_handle>& group)
+auto formatter::alternatives_head(std::vector<syntax::doc_id> alternatives, bool force_break)
+    -> syntax::doc_id {
+    if (alternatives.size() == 1) {
+        return doc_manager_.concat({alternatives.front(), doc_manager_.text(" => ")});
+    }
+
+    // `a, b, c => ` when it fits on one line, else one alternative per line and `=>` on its own
+    const auto sep{doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()})};
+    const auto trailer{
+        doc_manager_.if_break(doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()}),
+                              doc_manager_.text(" "))};
+    return doc_manager_.concat({
+        doc_manager_.group(
+            doc_manager_.concat({doc_manager_.join(std::move(alternatives), sep), trailer}),
+            force_break),
+        doc_manager_.text("=> "),
+    });
+}
+
+auto formatter::cfg_arm_head(bool first, const stdx::option<expr_handle>& predicate)
     -> syntax::doc_id {
     std::vector<syntax::doc_id> parts;
-    for (usize a{0}; a < group.arms.size(); ++a) {
-        const auto& arm{group.arms[a]};
-        if (a != 0) { parts.emplace_back(doc_manager_.text(" else ")); }
-        if (arm.predicate) {
-            parts.emplace_back(doc_manager_.text("@cfg ("));
-            parts.emplace_back(format(*arm.predicate));
-            parts.emplace_back(doc_manager_.text(") "));
-        }
-        std::vector<syntax::doc_id> items;
-        items.reserve(arm.items.size());
-        for (const auto& item : arm.items) { items.emplace_back(format(item)); }
-        parts.emplace_back(doc_manager_.group(doc_manager_.concat({
-            doc_manager_.text("{"),
-            doc_manager_.nest(doc_manager_.concat(
-                {doc_manager_.line(), doc_manager_.join(std::move(items), doc_manager_.line())})),
-            doc_manager_.line(),
-            doc_manager_.text("}"),
-        })));
+    if (!first) { parts.emplace_back(doc_manager_.text(" else ")); }
+    if (predicate) {
+        parts.emplace_back(doc_manager_.text("@cfg ("));
+        parts.emplace_back(format(*predicate));
+        parts.emplace_back(doc_manager_.text(") "));
     }
     return doc_manager_.concat(std::move(parts));
+}
+
+auto formatter::empty_cfg_arm(const stdx::option<source_location>& close) -> syntax::doc_id {
+    const auto dangling{close ? consume_dangling_comments(close->line, close->column)
+                              : doc_manager_.nil()};
+    if (dangling == doc_manager_.nil()) { return doc_manager_.text("{}"); }
+    return doc_manager_.concat({
+        doc_manager_.text("{"),
+        doc_manager_.nest(doc_manager_.concat({doc_manager_.hard_line(), dangling})),
+        doc_manager_.hard_line(),
+        doc_manager_.text("}"),
+    });
+}
+
+template <typename Group, typename Render>
+auto formatter::with_cfg_group_comments(const Group& group,
+                                        usize        end_line,
+                                        bool         allow_leading_blank,
+                                        Render&&     render) -> syntax::doc_id {
+    const auto start_line{ast_.location_of(*group.arms.front().predicate).line};
+    const auto leading{consume_leading_comments(start_line, allow_leading_blank)};
+    auto       doc{render()};
+    const auto trailing{consume_trailing_comment(end_line)};
+    if (trailing != doc_manager_.nil()) { doc = doc_manager_.concat({doc, trailing}); }
+    if (leading != doc_manager_.nil()) { doc = doc_manager_.concat({leading, doc}); }
+    return doc;
+}
+
+template <typename Group, typename ItemFmt, typename ItemStart, typename ItemEnd>
+auto formatter::format_aggregate_cfg_group(const Group& group,
+                                           bool         allow_leading_blank,
+                                           ItemFmt&&    item_fmt,
+                                           ItemStart&&  item_start,
+                                           ItemEnd&&    item_end) -> syntax::doc_id {
+    const auto& last{group.arms.back()};
+    const auto  end_line{last.close ? last.close->line : item_end(last.items.back())};
+    return with_cfg_group_comments(group, end_line, allow_leading_blank, [&] {
+        std::vector<syntax::doc_id> parts;
+        for (usize a{0}; a < group.arms.size(); ++a) {
+            const auto& arm{group.arms[a]};
+            parts.emplace_back(cfg_arm_head(a == 0, arm.predicate));
+            if (arm.items.empty()) {
+                parts.emplace_back(empty_cfg_arm(arm.close));
+                continue;
+            }
+
+            const auto& items{arm.items};
+            auto        list{format_commented_items(
+                items.size(),
+                arm.close ? arm.close->line : item_end(items.back()),
+                [&](usize i) { return item_start(items[i]); },
+                [&](usize i) { return item_end(items[i]); },
+                [&](usize i) { return item_fmt(items[i]); })};
+            parts.emplace_back(commented_delimited("{", "}", std::move(list), true, true, false));
+        }
+        return doc_manager_.concat(std::move(parts));
+    });
+}
+
+auto formatter::format_member_cfg_group(const cfg_item_group<member_handle>& group,
+                                        bool allow_leading_blank) -> syntax::doc_id {
+    const auto& last{group.arms.back()};
+    const auto  end_line{last.close ? last.close->line
+                                    : ast_.end_location_of(last.items.back()).line};
+    return with_cfg_group_comments(group, end_line, allow_leading_blank, [&] {
+        std::vector<syntax::doc_id> parts;
+        for (usize a{0}; a < group.arms.size(); ++a) {
+            const auto& arm{group.arms[a]};
+            parts.emplace_back(cfg_arm_head(a == 0, arm.predicate));
+
+            std::vector<syntax::doc_id> items;
+            bool                        has_comments{false};
+            for (usize i{0}; i < arm.items.size(); ++i) {
+                const auto& item{arm.items[i]};
+                const auto  leading{consume_leading_comments(ast_.location_of(item).line, i != 0)};
+                auto        item_doc{format(item)};
+                const auto  trailing{consume_trailing_comment(ast_.end_location_of(item).line)};
+                if (trailing != doc_manager_.nil()) {
+                    item_doc = doc_manager_.concat({item_doc, trailing});
+                }
+                if (leading != doc_manager_.nil()) {
+                    item_doc = doc_manager_.concat({leading, item_doc});
+                }
+                has_comments |= leading != doc_manager_.nil() || trailing != doc_manager_.nil();
+                items.emplace_back(item_doc);
+            }
+            if (items.empty()) {
+                parts.emplace_back(empty_cfg_arm(arm.close));
+                continue;
+            }
+            const auto dangling{arm.close
+                                    ? consume_dangling_comments(arm.close->line, arm.close->column)
+                                    : doc_manager_.nil()};
+            if (dangling != doc_manager_.nil()) {
+                items.emplace_back(dangling);
+                has_comments = true;
+            }
+
+            const auto separator{has_comments ? doc_manager_.hard_line() : doc_manager_.line()};
+            parts.emplace_back(doc_manager_.group(doc_manager_.concat({
+                doc_manager_.text("{"),
+                doc_manager_.nest(doc_manager_.concat(
+                    {separator, doc_manager_.join(std::move(items), separator)})),
+                separator,
+                doc_manager_.text("}"),
+            })));
+        }
+        return doc_manager_.concat(std::move(parts));
+    });
 }
 
 auto formatter::format_members(std::vector<syntax::doc_id>&                      entries,
@@ -496,7 +623,7 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
     const auto flush_cfg{[&](usize position) -> void {
         for (const auto& group : cfg_groups) {
             if (group.position == position) {
-                entries.emplace_back(format_member_cfg_group(group));
+                entries.emplace_back(format_member_cfg_group(group, position != 0));
             }
         }
     }};
@@ -554,7 +681,12 @@ auto formatter::format_field_aggregate(const Node&    node,
     const auto                  flush_cfg_groups{[&](usize position) -> void {
         for (const auto& group : node.cfg_groups) {
             if (group.position != position) { continue; }
-            entries.emplace_back(format_aggregate_cfg_group(group, field_item));
+            entries.emplace_back(format_aggregate_cfg_group(
+                group,
+                !entries.empty(),
+                field_item,
+                [&](const auto& field) { return ast_.location_of(field.name).line; },
+                field_end_line));
         }
     }};
 
@@ -673,7 +805,15 @@ auto formatter::format_enum(const enum_expr& node) -> syntax::doc_id {
     const auto                  flush_cfg_groups{[&](usize position) -> void {
         for (const auto& group : node.cfg_groups) {
             if (group.position == position) {
-                entries.emplace_back(format_aggregate_cfg_group(group, variant_item));
+                entries.emplace_back(format_aggregate_cfg_group(
+                    group,
+                    !entries.empty(),
+                    variant_item,
+                    [&](const auto& variant) { return ast_.location_of(variant.name).line; },
+                    [&](const auto& variant) {
+                        return variant.value ? ast_.end_location_of(*variant.value).line
+                                             : ast_.end_location_of(variant.name).line;
+                    }));
             }
         }
     }};
@@ -1472,23 +1612,10 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         auto        leading{consume_leading_comments(start_loc.line, !arms.empty())};
 
         std::vector<syntax::doc_id> parts;
-        if (arm.patterns.size() > 1) {
-            // `a, b, c => body` when it fits on one line
-            std::vector<syntax::doc_id> pattern_docs;
-            pattern_docs.reserve(arm.patterns.size());
-            for (const auto& pattern : arm.patterns) { pattern_docs.emplace_back(format(pattern)); }
-            const auto sep{doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()})};
-            const auto trailer{doc_manager_.if_break(
-                doc_manager_.concat({doc_manager_.text(","), doc_manager_.line()}),
-                doc_manager_.text(" "))};
-            parts.emplace_back(doc_manager_.group(
-                doc_manager_.concat({doc_manager_.join(std::move(pattern_docs), sep), trailer}),
-                arm.force_break));
-            parts.emplace_back(doc_manager_.text("=> "));
-        } else {
-            parts.emplace_back(format(arm.patterns.front()));
-            parts.emplace_back(doc_manager_.text(" => "));
-        }
+        std::vector<syntax::doc_id> pattern_docs;
+        pattern_docs.reserve(arm.patterns.size());
+        for (const auto& pattern : arm.patterns) { pattern_docs.emplace_back(format(pattern)); }
+        parts.emplace_back(alternatives_head(std::move(pattern_docs), arm.force_break));
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
             parts.emplace_back(doc_manager_.text(modifier_prefix(arm.capture->modifier)));
@@ -1694,7 +1821,7 @@ auto formatter::visit(node_id id, const cfg_value_expr& node) -> syntax::doc_id 
         guards.size() + (node.fallback ? 1 : 0),
         ast_.end_location_of(id).line,
         [&](usize i) {
-            return i < guards.size() ? ast_.location_of(guards[i].predicate).line
+            return i < guards.size() ? ast_.location_of(guards[i].predicates.front()).line
                                      : ast_.location_of(*node.fallback).line;
         },
         [&](usize i) {
@@ -1704,8 +1831,14 @@ auto formatter::visit(node_id id, const cfg_value_expr& node) -> syntax::doc_id 
             if (i == guards.size()) {
                 return doc_manager_.concat({doc_manager_.text("_ => "), format(*node.fallback)});
             }
+            std::vector<syntax::doc_id> predicates;
+            predicates.reserve(guards[i].predicates.size());
+            for (const auto predicate : guards[i].predicates) {
+                predicates.emplace_back(format(predicate));
+            }
             return doc_manager_.concat(
-                {format(guards[i].predicate), doc_manager_.text(" => "), format(guards[i].value)});
+                {alternatives_head(std::move(predicates), guards[i].force_break),
+                 format(guards[i].value)});
         })};
 
     return doc_manager_.concat({
@@ -1717,12 +1850,7 @@ auto formatter::visit(node_id id, const cfg_value_expr& node) -> syntax::doc_id 
 auto formatter::visit(node_id, const cfg_stmt& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> parts;
     for (auto it{node.arms.begin()}; it != node.arms.end(); ++it) {
-        if (it != node.arms.begin()) { parts.emplace_back(doc_manager_.text(" else ")); }
-        if (it->predicate) {
-            parts.emplace_back(doc_manager_.text("@cfg ("));
-            parts.emplace_back(format(*it->predicate));
-            parts.emplace_back(doc_manager_.text(") "));
-        }
+        parts.emplace_back(cfg_arm_head(it == node.arms.begin(), it->predicate));
 
         // Laid out like a block, keeping each item's comments and one author blank line between
         std::vector<syntax::doc_id> body;
@@ -1745,6 +1873,17 @@ auto formatter::visit(node_id, const cfg_stmt& node) -> syntax::doc_id {
             }
             body.emplace_back(item_doc);
             previous = *item;
+        }
+        if (body.empty()) {
+            parts.emplace_back(empty_cfg_arm(it->close));
+            continue;
+        }
+        if (it->close) {
+            auto dangling{consume_dangling_comments(it->close->line, it->close->column)};
+            if (dangling != doc_manager_.nil()) {
+                body.emplace_back(doc_manager_.hard_line());
+                body.emplace_back(dangling);
+            }
         }
         parts.emplace_back(doc_manager_.concat({
             doc_manager_.text("{"),

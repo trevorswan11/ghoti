@@ -163,6 +163,20 @@ class generic_instantiation_cache {
                        });
     }
 
+    // First write wins, so every module sees the instance's first request
+    auto add_request(generic_instantiation_request request) -> void {
+        auto name{request.mangled_name};
+        requests_.try_emplace(std::move(name), std::move(request));
+    }
+
+    [[nodiscard]] auto get_request(std::string_view mangled_name) const noexcept
+        -> stdx::option<const generic_instantiation_request&> {
+        if (const auto it{requests_.find(mangled_name)}; it != requests_.end()) {
+            return it->second;
+        }
+        return stdx::none;
+    }
+
     // Emit-time replay data, keyed by mangled instantiation name
     auto set_body_type_diff(std::string key, body_type_diff diff) -> void {
         if (body_type_diffs_.contains(key)) { return; }
@@ -237,6 +251,11 @@ class generic_instantiation_cache {
 
   private:
     ankerl::unordered_dense::map<generic_instantiation_key, generic_instantiation_entry> cache_;
+    ankerl::unordered_dense::map<std::string,
+                                 generic_instantiation_request,
+                                 stdx::string_transparent_hash,
+                                 stdx::string_transparent_eq>
+        requests_;
     ankerl::unordered_dense::map<std::string,
                                  std::vector<uptr>,
                                  stdx::string_transparent_hash,

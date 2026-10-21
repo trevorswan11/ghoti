@@ -508,9 +508,8 @@ fn addArtifacts(b: *std.Build, config: struct {
         compiler_tests.root_module.linkLibrary(libcompiler);
 
         // Real C on the other side of the C ABI interop tests, installed where the tests find it
-        const cabi_fixture = b.addLibrary(.{
-            .name = "cabi_fixture",
-            .linkage = .static,
+        const cabi_fixture = b.addObject(.{
+            .name = "cabi",
             .root_module = b.createModule(.{
                 .target = target,
                 .optimize = .ReleaseFast,
@@ -522,10 +521,17 @@ fn addArtifacts(b: *std.Build, config: struct {
             .file = b.path(ProjectPaths.cabi_fixture),
             .flags = &.{ "-std=c23", "-ffreestanding", "-fno-stack-protector", "-fno-builtin" },
         });
+        const fixture_name = b.fmt("{s}cabi_fixture{s}", .{
+            target.result.libPrefix(),
+            target.result.staticLibSuffix(),
+        });
+        const archive_fixture = b.addSystemCommand(&.{ b.graph.zig_exe, "ar", "rcs" });
+        const fixture_archive = archive_fixture.addOutputFileArg(fixture_name);
+        archive_fixture.addFileArg(cabi_fixture.getEmittedBin());
         const fixture_dir: std.Build.InstallDir = .{ .custom = "tests" };
-        const install_fixture = b.addInstallArtifact(cabi_fixture, .{ .dest_dir = .{ .override = fixture_dir } });
+        const install_fixture = b.addInstallFileWithDir(fixture_archive, fixture_dir, fixture_name);
         const test_fixtures_h = b.addConfigHeader(.{ .include_path = "ghoti/test_fixtures.h" }, .{
-            .GHOTI_CABI_FIXTURE = b.getInstallPath(fixture_dir, cabi_fixture.out_lib_filename),
+            .GHOTI_CABI_FIXTURE = b.getInstallPath(fixture_dir, fixture_name),
         });
         compiler_tests.root_module.addConfigHeader(test_fixtures_h);
         compiler_tests.step.dependOn(&install_fixture.step);

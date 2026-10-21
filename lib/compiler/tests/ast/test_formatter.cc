@@ -463,6 +463,90 @@ TEST_CASE("formatter preserves comments and blank lines inside a local @cfg bloc
     CHECK(format_source(source) == source);
 }
 
+TEST_CASE("formatter keeps a blank line between a comment and what follows it") {
+    round_trips(R"(// header
+
+const a = 1;
+// next to b
+/// doc on b
+const b = 2;
+
+const f = fn(): void {
+    let x = 1;
+    // section
+
+    let y = 2;
+    // tight
+    let z = 3;
+};
+)");
+}
+
+TEST_CASE("formatter keeps comments that close a @cfg block arm") {
+    constexpr std::string_view source{R"(comptime {
+    @cfg (a) {
+        @cfg (b) {
+            // only comment
+        } else {
+            let x = 1;
+            // after the last statement
+        }
+    } else @cfg (b) {
+        // first
+        // second
+    } else {}
+    // after the group
+}
+)"};
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter keeps comments inside aggregate @cfg groups") {
+    constexpr std::string_view source{R"(const S = struct {
+    a: i32,
+    // before the group
+    @cfg (os == .linux) {
+        // leading the field
+        uid: u32, // trailing the field
+        // closing the arm
+    } else {
+        // only comment
+    } // after the group
+
+    @cfg (os == .linux) {
+        const k = 1;
+        // closing the member arm
+    } else {}
+};
+
+const E = enum {
+    A,
+    @cfg (os == .windows) {
+        B,
+        // closing the variant arm
+    }
+};
+)"};
+    CHECK(format_source(source) == source);
+}
+
+TEST_CASE("formatter lays out @cfgValue arms with several predicates") {
+    round_trips(R"(const v = @cfgValue(
+    arch == .wasm32, arch == .riscv64 => false,
+    arch == .x86 => true,
+    _ => @cfgValue(os == .macos => true, _ => false),
+);
+)");
+    // A trailing comma before `=>` keeps one predicate per line
+    round_trips(R"(const v = @cfgValue(
+    arch == .wasm32,
+    arch == .riscv64,
+    => false,
+    _ => true,
+);
+)");
+}
+
 TEST_CASE("formatter writes an inferred array size as _") {
     CHECK(format_source("[_]i32{};") == "[_]i32{};\n");
     CHECK(format_source("[_:0]^N{ a, b };") == "[_:0]^N{ a, b };\n");

@@ -150,17 +150,20 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
         if (arms_ok && expr.fallback) {
             bool matched{false};
             for (const auto& guard : expr.guards) {
-                const auto b{eval_predicate(guard.predicate)};
-                if (!b) {
-                    matched = true; // error already reported; stop scanning
-                    break;
+                for (const auto predicate : guard.predicates) {
+                    const auto b{eval_predicate(predicate)};
+                    if (!b) {
+                        matched = true; // error already reported; stop scanning
+                        break;
+                    }
+                    if (*b) {
+                        record.chosen = ast::node_id{guard.value};
+                        result        = eval_term(guard.value);
+                        matched       = true;
+                        break;
+                    }
                 }
-                if (*b) {
-                    record.chosen = ast::node_id{guard.value};
-                    result        = eval_term(guard.value);
-                    matched       = true;
-                    break;
-                }
+                if (matched) { break; }
             }
             if (!matched) {
                 record.chosen = ast::node_id{*expr.fallback};
@@ -454,7 +457,8 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return cfg_value{
             cfgval::member{module_.ast.get_as<ast::identifier_expr>(access.member).name}};
     }
-    case ast::node_kind::DOT_EXPRESSION: return resolve_foreign_value(id);
+    case ast::node_kind::DOT_EXPRESSION:       return resolve_foreign_value(id);
+    case ast::node_kind::CFG_VALUE_EXPRESSION: return resolve_cfg_value(id);
     case ast::node_kind::BOOL_EXPRESSION:
         return cfg_value{id.get_token_type() == token_type_t::BOOLEAN_TRUE};
     case ast::node_kind::STRING_EXPRESSION:

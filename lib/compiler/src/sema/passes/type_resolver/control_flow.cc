@@ -2353,7 +2353,9 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
             [&](const ast::cfg_value_expr& data) {
                 if (data.predicate) { self(self, **data.predicate, loop_depth); }
                 for (const auto& guard : data.guards) {
-                    self(self, *guard.predicate, loop_depth);
+                    for (const auto predicate : guard.predicates) {
+                        self(self, *predicate, loop_depth);
+                    }
                     self(self, *guard.value, loop_depth);
                 }
                 if (data.fallback) { self(self, **data.fallback, loop_depth); }

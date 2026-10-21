@@ -259,6 +259,28 @@ TEST_CASE("f128 keeps signed zeros and special values by IEEE rules") {
     CHECK(f128::from_f64(-0.5).trunc().is_negative());
 }
 
+TEST_CASE("f128 keeps a NaN's sign and payload through decode and encode") {
+    const auto round_trip = [](u128 bits, float_format format) {
+        return f128::decode(bits, format).encode(format);
+    };
+    // Quiet and signaling payloads, both signs
+    CHECK(round_trip(u128{0x7fc10000U}, float_format::SINGLE) == u128{0x7fc10000U});
+    CHECK(round_trip(u128{0xff810000U}, float_format::SINGLE) == u128{0xff810000U});
+    CHECK(round_trip(u128{0x7d00U}, float_format::HALF) == u128{0x7d00U});
+    CHECK(round_trip(u128{0x7ff7100000000000ULL}, float_format::DOUBLE) ==
+          u128{0x7ff7100000000000ULL});
+    CHECK(round_trip((u128{0x7fff} << 64) | u128{0xc000000000000001ULL}, float_format::X87) ==
+          ((u128{0x7fff} << 64) | u128{0xc000000000000001ULL}));
+
+    // Widening top-aligns the payload, narrowing truncates it
+    const auto widened{f128::decode(u128{0x7fc10000U}, float_format::SINGLE)};
+    CHECK(widened.encode(float_format::DOUBLE) == u128{0x7ff8200000000000ULL});
+    CHECK(widened.encode(float_format::QUAD) == (u128{0x7fff820000000000ULL} << 64));
+    // A payload entirely below the narrower format's fraction stays a (quiet) NaN
+    const auto low_payload{f128::decode(u128{0x7ff0000000000001ULL}, float_format::DOUBLE)};
+    CHECK(low_payload.encode(float_format::SINGLE) == u128{0x7fc00000U});
+}
+
 TEST_CASE("x87 encodings the hardware rejects decode to NaN") {
     const auto x87 = [](u64 sign_exponent, u64 significand) {
         return f128::decode((u128{sign_exponent} << 64) | u128{significand}, float_format::X87);

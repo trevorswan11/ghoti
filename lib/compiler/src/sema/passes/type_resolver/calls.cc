@@ -345,10 +345,8 @@ auto type_resolver::reject_type_of_args(const ast::call_expr&     call,
                                         const ast::function_expr& fn_expr,
                                         std::string_view          mangled_name) -> bool {
     // `y: @TypeOf(x)` only has a type in the monomorph, which records it with its request
-    const auto request{std::ranges::find(resolving_.generic_instantiations,
-                                         mangled_name,
-                                         &generic_instantiation_request::mangled_name)};
-    if (request == resolving_.generic_instantiations.end()) { return false; }
+    const auto request{ctx_.instantiation_cache.get_request(mangled_name)};
+    if (!request) { return false; }
     for (usize i{0}, runtime_idx{0}; i < fn_expr.parameters.size() && i < call.arguments.size();
          ++i) {
         const auto& param{fn_expr.parameters[i]};

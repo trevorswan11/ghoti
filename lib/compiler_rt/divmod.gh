@@ -52,7 +52,7 @@ comptime {
     };
 }
 
-pub const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u128 {
+const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u128 {
     return udivmod(u128, a, b, maybe_rem);
 };
 
@@ -70,7 +70,7 @@ test "__udivmodti4" {
     }
 }
 
-pub const __udivmodsi4 = fn(a: u32, b: u32, rem: ^mut u32) callconv(.c): u32 {
+const __udivmodsi4 = fn(a: u32, b: u32, rem: ^mut u32) callconv(.c): u32 {
     let d = __udivsi3(a, b);
     *rem = a - d * b;
     return d;
@@ -90,7 +90,7 @@ test "__udivmodsi4" {
     }
 }
 
-pub const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u64 {
+const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u64 {
     return udivmod(u64, a, b, maybe_rem);
 };
 
@@ -108,7 +108,7 @@ test "__udivmoddi4" {
     }
 }
 
-pub const __divmodti4 = fn(a: i128, b: i128, rem: ^mut i128) callconv(.c): i128 {
+const __divmodti4 = fn(a: i128, b: i128, rem: ^mut i128) callconv(.c): i128 {
     let d = __divti3(a, b);
     *rem = a - d *% b;
     return d;
@@ -152,7 +152,7 @@ test "__divmodti4" {
     }
 }
 
-pub const __divmodsi4 = fn(a: i32, b: i32, rem: ^mut i32) callconv(.c): i32 {
+const __divmodsi4 = fn(a: i32, b: i32, rem: ^mut i32) callconv(.c): i32 {
     let d = __divsi3(a, b);
     *rem = a - d *% b;
     return d;
@@ -186,7 +186,7 @@ test "__divmodsi4" {
     }
 }
 
-pub const __divmoddi4 = fn(a: i64, b: i64, rem: ^mut i64) callconv(.c): i64 {
+const __divmoddi4 = fn(a: i64, b: i64, rem: ^mut i64) callconv(.c): i64 {
     let d = __divdi3(a, b);
     *rem = a - d *% b;
     return d;
@@ -220,7 +220,7 @@ test "__divmoddi4" {
     }
 }
 
-pub const __divti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+const __divti3 = fn(a: i128, b: i128) callconv(.c): i128 {
     return div(a, b);
 };
 
@@ -243,7 +243,7 @@ test "divti3" {
     test__divti3(@bitCast(i128, 0x8 << 124), 2, @bitCast(i128, 0xc << 124));
 }
 
-pub const __divsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+const __divsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
     return div_i32(n, d);
 };
 
@@ -271,7 +271,7 @@ test "__divsi3" {
     }
 }
 
-pub const __divdi3 = fn(n: i64, d: i64) callconv(.c): i64 {
+const __divdi3 = fn(n: i64, d: i64) callconv(.c): i64 {
     return div_i64(n, d);
 };
 
@@ -299,11 +299,11 @@ test "__divdi3" {
     }
 }
 
-pub const __udivti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+const __udivti3 = fn(a: u128, b: u128) callconv(.c): u128 {
     return udivmod(u128, a, b, nullptr);
 };
 
-pub const __udivsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+const __udivsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
     return div_u32(n, d);
 };
 
@@ -319,7 +319,7 @@ test "__udivsi3" {
     }
 }
 
-pub const __udivdi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+const __udivdi3 = fn(a: u64, b: u64) callconv(.c): u64 {
     return __udivmoddi4(a, b, nullptr);
 };
 
@@ -335,7 +335,7 @@ pub const __udivdi3 = fn(a: u64, b: u64) callconv(.c): u64 {
     return (@bitCast(i128, r) ^ s) -% s; // negate if s == -1
 };
 
-pub const __modti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+const __modti3 = fn(a: i128, b: i128) callconv(.c): i128 {
     return mod(a, b);
 };
 
@@ -374,7 +374,7 @@ test "__modti3" {
     test__modti3(make_ti(0x8000000000000000, 0), -3, -2);
 }
 
-pub const __modsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+const __modsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
     return n - __divsi3(n, d) *% d;
 };
 
@@ -403,7 +403,7 @@ test "__modsi3" {
     }
 }
 
-pub const __moddi3 = fn(a: i64, b: i64) callconv(.c): i64 {
+const __moddi3 = fn(a: i64, b: i64) callconv(.c): i64 {
     let abs_a = abs_i64(a);
     let abs_b = abs_i64(b);
     let mut r: u64 = undefined;
@@ -437,13 +437,13 @@ test "__moddi3" {
     }
 }
 
-pub const __umodti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+const __umodti3 = fn(a: u128, b: u128) callconv(.c): u128 {
     let mut r: u128 = undefined;
     _ = udivmod(u128, a, b, ^mut r);
     return r;
 };
 
-pub const __umodsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+const __umodsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
     return n - __udivsi3(n, d) * d;
 };
 
@@ -459,7 +459,7 @@ test "__umodsi3" {
     }
 }
 
-pub const __umoddi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+const __umoddi3 = fn(a: u64, b: u64) callconv(.c): u64 {
     let mut r: u64 = undefined;
     _ = __udivmoddi4(a, b, ^mut r);
     return r;
@@ -575,7 +575,7 @@ const divwide = fn(comptime T: type, u_high: T, u_low: T, divisor: T, remainder:
 };
 
 // Returns dividend / divisor and sets maybe_rem = dividend % divisor if non-null.
-pub const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mut T): T {
+const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mut T): T {
     const HalfT = HalveInt(T, false).HalfT;
     const half_bits = @bitSizeOf(HalfT);
 
