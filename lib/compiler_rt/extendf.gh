@@ -6,3 +6,33 @@ import "compiler_rt.gh" as compiler_rt;
 
 const math = std.math;
 const symbol = compiler_rt.symbol;
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        @cfg (compiler_rt.gnu_f16_abi) {
+            // symbol(__aeabi_h2f, "__gnu_h2f_ieee");
+        } else {
+            // symbol(__aeabi_h2f, "__aeabi_h2f");
+        }
+    } else @cfg (compiler_rt.gnu_f16_abi) {
+        // symbol(__extendhfsf2, "__gnu_h2f_ieee");
+    }
+    // symbol(__extendhfsf2, "__extendhfsf2");
+    // symbol(__extendhfdf2, "__extendhfdf2");
+    // symbol(__extendhfxf2, "__extendhfxf2");
+    // symbol(__extendhftf2, "__extendhftf2");
+
+    @cfg (compiler_rt.want_aeabi) {
+        // symbol(__aeabi_f2d, "__aeabi_f2d");
+    }
+    // symbol(__extendsfdf2, "__extendsfdf2");
+    // symbol(__extendsfxf2, "__extendsfxf2");
+    // symbol(__extendsftf2, "__extendsftf2");
+    // symbol(__extenddfxf2, "__extenddfxf2");
+    // symbol(__extenddftf2, "__extenddftf2");
+    // symbol(__extendxftf2, "__extendxftf2");
+}
+
+@cfg (compiler_rt.want_aeabi) {}
+
+@cfg (compiler_rt.gnu_f16_abi) {}

@@ -24,10 +24,47 @@ pub const want_ppc_abi = @cfgValue(arch == .powerpc or arch == .powerpc64);
 pub const want_sparc64_abi = @cfgValue(arch == .sparc64);
 pub const want_sparc32_abi = @cfgValue(arch == .sparc);
 
+pub const is_arch_eabi = @cfgValue(
+    abi == .eabi => true,
+    abi == .eabihf => true,
+    _ => false,
+);
+
 pub const want_aeabi = @cfgValue((arch == .arm or arch == .thumb) and
-    (abi == .eabi or abi == .eabihf or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
+    (is_arch_eabi or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
         abi == .gnueabihf or
         abi == .android));
+
+pub const is_os_darwin = @cfgValue(os == .macos);
+
+/// This governs whether to use these symbol names for f16/f32 conversions
+/// rather than the standard names:
+/// * __gnu_f2h_ieee
+/// * __gnu_h2f_ieee
+/// Known correct configurations:
+///   x86_64-freestanding-none => true
+///   x86_64-linux-none => true
+///   x86_64-linux-gnu => true
+///   x86_64-linux-musl => true
+///   x86_64-linux-eabi => true
+///   arm-linux-musleabihf => true
+///   arm-linux-gnueabihf => true
+///   arm-linux-eabihf => false
+///   wasm32-freestanding-none => false
+///   x86_64-windows-gnu => true
+///   x86_64-windows-msvc => true
+///   any-macos-any => false
+pub const gnu_f16_abi = @cfgValue(
+    arch == .wasm32 => false,
+    arch == .wasm64 => false,
+    arch == .riscv32 => false,
+    arch == .riscv64 => false,
+    arch == .arm => !is_arch_eabi,
+    arch == .thumb => !is_arch_eabi,
+    arch == .x86_64 => true,
+    arch == .x86 => true,
+    _ => is_os_darwin,
+);
 
 pub const @"f80" = match comptime (@targetArch()) {
     .x86_64, .x86 => f80,
@@ -105,37 +142,6 @@ pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
         pub const HalfTS = @Int(.{ .signedness = .signed, .bits = bits });
         pub const HalfT = if comptime (signed_half) HalfTS else HalfTU;
     };
-};
-
-/// This governs whether to use these symbol names for f16/f32 conversions
-/// rather than the standard names:
-/// * __gnu_f2h_ieee
-/// * __gnu_h2f_ieee
-/// Known correct configurations:
-///   x86_64-freestanding-none => true
-///   x86_64-linux-none => true
-///   x86_64-linux-gnu => true
-///   x86_64-linux-musl => true
-///   x86_64-linux-eabi => true
-///   arm-linux-musleabihf => true
-///   arm-linux-gnueabihf => true
-///   arm-linux-eabihf => false
-///   wasm32-freestanding-none => false
-///   x86_64-windows-gnu => true
-///   x86_64-windows-msvc => true
-///   any-macos-any => false
-pub const gnu_f16_abi = match comptime (@targetArch()) {
-    .wasm32,
-    .wasm64,
-    .riscv32,
-    .riscv64,
-    => false,
-    .arm, .thumb => match comptime (@targetAbi()) {
-        .eabi, .eabihf => false,
-        _ => true,
-    },
-    .x86_64, .x86 => true,
-    _ => @targetOs() == .macos,
 };
 
 @[inline(.always)] pub const abs_i32 = fn(x: i32): i32 {
