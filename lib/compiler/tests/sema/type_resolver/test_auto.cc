@@ -267,8 +267,8 @@ TEST_CASE("Generic function instantiation and deduplication") {
         CHECK(r2_type == ctx->get_type(sema::type_kind::BOOL));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 2);
-        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "id__i32");
-        CHECK(ctx->root_mod.generic_instantiations[1].mangled_name == "id__bool");
+        CHECK(ctx->root_mod.generic_instantiations[0] == "id__i32");
+        CHECK(ctx->root_mod.generic_instantiations[1] == "id__bool");
     }
 
     SECTION("Deduplicates multiple calls with identical argument types") {
@@ -289,7 +289,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
         CHECK(b_type == ctx->get_int_type(32, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 1);
-        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "id__i32");
+        CHECK(ctx->root_mod.generic_instantiations[0] == "id__i32");
     }
 
     SECTION("Instantiates generic function with multiple auto parameters") {
@@ -310,8 +310,8 @@ TEST_CASE("Generic function instantiation and deduplication") {
         CHECK(r2_type == ctx->get_int_type(64, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 2);
-        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "add__i32_i32");
-        CHECK(ctx->root_mod.generic_instantiations[1].mangled_name == "add__i64_i64");
+        CHECK(ctx->root_mod.generic_instantiations[0] == "add__i32_i32");
+        CHECK(ctx->root_mod.generic_instantiations[1] == "add__i64_i64");
     }
 
     SECTION("Instantiates generic function with mixed concrete and auto parameters") {
@@ -327,7 +327,7 @@ TEST_CASE("Generic function instantiation and deduplication") {
         CHECK(r_type == ctx->get_int_type(32, true));
 
         CHECK(ctx->root_mod.generic_instantiations.size() == 1);
-        CHECK(ctx->root_mod.generic_instantiations[0].mangled_name == "choose__bool_i32");
+        CHECK(ctx->root_mod.generic_instantiations[0] == "choose__bool_i32");
     }
 }
 

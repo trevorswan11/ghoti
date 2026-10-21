@@ -1108,8 +1108,11 @@ auto type_resolver::instantiate_generic(type&                             callee
             .module          = &fn_mod,
         };
 
-        fn_mod.generic_instantiations.emplace_back(req);
-        if (&resolving_ != &fn_mod) { resolving_.generic_instantiations.emplace_back(req); }
+        ctx_.instantiation_cache.add_request(std::move(req));
+        fn_mod.generic_instantiations.emplace_back(mangled_name);
+        if (&resolving_ != &fn_mod) {
+            resolving_.generic_instantiations.emplace_back(mangled_name);
+        }
     }
 
     // A `fn(...): type` constructor that hands back an existing non-aggregate type by name,

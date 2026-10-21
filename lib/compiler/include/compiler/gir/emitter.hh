@@ -310,7 +310,7 @@ class emitter {
                                     ast::expr_handle  at) -> void;
     auto emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_type) -> value;
     auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;
-    auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
+    auto emit_generic_instantiation(std::string_view mangled_name) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     // Produces a value exactly as resolved, including a bare reference-typed value where
     // applicable.
