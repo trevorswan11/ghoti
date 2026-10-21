@@ -54,7 +54,7 @@ test "__mulsf3" {
     }
 }
 
-pub const mul_f32 = fn(a: f32, b: f32): f32 {
+const mul_f32 = fn(a: f32, b: f32): f32 {
     return mulf3(f32, a, b);
 };
 
@@ -83,7 +83,7 @@ test "__muldf3" {
     }
 }
 
-pub const mul_f64 = fn(a: f64, b: f64): f64 {
+const mul_f64 = fn(a: f64, b: f64): f64 {
     return mulf3(f64, a, b);
 };
 
@@ -180,7 +180,7 @@ test "__mulxf3" {
     );
 }
 
-pub const mul_f80 = fn(a: f80, b: f80): f80 {
+const mul_f80 = fn(a: f80, b: f80): f80 {
     return mulf3(f80, a, b);
 };
 
@@ -281,7 +281,7 @@ test "__multf3" {
     test__multf3(2.0, math.float_true_min(f128), 0x0, 0x2);
 }
 
-pub const mul_f128 = fn(a: f128, b: f128): f128 {
+const mul_f128 = fn(a: f128, b: f128): f128 {
     return mulf3(f128, a, b);
 };
 

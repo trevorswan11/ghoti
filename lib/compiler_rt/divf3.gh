@@ -84,7 +84,7 @@ test "__divsf3" {
     test__divsf3(@bitCast(f32, 5u32), 2.0, 0x00000002);
 }
 
-@[inline(.always)] pub const div_f32 = fn(a: f32, b: f32): f32 {
+@[inline(.always)] const div_f32 = fn(a: f32, b: f32): f32 {
     return divf3(f32, a, b);
 };
 
@@ -144,7 +144,7 @@ test "__divdf3" {
     test__divdf3(@bitCast(f64, 5u64), 2.0, 0x0000000000000002);
 }
 
-@[inline(.always)] pub const div_f64 = fn(a: f64, b: f64): f64 {
+@[inline(.always)] const div_f64 = fn(a: f64, b: f64): f64 {
     return divf3(f64, a, b);
 };
 
@@ -228,7 +228,7 @@ test "__divtf3" {
     test__divtf3(1.2, std.math.float_max(f128), 0x00004ccccccccccc, 0xcccccccccccccccd);
 }
 
-@[inline(.always)] pub const div_f128 = fn(a: f128, b: f128): f128 {
+@[inline(.always)] const div_f128 = fn(a: f128, b: f128): f128 {
     return divf3(f128, a, b);
 };
 
@@ -331,7 +331,7 @@ test "__divxf3" {
     test__divxf3(0x1.0000000000000002p16383, 0x1p-1, inf_rep);
 }
 
-@[inline(.always)] pub const div_f80 = fn(a: f80, b: f80): f80 {
+@[inline(.always)] const div_f80 = fn(a: f80, b: f80): f80 {
     return divf3(f80, a, b);
 };
 

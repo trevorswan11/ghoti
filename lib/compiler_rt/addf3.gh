@@ -33,7 +33,7 @@ comptime {
     symbol(__subtf3, "__subtf3");
 }
 
-pub const add_f32 = fn(a: f32, b: f32): f32 {
+const add_f32 = fn(a: f32, b: f32): f32 {
     return addf3(f32, a, b);
 };
 
@@ -41,7 +41,7 @@ const __addsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
     return add_f32(a, b);
 };
 
-pub const sub_f32 = fn(a: f32, b: f32): f32 {
+const sub_f32 = fn(a: f32, b: f32): f32 {
     return add_f32(a, compiler_rt.fneg(b));
 };
 
@@ -49,7 +49,7 @@ const __subsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
     return sub_f32(a, b);
 };
 
-pub const add_f64 = fn(a: f64, b: f64): f64 {
+const add_f64 = fn(a: f64, b: f64): f64 {
     return addf3(f64, a, b);
 };
 
@@ -57,7 +57,7 @@ const __adddf3 = fn(a: f64, b: f64) callconv(.c): f64 {
     return add_f64(a, b);
 };
 
-pub const sub_f64 = fn(a: f64, b: f64): f64 {
+const sub_f64 = fn(a: f64, b: f64): f64 {
     return add_f64(a, compiler_rt.fneg(b));
 };
 
@@ -65,7 +65,7 @@ const __subdf3 = fn(a: f64, b: f64) callconv(.c): f64 {
     return sub_f64(a, b);
 };
 
-pub const add_f80 = fn(a: f80, b: f80): f80 {
+const add_f80 = fn(a: f80, b: f80): f80 {
     return addf3(f80, a, b);
 };
 
@@ -73,7 +73,7 @@ const __addxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
     return @bitCast(add_f80(@bitCast(a), @bitCast(b)));
 };
 
-pub const sub_f80 = fn(a: f80, b: f80): f80 {
+const sub_f80 = fn(a: f80, b: f80): f80 {
     return add_f80(a, compiler_rt.fneg(b));
 };
 
@@ -81,7 +81,7 @@ const __subxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compil
     return @bitCast(sub_f80(@bitCast(a), @bitCast(b)));
 };
 
-pub const add_f128 = fn(a: f128, b: f128): f128 {
+const add_f128 = fn(a: f128, b: f128): f128 {
     return addf3(f128, a, b);
 };
 
@@ -89,7 +89,7 @@ const __addtf3 = fn(a: f128, b: f128) callconv(.c): f128 {
     return add_f128(a, b);
 };
 
-pub const sub_f128 = fn(a: f128, b: f128): f128 {
+const sub_f128 = fn(a: f128, b: f128): f128 {
     return add_f128(a, compiler_rt.fneg(b));
 };
 

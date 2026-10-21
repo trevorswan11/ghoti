@@ -10,29 +10,249 @@ const symbol = compiler_rt.symbol;
 comptime {
     @cfg (compiler_rt.want_aeabi) {
         @cfg (compiler_rt.gnu_f16_abi) {
-            // symbol(__aeabi_h2f, "__gnu_h2f_ieee");
+            symbol(__aeabi_h2f, "__gnu_h2f_ieee");
         } else {
-            // symbol(__aeabi_h2f, "__aeabi_h2f");
+            symbol(__aeabi_h2f, "__aeabi_h2f");
         }
     } else @cfg (compiler_rt.gnu_f16_abi) {
-        // symbol(__extendhfsf2, "__gnu_h2f_ieee");
+        symbol(__extendhfsf2, "__gnu_h2f_ieee");
     }
-    // symbol(__extendhfsf2, "__extendhfsf2");
-    // symbol(__extendhfdf2, "__extendhfdf2");
-    // symbol(__extendhfxf2, "__extendhfxf2");
-    // symbol(__extendhftf2, "__extendhftf2");
+    symbol(__extendhfsf2, "__extendhfsf2");
+    symbol(__extendhfdf2, "__extendhfdf2");
+    symbol(__extendhfxf2, "__extendhfxf2");
+    symbol(__extendhftf2, "__extendhftf2");
 
     @cfg (compiler_rt.want_aeabi) {
-        // symbol(__aeabi_f2d, "__aeabi_f2d");
+        symbol(__aeabi_f2d, "__aeabi_f2d");
     }
-    // symbol(__extendsfdf2, "__extendsfdf2");
-    // symbol(__extendsfxf2, "__extendsfxf2");
-    // symbol(__extendsftf2, "__extendsftf2");
-    // symbol(__extenddfxf2, "__extenddfxf2");
-    // symbol(__extenddftf2, "__extenddftf2");
-    // symbol(__extendxftf2, "__extendxftf2");
+    symbol(__extendsfdf2, "__extendsfdf2");
+    symbol(__extendsfxf2, "__extendsfxf2");
+    symbol(__extendsftf2, "__extendsftf2");
+    symbol(__extenddfxf2, "__extenddfxf2");
+    symbol(__extenddftf2, "__extenddftf2");
+    symbol(__extendxftf2, "__extendxftf2");
 }
 
-@cfg (compiler_rt.want_aeabi) {}
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_h2f = fn(a: u16) callconv(.aapcs): u32 {
+        return @bitCast(f32_float_cast_f16(@bitCast(a)));
+    };
 
-@cfg (compiler_rt.gnu_f16_abi) {}
+    const __aeabi_f2d = fn(a: f32) callconv(.aapcs): f64 {
+        return f64_float_cast_f32(a);
+    };
+}
+
+const __extendhfsf2 = fn(a: f16) callconv(.c): f32 {
+    return f32_float_cast_f16(a);
+};
+
+const f32_float_cast_f16 = fn(a: f16): f32 {
+    return extendf(f32, f16, a);
+};
+
+const __extendhfdf2 = fn(a: f16) callconv(.c): f64 {
+    return extendf(f64, f16, a);
+};
+
+const __extendhfxf2 = fn(a: f16) callconv(.c): compiler_rt.f80 {
+    return @bitCast(extend_f80(f16, a));
+};
+
+const __extendhftf2 = fn(a: f16) callconv(.c): f128 {
+    return extendf(f128, f16, a);
+};
+
+const __extendsfdf2 = fn(a: f32) callconv(.c): f64 {
+    return f64_float_cast_f32(a);
+};
+
+const f64_float_cast_f32 = fn(a: f32): f64 {
+    return extendf(f64, f32, a);
+};
+
+const __extendsfxf2 = fn(a: f32) callconv(.c): compiler_rt.f80 {
+    return @bitCast(extend_f80(f32, a));
+};
+
+const __extendsftf2 = fn(a: f32) callconv(.c): f128 {
+    return extendf(f128, f32, a);
+};
+
+const __extenddfxf2 = fn(a: f64) callconv(.c): compiler_rt.f80 {
+    return @bitCast(extend_f80(f64, a));
+};
+
+const __extenddftf2 = fn(a: f64) callconv(.c): f128 {
+    return extendf(f128, f64, a);
+};
+
+const __extendxftf2 = fn(a: compiler_rt.f80) callconv(.c): f128 {
+    return f128_float_cast_f80(@bitCast(a));
+};
+
+@[inline(.always)] const f128_float_cast_f80 = fn(a: f80): f128 {
+    const src_int_bit = 0x8000000000000000u64;
+    const src_sig_mask = ~src_int_bit;
+    const src_sig_bits = math.float_mantissa_bits(f80) - 1; // -1 for the integer bit
+    const dst_sig_bits = math.float_mantissa_bits(f128);
+    const dst_bits = @bitSizeOf(f128);
+
+    // Break a into a sign and representation of the absolute value
+    let mut a_rep: math.f80 = .from_float(a);
+    let sign = a_rep.exp & 0x8000;
+    a_rep.exp &= 0x7FFF;
+    let mut abs_result: u128 = undefined;
+
+    if (a_rep.exp == 0 and a_rep.fraction == 0) {
+        // zero
+        abs_result = 0;
+    } else if (a_rep.exp == 0x7FFF) {
+        // a is nan or infinite
+        abs_result = @as(u128, a_rep.fraction) << (dst_sig_bits - src_sig_bits);
+        abs_result |= @as(u128, a_rep.exp) << dst_sig_bits;
+    } else if (a_rep.fraction & src_int_bit != 0) {
+        // a is a normal value
+        abs_result = @as(u128, a_rep.fraction & src_sig_mask) << (dst_sig_bits - src_sig_bits);
+        abs_result |= @as(u128, a_rep.exp) << dst_sig_bits;
+    } else {
+        // a is denormal
+        abs_result = @as(u128, a_rep.fraction) << (dst_sig_bits - src_sig_bits);
+    }
+
+    // Apply the signbit to (Dst)abs(a).
+    let result: u128 = abs_result | @as(u128, sign) << (dst_bits - 16);
+    return @bitCast(result);
+};
+
+@[inline(.always)] const extendf = fn(comptime Dst: type, comptime Src: type, f: Src): Dst {
+    const SrcRep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(Src).float.bits });
+    const DstRep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(Dst).float.bits });
+    const src_sig_bits = math.float_mantissa_bits(Src);
+    const dst_sig_bits = math.float_mantissa_bits(Dst);
+
+    // Various constants whose values follow Src the type parameters.
+    // Any reasonable optimizer will fold and propagate all of these.
+    const src_bits = @bitSizeOf(Src);
+    const src_exp_bits = src_bits - src_sig_bits - 1;
+    const src_inf_exp = (1 << src_exp_bits) - 1;
+    const src_exp_bias = src_inf_exp >> 1;
+
+    const src_min_normal = 1 << src_sig_bits;
+    const src_infinity = src_inf_exp << src_sig_bits;
+    const src_sign_mask = 1 << (src_sig_bits + src_exp_bits);
+    const src_abs_mask = src_sign_mask - 1;
+    const src_qnan = 1 << (src_sig_bits - 1);
+    const src_nan_code = src_qnan - 1;
+
+    const dst_bits = @bitSizeOf(Dst);
+    const dst_exp_bits = dst_bits - dst_sig_bits - 1;
+    const dst_inf_exp = (1 << dst_exp_bits) - 1;
+    const dst_exp_bias = dst_inf_exp >> 1;
+
+    const dst_min_normal: DstRep = @as(DstRep, 1) << dst_sig_bits;
+
+    let a: SrcRep = @bitCast(f);
+    // Break a inDst a sign and representation of the absolute value
+    let a_rep: SrcRep = @bitCast(a);
+    let a_abs: SrcRep = a_rep & src_abs_mask;
+    let sign: SrcRep = a_rep & src_sign_mask;
+    let mut abs_result: DstRep = undefined;
+
+    if (a_abs -% src_min_normal < src_infinity - src_min_normal) {
+        // a is a normal number.
+        // Extend Dst the destination type by shifting the significand and
+        // exponent inDst the proper position and rebiasing the exponent.
+        abs_result = @as(DstRep, a_abs) << (dst_sig_bits - src_sig_bits);
+        abs_result += (dst_exp_bias - src_exp_bias) << dst_sig_bits;
+    } else if (a_abs >= src_infinity) {
+        // a is NaN or infinity.
+        // Conjure the result by beginning with infinity, then setting the qNaN
+        // bit (if needed) and right-aligning the rest of the trailing NaN
+        // payload field.
+        abs_result = dst_inf_exp << dst_sig_bits;
+        abs_result |= @as(DstRep, a_abs & src_qnan) << (dst_sig_bits - src_sig_bits);
+        abs_result |= @as(DstRep, a_abs & src_nan_code) << (dst_sig_bits - src_sig_bits);
+    } else if (a_abs != 0) {
+        // a is denormal.
+        // renormalize the significand and clear the leading bit, then insert
+        // the correct adjusted exponent in the destination type.
+        let scale: u32 = @clz(a_abs) - @clz(@as(SrcRep, src_min_normal));
+        abs_result = @as(DstRep, a_abs) << @intCast(dst_sig_bits - src_sig_bits + scale);
+        abs_result ^= dst_min_normal;
+        let result_exponent: u32 = dst_exp_bias - src_exp_bias - scale + 1;
+        abs_result |= @intCast(DstRep, result_exponent) << dst_sig_bits;
+    } else {
+        // a is zero.
+        abs_result = 0;
+    }
+
+    // Apply the signbit Dst (Dst)abs(a).
+    let result: DstRep = abs_result | @as(DstRep, sign) << (dst_bits - src_bits);
+    return @bitCast(result);
+};
+
+@[inline(.always)] const extend_f80 = fn(comptime Src: type, f: Src): f80 {
+    const SrcRep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(Src).float.bits });
+    const src_sig_bits = math.float_mantissa_bits(Src);
+    const dst_int_bit = 0x8000000000000000;
+    const dst_sig_bits = math.float_mantissa_bits(f80) - 1; // -1 for the integer bit
+
+    const dst_exp_bias = 16383;
+
+    const src_bits = @bitSizeOf(Src);
+    const src_exp_bits = src_bits - src_sig_bits - 1;
+    const src_inf_exp = (1 << src_exp_bits) - 1;
+    const src_exp_bias = src_inf_exp >> 1;
+
+    const src_min_normal = 1 << src_sig_bits;
+    const src_inf = src_inf_exp << src_sig_bits;
+    const src_sign_mask = 1 << (src_sig_bits + src_exp_bits);
+    const src_abs_mask = src_sign_mask - 1;
+    const src_qnan = 1 << (src_sig_bits - 1);
+    const src_nan_code = src_qnan - 1;
+
+    let mut dst: math.f80 = undefined;
+
+    let a: SrcRep = @bitCast(f);
+    // Break a into a sign and representation of the absolute value
+    let a_abs = a & src_abs_mask;
+    let sign: u16 = if (a & src_sign_mask != 0) 0x8000 else 0;
+
+    if (a_abs -% src_min_normal < src_inf - src_min_normal) {
+        // a is a normal number.
+        // Extend to the destination type by shifting the significand and
+        // exponent into the proper position and rebiasing the exponent.
+        dst.exp = @intCast(a_abs >> src_sig_bits);
+        dst.exp += dst_exp_bias - src_exp_bias;
+        dst.fraction = @as(u64, a_abs) << (dst_sig_bits - src_sig_bits);
+        dst.fraction |= dst_int_bit; // bit 64 is always set for normal numbers
+    } else if (a_abs >= src_inf) {
+        // a is NaN or infinity.
+        // Conjure the result by beginning with infinity, then setting the qNaN
+        // bit (if needed) and right-aligning the rest of the trailing NaN
+        // payload field.
+        dst.exp = 0x7fff;
+        dst.fraction = dst_int_bit;
+        dst.fraction |= @as(u64, a_abs & src_qnan) << (dst_sig_bits - src_sig_bits);
+        dst.fraction |= @as(u64, a_abs & src_nan_code) << (dst_sig_bits - src_sig_bits);
+    } else if (a_abs != 0) {
+        // a is denormal.
+        // renormalize the significand and clear the leading bit, then insert
+        // the correct adjusted exponent in the destination type.
+        let scale: u16 = @clz(a_abs) - @clz(@as(SrcRep, src_min_normal));
+
+        dst.fraction = @as(u64, a_abs) << @intCast(dst_sig_bits - src_sig_bits + scale);
+        dst.fraction |= dst_int_bit; // bit 64 is always set for normal numbers
+        dst.exp = @truncate(a_abs >> @intCast(src_sig_bits - scale));
+        dst.exp ^= 1;
+        dst.exp |= dst_exp_bias - src_exp_bias - scale + 1;
+    } else {
+        // a is zero.
+        dst.exp = 0;
+        dst.fraction = 0;
+    }
+
+    dst.exp |= sign;
+    return dst.to_float();
+};

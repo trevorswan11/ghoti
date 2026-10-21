@@ -11,7 +11,7 @@ const Unordered = match comptime (@targetArch()) {
     .aarch64 => i32,
     _ => if comptime (@bitSizeOf(c_long) >= @bitSizeOf(usize)) c_long else c_longlong,
 };
-pub const Order = enum : Unordered { lt = -1, eq = 0, gt = 1 };
+const Order = enum : Unordered { lt = -1, eq = 0, gt = 1 };
 
 comptime {
     @cfg (compiler_rt.want_aeabi) {
@@ -129,11 +129,11 @@ const __unordsf2 = fn(a: f32, b: f32) callconv(.c): Unordered {
     return @intFromBool(unord_f32(a, b));
 };
 
-@[inline(.always)] pub const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
+@[inline(.always)] const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
     return cmpf2(f32, a, b);
 };
 
-@[inline(.always)] pub const unord_f32 = fn(a: f32, b: f32): bool {
+@[inline(.always)] const unord_f32 = fn(a: f32, b: f32): bool {
     return unord(f32, a, b);
 };
 
@@ -190,11 +190,11 @@ const __unorddf2 = fn(a: f64, b: f64) callconv(.c): Unordered {
     return @intFromBool(unord_f64(a, b));
 };
 
-@[inline(.always)] pub const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
+@[inline(.always)] const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
     return cmpf2(f64, a, b);
 };
 
-@[inline(.always)] pub const unord_f64 = fn(a: f64, b: f64): bool {
+@[inline(.always)] const unord_f64 = fn(a: f64, b: f64): bool {
     return unord(f64, a, b);
 };
 
@@ -251,7 +251,7 @@ const __unordxf2 = fn(a: f80, b: f80) callconv(.c): Unordered {
     return @intFromBool(unord_f80(a, b));
 };
 
-@[inline(.always)] pub const cmp_f80 = fn(a: f80, b: f80): std.Option(Order) {
+@[inline(.always)] const cmp_f80 = fn(a: f80, b: f80): std.Option(Order) {
     const significand_bits = math.float_mantissa_bits(f80);
     const int_bit = 0x8000000000000000;
     const sign_bit = 0x8000;
@@ -289,7 +289,7 @@ const __unordxf2 = fn(a: f80, b: f80) callconv(.c): Unordered {
     }
 };
 
-@[inline(.always)] pub const unord_f80 = fn(a: f80, b: f80): bool {
+@[inline(.always)] const unord_f80 = fn(a: f80, b: f80): bool {
     return unord(f80, a, b);
 };
 
@@ -305,11 +305,11 @@ const __unordtf2 = fn(a: f128, b: f128) callconv(.c): Unordered {
     return @intFromBool(unord_f128(a, b));
 };
 
-@[inline(.always)] pub const cmp_f128 = fn(a: f128, b: f128): std.Option(Order) {
+@[inline(.always)] const cmp_f128 = fn(a: f128, b: f128): std.Option(Order) {
     return cmpf2(f128, a, b);
 };
 
-@[inline(.always)] pub const unord_f128 = fn(a: f128, b: f128): bool {
+@[inline(.always)] const unord_f128 = fn(a: f128, b: f128): bool {
     return unord(f128, a, b);
 };
 
