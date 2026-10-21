@@ -44,9 +44,16 @@ comptime {
     };
 }
 
-const __extendhfsf2 = fn(a: f16) callconv(.c): f32 {
-    return f32_float_cast_f16(a);
-};
+@cfg (os == .macos and arch == .x86) {
+    // Darwin uses different abi for f16 for some reason
+    const __extendhfsf2 = fn(a: u16) callconv(.c): f32 {
+        return f32_float_cast_f16(@bitCast(a));
+    };
+} else {
+    const __extendhfsf2 = fn(a: f16) callconv(.c): f32 {
+        return f32_float_cast_f16(a);
+    };
+}
 
 const f32_float_cast_f16 = fn(a: f16): f32 {
     return extendf(f32, f16, a);
