@@ -44,6 +44,7 @@ class formatter {
         usize            col;
         bool             is_trailing{false};
         bool             is_leading_blank{false};
+        bool             is_trailing_blank{false}; // a blank line before the token after it
         bool             consumed{false};
     };
 

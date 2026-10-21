@@ -893,6 +893,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 ## Tooling
 - `ghoti fmt` puts a multiline (`\\`) asm template on lines of its own, with the `,` after it on the next
 - Fixed: `ghoti fmt` moved comments out of `@cfg` arms: ones in a statement arm landed after the whole `@cfg` chain, and ones in a struct, union, or enum `@cfg` group after the whole type (#391)
+- Fixed: `ghoti fmt` dropped a blank line between a comment and the code after it (`// section`, blank line, then a statement)
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
 - `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
 - An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it

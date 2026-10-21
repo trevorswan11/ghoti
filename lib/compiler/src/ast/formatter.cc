@@ -132,7 +132,8 @@ auto formatter::init_trivia() -> void {
     bool          first{true};
 
     while (true) {
-        auto enriched{lex.advance_enriched()};
+        auto       enriched{lex.advance_enriched()};
+        const auto leading_start{comments_.size()};
 
         for (const auto& t : enriched.leading_trivia) {
             if (t.kind == syntax::trivia_kind::LINE_COMMENT) {
@@ -144,6 +145,7 @@ auto formatter::init_trivia() -> void {
                     .col              = t.col,
                     .is_trailing      = false,
                     .is_leading_blank = has_blank,
+                    .is_trailing_blank = false,
                     .consumed         = false,
                 });
                 prev_line = t.line;
@@ -152,6 +154,10 @@ auto formatter::init_trivia() -> void {
         }
 
         if (enriched.token.type == syntax::token_type_t::END) { break; }
+
+        if (comments_.size() > leading_start && enriched.token.line > comments_.back().line + 1) {
+            comments_.back().is_trailing_blank = true;
+        }
 
         prev_line = enriched.token.line;
         first     = false;
@@ -164,6 +170,7 @@ auto formatter::init_trivia() -> void {
                     .col              = t.col,
                     .is_trailing      = true,
                     .is_leading_blank = false,
+                    .is_trailing_blank = false,
                     .consumed         = false,
                 });
                 prev_line = t.line;
@@ -177,6 +184,7 @@ auto formatter::consume_leading_comments(usize before_line, bool allow_leading_b
     if (comment_idx_ >= comments_.size()) { return doc_manager_.nil(); }
 
     std::vector<syntax::doc_id> docs;
+    bool                        blank_after{false};
     while (comment_idx_ < comments_.size()) {
         const auto& c{comments_[comment_idx_]};
         if (c.line >= before_line) { break; }
@@ -189,10 +197,12 @@ auto formatter::consume_leading_comments(usize before_line, bool allow_leading_b
             }
             docs.emplace_back(doc_manager_.text(c.text));
             docs.emplace_back(doc_manager_.hard_line());
+            blank_after = c.is_trailing_blank;
         }
         ++comment_idx_;
     }
     if (docs.empty()) { return doc_manager_.nil(); }
+    if (blank_after) { docs.emplace_back(doc_manager_.hard_line()); }
     return doc_manager_.concat(std::move(docs));
 }
 

@@ -463,6 +463,25 @@ TEST_CASE("formatter preserves comments and blank lines inside a local @cfg bloc
     CHECK(format_source(source) == source);
 }
 
+TEST_CASE("formatter keeps a blank line between a comment and what follows it") {
+    round_trips(R"(// header
+
+const a = 1;
+// next to b
+/// doc on b
+const b = 2;
+
+const f = fn(): void {
+    let x = 1;
+    // section
+
+    let y = 2;
+    // tight
+    let z = 3;
+};
+)");
+}
+
 TEST_CASE("formatter keeps comments that close a @cfg block arm") {
     constexpr std::string_view source{R"(comptime {
     @cfg (a) {
