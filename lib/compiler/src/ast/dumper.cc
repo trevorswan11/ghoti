@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <ranges>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -464,7 +465,12 @@ auto dumper::visit(node_id, const cfg_value_expr& cfg_value) -> void {
     for (const auto& guard : cfg_value.guards) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Guard: ", indent_.current_branch());
-        dump(guard.predicate);
+        dump(guard.predicates.front());
+        for (auto& pred : guard.predicates | std::views::drop(1)) {
+            const indent::guard g2{indent_, false};
+            fmt::print(out_, "{}| ", indent_.current_branch());
+            dump(pred);
+        }
         {
             const indent::guard g2{indent_, true};
             fmt::print(out_, "{}=> ", indent_.current_branch());

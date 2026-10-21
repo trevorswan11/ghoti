@@ -70,6 +70,31 @@ TEST_CASE("The @cfgValue guard form yields a per-target comptime value") {
     )") == 40);
 }
 
+TEST_CASE("A @cfgValue guard arm with several predicates is taken when any of them holds") {
+    CHECK(helpers::compile_and_run(R"(
+        const A = @cfgValue(
+            ptr_bits == 7,
+            ptr_bits == 64,
+            ptr_bits == 9, => 3,
+            _ => 1,
+        );
+        const B = @cfgValue(ptr_bits == 7, ptr_bits == 9 => 10, _ => 20);
+
+        pub const main = fn(): i32 { return A + B; };
+    )") == 23);
+}
+
+TEST_CASE("A @cfgValue guard arm may yield a nested @cfgValue") {
+    CHECK(helpers::compile_and_run(R"(
+        const N = @cfgValue(
+            ptr_bits == 64 => @cfgValue(ptr_bits == 3 => 100, _ => 200),
+            _ => 0,
+        );
+
+        pub const main = fn(): i32 { return N; };
+    )") == 200);
+}
+
 namespace {
 
 constexpr std::string_view GOOD_BACKEND{R"(

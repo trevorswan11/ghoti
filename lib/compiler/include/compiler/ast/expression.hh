@@ -16,6 +16,7 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
@@ -118,8 +119,9 @@ struct do_while_loop_expr {
 // A `@cfg(...) ...` group inside an aggregate  body
 template <typename Item> struct cfg_item_group {
     struct arm {
-        stdx::option<expr_handle> predicate; // unset on the trailing bare `else`
-        std::vector<Item>         items;
+        stdx::option<expr_handle>     predicate; // unset on the trailing bare `else`
+        std::vector<Item>             items;
+        stdx::option<source_location> close; // the `}` of a braced body, for its comments
     };
 
     usize            position{0}; // index in the aggregate's item list this group expands at
@@ -313,11 +315,13 @@ struct infinite_loop_expr {
 };
 
 // `@cfgValue(<pred>)` -> comptime bool, or the guard form
-// `@cfgValue(<pred> => <val>, ..., _ => <val>)` -> comptime T
+// `@cfgValue(<pred>, ... => <val>, ..., _ => <val>)` -> comptime T
 struct cfg_value_expr {
+    // Taken when any of its predicates holds
     struct guard {
-        expr_handle predicate;
-        expr_handle value;
+        std::vector<expr_handle> predicates;
+        expr_handle              value;
+        bool                     force_break{false}; // trailing comma before `=>`
     };
 
     stdx::option<expr_handle> predicate;

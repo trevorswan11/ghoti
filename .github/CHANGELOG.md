@@ -867,6 +867,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a generic function or type constructor instantiated with `-0.0` and with `0.0` reused whichever instance came first, since the two compare equal; comptime arguments now match by bit pattern
 - Fixed: a `for comptime` or a per-iteration `while comptime` in a generic function kept the first instantiation's types from its second iteration on, so `y = @truncate(...)` in the loop reported "cannot assign 'u64' to 'u32'" once the function was also used with a wider type
 - `@truncate` accepts a target as wide as its operand, so `@truncate(T, x)` works in generic code when `T` is `x`'s own type (`u128` to `u128`); it keeps the bits as they are, and only a wider target is rejected
+- A `@cfgValue` guard arm may list several predicates and is taken when any of them holds: `arch == .wasm32, arch == .wasm64 => false` (#392)
+    - As with `match`, a trailing comma before `=>` (`a, b, => x`) puts one predicate per line
+    - An arm's value may itself be a `@cfgValue`: `arch == .arm => @cfgValue(abi == .eabi => false, _ => true)`
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values
@@ -889,6 +892,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 
 ## Tooling
 - `ghoti fmt` puts a multiline (`\\`) asm template on lines of its own, with the `,` after it on the next
+- Fixed: `ghoti fmt` moved comments out of `@cfg` arms: ones in a statement arm landed after the whole `@cfg` chain, and ones in a struct, union, or enum `@cfg` group after the whole type (#391)
 - Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
 - `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
 - An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it
