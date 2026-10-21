@@ -34,6 +34,11 @@ struct source_location {
     source_location() noexcept = default;
     source_location(usize line, usize column) noexcept : line{line}, column{column} {}
 
+    // The 1-indexed form users see, e.g. baked into a runtime `builtin.SourceLocation`
+    [[nodiscard]] auto one_based() const noexcept -> source_location {
+        return {line + 1, column + 1};
+    }
+
     auto operator==(const source_location&) const noexcept -> bool = default;
 };
 

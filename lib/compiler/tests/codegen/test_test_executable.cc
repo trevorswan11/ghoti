@@ -64,6 +64,16 @@ TEST_CASE("Test with @src compiles and executes properly") {
     )") == 0);
 }
 
+TEST_CASE("@src reports the 1-based line and column of the builtin") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "src location is 1-based" {
+            let loc = @src();
+            @require(loc.line == 3);
+            @require(loc.column == 23);
+        }
+    )") == 0);
+}
+
 TEST_CASE("The program's own `test_runner` runs instead of the default") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "ignored test" {

@@ -5361,7 +5361,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         return const_value{scoped_symbol_name(*owner->root_table_idx, "test_runner"), *fn_type};
     }
     case syntax::builtin_t::SRC: {
-        const auto&  loc{module_->ast.location_of(id)};
+        const auto   loc{module_->ast.location_of(*call.function).one_based()};
         const_struct src_struct;
         auto&        t_u32{ctx_.get_int(32, false)};
         src_struct.fields["file"]   = const_value::make_string(ctx_, module_->path.string());

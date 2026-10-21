@@ -121,11 +121,11 @@ const __extendhftf2 = fn(a: f16) callconv(.c): f128 {
 };
 
 @[testing] const test__extendhftf2 = fn(a: u16, expected_hi: u64, expected_lo: u64): bool {
-    const x = __extendhftf2(@bitCast(a));
+    let x = __extendhftf2(@bitCast(a));
 
-    const rep: u128 = @bitCast(x);
-    const hi: u64 = @intCast(rep >> 64);
-    const lo: u64 = @truncate(rep);
+    let rep: u128 = @bitCast(x);
+    let hi: u64 = @intCast(rep >> 64);
+    let lo: u64 = @truncate(rep);
 
     if (hi == expected_hi and lo == expected_lo) return true;
 
@@ -142,8 +142,7 @@ test "__extendhftf2" {
     // qNaN
     @expect(test__extendhftf2(0x7e00, 0x7fff800000000000, 0x0));
     // NaN
-    // TODO(tcs): Failing
-    // @expect(test__extendhftf2(0x7d00, 0x7fff400000000000, 0x0));
+    @expect(test__extendhftf2(0x7d00, 0x7fff400000000000, 0x0));
     // inf
     @expect(test__extendhftf2(0x7c00, 0x7fff000000000000, 0x0));
     @expect(test__extendhftf2(0xfc00, 0xffff000000000000, 0x0));
@@ -180,11 +179,11 @@ const __extendsftf2 = fn(a: f32) callconv(.c): f128 {
 };
 
 @[testing] const test__extendsftf2 = fn(a: f32, expected_hi: u64, expected_lo: u64): bool {
-    const x = __extendsftf2(a);
+    let x = __extendsftf2(a);
 
-    const rep: u128 = @bitCast(x);
-    const hi: u64 = @intCast(rep >> 64);
-    const lo: u64 = @truncate(rep);
+    let rep: u128 = @bitCast(x);
+    let hi: u64 = @intCast(rep >> 64);
+    let lo: u64 = @truncate(rep);
 
     if (hi == expected_hi and lo == expected_lo) return true;
     // test other possible NaN representation(signal NaN)
@@ -199,10 +198,9 @@ test "__extendsftf2" {
     // qNaN
     @expect(test__extendsftf2(@bitCast(0x7fc00000u32), 0x7fff800000000000, 0x0));
     // NaN
-    // TODO(tcs): Failing
-    // @expect(
-    //     test__extendsftf2(@bitCast(0x7f800000 | (0x410000 & 0x7fffff)), 0x7fff820000000000, 0x0),
-    // );
+    @expect(
+        test__extendsftf2(@bitCast(0x7f800000 | (0x410000 & 0x7fffff)), 0x7fff820000000000, 0x0),
+    );
     // inf
     @expect(test__extendsftf2(@bitCast(0x7f800000u32), 0x7fff000000000000, 0x0));
     // zero
@@ -218,9 +216,9 @@ const __extenddfxf2 = fn(a: f64) callconv(.c): compiler_rt.f80 {
 };
 
 @[testing] const test__extenddfxf2 = fn(a: f64, expected: u80): bool {
-    const x = __extenddfxf2(a);
+    let x = __extenddfxf2(a);
 
-    const rep: u80 = @bitCast(x);
+    let rep: u80 = @bitCast(x);
     if (rep == expected) return true;
     // test other possible NaN representation(signal NaN)
     if (math.is_nan(@bitCast(f80, expected)) and math.is_nan(x)) return true;
@@ -232,12 +230,10 @@ test "__extenddfxf2" {
     @expect(test__extenddfxf2(@bitCast(0x7ff8000000000000u64), 0x7fffc000000000000000));
 
     // NaN
-    // TODO(tcs): Failing
-    // @expect(test__extenddfxf2(
-    //         @bitCast(0x7ff0000000000000 | (0x7100000000000u64 & 0xfffffffffffff)),
-    //         0x7fffe080000000000000,
-    //     ));
-    // This is bad?
+    @expect(test__extenddfxf2(
+            @bitCast(0x7ff0000000000000 | (0x7100000000000u64 & 0xfffffffffffff)),
+            0x7fffe080000000000000,
+        ));
 
     // inf
     @expect(test__extenddfxf2(@bitCast(0x7ff0000000000000u64), 0x7fff8000000000000000));
@@ -263,11 +259,11 @@ const __extenddftf2 = fn(a: f64) callconv(.c): f128 {
 };
 
 @[testing] const test__extenddftf2 = fn(a: f64, expected_hi: u64, expected_lo: u64): bool {
-    const x = __extenddftf2(a);
+    let x = __extenddftf2(a);
 
-    const rep: u128 = @bitCast(x);
-    const hi: u64 = @intCast(rep >> 64);
-    const lo: u64 = @truncate(rep);
+    let rep: u128 = @bitCast(x);
+    let hi: u64 = @intCast(rep >> 64);
+    let lo: u64 = @truncate(rep);
 
     if (hi == expected_hi and lo == expected_lo) return true;
     // test other possible NaN representation(signal NaN)
@@ -283,12 +279,11 @@ test "__extenddftf2" {
     @expect(test__extenddftf2(@bitCast(0x7ff8000000000000u64), 0x7fff800000000000, 0x0));
 
     // NaN
-    // TODO(tcs): Failing
-    // @expect(test__extenddftf2(
-    //     @bitCast(0x7ff0000000000000 | (0x7100000000000u64 & 0xfffffffffffff)),
-    //     0x7fff710000000000,
-    //     0x0,
-    // ));
+    @expect(test__extenddftf2(
+        @bitCast(0x7ff0000000000000 | (0x7100000000000u64 & 0xfffffffffffff)),
+        0x7fff710000000000,
+        0x0,
+    ));
 
     // inf
     @expect(test__extenddftf2(@bitCast(0x7ff0000000000000u64), 0x7fff000000000000, 0x0));

@@ -221,4 +221,22 @@ TEST_CASE("A NaN compares unequal to everything, itself included, folded and at 
     )") == 0);
 }
 
+TEST_CASE("A NaN constant keeps its sign and payload, signaling included") {
+    CHECK(helpers::compile_and_run(R"(
+        const id32 = fn(x: f32): f32 { return x; };
+        const id64 = fn(x: f64): f64 { return x; };
+        pub const main = fn(): i32 {
+            const quiet: f32 = @bitCast(f32, @as(u32, 0x7fc10000));
+            if (@bitCast(u32, quiet) != 0x7fc10000) { return 1; }
+            if (@bitCast(u32, id32(quiet)) != 0x7fc10000) { return 2; }
+            const signaling: f32 = @bitCast(f32, @as(u32, 0xff810000));
+            if (@bitCast(u32, signaling) != 0xff810000) { return 3; }
+            if (@bitCast(u32, id32(signaling)) != 0xff810000) { return 4; }
+            const wide: f64 = @bitCast(f64, @as(u64, 0x7ff7100000000000));
+            if (@bitCast(u64, id64(wide)) != 0x7ff7100000000000) { return 5; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

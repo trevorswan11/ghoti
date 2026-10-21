@@ -508,8 +508,13 @@ auto f128::decode(u128 bits, float_format format) -> f128 {
     const bool integer_bit_clear{explicit_integer_bit && ((field >> (field_bits - 1)) & 1) == 0};
     if (biased != 0 && integer_bit_clear) { return quiet_nan(); }
     if (biased == all_ones) {
-        const auto payload{explicit_integer_bit ? field & low_mask(field_bits - 1) : field};
-        return payload == 0 ? infinity(negative) : quiet_nan();
+        const auto payload_bits{explicit_integer_bit ? field_bits - 1 : field_bits};
+        const auto payload{field & low_mask(payload_bits)};
+        if (payload == 0) { return infinity(negative); }
+        // Widening keeps the sign and top-aligns the payload, so a NaN survives a round trip
+        return from_bits((negative ? QUAD_SIGN_BIT : u128{}) |
+                         (u128{QUAD_EXPONENT_MASK} << QUAD_FRACTION_BITS) |
+                         (payload << (QUAD_FRACTION_BITS - payload_bits)));
     }
 
     auto significand{field};
@@ -556,7 +561,12 @@ auto f128::encode(float_format format) const -> u128 {
     const auto rounded{round_to(format)};
     const u128 sign{rounded.is_negative() ? u128{1} << (info.storage_bits - 1) : u128{}};
     if (rounded.is_nan()) {
-        return (all_ones << field_bits) | integer_bit | (u128{1} << (info.precision - 2));
+        // Narrowing truncates the payload's low bits, quieting it if nothing is left
+        const auto payload_bits{explicit_integer_bit ? field_bits - 1 : field_bits};
+        auto       payload{(rounded.bits_ & low_mask(QUAD_FRACTION_BITS)) >>
+                           (QUAD_FRACTION_BITS - payload_bits)};
+        if (payload == 0) { payload = u128{1} << (payload_bits - 1); }
+        return sign | (all_ones << field_bits) | integer_bit | payload;
     }
     if (rounded.is_infinite()) { return sign | (all_ones << field_bits) | integer_bit; }
     if (rounded.is_zero()) { return sign; }

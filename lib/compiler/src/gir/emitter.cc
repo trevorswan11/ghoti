@@ -1596,7 +1596,7 @@ auto emitter::emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -
                                  return fmt::format("anonymous_test{}", anon_test_desc_counter_++);
                              })};
 
-    const auto loc{active_ast().location_of(id)};
+    const auto loc{active_ast().location_of(id).one_based()};
     const auto unique_fn_name{fmt::format("__ghoti_test_fn_{}", anon_test_fn_counter_++)};
 
     auto& fn{add_gir_function(unique_fn_name, test_fn_type, true, false)};
@@ -2152,8 +2152,8 @@ auto emitter::emit_skip(value msg, ast::node_id at) -> void {
     std::vector<value> args;
     args.emplace_back(std::move(msg));
     args.emplace_back(const_value::make_string(ctx_, active_mod().path.string()).to_gir_value());
-    args.emplace_back(value{static_cast<u64>(loc.line), u32_type});
-    args.emplace_back(value{static_cast<u64>(loc.column), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.one_based().line), u32_type});
+    args.emplace_back(value{static_cast<u64>(loc.one_based().column), u32_type});
 
     request_builtin_runtime("skip_handler");
     builder_.set_location(loc);
@@ -4334,7 +4334,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         }
         case syntax::builtin_t::SRC: {
             // `@src()` yields a `builtin::SourceLocation` aggregate
-            const auto         loc{active_ast().location_of(id)};
+            const auto         loc{active_ast().location_of(*call.function).one_based()};
             auto&              u32_type{ctx_.get_int(32, false)};
             std::vector<value> args;
             args.emplace_back(
@@ -4399,7 +4399,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
 
-            const auto loc{active_ast().location_of(id)};
+            const auto loc{active_ast().location_of(*call.function).one_based()};
             auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
@@ -4446,7 +4446,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             }
 
-            const auto loc{active_ast().location_of(id)};
+            const auto loc{active_ast().location_of(*call.function).one_based()};
             auto&      u32_type{ctx_.get_int(32, false)};
 
             std::vector<value> args;
@@ -4473,7 +4473,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             emit_skip(msg_val ? std::move(*msg_val)
                               : const_value::make_string(ctx_, "").to_gir_value(),
-                      id);
+                      *call.function);
             return value{void_val{}, ret_type};
         }
         case syntax::builtin_t::CLZ:
@@ -6593,7 +6593,7 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
 }
 
 auto emitter::emit_panic_call(std::string_view message, ast::node_id site) -> void {
-    const auto loc{active_ast().location_of(site)};
+    const auto loc{active_ast().location_of(site).one_based()};
     auto&      u32_type{ctx_.get_int(32, false)};
     auto&      noreturn_type{ctx_.get_builtin_resolved_type(sema::type_kind::NORETURN)};
     auto&      cstr_type{ctx_.get_slice(sema::types::mut::CONSTANT, true, ctx_.get_int(8, false))};
