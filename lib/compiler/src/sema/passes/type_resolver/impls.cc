@@ -776,6 +776,7 @@ auto type_resolver::resolve_param_impl_bodies(
         type_resolver inst{impl_mod, ctx_, fn_table, std::move(stk)};
         inst.for_generic_instantiation_ = true;
         inst.reresolve_floor_.emplace(fn_table);
+        inst.instantiation_root_depth_.emplace(inst.table_stack_.size() - 1);
         const structural_guard this_guard{inst.user_type_stack_, concrete};
 
         const auto mark_resolved{[&](ast::node_id name) {
@@ -1447,6 +1448,7 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
         type_resolver inst{imod, ctx_, fn_table, std::move(stk)};
         inst.for_generic_instantiation_ = true;
         inst.reresolve_floor_.emplace(fn_table);
+        inst.instantiation_root_depth_.emplace(inst.table_stack_.size() - 1);
 
         const structural_guard     this_guard{inst.user_type_stack_, target};
         const body_typing_snapshot snap{imod};

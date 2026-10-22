@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -31,6 +32,8 @@ struct generic_function_info {
     stdx::option<type&> enclosing_type{stdx::none};
     // For a method declared directly in an aggregate returned by a `fn(...): type` ctor
     stdx::option<usize> enclosing_fn_table_idx{stdx::none};
+    // For a local generic function, the scopes of the functions around it, outermost first
+    std::vector<usize> enclosing_scopes{};
 };
 
 class generic_function_registry {
@@ -43,9 +46,10 @@ class generic_function_registry {
                            mod::module_t&                 module,
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
-                           stdx::option<std::string_view> name           = stdx::none,
-                           stdx::option<type&>            enclosing_type = stdx::none,
-                           stdx::option<usize> enclosing_fn_table_idx    = stdx::none) -> void {
+                           stdx::option<std::string_view> name                   = stdx::none,
+                           stdx::option<type&>            enclosing_type         = stdx::none,
+                           stdx::option<usize>            enclosing_fn_table_idx = stdx::none,
+                           std::vector<usize>             enclosing_scopes       = {}) -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
                               .module                 = &module,
@@ -55,6 +59,7 @@ class generic_function_registry {
                               .name                   = name,
                               .enclosing_type         = enclosing_type,
                               .enclosing_fn_table_idx = enclosing_fn_table_idx,
+                              .enclosing_scopes       = std::move(enclosing_scopes),
                           });
     }
 

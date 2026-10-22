@@ -287,6 +287,15 @@ struct context {
     // The same signature as `fn`, toggled between erased and thin
     [[nodiscard]] auto with_erasure(type& fn, bool erased) -> type&;
 
+    // A local function's type for one generic instantiation, distinct from its template's
+    [[nodiscard]] auto local_function_instance(const type& fn_template, std::string_view instance)
+        -> type&;
+
+    // The closure type wrapping local function `fn_type`, or its self-inclusive call signature,
+    // with one per generic instantiation of that function
+    [[nodiscard]] auto closure_slot_of(const type& fn_type) -> type&;
+    [[nodiscard]] auto closure_impl_signature_slot_of(const type& fn_type) -> type&;
+
     // `@Fn`'s result: `get_function` for a plain signature, else a thin method-shaped type
     [[nodiscard]] auto get_function_like(gsl::span<type*>        params,
                                          type&                   return_type,

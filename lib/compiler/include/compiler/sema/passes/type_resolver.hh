@@ -193,6 +193,15 @@ class type_resolver {
     [[nodiscard]] auto comptime_type_var_value(const symbol& sym) -> stdx::option<type&>;
     // Whether `sym` is a `let mut` (or `comptime let mut`) local
     [[nodiscard]] auto is_mutable_local(const symbol& sym) const -> bool;
+    // The table depth where the outermost function's frame begins: an instantiated generic's body
+    // or else the first open function. Only meaningful while a function is open
+    [[nodiscard]] auto outermost_function_boundary() const -> usize;
+    // The scopes between the module root and the function being resolved, for a local function
+    [[nodiscard]] auto enclosing_function_scopes() const -> std::vector<usize>;
+    // The type a local function literal `id` is resolved into, fresh for each instantiation
+    [[nodiscard]] auto instance_local_function_type(ast::node_id id) -> type&;
+    // Whether `sym` is a type or a constant, which a closure reads without capturing it
+    [[nodiscard]] auto is_compile_time_only(symbol& sym) -> bool;
     // The first runtime local a `const` closure captures, which only a `let` closure may
     [[nodiscard]] auto const_closure_runtime_capture(const ast::decl_stmt& decl) const
         -> stdx::option<std::string_view>;
@@ -1040,6 +1049,12 @@ class type_resolver {
     bool instantiating_testing_fn_{false};
     // The generic whose body this freestanding instantiation resolver walks
     stdx::option<const ast::function_expr&> instantiating_fn_{};
+    // Table depth of that body's own scope, which pushes no function boundary but still owns the
+    // locals a closure inside it captures
+    stdx::opt_size instantiation_root_depth_{};
+    // For a local generic, where the scopes of the functions around it begin. Their runtime locals
+    // belong to another frame, which an instantiated body can't reach
+    stdx::opt_size enclosing_locals_depth_{};
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

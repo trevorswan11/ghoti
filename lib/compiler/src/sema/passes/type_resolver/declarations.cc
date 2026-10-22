@@ -405,9 +405,23 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
+    // A local generic's body runs in its own monomorph, apart from the frame that wrote it
+    if (enclosing_locals_depth_ && instantiation_root_depth_ &&
+        lookup->depth >= *enclosing_locals_depth_ && lookup->depth < *instantiation_root_depth_ &&
+        !is_compile_time_only(lookup->symbol)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("A generic local function can't capture the runtime local '{}'; pass it "
+                        "as an argument instead",
+                        name),
+            error::GENERIC_CLOSURE_CAPTURE,
+            resolving_.ast.location_of(id)));
+    }
+
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
     if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
-        lookup->depth >= function_boundaries_.front()) {
+        lookup->depth >= outermost_function_boundary()) {
         // A function referring to its own name is recursion, not a captured free variable
         bool is_self_reference{false};
         if (const auto node{lookup->symbol.get_data().as_opt<symbols::node_t>()}) {
@@ -422,7 +436,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
 
         if (is_self_reference) {
             self_recursive_flags_.back() = true;
-        } else {
+        } else if (!is_compile_time_only(lookup->symbol)) {
             auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
 
             // A closure needs a mutable binding to write through, but a `move fn` owns a copy.
@@ -450,15 +464,16 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                     resolving_.ast.location_of(id)));
             }
 
-            // Find the innermost open function whose own scope actually contains the declaration
-            usize owner_idx{0};
+            // Find the innermost open function whose own scope actually contains the declaration.
+            // A generic body being instantiated owns it when no open function does
+            usize first_capturing{0};
             for (usize i{function_boundaries_.size()}; i-- > 0;) {
                 if (lookup->depth >= function_boundaries_[i]) {
-                    owner_idx = i;
+                    first_capturing = i + 1;
                     break;
                 }
             }
-            for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
+            for (usize i{first_capturing}; i < open_function_nodes_.size(); ++i) {
                 resolving_.add_capture(open_function_nodes_[i], name, usage);
             }
         }
@@ -474,7 +489,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // A declaration outside every open function resolves on first use as if from its own scope.
     // otherwise its functions would see the open ones' frames and capture from them
     if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
-        lookup->depth < function_boundaries_.front()) {
+        lookup->depth < outermost_function_boundary()) {
         const std::vector<usize> outer_tables(table_stack_.begin(), table_stack_.end());
         for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) { table_stack_.pop(); }
         const auto outer_table_idx{std::exchange(table_idx_, outer_tables[lookup->depth])};

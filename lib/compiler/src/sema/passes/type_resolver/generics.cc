@@ -298,7 +298,12 @@ ctor_instance_display_name(const context&                                       
     }
     case type_kind::CLOSURE: {
         const auto& cl{data.as<types::closure_t>()};
-        return "closure_" + mangle_arg_type(reg, cl.signature);
+        // Distinct closures sharing a signature still run different bodies
+        const auto instance{t.get_instance_id()};
+        return fmt::format("closure{}{}_{}",
+                           t.get_symbol_table_idx(),
+                           instance ? fmt::format("x{:x}", instance) : "",
+                           mangle_arg_type(reg, cl.signature));
     }
     case type_kind::FUNCTION: {
         const auto& fn{data.as<types::function>()};
@@ -716,20 +721,23 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
 
     // A top-level generic sees only its own bindings, never a caller's same-named ones
-    auto                       outer_frames{fn_info.enclosing_fn_table_idx
-                                                ? std::vector<comptime_frame>{}
-                                                : std::exchange(ctx_.comptime_binding_frames, {})};
-    const auto                 frames_restore{gsl::finally([&] {
-        if (!fn_info.enclosing_fn_table_idx) {
-            ctx_.comptime_binding_frames = std::move(outer_frames);
-        }
+    const bool keeps_outer_frames{fn_info.enclosing_fn_table_idx ||
+                                  !fn_info.enclosing_scopes.empty()};
+    auto       outer_frames{keeps_outer_frames ? std::vector<comptime_frame>{}
+                                               : std::exchange(ctx_.comptime_binding_frames, {})};
+    const auto frames_restore{gsl::finally([&] {
+        if (!keeps_outer_frames) { ctx_.comptime_binding_frames = std::move(outer_frames); }
     })};
     const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(binding_frame)};
 
     symbol_table_stack inst_stack;
     inst_stack.push(*ctx_.prelude_index);
     if (fn_mod.root_table_idx) { inst_stack.push(*fn_mod.root_table_idx); }
-    if (enclosing_impl) {
+    // A local generic still sees the scopes it was written in
+    const auto enclosing_locals_depth{inst_stack.size()};
+    if (!fn_info.enclosing_scopes.empty()) {
+        for (const auto idx : fn_info.enclosing_scopes) { inst_stack.push(idx); }
+    } else if (enclosing_impl) {
         inst_stack.push(enclosing_impl->body_scope_idx);
     } else if (fn_info.enclosing_type && fn_info.enclosing_type->has_symbol_table_idx()) {
         if (fn_info.enclosing_fn_table_idx) { inst_stack.push(*fn_info.enclosing_fn_table_idx); }
@@ -780,6 +788,10 @@ auto type_resolver::instantiate_generic(type&                             callee
         deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
     inst_resolver.instantiating_testing_fn_ = declares_testing_fn(fn_mod, fn_info.node_id);
     inst_resolver.instantiating_fn_.emplace(fn_expr);
+    inst_resolver.instantiation_root_depth_.emplace(inst_resolver.table_stack_.size() - 1);
+    if (!fn_info.enclosing_scopes.empty()) {
+        inst_resolver.enclosing_locals_depth_.emplace(enclosing_locals_depth);
+    }
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
     stdx::option<structural_guard> this_type_guard;

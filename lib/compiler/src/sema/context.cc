@@ -106,6 +106,36 @@ auto context::with_erasure(type& fn, bool erased) -> type& {
     return get_function(data->params, data->return_type, data->is_variadic, data->conv, erased);
 }
 
+auto context::local_function_instance(const type& fn_template, std::string_view instance) -> type& {
+    const auto   idx{fn_template.get_symbol_table_idx()};
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT, idx};
+    key.imprint(instance);
+    auto& slot{*pool[key]};
+    if (slot.get_instance_id() != 0) { return slot; }
+    slot.set_symbol_table_idx(idx);
+    stdx::hasher id_hash{idx};
+    id_hash.combine(instance);
+    slot.set_instance_id(id_hash.finalize() | 1); // never the "no instance" zero
+    return slot;
+}
+
+auto context::closure_slot_of(const type& fn_type) -> type& {
+    const auto   idx{fn_type.get_symbol_table_idx()};
+    types::key_t key{type_kind::CLOSURE, types::mut::CONSTANT, idx};
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(instance); }
+    auto& slot{*pool[key]};
+    slot.set_symbol_table_idx(idx);
+    slot.set_instance_id(fn_type.get_instance_id());
+    return slot;
+}
+
+auto context::closure_impl_signature_slot_of(const type& fn_type) -> type& {
+    types::key_t key{
+        type_kind::FUNCTION, types::mut::CONSTANT, fn_type.get_symbol_table_idx(), true};
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(instance); }
+    return *pool[key];
+}
+
 auto context::get_array(types::mut::mutability_modifiers mutability,
                         bool                             null_terminated,
                         usize                            size,

@@ -58,6 +58,10 @@ namespace ghoti::gir {
 
 namespace {
 
+// A closure body's own environment, under a name no source identifier spells, so a captured
+// method `self` stays visible inside it
+constexpr std::string_view CLOSURE_ENV_BINDING{"#env"};
+
 // Rewrites ghoti's GCC-style `%N` operand placeholders into LLVM's `$N` form
 [[nodiscard]] auto rewrite_asm_template(std::string_view src) -> std::string {
     std::string out;
@@ -771,7 +775,7 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
     // A closure's own body already takes its environment first, so it is the code directly
     if (src_ty->get_kind() == sema::type_kind::CLOSURE) {
         const auto env{builder_.emit_address_of(emit_lvalue(src), ptr_ty)};
-        const auto code{fmt::format("closure{}", src_ty->get_symbol_table_idx())};
+        const auto code{closure_fn_name(*src_ty)};
         return value{builder_.emit_make_callable(value{env, ptr_ty}, code, fat_type), fat_type};
     }
 
@@ -1874,8 +1878,11 @@ auto emitter::emit_named_local_function(std::string_view          name,
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Local function must have a resolved sema type");
     auto& fn_type{*sema_type};
-    // Deterministic per fn node, so a `comptime` function-ref argument can name it.
-    const auto anon_name{fmt::format("localfn.{}", id.get_index())};
+    // Deterministic per fn node, so a `comptime` function-ref argument can name it. Each generic
+    // instantiation types the node on its own copy, which gets its own body
+    const auto instance{fn_type.get_instance_id()};
+    const auto anon_name{instance ? fmt::format("localfn.{}.{:x}", id.get_index(), instance)
+                                  : fmt::format("localfn.{}", id.get_index())};
     if (gir_module_.has_function(anon_name)) { return anon_name; }
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
@@ -1929,8 +1936,7 @@ auto emitter::emit_closure_function(ast::node_id                  id,
                                     const sema::types::closure_t& cl,
                                     sema::type&                   closure_type) -> void {
     PROFILE_FUNCTION();
-    const auto idx{closure_type.get_symbol_table_idx()};
-    const auto fn_name{fmt::format("closure{}", idx)};
+    const auto fn_name{closure_fn_name(closure_type)};
     if (gir_module_.has_function(fn_name)) { return; }
 
     const auto impl_sig_data{cl.impl_signature.get_data().as_opt<sema::types::function>()};
@@ -1951,7 +1957,7 @@ auto emitter::emit_closure_function(ast::node_id                  id,
 
         auto& self_type{*impl_sig_data->params[0]};
         auto& self_slot{fn.add_param("self", self_type)};
-        scopes_.back().bindings.emplace("self",
+        scopes_.back().bindings.emplace(CLOSURE_ENV_BINDING,
                                         local_binding{
                                             .id        = self_slot.id,
                                             .type      = self_type,
@@ -1961,13 +1967,29 @@ auto emitter::emit_closure_function(ast::node_id                  id,
 
         bind_declared_params(fn, fn_expr, active_mod());
 
-        // Load every capture once, up front, from `self`
+        // Load every capture once, up front, from `self`. Indexed as the environment itself, since
+        // a GEP through the `&mut` reference would step over whole environments
         auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         for (usize field_idx{0}; const auto& capture : cl.captures) {
+            // A `move fn` owns its copies, so a write to one must still be there on the next call
+            const bool owned{fn_expr.is_move && capture.mode == sema::types::capture_mode::VALUE};
+            auto&      field_type{owned ? *ctx_.pool.with_const(*capture.storage_type, false)
+                                        : *capture.storage_type};
             const auto field_ptr{
-                builder_.emit_get_element_ptr(value{self_slot.id, self_type},
+                builder_.emit_get_element_ptr(value{self_slot.id, closure_type},
                                               {value{static_cast<u64>(field_idx), usize_type}},
-                                              *capture.storage_type)};
+                                              field_type)};
+            if (owned) {
+                scopes_.back().bindings.emplace(capture.name,
+                                                local_binding{
+                                                    .id        = field_ptr,
+                                                    .type      = field_type,
+                                                    .is_alloca = true,
+                                                    .const_val = stdx::none,
+                                                });
+                ++field_idx;
+                continue;
+            }
             const auto loaded{
                 builder_.emit_load(value{field_ptr, *capture.storage_type}, *capture.storage_type)};
             const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
@@ -1987,6 +2009,14 @@ auto emitter::emit_closure_function(ast::node_id                  id,
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+}
+
+auto emitter::closure_fn_name(const sema::type& closure_type) -> std::string {
+    const auto idx{closure_type.get_symbol_table_idx()};
+    if (const auto instance{closure_type.get_instance_id()}) {
+        return fmt::format("closure{}.{:x}", idx, instance);
+    }
+    return fmt::format("closure{}", idx);
 }
 
 auto emitter::emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type)
@@ -2021,8 +2051,17 @@ auto emitter::get_capture_source(const sema::types::closure_capture& capture) ->
     }
 
     // Otherwise a reference, so the address is needed, not the value
-    ASSERT(binding->is_alloca, "Reference-captured variable must be addressable");
-    return value{binding->id, *capture.storage_type};
+    if (binding->is_alloca) { return value{binding->id, *capture.storage_type}; }
+
+    // A parameter or immutable `let` has no storage of its own, but it never changes either, so a
+    // reference to a copy reads the same
+    ASSERT(capture.mode == sema::types::capture_mode::REF,
+           "A mutably captured variable must be addressable");
+    const value current{binding->const_val ? *binding->const_val
+                                           : value{binding->id, binding->type}};
+    const auto  spill{builder_.emit_alloca(binding->type)};
+    builder_.emit_store(value{spill, binding->type}, current).is_initializer = true;
+    return value{spill, *capture.storage_type};
 }
 
 auto emitter::emit_comptime_closure(const const_closure& cl) -> std::string {
@@ -4754,7 +4793,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 }
             } else if (binding->type.get_kind() == sema::type_kind::CLOSURE) {
                 is_closure_ident_call = true;
-                callee_name.emplace(fmt::format("closure{}", binding->type.get_symbol_table_idx()));
+                callee_name.emplace(closure_fn_name(binding->type));
             } else {
                 callee_name.emplace(std::string{ident->name});
             }
@@ -4902,7 +4941,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         if (const auto fn_ty{active_mod().get_sema_type_opt(call.function)};
             fn_ty && fn_ty->get_kind() == sema::type_kind::CLOSURE) {
             is_closure_ident_call = true;
-            callee_name.emplace(fmt::format("closure{}", fn_ty->get_symbol_table_idx()));
+            callee_name.emplace(closure_fn_name(*fn_ty));
         } else {
             callee_name.emplace(emit_anonymous_function(*call.function, *fn_expr));
         }
@@ -4979,8 +5018,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // A recursive closure call needs the self-inclusive impl signature, not the public one
     if (is_fn_ctx_self_call && fn_type_opt) {
-        const auto idx{fn_type_opt->get_symbol_table_idx()};
-        auto&      cl_type{*ctx_.pool[{sema::type_kind::CLOSURE, sema::types::mut::CONSTANT, idx}]};
+        auto& cl_type{ctx_.closure_slot_of(*fn_type_opt)};
         if (cl_type.is_resolved()) {
             fn_data = cl_type.get_data()
                           .as_opt<sema::types::closure_t>()
@@ -5041,8 +5079,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         args.emplace_back(value{self_ptr.data, *fn_data->params[0]});
     } else if (is_fn_ctx_self_call) {
         // Recursing into a closure via @fnCtx(): reuse this body's own self binding
-        const auto binding{lookup_binding("self")};
-        ASSERT(binding, "@fnCtx() inside a closure must have a self binding");
+        const auto binding{lookup_binding(CLOSURE_ENV_BINDING)};
+        ASSERT(binding, "@fnCtx() inside a closure must have its environment bound");
         ASSERT(fn_data && !fn_data->params.empty(),
                "Closure implementation signature must have self");
         args.emplace_back(value{binding->id, *fn_data->params[0]});
@@ -8463,7 +8501,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
     // The thunk itself is static, so this ignores base_lval entirely
     if (obj_type->get_kind() == sema::type_kind::CLOSURE && member_ident.name == "thunk") {
-        return value{fmt::format("closure{}", obj_type->get_symbol_table_idx()), sema_type};
+        return value{closure_fn_name(*obj_type), sema_type};
     }
 
     if (obj_type->get_kind() == sema::type_kind::SLICE) {

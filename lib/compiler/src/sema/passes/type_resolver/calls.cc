@@ -1381,12 +1381,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     // The entire function lives inside of its preallocated scope
-    auto& fn_type{resolving_.get_sema_type(id)};
-
-    if (for_generic_instantiation_ && reresolve_floor_ && fn_type.has_symbol_table_idx() &&
-        fn_type.get_symbol_table_idx() >= *reresolve_floor_) {
-        fn_type.unresolve();
-    }
+    auto& fn_type{instance_local_function_type(id)};
 
     // `pre_register_impls` force-drives an impl target aggregate's decl. The
     // signature is already committed, so a re-entry is a no-op rather than an assertion failure.
@@ -1555,8 +1550,14 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                 preceding.emplace(idx);
             }
         }
-        ctx_.generic_functions.register_function(
-            fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic, enclosing_fn_table_idx);
+        ctx_.generic_functions.register_function(fn_type,
+                                                 resolving_,
+                                                 id,
+                                                 fn,
+                                                 stdx::none,
+                                                 enclosing_for_generic,
+                                                 enclosing_fn_table_idx,
+                                                 enclosing_function_scopes());
         register_impl_param_bounds(fn);
         return last_type_.emplace(fn_type);
     }
@@ -1624,6 +1625,29 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     last_type_.emplace(fn_type);
 }
 
+auto type_resolver::instance_local_function_type(ast::node_id id) -> type& {
+    auto&      current{resolving_.get_sema_type(id)};
+    const bool in_instantiated_body{for_generic_instantiation_ && reresolve_floor_ &&
+                                    current.has_symbol_table_idx() &&
+                                    current.get_symbol_table_idx() >= *reresolve_floor_};
+    if (!in_instantiated_body) { return current; }
+    // A type ctor's members are monomorphized from the literal's shared shape instead
+    const bool is_aggregate_member{function_boundaries_.empty() &&
+                                   !resolving_aggregate_nodes_.empty()};
+    if (typing_scope_prefix_.empty() || is_aggregate_member) {
+        current.unresolve();
+        return current;
+    }
+
+    // Each instantiation types the literal on its own copy, else the last one would win for all.
+    // A revisit within this one finds that copy (or the closure built from it) already in place
+    auto& instance{ctx_.local_function_instance(current, typing_scope_prefix_)};
+    if (current.get_instance_id() == instance.get_instance_id()) { return current; }
+    instance.unresolve();
+    resolving_.set_sema_type(id, instance);
+    return instance;
+}
+
 auto type_resolver::infer_capture_mode(capture_usage usage,
                                        const type&   captured_type,
                                        bool          force_move) noexcept -> types::capture_mode {
@@ -1642,9 +1666,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
     const auto captures{resolving_.get_captures(fn_id)};
     ASSERT(!captures.empty(), "attach_closure_type called with no captures");
 
-    const auto idx{fn_type.get_symbol_table_idx()};
-    auto*      closure_type{ctx_.pool[{type_kind::CLOSURE, types::mut::CONSTANT, idx}].get()};
-    closure_type->set_symbol_table_idx(idx);
+    auto* closure_type{&ctx_.closure_slot_of(fn_type)};
 
     auto  capture_span{ctx_.arena.make_span<types::closure_capture>(captures.size())};
     usize i{0};
@@ -1674,7 +1696,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
         impl_params[p + 1] = public_sig.params[p];
     }
 
-    auto* impl_sig{ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, idx, true}].get()};
+    auto* impl_sig{&ctx_.closure_impl_signature_slot_of(fn_type)};
     impl_sig->resolve<types::function>(
         impl_params, public_sig.return_type, true, public_sig.is_variadic, public_sig.conv);
 
@@ -1687,6 +1709,44 @@ auto type_resolver::is_mutable_local(const symbol& sym) const -> bool {
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
     const auto decl{node ? resolving_.ast.get_as_opt<ast::decl_stmt>(*node) : stdx::none};
     return decl && decl->has_modifier(ast::decl_modifiers::MUT);
+}
+
+auto type_resolver::is_compile_time_only(symbol& sym) -> bool {
+    if (sym.has_kind() && sym.get_kind() == symbol_kind::TYPE) { return true; }
+    // A `const` folds wherever it's read. A `comptime let mut` may still change after the capture
+    if (const auto node{sym.get_data().as_opt<symbols::node_t>()}) {
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (decl && decl->has_modifier(ast::decl_modifiers::COMPTIME) &&
+            !decl->has_modifier(ast::decl_modifiers::MUT)) {
+            return true;
+        }
+    }
+    // An instantiated `comptime T: type` parameter is typed as the type it was bound to
+    if (const auto param{sym.get_data().as_opt<symbols::parameter>()}) {
+        return param->is_comptime || param->spells_type();
+    }
+    return false;
+}
+
+auto type_resolver::enclosing_function_scopes() const -> std::vector<usize> {
+    // Only a function opened inside another one (or inside a generic's body) has any
+    const bool is_local{function_boundaries_.size() > 1 || instantiation_root_depth_.has_value()};
+    if (!is_local || !resolving_.root_table_idx) { return {}; }
+
+    std::vector<usize> scopes;
+    bool               past_root{false};
+    for (usize depth{0}; const auto idx : table_stack_) {
+        // The function's own scope is the innermost, which instantiation pushes by itself
+        if (++depth == table_stack_.size()) { break; }
+        if (past_root) { scopes.emplace_back(idx); }
+        past_root = past_root || idx == *resolving_.root_table_idx;
+    }
+    return scopes;
+}
+
+auto type_resolver::outermost_function_boundary() const -> usize {
+    if (instantiation_root_depth_) { return *instantiation_root_depth_; }
+    return function_boundaries_.front();
 }
 
 auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) const

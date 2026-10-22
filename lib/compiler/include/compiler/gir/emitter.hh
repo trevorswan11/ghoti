@@ -198,6 +198,8 @@ class emitter {
     }
 
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
+    // The GIR function holding a closure's body, unique to its generic instantiation
+    [[nodiscard]] static auto closure_fn_name(const sema::type& closure_type) -> std::string;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants
     auto emit_comptime_closure(const const_closure& cl) -> std::string;
