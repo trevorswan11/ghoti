@@ -156,7 +156,7 @@ TEST_CASE("`while (x) |v| ... else |e|` captures the residual that ended it") {
                45);
 }
 
-TEST_CASE("captures fold in constants, `if comptime`, and `while comptime`") {
+TEST_CASE("captures fold in constants, `if comptime`, and `unroll while`") {
     CHECK(helpers::compile_and_run(fmt::format("{}{}", PRELUDE, R"(
         const OPT: O = O{ .some = 12 };
         const X = if (OPT) |v| v + 1 else 0;
@@ -166,7 +166,7 @@ TEST_CASE("captures fold in constants, `if comptime`, and `while comptime`") {
             if comptime (mk(3)) |v| { total += v; } else { total += 100; }
             if comptime (half(1)) |v| { total += v; } else |e| { total += @as(i32, e); }
             comptime let mut c: Counter = .{ .n = 0, .limit = 3 };
-            while comptime (c.next()) |x| { total += x * 10; }
+            unroll while (c.next()) |x| { total += x * 10; }
             return total;
         };
     )")) == 13 + 14 + 3 + 7 + 60);

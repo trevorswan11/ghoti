@@ -2344,10 +2344,10 @@ auto emitter::emit_break(ast::node_id, const ast::break_stmt& brk) -> void {
                     const auto val{result_type ? emit_coerced_expr(*brk.expression, *result_type)
                                                : emit_expression(*brk.expression)};
                     if (result_slot) { builder_.emit_store(*result_slot, val); }
-                    comptime_loop_break_value_.emplace(val);
+                    unrolled_loop_break_value_.emplace(val);
                 }
                 emit_defers_up_to(scope_depth);
-                comptime_loop_break_ = true;
+                unrolled_loop_break_ = true;
                 return;
             }
             if (brk.expression && result_slot) {
@@ -2383,7 +2383,7 @@ auto emitter::emit_continue(ast::node_id, const ast::continue_stmt& cnt) -> void
         if (!target_label || label == *target_label) {
             if (is_comptime) {
                 emit_defers_up_to(scope_depth);
-                comptime_loop_continue_ = true;
+                unrolled_loop_continue_ = true;
                 return;
             }
             emit_defers_up_to(scope_depth);
@@ -2401,10 +2401,10 @@ auto emitter::emit_block(const ast::block_stmt& block) -> void {
     for (const auto& stmt : block.statements) {
         // A folded `if comptime` arm (or any diverging statement) can terminate the block
         if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { break; }
-        if (comptime_loop_continue_ || comptime_loop_break_) { break; }
+        if (unrolled_loop_continue_ || unrolled_loop_break_) { break; }
         emit_stmt(stmt);
     }
-    if (!comptime_loop_continue_ && !comptime_loop_break_) {
+    if (!unrolled_loop_continue_ && !unrolled_loop_break_) {
         if (const auto seg{builder_.get_segment()}; !seg || !seg->has_terminator()) {
             emit_defers_for_scope(scopes_.size() - 1);
         }
@@ -5414,20 +5414,19 @@ auto emitter::emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value {
     return value{void_val{}, sema_type};
 }
 
-auto emitter::comptime_unroll_limit_reached(usize            iterations,
-                                            std::string_view loop_kind,
-                                            ast::node_id     id) -> bool {
+auto emitter::unroll_limit_reached(usize iterations, std::string_view loop_kind, ast::node_id id)
+    -> bool {
     if (iterations < ctx_.eval_unroll_limit) { return false; }
     ctx_.diags.emplace_back(
         fmt::format("{} exceeded its unroll limit of {}; raise it with `@setEvalUnrollLimit`",
                     loop_kind,
                     ctx_.eval_unroll_limit),
-        sema::error::COMPTIME_LOOP_LIMIT,
+        sema::error::UNROLLED_LOOP_LIMIT,
         active_ast().location_of(id));
     return true;
 }
 
-auto emitter::fold_comptime_loop_condition(ast::expr_handle condition, std::string_view loop_kind)
+auto emitter::fold_unrolled_loop_condition(ast::expr_handle condition, std::string_view loop_kind)
     -> stdx::option<bool> {
     const gir::const_eval::comptime_context_guard g{const_eval_, true};
     const auto                                    diags_before{ctx_.diags.size()};
@@ -5445,7 +5444,7 @@ auto emitter::fold_comptime_loop_condition(ast::expr_handle condition, std::stri
     return cond;
 }
 
-auto emitter::emit_comptime_loop_body(const ast::block_stmt& block) -> comptime_body_exit {
+auto emitter::emit_unrolled_loop_body(const ast::block_stmt& block) -> unrolled_body_exit {
     {
         const loop_context_guard g_loop{loop_stack_,
                                         loop_context{
@@ -5459,14 +5458,14 @@ auto emitter::emit_comptime_loop_body(const ast::block_stmt& block) -> comptime_
         emit_block(block);
     }
     if (const auto cur_seg{builder_.get_segment()}; cur_seg && cur_seg->has_terminator()) {
-        return comptime_body_exit::BREAK;
+        return unrolled_body_exit::BREAK;
     }
-    if (std::exchange(comptime_loop_break_, false)) { return comptime_body_exit::BREAK; }
-    if (std::exchange(comptime_loop_continue_, false)) { return comptime_body_exit::CONTINUE; }
-    return comptime_body_exit::NEXT;
+    if (std::exchange(unrolled_loop_break_, false)) { return unrolled_body_exit::BREAK; }
+    if (std::exchange(unrolled_loop_continue_, false)) { return unrolled_body_exit::CONTINUE; }
+    return unrolled_body_exit::NEXT;
 }
 
-auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& while_loop)
+auto emitter::emit_unrolled_while(ast::node_id id, const ast::while_loop_expr& while_loop)
     -> value {
     PROFILE_FUNCTION();
     auto&       void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
@@ -5477,7 +5476,7 @@ auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& w
         // Each pass re-binds the loop's `comptime let mut`(s) to their just-updated value; a stale
         // memoized fold of the condition (or anything the body reads) must not survive across it.
         const_eval_.clear_memo();
-        // `while comptime (x) |v|` binds each continued payload for that iteration's body
+        // `unroll while (x) |v|` binds each continued payload for that iteration's body
         sema::comptime_frame capture_frame;
         if (while_loop.payload_capture) {
             const gir::const_eval::comptime_context_guard g{const_eval_, true};
@@ -5485,7 +5484,7 @@ auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& w
             const auto flow{const_eval_.try_eval_flow(while_loop.condition, id)};
             if (!flow && ctx_.diags.size() == diags_before) {
                 ctx_.diags.emplace_back(
-                    "`while comptime`'s condition must fold to a compile-time-known value",
+                    "`unroll while`'s condition must fold to a compile-time-known value",
                     sema::error::COMPTIME_WHILE_NONFOLDABLE_COND,
                     active_ast().location_of(while_loop.condition));
             }
@@ -5495,7 +5494,7 @@ auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& w
                 capture_frame.insert_or_assign(ident->name, flow->payload);
             }
         } else {
-            const auto cond{fold_comptime_loop_condition(while_loop.condition, "`while comptime`")};
+            const auto cond{fold_unrolled_loop_condition(while_loop.condition, "`unroll while`")};
             if (!cond || !*cond) { break; }
         }
         const comptime_frame_guard capture_guard{ctx_.comptime_binding_frames,
@@ -5509,8 +5508,8 @@ auto emitter::emit_comptime_while(ast::node_id id, const ast::while_loop_expr& w
         // Without one, the enclosing instantiation's typing stays in effect
         stdx::option<mod::body_diff_guard> diff_guard;
         if (diff) { diff_guard.emplace(active_mod(), diff); }
-        if (comptime_unroll_limit_reached(iterations++, "`while comptime`", id)) { break; }
-        if (emit_comptime_loop_body(block) == comptime_body_exit::BREAK) { break; }
+        if (unroll_limit_reached(iterations++, "`unroll while`", id)) { break; }
+        if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
         if (while_loop.continuation) { emit_expression(*while_loop.continuation); }
     }
     return value{void_val{}, void_type};
@@ -5522,7 +5521,7 @@ auto emitter::emit_while(ast::node_id                   id,
                          stdx::option<local_id>         res_slot,
                          stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    if (while_loop.is_comptime) { return emit_comptime_while(id, while_loop); }
+    if (while_loop.is_unrolled) { return emit_unrolled_while(id, while_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{yields_runtime_value(sema_type)};
 
@@ -5619,7 +5618,7 @@ auto emitter::emit_while(ast::node_id                   id,
     return value{void_val{}, sema_type};
 }
 
-auto emitter::emit_comptime_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while)
+auto emitter::emit_unrolled_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while)
     -> value {
     PROFILE_FUNCTION();
     auto&       void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
@@ -5627,14 +5626,13 @@ auto emitter::emit_comptime_do_while(ast::node_id id, const ast::do_while_loop_e
 
     usize iterations{0};
     while (true) {
-        if (comptime_unroll_limit_reached(iterations++, "`do ... while comptime`", id)) { break; }
+        if (unroll_limit_reached(iterations++, "`unroll do ... while`", id)) { break; }
         const_eval_.clear_memo();
 
-        if (emit_comptime_loop_body(block) == comptime_body_exit::BREAK) { break; }
+        if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
 
         const_eval_.clear_memo();
-        const auto cond{
-            fold_comptime_loop_condition(do_while.condition, "`do ... while comptime`")};
+        const auto cond{fold_unrolled_loop_condition(do_while.condition, "`unroll do ... while`")};
         if (!cond || !*cond) { break; }
     }
     return value{void_val{}, void_type};
@@ -5646,7 +5644,7 @@ auto emitter::emit_do_while(ast::node_id                   id,
                             stdx::option<local_id>         res_slot,
                             stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    if (do_while.is_comptime) { return emit_comptime_do_while(id, do_while); }
+    if (do_while.is_unrolled) { return emit_unrolled_do_while(id, do_while); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{yields_runtime_value(sema_type)};
 
@@ -5704,10 +5702,10 @@ auto emitter::emit_comptime_infinite_loop(ast::node_id id, const ast::infinite_l
 
     usize iterations{0};
     while (true) {
-        if (comptime_unroll_limit_reached(iterations++, "`loop comptime`", id)) { break; }
+        if (unroll_limit_reached(iterations++, "`unroll loop`", id)) { break; }
 
         const_eval_.clear_memo();
-        if (emit_comptime_loop_body(block) == comptime_body_exit::BREAK) { break; }
+        if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
     }
     return value{void_val{}, void_type};
 }
@@ -5718,7 +5716,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
                                  stdx::option<local_id>         res_slot,
                                  stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    if (loop.is_comptime) { return emit_comptime_infinite_loop(id, loop); }
+    if (loop.is_unrolled) { return emit_comptime_infinite_loop(id, loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{yields_runtime_value(sema_type)};
 
@@ -5763,7 +5761,7 @@ auto emitter::emit_infinite_loop(ast::node_id                   id,
     return value{void_val{}, sema_type};
 }
 
-auto emitter::emit_comptime_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value {
+auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value {
     PROFILE_FUNCTION();
     auto& void_type{ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
 
@@ -5846,7 +5844,7 @@ auto emitter::emit_comptime_for(ast::node_id id, const ast::for_loop_expr& for_l
             cx_frame.insert_or_assign(*companion_name, (*cx_args)[i++]);
         }
         const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(cx_frame)};
-        if (emit_comptime_loop_body(block) == comptime_body_exit::BREAK) { break; }
+        if (emit_unrolled_loop_body(block) == unrolled_body_exit::BREAK) { break; }
     }
 
     return value{void_val{}, void_type};
@@ -5858,7 +5856,7 @@ auto emitter::emit_for(ast::node_id                   id,
                        stdx::option<local_id>         res_slot,
                        stdx::option<sema::type&>      result_type) -> value {
     PROFILE_FUNCTION();
-    if (for_loop.is_comptime) { return emit_comptime_for(id, for_loop); }
+    if (for_loop.is_unrolled) { return emit_unrolled_for(id, for_loop); }
     const auto sema_type{result_type ? result_type : active_mod().get_sema_type_opt(id)};
     const bool yields_value{yields_runtime_value(sema_type)};
 
@@ -8743,7 +8741,7 @@ auto emitter::emit_comptime(ast::node_id id, const ast::comptime_expr& cx) -> va
     const gir::const_eval::comptime_context_guard g{const_eval_, true};
     const sema::comptime_evaluation_scope         cx_scope{ctx_, true};
     const auto                                    diags_before{ctx_.diags.size()};
-    const auto                                    cv{const_eval_.try_eval(*cx.rhs)};
+    const auto                                    cv{const_eval_.try_eval(id)};
     if (emit_comptime_skip(id)) { return value{undefined_val{}, sema_type}; }
     if (!cv) {
         report_comptime_failure(diags_before, "The operand of 'comptime'", *cx.rhs);

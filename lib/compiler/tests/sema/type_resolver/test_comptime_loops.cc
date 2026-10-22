@@ -5,116 +5,116 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`for comptime` unrolls a range/array/pack driver without error") {
+TEST_CASE("`unroll for` unrolls a range/array/pack driver without error") {
     helpers::resolve_and_check(R"(
         const use = fn(): void {
             let mut sum = 0;
-            for comptime (0..3) |v| { sum = sum + v; }
+            unroll for (0..3) |v| { sum = sum + v; }
         };
     )");
     helpers::resolve_and_check(R"(
         const arr: [3]i32 = .{1, 2, 3};
         const use = fn(): void {
             let mut sum = 0;
-            for comptime (arr) |v| { sum = sum + v; }
+            unroll for (arr) |v| { sum = sum + v; }
         };
     )");
     helpers::resolve_and_check(R"(
         const f = fn(rest...): void {
             let mut sum = 0;
-            for comptime (rest) |e| { sum = sum + e; }
+            unroll for (rest) |e| { sum = sum + e; }
         };
         const use = fn(): void { f(1, 2, 3); };
     )");
 }
 
-TEST_CASE("`for comptime`'s trip count must be known at compile time") {
+TEST_CASE("`unroll for`'s trip count must be known at compile time") {
     CHECK(helpers::raised(R"(
         let use = fn(a: usize): void {
-            for comptime (0..a) |v| { _ = v; }
+            unroll for (0..a) |v| { _ = v; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_COUNT_NOT_STATIC));
+                          sema::error::UNROLLED_LOOP_COUNT_NOT_STATIC));
     CHECK(helpers::raised(R"(
         let use = fn(a: [3]i32): void {
-            for comptime (a) |v| { _ = v; }
+            unroll for (a) |v| { _ = v; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_COUNT_NOT_STATIC));
+                          sema::error::UNROLLED_LOOP_COUNT_NOT_STATIC));
     CHECK(helpers::raised(R"(
         const use = fn(): void {
-            for comptime (0..) |v| { _ = v; }
+            unroll for (0..) |v| { _ = v; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_COUNT_NOT_STATIC));
+                          sema::error::UNROLLED_LOOP_COUNT_NOT_STATIC));
 }
 
-TEST_CASE("`for comptime` rejects mismatched-length drivers and a non-trailing open range") {
+TEST_CASE("`unroll for` rejects mismatched-length drivers and a non-trailing open range") {
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             const a: [2]i32 = .{1, 2};
             const b: [3]i32 = .{3, 4, 5};
-            for comptime (a, b) |x, y| { _ = x; _ = y; }
+            unroll for (a, b) |x, y| { _ = x; _ = y; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_COUNT_NOT_STATIC));
+                          sema::error::UNROLLED_LOOP_COUNT_NOT_STATIC));
 
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             const a: [2]i32 = .{1, 2};
-            for comptime (0.., a) |i, x| { _ = i; _ = x; }
+            unroll for (0.., a) |i, x| { _ = i; _ = x; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_COUNT_NOT_STATIC));
+                          sema::error::UNROLLED_LOOP_COUNT_NOT_STATIC));
 }
 
-TEST_CASE("`for comptime` rejects a `break`/`continue` at its own iteration boundary") {
+TEST_CASE("`unroll for` rejects a `break`/`continue` at its own iteration boundary") {
     CHECK(helpers::raised(R"(
         const use = fn(): void {
-            for comptime (0..3) |v| { if (v == 1) { break; } }
+            unroll for (0..3) |v| { if (v == 1) { break; } }
         };
     )",
-                          sema::error::COMPTIME_LOOP_BREAK));
+                          sema::error::UNROLLED_LOOP_BREAK));
     CHECK(helpers::raised(R"(
         const use = fn(): void {
-            for comptime (0..3) |v| { if (v == 1) { continue; } }
+            unroll for (0..3) |v| { if (v == 1) { continue; } }
         };
     )",
-                          sema::error::COMPTIME_LOOP_CONTINUE));
+                          sema::error::UNROLLED_LOOP_CONTINUE));
 }
 
-TEST_CASE("`for comptime`'s break/continue restriction does not reach a nested ordinary loop") {
+TEST_CASE("`unroll for`'s break/continue restriction does not reach a nested ordinary loop") {
     helpers::resolve_and_check(R"(
         const use = fn(): void {
-            for comptime (0..3) |v| {
+            unroll for (0..3) |v| {
                 for (0..v) |j| { if (j == 0) { break; } }
             }
         };
     )");
 }
 
-TEST_CASE("`while comptime` rejects runtime `break`/`continue`") {
+TEST_CASE("`unroll while` rejects runtime `break`/`continue`") {
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            while comptime (true) { if (n == 1) { break; } n = n + 1; }
+            unroll while (true) { if (n == 1) { break; } n = n + 1; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_BREAK));
+                          sema::error::UNROLLED_LOOP_BREAK));
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            while comptime (true) { if (n == 1) { continue; } n = n + 1; }
+            unroll while (true) { if (n == 1) { continue; } n = n + 1; }
         };
     )",
-                          sema::error::COMPTIME_LOOP_CONTINUE));
+                          sema::error::UNROLLED_LOOP_CONTINUE));
 }
 
-TEST_CASE("`while comptime` allows compile-time `break` and `continue`") {
+TEST_CASE("`unroll while` allows compile-time `break` and `continue`") {
     helpers::resolve_and_check(R"(
         const use = fn(): void {
             comptime let mut n = 0;
-            while comptime (n < 5) {
+            unroll while (n < 5) {
                 if comptime (n == 2) {
                     n = n + 2;
                     continue;
@@ -128,53 +128,53 @@ TEST_CASE("`while comptime` allows compile-time `break` and `continue`") {
     )");
 }
 
-TEST_CASE("`do ... while comptime` rejects runtime jumps and allows compile-time jumps") {
+TEST_CASE("`unroll do ... while` rejects runtime jumps and allows compile-time jumps") {
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            do { if (n == 1) { break; } } while comptime (true);
+            unroll do { if (n == 1) { break; } } while (true);
         };
     )",
-                          sema::error::COMPTIME_LOOP_BREAK));
+                          sema::error::UNROLLED_LOOP_BREAK));
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            do { if (n == 1) { continue; } } while comptime (true);
+            unroll do { if (n == 1) { continue; } } while (true);
         };
     )",
-                          sema::error::COMPTIME_LOOP_CONTINUE));
+                          sema::error::UNROLLED_LOOP_CONTINUE));
 
     helpers::resolve_and_check(R"(
         const use = fn(): void {
             comptime let mut n = 0;
-            do {
+            unroll do {
                 if comptime (n == 1) { break; }
                 n = n + 1;
-            } while comptime (n < 5);
+            } while (n < 5);
         };
     )");
 }
 
-TEST_CASE("`loop comptime` rejects runtime jumps and allows compile-time jumps") {
+TEST_CASE("`unroll loop` rejects runtime jumps and allows compile-time jumps") {
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            loop comptime { if (n == 1) { break; } }
+            unroll loop { if (n == 1) { break; } }
         };
     )",
-                          sema::error::COMPTIME_LOOP_BREAK));
+                          sema::error::UNROLLED_LOOP_BREAK));
     CHECK(helpers::raised(R"(
         const use = fn(): void {
             let mut n = 0;
-            loop comptime { if (n == 1) { continue; } }
+            unroll loop { if (n == 1) { continue; } }
         };
     )",
-                          sema::error::COMPTIME_LOOP_CONTINUE));
+                          sema::error::UNROLLED_LOOP_CONTINUE));
 
     helpers::resolve_and_check(R"(
         const use = fn(): void {
             comptime let mut n = 0;
-            loop comptime {
+            unroll loop {
                 if comptime (n == 3) { break; }
                 n = n + 1;
             }

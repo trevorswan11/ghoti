@@ -821,11 +821,11 @@ TEST_CASE("Const eval unreachable in match expression") {
     }
 }
 
-TEST_CASE("`for comptime` iterating over `[]u8` parameter") {
+TEST_CASE("`unroll for` iterating over `[]u8` parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const parse_usize = fn(comptime digits: []u8): usize {
             comptime let mut n: usize = 0;
-            for comptime (digits) |c| {
+            unroll for (digits) |c| {
                 n = n * 10 + @intCast(usize, c - '0');
             }
             return n;

@@ -141,7 +141,7 @@ namespace {
 
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
-    if (do_while.is_comptime) { check_comptime_loop_jumps(do_while.block); }
+    if (do_while.is_unrolled) { check_unrolled_loop_jumps(do_while.block); }
 
     // The loop itself holds the block index, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
@@ -150,8 +150,8 @@ auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_whi
     {
         const scope                  s{table_stack_, loop_type.get_symbol_table_idx(), table_idx_};
         const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(do_while.block)};
-        const mutating_context_guard cx_loop_g{in_comptime_loop_,
-                                               do_while.is_comptime || in_comptime_loop_};
+        const mutating_context_guard cx_loop_g{in_unrolled_loop_,
+                                               do_while.is_unrolled || in_unrolled_loop_};
         if (resolve_block_statements(block)) { return fail_scoped_body(); }
     }
 
@@ -206,7 +206,7 @@ namespace {
     return gsl::not_null{&base_type};
 }
 
-struct comptime_for_driver {
+struct unrolled_for_driver {
     bool                           is_pack{false};
     type*                          elem_type{nullptr};
     std::vector<gir::const_value>  elem_values; // empty for a pack driver
@@ -243,9 +243,9 @@ class iteration_write_log {
 
 } // namespace
 
-// Unrolls a `for comptime`, resolving the block once per iteration under its own
+// Unrolls an `unroll for`, resolving the block once per iteration under its own
 // `comptime_frame` slot and diffing each into a `body_type_diff` the emitter replays
-auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_expr& for_expr)
+auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_expr)
     -> void {
     PROFILE_FUNCTION();
     ASSERT(for_expr.iterables.size() == for_expr.captures.size());
@@ -254,11 +254,11 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
-                             "`for comptime` needs at least one driving iterable",
-                             error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                             "`unroll for` needs at least one driving iterable",
+                             error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                              resolving_.ast.location_of(id)));
     }
-    check_comptime_loop_jumps(for_expr.block);
+    check_unrolled_loop_jumps(for_expr.block);
 
     auto& loop_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
@@ -280,13 +280,13 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            "`for comptime` needs at least one driving iterable besides a companion `0..` index "
+            "`unroll for` needs at least one driving iterable besides a companion `0..` index "
             "range",
-            error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+            error::UNROLLED_LOOP_COUNT_NOT_STATIC,
             resolving_.ast.location_of(id)));
     }
 
-    std::vector<comptime_for_driver> drivers(num_drivers);
+    std::vector<unrolled_for_driver> drivers(num_drivers);
     stdx::opt_size                   count;
     for (usize d{0}; d < num_drivers; ++d) {
         const auto  driver_id{*for_expr.iterables[d]};
@@ -308,7 +308,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
         } else {
             {
                 const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
-                const mutating_context_guard unrolled_g{in_comptime_for_iterable_, true};
+                const mutating_context_guard unrolled_g{in_unrolled_for_iterable_, true};
                 TRY_RESOLVE(driver_id);
             }
             // A bare identifier naming a `comptime` array or slice resolves through a `TYPE`
@@ -322,9 +322,9 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for comptime`'s driving range must have a compile-time-known upper "
+                        "`unroll for`'s driving range must have a compile-time-known upper "
                         "bound",
-                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                        error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 drv.elem_type = &slice_data->underlying;
@@ -342,8 +342,8 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for comptime`'s range bounds must be compile-time constant",
-                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                        "`unroll for`'s range bounds must be compile-time constant",
+                        error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 const bool inclusive{driver_id.get_token_type() ==
@@ -371,9 +371,9 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "`for comptime`'s iterable must be a parameter pack, a compile-time-"
+                        "`unroll for`'s iterable must be a parameter pack, a compile-time-"
                         "known range, or a compile-time-known array/slice value",
-                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                        error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
                 if (arr) {
@@ -398,8 +398,8 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
                     return last_type_.emplace(ctx_.poison_node(
                         resolving_,
                         id,
-                        "Could not determine the element type of this `for comptime` iterable",
-                        error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                        "Could not determine the element type of this `unroll for` iterable",
+                        error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
             }
@@ -409,11 +409,11 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                fmt::format("`for comptime`'s driving iterables must all have the same length "
+                fmt::format("`unroll for`'s driving iterables must all have the same length "
                             "({} vs {})",
                             *count,
                             this_count),
-                error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                 resolving_.ast.location_of(driver_id)));
         }
         count.emplace(this_count);
@@ -426,8 +426,8 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
-                "`for comptime`'s companion iterable must be an open-ended index range like `0..`",
-                error::COMPTIME_LOOP_COUNT_NOT_STATIC,
+                "`unroll for`'s companion iterable must be an open-ended index range like `0..`",
+                error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                 resolving_.ast.location_of(*for_expr.iterables.back())));
         }
     }
@@ -520,7 +520,7 @@ auto type_resolver::resolve_comptime_for(ast::node_id id, const ast::for_loop_ex
 auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -> void {
     PROFILE_FUNCTION();
     ASSERT(for_expr.iterables.size() == for_expr.captures.size());
-    if (for_expr.is_comptime) { return resolve_comptime_for(id, for_expr); }
+    if (for_expr.is_unrolled) { return resolve_unrolled_for(id, for_expr); }
 
     // The loop itself holds the block index which houses captures, not the block
     auto& loop_type{resolving_.get_sema_type(id)};
@@ -688,7 +688,7 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
         return last_type_.emplace(void_t);
     }
 
-    if (if_expr.comptime_condition && !in_comptime_loop_) {
+    if (if_expr.comptime_condition && !in_unrolled_loop_) {
         // Install simulated comptime_frame so condition folding observes preceding `comptime let
         // mut` mutations.
         const comptime_frame_guard sim_guard{ctx_.comptime_binding_frames, make_simulated_frame()};
@@ -918,7 +918,7 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
 
 auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) -> void {
     PROFILE_FUNCTION();
-    if (loop.is_comptime) { check_comptime_loop_jumps(loop.block); }
+    if (loop.is_unrolled) { check_unrolled_loop_jumps(loop.block); }
     auto& loop_type{resolving_.get_sema_type(id)};
     // Poisoned by an earlier error (e.g. a prior unrolling). Its scope is gone
     if (!loop_type.has_symbol_table_idx()) { return last_type_.emplace(ctx_.get_poison()); }
@@ -926,8 +926,8 @@ auto type_resolver::visit(ast::node_id id, const ast::infinite_loop_expr& loop) 
 
     // Just an abridged normal loop handler
     const auto&                  block{resolving_.ast.get_as<ast::block_stmt>(loop.block)};
-    const mutating_context_guard cx_loop_g{in_comptime_loop_,
-                                           loop.is_comptime || in_comptime_loop_};
+    const mutating_context_guard cx_loop_g{in_unrolled_loop_,
+                                           loop.is_unrolled || in_unrolled_loop_};
     if (resolve_block_statements(block)) { return fail_scoped_body(); }
     last_type_.emplace(loop_type);
 }
@@ -1356,7 +1356,7 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
             resolving_.set_sema_type(*live.capture->payload, *cap_type);
             resolve_symbol_info(live.capture->payload, symbol_kind::VALUE);
 
-            // Give the capture the same `comptime_frame` binding a `for`/`while comptime`
+            // Give the capture the same `comptime_frame` binding an `unroll for`/`while`
             // capture already gets
             const auto& cap_ident{
                 resolving_.ast.get_as<ast::identifier_expr>(*live.capture->payload)};
@@ -1962,7 +1962,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
     PROFILE_FUNCTION();
     // Unrolling itself is an emit-time concern, the resolver only needs to type-check the
     // condition/body once
-    if (while_loop.is_comptime) { check_comptime_loop_jumps(while_loop.block); }
+    if (while_loop.is_unrolled) { check_unrolled_loop_jumps(while_loop.block); }
     TRY_RESOLVE(while_loop.condition);
     if (reject_type_condition(while_loop.condition)) { return; }
     // The loop itself holds the block index which houses captures, not the block
@@ -1975,7 +1975,7 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
                                                     while_loop.else_capture,
                                                     loop_type.get_symbol_table_idx(),
                                                     "while",
-                                                    while_loop.is_comptime)}) {
+                                                    while_loop.is_unrolled)}) {
         return last_type_.emplace(*poisoned);
     }
     {
@@ -1986,12 +1986,12 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
             if (!last_type_ || last_type_->is_poison()) { return fail_scoped_body(); }
         }
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
-        const mutating_context_guard cx_loop_g{in_comptime_loop_,
-                                               while_loop.is_comptime || in_comptime_loop_};
+        const mutating_context_guard cx_loop_g{in_unrolled_loop_,
+                                               while_loop.is_unrolled || in_unrolled_loop_};
         // A body that changes a `comptime let mut` type is typed once per iteration
-        const bool per_iteration{while_loop.is_comptime && !while_loop.continuation &&
+        const bool per_iteration{while_loop.is_unrolled && !while_loop.continuation &&
                                  assigns_comptime_type_var(*while_loop.block)};
-        if (per_iteration ? resolve_comptime_while_iterations(id, while_loop, block)
+        if (per_iteration ? resolve_unrolled_while_iterations(id, while_loop, block)
                           : resolve_block_statements(block)) {
             return fail_scoped_body();
         }
@@ -2040,7 +2040,7 @@ auto type_resolver::assigns_comptime_type_var(ast::node_id root) -> bool {
     return found;
 }
 
-auto type_resolver::resolve_comptime_while_iterations(ast::node_id                id,
+auto type_resolver::resolve_unrolled_while_iterations(ast::node_id                id,
                                                       const ast::while_loop_expr& while_loop,
                                                       const ast::block_stmt&      block) -> bool {
     const auto saved_for_gi{for_generic_instantiation_};
@@ -2365,7 +2365,7 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
     check_jumps(check_jumps, *body, 0);
 }
 
-auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
+auto type_resolver::check_unrolled_loop_jumps(ast::stmt_handle body) -> void {
     ankerl::unordered_dense::set<std::string_view> local_labels;
 
     auto collect_labels = [&](auto& self, ast::node_id n) -> void {
@@ -2396,7 +2396,7 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
     };
     collect_labels(collect_labels, *body);
 
-    // `loop_depth` counts nested ordinary loops declared inside this comptime loop's own body
+    // `loop_depth` counts nested ordinary loops declared inside this unrolled loop's own body
     // `runtime_control_flow_depth` tracks nesting inside runtime branches (if/match)
     auto check_jumps = [&](auto&        self,
                            ast::node_id n,
@@ -2410,15 +2410,15 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
                     !local_labels.contains(
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
                 if (labeled_outward) {
-                    ctx_.diags.emplace_back("'break' cannot target a loop outside a comptime loop",
-                                            error::COMPTIME_LOOP_BREAK,
+                    ctx_.diags.emplace_back("'break' cannot target a loop outside an unrolled loop",
+                                            error::UNROLLED_LOOP_BREAK,
                                             resolving_.ast.location_of(n));
                 } else if (unlabeled_and_local) {
                     if (runtime_control_flow_depth > 0) {
                         ctx_.diags.emplace_back(
-                            "'break' inside a comptime loop is only allowed within compile-time "
+                            "'break' inside an unrolled loop is only allowed within compile-time "
                             "control flow",
-                            error::COMPTIME_LOOP_BREAK,
+                            error::UNROLLED_LOOP_BREAK,
                             resolving_.ast.location_of(n));
                     }
                 }
@@ -2434,15 +2434,15 @@ auto type_resolver::check_comptime_loop_jumps(ast::stmt_handle body) -> void {
                         resolving_.ast.get_as<ast::identifier_expr>(*data.label).name)};
                 if (labeled_outward) {
                     ctx_.diags.emplace_back(
-                        "'continue' cannot target a loop outside a comptime loop",
-                        error::COMPTIME_LOOP_CONTINUE,
+                        "'continue' cannot target a loop outside an unrolled loop",
+                        error::UNROLLED_LOOP_CONTINUE,
                         resolving_.ast.location_of(n));
                 } else if (unlabeled_and_local) {
                     if (runtime_control_flow_depth > 0) {
                         ctx_.diags.emplace_back(
-                            "'continue' inside a comptime loop is only allowed within "
+                            "'continue' inside an unrolled loop is only allowed within "
                             "compile-time control flow (such as `if comptime`)",
-                            error::COMPTIME_LOOP_CONTINUE,
+                            error::UNROLLED_LOOP_CONTINUE,
                             resolving_.ast.location_of(n));
                     }
                 }

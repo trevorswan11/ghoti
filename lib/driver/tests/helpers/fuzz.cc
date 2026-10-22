@@ -76,6 +76,7 @@ constexpr std::array REPLACEMENTS{
     "loop",
     "for",
     "while",
+    "unroll",
     "defer",
     "errdefer",
     "const",

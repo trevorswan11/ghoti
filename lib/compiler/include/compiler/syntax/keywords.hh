@@ -33,6 +33,7 @@ constexpr keyword_t ERRDEFER{"errdefer", token_type_t::ERRDEFER};
 constexpr keyword_t LOOP{"loop", token_type_t::LOOP};
 constexpr keyword_t FOR{"for", token_type_t::FOR};
 constexpr keyword_t WHILE{"while", token_type_t::WHILE};
+constexpr keyword_t UNROLL{"unroll", token_type_t::UNROLL};
 constexpr keyword_t CONTINUE{"continue", token_type_t::CONTINUE};
 constexpr keyword_t BREAK{"break", token_type_t::BREAK};
 constexpr keyword_t IMPORT{"import", token_type_t::IMPORT};
@@ -104,6 +105,7 @@ constexpr std::array ALL_KEYWORDS{
     keywords::LOOP,
     keywords::FOR,
     keywords::WHILE,
+    keywords::UNROLL,
     keywords::CONTINUE,
     keywords::BREAK,
     keywords::IMPORT,

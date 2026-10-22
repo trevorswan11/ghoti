@@ -3,7 +3,7 @@ package pages
 templ SyntaxLoopsPage() {
 	<h1>Loops</h1>
 	<ul>
-		<li>There are 4 different loops in ghoti</li>
+		<li>There are 4 different loops in ghoti, and any of them can be unrolled at compile time</li>
 	</ul>
 	<h2>Do-while Loops</h2>
 	<ul>
@@ -42,7 +42,7 @@ templ SyntaxLoopsPage() {
 				<li><code>lo..hi</code> counts from <code>lo</code> to <code>hi</code>, not including <code>hi</code>, and <code>lo..=hi</code> includes <code>hi</code>, even when <code>hi</code> is its type's maximum or minimum</li>
 				<li>A range whose start is past its end counts down: <code>3..0</code> is 3, 2, 1 and <code>-1..=-8</code> is -1 through -8. The direction is checked when the loop starts, so <code>{ "for (i..n)" }</code> counts down whenever <code>i</code> is greater than <code>n</code></li>
 				<li>Equal bounds run zero times with <code>..</code> and once with <code>..=</code></li>
-				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>{ "for" } comptime</code> unrolls into constants of the default integer type instead)</li>
+				<li>A range's counter has its bounds' type; with untyped bounds it is <code>usize</code>, or <code>isize</code> when a bound is negative (<code>{ "unroll for" }</code> unrolls into constants of the default integer type instead)</li>
 				<li>When both bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, like an integer literal does</li>
 			</ul>
 		</li>
@@ -95,6 +95,29 @@ for (0..4) |i, j| { ... } else { return b; } // Illegal, the number of captures 
 while (true) {a;} else return b; // The return statement only runs if the loop body does not break
 while (it.next()) |item| : (i += 1) { use(item); } // Runs until next() returns .none
 while (reader.read(buf)) |n| { consume(buf[0..n]); } else |err| { log(err); }` }
+		</code>
+	</pre>
+	<h2>Unrolled Loops</h2>
+	<ul>
+		<li><code>unroll</code> before any loop (<code>{ "unroll for" }</code>, <code>{ "unroll while" }</code>, <code>{ "unroll do" }</code>, <code>{ "unroll loop" }</code>) expands it while compiling: the body is emitted once per iteration, and the program runs those copies in order</li>
+		<li>The loop's header is compile-time: a <code>{ "for" }</code>'s iterables must have a compile-time-known length, and a <code>{ "while" }</code>/<code>{ "do" }</code> condition must fold to a compile-time <code>bool</code></li>
+		<li>Each iteration's captures are compile-time constants, so they can pick types, index parameter packs, or drive <code>{ "if comptime" }</code></li>
+		<li>The body itself still runs at runtime and can read and write runtime values</li>
+		<li>
+			Unrolled loops cannot have an <code>else</code> clause or a label
+			<ul>
+				<li><code>{ "break" }</code> and <code>{ "continue" }</code> that target the unrolled loop are only allowed inside compile-time control flow, such as <code>{ "if comptime" }</code></li>
+			</ul>
+		</li>
+		<li><code>{ "@setEvalUnrollLimit(n)" }</code> caps the number of iterations, so a condition that never turns false is a compile error instead of a hang</li>
+		<li><code>unroll</code> does not run the loop at compile time. To do that, put the loop in a <code>{ "comptime { ... }" }</code> block or write <code>comptime</code> before it, as in <code>{ "comptime unroll for (...)" }</code> or <code>{ "comptime for (...)" }</code></li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `unroll for (fields) |f| { print(@field(value, f.name)); } // One print per field
+comptime let mut i = 0;
+unroll while (i < 4) : (i += 1) { out[i] = in[i] * 2; } // Four stores, no runtime counter
+unroll for (0..3) |i| { ... } else return b; // Illegal, an unrolled loop has no else clause` }
 		</code>
 	</pre>
 	<h2>Important Considerations</h2>

@@ -317,14 +317,14 @@ template <ast::IndexableID ID>
 auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> void {
     const auto name{ident.name};
 
-    // A pack is usable only as `.len`, `[K]`, `for comptime`'s iterable, or `expr...`. Those
+    // A pack is usable only as `.len`, `[K]`, `unroll for`'s iterable, or `expr...`. Those
     // forms intercept before ever reaching here, so a bare mention of the name is out of position.
     if (current_pack_ && name == current_pack_->name) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("'{}' is a parameter pack; use '{}.len', '{}[k]', "
-                                         "'{}...', or a `for comptime` iterable",
+                                         "'{}...', or an `unroll for` iterable",
                                          name,
                                          name,
                                          name,

@@ -1896,7 +1896,14 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         [&](const ast::comptime_expr& data) -> stdx::option<const_value> {
             const comptime_context_guard          g{*this, true};
             const sema::comptime_evaluation_scope scope{ctx_, true};
-            return try_eval(data.rhs);
+            const auto                            res{try_eval(data.rhs)};
+            // `comptime for (...) {}` finishing normally has no value, like a comptime block
+            const auto& rhs{module_->ast[*data.rhs]};
+            const bool  is_loop{rhs.is<ast::for_loop_expr>() || rhs.is<ast::while_loop_expr>() ||
+                                rhs.is<ast::do_while_loop_expr>() ||
+                                rhs.is<ast::infinite_loop_expr>()};
+            if (res || !is_loop || current_signal_.kind || cond_unknown_) { return res; }
+            return const_value{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
         },
         [&](const ast::dereference_expr& data) -> stdx::option<const_value> {
             if (const auto ref{module_->ast.get_as_opt<ast::reference_expr>(data.rhs)}) {
@@ -5951,7 +5958,7 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
     PROFILE_FUNCTION();
     if (!fn_expr.body) { return stdx::none; }
     // A trailing `rest...` pack binds as a constant array of every remaining argument, so
-    // `rest.len`, `rest[k]`, `for comptime (rest)`, and `rest...` forwarding all fold
+    // `rest.len`, `rest[k]`, `unroll for (rest)`, and `rest...` forwarding all fold
     const bool  has_pack{!fn_expr.parameters.empty() && fn_expr.parameters.back().is_pack};
     const bool  has_self{fn_expr.self.has_value()};
     const usize fixed_args{fn_expr.parameters.size() - (has_pack ? 1UZ : 0UZ) +

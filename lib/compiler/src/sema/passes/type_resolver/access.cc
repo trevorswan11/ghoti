@@ -880,7 +880,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
 
     // An endpoint is an ordinary value, never itself a range
     const bool                   for_iterable{in_for_iterable_};
-    const bool                   unrolled{std::exchange(in_comptime_for_iterable_, false)};
+    const bool                   unrolled{std::exchange(in_unrolled_for_iterable_, false)};
     const mutating_context_guard subscript_g{in_subscript_index_, false};
     const mutating_context_guard for_iter_g{in_for_iterable_, false};
     type*                        lhs_type{&usize_type};
@@ -938,7 +938,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
         }};
         const auto lo{fold_int(range.lhs)};
         const auto hi{fold_int(range.rhs)};
-        // `for comptime` unrolls into constants, which keep the default integer type
+        // `unroll for` unrolls into constants, which keep the default integer type
         const bool negative{(lo && *lo < 0) || (hi && *hi < 0)};
         if (!unrolled) {
             lhs_type =

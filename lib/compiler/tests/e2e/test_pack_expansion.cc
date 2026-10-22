@@ -9,7 +9,7 @@ TEST_CASE("`expr...` forwards a pack to another pack function") {
     CHECK(helpers::compile_and_run(R"(
         const sum = fn(rest...): i32 {
             let mut total: i32 = 0;
-            for comptime (rest) |v| { total = total + v; }
+            unroll for (rest) |v| { total = total + v; }
             return total;
         };
         const forward_only = fn(rest...): i32 { return sum(rest...); };
@@ -21,7 +21,7 @@ TEST_CASE("`expr...` forwards a pack alongside a leading fixed argument") {
     CHECK(helpers::compile_and_run(R"(
         const sum = fn(rest...): i32 {
             let mut total: i32 = 0;
-            for comptime (rest) |v| { total = total + v; }
+            unroll for (rest) |v| { total = total + v; }
             return total;
         };
         const forward = fn(a: i32, rest...): i32 { return a + sum(rest...); };
@@ -33,7 +33,7 @@ TEST_CASE("the same pack may be expanded more than once in one call site") {
     CHECK(helpers::compile_and_run(R"(
         const sum = fn(rest...): i32 {
             let mut total: i32 = 0;
-            for comptime (rest) |v| { total = total + v; }
+            unroll for (rest) |v| { total = total + v; }
             return total;
         };
         const twice = fn(rest...): i32 { return sum(rest...) + sum(rest...); };
@@ -50,11 +50,11 @@ TEST_CASE("`expr...` forwards a pack into a plain (non-pack) function's fixed pa
 }
 
 TEST_CASE("the same pack function instantiated at two different arities does not corrupt shared "
-          "`for comptime` scope typing") {
+          "`unroll for` scope typing") {
     CHECK(helpers::compile_and_run(R"(
         const sum = fn(rest...): i32 {
             let mut total: i32 = 0;
-            for comptime (rest) |v| { total = total + v; }
+            unroll for (rest) |v| { total = total + v; }
             return total;
         };
         pub const main = fn(): i32 { return sum(1, 2, 3, 4) + sum(1, 2); };

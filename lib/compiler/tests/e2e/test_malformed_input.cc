@@ -346,7 +346,7 @@ TEST_CASE("a loop body error inside a generic reports cleanly on every instantia
         const D = struct { count_x: f32, count_y: u32 };
         pub const main = fn(): i32 {
             let mut acc: i32 = 0;
-            for comptime (@typeInfo(D).@"struct".fields) |field| {
+            unroll for (@typeInfo(D).@"struct".fields) |field| {
                 if comptime (starts(u8, field.name, "count_")) { acc += 1; }
             }
             return acc;
@@ -401,11 +401,11 @@ TEST_CASE("misused names and types report diagnostics instead of crashing") {
     // A constant written to while its own initializer is folding
     helpers::expect_compile_error(
         "const pick = fn(x: i32): i32 { b = 0; return 1; }; const b = pick(1);");
-    // Scoped nodes under an initializer's type or a runtime loop inside `for comptime`
+    // Scoped nodes under an initializer's type or a runtime loop inside `unroll for`
     helpers::expect_compile_error(
         "pub const main = fn(): i32 { let x = match (1) { 1 => 1, _ => 2, }{ }; return 0; };");
     helpers::expect_compile_error(
-        "const use = fn(): void { for comptime (0..3) |vv| { for (0..v) |j| { _ = j; } } };");
+        "const use = fn(): void { unroll for (0..3) |vv| { for (0..v) |j| { _ = j; } } };");
 }
 
 TEST_CASE("scoped expressions work as member-access objects and initializer types") {

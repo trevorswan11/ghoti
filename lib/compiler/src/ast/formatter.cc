@@ -1245,9 +1245,9 @@ auto formatter::visit(node_id id, const call_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const do_while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
-        doc_manager_.text("do "),
+        doc_manager_.text(node.is_unrolled ? "unroll do " : "do "),
         format(node.block),
-        doc_manager_.text(node.is_comptime ? " while comptime (" : " while ("),
+        doc_manager_.text(" while ("),
         format(node.condition),
         doc_manager_.text(")"),
     });
@@ -1279,7 +1279,7 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     }
 
     return doc_manager_.concat({
-        doc_manager_.text(node.is_comptime ? "for comptime " : "for "),
+        doc_manager_.text(node.is_unrolled ? "unroll for " : "for "),
         doc_manager_.delimited(
             "(", ")", std::move(iterables), false, false, node.iterables_force_break),
         doc_manager_.text(" "),
@@ -1515,7 +1515,7 @@ auto formatter::visit(node_id, const index_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const infinite_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat(
-        {doc_manager_.text(node.is_comptime ? "loop comptime " : "loop "), format(node.block)});
+        {doc_manager_.text(node.is_unrolled ? "unroll loop " : "loop "), format(node.block)});
 }
 
 auto formatter::visit(node_id id, const assignment_expr& node) -> syntax::doc_id {
@@ -1785,7 +1785,7 @@ auto formatter::visit(node_id, const interface_expr& node) -> syntax::doc_id {
 
 auto formatter::visit(node_id, const while_loop_expr& node) -> syntax::doc_id {
     return doc_manager_.concat({
-        doc_manager_.text(node.is_comptime ? "while comptime (" : "while ("),
+        doc_manager_.text(node.is_unrolled ? "unroll while (" : "while ("),
         format(node.condition),
         doc_manager_.text(")"),
         node.payload_capture

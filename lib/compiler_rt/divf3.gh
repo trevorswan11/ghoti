@@ -471,7 +471,7 @@ test "__divxf3" {
         let b_uq1_hw: HalfZ = @truncate(b_significand >> (significand_bits + 1 - half_width));
         let mut x_uq0_hw = c_hw -% b_uq1_hw;
 
-        for comptime (0..half_iterations) |_| {
+        unroll for (0..half_iterations) |_| {
             // "0 - (...)" is equivalent to "2 - (...)" in UQ1.(HW-1).
             let x_times_b: HalfZ = @truncate(@as(Z, x_uq0_hw) * @as(Z, b_uq1_hw) >> half_width);
             let corr_uq1_hw = -%x_times_b;
@@ -501,7 +501,7 @@ test "__divxf3" {
         const c = @as(Z, 0x7504F333) << (type_width - 32);
         x_uq0 = c -% b_uq1;
 
-        for comptime (0..3) |_| {
+        unroll for (0..3) |_| {
             let x_times_b: Z = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, b_uq1) >> type_width);
             let corr_uq1 = -%x_times_b;
             x_uq0 = @truncate(@as(TwiceZ, x_uq0) * @as(TwiceZ, corr_uq1) >> (type_width - 1));

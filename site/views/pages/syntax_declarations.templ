@@ -59,11 +59,11 @@ let mut e: []u8 = undefined; // Allowed, e is uninitialized and future assignmen
 		<li><code>const</code> values must be computable at compile time; anything else is an error that suggests <code>let</code></li>
 		<li>Types, functions, <code>undefined</code> aliases, and values that hold <code>type</code>s are always declared with <code>const</code></li>
 		<li>Taking the address of a <code>const</code> (<code>^TABLE</code>) gives a pointer to one read-only copy</li>
-		<li><code>comptime let mut</code> declares a local that changes while compiling, such as a cursor in a <code>{ "for comptime" }</code> loop; it has no address</li>
+		<li><code>comptime let mut</code> declares a local that changes while compiling, such as a cursor in a <code>{ "unroll for" }</code> loop; it has no address</li>
 		<li>
 			A <code>comptime let mut</code> can hold a type: each use names the type it holds at that point, and only another type can be assigned to it
 			<ul>
-				<li>A <code>{ "for comptime" }</code> or <code>{ "while comptime" }</code> loop can build a type up one iteration at a time</li>
+				<li>A <code>{ "unroll for" }</code> or <code>{ "unroll while" }</code> loop can build a type up one iteration at a time</li>
 			</ul>
 		</li>
 		<li><code>comptime let</code> without <code>mut</code> is an error: that is spelled <code>const</code></li>
@@ -71,7 +71,7 @@ let mut e: []u8 = undefined; // Allowed, e is uninitialized and future assignmen
 	<pre>
 		<code class="language-ghoti">
 			{ `comptime let mut T: type = u8;
-for comptime (0..3) |_| { T = Wrap(T); }
+unroll for (0..3) |_| { T = Wrap(T); }
 let nested: T = undefined;   // Wrap(Wrap(Wrap(u8)))` }
 		</code>
 	</pre>

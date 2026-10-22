@@ -666,7 +666,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     const auto fn_type{fn_info.fn_type};
     const auto fn_table_idx{fn_type->get_symbol_table_idx()};
 
-    // Computed early so a nested `for`/`while comptime`'s per-iteration typing keys can be scoped
+    // Computed early so a nested `unroll for`/`while`'s per-iteration typing keys can be scoped
     // to this instantiation before its body is resolved
     auto mangled_name{instance_mangled_name(ctx_, fn_info, concrete_args, comptime_args)};
 

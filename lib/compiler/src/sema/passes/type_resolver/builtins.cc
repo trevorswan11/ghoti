@@ -2278,7 +2278,7 @@ auto type_resolver::resolve_program_builtin(ID, builtin_site& site)
         break;
     }
     case syntax::builtin_t::COMPILE_ERROR: {
-        if (in_comptime_loop_) {
+        if (in_unrolled_loop_) {
             return_type = &builtin.return_type;
             break;
         }
