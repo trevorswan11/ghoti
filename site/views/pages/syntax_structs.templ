@@ -15,7 +15,7 @@ templ SyntaxStructsPage() {
 			<ul>
 				<li>These must be the first thing to appear in the struct</li>
 				<li>They are declared with an optional <code>pub</code> to mark access modifiers, followed by the name, type, and optional default value: e.g. <code>pub foo: i32 = 23</code></li>
-				<li>An optional <code>{ "@alignas(N)" }</code> specifier can precede a field to enforce an explicit alignment of <code>N</code> bytes.</li>
+				<li>An optional <code>{ "@[align(N)]" }</code> attribute can precede a field to enforce an explicit alignment of <code>N</code> bytes: e.g. <code>{ "@[align(16)] data: [4]f32" }</code></li>
 				<li>
 					Members do not have an individual idea of mutability, simply inheriting the mutability of their enclosing object when used
 					<ul>
@@ -31,13 +31,13 @@ templ SyntaxStructsPage() {
 					<code>packed struct { "{ ... }" }</code>: A Zig-style <em>bit-packed</em> struct. The whole struct becomes a single backing integer <code>iN</code> whose width <code>N</code> is the sum of its fields' bit sizes (<code>{ "@bitSizeOf" }</code> of each field). Field <em>k</em> occupies bits <code>[offset_k, offset_k + { "@bitSizeOf" }(field_k))</code> with <code>offset_0 = 0</code>, laid out least-significant-bit first in declaration order.
 					<ul>
 						<li>Fields must be bit-packable: integers, floats, <code>bool</code>, enums, pointers, other bit-packed <code>packed</code> aggregates, and fixed arrays of those. A slice, plain struct, function type, etc. is rejected.</li>
-						<li>A <code>packed struct</code> field may not carry <code>{ "@alignas" }</code>, and the backing width is currently capped at 128 bits.</li>
+						<li>A <code>packed struct</code> field may not carry <code>{ "@[align(N)]" }</code>, and the backing width is currently capped at 128 bits.</li>
 						<li>A field has no address of its own: <code>&amp;p.field</code> / <code>^p.field</code> is a compile error. Read/write of a field lowers to shift-and-mask over the backing integer.</li>
 						<li><code>{ "@sizeOf" }(P)</code> is the backing integer's ABI byte size; <code>{ "@bitSizeOf" }(P)</code> is <code>N</code>.</li>
 					</ul>
 				</li>
 				<li><code>extern struct { "{ ... }" }</code>: Enforces C ABI struct layout and alignment rules for C interop.</li>
-				<li><code>extern packed struct { "{ ... }" }</code>: C-ABI <code>__attribute__((packed))</code> &mdash; byte-offset semantics with padding removed. This is <em>not</em> bit-packed; fields keep their own addresses and may use <code>{ "@alignas" }</code>.</li>
+				<li><code>extern packed struct { "{ ... }" }</code>: C-ABI <code>__attribute__((packed))</code> &mdash; byte-offset semantics with padding removed. This is <em>not</em> bit-packed; fields keep their own addresses and may use <code>{ "@[align(N)]" }</code>.</li>
 				<li>
 					An <code>extern</code> struct field may not contain a reference or a <code>dyn</code> fat pointer, since neither has a C ABI representation
 					<ul>
@@ -130,7 +130,7 @@ foo.worker_two();           // Or with this shorthand` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const S = struct { let mut a: int; };
+			{ `const S = struct { a: i32 };
 
 const s1 = S{ .a = 3 };
 const s2: S = .{ .a = 3 };` }
@@ -148,10 +148,10 @@ const s2: S = .{ .a = 3 };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Point = struct { let mut x: int; let mut y: int; };
+			{ `const Point = struct { x: i32, y: i32 };
 
 const make = fn(hi: bool): Point {
-    return if (hi) .{ .x = 1, .y = 2 }; else .{ .x = 0, .y = 0 };
+    return if (hi) .{ .x = 1, .y = 2 } else .{ .x = 0, .y = 0 };
 };` }
 		</code>
 	</pre>

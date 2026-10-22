@@ -20,7 +20,7 @@ templ SyntaxEnumsPage() {
 		</li>
 		<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
 		<li>The backing type of an enum is defaulted to the smallest available type, but can be set to any integer (signed, unsigned, or byte)</li>
-		<li>Enums can be casted to and from their underlying type by using the <code>{ "@cast" }</code> builtin</li>
+		<li>Enums can be converted to and from their underlying type with the <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> builtins</li>
 		<li>
 			For an enum to accept values that are outside of the values of its internal enumerations, you must end the enumeration list with an underscore <code>_</code>
 			<ul>
