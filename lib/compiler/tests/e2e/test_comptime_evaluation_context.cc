@@ -13,7 +13,7 @@ TEST_CASE("a comptime block folds calls into functions that take a parameter pac
     CHECK(helpers::compile_and_run_tests(R"(
         pub const max = fn(a: auto, b: auto, c...): auto {
             let mut largest = if (a > b) a else b;
-            for comptime (c) |arg| {
+            unroll for (c) |arg| {
                 if (arg > largest) largest = arg;
             }
             return largest;

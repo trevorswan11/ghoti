@@ -506,7 +506,7 @@ TEST_CASE(
 
         test "field name from reflection compares correctly against another []u8 argument" {
             let needle: []u8 = "count_x"[0..];
-            for comptime (@typeInfo(Data).@"struct".fields) |field| {
+            unroll for (@typeInfo(Data).@"struct".fields) |field| {
                 @expect(eql(u8, field.name, needle));
             }
         }

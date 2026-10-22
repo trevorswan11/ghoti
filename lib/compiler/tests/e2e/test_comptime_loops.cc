@@ -7,11 +7,11 @@
 
 namespace ghoti::tests {
 
-TEST_CASE("`while comptime` unrolls while its `comptime let mut` condition holds") {
+TEST_CASE("`unroll while` unrolls while its `comptime let mut` condition holds") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            while comptime (n < 3) { n = n + 1; }
+            unroll while (n < 3) { n = n + 1; }
             return n;
         };
     )") == 3);
@@ -19,110 +19,110 @@ TEST_CASE("`while comptime` unrolls while its `comptime let mut` condition holds
         pub const main = fn(): i32 {
             comptime let mut n = 0;
             comptime let mut sum = 0;
-            while comptime (n < 4) { sum = sum + n; n = n + 1; }
+            unroll while (n < 4) { sum = sum + n; n = n + 1; }
             return sum;
         };
     )") == 6);
 }
 
-TEST_CASE("`while comptime` rejects a condition that can't fold to a compile-time `bool`") {
+TEST_CASE("`unroll while` rejects a condition that can't fold to a compile-time `bool`") {
     helpers::expect_compile_error(R"(
         let step = fn(a: i32): i32 {
-            while comptime (a < 3) { a = a + 1; }
+            unroll while (a < 3) { a = a + 1; }
             return a;
         };
         pub const main = fn(): i32 { return step(1); };
     )");
 }
 
-TEST_CASE("`while comptime` stops at `@setEvalUnrollLimit` rather than looping forever") {
+TEST_CASE("`unroll while` stops at `@setEvalUnrollLimit` rather than looping forever") {
     helpers::expect_compile_error(R"(
         pub const main = fn(): i32 {
             @setEvalUnrollLimit(5);
             comptime let mut n = 0;
-            while comptime (n < 100) { n = n + 1; }
+            unroll while (n < 100) { n = n + 1; }
             return n;
         };
     )");
 }
 
-TEST_CASE("`for comptime` unrolls over a compile-time range") {
+TEST_CASE("`unroll for` unrolls over a compile-time range") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (0..3) |v| { sum = sum + v; }
+            unroll for (0..3) |v| { sum = sum + v; }
             return sum;
         };
     )") == 3);
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (1..=3) |v| { sum = sum + v; }
+            unroll for (1..=3) |v| { sum = sum + v; }
             return sum;
         };
     )") == 6);
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut count = 0;
-            for comptime (0..0) |v| { count = count + 1; }
+            unroll for (0..0) |v| { count = count + 1; }
             return count;
         };
     )") == 0);
 }
 
-TEST_CASE("`for comptime` unrolls over a module-level `comptime` array") {
+TEST_CASE("`unroll for` unrolls over a module-level `comptime` array") {
     CHECK(helpers::compile_and_run(R"(
         const arr: [3]i32 = .{10, 20, 30};
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (arr) |v| { sum = sum + v; }
+            unroll for (arr) |v| { sum = sum + v; }
             return sum;
         };
     )") == 60);
 }
 
-TEST_CASE("`for comptime` unrolls over a function-local `comptime` array") {
+TEST_CASE("`unroll for` unrolls over a function-local `comptime` array") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             const arr: [3]i32 = .{10, 20, 30};
             let mut sum = 0;
-            for comptime (arr) |v| { sum = sum + v; }
+            unroll for (arr) |v| { sum = sum + v; }
             return sum;
         };
     )") == 60);
 }
 
-TEST_CASE("`for comptime` unrolls over a range with a companion `0..` index") {
+TEST_CASE("`unroll for` unrolls over a range with a companion `0..` index") {
     CHECK(helpers::compile_and_run(R"(
         const arr: [3]i32 = .{10, 20, 30};
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (arr, 0..) |v, i| { sum = sum + v + @intCast(i32, i); }
+            unroll for (arr, 0..) |v, i| { sum = sum + v + @intCast(i32, i); }
             return sum;
         };
     )") == 63);
 }
 
-TEST_CASE("`for comptime` unrolls over two arrays in parallel") {
+TEST_CASE("`unroll for` unrolls over two arrays in parallel") {
     CHECK(helpers::compile_and_run(R"(
         const a: [3]i32 = .{1, 2, 3};
         const b: [3]i32 = .{4, 5, 6};
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (a, b) |x, y| { sum = sum + x * y; }
+            unroll for (a, b) |x, y| { sum = sum + x * y; }
             return sum;
         };
     )") == 1 * 4 + 2 * 5 + 3 * 6);
 }
 
-TEST_CASE("`for comptime` unrolls over three iterables (array, range, array) plus a companion "
+TEST_CASE("`unroll for` unrolls over three iterables (array, range, array) plus a companion "
           "index") {
     CHECK(helpers::compile_and_run(R"(
         const a: [3]i32 = .{1, 2, 3};
         const b: [3]i32 = .{4, 5, 6};
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (a, 0..3, b, 0..) |x, r, y, i| {
+            unroll for (a, 0..3, b, 0..) |x, r, y, i| {
                 sum = sum + x + r + y + @intCast(i32, i);
             }
             return sum;
@@ -130,47 +130,47 @@ TEST_CASE("`for comptime` unrolls over three iterables (array, range, array) plu
     )") == (1 + 0 + 4 + 0) + (2 + 1 + 5 + 1) + (3 + 2 + 6 + 2));
 }
 
-TEST_CASE("`for comptime` mixes a parameter pack with an array driver in parallel") {
+TEST_CASE("`unroll for` mixes a parameter pack with an array driver in parallel") {
     CHECK(helpers::compile_and_run(R"(
         const weights: [3]i32 = .{2, 3, 5};
         const f = fn(rest...): i32 {
             let mut sum = 0;
-            for comptime (rest, weights) |e, w| { sum = sum + e * w; }
+            unroll for (rest, weights) |e, w| { sum = sum + e * w; }
             return sum;
         };
         pub const main = fn(): i32 { return f(1, 2, 3); };
     )") == 1 * 2 + 2 * 3 + 3 * 5);
 }
 
-TEST_CASE("`for comptime`'s parallel iterables must all have the same length") {
+TEST_CASE("`unroll for`'s parallel iterables must all have the same length") {
     helpers::expect_compile_error(R"(
         const a: [2]i32 = .{1, 2};
         const b: [3]i32 = .{1, 2, 3};
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (a, b) |x, y| { sum = sum + x + y; }
+            unroll for (a, b) |x, y| { sum = sum + x + y; }
             return sum;
         };
     )");
 }
 
-TEST_CASE("`for comptime` unrolls over a parameter pack") {
+TEST_CASE("`unroll for` unrolls over a parameter pack") {
     CHECK(helpers::compile_and_run(R"(
         const f = fn(rest...): i32 {
             let mut sum = 0;
-            for comptime (rest) |e| { sum = sum + e; }
+            unroll for (rest) |e| { sum = sum + e; }
             return sum;
         };
         pub const main = fn(): i32 { return f(1, 2, 3, 4); };
     )") == 10);
 }
 
-TEST_CASE("`for comptime`'s own `break`/`continue` restriction does not reach a nested ordinary "
+TEST_CASE("`unroll for`'s own `break`/`continue` restriction does not reach a nested ordinary "
           "loop") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut count = 0;
-            for comptime (0..3) |v| {
+            unroll for (0..3) |v| {
                 for (0..v) |j| { if (j == 0) { break; } count = count + 1; }
             }
             return count;
@@ -178,22 +178,22 @@ TEST_CASE("`for comptime`'s own `break`/`continue` restriction does not reach a 
     )") == 0);
 }
 
-TEST_CASE("`for comptime`'s `defer` fires at the end of each iteration") {
+TEST_CASE("`unroll for`'s `defer` fires at the end of each iteration") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut order = 0;
-            for comptime (0..3) |v| { defer order = order * 10 + v; }
+            unroll for (0..3) |v| { defer order = order * 10 + v; }
             return order;
         };
     )") == 12);
 }
 
-TEST_CASE("`while comptime` allows compile-time `continue` and `break`") {
+TEST_CASE("`unroll while` allows compile-time `continue` and `break`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
             comptime let mut sum = 0;
-            while comptime (n < 5) : (n = n + 1) {
+            unroll while (n < 5) : (n = n + 1) {
                 if comptime (n == 2) { continue; }
                 sum = sum + n;
             }
@@ -204,7 +204,7 @@ TEST_CASE("`while comptime` allows compile-time `continue` and `break`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            while comptime (true) {
+            unroll while (true) {
                 if comptime (n == 3) { break; }
                 n = n + 1;
             }
@@ -213,13 +213,13 @@ TEST_CASE("`while comptime` allows compile-time `continue` and `break`") {
     )") == 3);
 }
 
-TEST_CASE("`do ... while comptime` unrolls and executes body at least once") {
+TEST_CASE("`unroll do ... while` unrolls and executes body at least once") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            do {
+            unroll do {
                 n = n + 1;
-            } while comptime (n < 4);
+            } while (n < 4);
             return n;
         };
     )") == 4);
@@ -227,9 +227,9 @@ TEST_CASE("`do ... while comptime` unrolls and executes body at least once") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            do {
+            unroll do {
                 n = n + 1;
-            } while comptime (false);
+            } while (false);
             return n;
         };
     )") == 1);
@@ -237,20 +237,20 @@ TEST_CASE("`do ... while comptime` unrolls and executes body at least once") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            do {
+            unroll do {
                 if comptime (n == 2) { break; }
                 n = n + 1;
-            } while comptime (n < 10);
+            } while (n < 10);
             return n;
         };
     )") == 2);
 }
 
-TEST_CASE("`loop comptime` unrolls and breaks at compile time") {
+TEST_CASE("`unroll loop` unrolls and breaks at compile time") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            loop comptime {
+            unroll loop {
                 if comptime (n == 5) { break; }
                 n = n + 1;
             }
@@ -259,11 +259,11 @@ TEST_CASE("`loop comptime` unrolls and breaks at compile time") {
     )") == 5);
 }
 
-TEST_CASE("`for comptime` allows compile-time `continue` and `break`") {
+TEST_CASE("`unroll for` allows compile-time `continue` and `break`") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             let mut sum = 0;
-            for comptime (0..5) |v| {
+            unroll for (0..5) |v| {
                 if comptime (v == 2) { continue; }
                 if comptime (v == 4) { break; }
                 sum = sum + v;
@@ -348,12 +348,12 @@ TEST_CASE("`continue` and labeled jumps fold like their runtime counterparts") {
     )") == 0);
 }
 
-TEST_CASE("comptime loops in a generic fn retype every iteration per instantiation") {
+TEST_CASE("unrolled loops in a generic fn retype every iteration per instantiation") {
     CHECK(helpers::compile_and_run(R"(
         const by_for = fn(comptime T: type, x: T): T {
             const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
             let mut y = x;
-            for comptime (0..3) |_| {
+            unroll for (0..3) |_| {
                 y = @truncate(@as(Wide, y) * 2);
             }
             return y;
@@ -364,7 +364,7 @@ TEST_CASE("comptime loops in a generic fn retype every iteration per instantiati
             let mut y = x;
             comptime let mut U: type = T;
             comptime let mut k = 0;
-            while comptime (k < 3) {
+            unroll while (k < 3) {
                 U = T;
                 y = @truncate(@as(Wide, y) * 2);
                 k = k + 1;
@@ -376,10 +376,10 @@ TEST_CASE("comptime loops in a generic fn retype every iteration per instantiati
             const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
             let mut y = x;
             comptime let mut k = 0;
-            do {
+            unroll do {
                 y = @truncate(@as(Wide, y) * 2);
                 k = k + 1;
-            } while comptime (k < 3);
+            } while (k < 3);
             return y;
         };
 
@@ -387,7 +387,7 @@ TEST_CASE("comptime loops in a generic fn retype every iteration per instantiati
             const Wide = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits * 2 });
             let mut y = x;
             comptime let mut k = 0;
-            loop comptime {
+            unroll loop {
                 if comptime (k == 3) { break; }
                 y = @truncate(@as(Wide, y) * 2);
                 k = k + 1;
@@ -403,6 +403,24 @@ TEST_CASE("comptime loops in a generic fn retype every iteration per instantiati
             return 42;
         };
     )") == 42);
+}
+
+TEST_CASE("`comptime` before a loop evaluates it like a `comptime` block") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            comptime { unroll for (1..=4) |v| { @assert(v > 0); } }
+            comptime unroll for (1..=4) |v| { @assert(v > 0); };
+            comptime for (0..3) |v| { @assert(v < 3); };
+            comptime unroll loop { break; };
+            return 7;
+        };
+    )") == 7);
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            comptime unroll for (0..3) |v| { @assert(v < 2); };
+            return 0;
+        };
+    )");
 }
 
 } // namespace ghoti::tests

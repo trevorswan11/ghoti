@@ -110,9 +110,11 @@ struct asm_expr {
 struct do_while_loop_expr {
     block_handle block;
     expr_handle  condition;
-    bool         is_comptime{false};
+    bool         is_unrolled{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -165,9 +167,11 @@ struct for_loop_expr {
     stdx::option<stmt_handle> non_break;
     bool                      iterables_force_break{false}; // trailing comma before `)`
     bool                      captures_force_break{false};  // trailing comma before `|`
-    bool                      is_comptime{false};           // `for comptime (...)`
+    bool                      is_unrolled{false};           // `unroll for (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -308,9 +312,11 @@ struct index_expr {
 
 struct infinite_loop_expr {
     block_handle block;
-    bool         is_comptime{false};
+    bool         is_unrolled{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -402,6 +408,10 @@ struct label_expr {
 };
 
 [[nodiscard]] auto parse_comptime_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
+// `unroll for`/`while`/`do`/`loop`
+[[nodiscard]] auto parse_unrolled_loop(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct match_expr {
@@ -587,11 +597,13 @@ struct while_loop_expr {
     stdx::option<expr_handle> continuation;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
-    bool                      is_comptime{false}; // `while comptime (...)`
+    bool                      is_unrolled{false}; // `unroll while (...)`
     stdx::option<capture_t>   payload_capture{};  // `while (x) |v|`: an unwrapped payload
     stdx::option<capture_t>   else_capture{};     // `else |e|`: the residual that ended it
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 

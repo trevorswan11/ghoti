@@ -153,7 +153,7 @@ test "min_int" {
 /// Returns the maximum of at least two values which are implicitly convertible
 pub const max = fn(a: auto, b: auto, c...): auto {
     let mut largest = if (a > b) a else b;
-    for comptime (c) |arg| {
+    unroll for (c) |arg| {
         if (arg > largest) largest = arg;
     }
     return largest;
@@ -174,7 +174,7 @@ test "max" {
 /// Returns the minimum of at least two values which are implicitly convertible
 pub const min = fn(a: auto, b: auto, c...): auto {
     let mut smallest = if (a < b) a else b;
-    for comptime (c) |arg| {
+    unroll for (c) |arg| {
         if (arg < smallest) smallest = arg;
     }
     return smallest;

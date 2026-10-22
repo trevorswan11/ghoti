@@ -44,7 +44,7 @@ struct active_block_frame {
     usize                                current_stmt_idx{0};
     stdx::option<bool>                   runtime_safety{}; // set by `@setRuntimeSafety`
     usize                                safety_fn_depth{0};
-    // A `for comptime` body's `comptime let mut` values as the previous iteration left them
+    // An `unroll for` body's `comptime let mut` values as the previous iteration left them
     stdx::option<comptime_frame> carried{};
 };
 

@@ -430,6 +430,11 @@ auto parse_compile_time_expression(syntax::parser& parser, bool enabled)
 
 auto do_while_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
+    return parse(parser, false);
+}
+
+auto do_while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -437,11 +442,6 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     const block_handle block{TRY(block_stmt::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::WHILE));
 
-    bool is_comptime{false};
-    if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        parser.advance();
-        is_comptime = true;
-    }
 
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
@@ -453,9 +453,9 @@ auto do_while_loop_expr::parse(syntax::parser& parser)
     parser.advance();
 
     // There's no continuation or non break clause so this is easy :)
-    const auto condition{TRY(parse_compile_time_expression(parser, is_comptime))};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_unrolled))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
-    return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_comptime);
+    return parser.add_expr<do_while_loop_expr>(start_token, block, condition, is_unrolled);
 }
 
 namespace {
@@ -773,14 +773,14 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
 }
 
 auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    return parse(parser, false);
+}
+
+auto for_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    bool is_comptime{false};
-    if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        parser.advance();
-        is_comptime = true;
-    }
 
     // Iterables have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
@@ -792,7 +792,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
 
     std::vector<expr_handle>                 iterables;
     bool                                     iterables_force_break{false};
-    const syntax::parser::compile_time_scope cx_scope{parser, is_comptime};
+    const syntax::parser::compile_time_scope cx_scope{parser, is_unrolled};
     while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
         parser.advance();
@@ -845,10 +845,10 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle        block{TRY(block_stmt::parse(parser))};
     stdx::option<stmt_handle> non_break;
-    if (is_comptime) {
+    if (is_unrolled) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
-            return make_syntax_err("`for comptime` cannot have an `else`/non-break clause",
-                                   syntax::error::COMPTIME_LOOP_HAS_ELSE,
+            return make_syntax_err("`unroll for` cannot have an `else`/non-break clause",
+                                   syntax::error::UNROLLED_LOOP_HAS_ELSE,
                                    parser.get_peek_token());
         }
     } else {
@@ -870,7 +870,7 @@ auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, s
                                           non_break,
                                           iterables_force_break,
                                           captures_force_break,
-                                          is_comptime);
+                                          is_unrolled);
 }
 
 // Variadic must be handled first and should break the enclosing loop
@@ -1389,17 +1389,17 @@ auto index_expr::parse(syntax::parser& parser, expr_handle array)
 
 auto infinite_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
+    return parse(parser, false);
+}
+
+auto infinite_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-    bool       is_comptime{false};
-    if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        parser.advance();
-        is_comptime = true;
-    }
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
 
     const block_handle block{TRY(block_stmt::parse(parser))};
-    return parser.add_expr<infinite_loop_expr>(start_token, block, is_comptime);
+    return parser.add_expr<infinite_loop_expr>(start_token, block, is_unrolled);
 }
 
 auto cfg_value_expr::parse(syntax::parser& parser)
@@ -1726,6 +1726,31 @@ auto parse_comptime_expr(syntax::parser& parser) -> stdx::result<expr_handle, sy
     return comptime_expr::parse(parser);
 }
 
+auto parse_unrolled_loop(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    using syntax::token_type_t;
+    const auto unroll_token{parser.get_current_token()};
+    const auto loop_type{parser.get_peek_token().type};
+    switch (loop_type) {
+    case token_type_t::FOR:
+    case token_type_t::WHILE:
+    case token_type_t::DO:
+    case token_type_t::LOOP:  break;
+    default:
+        return make_syntax_err("Expected a `for`, `while`, `do`, or `loop` after 'unroll'",
+                               syntax::error::UNROLL_MISSING_LOOP,
+                               unroll_token);
+    }
+    parser.advance();
+
+    switch (loop_type) {
+    case token_type_t::FOR:   return for_loop_expr::parse(parser, true);
+    case token_type_t::WHILE: return while_loop_expr::parse(parser, true);
+    case token_type_t::DO:    return do_while_loop_expr::parse(parser, true);
+    default:                  return infinite_loop_expr::parse(parser, true);
+    }
+}
+
 auto comptime_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -1755,35 +1780,34 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         const auto& stmt{parser.get_node<expr_stmt>(*raw_stmt)};
         switch (stmt.expression->get_kind()) {
         case node_kind::FOR_LOOP_EXPRESSION:
-            if (parser.get_node<for_loop_expr>(*stmt.expression).is_comptime) {
-                return make_syntax_err("`for comptime` cannot be labeled; it has no `break`/"
+            if (parser.get_node<for_loop_expr>(*stmt.expression).is_unrolled) {
+                return make_syntax_err("`unroll for` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
-                                       syntax::error::COMPTIME_LOOP_LABELED,
+                                       syntax::error::UNROLLED_LOOP_LABELED,
                                        parser.get_location_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::WHILE_LOOP_EXPRESSION:
-            if (parser.get_node<while_loop_expr>(*stmt.expression).is_comptime) {
-                return make_syntax_err("`while comptime` cannot be labeled; it has no `break`/"
+            if (parser.get_node<while_loop_expr>(*stmt.expression).is_unrolled) {
+                return make_syntax_err("`unroll while` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
-                                       syntax::error::COMPTIME_LOOP_LABELED,
+                                       syntax::error::UNROLLED_LOOP_LABELED,
                                        parser.get_location_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
-            if (parser.get_node<do_while_loop_expr>(*stmt.expression).is_comptime) {
-                return make_syntax_err(
-                    "`do ... while comptime` cannot be labeled; it has no `break`/"
-                    "`continue` to target",
-                    syntax::error::COMPTIME_LOOP_LABELED,
-                    parser.get_location_of(*raw_stmt));
+            if (parser.get_node<do_while_loop_expr>(*stmt.expression).is_unrolled) {
+                return make_syntax_err("`unroll do ... while` cannot be labeled; it has no `break`/"
+                                       "`continue` to target",
+                                       syntax::error::UNROLLED_LOOP_LABELED,
+                                       parser.get_location_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::INFINITE_LOOP_EXPRESSION:
-            if (parser.get_node<infinite_loop_expr>(*stmt.expression).is_comptime) {
-                return make_syntax_err("`loop comptime` cannot be labeled; it has no `break`/"
+            if (parser.get_node<infinite_loop_expr>(*stmt.expression).is_unrolled) {
+                return make_syntax_err("`unroll loop` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
-                                       syntax::error::COMPTIME_LOOP_LABELED,
+                                       syntax::error::UNROLLED_LOOP_LABELED,
                                        parser.get_location_of(*raw_stmt));
             }
             return stmt.expression;
@@ -2252,14 +2276,14 @@ auto parse_modified_struct_or_union(syntax::parser& parser)
 
 auto while_loop_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
+    return parse(parser, false);
+}
+
+auto while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
 
-    bool is_comptime{false};
-    if (parser.peek_token_is(syntax::token_type_t::COMPTIME)) {
-        parser.advance();
-        is_comptime = true;
-    }
 
     // Conditions have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
@@ -2270,7 +2294,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
                                start_token);
     }
 
-    const auto condition{TRY(parse_compile_time_expression(parser, is_comptime))};
+    const auto condition{TRY(parse_compile_time_expression(parser, is_unrolled))};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     auto payload_capture{TRY(try_parse_capture(parser))};
 
@@ -2297,10 +2321,10 @@ auto while_loop_expr::parse(syntax::parser& parser)
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     const block_handle  block{TRY(block_stmt::parse(parser))};
     capturing_alternate non_break;
-    if (is_comptime) {
+    if (is_unrolled) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
-            return make_syntax_err("`while comptime` cannot have an `else`/non-break clause",
-                                   syntax::error::COMPTIME_LOOP_HAS_ELSE,
+            return make_syntax_err("`unroll while` cannot have an `else`/non-break clause",
+                                   syntax::error::UNROLLED_LOOP_HAS_ELSE,
                                    parser.get_peek_token());
         }
     } else {
@@ -2312,7 +2336,7 @@ auto while_loop_expr::parse(syntax::parser& parser)
                                             continuation,
                                             block,
                                             non_break.body,
-                                            is_comptime,
+                                            is_unrolled,
                                             std::move(payload_capture),
                                             std::move(non_break.capture));
 }

@@ -206,7 +206,7 @@ pub const approx_eq_abs = fn(comptime T: type, x: T, y: T, tolerance: T): bool {
 
 test "approx_eq_abs" {
     @skip("`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__letf2`, `__eqtf2`");
-    for comptime ([_]type{ f16, f32, f64, f128 }) |T| {
+    unroll for ([_]type{ f16, f32, f64, f128 }) |T| {
         const eps_value = float_eps(T);
         const min_value = float_min(T);
 
@@ -263,7 +263,7 @@ test "approx_eq_rel" {
     @skip(
         "`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__gttf2`, `__eqtf2`, `__multf3`, `__letf2`",
     );
-    for comptime ([_]type{ f16, f32, f64, f128 }) |T| {
+    unroll for ([_]type{ f16, f32, f64, f128 }) |T| {
         const eps_value = float_eps(T);
         const sqrt_eps_value = sqrt.sqrt(eps_value);
         const nan_value = nan(T);

@@ -31,12 +31,12 @@ TEST_CASE("a `comptime let mut` type can start without an annotation and change 
     )") == 1);
 }
 
-TEST_CASE("a `comptime let mut` type builds up across `for comptime` iterations") {
+TEST_CASE("a `comptime let mut` type builds up across `unroll for` iterations") {
     CHECK(helpers::compile_and_run(R"(
         const Wrap = fn(comptime T: type): type { return struct { inner: T, pad: u8 }; };
         pub const main = fn(): i32 {
             comptime let mut T: type = u8;
-            for comptime (0..3) |_| { T = Wrap(T); }
+            unroll for (0..3) |_| { T = Wrap(T); }
             let w: T = undefined;
             _ = w;
             return @intCast(i32, @sizeOf(T));
@@ -44,13 +44,13 @@ TEST_CASE("a `comptime let mut` type builds up across `for comptime` iterations"
     )") == 4);
 }
 
-TEST_CASE("a `comptime let mut` type builds up across `while comptime` iterations") {
+TEST_CASE("a `comptime let mut` type builds up across `unroll while` iterations") {
     CHECK(helpers::compile_and_run(R"(
         const Wrap = fn(comptime T: type): type { return struct { inner: T, pad: u8 }; };
         pub const main = fn(): i32 {
             comptime let mut T: type = u8;
             comptime let mut n: usize = 0;
-            while comptime (n < 3) { T = Wrap(T); n += 1; }
+            unroll while (n < 3) { T = Wrap(T); n += 1; }
             return @intCast(i32, @sizeOf(T));
         };
     )") == 4);

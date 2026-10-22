@@ -123,7 +123,7 @@ class emitter {
 
     // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
     // holds `true`; no runtime loop, no `body_type_diff`
-    enum class comptime_body_exit : u8 {
+    enum class unrolled_body_exit : u8 {
         NEXT,
         CONTINUE,
         BREAK,
@@ -387,21 +387,20 @@ class emitter {
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
 
-    // Emits one unrolled iteration of a comptime loop body, consuming its break/continue flags
-    auto               emit_comptime_loop_body(const ast::block_stmt& block) -> comptime_body_exit;
-    [[nodiscard]] auto comptime_unroll_limit_reached(usize            iterations,
-                                                     std::string_view loop_kind,
-                                                     ast::node_id     id) -> bool;
-    [[nodiscard]] auto fold_comptime_loop_condition(ast::expr_handle condition,
+    // Emits one unrolled iteration of an unrolled loop body, consuming its break/continue flags
+    auto emit_unrolled_loop_body(const ast::block_stmt& block) -> unrolled_body_exit;
+    [[nodiscard]] auto
+    unroll_limit_reached(usize iterations, std::string_view loop_kind, ast::node_id id) -> bool;
+    [[nodiscard]] auto fold_unrolled_loop_condition(ast::expr_handle condition,
                                                     std::string_view loop_kind)
         -> stdx::option<bool>;
-    auto emit_comptime_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
+    auto emit_unrolled_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
                        stdx::option<std::string_view> label       = stdx::none,
                        stdx::option<local_id>         res_slot    = stdx::none,
                        stdx::option<sema::type&>      result_type = stdx::none) -> value;
-    auto emit_comptime_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while) -> value;
+    auto emit_unrolled_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while) -> value;
     auto emit_infinite_loop(ast::node_id                   id,
                             const ast::infinite_loop_expr& loop,
                             stdx::option<std::string_view> label       = stdx::none,
@@ -415,7 +414,7 @@ class emitter {
                   stdx::option<sema::type&>      result_type = stdx::none) -> value;
     // Replays each iteration the resolver already unrolled: no runtime loop, `N` straight-line
     // blocks under that iteration's `body_type_diff` overlay and `comptime_frame` binding.
-    auto emit_comptime_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
+    auto emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
     // The type two concrete numeric operands of different types are converted to before they meet
@@ -656,9 +655,9 @@ class emitter {
     module_t                     gir_module_;
     std::vector<scope_frame>     scopes_;
     std::vector<loop_context>    loop_stack_;
-    bool                         comptime_loop_continue_{false};
-    bool                         comptime_loop_break_{false};
-    stdx::option<value>          comptime_loop_break_value_{};
+    bool                         unrolled_loop_continue_{false};
+    bool                         unrolled_loop_break_{false};
+    stdx::option<value>          unrolled_loop_break_value_{};
     stdx::option<value>          current_error_slot_{};
     default_counter              anon_test_desc_counter_;
     default_counter              anon_test_fn_counter_;

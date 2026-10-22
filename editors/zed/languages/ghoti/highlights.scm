@@ -96,6 +96,9 @@
 (break_statement label: (identifier) @label)
 (continue_statement label: (identifier) @label)
 
+; `union(enum)` spells its inferred tag with the keyword
+(inferred_tag) @keyword
+
 ; Keywords
 [
   "fn"
@@ -115,6 +118,7 @@
   "loop"
   "for"
   "while"
+  "unroll"
   "continue"
   "break"
   "import"

@@ -137,6 +137,7 @@ enum class token_type_t : u8 {
     LOOP,
     FOR,
     WHILE,
+    UNROLL,
     CONTINUE,
     BREAK,
     IMPORT,

@@ -566,6 +566,7 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::WHILE]            = ast::while_loop_expr::parse;
     fns[token_type_t::DO]               = ast::do_while_loop_expr::parse;
     fns[token_type_t::LOOP]             = ast::infinite_loop_expr::parse;
+    fns[token_type_t::UNROLL]           = ast::parse_unrolled_loop;
 
     for (const auto tt : stdx::enum_range<token_type_t::INT_2, token_type_t::INT_16>()) {
         fns[tt] = ast::int_literal_expr::parse;

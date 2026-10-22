@@ -18,7 +18,7 @@ const Data = struct {
 
     const countStuff = fn(self): f64 {
         let mut accumulator: f64 = 0;
-        for comptime (@typeInfo(@This()).struct.fields) |field| {
+        unroll for (@typeInfo(@This()).struct.fields) |field| {
             if (std.mem.starts_with(u8, field.name, "count_")) {
                 accumulator +=
                     match comptime (field.type) {

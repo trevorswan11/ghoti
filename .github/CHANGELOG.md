@@ -870,6 +870,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - A `@cfgValue` guard arm may list several predicates and is taken when any of them holds: `arch == .wasm32, arch == .wasm64 => false` (#392)
     - As with `match`, a trailing comma before `=>` (`a, b, => x`) puts one predicate per line
     - An arm's value may itself be a `@cfgValue`: `arch == .arm => @cfgValue(abi == .eabi => false, _ => true)`
+- **Breaking:** unrolled loops are spelled with a leading `unroll`: `unroll for`, `unroll while`, `unroll do { ... } while (c)`, and `unroll loop` replace `for comptime`, `while comptime`, `do { ... } while comptime (c)`, and `loop comptime` (#395)
+    - `unroll` is now a keyword
+    - `comptime` before any loop (`comptime unroll for (...)`, `comptime for (...)`) runs it at compile time, as `comptime { ... }` around it does; it used to be rejected as not evaluable
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

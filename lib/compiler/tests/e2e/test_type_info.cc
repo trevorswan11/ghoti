@@ -312,14 +312,14 @@ TEST_CASE("`@typeInfo` on a union tags correctly and reads `tagged`") {
     )") == 1);
 }
 
-TEST_CASE("`for comptime` over a match-captured payload's own slice field now works") {
+TEST_CASE("`unroll for` over a match-captured payload's own slice field now works") {
     CHECK(helpers::compile_and_run(R"(
         const Color = enum { red, green, blue };
         const use = fn(): i32 {
             return match comptime (@typeInfo(Color)) {
                 .@"enum" => |e| blk: {
                     let mut count = 0;
-                    for comptime (e.fields) |f| { count = count + 1; _ = f; }
+                    unroll for (e.fields) |f| { count = count + 1; _ = f; }
                     break :blk count;
                 },
                 _ => -1,
@@ -331,14 +331,14 @@ TEST_CASE("`for comptime` over a match-captured payload's own slice field now wo
     )") == 3);
 }
 
-TEST_CASE("a match-captured payload's field is readable inside a nested `for comptime` body") {
+TEST_CASE("a match-captured payload's field is readable inside a nested `unroll for` body") {
     CHECK(helpers::compile_and_run(R"(
         const Color = enum { red, green, blue };
         const use = fn(): i32 {
             return match comptime (@typeInfo(Color)) {
                 .@"enum" => |e| blk: {
                     let mut total = 0;
-                    for comptime (e.fields) |f| {
+                    unroll for (e.fields) |f| {
                         total = total + @intCast(i32, f.name.len);
                     }
                     break :blk total;
@@ -414,13 +414,13 @@ TEST_CASE("`if comptime` can compare `@typeInfo(T)` against a bare tagged-union 
     )") == 0);
 }
 
-TEST_CASE("consecutive `for comptime` iterations that fold `if comptime` to the SAME branch "
+TEST_CASE("consecutive `unroll for` iterations that fold `if comptime` to the SAME branch "
           "don't corrupt an adjacent iteration's own (different) verdict") {
     CHECK(helpers::compile_and_run(R"(
         const Data = struct { count_x: f32, count_y: u32, other: bool };
         pub const main = fn(): i32 {
             let mut acc: i32 = 0;
-            for comptime (@typeInfo(Data).@"struct".fields) |field| {
+            unroll for (@typeInfo(Data).@"struct".fields) |field| {
                 if comptime (field.name.len == 7) {
                     acc += 1;
                 }
@@ -456,7 +456,7 @@ TEST_CASE("a bare (non-`match`) `@typeInfo(T).int` field access spilled to memor
 }
 
 TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair folds per-field "
-          "inside a `for comptime` over `@typeInfo(T).fields`") {
+          "inside an `unroll for` over `@typeInfo(T).fields`") {
     CHECK(helpers::compile_and_run(R"(
         const eql = fn(comptime T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
@@ -473,7 +473,7 @@ TEST_CASE("`if comptime` calling a `std.mem`-shaped `startsWith`/`eql` pair fold
         const Data = struct { count_x: f32, count_y: u32, other: bool };
         pub const main = fn(): i32 {
             let mut acc: i32 = 0;
-            for comptime (@typeInfo(Data).@"struct".fields) |field| {
+            unroll for (@typeInfo(Data).@"struct".fields) |field| {
                 if comptime (startsWith(u8, field.name, "count_")) {
                     acc += 1;
                 }

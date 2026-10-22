@@ -53,12 +53,12 @@ TEST_CASE("A module-level `type` array folds at every use") {
     )") == 0);
 }
 
-TEST_CASE("`for comptime` walks a `type` array") {
+TEST_CASE("`unroll for` walks a `type` array") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {
             const ts = [_]type{ u8, u16, u32, u64 };
             let mut total: usize = 0;
-            for comptime (ts) |T| { total += @sizeOf(T); }
+            unroll for (ts) |T| { total += @sizeOf(T); }
             return @intCast(i32, total);
         };
     )") == 15);

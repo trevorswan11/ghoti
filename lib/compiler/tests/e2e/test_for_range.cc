@@ -178,7 +178,7 @@ TEST_CASE("a descending range folds at compile time and unrolls") {
         const K = @call(.compile_time, sum, 5, 2);
         pub const main = fn(): i32 {
             let mut u: i32 = 0;
-            for comptime (4..1) |i| { u = u * 10 + i; }
+            unroll for (4..1) |i| { u = u * 10 + i; }
             return if (K == 14 and u == 432) 9 else 1;
         };
     )") == 9);

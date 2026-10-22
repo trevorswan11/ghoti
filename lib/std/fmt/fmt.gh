@@ -41,5 +41,5 @@ pub const format = fn(w: &mut impl Writer, comptime fmt: []u8, args...): std.Res
     let mut dyn_w: &mut dyn Writer = w;
     comptime let mut cursor: usize = 0;
 
-    for comptime (args, 0..) |arg, i| {}
+    unroll for (args, 0..) |arg, i| {}
 };

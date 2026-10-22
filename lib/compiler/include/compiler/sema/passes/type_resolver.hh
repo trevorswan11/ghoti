@@ -207,9 +207,9 @@ class type_resolver {
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
     // Whether `root` assigns to a `comptime let mut` type anywhere outside a nested function
     [[nodiscard]] auto assigns_comptime_type_var(ast::node_id root) -> bool;
-    // Types a `while comptime` body once per iteration, recording each pass's typing; true if
+    // Types an `unroll while` body once per iteration, recording each pass's typing; true if
     // the body poisoned
-    [[nodiscard]] auto resolve_comptime_while_iterations(ast::node_id                id,
+    [[nodiscard]] auto resolve_unrolled_while_iterations(ast::node_id                id,
                                                          const ast::while_loop_expr& while_loop,
                                                          const ast::block_stmt&      block) -> bool;
     [[nodiscard]] auto is_declared_later_in_active_block(ast::node_id decl) const -> bool;
@@ -748,13 +748,13 @@ class type_resolver {
     // Resolves a `match comptime`: folds the scrutinee, type-checks only the selected arm
     auto resolve_comptime_match(ast::node_id, const ast::match_expr&, type& matcher_type) -> void;
 
-    // Resolves a `for comptime`: unrolls into one resolve pass per compile-time-known iteration,
+    // Resolves an `unroll for`: unrolls into one resolve pass per compile-time-known iteration,
     // diffing each into a per-iteration `body_type_diff` for the emitter to replay.
-    auto resolve_comptime_for(ast::node_id, const ast::for_loop_expr&) -> void;
+    auto resolve_unrolled_for(ast::node_id, const ast::for_loop_expr&) -> void;
 
-    // Rejects a bare `break`/`continue` reaching a `for`/`while comptime`'s own iteration
+    // Rejects a bare `break`/`continue` reaching an `unroll for`/`while`'s own iteration
     // boundary (nested ordinary loops declared inside the body are unaffected).
-    auto check_comptime_loop_jumps(ast::stmt_handle body) -> void;
+    auto check_unrolled_loop_jumps(ast::stmt_handle body) -> void;
 
     auto visit(ast::node_id, const ast::match_expr&) -> void;
     auto visit(ast::node_id, const ast::reference_expr&) -> void;
@@ -1001,8 +1001,8 @@ class type_resolver {
     stdx::option<std::pair<usize, type*>> pending_instance_slot_;
     // The arguments of the call being instantiated, by parameter, to place a bound's error
     std::vector<source_location> instantiating_arg_locations_;
-    // Set while resolving a `for comptime` driver, whose range unrolls into constants
-    bool in_comptime_for_iterable_{false};
+    // Set while resolving an `unroll for` driver, whose range unrolls into constants
+    bool in_unrolled_for_iterable_{false};
     bool resolving_callee_{false};
     // Set while resolving an initializer's `.field` accessor, which names a field by design
     bool resolving_init_accessor_{false};
@@ -1025,7 +1025,7 @@ class type_resolver {
     bool in_generic_signature_{false};
     // An instantiation whose failure the caller discards, so it must not poison a foreign module
     bool tentative_instantiation_{false};
-    bool in_comptime_loop_{false};
+    bool in_unrolled_loop_{false};
 
     // Set by a dedicated instantiation resolver: a body-local decl whose declaring scope index is
     // at or above this floor  is re-typed even though an earlier pass already left its symbol

@@ -21,7 +21,7 @@ TEST_CASE("const, let, let mut and comptime let mut each bind a value") {
             while (i < 3) { i += 1; }
             counter += i;
             comptime let mut acc: i32 = 0;
-            for comptime (0..4) |k| { acc += k; }
+            unroll for (0..4) |k| { acc += k; }
             return x + counter + acc + @intCast(i32, N);
         };
     )") == 10 + 2 + 3 + 6 + 16);

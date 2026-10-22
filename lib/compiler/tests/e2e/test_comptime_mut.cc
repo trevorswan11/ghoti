@@ -130,12 +130,12 @@ TEST_CASE("`comptime let mut` struct field supports a compound assignment") {
     )") == 12);
 }
 
-TEST_CASE("`comptime let mut` accumulates across `for comptime` iterations") {
+TEST_CASE("`comptime let mut` accumulates across `unroll for` iterations") {
     CHECK(helpers::compile_and_run(R"(
         const Point = struct { x: i32, y: i32 };
         pub const main = fn(): i32 {
             comptime let mut p = Point{ .x = 0, .y = 0 };
-            for comptime (0..3) |i| { p.x += i; }
+            unroll for (0..3) |i| { p.x += i; }
             return p.x;
         };
     )") == 3);
@@ -217,7 +217,7 @@ TEST_CASE("nested `comptime` argument folding resolves mutated `comptime let mut
     )") == 42);
 }
 
-TEST_CASE("nested `comptime` argument folding inside `while comptime` condition") {
+TEST_CASE("nested `comptime` argument folding inside `unroll while` condition") {
     CHECK(helpers::compile_and_run(R"(
         const is_digit = fn(comptime c: u8): bool {
             return c >= '0' and c <= '9';
@@ -225,7 +225,7 @@ TEST_CASE("nested `comptime` argument folding inside `while comptime` condition"
         pub const main = fn(): i32 {
             const s = "123a";
             comptime let mut i: usize = 0;
-            while comptime (i < s.len and is_digit(s[i])) : (i += 1) {}
+            unroll while (i < s.len and is_digit(s[i])) : (i += 1) {}
             return @intCast(i32, i);
         };
     )") == 3);
@@ -260,11 +260,11 @@ TEST_CASE("mutated `comptime let mut` struct field visible to nested `comptime` 
     )") == 35);
 }
 
-TEST_CASE("`for comptime` iterating over string slice in e2e execution") {
+TEST_CASE("`unroll for` iterating over string slice in e2e execution") {
     CHECK(helpers::compile_and_run(R"(
         const parse_usize = fn(comptime digits: []u8): usize {
             comptime let mut n: usize = 0;
-            for comptime (digits) |c| {
+            unroll for (digits) |c| {
                 n = n * 10 + @intCast(usize, c - '0');
             }
             return n;

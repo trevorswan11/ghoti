@@ -91,11 +91,11 @@ TEST_CASE("A field can't have type noreturn") {
     helpers::expect_compile_error("let mut x: [2]noreturn = undefined;");
 }
 
-TEST_CASE("A comptime loop over a condition-less if comptime is checked without crashing") {
+TEST_CASE("An unrolled loop over a condition-less if comptime is checked without crashing") {
     helpers::expect_compile_error(R"(
         pub const main = fn(): i32 {
             comptime let mut n = 0;
-            loop comptime {
+            unroll loop {
                 if comptime fn(): i32 (n == 5) { break; }
                 n = n + 1;
             }

@@ -151,7 +151,7 @@ class parser {
         stdx::opt_size saved_;
     };
 
-    // Marks a position evaluated at compile time: an `if`/`match`/`for`/`while comptime` header,
+    // Marks a position evaluated at compile time: an `if`/`match comptime` or `unroll` header,
     // a `comptime` block or label, or a `const` declaration's initializer
     class compile_time_scope {
       public:
