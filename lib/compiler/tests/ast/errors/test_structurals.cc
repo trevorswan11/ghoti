@@ -19,86 +19,90 @@ TEST_CASE("Empty enum") {
 }
 
 TEST_CASE("Illegal underlying type") {
-    helpers::test_parser_fail("enum : 4 {A};",
-                              syntax::diagnostic{syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
-    helpers::test_parser_fail(R"(enum : "e" {A};)",
-                              syntax::diagnostic{syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
+    helpers::test_parser_fail(
+        "enum : 4 {A};",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
+    helpers::test_parser_fail(
+        R"(enum : "e" {A};)",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 5});
 }
 
 TEST_CASE("Empty enum with decl") {
     helpers::test_parser_fail(
-        "enum : i64 { const b := fn(&self, a: A): C { c; }; };",
+        "enum : i64 { const b = fn(&self, a: A): C { c; }; };",
         syntax::diagnostic{"Enums must be declared with at least one enumeration",
                            syntax::error::EMPTY_ENUM,
                            std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Out of order enum") {
-    helpers::test_parser_fail("enum : i64 { A = 2 const b := fn(&self, a: A): C { c; }; B = 2 };",
-                              syntax::diagnostic{"Expected token SEMICOLON, found RBRACE",
+    helpers::test_parser_fail("enum : i64 { A = 2 const b = fn(&self, a: A): C { c; }; B = 2 };",
+                              syntax::diagnostic{"Expected ';', found '}'",
                                                  syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 63UZ}});
+                                                 std::pair{0UZ, 62UZ}});
 }
 
 TEST_CASE("Illegal struct members") {
     helpers::test_parser_fail(
-        "struct { extern var foo: bar; };",
+        "struct { extern let mut foo: bar; };",
         syntax::diagnostic{"Member declarations may neither be marked extern nor export",
                            syntax::error::INVALID_MEMBER,
                            std::pair{0UZ, 9UZ}});
 
     helpers::test_parser_fail("struct { defer {}; };",
-                              syntax::diagnostic{"Expected token IDENT, found DEFER",
+                              syntax::diagnostic{"Expected an identifier, found 'defer'",
                                                  syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 9UZ}},
-                              syntax::diagnostic{"No prefix parse function for RBRACE(}) found",
-                                                 syntax::error::MISSING_PREFIX_PARSER,
-                                                 std::pair{0UZ, 19UZ}});
+                                                 std::pair{0UZ, 9UZ}});
 }
 
 TEST_CASE("Illegal union field name") {
-    helpers::test_parser_fail(
-        "union { 2: i32 };",
-        syntax::diagnostic{
-            "Expected token IDENT, found INT_10", syntax::error::UNEXPECTED_TOKEN, 0, 8});
+    helpers::test_parser_fail("union(enum) { 2: i32 };",
+                              syntax::diagnostic{"Expected an identifier, found an integer literal",
+                                                 syntax::error::UNEXPECTED_TOKEN,
+                                                 0,
+                                                 14});
 }
 
 TEST_CASE("Illegal union field type") {
-    helpers::test_parser_fail("union { a: 2 };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 9});
+    helpers::test_parser_fail(
+        "union(enum) { a: 2 };",
+        syntax::diagnostic{"Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, 0, 15});
 }
 
 TEST_CASE("Empty union") {
-    helpers::test_parser_fail("union { };",
+    helpers::test_parser_fail("union(enum) { };",
                               syntax::diagnostic{"Unions must be declared with at least one field",
                                                  syntax::error::EMPTY_UNION,
                                                  std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Empty union with decl") {
-    helpers::test_parser_fail("union { const b := fn(&self, a: A): C { c; }; };",
+    helpers::test_parser_fail("union(enum) { const b = fn(&self, a: A): C { c; }; };",
                               syntax::diagnostic{"Unions must be declared with at least one field",
                                                  syntax::error::EMPTY_UNION,
                                                  std::pair{0UZ, 0UZ}});
 }
 
 TEST_CASE("Out of order union") {
-    helpers::test_parser_fail("union { a: i32, const b := fn(&self, a: A): C { c; }; b: i32, };",
-                              syntax::diagnostic{"Expected token SEMICOLON, found COMMA",
-                                                 syntax::error::UNEXPECTED_TOKEN,
-                                                 std::pair{0UZ, 60UZ}});
+    helpers::test_parser_fail(
+        "union(enum) { a: i32, const b = fn(&self, a: A): C { c; }; b: i32, };",
+        syntax::diagnostic{
+            "Expected ';', found ','", syntax::error::UNEXPECTED_TOKEN, std::pair{0UZ, 65UZ}});
 }
 
-TEST_CASE("Illegal type aliasing/definition") {
-    const auto expected_diag = [] -> syntax::diagnostic {
-        return {"User-defined types can only be defined with non-modified aliases",
-                syntax::error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
-                std::pair{0UZ, 10UZ}};
+TEST_CASE("Illegal modified type literal") {
+    const auto expected_diag = [](usize col) -> syntax::diagnostic {
+        return {"A struct, union, enum, or interface literal cannot take a type modifier",
+                syntax::error::ILLEGAL_MODIFIED_TYPE_LITERAL,
+                std::pair{0UZ, col}};
     };
 
-    helpers::test_parser_fail("using U = &union { a: i32 };", expected_diag());
-    helpers::test_parser_fail("using S = ^struct { pub var foo := bar; };", expected_diag());
-    helpers::test_parser_fail("using E = ^enum { a };", expected_diag());
+    helpers::test_parser_fail("const U = &union(enum) { a: i32 };", expected_diag(10UZ));
+    helpers::test_parser_fail("const S = ^struct { pub let mut foo = bar; };", expected_diag(10UZ));
+    helpers::test_parser_fail("const E = ^enum { a };", expected_diag(10UZ));
+    helpers::test_parser_fail("const I = &mut interface { const f = fn(&self): i32; };",
+                              expected_diag(10UZ));
+    helpers::test_parser_fail("let mut s: ^struct { a: i32 } = undefined;", expected_diag(11UZ));
 }
 
 } // namespace ghoti::tests

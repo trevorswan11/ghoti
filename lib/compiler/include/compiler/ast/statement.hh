@@ -11,11 +11,13 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
@@ -27,8 +29,9 @@ struct block_stmt {
     MAKE_ITERATOR(statements_t, std::vector<stmt_handle>, statements);
 
     statements_t statements;
+    bool         is_comptime{false};
 
-    [[nodiscard]] static auto parse(syntax::parser& parser)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_comptime = false)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
 
@@ -44,8 +47,9 @@ struct break_stmt {
 
 struct cfg_stmt {
     struct arm {
-        stdx::option<expr_handle> predicate;
-        std::vector<stmt_handle>  items;
+        stdx::option<expr_handle>     predicate;
+        std::vector<stmt_handle>      items;
+        stdx::option<source_location> close; // the `}` of a braced body, for its comments
     };
 
     std::vector<arm> arms;
@@ -64,15 +68,14 @@ struct continue_stmt {
 };
 
 enum class decl_modifiers : u16 {
-    VARIABLE    = 1 << 0,
-    CONSTANT    = 1 << 1,
-    CONSTEXPR   = 1 << 2,
+    MUT         = 1 << 0, // `let mut`, or `comptime let mut` with `COMPTIME`
+    LET         = 1 << 1,
+    COMPTIME    = 1 << 2, // `const`, or `comptime let mut` with `MUT`
     PUBLIC      = 1 << 3,
     EXTERN      = 1 << 4,
     EXPORT      = 1 << 5,
     THREADLOCAL = 1 << 6,
     WEAK        = 1 << 7,
-    DISCARDABLE = 1 << 8,
 };
 
 MAKE_ENUM_OPERATORS(decl_modifiers)
@@ -84,7 +87,9 @@ struct decl_stmt {
     decl_modifiers                 modifiers;
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
-    stdx::option<expr_handle>      discardable_condition; // unset for a bare `@discardable`
+    stdx::option<attribute_list>   attributes;
+    // A hidden `__ghoti_f@default<k>` the parser wrote for a call leaving `f`'s defaults off
+    bool is_default_wrapper{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
@@ -92,6 +97,9 @@ struct decl_stmt {
     [[nodiscard]] auto has_modifier(decl_modifiers flag) const noexcept -> bool {
         return modifiers_has(modifiers, flag);
     }
+
+    // A compile-time declaration whose initializer is evaluated, not a function or type it names
+    [[nodiscard]] auto evaluates_at_compile_time() const noexcept -> bool;
 
   private:
     static auto modifiers_has(decl_modifiers modifiers, decl_modifiers flag) noexcept -> bool {
@@ -170,18 +178,6 @@ struct impl_stmt {
     explicit_type_id                      target_type;
     member_list                           members;
     bool impl_params_force_break{false}; // trailing comma before `)`
-
-    [[nodiscard]] static auto parse(syntax::parser& parser)
-        -> stdx::result<stmt_handle, syntax::diagnostic>;
-};
-
-struct using_stmt {
-    identifier_handle alias;
-    explicit_type_id  explicit_type;
-
-    [[nodiscard]] static constexpr auto is_public(ast::node_id id) noexcept -> bool {
-        return id.get_token_type() == syntax::token_type_t::PUBLIC;
-    }
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;

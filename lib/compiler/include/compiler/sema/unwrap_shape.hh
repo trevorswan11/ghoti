@@ -24,7 +24,7 @@ inline constexpr std::string_view OUTPUT{"Output"};
 inline constexpr std::string_view RESIDUAL{"Residual"};
 inline constexpr std::string_view FROM{"From"};
 inline constexpr std::string_view BRANCH{"branch"};
-inline constexpr std::string_view FROM_RESIDUAL{"fromResidual"};
+inline constexpr std::string_view FROM_RESIDUAL{"from_residual"};
 inline constexpr std::string_view FLOW_CONTINUE{"continue"};
 inline constexpr std::string_view FLOW_BREAK{"break"};
 
@@ -34,20 +34,20 @@ inline constexpr std::string_view FLOW_BREAK{"break"};
 // within `t` (function signatures, pointers, references, slices, arrays).
 [[nodiscard]] auto remap_type(context& ctx, type& t, const type& from, type& to) -> type&;
 
-// Looks up an associated type alias (`using Output = ...`) in an impl's body scope,
+// Looks up an associated type alias (`const Output = ...`) in an impl's body scope,
 // substituting sentinels with concrete type arguments for parameterized impls.
 [[nodiscard]] auto find_assoc_type_alias(context&           ctx,
                                          const impl_record& rec,
-                                         std::string_view   name) -> stdx::option<const type&>;
+                                         std::string_view   name) -> stdx::option<type&>;
 
 // Deconstructed shape of an operand implementing `builtin.Unwrappable`.
 struct unwrap_info {
-    gsl::not_null<const type*> operand_type;
-    gsl::not_null<const type*> output_type;
-    gsl::not_null<const type*> residual_type;
+    gsl::not_null<type*> operand_type;
+    gsl::not_null<type*> output_type;
+    gsl::not_null<type*> residual_type;
 
     // The concrete `Flow(Output, Residual)` return type from `branch(self)`.
-    stdx::option<const type&>         flow_type{};
+    stdx::option<type&>               flow_type{};
     bool                              residual_is_void{false};
     gsl::not_null<const impl_record*> impl;
 
@@ -57,8 +57,8 @@ struct unwrap_info {
 
 // Deconstructed shape of a function return type implementing `builtin.Rewrappable`.
 struct rewrap_info {
-    gsl::not_null<const type*>        return_type;
-    gsl::not_null<const type*>        from_type;
+    gsl::not_null<type*>              return_type;
+    gsl::not_null<type*>              from_type;
     gsl::not_null<const impl_record*> impl;
 
     [[nodiscard]] auto gir_method_name(std::string_view           method_name,
@@ -66,11 +66,10 @@ struct rewrap_info {
 };
 
 // Resolves whether `operand` implements `builtin.Unwrappable`, extracting its `branch()` shape.
-[[nodiscard]] auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_info>;
+[[nodiscard]] auto unwrap_shape_of(context& ctx, type& operand) -> stdx::option<unwrap_info>;
 
-// Resolves whether `return_type` implements `builtin.Rewrappable`, extracting its `fromResidual()`
+// Resolves whether `return_type` implements `builtin.Rewrappable`, extracting its `from_residual()`
 // shape.
-[[nodiscard]] auto rewrap_shape_of(context& ctx, const type& return_type)
-    -> stdx::option<rewrap_info>;
+[[nodiscard]] auto rewrap_shape_of(context& ctx, type& return_type) -> stdx::option<rewrap_info>;
 
 } // namespace ghoti::sema

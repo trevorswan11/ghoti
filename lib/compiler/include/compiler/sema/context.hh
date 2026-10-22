@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -9,12 +10,16 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
@@ -25,10 +30,102 @@
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "support/diagnostic.hh"
+
+namespace ghoti::ast { struct block_stmt; } // namespace ghoti::ast
 
 namespace ghoti::sema {
 
-using constexpr_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
+/// Tracks the active lexical block and statement position currently being type-resolved
+using comptime_frame = ankerl::unordered_dense::map<std::string_view, gir::const_value>;
+
+struct active_block_frame {
+    stdx::option<const ast::block_stmt&> block{};
+    usize                                current_stmt_idx{0};
+    stdx::option<bool>                   runtime_safety{}; // set by `@setRuntimeSafety`
+    usize                                safety_fn_depth{0};
+    // An `unroll for` body's `comptime let mut` values as the previous iteration left them
+    stdx::option<comptime_frame> carried{};
+};
+
+// Mirrors `builtin.OptimizeMode`
+enum class optimize_mode : u8 {
+    DEBUG,
+    RELEASE_SAFE,
+    RELEASE_FAST,
+    RELEASE_SMALL,
+};
+
+[[nodiscard]] constexpr auto optimize_mode_name(optimize_mode mode) noexcept -> std::string_view {
+    switch (mode) {
+    case optimize_mode::DEBUG:         return "debug";
+    case optimize_mode::RELEASE_SAFE:  return "release_safe";
+    case optimize_mode::RELEASE_FAST:  return "release_fast";
+    case optimize_mode::RELEASE_SMALL: return "release_small";
+    }
+    return "debug";
+}
+
+// What a use of a `@[deprecated]` name reports
+enum class deprecation_policy : u8 {
+    WARN,
+    DENY,
+    ALLOW,
+};
+
+// One symbol `@export` defines for a function declaration
+struct function_export {
+    stdx::option<const mod::module_t&> owner;
+    ast::node_id                       fn_node; // the exported function literal
+    std::string                        name;
+    bool                               weak{false};
+    ast::symbol_visibility             visibility{ast::symbol_visibility::DEFAULT};
+    source_location                    site;
+};
+
+// Every `@export` in the program, shared by every module's context
+class export_registry {
+  public:
+    auto add(function_export entry) -> void { exports_.emplace_back(std::move(entry)); }
+
+    // The exports of one function literal, in the order they were written
+    [[nodiscard]] auto of(const mod::module_t& owner, ast::node_id fn_node) const
+        -> std::vector<const function_export*> {
+        std::vector<const function_export*> found;
+        for (const auto& entry : exports_) {
+            if (entry.owner && entry.owner == owner &&
+                entry.fn_node.get_index() == fn_node.get_index() &&
+                entry.fn_node.get_kind() == fn_node.get_kind()) {
+                found.emplace_back(&entry);
+            }
+        }
+        return found;
+    }
+
+    [[nodiscard]] auto named(std::string_view name) const -> stdx::option<const function_export&> {
+        for (const auto& entry : exports_) {
+            if (entry.name == name) { return entry; }
+        }
+        return stdx::none;
+    }
+
+    // Like `named`, but skipping the exports of `std/start.gh`, the program's entry code
+    [[nodiscard]] auto named_by_program(std::string_view name) const
+        -> stdx::option<const function_export&> {
+        for (const auto& entry : exports_) {
+            if (entry.name == name && !(entry.owner && entry.owner->is_start)) { return entry; }
+        }
+        return stdx::none;
+    }
+
+  private:
+    std::vector<function_export> exports_;
+};
+
+struct test_queue {
+    std::vector<mod::module_t*> modules;
+    usize                       resolve_depth{0};
+};
 
 // A contextual wrapper around sematic steps
 //
@@ -47,13 +144,31 @@ struct context {
     stdx::opt_size          prelude_index;
     codegen::target_options target_opts;
     std::string             user_main_name{"main"};
-    bool                    runtime_safety{true};
+    // The root module and `std/start.gh`, once an executable's entry code is attached
+    stdx::option<mod::module_t&> entry_root{};
+    stdx::option<mod::module_t&> start_module{};
+    bool                         runtime_safety{true};
+    // Building a test executable, which `@cfg(testing)` reports
+    bool               testing{false};
+    optimize_mode      build_mode{optimize_mode::DEBUG};
+    deprecation_policy deprecated_policy{deprecation_policy::WARN};
+
+    // `path:line:column` of every deprecated use already reported, so re-resolution stays quiet
+    ankerl::unordered_dense::set<std::string> reported_deprecations;
 
     // For the generic instantiation currently being resolved or emitted
-    std::vector<constexpr_frame> constexpr_binding_frames;
+    std::vector<comptime_frame> comptime_binding_frames;
+
+    // Nonzero while resolving a `comptime { ... }` body, whose folds are compile-time evaluation
+    usize comptime_evaluation_depth{0};
 
     // Declared names for user struct/enum/union types, for `@typeName`
-    ankerl::unordered_dense::map<const type*, std::string_view> user_type_names;
+    type_name_map& user_type_names;
+
+    // `@export`ed symbols, shared with every imported module's context
+    export_registry& exports;
+
+    test_queue& pending_tests;
 
     // Cache of read embedded files (path string -> optional file contents)
     ankerl::unordered_dense::map<std::string, stdx::option<std::string>> embed_cache;
@@ -65,7 +180,27 @@ struct context {
     // Persists across all const evaluators
     usize eval_unroll_limit{256};
 
+    // Nesting of in-progress generic instantiations, bounded so runaway recursion is reported
+    usize                  generic_instantiation_depth{0};
+    static constexpr usize max_generic_instantiation_depth{256};
+    // Monomorphs whose body is being resolved, by mangled name, so a recursive call reuses them
+    ankerl::unordered_dense::map<std::string, type*> instantiations_in_progress;
+    // Module constant pts whose initializers are being folded, so one reading itself is caught
+    ankerl::unordered_dense::set<uptr> globals_in_evaluation;
+
+    // Generic function's parameter bounds by function literal so each of a type ctor's
+    // per-instantiation members shares them
+    param_bound_map& param_bounds;
+
+    // Set by another thread once nobody wants this analysis anymore
+    stdx::option<const std::atomic<bool>&> cancellation{};
+
     auto advance_epoch() noexcept -> u64 { return ++env_epoch; }
+
+    // Whether to stop at the next declaration; what was skipped leaves the analysis incomplete
+    [[nodiscard]] auto cancelled() const noexcept -> bool {
+        return cancellation && cancellation->load(std::memory_order_relaxed);
+    }
 
     context(mod::module_manager&         modules,
             symbol_table_registry&       registry,
@@ -79,8 +214,9 @@ struct context {
             codegen::target_options      target_opts = {}) noexcept
         : modules{modules}, registry{registry}, pool{pool}, generic_functions{generic_functions},
           instantiation_cache{instantiation_cache}, impls{impls}, arena{arena},
-          diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)} {
-    }
+          diags{std::move(diags)}, error_stream{error_stream}, target_opts{std::move(target_opts)},
+          user_type_names{*arena.make<type_name_map>()}, exports{*arena.make<export_registry>()},
+          pending_tests{*arena.make<test_queue>()}, param_bounds{*arena.make<param_bound_map>()} {}
     ~context() = default;
 
     // Creates a copy with identical data but a new diagnostic list
@@ -90,10 +226,16 @@ struct context {
           instantiation_cache{other.instantiation_cache}, impls{other.impls}, arena{other.arena},
           diags{other.diags.create_new()}, error_stream{other.error_stream},
           prelude_index{other.prelude_index}, target_opts{other.target_opts},
-          user_main_name{other.user_main_name}, runtime_safety{other.runtime_safety},
-          constexpr_binding_frames{other.constexpr_binding_frames},
-          user_type_names{other.user_type_names}, embed_cache{other.embed_cache},
-          env_epoch{other.env_epoch} {}
+          user_main_name{other.user_main_name}, entry_root{other.entry_root},
+          start_module{other.start_module}, runtime_safety{other.runtime_safety},
+          testing{other.testing}, build_mode{other.build_mode},
+          deprecated_policy{other.deprecated_policy},
+          comptime_binding_frames{other.comptime_binding_frames},
+          comptime_evaluation_depth{other.comptime_evaluation_depth},
+          user_type_names{other.user_type_names}, exports{other.exports},
+          pending_tests{other.pending_tests}, embed_cache{other.embed_cache},
+          env_epoch{other.env_epoch}, param_bounds{other.param_bounds},
+          cancellation{other.cancellation} {}
 
     auto operator=(const context& other) -> context& = delete;
     context(context&&) noexcept                      = default;
@@ -111,11 +253,21 @@ struct context {
     // Gets the already-resolved poison type from the pool
     [[nodiscard]] auto get_poison() -> type&;
 
+    // A character literal's untyped constant: `comptime_int`, but `u21` once it needs a type
+    [[nodiscard]] auto get_char_constant() -> type&;
+    // The concrete type an untyped `t` takes when nothing asks for one: `i32`, `u21` for a
+    // character constant, or `f64`; any other type is itself
+    [[nodiscard]] auto default_concrete(type& t) -> type&;
+
     // Pools and resolves the arbitrary-width integer type `iN` / `uN`
     [[nodiscard]] auto get_int(u16                              bits,
                                bool                             is_signed,
                                types::mut::mutability_modifiers mutability = types::mut::CONSTANT)
         -> type&;
+
+    // The integer `@backingInt`/`@fromBackingInt` convert through: an enum's underlying type, a
+    // bit-packed struct/union's `uN`, or a tagged union's `i32` tag. None for any other type.
+    [[nodiscard]] auto backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type&>;
 
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_pointer(types::mut::mutability_modifiers mutability, type& underlying)
@@ -124,6 +276,24 @@ struct context {
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_reference(types::mut::mutability_modifiers mutability, type& underlying)
         -> type&;
+
+    // A structural (selfless) function type as spelled by `fn(...): R` / `extern fn(...): R`
+    [[nodiscard]] auto get_function(gsl::span<type*>        params,
+                                    type&                   return_type,
+                                    bool                    is_variadic,
+                                    ast::calling_convention conv,
+                                    bool                    erased) -> type&;
+
+    // The same signature as `fn`, toggled between erased and thin
+    [[nodiscard]] auto with_erasure(type& fn, bool erased) -> type&;
+
+    // `@Fn`'s result: `get_function` for a plain signature, else a thin method-shaped type
+    [[nodiscard]] auto get_function_like(gsl::span<type*>        params,
+                                         type&                   return_type,
+                                         bool                    has_self,
+                                         bool                    is_variadic,
+                                         ast::calling_convention conv,
+                                         bool                    erased) -> type&;
 
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_array(types::mut::mutability_modifiers mutability,
@@ -147,7 +317,7 @@ struct context {
     //
     // Returns the poison type for optional non-lookup usage
     template <ast::IndexableID ID, typename... Args>
-    auto poison_node(mod::module& module, ID id, Args&&... args) -> type& {
+    auto poison_node(mod::module_t& module, ID id, Args&&... args) -> type& {
         if constexpr (sizeof...(args) != 0) { diags.emplace_back(std::forward<Args>(args)...); }
 
         auto& poison{get_poison()};
@@ -164,15 +334,40 @@ struct context {
     // A compiler-known target-fact enum by name, from the prelude
     [[nodiscard]] auto get_builtin_type(std::string_view name) -> type&;
 
-    [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
+    // The module whose own `test_runner` a test build calls: the root's, else `std.testing`'s
+    // once the program loads `std`, else `builtin`'s default
+    [[nodiscard]] auto entry_test_runner_module() -> stdx::option<mod::module_t&>;
 
-    // The bound value of a `constexpr` parameter named `name`, searching innermost frame first
-    [[nodiscard]] auto lookup_constexpr_binding(std::string_view name) const
+    [[nodiscard]] auto type_display_name(const type& t) const -> std::string;
+    // "Type mismatch in store: cannot assign 'from' to 'to'", with the rejection reason if any
+    [[nodiscard]] auto store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
+        -> std::string;
+
+    // The bound value of a `comptime` parameter named `name`, searching innermost frame first
+    [[nodiscard]] auto lookup_comptime_binding(std::string_view name) const
         -> stdx::option<const gir::const_value&>;
 
     // Reads embedded file into embed_cache and returns reference to contents if successful
     [[nodiscard]] auto read_embed_file(const std::filesystem::path& path)
         -> stdx::option<const std::string&>;
+};
+
+// Marks everything folded while it lives as compile-time evaluation (a `comptime` block, label,
+// or declaration initializer), as opposed to an opportunistic fold of runtime code
+class comptime_evaluation_scope {
+  public:
+    comptime_evaluation_scope(context& ctx, bool enabled) noexcept
+        : depth_{ctx.comptime_evaluation_depth}, enabled_{enabled} {
+        if (enabled_) { ++depth_; }
+    }
+    ~comptime_evaluation_scope() noexcept {
+        if (enabled_) { --depth_; }
+    }
+    MAKE_PINNED(comptime_evaluation_scope);
+
+  private:
+    usize& depth_;
+    bool   enabled_;
 };
 
 } // namespace ghoti::sema

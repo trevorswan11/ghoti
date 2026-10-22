@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/DebugInfo/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/DebugInfo/CMakeLists.txt
 const root = "llvm/lib/DebugInfo/";
 
 pub const btf_root = root ++ "BTF";
@@ -95,11 +95,17 @@ pub const gsym_root = root ++ "GSYM";
 pub const gsym_sources = [_][]const u8{
     "DwarfTransformer.cpp",
     "Header.cpp",
+    "HeaderV2.cpp",
     "FileWriter.cpp",
     "FunctionInfo.cpp",
+    "GlobalData.cpp",
     "GsymCreator.cpp",
+    "GsymCreatorV1.cpp",
+    "GsymCreatorV2.cpp",
     "GsymContext.cpp",
     "GsymReader.cpp",
+    "GsymReaderV1.cpp",
+    "GsymReaderV2.cpp",
     "InlineInfo.cpp",
     "LineTable.cpp",
     "LookupResult.cpp",
@@ -112,7 +118,6 @@ pub const gsym_sources = [_][]const u8{
 pub const logical_view_root = root ++ "LogicalView";
 pub const logical_view_sources = [_][]const u8{
     "LVReaderHandler.cpp",
-
     "Core/LVCompare.cpp",
     "Core/LVElement.cpp",
     "Core/LVLine.cpp",
@@ -127,11 +132,11 @@ pub const logical_view_sources = [_][]const u8{
     "Core/LVSupport.cpp",
     "Core/LVSymbol.cpp",
     "Core/LVType.cpp",
-
     "Readers/LVBinaryReader.cpp",
     "Readers/LVCodeViewReader.cpp",
     "Readers/LVCodeViewVisitor.cpp",
     "Readers/LVDWARFReader.cpp",
+    "Readers/LVIRReader.cpp",
 };
 
 pub const msf_root = root ++ "MSF";

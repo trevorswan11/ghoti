@@ -45,6 +45,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::REFERENCE_EXPRESSION, "reference-of"},
     name_mapping{node_kind::ADDRESS_OF_EXPRESSION, "address-of"},
     name_mapping{node_kind::DEREFERENCE_EXPRESSION, "dereference"},
+    name_mapping{node_kind::COMPTIME_EXPRESSION, "comptime"},
     name_mapping{node_kind::IMPLICIT_ACCESS_EXPRESSION, "implicit access"},
     name_mapping{node_kind::STRING_EXPRESSION, "string"},
     name_mapping{node_kind::INT_LITERAL_EXPRESSION, "int-literal"},
@@ -56,6 +57,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::STRUCT_EXPRESSION, "struct"},
     name_mapping{node_kind::UNION_EXPRESSION, "union"},
     name_mapping{node_kind::INTERFACE_EXPRESSION, "interface"},
+    name_mapping{node_kind::TYPE_EXPRESSION, "type"},
     name_mapping{node_kind::WHILE_LOOP_EXPRESSION, "while loop"},
     name_mapping{node_kind::BLOCK_STATEMENT, "statement"},
     name_mapping{node_kind::BREAK_STATEMENT, "statement"},
@@ -68,8 +70,7 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::IMPL_STATEMENT, "statement"},
     name_mapping{node_kind::IMPORT_STATEMENT, "statement"},
     name_mapping{node_kind::RETURN_STATEMENT, "statement"},
-    name_mapping{node_kind::TEST_STATEMENT, "statement"},
-    name_mapping{node_kind::USING_STATEMENT, "statement"})};
+    name_mapping{node_kind::TEST_STATEMENT, "statement"})};
 
 } // namespace
 
@@ -87,6 +88,8 @@ constexpr auto MODIFIERS{stdx::fixed::enum_map<token_type, modifier>::from(
     modifier_mapping{token_type::AND_MUT, modifier::MUT_REF},
     modifier_mapping{token_type::CARET, modifier::PTR},
     modifier_mapping{token_type::CARET_MUT, modifier::MUT_PTR},
+    modifier_mapping{token_type::AND_MUT_POLY, modifier::POLY_REF},
+    modifier_mapping{token_type::CARET_MUT_POLY, modifier::POLY_PTR},
     modifier_mapping{token_type::VOLATILE, modifier::VOLATILE})};
 
 } // namespace
@@ -96,9 +99,16 @@ type_modifier::type_modifier(const syntax::token_t& tok) noexcept
 
 auto type_modifier::parse(syntax::parser& parser, const syntax::token_t& current)
     -> stdx::result<type_modifier, syntax::diagnostic> {
+    // A value's mutability is its binding's; only what `^`, `&`, or `[]` reaches carries `mut`
     if (current.type == syntax::token_type_t::MUT) {
-        TRY(parser.expect_peek(syntax::token_type_t::VOLATILE));
-        return type_modifier{modifier::MUT_VOLATILE};
+        const bool before_volatile{parser.peek_token_is(syntax::token_type_t::VOLATILE)};
+        return make_syntax_err(before_volatile
+                                   ? "`mut volatile T` is just `volatile T`: a value's mutability "
+                                     "comes from `let mut`, not its type"
+                                   : "`mut` only qualifies what a `^`, `&`, or `[]` reaches; a "
+                                     "value's mutability comes from `let mut`",
+                               syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                               current);
     }
     return type_modifier{current};
 }

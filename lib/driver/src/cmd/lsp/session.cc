@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <gsl/pointers>
+#include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
@@ -14,14 +15,19 @@
 #include "compiler/module/error.hh"
 #include "compiler/module/module.hh"
 #include "compiler/module/overlay_loader.hh"
+#include "compiler/module/parse_cache.hh"
 #include "compiler/module/stdlib.hh"
-#include "support/path_utils.hh"
 
 namespace ghoti::lsp {
 
-analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& error_stream) noexcept
+analysis_session::analysis_session(mod::overlay_loader&            loader,
+                                   std::ostream&                   error_stream,
+                                   stdx::option<mod::parse_cache&> cache) noexcept
     : manager_{loader}, analyzer_{manager_, error_stream, false, {}, true} {
     PROFILE_FUNCTION();
+    if (cache) { manager_.set_parse_cache(*cache); }
+    // The editor checks test blocks too
+    analyzer_.set_testing(true);
     const auto stdlib_path{mod::find_stdlib()};
     if (!stdlib_path) {
         fmt::println(error_stream, "could not locate the ghoti standard library");
@@ -34,14 +40,11 @@ analysis_session::analysis_session(mod::overlay_loader& loader, std::ostream& er
 }
 
 auto analysis_session::analyze(const std::filesystem::path& entry_path)
-    -> stdx::result<gsl::not_null<mod::module*>, mod::diagnostic> {
+    -> stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic> {
     PROFILE_FUNCTION();
-    auto relative_path{entry_path};
-    if (auto rel{path_utils::make_relative(relative_path)}) { relative_path = std::move(*rel); }
-
     // A poisoned/errored module is still returned so its diagnostics can be reported
-    DISCARD(analyzer_.analyze(relative_path));
-    return manager_.try_get_file_module(relative_path);
+    DISCARD(analyzer_.analyze(entry_path));
+    return manager_.try_get_file_module(entry_path);
 }
 
 } // namespace ghoti::lsp

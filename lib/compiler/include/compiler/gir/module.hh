@@ -13,6 +13,7 @@
 #include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -22,16 +23,18 @@
 namespace ghoti::gir {
 
 struct global_decl {
-    std::string               name;
-    sema::type&               type;
-    stdx::option<value>       init_value;
-    stdx::option<const_value> const_init;
-    gir::linkage              linkage{linkage::INTERNAL};
-    std::string               abi_name{"c"};
-    std::string               link_name;
-    bool                      is_constant{false};
-    bool                      is_thread_local{false};
-    bool                      is_weak{false};
+    std::string                          name;
+    sema::type&                          type;
+    stdx::option<value>                  init_value;
+    stdx::option<const_value>            const_init;
+    gir::linkage                         linkage{linkage::INTERNAL};
+    std::string                          abi_name{"c"};
+    std::string                          link_name;
+    bool                                 is_constant{false};
+    bool                                 is_thread_local{false};
+    bool                                 is_weak{false};
+    stdx::option<ast::symbol_visibility> visibility{};
+    stdx::option<u64>                    alignment{};
 };
 
 struct type_decl {
@@ -39,14 +42,21 @@ struct type_decl {
     sema::type& type;
 };
 
-class module {
-  public:
-    explicit module(const mod::module& ast_mod, ghoti::arena& arena) noexcept
-        : ast_module_{ast_mod}, arena_{arena} {}
-    ~module() = default;
-    MAKE_MOVE_CONSTRUCTABLE_ONLY(module);
+// A symbol the module imports from an `extern("lib", ...)` library
+struct extern_import {
+    std::string library;
+    std::string symbol;
+    bool        data{false};
+};
 
-    MAKE_GETTER(ast_module, const mod::module&);
+class module_t {
+  public:
+    explicit module_t(const mod::module_t& ast_mod, ghoti::arena& arena) noexcept
+        : ast_module_{ast_mod}, arena_{arena} {}
+    ~module_t() = default;
+    MAKE_MOVE_CONSTRUCTABLE_ONLY(module_t);
+
+    MAKE_GETTER(ast_module, const mod::module_t&);
     MAKE_DEDUCING_GETTER(types);
     MAKE_DEDUCING_GETTER(globals);
     MAKE_DEDUCING_GETTER(functions);
@@ -79,14 +89,16 @@ class module {
                     std::string         abi_name = "c") -> global_decl&;
     auto add_function(std::string  name,
                       sema::type&  type,
-                      bool         is_test      = false,
-                      bool         is_constexpr = false,
-                      bool         is_variadic  = false,
-                      gir::linkage linkage      = linkage::INTERNAL,
-                      std::string  abi_name     = "c") -> function&;
+                      bool         is_test     = false,
+                      bool         is_comptime = false,
+                      bool         is_variadic = false,
+                      gir::linkage linkage     = linkage::INTERNAL,
+                      std::string  abi_name    = "c") -> function&;
 
     // Names extern decls contribute to the link line (excludes the default "c" target).
     [[nodiscard]] auto get_required_libraries() const -> std::vector<std::string>;
+    // Each extern symbol and the library it comes from, by its link name
+    [[nodiscard]] auto get_library_imports() const -> std::vector<extern_import>;
 
     // Marks the split between root-module decls and imported ones
     auto mark_import_boundary() noexcept -> void {
@@ -101,7 +113,7 @@ class module {
     [[nodiscard]] auto to_string() const -> std::string;
 
   private:
-    const mod::module&        ast_module_;
+    const mod::module_t&      ast_module_;
     ghoti::arena&             arena_;
     std::vector<type_decl*>   types_;
     std::vector<global_decl*> globals_;

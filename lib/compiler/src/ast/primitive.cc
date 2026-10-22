@@ -3,26 +3,25 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <charconv>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 #include <stdx/assert.hh>
-#include <stdx/fixed/vector.hh>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/handle.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
-#include "stdx/string.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -54,6 +53,15 @@ namespace {
         value = value * radix + d;
     }
     return value;
+}
+
+[[nodiscard]] auto without_separators(std::string_view digits) -> std::string {
+    std::string cleaned;
+    cleaned.reserve(digits.size());
+    for (const char c : digits) {
+        if (c != '_') { cleaned.push_back(c); }
+    }
+    return cleaned;
 }
 
 [[nodiscard]] auto all_digits(std::string_view s) noexcept -> bool {
@@ -106,6 +114,17 @@ struct int_suffix {
 }
 
 // Splits a lexeme into `<prefix><digits>` and a trailing suffix
+// The exact value of a literal's digits, skipping `_` separators
+[[nodiscard]] auto exact_digits(std::string_view digits, syntax::numeric_base base)
+    -> stdx::option<big_int> {
+    std::string kept;
+    kept.reserve(digits.size());
+    for (const char c : digits) {
+        if (c != '_') { kept.push_back(c); }
+    }
+    return big_int::parse(kept, std::to_underlying(base));
+}
+
 [[nodiscard]] auto split_int_lexeme(std::string_view lexeme, syntax::numeric_base base)
     -> std::pair<std::string_view, std::string_view> {
     const usize prefix{base == syntax::numeric_base::DECIMAL ? 0UZ : 2UZ};
@@ -153,29 +172,50 @@ auto int_literal_expr::parse(syntax::parser& parser)
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
 
-    // A byte literal `'x'` is a width-8 unsigned integer.
-    if (start_token.type == syntax::token_type_t::U8) {
-        u8 value{static_cast<u8>(slice[1])};
-        if (slice[1] == '\\') {
-            switch (slice[2]) {
-            case 'n':  value = '\n'; break;
-            case 'r':  value = '\r'; break;
-            case 't':  value = '\t'; break;
-            case '\\': value = '\\'; break;
-            case '\'': value = '\''; break;
-            case '"':  value = '"'; break;
-            case '0':  value = '\0'; break;
-            default:   return make_syntax_err(syntax::error::UNKNOWN_CHARACTER_ESCAPE, start_token);
+    // A character literal `'x'` is the untyped code point of its one character or escape
+    if (start_token.type == syntax::token_type_t::CHAR) {
+        const auto inner{stdx::string::substr(slice, 1, slice.size() - 2)};
+        u32        value{0};
+        usize      count{0};
+        for (usize i{0}; i < inner.size(); ++count) {
+            if (inner[i] == '\\') {
+                const auto scan{syntax::scan_escape(stdx::string::substr(inner, i))};
+                if (!scan.error.empty()) {
+                    return make_syntax_err(scan.error,
+                                           syntax::error::UNKNOWN_CHARACTER_ESCAPE,
+                                           start_token.line,
+                                           start_token.column + 1 + i);
+                }
+                if (count == 0) { value = scan.value; }
+                i += scan.length;
+                continue;
             }
+            const auto decoded{syntax::decode_code_point(stdx::string::substr(inner, i))};
+            if (!decoded) {
+                return make_syntax_err("Character literal is not valid UTF-8",
+                                       syntax::error::INVALID_UTF8,
+                                       start_token.line,
+                                       start_token.column + 1 + i);
+            }
+            if (count == 0) { value = decoded->value; }
+            i += decoded->length;
+        }
+        if (count != 1) {
+            return make_syntax_err(
+                fmt::format("Character literal must contain exactly one code point; found {}",
+                            count),
+                syntax::error::INVALID_CHARACTER_LITERAL,
+                start_token);
         }
         return parser.add_expr<int_literal_expr>(start_token,
                                                  int_literal_expr{
                                                      .value     = value,
-                                                     .width     = 8,
+                                                     .width     = 0,
                                                      .is_signed = false,
                                                      .is_size   = false,
                                                      .base      = syntax::numeric_base::DECIMAL,
                                                      .spelling  = slice,
+                                                     .is_char   = true,
                                                  });
     }
 
@@ -193,19 +233,28 @@ auto int_literal_expr::parse(syntax::parser& parser)
                                                                  : stdx::string::substr(digits, 2)};
     bool       overflow{false};
     const u128 value{parse_u128(digits_only, std::to_underlying(base), overflow)};
-    if (overflow) {
+    // Past 128 bits the literal is still exact, as a `comptime_int` grows as needed
+    if (overflow && !exact_digits(digits_only, base)) {
         return make_syntax_err("Overflow of literal", syntax::error::INTEGER_OVERFLOW, start_token);
     }
 
     return parser.add_expr<int_literal_expr>(start_token,
                                              int_literal_expr{
-                                                 .value     = value,
+                                                 .value     = overflow ? u128{} : value,
                                                  .width     = info->width,
                                                  .is_signed = info->is_signed,
                                                  .is_size   = info->is_size,
                                                  .base      = base,
                                                  .spelling  = slice,
+                                                 .is_big    = overflow,
                                              });
+}
+
+auto int_literal_expr::exact_value() const -> big_int {
+    if (!is_big) { return big_int{value}; }
+    const auto digits{split_int_lexeme(spelling, base).first};
+    return *exact_digits(
+        base == syntax::numeric_base::DECIMAL ? digits : stdx::string::substr(digits, 2), base);
 }
 
 auto float_literal_expr::parse(syntax::parser& parser)
@@ -214,10 +263,16 @@ auto float_literal_expr::parse(syntax::parser& parser)
     const auto start_token{parser.get_current_token()};
     const auto slice{start_token.slice};
 
+    // Hex digits include `f`, so a hex literal's suffix can only follow its `p` exponent
+    const bool hex{slice.size() > 1 && (slice[1] == 'x' || slice[1] == 'X')};
+    const auto suffix_search{hex ? slice.find_first_of("pP") : 0};
+
     // Trailing `f<width>` suffix, if any.
     std::string_view mantissa{slice};
     u8               width{0};
-    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos) {
+    if (const auto pos{slice.find_last_of("fF")}; pos != std::string_view::npos &&
+                                                  suffix_search != std::string_view::npos &&
+                                                  pos > suffix_search) {
         const auto ws{stdx::string::substr(slice, pos + 1)};
         if (ws.empty() || !all_digits(ws)) {
             return make_syntax_err(
@@ -235,21 +290,29 @@ auto float_literal_expr::parse(syntax::parser& parser)
         mantissa = stdx::string::substr(slice, 0, pos);
     }
 
-    using namespace stdx::size_literals;
-    static thread_local stdx::fixed::vector<char, 1_KiB> buffer;
-    buffer.clear();
-    for (const char c : mantissa) {
-        if (c != '_') { buffer.emplace_back(c); }
-    }
-
-    f64                          value{};
-    const std::from_chars_result result{std::from_chars(buffer.begin(), buffer.end(), value)};
-    if (result.ec != std::errc{} || result.ptr != buffer.end()) {
+    const auto parsed{f128::parse(without_separators(mantissa))};
+    switch (parsed.status) {
+    case float_parse_status::OK: break;
+    case float_parse_status::TOO_SMALL:
+        return make_syntax_err(
+            "Float literal is too small to represent", syntax::error::DOUBLE_OVERFLOW, start_token);
+    case float_parse_status::TOO_LARGE:
+    case float_parse_status::MALFORMED:
         return make_syntax_err("Overflow of literal", syntax::error::DOUBLE_OVERFLOW, start_token);
     }
 
-    return parser.add_expr<float_literal_expr>(
-        start_token, float_literal_expr{.value = value, .width = width, .spelling = slice});
+    return parser.add_expr<float_literal_expr>(start_token,
+                                               float_literal_expr{
+                                                   .value    = parsed.value,
+                                                   .width    = width,
+                                                   .spelling = slice,
+                                                   .mantissa = mantissa,
+                                               });
+}
+
+auto float_literal_expr::value_in(float_format format) const -> f128 {
+    if (mantissa.empty() || format == float_format::QUAD) { return value.round_to(format); }
+    return f128::parse(without_separators(mantissa), format).value;
 }
 
 auto bool_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {

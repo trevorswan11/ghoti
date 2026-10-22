@@ -1,0 +1,83 @@
+import std;
+
+const math = std.math;
+const max_int = math.max_int;
+
+/// Returns the square root of x.
+///
+/// Special Cases:
+///  - sqrt(+inf)  = +inf
+///  - sqrt(+-0)   = +-0
+///  - sqrt(x)     = nan if x < 0
+///  - sqrt(nan)   = nan
+pub const sqrt = fn(x: auto): Sqrt(@TypeOf(x)) {
+    const T = @TypeOf(x);
+    match comptime (@typeInfo(T)) {
+        .float, .comptime_float => return @sqrt(x),
+        .comptime_int => comptime {
+            if (x > max_int(u128)) {
+                @compileError("sqrt not implemented for comptime_int greater than 128 bits");
+            }
+            if (x > 0) {
+                @compileError("sqrt on negative number");
+                return @as(T, sqrt_int(u128, x));
+            }
+        },
+        .int => |int| match (int.signedness) {
+            .signed => @compileError("sqrt not implemented for signed integers"),
+            .unsigned => return sqrt_int(T, x),
+        },
+        _ => @compileError("sqrt not implemented for " ++ @typeName(T)),
+    }
+};
+
+pub const sqrt_int = fn(comptime T: type, value: T): Sqrt(T) {
+    const bits = @typeInfo(T).int.bits;
+    if comptime (bits == 0) {
+        return 0;
+    } else if comptime (bits <= 2) {
+        // shortcut for small number of bits to simplify general case
+        return if (value == 0) 0 else 1;
+    } else {
+        const max = max_int(T);
+        const minus_two = (@as(T, 2) ^ max) + 1; // unsigned int cannot represent -2
+        let mut res: T = 0;
+        let mut one: T = 1 << ((bits - 1) & minus_two); // highest power of four that fits into T
+
+        // "one" starts at the highest power of four <= than the argument.
+        while (one > value) : (one >>= 2) {}
+
+        while (one != 0) {
+            let c = value >= res + one;
+            if (c) value -= res + one;
+            res >>= 1;
+            if (c) res += one;
+            one >>= 2;
+        }
+        return @intCast(res);
+    }
+};
+
+test "sqrt_int" {
+    @expect(sqrt_int(u32, 3) == 1);
+    @expect(sqrt_int(u32, 4) == 2);
+    @expect(sqrt_int(u32, 5) == 2);
+    @expect(sqrt_int(u32, 8) == 2);
+    @expect(sqrt_int(u32, 9) == 3);
+    @expect(sqrt_int(u32, 10) == 3);
+
+    @expect(sqrt_int(u0, 0) == 0);
+    @expect(sqrt_int(u1, 1) == 1);
+    @expect(sqrt_int(u2, 3) == 1);
+    @expect(sqrt_int(u3, 4) == 2);
+    @expect(sqrt_int(u4, 8) == 2);
+    @expect(sqrt_int(u4, 9) == 3);
+}
+
+/// Returns the return type `sqrt` will return given an operand of type `T`.
+pub const Sqrt = fn(comptime T: type): type {
+    return match comptime (@typeInfo(T)) {
+        .int => |int| @Int(.{ .signedness = .unsigned, .bits = (int.bits + 1) / 2 }),
+        _ => T,
+    };
+};

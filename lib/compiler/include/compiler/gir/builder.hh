@@ -10,6 +10,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
@@ -41,8 +42,12 @@ class builder {
     }
 
     auto emit_instruction(instruction inst) -> instruction&;
-    auto emit_alloca(sema::type& type, std::string_view name = {}, bool is_const = false)
-        -> local_id;
+    // Tags the most recent `CALL` in the active segment with `@call`'s modifier
+    auto mark_last_call(ast::call_modifier modifier) -> void;
+    auto emit_alloca(sema::type&       type,
+                     std::string_view  name      = {},
+                     bool              is_const  = false,
+                     stdx::option<u64> alignment = stdx::none) -> local_id;
 
     // An alloca hoisted into the function's entry segment (before its terminator) so it dominates
     // every use, no matter which segment is currently being built.
@@ -57,16 +62,24 @@ class builder {
     auto emit_store(value dest, value val) -> instruction&;
     // Produces a temporary holding the address of a module-level / static-member global.
     auto emit_global_addr(std::string name, sema::type& type, bool is_const = false) -> local_id;
+    auto emit_make_callable(value ctx, stdx::option<std::string> code_fn, sema::type& erased_fn)
+        -> local_id;
     auto emit_get_element_ptr(value base, std::vector<value> indices, sema::type& result_type)
         -> local_id;
     auto emit_address_of(value target, sema::type& result_type) -> local_id;
     auto emit_deref(value ptr, sema::type& result_type) -> local_id;
-    auto
-    emit_binary(instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked = false)
-        -> local_id;
+    auto emit_binary(instruction_kind kind,
+                     value            lhs,
+                     value            rhs,
+                     sema::type&      type,
+                     bool             checked    = false,
+                     bool             saturating = false) -> local_id;
     auto emit_unary(instruction_kind kind, value operand, sema::type& type, bool checked = false)
         -> local_id;
-    auto emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id;
+    // `checked` guards a float -> integer cast against a NaN or out-of-range operand
+    auto
+    emit_cast(instruction_kind kind, value operand, sema::type& target_type, bool checked = false)
+        -> local_id;
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
 
@@ -77,8 +90,8 @@ class builder {
                            sema::type&        return_type,
                            stdx::option<u8>   atomic_op         = stdx::none,
                            stdx::option<u8>   atomic_order      = stdx::none,
-                           stdx::option<u8>   atomic_fail_order = stdx::none)
-        -> stdx::option<local_id>;
+                           stdx::option<u8>   atomic_fail_order = stdx::none,
+                           bool               checked           = false) -> stdx::option<local_id>;
     auto emit_indirect_call(value callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
     auto emit_inline_asm(inline_asm info, std::vector<value> inputs, sema::type& result_type)

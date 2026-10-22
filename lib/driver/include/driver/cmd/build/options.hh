@@ -11,11 +11,15 @@
 #include <stdx/result.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
+#include "compiler/module/file_loader.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/context.hh"
 #include "driver/clap/error.hh"
 
 namespace CLI { class App; } // namespace CLI
@@ -34,17 +38,17 @@ struct raw_options {
     std::string              target;
     std::string              cpu{"generic"};
     std::string              features;
-    std::string              opt_level_str;
+    std::string              mode{"debug"};
     std::vector<std::string> module_raw_args;
     std::vector<std::string> extra_objects;
     std::vector<std::string> library_paths;
     std::vector<std::string> libraries;
     std::vector<std::string> forwarded_args;
-    bool                     release{false};
     bool                     debug_passes{false};
     bool                     time_passes{false};
     bool                     dynamic{false};
-    bool                     unsafe{false};
+    bool                     no_compiler_rt{false};
+    std::string              deprecated{"warn"};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
@@ -62,7 +66,10 @@ struct options {
     std::vector<std::string>           libraries{};
     std::vector<std::string>           forwarded_args{};
     bool                               dynamic{false};
+    bool                               compiler_rt{true};
+    sema::optimize_mode                mode{sema::optimize_mode::DEBUG};
     bool                               runtime_safety{true};
+    sema::deprecation_policy           deprecated_policy{sema::deprecation_policy::WARN};
     bool output_explicit{false}; // `ghoti test` only: true when `-o/--output` was given
 
     stdx::option<std::filesystem::path> emit_gir_path{};
@@ -75,26 +82,65 @@ struct options {
 
     // Writes the GIR / LLVM IR / assembly dumps requested via
     // --emit-gir / --emit-llvm-ir / --emit-asm, if any.
-    [[nodiscard]] auto emit_debug_artifacts(sema::analyzer& analyzer,
-                                            gir::module&    gir_mod,
-                                            std::ostream&   error_stream) const
+    [[nodiscard]] auto emit_debug_artifacts(sema::analyzer&      analyzer,
+                                            gir::module_t&       gir_mod,
+                                            std::ostream&        error_stream,
+                                            sema::build_artifact artifact) const
         -> stdx::result<void, clap::error>;
 
-    // Converts the input path from absolute to relative if needed
-    auto make_path_relative() -> void;
+    // Points `output_path` at a fresh absolute temp executable path tagged with `tag`
+    auto use_temp_executable_output(std::string_view tag) -> void;
 
-    [[nodiscard]] auto setup_module_manager(mod::module_manager& manager,
-                                            std::ostream&        error_stream)
-        -> stdx::result<void, clap::error>;
-
-    auto analyze(sema::analyzer&      analyzer,
-                 mod::module_manager& manager,
-                 std::ostream&        error_stream,
-                 bool                 for_test_executable = false)
-        -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error>;
+    auto make_output_path_absolute() -> void;
 };
 
+using analyzed_module = std::pair<gsl::not_null<mod::module_t*>, gir::module_t>;
+
+// Owns the loader, module manager, and analyzer every compiling subcommand drives.
+class compilation {
+  public:
+    compilation(options& opts, std::ostream& error_stream);
+
+    // Validates the input file, registers the stdlib and `-m` modules, and runs sema.
+    [[nodiscard]] auto analyze(bool for_test_executable = false)
+        -> stdx::result<analyzed_module, clap::error>;
+
+    [[nodiscard]] auto get_analyzer() noexcept -> sema::analyzer& { return analyzer_; }
+
+    // The command line's objects, search paths, and libraries, plus the target's compiler builtins
+    [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
+
+  private:
+    [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;
+    [[nodiscard]] auto ensure_output_directory() -> stdx::result<void, clap::error>;
+    [[nodiscard]] auto setup_module_manager() -> stdx::result<void, clap::error>;
+
+  private:
+    options&            opts_;
+    std::ostream&       error_stream_;
+    mod::file_loader    loader_;
+    mod::module_manager manager_;
+    sema::analyzer      analyzer_;
+};
+
+[[nodiscard]] auto report_codegen_error(std::ostream& error_stream, const codegen::diagnostic& diag)
+    -> stdx::err<clap::error>;
+
+// Runs a just-built executable and maps its exit status onto the driver's result.
+[[nodiscard]] auto run_built_executable(const options& opts,
+                                        std::ostream&  error_stream,
+                                        bool cleanup_output) -> stdx::result<void, clap::error>;
+
 // Helper to register standard build options into CLI subcommands
+// `--deprecated=warn|error|ignore`, shared by every subcommand that runs sema
+auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
+// `-M,--mode debug|release_safe|release_fast|release_small`, shared by every compiling subcommand
+auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
+
+// `--cpu` and `--features`
+auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void;
+// `--no-compiler-rt`, shared by every subcommand that links
+auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void;
 

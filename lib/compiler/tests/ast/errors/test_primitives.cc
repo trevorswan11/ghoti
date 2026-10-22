@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/arena.hh"
 #include "compiler/syntax/error.hh"
 #include "helpers/ast.hh"
 
@@ -15,16 +16,6 @@ namespace {
 }
 
 } // namespace
-
-TEST_CASE("Integer literal overflow past the 128-bit compile-time cap") {
-    // 33 hex digits => 132 bits, past the u128 evaluation domain.
-    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFu64;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
-    helpers::test_parser_fail("0x1FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFz;",
-                              overflow_error(syntax::error::INTEGER_OVERFLOW));
-}
 
 TEST_CASE("Removed and malformed literal suffixes are rejected") {
     const auto err = [](std::string_view msg, syntax::error e) {
@@ -42,8 +33,10 @@ TEST_CASE("Removed and malformed literal suffixes are rejected") {
 }
 
 TEST_CASE("Character escape errors") {
-    helpers::test_parser_fail("'\\f';",
-                              syntax::diagnostic{syntax::error::UNKNOWN_CHARACTER_ESCAPE, 0, 0});
+    helpers::test_parser_fail(
+        "'\\f';",
+        syntax::diagnostic{
+            "Unknown escape sequence '\\f'", syntax::error::UNKNOWN_CHARACTER_ESCAPE, 0, 1});
 }
 
 TEST_CASE("Floating point overflow") {
@@ -51,11 +44,18 @@ TEST_CASE("Floating point overflow") {
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
     helpers::test_parser_fail("1023.234612e234000;",
                               overflow_error(syntax::error::DOUBLE_OVERFLOW));
+    helpers::test_parser_fail("0x1p20000;", overflow_error(syntax::error::DOUBLE_OVERFLOW));
+    helpers::test_parser_fail(
+        "0x1p-20000;",
+        syntax::diagnostic{
+            "Float literal is too small to represent", syntax::error::DOUBLE_OVERFLOW, 0, 0});
 }
 
-TEST_CASE("Literal digit span too long for the scratch buffer overflows cleanly") {
-    const auto too_long{std::string(1'200, '1') + ";"};
-    helpers::test_parser_fail(too_long, overflow_error(syntax::error::INTEGER_OVERFLOW));
+TEST_CASE("An integer literal of any length parses exactly") {
+    const auto   long_literal{std::string(1'200, '1') + ";"};
+    ghoti::arena arena;
+    const auto   ast{helpers::parse(long_literal, arena)};
+    CHECK_FALSE(ast.empty());
 }
 
 } // namespace ghoti::tests

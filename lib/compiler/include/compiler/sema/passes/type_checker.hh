@@ -22,7 +22,7 @@ namespace ghoti::sema {
 
 class type_checker {
   public:
-    static auto check_types(gir::module& gir_mod, mod::module& ast_mod, context& ctx)
+    static auto check_types(gir::module_t& gir_mod, mod::module_t& ast_mod, context& ctx)
         -> mod::module_state;
 
   private:
@@ -33,10 +33,15 @@ class type_checker {
     };
 
   private:
-    explicit type_checker(gir::module& gir_mod, context& ctx) noexcept;
+    explicit type_checker(gir::module_t& gir_mod, context& ctx) noexcept;
 
     auto check_function(gir::function& fn) -> void;
     auto check_segment(gir::function& fn, gir::segment& seg) -> void;
+    auto check_call_modifier(gir::function& fn, gir::segment& seg, usize index) -> void;
+    // Tracks an instruction's (non-alloca) result so later operand lookups see its type
+    auto record_value_result(const gir::instruction& inst) -> void;
+    auto report_operator_mismatch(const gir::instruction& inst, const type& lhs, const type& rhs)
+        -> void;
     auto check_instruction(gir::function& fn, const gir::instruction& inst) -> void;
     auto check_store(const gir::instruction& inst) -> void;
 
@@ -59,9 +64,14 @@ class type_checker {
                                            const type&                   val_t,
                                            const type&                   dest_t,
                                            stdx::option<source_location> loc) -> bool;
+    // As above for an argument bound to a parameter, which a `mut?` parameter relaxes
+    [[nodiscard]] auto is_arg_value_assignable(const gir::value&             val,
+                                               const type&                   val_t,
+                                               const type&                   param_t,
+                                               stdx::option<source_location> loc) -> bool;
 
   private:
-    gir::module&                                            gir_mod_;
+    gir::module_t&                                          gir_mod_;
     context&                                                ctx_;
     u32                                                     target_ptr_bits_;
     ankerl::unordered_dense::map<gir::local_id, local_info> locals_;

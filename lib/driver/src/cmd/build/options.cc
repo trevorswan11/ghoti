@@ -1,5 +1,6 @@
 #include "driver/cmd/build/options.hh"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,6 +19,8 @@
 #include <stdx/result.hh>
 #include <stdx/string.hh>
 
+#include "compiler/codegen/error.hh"
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/module.hh"
@@ -27,8 +30,69 @@
 #include "driver/clap/error.hh"
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
+#include "support/subprocess.hh"
+#include "support/tempfile.hh"
 
 namespace ghoti::cmd::build {
+
+namespace {
+
+[[nodiscard]] auto parse_optimize_mode(std::string_view name) -> stdx::option<sema::optimize_mode> {
+    for (const auto mode : {sema::optimize_mode::DEBUG,
+                            sema::optimize_mode::RELEASE_SAFE,
+                            sema::optimize_mode::RELEASE_FAST,
+                            sema::optimize_mode::RELEASE_SMALL}) {
+        if (sema::optimize_mode_name(mode) == name) { return mode; }
+    }
+    return stdx::none;
+}
+
+[[nodiscard]] auto mode_opt_level(sema::optimize_mode mode) -> codegen::opt_level {
+    switch (mode) {
+    case sema::optimize_mode::DEBUG:         return codegen::opt_level::O0;
+    case sema::optimize_mode::RELEASE_SAFE:  return codegen::opt_level::O2;
+    case sema::optimize_mode::RELEASE_FAST:  return codegen::opt_level::O3;
+    case sema::optimize_mode::RELEASE_SMALL: return codegen::opt_level::Oz;
+    }
+    return codegen::opt_level::O0;
+}
+
+[[nodiscard]] auto mode_has_runtime_safety(sema::optimize_mode mode) -> bool {
+    return mode == sema::optimize_mode::DEBUG || mode == sema::optimize_mode::RELEASE_SAFE;
+}
+
+[[nodiscard]] auto parse_deprecation_policy(std::string_view name) -> sema::deprecation_policy {
+    if (name == "error") { return sema::deprecation_policy::DENY; }
+    if (name == "ignore") { return sema::deprecation_policy::ALLOW; }
+    return sema::deprecation_policy::WARN;
+}
+
+} // namespace
+
+auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_flag("--no-compiler-rt",
+                   opts.no_compiler_rt,
+                   "Don't build or link the compiler builtins from lib/compiler_rt")
+        ->default_val(opts.no_compiler_rt);
+}
+
+auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("-M,--mode",
+                     opts.mode,
+                     "Build mode: debug (default), release_safe, release_fast, or release_small")
+        ->default_val(opts.mode);
+}
+
+auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("--deprecated",
+                     opts.deprecated,
+                     "How a use of a @[deprecated] declaration is reported (warn, error, ignore)")
+        ->check(CLI::IsMember({"warn", "error", "ignore"}))
+        ->default_val(opts.deprecated);
+}
 
 auto options::process_raw(const raw_options&   raw,
                           codegen::output_type type,
@@ -38,20 +102,15 @@ auto options::process_raw(const raw_options&   raw,
         .time_passes   = raw.time_passes,
     };
 
-    if (!raw.opt_level_str.empty()) {
-        if (auto level{codegen::parse_opt_level(raw.opt_level_str)}) {
-            opt_opts.level = *level;
-        } else {
-            return clap::fatal_error(
-                error_stream,
-                fmt::format("invalid optimization level '{}'", raw.opt_level_str),
-                clap::error::INVALID_OPTIMIZATION);
-        }
-    } else if (raw.release) {
-        opt_opts.level = codegen::opt_level::O2;
-    } else {
-        opt_opts.level = codegen::opt_level::O0;
+    const auto mode{parse_optimize_mode(raw.mode)};
+    if (!mode) {
+        return clap::fatal_error(error_stream,
+                                 fmt::format("invalid build mode '{}'; expected debug, "
+                                             "release_safe, release_fast, or release_small",
+                                             raw.mode),
+                                 clap::error::INVALID_OPTIMIZATION);
     }
+    opt_opts.level = mode_opt_level(*mode);
 
     std::filesystem::path input_path{raw.input};
     std::filesystem::path output_path;
@@ -115,7 +174,10 @@ auto options::process_raw(const raw_options&   raw,
         .libraries         = raw.libraries,
         .forwarded_args    = raw.forwarded_args,
         .dynamic           = raw.dynamic,
-        .runtime_safety    = !raw.unsafe,
+        .compiler_rt       = !raw.no_compiler_rt,
+        .mode              = *mode,
+        .runtime_safety    = mode_has_runtime_safety(*mode),
+        .deprecated_policy = parse_deprecation_policy(raw.deprecated),
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
@@ -123,64 +185,46 @@ auto options::process_raw(const raw_options&   raw,
     };
 }
 
-auto options::make_path_relative() -> void {
-    if (auto rel{path_utils::make_relative(input_path)}) { input_path = std::move(*rel); }
+auto options::use_temp_executable_output(std::string_view tag) -> void {
+    const auto default_ext{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE,
+                                                                 target_opts.triple_str)};
+    output_path = tempfile::make_temp_path(tag);
+    if (!default_ext.empty()) { output_path.replace_extension(default_ext); }
 }
 
-auto options::setup_module_manager(mod::module_manager& manager, std::ostream& error_stream)
-    -> stdx::result<void, clap::error> {
-    if (const auto stdlib_path{mod::find_stdlib()}) {
-        if (auto res{manager.add_library_module("std", *stdlib_path)}; !res) {
-            return clap::fatal_error(
-                error_stream,
-                fmt::format("failed to register stdlib: {}",
-                            res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR)),
-                clap::error::COMPILATION_FAILED);
-        }
-    } else {
-        return clap::fatal_error(
-            error_stream,
-            fmt::format("could not locate the ghoti standard library; set {} to its std.gh "
-                        "path, or run from within a source checkout",
-                        GHOTI_STDLIB_ENV),
-            clap::error::COMPILATION_FAILED);
-    }
-
-    for (const auto& mod : modules) {
-        std::error_code ec;
-        if (!std::filesystem::exists(mod.path, ec)) {
-            return clap::fatal_error(
-                error_stream,
-                fmt::format("module '{}' root path '{}' not found", mod.name, mod.path.string()),
-                clap::error::FILE_NOT_FOUND);
-        }
-
-        if (auto res{manager.add_library_module(mod.name, mod.path)}; !res) {
-            return clap::fatal_error(
-                error_stream,
-                fmt::format("failed to register module '{}': {}",
-                            mod.name,
-                            res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR)),
-                clap::error::COMPILATION_FAILED);
-        }
-    }
-
-    return {};
+auto options::make_output_path_absolute() -> void {
+    if (!output_path.is_relative()) { return; }
+    std::error_code ec;
+    if (auto abs{std::filesystem::absolute(output_path, ec)}; !ec) { output_path = std::move(abs); }
 }
 
-auto options::analyze(sema::analyzer&      analyzer,
-                      mod::module_manager& manager,
-                      std::ostream&        error_stream,
-                      bool                 for_test_executable)
-    -> stdx::result<std::pair<gsl::not_null<ghoti::mod::module*>, gir::module>, clap::error> {
-    auto gir_mod_res{analyzer.analyze(input_path, for_test_executable)};
-    if (!gir_mod_res) { return stdx::err{clap::error::COMPILATION_FAILED}; }
+compilation::compilation(options& opts, std::ostream& error_stream)
+    : opts_{opts}, error_stream_{error_stream}, manager_{loader_},
+      analyzer_{manager_, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety} {
+    analyzer_.set_deprecation_policy(opts_.deprecated_policy);
+    analyzer_.set_optimize_mode(opts_.mode);
+    // Spawned children resolve a bare relative name via PATH, so pin the output path first
+    opts_.make_output_path_absolute();
+}
 
-    auto module_result{manager.try_get_file_module(input_path)};
-    if (!module_result) {
-        return clap::fatal_error(error_stream,
-                                 fmt::format("failed to retrieve module '{}'", input_path.string()),
+auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_module, clap::error> {
+    TRY(validate_input_path());
+    TRY(ensure_output_directory());
+    TRY(setup_module_manager());
+
+    auto gir_mod_res{analyzer_.analyze(opts_.input_path, for_test_executable)};
+    if (!gir_mod_res) {
+        return clap::fatal_error(error_stream_,
+                                 gir_mod_res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
                                  clap::error::COMPILATION_FAILED);
+    }
+
+    auto module_result{manager_.try_get_file_module(opts_.input_path)};
+    if (!module_result) {
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("failed to retrieve module '{}'", opts_.input_path.string()),
+            clap::error::COMPILATION_FAILED);
     }
 
     auto module{*module_result};
@@ -189,11 +233,140 @@ auto options::analyze(sema::analyzer&      analyzer,
     }
     // A `-m`-registered library module (or a transitively-imported one) is parsed lazily and
     // may fail independently of the entry module's own state
-    if (manager.any_errored()) {
-        manager.print_all_diagnostics(error_stream);
+    if (manager_.any_errored()) {
+        manager_.print_all_diagnostics(error_stream_);
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
     return std::make_pair(module, std::move(*gir_mod_res));
+}
+
+auto compilation::linker_options() const -> codegen::extra_linker_options {
+    codegen::extra_linker_options linker_opts{
+        .objects       = opts_.extra_objects,
+        .library_paths = opts_.library_paths,
+        .libraries     = opts_.libraries,
+    };
+    if (opts_.compiler_rt) { linker_opts.compiler_rt.emplace(); }
+    return linker_opts;
+}
+
+auto compilation::validate_input_path() -> stdx::result<void, clap::error> {
+    if (!path_utils::exists(opts_.input_path)) {
+        return clap::fatal_error(error_stream_,
+                                 fmt::format("file '{}' not found", opts_.input_path.string()),
+                                 clap::error::FILE_NOT_FOUND);
+    }
+    if (!std::filesystem::is_regular_file(opts_.input_path)) {
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("input path '{}' is not a regular file", opts_.input_path.string()),
+            clap::error::FILE_NOT_FOUND);
+    }
+
+    if (auto rel{path_utils::make_relative(opts_.input_path)}) {
+        opts_.input_path = std::move(*rel);
+    }
+    return {};
+}
+
+auto compilation::ensure_output_directory() -> stdx::result<void, clap::error> {
+    const auto parent{opts_.output_path.parent_path()};
+    if (parent.empty()) { return {}; }
+    std::error_code ec;
+    if (std::filesystem::is_directory(parent, ec)) { return {}; }
+    if (path_utils::exists(parent)) {
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("output location '{}' is not a directory", parent.string()),
+            clap::error::IO_ERROR);
+    }
+    if (!std::filesystem::create_directories(parent, ec) || ec) {
+        return clap::fatal_error(error_stream_,
+                                 fmt::format("could not create output directory '{}': {}",
+                                             parent.string(),
+                                             ec.message()),
+                                 clap::error::IO_ERROR);
+    }
+    return {};
+}
+
+auto compilation::setup_module_manager() -> stdx::result<void, clap::error> {
+    if (const auto stdlib_path{mod::find_stdlib()}) {
+        if (auto res{manager_.add_library_module("std", *stdlib_path)}; !res) {
+            return clap::fatal_error(
+                error_stream_,
+                fmt::format("failed to register stdlib: {}",
+                            res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR)),
+                clap::error::COMPILATION_FAILED);
+        }
+    } else {
+        return clap::fatal_error(
+            error_stream_,
+            fmt::format("could not locate the ghoti standard library; set {} to its std.gh "
+                        "path, or run from within a source checkout",
+                        GHOTI_STDLIB_ENV),
+            clap::error::COMPILATION_FAILED);
+    }
+
+    for (const auto& mod : opts_.modules) {
+        if (!path_utils::exists(mod.path)) {
+            return clap::fatal_error(
+                error_stream_,
+                fmt::format("module '{}' root path '{}' not found", mod.name, mod.path.string()),
+                clap::error::FILE_NOT_FOUND);
+        }
+
+        if (auto res{manager_.add_library_module(mod.name, mod.path)}; !res) {
+            return clap::fatal_error(
+                error_stream_,
+                fmt::format("failed to register module '{}': {}",
+                            mod.name,
+                            res.error().get_message().value_or(GHOTI_UNKNOWN_ERROR)),
+                clap::error::COMPILATION_FAILED);
+        }
+    }
+    return {};
+}
+
+auto report_codegen_error(std::ostream& error_stream, const codegen::diagnostic& diag)
+    -> stdx::err<clap::error> {
+    return clap::fatal_error(error_stream,
+                             diag.get_message().value_or(GHOTI_UNKNOWN_ERROR),
+                             clap::error::COMPILATION_FAILED);
+}
+
+auto run_built_executable(const options& opts, std::ostream& error_stream, bool cleanup_output)
+    -> stdx::result<void, clap::error> {
+    std::vector<std::string> child_argv{opts.output_path.string()};
+    child_argv.insert(child_argv.end(), opts.forwarded_args.begin(), opts.forwarded_args.end());
+
+    stdx::option<tempfile> built_exe;
+    if (cleanup_output) { built_exe.emplace(std::in_place, opts.output_path); }
+
+    // The program (or test suite) owns its runtime; never impose the default spawn timeout on it.
+    const auto exit_code_opt{
+        spawn_child(mock_argv{std::move(child_argv)}, std::chrono::milliseconds::max())};
+    if (!exit_code_opt) {
+        return clap::fatal_error(error_stream,
+                                 fmt::format("failed to execute '{}'", opts.output_path.string()),
+                                 clap::error::UNEXPECTED_ERROR);
+    }
+
+    if (const auto exit_code{*exit_code_opt}; exit_code != 0) {
+        return stdx::err{static_cast<clap::error>(exit_code)};
+    }
+    return {};
+}
+
+auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("--cpu",
+                     opts.cpu,
+                     "Target CPU: `generic` (the default), `native` for this machine, or a model "
+                     "such as `skylake` or `apple-m1`")
+        ->default_val(opts.cpu);
+    subcmd->add_option(
+        "--features", opts.features, "Target CPU features to add or remove: `+avx2,-sse4.2`");
 }
 
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
@@ -206,12 +379,8 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         "-L,--library-path", opts.library_paths, "Add directory to library search paths");
     subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
     subcmd->add_option("--target", opts.target, "Target triple");
-    subcmd->add_option("--cpu", opts.cpu, "Target CPU architecture")->default_val(opts.cpu);
-    subcmd->add_option("--features", opts.features, "Target CPU features");
-    subcmd->add_option(
-        "-O,--opt-level", opts.opt_level_str, "Optimization level (0, 1, 2, 3, s, z)");
-    subcmd->add_flag("--release", opts.release, "Build in release mode (defaults to -O2)")
-        ->default_val(opts.release);
+    add_cpu_options(subcmd, opts);
+    add_mode_option(subcmd, opts);
     subcmd
         ->add_flag("--debug-passes",
                    opts.debug_passes,
@@ -219,8 +388,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->default_val(opts.debug_passes);
     subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
         ->default_val(opts.time_passes);
-    subcmd->add_flag("--unsafe", opts.unsafe, "Disable all runtime safety checks")
-        ->default_val(opts.unsafe);
+    add_deprecated_option(subcmd, opts);
     subcmd
         ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")
         ->type_name("FILE");
@@ -234,9 +402,10 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->type_name("FILE");
 }
 
-auto options::emit_debug_artifacts(sema::analyzer& analyzer,
-                                   gir::module&    gir_mod,
-                                   std::ostream&   error_stream) const
+auto options::emit_debug_artifacts(sema::analyzer&      analyzer,
+                                   gir::module_t&       gir_mod,
+                                   std::ostream&        error_stream,
+                                   sema::build_artifact artifact) const
     -> stdx::result<void, clap::error> {
     const auto write_file{[&](const std::filesystem::path& path,
                               std::string_view             contents,
@@ -261,7 +430,7 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
     if (emit_gir_path) { TRY(write_file(*emit_gir_path, gir_mod.to_string(), "GIR")); }
 
     if (emit_llvm_ir_path) {
-        auto ir{analyzer.emit_llvm_ir_text(gir_mod, opt_opts)};
+        auto ir{analyzer.emit_llvm_ir_text(gir_mod, target_opts, opt_opts, artifact)};
         if (!ir) {
             return clap::fatal_error(error_stream,
                                      ir.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
@@ -271,7 +440,7 @@ auto options::emit_debug_artifacts(sema::analyzer& analyzer,
     }
 
     if (emit_asm_path) {
-        auto asm_text{analyzer.emit_asm_text(gir_mod, target_opts, opt_opts)};
+        auto asm_text{analyzer.emit_asm_text(gir_mod, target_opts, opt_opts, artifact)};
         if (!asm_text) {
             return clap::fatal_error(error_stream,
                                      asm_text.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),

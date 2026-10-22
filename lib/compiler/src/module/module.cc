@@ -1,9 +1,11 @@
 #include "compiler/module/module.hh"
 
+#include <algorithm>
 #include <filesystem>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <fmt/color.h>
@@ -15,16 +17,22 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/module/error.hh"
+#include "compiler/module/parse_cache.hh"
+#include "compiler/module/stdlib.hh"
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/side_tables.hh"
+#include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "support/diagnostic.hh"
+#include "support/path_utils.hh"
 #include "support/source_file.hh"
 #include "support/style.hh"
 
@@ -32,7 +40,7 @@ namespace ghoti::mod {
 
 auto format_module_diagnostic(std::ostream&                         os, // NOLINT
                               const detail::formattable_diagnostic& diag,
-                              stdx::option<const mod::module&>      module,
+                              stdx::option<const mod::module_t&>    module,
                               stdx::option<bool>                    in_terminal) -> std::ostream& {
     const auto tty{in_terminal.value_or(stdx::is_tty())};
 
@@ -40,7 +48,7 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     if (!module) { return format_diagnostic(os, diag, stdx::none, tty); }
 
     // Without location, there's no way to point to an error
-    format_diagnostic(os, diag, module->path.string(), tty);
+    format_diagnostic(os, diag, path_utils::display(module->path), tty);
     if (!diag.location) { return os; }
 
     // Diagnostic error messages can include the location
@@ -50,14 +58,34 @@ auto format_module_diagnostic(std::ostream&                         os, // NOLIN
     return os;
 }
 
-auto module::print_diagnostics(std::ostream& os) const -> void {
+auto module_t::source_of(ast::node_id id) const -> std::string_view {
+    const std::string_view text{source};
+    const auto             offset_of{[&](const source_location& loc) -> usize {
+        usize offset{0};
+        for (usize line{0}; line < loc.line && offset < text.size(); ++line) {
+            const auto newline{text.find('\n', offset)};
+            if (newline == std::string_view::npos) { return text.size(); }
+            offset = newline + 1;
+        }
+        return std::min(offset + loc.column, text.size());
+    }};
+    // `end_location_of` ends just past the node's last token
+    const auto start{offset_of(ast.location_of(id))};
+    const auto end{offset_of(ast.end_location_of(id))};
+    return start < end ? stdx::string::substr(text, start, end - start) : std::string_view{};
+}
+
+auto module_t::print_diagnostics(std::ostream& os) const -> void {
     PROFILE_FUNCTION();
     if (is_ok()) { return; }
     diagnostics.visit(
         [this, &os](const auto& list) -> void {
             for (const auto& diag : list) {
+                const auto& owner{diag.origin() ? *diag.origin() : *this};
+                // The module the error points into may already report it itself
+                if (&owner != this && owner.reports(diag)) { continue; }
                 format_module_diagnostic(
-                    os, diag.to_formattable(), *this, list.get_terminal_status())
+                    os, diag.to_formattable(), owner, list.get_terminal_status())
                     << "\n";
             }
         },
@@ -68,28 +96,42 @@ auto module::print_diagnostics(std::ostream& os) const -> void {
 
 auto module_manager::try_get_file_module(const std::filesystem::path& path,
                                          const std::filesystem::path& parent_path)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     PROFILE_FUNCTION();
     ASSERT((parent_path.empty() || parent_path.is_absolute()) &&
            "Parent path must be absolute or empty");
-    if (!path.is_relative()) {
-        return make_mod_err(fmt::format("Requested file '{}' is absolute", path.string()),
-                            error::MODULE_PATH_NOT_RELATIVE);
-    };
-
-    const auto normalized{loader_.normalize(parent_path.empty() ? path : parent_path / path)};
+    // An absolute path names its file directly; a relative one is resolved from the importer
+    const auto requested{parent_path.empty() || path.is_absolute() ? path : parent_path / path};
+    const auto normalized{loader_.normalize(requested)};
     if (!normalized) { return make_mod_err(normalized.error()); }
     return try_get(*normalized);
 }
 
 auto module_manager::try_get_library_module(std::string_view name)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     PROFILE_FUNCTION();
     auto it{module_lut_.find(name)};
     if (it == module_lut_.end()) {
         return make_mod_err(fmt::format("Unknown module '{}'", name), error::MODULE_DOES_NOT_EXIST);
     }
     return try_get(it->second);
+}
+
+auto module_manager::find_file_module(const std::filesystem::path& path)
+    -> stdx::option<module_t&> {
+    const auto normalized{loader_.normalize(path)};
+    if (!normalized) { return stdx::none; }
+    const auto loaded{modules_.find(*normalized)};
+    if (loaded == modules_.end()) { return stdx::none; }
+    return *loaded->second;
+}
+
+auto module_manager::find_loaded_library_module(std::string_view name) -> stdx::option<module_t&> {
+    const auto path{module_lut_.find(name)};
+    if (path == module_lut_.end()) { return stdx::none; }
+    const auto loaded{modules_.find(path->second)};
+    if (loaded == modules_.end()) { return stdx::none; }
+    return *loaded->second;
 }
 
 auto module_manager::add_library_module(std::string_view name, const std::filesystem::path& path)
@@ -112,10 +154,29 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
     return {};
 }
 
-auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
-    for (const auto& [path, mod] : modules_) {
-        if (mod->is_poisoned() || mod->is_errored()) { mod->print_diagnostics(os); }
+auto module_t::print_warnings(std::ostream& os) const -> void {
+    for (const auto& warning : warnings) {
+        format_module_diagnostic(
+            os, warning.to_formattable(), *this, warnings.get_terminal_status())
+            << "\n";
     }
+}
+
+auto module_manager::print_all_warnings(std::ostream& os) const -> void {
+    for (const auto& [path, mod] : modules_) { mod->print_warnings(os); }
+}
+
+auto module_manager::print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void {
+    if (!mod.is_poisoned() && !mod.is_errored()) { return; }
+    if (!printed_diagnostics_.insert(&mod).second) { return; }
+    mod.print_diagnostics(os);
+}
+
+auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
+    for (const auto& [path, mod] : modules_) { print_diagnostics_once(*mod, os); }
+    // An error inside an emitted `builtin` declaration is attributed to `builtin` itself
+    if (builtin_module_) { print_diagnostics_once(*builtin_module_, os); }
+    if (start_module_) { print_diagnostics_once(*start_module_, os); }
 }
 
 auto module_manager::any_errored() const noexcept -> bool {
@@ -123,40 +184,56 @@ auto module_manager::any_errored() const noexcept -> bool {
     for (const auto& [path, mod] : modules_) {
         if (mod->is_poisoned() || mod->is_errored()) { return true; }
     }
-    return false;
+    if (start_module_ && (start_module_->is_poisoned() || start_module_->is_errored())) {
+        return true;
+    }
+    return builtin_module_ && (builtin_module_->is_poisoned() || builtin_module_->is_errored());
 }
 
 auto module_manager::try_get(const std::filesystem::path& path)
-    -> stdx::result<gsl::not_null<module*>, diagnostic> {
+    -> stdx::result<gsl::not_null<module_t*>, diagnostic> {
     // Prevent re-parsing by checking the map, safe as pointers are stable
     PROFILE_FUNCTION();
     if (auto it{modules_.find(path)}; it != modules_.end()) { return it->second.get(); }
     auto source{TRY(loader_.load(path))};
 
-    auto mod{stdx::make_box<module>(path, path.parent_path(), source_file{std::move(source)})};
-    syntax::parser p{mod->source};
-    auto           diagnostics{p.consume(mod->ast, *arena_)};
+    stdx::box<module_t> mod;
+    syntax::diagnostics diagnostics;
+    if (parse_cache_) {
+        auto parsed{parse_cache_->get(path, std::move(source))};
+        mod = stdx::make_box<module_t>(
+            path, path.parent_path(), source_file{std::string_view{parsed->source}});
+        mod->ast    = parsed->ast.borrow(*arena_);
+        diagnostics = parsed->diagnostics.create_new();
+        for (const auto& d : parsed->diagnostics) { diagnostics.push_back(d); }
+        mod->parsed_from = std::move(parsed);
+    } else {
+        mod = stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)});
+        diagnostics = parse_source(mod->source, mod->ast, *arena_);
+    }
 
     mod->sema_side_tables.resize(mod->ast.get_pool_sizes());
     mod->parse_diagnostics.reserve(diagnostics.size());
-    for (const auto& d : diagnostics) { mod->parse_diagnostics.push_back(d.snapshot()); }
+    for (const auto& d : diagnostics) { mod->parse_diagnostics.emplace_back(d.snapshot()); }
     mod->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
     mod->diagnostics = std::move(diagnostics);
+    mod->is_start    = is_start_path(path);
 
     auto* ptr = mod.get();
     modules_.emplace(path, std::move(mod));
     return ptr;
 }
 
-auto module_manager::get_or_create_builtin_module(std::string_view source) -> module& {
+auto module_manager::get_or_create_builtin_module(std::string_view source) -> module_t& {
     PROFILE_FUNCTION();
     if (builtin_module_) { return *builtin_module_; }
 
-    builtin_module_ = stdx::make_box<module>(std::filesystem::path{"<builtin>"},
-                                             std::filesystem::path{},
-                                             source_file{std::string{source}});
+    builtin_module_ = stdx::make_box<module_t>(std::filesystem::path{"<builtin>"},
+                                               std::filesystem::path{},
+                                               source_file{std::string{source}});
     syntax::parser p{builtin_module_->source};
-    const auto     diagnostics{p.consume(builtin_module_->ast, *arena_)};
+    p.enable_default_wrappers();
+    const auto diagnostics{p.consume(builtin_module_->ast, *arena_)};
     VERIFY(diagnostics.empty(), "the compiler-provided target-fact enum source must parse cleanly");
 
     builtin_module_->sema_side_tables.resize(builtin_module_->ast.get_pool_sizes());
@@ -164,29 +241,90 @@ auto module_manager::get_or_create_builtin_module(std::string_view source) -> mo
     return *builtin_module_;
 }
 
-auto module::get_overlay_node_type(usize idx) const noexcept
+auto module_manager::is_start_path(const std::filesystem::path& path) -> bool {
+    if (!start_path_) { start_path_.emplace(find_start()); }
+    if (!*start_path_) { return false; }
+    std::error_code ec;
+    return std::filesystem::equivalent(path, **start_path_, ec) && !ec;
+}
+
+auto module_manager::get_or_create_start_module(const std::filesystem::path& path,
+                                                std::string_view             source) -> module_t& {
+    PROFILE_FUNCTION();
+    if (start_module_) { return *start_module_; }
+
+    start_module_ =
+        stdx::make_box<module_t>(path, path.parent_path(), source_file{std::string{source}});
+    syntax::parser p{start_module_->source};
+    p.enable_default_wrappers();
+    auto diagnostics{p.consume(start_module_->ast, *arena_)};
+
+    start_module_->sema_side_tables.resize(start_module_->ast.get_pool_sizes());
+    start_module_->parse_diagnostics.reserve(diagnostics.size());
+    for (const auto& d : diagnostics) {
+        start_module_->parse_diagnostics.emplace_back(d.snapshot());
+    }
+    start_module_->state       = diagnostics.empty() ? module_state::PARSED : module_state::ERRORED;
+    start_module_->diagnostics = std::move(diagnostics);
+    start_module_->is_start    = true;
+    return *start_module_;
+}
+
+auto module_t::get_overlay_node_type(usize idx) const noexcept
     -> stdx::option<stdx::option<sema::type&>> {
     if (!active_body_diff) { return stdx::none; }
     return active_body_diff->find_node_type(idx);
 }
 
-auto module::get_overlay_explicit_type(usize idx) const noexcept
+auto module_t::get_overlay_explicit_type(usize idx) const noexcept
     -> stdx::option<stdx::option<sema::type&>> {
     if (!active_body_diff) { return stdx::none; }
     return active_body_diff->find_explicit_type(idx);
 }
 
-auto module::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
+auto module_t::record_node_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->node_idxs.emplace_back(idx); }
+}
+
+auto module_t::record_explicit_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
+}
+
+auto module_t::attributes_of(ast::node_id id) const noexcept
+    -> stdx::option<const sema::resolved_attributes&> {
+    if (active_body_diff) {
+        if (const auto resolved{active_body_diff->find_attributes(id.get_index())}) {
+            return resolved;
+        }
+    }
+    const auto it{node_attributes.find(id.get_index())};
+    if (it == node_attributes.end()) { return stdx::none; }
+    return it->second;
+}
+
+auto module_t::set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved)
+    -> void {
+    node_attributes.insert_or_assign(id.get_index(), resolved);
+    if (active_write_log) { active_write_log->attribute_idxs.emplace_back(id.get_index()); }
+}
+
+auto module_t::get_overlay_call_target(usize idx) const noexcept
+    -> stdx::option<stdx::option<std::string_view>> {
+    if (!active_body_diff) { return stdx::none; }
+    return active_body_diff->find_call_target(idx);
+}
+
+auto module_t::get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch> {
     if (active_body_diff) {
         if (const auto br{active_body_diff->find_if_branch(node_idx)}) { return br; }
     }
-    if (const auto it{if_constexpr_results.find(node_idx)}; it != if_constexpr_results.end()) {
+    if (const auto it{if_comptime_results.find(node_idx)}; it != if_comptime_results.end()) {
         return it->second;
     }
     return stdx::none;
 }
 
-auto module::get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size {
+auto module_t::get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size {
     if (active_body_diff) {
         if (const auto arm{active_body_diff->find_match_arm(node_idx)}) { return arm; }
     }

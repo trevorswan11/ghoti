@@ -25,12 +25,12 @@ namespace syms = sema::symbols;
 namespace {
 
 // Checks for the builtin's presence in the prelude table and its return type when called
-auto test_builtin_resolve(const syntax::builtin_t& builtin,
-                          std::string_view         mock_params,
-                          auto&&                   expected_type_fn,
-                          std::string_view         prelude = "") -> void {
+auto test_builtin_resolve(const syntax::builtin_def& builtin,
+                          std::string_view           mock_params,
+                          auto&&                     expected_type_fn,
+                          std::string_view           prelude = "") -> void {
     auto [ctx, idx]{helpers::resolve_and_check(
-        fmt::format("{}const foo := {}({});", prelude, builtin.name, mock_params))};
+        fmt::format("{}const foo = {}({});", prelude, builtin.name, mock_params))};
 
     // Quickly check to make sure the prelude table has the builtin
     const auto [builtin_sym, builtin_sym_data]{ctx->get_symbol<syms::builtin>(
@@ -55,10 +55,16 @@ auto test_builtin_resolve(const syntax::builtin_t& builtin,
 namespace bis = syntax::builtins;
 
 TEST_CASE("Builtin 'safe' casts") {
-    const auto bi{GENERATE(bis::BIT_CAST, bis::AS, bis::INT_CAST)};
+    const auto bi{GENERATE(bis::AS, bis::INT_CAST)};
     test_builtin_resolve(bi, "i32, 23UZ", [](helpers::sema_test_context& ctx) -> sema::type& {
         return ctx.get_int_type(32, true);
     });
+
+    // A bit cast reinterprets bytes, so its operand must be exactly as wide as its target
+    test_builtin_resolve(
+        bis::BIT_CAST, "i32, 23u32", [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_int_type(32, true);
+        });
 }
 
 TEST_CASE("Builtin pointer casts require pointer target and operand types") {
@@ -87,10 +93,18 @@ TEST_CASE("Builtin 'unsafe' casts") {
         "const v: volatile i32 = 23;");
 }
 
-TEST_CASE("Builtin bit/byte operations") {
-    const auto bi{GENERATE(bis::ALIGN_OF, bis::SIZE_OF, bis::CLZ, bis::CTZ, bis::POPCOUNT)};
+TEST_CASE("Builtin layout queries are comptime_int") {
+    const auto bi{GENERATE(bis::ALIGN_OF, bis::SIZE_OF, bis::BIT_SIZE_OF)};
+    test_builtin_resolve(bi, "u32", [](helpers::sema_test_context& ctx) -> sema::type& {
+        return ctx.get_type(sema::type_kind::COMPTIME_INT);
+    });
+}
+
+TEST_CASE("Builtin bit-counting operations return the minimum unsigned width for the operand's "
+          "bit count") {
+    const auto bi{GENERATE(bis::CLZ, bis::CTZ, bis::POPCOUNT)};
     test_builtin_resolve(bi, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::USIZE);
+        return ctx.get_int_type(6, false);
     });
 }
 
@@ -109,41 +123,46 @@ TEST_CASE("Builtin type introspection") {
         return ctx.get_type(sema::type_kind::TYPE, ctx.get_int_type(32, true));
     });
 
-    test_builtin_resolve(bis::TAG_NAME, "123", [](helpers::sema_test_context& ctx) -> sema::type& {
-        return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
-    });
+    test_builtin_resolve(
+        bis::TAG_NAME,
+        "E.a",
+        [](helpers::sema_test_context& ctx) -> sema::type& {
+            return ctx.get_type(sema::type_kind::SLICE, true, ctx.get_int_type(8, false));
+        },
+        "const E = enum { a };");
 }
 
 TEST_CASE("Builtin this introspection") {
-    auto [ctx, idx]{helpers::resolve_and_check("struct { using A = @This(); };")};
+    auto [ctx, idx]{helpers::resolve_and_check("struct { const A = @This(); };")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("A", idx + 1)};
     CHECK(type == ctx->get_type(sema::type_kind::STRUCT, idx + 1));
 }
 
 TEST_CASE("Deferred return type from typeOf") {
-    auto [ctx,
-          idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = @typeOf(a());")};
+    auto [ctx, idx]{
+        helpers::resolve_and_check("const a = fn(): type { return u8; }; const B = @TypeOf(a());")};
 
-    const auto [sym, sym_data, node_data, type]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
+    const auto [sym, sym_data, node_data]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};
 
-    const auto& call =
-        UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
+    // The call itself stays deferred; the alias folds it
+    const auto& call = UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*node_data.value));
+    const auto& type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(type == ctx->get_type(sema::type_kind::TYPE, &call));
     CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }
 
 TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Alias := @typeOf(0);
+        const Alias = @TypeOf(0);
         const via_alias: Alias = 7;
-        const direct: @typeOf(false) = true;
-        const echo := fn(x: auto, y: @typeOf(x)): auto { return y; };
-        const call_echo := echo(1, 2);
+        const direct: @TypeOf(false) = true;
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        const call_echo = echo(1, 2);
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
-    const auto& cx_int{ctx->get_type(sema::type_kind::CONSTEXPR_INT)};
+    const auto& cx_int{ctx->get_type(sema::type_kind::COMPTIME_INT)};
     const auto& bool_type{ctx->get_type(sema::type_kind::BOOL)};
 
     const auto decl_type = [&](std::string_view name) -> const sema::type& {
@@ -160,22 +179,26 @@ TEST_CASE("typeOf denotes the wrapped type in a value's or parameter's explicit 
 
 TEST_CASE("A return type may depend on a parameter whose type depends on an earlier parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const chain := fn(a: auto, b: @typeOf(a)): @typeOf(b) { return b; };
-        const call_chain := chain(1, 2);
+        const chain = fn(a: auto, b: @TypeOf(a)): @TypeOf(b) { return b; };
+        const call_chain = chain(1, 2);
+        const typed_chain = chain(1i32, 2);
     )")};
 
-    const auto& i32_type{ctx->get_int_type(32, true)};
+    // An untyped `1` binds `comptime_int`, which the dependent types carry through
     const auto [sym, _, node, type]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_chain", idx)};
-    CHECK(type == i32_type);
+    CHECK(type == ctx->get_type(sema::type_kind::COMPTIME_INT));
+    const auto [typed_sym, typed_, typed_node, typed_type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("typed_chain", idx)};
+    CHECK(typed_type == ctx->get_int_type(32, true));
 }
 
 TEST_CASE("A later parameter's type may be a type-constructor call over an earlier parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Box := fn(T: type): type { return struct { val: T }; };
-        const unbox := fn(a: auto, b: Box(@typeOf(a))): i32 { return b.val; };
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
+        const unbox = fn(a: auto, b: Box(@TypeOf(a))): i32 { return b.val; };
         const boxed: Box(i32) = .{ .val = 2 };
-        const call_unbox := unbox(1, boxed);
+        const call_unbox = unbox(1, boxed);
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
@@ -185,14 +208,6 @@ TEST_CASE("A later parameter's type may be a type-constructor call over an earli
 }
 
 TEST_CASE("Builtin pointer conversions") {
-    test_builtin_resolve(
-        bis::PTR_FROM_ARRAY,
-        "a",
-        [](helpers::sema_test_context& ctx) -> sema::type& {
-            return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
-        },
-        "var a := [_]i32{0, 1, 2};");
-
     test_builtin_resolve(
         bis::PTR_FROM_INT, "^i32, 0xc0ffeeu64", [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::POINTER, ctx.get_int_type(32, true));
@@ -211,7 +226,7 @@ TEST_CASE("Builtins memory operation") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var d: []mut u8 = undefined; var s: []u8 = undefined;");
+        "let mut d: []mut u8 = undefined; let mut s: []u8 = undefined;");
 
     test_builtin_resolve(
         bis::MEMSET,
@@ -219,23 +234,23 @@ TEST_CASE("Builtins memory operation") {
         [](helpers::sema_test_context& ctx) -> sema::type& {
             return ctx.get_type(sema::type_kind::VOID_);
         },
-        "var d: []mut u8 = undefined;");
+        "let mut d: []mut u8 = undefined;");
 }
 
 TEST_CASE("@memcpy rejects a non-contiguous or immutable destination") {
     helpers::test_resolver_fail(
-        R"(const f := fn(d: []u8, s: []u8): void { @memcpy(d, s); };)",
+        R"(const f = fn(d: []u8, s: []u8): void { @memcpy(d, s); };)",
         sema::diagnostic{"'@memcpy' cannot write through an immutable destination; use a `mut` "
                          "slice or array",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 48UZ}});
+                         std::pair{0UZ, 47UZ}});
 
     helpers::test_resolver_fail(
-        R"(const f := fn(d: []mut u8, s: []u16): void { @memcpy(d, s); };)",
+        R"(const f = fn(d: []mut u8, s: []u16): void { @memcpy(d, s); };)",
         sema::diagnostic{"'@memcpy' requires matching element types; the destination holds 'u8' "
                          "but the source holds 'u16'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 56UZ}});
+                         std::pair{0UZ, 55UZ}});
 }
 
 TEST_CASE("Builtin arithmetic") {
@@ -264,44 +279,38 @@ TEST_CASE("Builtin control flow") {
 
 TEST_CASE("@panic requires a compile-time-constant message") {
     helpers::test_resolver_fail(
-        R"(const f := fn(m: []u8): void { @panic(m); };)",
+        R"(const f = fn(m: []u8): void { @panic(m); };)",
         sema::diagnostic{"@panic message must be a compile-time-constant string",
-                         sema::error::CONSTEXPR_EVALUATION_FAILED,
-                         std::pair{0UZ, 38UZ}});
+                         sema::error::COMPTIME_EVALUATION_FAILED,
+                         std::pair{0UZ, 37UZ}});
 }
 
 TEST_CASE("Builtin function arity mismatch") {
-    helpers::test_resolver_fail("const foo := @sizeOf();",
+    helpers::test_resolver_fail("const foo = @sizeOf();",
                                 sema::diagnostic{"Builtin expects 1 arguments, found 0",
                                                  sema::error::ARITY_MISMATCH,
-                                                 std::pair{0UZ, 13UZ}});
+                                                 std::pair{0UZ, 12UZ}});
 }
 
 TEST_CASE("Const cast quick type checking") {
     helpers::test_resolver_fail(
-        "const foo := @constCast(1);",
-        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'constexpr_int'",
+        "const foo = @constCast(1);",
+        sema::diagnostic{"Expected pointer, reference, slice, or array type; found 'comptime_int'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 24UZ}});
+                         std::pair{0UZ, 23UZ}});
 }
 
 TEST_CASE("Other builtin quick type mismatch") {
-    helpers::test_resolver_fail(
-        "const foo := @ptrFromArray(1i32);",
-        sema::diagnostic{"Expected an array-yielding expression; found 'i32'",
-                         sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 27UZ}});
-
-    helpers::test_resolver_fail("const foo := @ptrFromInt(i32, 0xdeadbeefu64);",
+    helpers::test_resolver_fail("const foo = @ptrFromInt(i32, 0xdeadbeefu64);",
                                 sema::diagnostic{"Expected a pointer type; found 'i32'",
                                                  sema::error::TYPE_MISMATCH,
-                                                 std::pair{0UZ, 25UZ}});
+                                                 std::pair{0UZ, 24UZ}});
 
     helpers::test_resolver_fail(
-        "const foo := @sliceFromPtr(1i32, 20UZ);",
+        "const foo = @sliceFromPtr(1i32, 20UZ);",
         sema::diagnostic{"Expected a pointer-yielding expression; found 'i32'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 27UZ}});
+                         std::pair{0UZ, 26UZ}});
 }
 
 TEST_CASE("Illegal @This usage") {
@@ -346,33 +355,33 @@ TEST_CASE("Builtin C va builtins resolution") {
 
 TEST_CASE("@setEvalRecursionLimit top-level placement produces error") {
     helpers::test_resolver_fail(
-        "const bad := @setEvalRecursionLimit(50);",
+        "const bad = @setEvalRecursionLimit(50);",
         sema::diagnostic{"@setEvalRecursionLimit can only be used within a function scope",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 13UZ}});
+                         std::pair{0UZ, 12UZ}});
 }
 
 TEST_CASE("Free call and discard statements evaluate expressions without assignment") {
-    SECTION("Free call @setMainSymbol") {
+    SECTION("Free call @export") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            @setMainSymbol("custom_entry");
-            pub const custom_entry := fn(): void {};
+            const custom_entry = fn(): void {};
+            @export(custom_entry, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "custom_entry");
     }
 
-    SECTION("Free call @setMainSymbol with leading underscore") {
+    SECTION("Free call @export of a leading-underscore name") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            @setMainSymbol("_my_custom_main");
-            pub const _my_custom_main := fn(): void {};
+            const _my_custom_main = fn(): void {};
+            @export(_my_custom_main, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "_my_custom_main");
     }
 
-    SECTION("Discard statement with @setMainSymbol") {
+    SECTION("Discard statement with @export") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            _ = @setMainSymbol("discarded_main");
-            pub const discarded_main := fn(): void {};
+            const discarded_main = fn(): void {};
+            _ = @export(discarded_main, .{ .name = "main" });
         )")};
         CHECK(ctx->analyzer.get_ctx().user_main_name == "discarded_main");
     }
@@ -380,7 +389,7 @@ TEST_CASE("Free call and discard statements evaluate expressions without assignm
     SECTION("Leading underscore identifier in declarations") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
             const _val: i32 = 42;
-            pub const _get_val := fn(): i32 {
+            pub const _get_val = fn(): i32 {
                 return _val;
             };
         )")};
@@ -388,19 +397,18 @@ TEST_CASE("Free call and discard statements evaluate expressions without assignm
     }
 }
 
-TEST_CASE("@setMainSymbol invalid identifier error") {
+TEST_CASE("@export rejects what it can't export") {
     helpers::test_resolver_fail(
-        "@setMainSymbol(\"invalid main name\");",
-        sema::diagnostic{
-            "@setMainSymbol argument must be a valid identifier; found 'invalid main name'",
-            sema::error::TYPE_MISMATCH,
-            std::pair{0UZ, 15UZ}});
-
-    helpers::test_resolver_fail(
-        "@setMainSymbol(\"123bad\");",
-        sema::diagnostic{"@setMainSymbol argument must be a valid identifier; found '123bad'",
+        "let mut g: i32 = 1; @export(g, .{ .name = \"g\" });",
+        sema::diagnostic{"'@export' expects a function declared with 'const', like "
+                         "'@export(add, .{ .name = \"add\" })'",
                          sema::error::TYPE_MISMATCH,
-                         std::pair{0UZ, 15UZ}});
+                         std::pair{0UZ, 28UZ}});
+    helpers::test_resolver_fail(
+        "const f = fn(): void {}; @export(f, .{ .name = \"\" });",
+        sema::diagnostic{"An exported symbol name can't be empty or hold a zero byte",
+                         sema::error::TYPE_MISMATCH,
+                         std::pair{0UZ, 37UZ}});
 }
 
 TEST_CASE("@embed builtin constant eval in sema") {
@@ -410,8 +418,7 @@ TEST_CASE("@embed builtin constant eval in sema") {
         fmt::print(out, "GhotiEmbedData");
     }
 
-    const auto source{
-        fmt::format(R"(const data := @embed("{}");)", embedded.path.generic_string())};
+    const auto source{fmt::format(R"(const data = @embed("{}");)", embedded.path.generic_string())};
     auto [ctx, idx]{helpers::resolve_and_check(source)};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -423,18 +430,18 @@ TEST_CASE("@embed builtin constant eval in sema") {
 
 TEST_CASE("@embed non-existent file produces sema error") {
     helpers::test_resolver_fail(
-        R"(const data := @embed("/nonexistent/file/path/that/does/not/exist.txt");)",
+        R"(const data = @embed("/nonexistent/file/path/that/does/not/exist.txt");)",
         sema::diagnostic{
             "failed to read embedded file '/nonexistent/file/path/that/does/not/exist.txt'",
-            sema::error::CONSTEXPR_EVALUATION_FAILED,
-            std::pair{0UZ, 21UZ}});
+            sema::error::COMPTIME_EVALUATION_FAILED,
+            std::pair{0UZ, 20UZ}});
 }
 
 TEST_CASE("@returnAddress builtin in sema") {
     SECTION("resolves to usize inside function") {
         auto [ctx, idx]{helpers::resolve_and_check(R"(
-            pub const get_ret_addr := fn(): usize {
-                const addr := @returnAddress();
+            pub const get_ret_addr = fn(): usize {
+                let addr = @returnAddress();
                 return addr;
             };
         )")};
@@ -443,15 +450,15 @@ TEST_CASE("@returnAddress builtin in sema") {
 
     SECTION("fails outside of a function") {
         helpers::test_resolver_fail(
-            "const addr := @returnAddress();",
+            "const addr = @returnAddress();",
             sema::diagnostic{"@returnAddress() may only be used inside of a function",
                              sema::error::ILLEGAL_RETURN_ADDRESS_USAGE,
-                             std::pair{0UZ, 28UZ}});
+                             std::pair{0UZ, 27UZ}});
     }
 
     SECTION("fails with arguments") {
         helpers::test_resolver_fail(
-            R"(pub const f := fn(): void {
+            R"(pub const f = fn(): void {
                     _ = @returnAddress(42);
                 };
             )",

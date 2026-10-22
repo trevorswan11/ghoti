@@ -32,6 +32,7 @@ enum class node_kind : u8 {
     REFERENCE_EXPRESSION,
     ADDRESS_OF_EXPRESSION,
     DEREFERENCE_EXPRESSION,
+    COMPTIME_EXPRESSION,
     IMPLICIT_ACCESS_EXPRESSION,
     STRING_EXPRESSION,
     INT_LITERAL_EXPRESSION,
@@ -44,6 +45,7 @@ enum class node_kind : u8 {
     STRUCT_EXPRESSION,
     UNION_EXPRESSION,
     INTERFACE_EXPRESSION,
+    TYPE_EXPRESSION,
     WHILE_LOOP_EXPRESSION,
 
     BLOCK_STATEMENT,
@@ -59,7 +61,6 @@ enum class node_kind : u8 {
     IMPORT_STATEMENT,
     RETURN_STATEMENT,
     TEST_STATEMENT,
-    USING_STATEMENT,
 
     DISCARDED, // Represented by stdx::monostate
 };
@@ -89,6 +90,7 @@ enum class node_kind : u8 {
     X(reference_expr)       \
     X(dereference_expr)     \
     X(address_of_expr)      \
+    X(comptime_expr)        \
     X(implicit_access_expr) \
     X(string_expr)          \
     X(int_literal_expr)     \
@@ -101,6 +103,7 @@ enum class node_kind : u8 {
     X(struct_expr)          \
     X(union_expr)           \
     X(interface_expr)       \
+    X(type_expr)            \
     X(while_loop_expr)
 
 #define FOREACH_AST_STMT(X) \
@@ -116,8 +119,7 @@ enum class node_kind : u8 {
     X(impl_stmt)            \
     X(import_stmt)          \
     X(return_stmt)          \
-    X(test_stmt)            \
-    X(using_stmt)
+    X(test_stmt)
 
 // DOES NOT INCLUDE DISCARDED
 #define FOREACH_AST_NODE(X) \
@@ -142,6 +144,7 @@ enum class explicit_type_kind : u8 {
     INTERFACE,
     ARRAY,
     DYN,
+    EXPR,
 };
 
 #define FOREACH_AST_TYPE(X)   \
@@ -155,12 +158,14 @@ enum class explicit_type_kind : u8 {
     X(union_expr)             \
     X(interface_expr)         \
     X(explicit_array_type)    \
-    X(explicit_dyn_type)
+    X(explicit_dyn_type)      \
+    X(explicit_expr_type)
 
 class explicit_type_id;
 struct explicit_array_type;
 struct explicit_function_type;
 struct explicit_dyn_type;
+struct explicit_expr_type;
 
 template <typename T> struct node_kind_of;
 
@@ -200,6 +205,7 @@ NODE_KIND_OF_TRAIT(unwrap_expr, UNWRAP_EXPRESSION)
 NODE_KIND_OF_TRAIT(reference_expr, REFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(dereference_expr, DEREFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(address_of_expr, ADDRESS_OF_EXPRESSION)
+NODE_KIND_OF_TRAIT(comptime_expr, COMPTIME_EXPRESSION)
 NODE_KIND_OF_TRAIT(implicit_access_expr, IMPLICIT_ACCESS_EXPRESSION)
 NODE_KIND_OF_TRAIT(string_expr, STRING_EXPRESSION)
 NODE_KIND_OF_TRAIT(int_literal_expr, INT_LITERAL_EXPRESSION)
@@ -212,6 +218,7 @@ NODE_KIND_OF_TRAIT(unreachable_expr, UNREACHABLE_EXPRESSION)
 NODE_KIND_OF_TRAIT(struct_expr, STRUCT_EXPRESSION)
 NODE_KIND_OF_TRAIT(union_expr, UNION_EXPRESSION)
 NODE_KIND_OF_TRAIT(interface_expr, INTERFACE_EXPRESSION)
+NODE_KIND_OF_TRAIT(type_expr, TYPE_EXPRESSION)
 NODE_KIND_OF_TRAIT(while_loop_expr, WHILE_LOOP_EXPRESSION)
 
 NODE_KIND_OF_TRAIT(block_stmt, BLOCK_STATEMENT)
@@ -227,7 +234,6 @@ NODE_KIND_OF_TRAIT(impl_stmt, IMPL_STATEMENT)
 NODE_KIND_OF_TRAIT(import_stmt, IMPORT_STATEMENT)
 NODE_KIND_OF_TRAIT(return_stmt, RETURN_STATEMENT)
 NODE_KIND_OF_TRAIT(test_stmt, TEST_STATEMENT)
-NODE_KIND_OF_TRAIT(using_stmt, USING_STATEMENT)
 NODE_KIND_OF_TRAIT(discarded, DISCARDED)
 
 #undef KIND_OF_TRAIT
@@ -257,6 +263,7 @@ KIND_OF_TRAIT(union_expr, UNION)
 KIND_OF_TRAIT(interface_expr, INTERFACE)
 KIND_OF_TRAIT(explicit_array_type, ARRAY)
 KIND_OF_TRAIT(explicit_dyn_type, DYN)
+KIND_OF_TRAIT(explicit_expr_type, EXPR)
 
 #undef KIND_OF_TRAIT
 

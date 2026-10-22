@@ -15,6 +15,7 @@
 #include "helpers/common.hh"
 #include "helpers/gir.hh"
 #include "helpers/sema.hh"
+#include "support/float128.hh"
 
 namespace ghoti::tests {
 
@@ -75,9 +76,9 @@ TEST_CASE("GIR value types and operations") {
     CHECK(v_u64.is<u64>());
     CHECK(UNWRAP(v_u64.as_opt<u64>()) == 456);
 
-    const value v_f64{3.14};
-    CHECK(v_f64.is<f64>());
-    CHECK(UNWRAP(v_f64.as_opt<f64>()) == 3.14);
+    const value v_f64{f128::from_f64(3.14)};
+    CHECK(v_f64.is<f128>());
+    CHECK(UNWRAP(v_f64.as_opt<f128>()).to_f64() == 3.14);
 
     const value v_bool{true};
     CHECK(v_bool.is<bool>());
@@ -138,7 +139,7 @@ TEST_CASE("GIR function management and local ID allocation") {
     function fn{arena, "compute", fn_type};
     CHECK(fn.get_name() == "compute");
     CHECK_FALSE(fn.get_is_test());
-    CHECK_FALSE(fn.get_is_constexpr());
+    CHECK_FALSE(fn.get_is_comptime());
 
     fn.add_param("a", i32_type);
     fn.add_param("b", i32_type);
@@ -167,7 +168,7 @@ TEST_CASE("GIR module container and arena allocation") {
     using namespace gir;
 
     auto [ctx, idx]{helpers::resolve_and_check("const a: i32 = 42;")};
-    gir::module gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
+    gir::module_t gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
 
     auto& i32_type{
         *ctx->analyzer
@@ -195,24 +196,24 @@ TEST_CASE("GIR module container and arena allocation") {
 
 TEST_CASE("Comprehensive program lowering") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
         };
 
-        const max := fn(a: auto, b: auto): auto {
+        const max = fn(a: auto, b: auto): auto {
             if (a > b) {
                 return a;
             }
             return b;
         };
 
-        const transform := fn(p: Point): i32 {
-            var res: i32 = 0;
+        const transform = fn(p: Point): i32 {
+            let mut res: i32 = 0;
             defer res = res + 100;
 
-            const mx := max(p.x, p.y);
-            var i: i32 = 0;
+            let mx = max(p.x, p.y);
+            let mut i: i32 = 0;
             while (i < 3) {
                 res += mx;
                 i += 1;
@@ -222,8 +223,8 @@ TEST_CASE("Comprehensive program lowering") {
         };
 
         test "run_transform" {
-            const p := Point{ .x = 10, .y = 20 };
-            const ans := transform(p);
+            let p = Point{ .x = 10, .y = 20 };
+            let ans = transform(p);
         }
     )")};
 

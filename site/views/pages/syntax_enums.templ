@@ -13,7 +13,7 @@ templ SyntaxEnumsPage() {
 			</ul>
 		</li>
 		<li>
-			Enums are strongly typed, and are declared with the standard declaration syntax or with a <code>using</code> statement
+			Enums are strongly typed, and are declared with the standard declaration syntax
 			<ul>
 				<li>In the event that the standard declaration syntax is used, it must be <code>const</code></li>
 			</ul>
@@ -30,8 +30,8 @@ templ SyntaxEnumsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Colors := enum { red, blue = 3, green };
-const Shapes := enum : u64 { circle, square, _ };` }
+			{ `const Colors = enum { red, blue = 3, green };
+const Shapes = enum : u64 { circle, square, _ };` }
 		</code>
 	</pre>
 	<ul>
@@ -40,7 +40,7 @@ const Shapes := enum : u64 { circle, square, _ };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := Colors.red;
+			{ `const a = Colors.red;
 const a: Colors = .red; // Equivalent` }
 		</code>
 	</pre>
@@ -53,6 +53,6 @@ const a: Colors = .red; // Equivalent` }
 				<li>These members must appear after all enumeration values</li>
 			</ul>
 		</li>
-		<li>Enum 'members' can also be <code>using</code> or <code>import</code> statements</li>
+		<li>Enum 'members' can also be type aliases or <code>import</code> statements</li>
 	</ul>
 }

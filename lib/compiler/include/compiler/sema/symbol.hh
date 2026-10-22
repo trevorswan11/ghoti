@@ -67,9 +67,7 @@ class builtin {
     type&           type_;
 };
 
-using node_t = ast::handle<ast::node_kind::DECL_STATEMENT,
-                           ast::node_kind::USING_STATEMENT,
-                           ast::node_kind::IMPORT_STATEMENT>;
+using node_t = ast::handle<ast::node_kind::DECL_STATEMENT, ast::node_kind::IMPORT_STATEMENT>;
 
 class label {
   public:
@@ -83,6 +81,7 @@ class label {
 
     [[nodiscard]] auto has_yield_types() const noexcept -> bool { return !yield_types_.empty(); }
     auto               add_yield_type(type& type) -> void { yield_types_.emplace_back(&type); }
+    auto               clear_yield_types() noexcept -> void { yield_types_.clear(); }
 
     // Gets the Label data from the symbol, asserting the underlying data is a label
     [[nodiscard]] static auto from(symbol& symbol) -> label&;
@@ -92,13 +91,12 @@ class label {
     std::vector<gsl::not_null<type*>> yield_types_;
 };
 
-using match_capture    = ast::identifier_handle;
-using struct_field     = ast::struct_expr::field;
-using union_field      = ast::union_expr::field;
-using enumeration      = ast::enum_expr::enumeration;
-using self_parameter   = ast::self_parameter;
-using parameter        = ast::function_expr::parameter;
-using for_loop_capture = ast::for_loop_expr::capture;
+using struct_field   = ast::struct_expr::field;
+using union_field    = ast::union_expr::field;
+using enumeration    = ast::enum_expr::enumeration;
+using self_parameter = ast::self_parameter;
+using parameter      = ast::function_expr::parameter;
+using capture        = ast::capture_t; // `match`, `for`, `if`, `while`, and `errdefer` captures
 
 } // namespace symbols
 
@@ -107,13 +105,12 @@ class symbol {
     using data_t = stdx::variant<symbols::builtin,
                                  symbols::node_t,
                                  symbols::label,
-                                 symbols::match_capture,
                                  symbols::struct_field,
                                  symbols::union_field,
                                  symbols::enumeration,
                                  symbols::self_parameter,
                                  symbols::parameter,
-                                 symbols::for_loop_capture>;
+                                 symbols::capture>;
 
   public:
     symbol(std::string_view name, data_t data) noexcept : name_{name}, data_{std::move(data)} {}
@@ -123,15 +120,15 @@ class symbol {
     MAKE_GETTER(name, std::string_view)
     MAKE_DEDUCING_GETTER(data)
 
-    [[nodiscard]] auto get_symbol_location(const mod::module& module) const noexcept
+    [[nodiscard]] auto get_symbol_location(const mod::module_t& module) const noexcept
         -> source_location;
 
     // Like `get_symbol_location`, but a decl_stmt resolves to its declared name's span rather
     // than the whole statement's; used for LSP go-to-definition/rename ranges
-    [[nodiscard]] auto get_symbol_span(const mod::module& module) const noexcept -> source_span;
+    [[nodiscard]] auto get_symbol_span(const mod::module_t& module) const noexcept -> source_span;
 
     // Can only be true for decls, imports, and type aliases
-    [[nodiscard]] auto is_public(const mod::module& module) const noexcept -> bool;
+    [[nodiscard]] auto is_public(const mod::module_t& module) const noexcept -> bool;
 
     [[nodiscard]] auto get_status() const noexcept -> symbol_status { return status_; }
     auto               set_status(symbol_status status) noexcept -> void { status_ = status; }
@@ -184,13 +181,13 @@ class symbol_table {
 
     // Constructs the symbolic node in place with the provided args
     template <typename T, typename... Args>
-    auto insert(std::string_view name, const mod::module& module, Args&&... args)
+    auto insert(std::string_view name, const mod::module_t& module, Args&&... args)
         -> stdx::result<void, diagnostic> {
         return insert(name, module, symbol::data_t{T{std::forward<Args>(args)...}});
     }
 
     // Checks that the module was inserted without collision
-    auto insert(std::string_view name, const mod::module& module, const symbol::data_t& data)
+    auto insert(std::string_view name, const mod::module_t& module, const symbol::data_t& data)
         -> stdx::result<void, diagnostic>;
 
     // For use of prelude injection only
@@ -291,13 +288,13 @@ class symbol_table_registry {
     // Constructs the symbolic node in place with the provided args
     template <typename T, typename... Args>
     [[nodiscard]] auto
-    insert_into(usize table_idx, const mod::module& module, std::string_view name, Args&&... args)
+    insert_into(usize table_idx, const mod::module_t& module, std::string_view name, Args&&... args)
         -> stdx::result<void, diagnostic> {
         return insert_into(table_idx, module, name, symbol::data_t{T{std::forward<Args>(args)...}});
     }
 
     [[nodiscard]] auto insert_into(usize                 table_idx,
-                                   const mod::module&    module,
+                                   const mod::module_t&  module,
                                    std::string_view      name,
                                    const symbol::data_t& data) -> stdx::result<void, diagnostic>;
 
@@ -327,7 +324,7 @@ class symbol_table_registry {
 
     // Looks up all levels of the stack for possible illegal shadowing of the name
     [[nodiscard]] auto is_shadowing(const symbol_table_stack& stack,
-                                    const mod::module&        module,
+                                    const mod::module_t&      module,
                                     std::string_view          name,
                                     const symbol::data_t&     data) noexcept
         -> stdx::result<void, diagnostic>;

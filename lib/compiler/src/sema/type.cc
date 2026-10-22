@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -18,7 +19,12 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/module/module.hh"
+#include "support/big_int.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
 
@@ -30,6 +36,7 @@ using type_mapping = std::pair<type_kind, std::string_view>;
 
 // The qualifier a `^`/`&`/`[]` container spells before its element
 auto container_qualifier(const type& container) -> std::string_view {
+    if (container.is_poly()) { return "mut? "; }
     if (container.is_volatile()) { return container.is_constant() ? "volatile " : "mut volatile "; }
     return container.is_constant() ? "" : "mut ";
 }
@@ -48,6 +55,48 @@ auto leaf_qualifier(const type& leaf) -> std::string_view {
     if (!r || !p) { return false; }
     if (r->underlying.is_constant() && !p->underlying.is_constant()) { return false; }
     return is_same_unqualified(r->underlying, p->underlying);
+}
+
+// Copying an array copies its element values, so the element's own qualifier is irrelevant and
+// nested arrays recurse as values
+[[nodiscard]] auto is_elem_value_copyable(const type& src_elem, const type& dest_elem) noexcept
+    -> bool {
+    if (src_elem == dest_elem) { return true; }
+
+    const auto src_kind{src_elem.get_kind()};
+    const auto dest_kind{dest_elem.get_kind()};
+    const auto is_view{[](type_kind kind) {
+        return kind == type_kind::POINTER || kind == type_kind::REFERENCE ||
+               kind == type_kind::SLICE;
+    }};
+
+    if (is_view(src_kind) || is_view(dest_kind)) {
+        if (src_elem.is_constant() && !dest_elem.is_constant()) { return false; }
+        if (ref_elem_decays_to_ptr(src_elem, dest_elem)) { return true; }
+        if (src_kind != dest_kind) { return false; }
+        const auto view_parts{[](const type& t) -> std::pair<stdx::option<const type&>, bool> {
+            const auto& data{t.get_data()};
+            if (const auto p{data.as_opt<types::pointer>()}) { return {p->underlying, false}; }
+            if (const auto r{data.as_opt<types::reference>()}) { return {r->underlying, false}; }
+            if (const auto sl{data.as_opt<types::slice>()}) {
+                return {sl->underlying, sl->null_terminated};
+            }
+            return {stdx::none, false};
+        }};
+        const auto [src_pointee, src_nt]{view_parts(src_elem)};
+        const auto [dest_pointee, dest_nt]{view_parts(dest_elem)};
+        if (!src_pointee || !dest_pointee || src_nt != dest_nt) { return false; }
+        if (src_pointee->is_constant() && !dest_pointee->is_constant()) { return false; }
+        return is_same_unqualified(*src_pointee, *dest_pointee);
+    }
+
+    if (const auto a_src{src_elem.get_data().as_opt<types::array>()}) {
+        const auto a_dest{dest_elem.get_data().as_opt<types::array>()};
+        return a_dest && a_src->len == a_dest->len &&
+               a_src->null_terminated == a_dest->null_terminated &&
+               is_elem_value_copyable(a_src->underlying, a_dest->underlying);
+    }
+    return is_same_unqualified(src_elem, dest_elem);
 }
 
 [[nodiscard]] constexpr auto float_significand_bits(type_kind kind) noexcept -> u16 {
@@ -74,13 +123,25 @@ constexpr auto TYPE_KIND_NAMES{[] {
 } // namespace
 
 auto type_kind_display_name(type_kind kind) noexcept -> std::string_view {
+    if (kind == type_kind::ENUM_LITERAL) { return "@EnumLiteral()"; }
     return TYPE_KIND_NAMES[kind];
 }
 
-auto type_kind_display_name(const type& t) -> std::string {
-    if (const auto info{as_integer(t)}) {
-        return fmt::format("{}{}", info->is_signed ? 'i' : 'u', info->bits);
+auto int_display_name(const types::integer& info) -> std::string {
+    if (info.c_type != types::c_int_type::NONE) {
+        return std::string{syntax::token_type::C_TYPE_NAMES[std::to_underlying(info.c_type) - 1]};
     }
+    return fmt::format("{}{}", info.is_signed ? 'i' : 'u', info.bits);
+}
+
+auto is_c_longdouble(const type& t) noexcept -> bool {
+    return is_float(t.get_kind()) && t.get_instance_id() == C_LONGDOUBLE_INSTANCE;
+}
+
+auto type_kind_display_name(const type& t) -> std::string {
+    if (const auto info{as_integer(t)}) { return int_display_name(*info); }
+    if (t.get_kind() == type_kind::ENUM_LITERAL) { return "@EnumLiteral()"; }
+    if (is_c_longdouble(t)) { return std::string{syntax::token_type::C_LONGDOUBLE_NAME}; }
     return std::string{type_kind_display_name(t.get_kind())};
 }
 
@@ -102,7 +163,44 @@ auto is_i32(const type& t) noexcept -> bool {
     return info && info->bits == 32 && info->is_signed;
 }
 
-auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
+auto float_format_of(const type& t) noexcept -> stdx::option<float_format> {
+    switch (t.get_kind()) {
+    case type_kind::F16:            return float_format::HALF;
+    case type_kind::F32:            return float_format::SINGLE;
+    case type_kind::F64:            return float_format::DOUBLE;
+    case type_kind::F80:            return float_format::X87;
+    case type_kind::F128:
+    case type_kind::COMPTIME_FLOAT: return float_format::QUAD;
+    default:                        return stdx::none;
+    }
+}
+
+auto fit_float(f128 value, const type& t, stdx::option<math_origin> origin) -> f128 {
+    const auto format{float_format_of(t)};
+    if (!format) { return value; }
+    if (origin && is_float(t.get_kind())) {
+        return evaluate(origin->function, origin->input, *format);
+    }
+    return value.round_to(*format);
+}
+
+auto comptime_float_fits(f128 value, const type& target) -> bool {
+    return !value.is_finite() || fit_float(value, target).is_finite();
+}
+
+auto comptime_int_fits(const big_int& value, const type& target, u32 ptr_bits) noexcept -> bool {
+    switch (target.get_kind()) {
+    case type_kind::INT: {
+        const auto info{as_integer(target)};
+        return !info || value.fits(info->bits, info->is_signed);
+    }
+    case type_kind::ISIZE: return value.fits(ptr_bits, true);
+    case type_kind::USIZE: return value.fits(ptr_bits, false);
+    default:               return true; // not a concrete integer target
+    }
+}
+
+auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool {
     u16  bits{0};
     bool is_signed{false};
     switch (target.get_kind()) {
@@ -120,7 +218,8 @@ auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -
     case type_kind::USIZE: bits = static_cast<u16>(ptr_bits); break;
     default:               return true; // not a concrete integer target
     }
-    if (bits == 0) { return false; }
+    // `u0` only holds 0
+    if (bits == 0) { return value == 0; }
     if (bits >= 128) { return true; }
 
     if (is_signed) {
@@ -138,14 +237,21 @@ auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32
     case type_kind::INT:       return int_width(t);
     case type_kind::BOOL:      return 1U;
     case type_kind::ISIZE:
-    case type_kind::USIZE:
+    case type_kind::USIZE:     return ptr_bits;
     case type_kind::POINTER:
-    case type_kind::REFERENCE: return ptr_bits;
+    case type_kind::REFERENCE: {
+        // A `&dyn I` / `^dyn I` fat pointer is two words, so like a slice it has no packed form
+        const auto  p{t.get_data().as_opt<types::pointer>()};
+        const auto  r{t.get_data().as_opt<types::reference>()};
+        const type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        if (referent && referent->get_kind() == type_kind::DYN) { return stdx::none; }
+        return ptr_bits;
+    }
     case type_kind::F16:
     case type_kind::F32:
     case type_kind::F64:
     case type_kind::F80:
-    case type_kind::F128:      return float_bits(t.get_kind());
+    case type_kind::F128: return float_bits(t.get_kind());
     case type_kind::ENUM:
         if (const auto e{t.get_data().as_opt<types::enum_t>()}) {
             return packed_field_bits(e->underlying, ptr_bits);
@@ -237,24 +343,35 @@ auto is_unsigned_integer(const type& t) noexcept -> bool {
     return t.get_kind() == type_kind::USIZE;
 }
 
+// Whether every value of `from` is also a value of `to`
+auto int_range_fits(const types::integer& from, const types::integer& to) noexcept -> bool {
+    if (from.is_signed) { return to.is_signed && to.bits >= from.bits; }
+    return to.is_signed ? to.bits > from.bits : to.bits >= from.bits;
+}
+
 auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     const auto from_kind{from.get_kind()};
     const auto to_kind{to.get_kind()};
 
     // An unsuffixed integer literal coerces to any concrete integer or float
-    if (from_kind == type_kind::CONSTEXPR_INT) { return is_numeric(to_kind); }
-    if (from_kind == type_kind::CONSTEXPR_FLOAT) {
-        return is_float(to_kind) || to_kind == type_kind::CONSTEXPR_FLOAT;
+    if (from_kind == type_kind::COMPTIME_INT) { return is_numeric(to_kind); }
+    if (from_kind == type_kind::COMPTIME_FLOAT) {
+        return is_float(to_kind) || to_kind == type_kind::COMPTIME_FLOAT;
     }
-    // A concrete numeric also flows into a `constexpr_*` slot
-    if (to_kind == type_kind::CONSTEXPR_INT) { return is_integer(from_kind); }
-    if (to_kind == type_kind::CONSTEXPR_FLOAT) {
+    // A concrete numeric also flows into a `comptime_*` slot
+    if (to_kind == type_kind::COMPTIME_INT) { return is_integer(from_kind); }
+    if (to_kind == type_kind::COMPTIME_FLOAT) {
         return is_float(from_kind) || is_integer(from_kind);
     }
 
     // A float widens to any wider float (`f16 -> f32 -> f64 -> f80 -> f128`).
     if (is_float(from_kind)) {
-        return is_float(to_kind) && float_bits(from_kind) < float_bits(to_kind);
+        if (!is_float(to_kind)) { return false; }
+        // `c_longdouble` and the float it's sized as hold the same values
+        if (is_c_longdouble(from) != is_c_longdouble(to)) {
+            return float_bits(from_kind) <= float_bits(to_kind);
+        }
+        return float_bits(from_kind) < float_bits(to_kind);
     }
 
     const auto from_int{as_integer(from)};
@@ -274,13 +391,18 @@ auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
 
     const auto to_int{as_integer(to)};
     if (!to_int) { return false; }
+    if (from_int->c_type != types::c_int_type::NONE || to_int->c_type != types::c_int_type::NONE) {
+        return int_range_fits(*from_int, *to_int);
+    }
     if (to_int->bits <= from_int->bits) { return false; }
     if (from_int->is_signed) { return to_int->is_signed; }
     return true; // uW widens to any wider iV or uV
 }
 
-auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
-    -> stdx::option<std::string> {
+auto cast_rejection_reason(const type&                        from,
+                           const type&                        to,
+                           u32                                ptr_bits,
+                           stdx::option<const type_name_map&> names) -> stdx::option<std::string> {
     if (is_same_unqualified(from, to) || is_implicit_widenable(from, to)) { return stdx::none; }
 
     const auto from_kind{from.get_kind()};
@@ -306,29 +428,29 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
             return fmt::format(
                 "narrowing conversion from '{}' to '{}' may truncate high bits; use @intCast for a "
                 "checked conversion or @truncate to discard high bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits == to_bits && from_signed != to_signed) {
             return fmt::format(
                 "conversion from '{}' to '{}' changes signedness and may change the represented "
                 "value; use @intCast for a checked conversion or @bitCast to reinterpret the bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits > to_bits && from_signed != to_signed) {
             return fmt::format(
                 "conversion from '{}' to '{}' narrows width and changes signedness; use @intCast "
                 "for a checked conversion or @truncate to discard high bits",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         if (from_bits < to_bits && from_signed && !to_signed) {
             return fmt::format(
                 "conversion from signed '{}' to unsigned '{}' cannot represent negative values; "
                 "use @intCast for a checked conversion",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                from.to_string(names),
+                to.to_string(names));
         }
         return stdx::none;
     }
@@ -337,37 +459,42 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
     if (is_float(from_kind) && is_float(to_kind)) {
         if (float_bits(from_kind) > float_bits(to_kind)) {
             return fmt::format(
-                "narrowing conversion from '{}' to '{}' may lose precision; use @as for an "
-                "explicit conversion",
-                type_kind_display_name(from),
-                type_kind_display_name(to));
+                "narrowing conversion from '{}' to '{}' may lose precision; use @floatCast for "
+                "an explicit conversion",
+                from.to_string(names),
+                to.to_string(names));
         }
         return stdx::none;
     }
 
     // Enum <-> Integer
-    if ((from_kind == type_kind::ENUM && is_integer(to_kind)) ||
-        (is_integer(from_kind) && to_kind == type_kind::ENUM)) {
-        return fmt::format(
-            "conversion between enum '{}' and integer '{}' requires an explicit cast; use @as for "
-            "an explicit conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+    if (from_kind == type_kind::ENUM && is_integer(to_kind)) {
+        return fmt::format("conversion from enum '{}' to integer '{}' requires an explicit cast; "
+                           "use @backingInt for an explicit conversion",
+                           from.to_string(names),
+                           to.to_string(names));
+    }
+    if (is_integer(from_kind) && to_kind == type_kind::ENUM) {
+        return fmt::format("conversion from integer '{}' to enum '{}' requires an explicit cast; "
+                           "use @fromBackingInt for an explicit conversion",
+                           from.to_string(names),
+                           to.to_string(names));
     }
 
     // Float <-> Integer
     if (is_float(from_kind) && is_integer(to_kind)) {
         return fmt::format(
-            "conversion from '{}' to '{}' truncates fractional part; use @as for an explicit "
-            "conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+            "conversion from '{}' to '{}' truncates fractional part; use @intFromFloat for an "
+            "explicit conversion",
+            from.to_string(names),
+            to.to_string(names));
     }
     if (is_integer(from_kind) && is_float(to_kind)) {
         return fmt::format(
-            "conversion from '{}' to '{}' may lose precision; use @as for an explicit conversion",
-            type_kind_display_name(from),
-            type_kind_display_name(to));
+            "conversion from '{}' to '{}' may lose precision; use @floatFromInt for an explicit "
+            "conversion",
+            from.to_string(names),
+            to.to_string(names));
     }
 
     // Bool <-> Integer / Pointer
@@ -375,57 +502,104 @@ auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
         return fmt::format(
             "conversion from '{}' to 'bool' tests non-zero; use @boolFromInt for an explicit "
             "conversion",
-            type_kind_display_name(from));
+            from.to_string(names));
     }
     if (from_kind == type_kind::BOOL && is_integer(to_kind)) {
         return fmt::format(
             "conversion from 'bool' to '{}' maps false/true to 0/1; use @intFromBool for an "
             "explicit conversion",
-            type_kind_display_name(to));
+            to.to_string(names));
     }
 
     return stdx::none;
 }
 
-auto type::to_string() const -> std::string {
+auto type::to_string(stdx::option<const type_name_map&> names) const -> std::string {
+    if (names) {
+        if (const auto it{names->find(this)}; it != names->end()) {
+            return std::string{it->second};
+        }
+    }
+
+    if (is_c_longdouble(*this)) {
+        return fmt::format("{}{}", leaf_qualifier(*this), syntax::token_type::C_LONGDOUBLE_NAME);
+    }
     // An INT's width lives on the key, so it stringifies even before the payload is resolved.
     if (get_kind() == type_kind::INT) {
         const auto info{as_integer(*this)};
-        return fmt::format(
-            "{}{}{}", leaf_qualifier(*this), info->is_signed ? 'i' : 'u', info->bits);
+        return fmt::format("{}{}", leaf_qualifier(*this), int_display_name(*info));
     }
     return data_.visit(
-        [this](types::pointer ptr) {
-            return fmt::format("^{}{}", container_qualifier(*this), ptr.underlying.to_string());
+        [this, names](types::pointer ptr) {
+            return fmt::format(
+                "^{}{}", container_qualifier(*this), ptr.underlying.to_string(names));
         },
-        [this](types::reference ref) {
-            return fmt::format("&{}{}", container_qualifier(*this), ref.underlying.to_string());
+        [this, names](types::reference ref) {
+            return fmt::format(
+                "&{}{}", container_qualifier(*this), ref.underlying.to_string(names));
         },
-        [this](types::slice slice) {
+        [this, names](types::slice slice) {
             return fmt::format("[{}]{}{}",
                                slice.null_terminated ? ":0" : "",
                                container_qualifier(*this),
-                               slice.underlying.to_string());
+                               slice.underlying.to_string(names));
         },
-        [this](types::array arr) {
+        [this, names](types::array arr) {
             return fmt::format("[{}{}]{}{}",
                                arr.len,
                                arr.null_terminated ? ":0" : "",
                                container_qualifier(*this),
-                               arr.underlying.to_string());
+                               arr.underlying.to_string(names));
         },
-        [](types::function fn) {
-            auto params_str{fmt::to_string(fmt::join(
-                fn.params | std::views::transform([](type* param) { return param->to_string(); }),
-                ", "))};
+        [this, names](const types::deferred_array& arr) {
+            std::string dim;
+            if (arr.array.dimension) {
+                if (const auto lit{arr.enclosing.ast.get_as_opt<ast::int_literal_expr>(
+                        *arr.array.dimension)}) {
+                    dim = fmt::to_string(lit->value);
+                } else if (const auto id{arr.enclosing.ast.get_as_opt<ast::identifier_expr>(
+                               *arr.array.dimension)}) {
+                    dim = std::string{id->name};
+                } else {
+                    dim = "_";
+                }
+            }
+            return fmt::format("[{}{}]{}{}",
+                               dim,
+                               arr.array.null_terminated ? ":0" : "",
+                               container_qualifier(*this),
+                               arr.underlying.to_string(names));
+        },
+        [names](types::function fn) {
+            auto params_str{
+                fmt::to_string(fmt::join(fn.params | std::views::transform([names](type* param) {
+                                             return param->to_string(names);
+                                         }),
+                                         ", "))};
             if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
-            return fmt::format("fn({}): {}", params_str, fn.return_type.to_string());
+            return fmt::format("fn({}): {}", params_str, fn.return_type.to_string(names));
         },
-        [](types::closure_t c) { return fmt::format("closure {}", c.signature.to_string()); },
-        [](types::module mod) {
+        [names](types::closure_t c) {
+            return fmt::format("closure {}", c.signature.to_string(names));
+        },
+        [](types::module_t mod) {
             return fmt::format("module {}", mod.imported.path.stem().string());
         },
-        [](types::enum_t e) { return fmt::format("enum : {}", e.underlying.to_string()); },
+        [names](types::enum_t e) {
+            return fmt::format("enum : {}", e.underlying.to_string(names));
+        },
+        [names](types::dyn_t d) {
+            const auto&              iface{d.interface.get_data().as<types::interface_t>()};
+            std::vector<std::string> bound;
+            for (usize i{0}; i < d.assoc_bindings.size(); ++i) {
+                if (!d.assoc_bindings[i]) { continue; }
+                bound.emplace_back(fmt::format(
+                    "{} = {}", iface.assoc_type_names[i], d.assoc_bindings[i]->to_string(names)));
+            }
+            const auto iface_name{d.interface.to_string(names)};
+            if (bound.empty()) { return fmt::format("dyn {}", iface_name); }
+            return fmt::format("dyn {}({})", iface_name, fmt::join(bound, ", "));
+        },
         [this](const auto&) {
             return fmt::format("{}{}", leaf_qualifier(*this), type_kind_display_name(get_kind()));
         });
@@ -448,56 +622,44 @@ auto type_pool::get_many(usize count, type& common_type) noexcept -> gsl::span<t
     return types;
 }
 
-namespace {
-
-auto strip_modifiers(type_pool& pool, const type& old_type, types::mutability_modifiers mut)
+auto type_pool::strip_modifiers(const type& old_type, types::mutability_modifiers mut)
     -> gsl::not_null<type*> {
     auto key{old_type.get_key()};
     key.set_mut(key.get_mut() & ~mut);
 
     // Resolve here since the type information doesn't contain modifier information
-    auto new_type{pool[key]};
+    auto new_type{(*this)[key]};
     new_type->resolve_if<type::data_t>(old_type.get_data());
-    if (const auto idx{old_type.get_symbol_table_idx_opt()}) {
-        new_type->set_symbol_table_idx(*idx);
+    new_type->copy_identity_from(old_type);
+    return new_type;
+}
+
+auto holds_type_values(const type& t) noexcept -> bool {
+    // An enum literal has no runtime form either, until it becomes an enum
+    if (t.get_kind() == type_kind::ENUM_LITERAL) { return true; }
+    const auto& data{t.get_data()};
+    // A not-yet-folded `[N]T` or type-constructor call shares the `type` kind without being one
+    if (const auto deferred{data.as_opt<types::deferred_array>()}) {
+        return holds_type_values(deferred->underlying);
     }
-    return new_type;
+    if (t.get_kind() == type_kind::TYPE) { return !data.is<types::deferred_call>(); }
+    if (const auto arr{data.as_opt<types::array>()}) { return holds_type_values(arr->underlying); }
+    if (const auto slice{data.as_opt<types::slice>()}) {
+        return holds_type_values(slice->underlying);
+    }
+    const auto any_field{[](gsl::span<type*> fields) {
+        return std::ranges::any_of(fields, [](const type* f) { return holds_type_values(*f); });
+    }};
+    if (const auto st{data.as_opt<types::struct_t>()}) { return any_field(st->fields); }
+    if (const auto ut{data.as_opt<types::union_t>()}) { return any_field(ut->fields); }
+    return false;
 }
 
-} // namespace
-
-auto type_pool::strip_const(const type& t) -> gsl::not_null<type*> {
-    if (!t.is_constant()) { return const_cast<type*>(&t); }
-    return strip_modifiers(*this, t, types::mut::CONSTANT);
-}
-
-auto type_pool::strip_volatile(const type& t) -> gsl::not_null<type*> {
-    if (!t.is_volatile()) { return const_cast<type*>(&t); }
-    return strip_modifiers(*this, t, types::mut::VOLATILE);
-}
-
-auto type_pool::with_const(const type& t, bool is_const) -> gsl::not_null<type*> {
-    if (t.is_constant() == is_const) { return const_cast<type*>(&t); }
-    if (!is_const) { return strip_modifiers(*this, t, types::mut::CONSTANT); }
-
-    auto key{t.get_key()};
-    key.set_mut(key.get_mut() | types::mut::CONSTANT);
-    auto new_type{(*this)[key]};
-    new_type->resolve_if<type::data_t>(t.get_data());
-    if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
-    return new_type;
-}
-
-auto type_pool::with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*> {
-    if (t.is_volatile() == is_vol) { return const_cast<type*>(&t); }
-    if (!is_vol) { return strip_modifiers(*this, t, types::mut::VOLATILE); }
-
-    auto key{t.get_key()};
-    key.set_mut(key.get_mut() | types::mut::VOLATILE);
-    auto new_type{(*this)[key]};
-    new_type->resolve_if<type::data_t>(t.get_data());
-    if (const auto idx{t.get_symbol_table_idx_opt()}) { new_type->set_symbol_table_idx(*idx); }
-    return new_type;
+auto is_comptime_aggregate(const type& t) noexcept -> bool {
+    if (t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>()) {
+        return false;
+    }
+    return holds_type_values(t);
 }
 
 auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
@@ -524,8 +686,8 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     }
 
     if (kind == type_kind::FUNCTION) {
-        // A raw fn-typed slot may bind either a plain function or a capturing closure at any call
-        if (unmodified) { return true; }
+        // A thin slot may still bind a closure's own type through a `comptime` param
+        if (unmodified && !is_erased_fn(t)) { return true; }
         if (const auto fn{data.as_opt<types::function>()}) {
             if (is_generic_type(fn->return_type, false)) { return true; }
             for (const auto* p : fn->params) {
@@ -535,6 +697,19 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
         return false;
     }
     return false;
+}
+
+auto signature_of(const type& fn_value_type) noexcept -> stdx::option<const types::function&> {
+    const type* target{&fn_value_type};
+    if (const auto ref{target->get_data().as_opt<types::reference>()}) {
+        target = &ref->underlying;
+    }
+    if (const auto ptr{target->get_data().as_opt<types::pointer>()}) { target = &ptr->underlying; }
+    return target->get_data().as_opt<types::function>();
+}
+
+auto is_type_parameter_slot(const type& t) noexcept -> bool {
+    return t.get_kind() == type_kind::TYPE && !t.get_data().is<types::deferred_array>();
 }
 
 auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
@@ -555,11 +730,21 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
     case type_kind::STRUCT:
     case type_kind::UNION:
     case type_kind::ENUM:
-    case type_kind::CLOSURE:   return a.get_symbol_table_idx_opt() == b.get_symbol_table_idx_opt();
-    case type_kind::DYN:       {
+    case type_kind::CLOSURE:   {
+        if (a.get_symbol_table_idx_opt() != b.get_symbol_table_idx_opt()) { return false; }
+        // Every instance of one type constructor shares its body's scope; a ctor's own template
+        // (no instance id) still matches any of them
+        const auto id_a{a.get_instance_id()};
+        const auto id_b{b.get_instance_id()};
+        return id_a == 0 || id_b == 0 || id_a == id_b;
+    }
+    case type_kind::DYN: {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};
         const auto d_b{b.get_data().as_opt<types::dyn_t>()};
-        return d_a && d_b && &d_a->interface == &d_b->interface;
+        if (!d_a || !d_b || &d_a->interface != &d_b->interface) { return false; }
+        return std::ranges::equal(d_a->assoc_bindings, d_b->assoc_bindings, [](type* x, type* y) {
+            return x == y || (x && y && is_same_unqualified(*x, *y));
+        });
     }
     case type_kind::POINTER: {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
@@ -591,17 +776,69 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         const auto f_a{a.get_data().as_opt<types::function>()};
         const auto f_b{b.get_data().as_opt<types::function>()};
         if (!f_a || !f_b) { return a == b; }
-        if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
-            f_a->params.size() != f_b->params.size()) {
-            return false;
-        }
-        for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
-            if (!is_same_unqualified(*param_a, *param_b)) { return false; }
-        }
-        return is_same_unqualified(f_a->return_type, f_b->return_type);
+        return f_a->erased == f_b->erased && is_same_fn_signature(a, b);
     }
-    default: return is_numeric(kind);
+    default:
+        // `c_longdouble` is its own type, apart from the float it's sized as
+        if (is_float(kind)) { return is_c_longdouble(a) == is_c_longdouble(b); }
+        return is_numeric(kind);
     }
+}
+
+auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool {
+    const auto f_a{a.get_data().as_opt<types::function>()};
+    const auto f_b{b.get_data().as_opt<types::function>()};
+    if (!f_a || !f_b) { return a == b; }
+    if (f_a->conv != f_b->conv || f_a->is_variadic != f_b->is_variadic ||
+        f_a->params.size() != f_b->params.size()) {
+        return false;
+    }
+    for (const auto& [param_a, param_b] : std::views::zip(f_a->params, f_b->params)) {
+        if (!is_same_unqualified(*param_a, *param_b)) { return false; }
+    }
+    return is_same_unqualified(f_a->return_type, f_b->return_type);
+}
+
+auto is_fn_assignable(const type& src, const type& dest) noexcept -> bool {
+    const auto f_src{src.get_data().as_opt<types::function>()};
+    const auto f_dest{dest.get_data().as_opt<types::function>()};
+    if (!f_src || !f_dest) { return false; }
+    if (f_src->erased && !f_dest->erased) { return false; }
+    // A trampoline cannot forward C varargs
+    if (f_dest->erased && f_src->is_variadic) { return false; }
+    return is_same_fn_signature(src, dest);
+}
+
+auto is_erased_fn(const type& t) noexcept -> bool {
+    const auto fn{t.get_data().as_opt<types::function>()};
+    return fn && fn->erased;
+}
+
+auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::function&> {
+    const type* target{&t};
+    if (const auto p{t.get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
+    const auto fn{target->get_data().as_opt<types::function>()};
+    if (!fn || !fn->erased) { return stdx::none; }
+    return *fn;
+}
+
+auto is_fat_callable(const type& t) noexcept -> bool { return fat_callable_fn(t).has_value(); }
+
+auto slice_copy_destination(const mod::module_t& m, ast::node_id lhs)
+    -> stdx::option<ast::expr_handle> {
+    const auto is_slice{[&](ast::node_id expr) {
+        const auto t{m.get_sema_type_opt(expr)};
+        return t && t->get_data().is<types::slice>();
+    }};
+    if (const auto index{m.ast.get_as_opt<ast::index_expr>(lhs)};
+        index && m.ast.get_as_opt<ast::range_expr>(index->index) && is_slice(lhs)) {
+        return ast::expr_handle{lhs};
+    }
+    if (const auto deref{m.ast.get_as_opt<ast::dereference_expr>(lhs)};
+        deref && is_slice(deref->rhs)) {
+        return deref->rhs;
+    }
+    return stdx::none;
 }
 
 auto is_assignable(const type& src, const type& dest) noexcept -> bool {
@@ -619,6 +856,20 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
     const auto src_kind{src.get_kind()};
     const auto dest_kind{dest.get_kind()};
 
+    // Whether the literal names a member is checked where its value is known
+    if (src_kind == type_kind::ENUM_LITERAL) {
+        if (dest_kind == type_kind::ENUM || dest_kind == type_kind::ENUM_LITERAL) { return true; }
+        if (const auto ut{dest.get_data().as_opt<types::union_t>()}) { return !ut->is_untagged; }
+        return false;
+    }
+
+    // A `union(MyEnum)` reads as its tag
+    if (const auto ut{src.get_data().as_opt<types::union_t>()};
+        ut && ut->tag_enum && dest_kind == type_kind::ENUM &&
+        is_same_unqualified(*ut->tag_enum, dest)) {
+        return true;
+    }
+
     if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {
         if (ut->is_untagged) {
             for (const auto* field : ut->fields) {
@@ -626,6 +877,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             }
         }
     }
+
+    // Only a place reached through a `mut?` parameter has the function's `mut?` mutability
+    if (dest.is_poly() && !src.is_poly()) { return false; }
 
     if (src_kind == dest_kind) {
         if (is_numeric(src_kind)) { return is_same_unqualified(src, dest); }
@@ -636,9 +890,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
         case type_kind::UNION:
         case type_kind::ENUM:
         case type_kind::TYPE:
+        case type_kind::CLOSURE: return is_same_unqualified(src, dest);
         case type_kind::FUNCTION:
-        case type_kind::CLOSURE:
-            return is_same_unqualified(src, dest);
+            return is_fn_assignable(src, dest);
             // ^S to ^T must be const correct
         case type_kind::POINTER: {
             const auto p_src{src.get_data().as_opt<types::pointer>()};
@@ -651,6 +905,9 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             // `^T` -> `^dyn I`: the concrete `T`'s conformance is enforced at coercion lowering.
             if (p_dest->underlying.get_kind() == type_kind::DYN) {
                 return is_aggregate(p_src->underlying.get_kind());
+            }
+            if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
+                return is_fn_assignable(p_src->underlying, p_dest->underlying);
             }
             return is_same_unqualified(p_src->underlying, p_dest->underlying);
         }
@@ -688,12 +945,8 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             if (a_src->len != a_dest->len || a_src->null_terminated != a_dest->null_terminated) {
                 return false;
             }
-            if (a_src->underlying.is_constant() && !a_dest->underlying.is_constant()) {
-                return false;
-            }
-            if (src.is_constant() && !dest.is_constant()) { return false; }
-            return is_same_unqualified(a_src->underlying, a_dest->underlying) ||
-                   ref_elem_decays_to_ptr(a_src->underlying, a_dest->underlying);
+            // Arrays are values: assignment copies, so element constness never blocks the copy
+            return is_elem_value_copyable(a_src->underlying, a_dest->underlying);
         }
         default: break;
         }
@@ -711,15 +964,60 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
                ref_elem_decays_to_ptr(a_src->underlying, s_dest->underlying);
     }
 
+    // A closure erases into a `fn(...)` / `^fn(...)` of the same call shape
+    if (src_kind == type_kind::CLOSURE && is_fat_callable(dest)) {
+        const auto cl{src.get_data().as_opt<types::closure_t>()};
+        const auto p_dest{dest.get_data().as_opt<types::pointer>()};
+        return cl && is_same_fn_signature(cl->signature, p_dest ? p_dest->underlying : dest);
+    }
+
     // Function to Function Pointer coercion: fn(...) -> ^fn(...) / ^mut fn(...)
     if (src_kind == type_kind::FUNCTION && dest_kind == type_kind::POINTER) {
         if (const auto p_dest{dest.get_data().as_opt<types::pointer>()}) {
             if (p_dest->underlying.get_kind() == type_kind::FUNCTION) {
-                return is_same_unqualified(src, p_dest->underlying);
+                return is_fn_assignable(src, p_dest->underlying);
             }
         }
     }
 
+    return false;
+}
+
+auto is_arg_assignable(const type& src, const type& param) noexcept -> bool {
+    if (!param.is_poly() || src.is_poly()) { return is_assignable(src, param); }
+    const auto view_parts{[](const type& t) -> std::pair<stdx::option<const type&>, bool> {
+        const auto& data{t.get_data()};
+        if (const auto p{data.as_opt<types::pointer>()}) { return {p->underlying, false}; }
+        if (const auto r{data.as_opt<types::reference>()}) { return {r->underlying, false}; }
+        if (const auto sl{data.as_opt<types::slice>()}) {
+            return {sl->underlying, sl->null_terminated};
+        }
+        if (const auto ar{data.as_opt<types::array>()}) {
+            return {ar->underlying, ar->null_terminated};
+        }
+        return {stdx::none, false};
+    }};
+    const auto src_kind{src.get_kind()};
+    const auto param_kind{param.get_kind()};
+    const bool array_to_slice{src_kind == type_kind::ARRAY && param_kind == type_kind::SLICE};
+    if (src_kind != param_kind && !array_to_slice) { return false; }
+    const auto [src_elem, src_nt]{view_parts(src)};
+    const auto [param_elem, param_nt]{view_parts(param)};
+    if (!src_elem || !param_elem || (param_nt && !src_nt)) { return false; }
+    if (src_kind == type_kind::ARRAY && param_kind == type_kind::ARRAY &&
+        src.get_data().as<types::array>().len != param.get_data().as<types::array>().len) {
+        return false;
+    }
+    return is_same_unqualified(*src_elem, *param_elem);
+}
+
+auto contains_poly(const type& t) noexcept -> bool {
+    if (t.is_poly()) { return true; }
+    const auto& data{t.get_data()};
+    if (const auto p{data.as_opt<types::pointer>()}) { return contains_poly(p->underlying); }
+    if (const auto r{data.as_opt<types::reference>()}) { return contains_poly(r->underlying); }
+    if (const auto sl{data.as_opt<types::slice>()}) { return contains_poly(sl->underlying); }
+    if (const auto ar{data.as_opt<types::array>()}) { return contains_poly(ar->underlying); }
     return false;
 }
 

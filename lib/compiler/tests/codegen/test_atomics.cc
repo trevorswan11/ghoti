@@ -17,7 +17,7 @@ TEST_CASE("@atomicLoad lowers to an atomic load with the requested ordering") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^mut i32): i32 {
+        pub const f = fn(p: ^mut i32): i32 {
             return @atomicLoad(i32, p, builtin.MemoryOrder.seq_cst);
         };
     )")};
@@ -33,7 +33,7 @@ TEST_CASE("@atomicStore lowers to an atomic store with the requested ordering") 
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^mut i32): void {
+        pub const f = fn(p: ^mut i32): void {
             @atomicStore(p, 1, builtin.MemoryOrder.release);
         };
     )")};
@@ -49,7 +49,7 @@ TEST_CASE("@atomicRmw lowers to an atomicrmw instruction using the requested op"
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^mut i32): i32 {
+        pub const f = fn(p: ^mut i32): i32 {
             return @atomicRmw(i32, p, builtin.AtomicRmwOp.add, 1, builtin.MemoryOrder.seq_cst);
         };
     )")};
@@ -64,7 +64,7 @@ TEST_CASE("@cmpxchgWeak lowers to a weak cmpxchg instruction") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^mut i32, out: ^mut i32): bool {
+        pub const f = fn(p: ^mut i32, out: ^mut i32): bool {
             return @cmpxchgWeak(i32, p, 0, 1, builtin.MemoryOrder.seq_cst,
                                 builtin.MemoryOrder.relaxed, out);
         };
@@ -80,7 +80,7 @@ TEST_CASE("@cmpxchgStrong lowers to a (non-weak) cmpxchg instruction") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(p: ^mut i32, out: ^mut i32): bool {
+        pub const f = fn(p: ^mut i32, out: ^mut i32): bool {
             return @cmpxchgStrong(i32, p, 0, 1, builtin.MemoryOrder.seq_cst,
                                   builtin.MemoryOrder.relaxed, out);
         };
@@ -97,7 +97,7 @@ TEST_CASE("@fence lowers to a standalone fence instruction") {
     llvm::LLVMContext   context;
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        pub const f := fn(): void {
+        pub const f = fn(): void {
             @fence(builtin.MemoryOrder.acq_rel);
         };
     )")};

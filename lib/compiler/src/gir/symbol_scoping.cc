@@ -14,6 +14,7 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
@@ -34,10 +35,10 @@ struct scan_state {
     name_count_map_t&          name_counts;
     symbol_scoping::str_set_t& weak_names;
     const sema::context&       ctx;
-    const mod::module&         entry_mod;
+    const mod::module_t&       entry_mod;
 };
 
-// A function / `var` global whose name is fixed by an external contract must never be renamed.
+// A function / `let mut` global whose name is fixed by an external contract must never be renamed.
 [[nodiscard]] auto is_externally_fixed(const ast::decl_stmt& decl) -> bool {
     if (decl.has_modifier(ast::decl_modifiers::EXTERN)) { return true; }
     if (decl.has_modifier(ast::decl_modifiers::EXPORT)) { return true; }
@@ -45,9 +46,24 @@ struct scan_state {
     return static_cast<bool>(decl.link_name);
 }
 
+// A non-function `let`/`const` the emitter lowers to a real GIR global, mirroring the early
+// returns of `emitter::emit_top_level_decl`.
+[[nodiscard]] auto has_global_storage(const mod::module_t& owner_mod, ast::node_id id) -> bool {
+    if (owner_mod.is_storageless_decl(id) || owner_mod.is_comptime_value_decl(id)) { return false; }
+    const auto ty{owner_mod.get_sema_type_opt(id)};
+    if (!ty) { return false; }
+    switch (ty->get_kind()) {
+    case sema::type_kind::TYPE:
+    case sema::type_kind::INTERFACE:
+    case sema::type_kind::FUNCTION:  return false;
+    default:                         return true;
+    }
+}
+
 auto scan_decl(scan_state&           st,
-               const mod::module&    owner_mod,
+               const mod::module_t&  owner_mod,
                usize                 owner_table_idx,
+               ast::node_id          id,
                const ast::decl_stmt& decl) -> void {
     const auto& ast{owner_mod.ast};
     if (!decl.value) { return; }
@@ -57,9 +73,9 @@ auto scan_decl(scan_state&           st,
     const auto name{name_ident->name};
 
     const bool is_fn{ast.get_as_opt<ast::function_expr>(*decl.value).has_value()};
-    const bool is_var{decl.has_modifier(ast::decl_modifiers::VARIABLE)};
+    const bool is_var{decl.has_modifier(ast::decl_modifiers::MUT)};
 
-    if (is_fn || is_var) {
+    if (is_fn || is_var || has_global_storage(owner_mod, id)) {
         st.name_counts[std::string{name}] += 1;
 
         // A `weak` definition and its non-weak override are meant to collapse onto one symbol
@@ -91,16 +107,16 @@ auto scan_decl(scan_state&           st,
 
     for (const auto& member : *members) {
         if (const auto md{ast.get_as_opt<ast::decl_stmt>(*member)}) {
-            scan_decl(st, owner_mod, *agg_table, *md);
+            scan_decl(st, owner_mod, *agg_table, *member, *md);
         }
     }
 }
 
-auto scan_module(scan_state& st, const mod::module& mod) -> void {
+auto scan_module(scan_state& st, const mod::module_t& mod) -> void {
     if (!mod.root_table_idx || mod.is_errored() || mod.is_poisoned()) { return; }
     for (const auto root_id : mod.ast) {
         if (const auto decl{mod.ast.get_as_opt<ast::decl_stmt>(root_id)}) {
-            scan_decl(st, mod, *mod.root_table_idx, *decl);
+            scan_decl(st, mod, *mod.root_table_idx, root_id, *decl);
         }
     }
 }
@@ -112,9 +128,9 @@ auto symbol_scoping::key_of(usize owner_table_idx, std::string_view name) -> std
     return fmt::format("{}{}{}", owner_table_idx, SEP, name);
 }
 
-auto symbol_scoping::build(const sema::context&          ctx,
-                           const mod::module&            entry_mod,
-                           gsl::span<mod::module* const> deps) -> symbol_scoping {
+auto symbol_scoping::build(const sema::context&                    ctx,
+                           const mod::module_t&                    entry_mod,
+                           gsl::span<stdx::option<mod::module_t&>> deps) -> symbol_scoping {
     PROFILE_FUNCTION();
     symbol_scoping   policy;
     name_count_map_t name_counts;
@@ -122,7 +138,7 @@ auto symbol_scoping::build(const sema::context&          ctx,
     scan_state       st{policy.scopable_defs_, name_counts, weak_names, ctx, entry_mod};
 
     scan_module(st, entry_mod);
-    for (auto* dep : deps) {
+    for (auto dep : deps) {
         if (dep) { scan_module(st, *dep); }
     }
 

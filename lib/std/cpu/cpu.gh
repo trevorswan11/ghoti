@@ -1,0 +1,437 @@
+//! The features of the CPU a program runs on, found at runtime.
+//!
+//! `builtin.cpu` is the CPU code is compiled for; `detect` asks the machine itself, so a
+//! `@[target_features(...)]` function can be called only where it is safe to.
+import std;
+
+/// The CPU features of the machine running this code: the compiled-for features of
+/// `builtin.cpu`, plus every one the hardware and OS report on top of them.
+///
+/// Only x86, and AArch64 on Linux, macOS, and Windows, report extra features; elsewhere this is
+/// `builtin.cpu.features`.
+pub const detect = fn(): builtin.CpuFeatureSet {
+    let mut set = builtin.cpu.features;
+    @cfg (arch == .x86_64 or arch == .x86) {
+        x86.detect(&mut set);
+    } else @cfg (arch == .aarch64 and os == .linux) {
+        aarch64_linux.detect(&mut set);
+    } else @cfg (arch == .aarch64 and os == .macos) {
+        aarch64_macos.detect(&mut set);
+    } else @cfg (arch == .aarch64 and os == .windows) {
+        aarch64_windows.detect(&mut set);
+    }
+    return set;
+};
+
+// Whether bit `n` of `word` is set
+const bit = fn(word: u64, n: u6): bool {
+    return ((word >> @as(u64, n)) & 1) != 0;
+};
+
+@cfg (arch == .x86_64 or arch == .x86) {
+    const x86 = struct {
+        const Regs = struct {
+            eax: u32,
+            ebx: u32,
+            ecx: u32,
+            edx: u32,
+        };
+
+        const cpuid = fn(leaf: u32, subleaf: u32): Regs {
+            let mut a: u32 = 0;
+            let mut b: u32 = 0;
+            let mut c: u32 = 0;
+            let mut d: u32 = 0;
+            asm {
+                template: "cpuid",
+                outputs: ("={eax}" = a, "={ebx}" = b, "={ecx}" = c, "={edx}" = d),
+                inputs: ("{eax}" = leaf, "{ecx}" = subleaf),
+            };
+            return .{ .eax = a, .ebx = b, .ecx = c, .edx = d };
+        };
+
+        // The register state the OS saves on a context switch (XCR0)
+        const xgetbv = fn(): u64 {
+            let mut lo: u32 = 0;
+            let mut hi: u32 = 0;
+            asm {
+                template: "xgetbv",
+                outputs: ("={eax}" = lo, "={edx}" = hi),
+                inputs: ("{ecx}" = 0u32),
+            };
+            return (@as(u64, hi) << 32) | @as(u64, lo);
+        };
+
+        const on = fn(
+            set: &mut builtin.CpuFeatureSet,
+            feature: builtin.CpuFeature,
+            word: u32,
+            n: u6,
+        ): void {
+            if (bit(@as(u64, word), n)) {
+                set.set(feature, true);
+            }
+        };
+
+        const detect = fn(set: &mut builtin.CpuFeatureSet): void {
+            let max_leaf = cpuid(0, 0).eax;
+            let max_ext = cpuid(0x80000000, 0).eax;
+            if (max_leaf < 1) {
+                return;
+            }
+
+            let l1 = cpuid(1, 0);
+            // AVX state is usable only when the OS saves the YMM registers; AVX-512 also needs
+            // the opmask and ZMM state, and AMX the tile state
+            let xcr0: u64 = if (bit(@as(u64, l1.ecx), 27)) xgetbv() else 0;
+            let avx_state = (xcr0 & 0x6) == 0x6;
+            let avx512_state = avx_state and (xcr0 & 0xE0) == 0xE0;
+            let amx_state = (xcr0 & 0x60000) == 0x60000;
+
+            on(set, .sse3, l1.ecx, 0);
+            on(set, .pclmul, l1.ecx, 1);
+            on(set, .ssse3, l1.ecx, 9);
+            on(set, .cx16, l1.ecx, 13);
+            on(set, .sse4_1, l1.ecx, 19);
+            on(set, .sse4_2, l1.ecx, 20);
+            on(set, .movbe, l1.ecx, 22);
+            on(set, .popcnt, l1.ecx, 23);
+            on(set, .aes, l1.ecx, 25);
+            on(set, .xsave, l1.ecx, 26);
+            on(set, .rdrnd, l1.ecx, 30);
+            on(set, .cmov, l1.edx, 15);
+            on(set, .cx8, l1.edx, 8);
+            on(set, .mmx, l1.edx, 23);
+            on(set, .fxsr, l1.edx, 24);
+            on(set, .sse, l1.edx, 25);
+            on(set, .sse2, l1.edx, 26);
+            if (avx_state) {
+                on(set, .avx, l1.ecx, 28);
+                on(set, .fma, l1.ecx, 12);
+                on(set, .f16c, l1.ecx, 29);
+            }
+
+            if (max_leaf >= 7) {
+                let l7 = cpuid(7, 0);
+                on(set, .fsgsbase, l7.ebx, 0);
+                on(set, .sgx, l7.ebx, 2);
+                on(set, .bmi, l7.ebx, 3);
+                on(set, .bmi2, l7.ebx, 8);
+                on(set, .invpcid, l7.ebx, 10);
+                on(set, .rtm, l7.ebx, 11);
+                on(set, .rdseed, l7.ebx, 18);
+                on(set, .adx, l7.ebx, 19);
+                on(set, .clflushopt, l7.ebx, 23);
+                on(set, .clwb, l7.ebx, 24);
+                on(set, .sha, l7.ebx, 29);
+                on(set, .pku, l7.ecx, 4);
+                on(set, .waitpkg, l7.ecx, 5);
+                on(set, .shstk, l7.ecx, 7);
+                on(set, .gfni, l7.ecx, 8);
+                on(set, .rdpid, l7.ecx, 22);
+                on(set, .kl, l7.ecx, 23);
+                on(set, .cldemote, l7.ecx, 25);
+                on(set, .movdiri, l7.ecx, 27);
+                on(set, .movdir64b, l7.ecx, 28);
+                on(set, .enqcmd, l7.ecx, 29);
+                on(set, .uintr, l7.edx, 5);
+                on(set, .serialize, l7.edx, 14);
+                on(set, .tsxldtrk, l7.edx, 16);
+                on(set, .pconfig, l7.edx, 18);
+                if (avx_state) {
+                    on(set, .avx2, l7.ebx, 5);
+                    on(set, .vaes, l7.ecx, 9);
+                    on(set, .vpclmulqdq, l7.ecx, 10);
+                }
+                if (avx512_state) {
+                    on(set, .avx512f, l7.ebx, 16);
+                    on(set, .avx512dq, l7.ebx, 17);
+                    on(set, .avx512ifma, l7.ebx, 21);
+                    on(set, .avx512cd, l7.ebx, 28);
+                    on(set, .avx512bw, l7.ebx, 30);
+                    on(set, .avx512vl, l7.ebx, 31);
+                    on(set, .avx512vbmi, l7.ecx, 1);
+                    on(set, .avx512vbmi2, l7.ecx, 6);
+                    on(set, .avx512vnni, l7.ecx, 11);
+                    on(set, .avx512bitalg, l7.ecx, 12);
+                    on(set, .avx512vpopcntdq, l7.ecx, 14);
+                    on(set, .avx512fp16, l7.edx, 23);
+                }
+                if (amx_state) {
+                    on(set, .amx_bf16, l7.edx, 22);
+                    on(set, .amx_tile, l7.edx, 24);
+                    on(set, .amx_int8, l7.edx, 25);
+                }
+
+                if (l7.eax >= 1) {
+                    let l7_1 = cpuid(7, 1);
+                    on(set, .sha512, l7_1.eax, 0);
+                    on(set, .sm3, l7_1.eax, 1);
+                    on(set, .sm4, l7_1.eax, 2);
+                    on(set, .raoint, l7_1.eax, 3);
+                    on(set, .cmpccxadd, l7_1.eax, 7);
+                    on(set, .hreset, l7_1.eax, 22);
+                    on(set, .prefetchi, l7_1.edx, 14);
+                    if (avx_state) {
+                        on(set, .avxvnni, l7_1.eax, 4);
+                        on(set, .avxifma, l7_1.eax, 23);
+                        on(set, .avxvnniint8, l7_1.edx, 4);
+                        on(set, .avxneconvert, l7_1.edx, 5);
+                        on(set, .avxvnniint16, l7_1.edx, 10);
+                    }
+                    if (avx512_state) {
+                        on(set, .avx512bf16, l7_1.eax, 5);
+                    }
+                    if (amx_state) {
+                        on(set, .amx_fp16, l7_1.eax, 21);
+                    }
+                }
+            }
+
+            if (max_leaf >= 0xD) {
+                let ld = cpuid(0xD, 1);
+                on(set, .xsaveopt, ld.eax, 0);
+                on(set, .xsavec, ld.eax, 1);
+                on(set, .xsaves, ld.eax, 3);
+            }
+
+            if (max_ext >= 0x80000001) {
+                let ext = cpuid(0x80000001, 0);
+                on(set, .sahf, ext.ecx, 0);
+                on(set, .lzcnt, ext.ecx, 5);
+                on(set, .sse4a, ext.ecx, 6);
+                on(set, .prfchw, ext.ecx, 8);
+                on(set, .lwp, ext.ecx, 15);
+                on(set, .tbm, ext.ecx, 21);
+                on(set, .mwaitx, ext.ecx, 29);
+                @cfg (arch == .x86_64) {
+                    on(set, .@"64bit", ext.edx, 29);
+                }
+                if (avx_state) {
+                    on(set, .xop, ext.ecx, 11);
+                    on(set, .fma4, ext.ecx, 16);
+                }
+            }
+        };
+    };
+}
+
+@cfg (arch == .aarch64 and os == .linux) {
+    const aarch64_linux = struct {
+        const AT_NULL: u64 = 0;
+        const AT_HWCAP: u64 = 16;
+        const AT_HWCAP2: u64 = 26;
+
+        // A little-endian `u64` at byte `at` of `bytes`
+        const read_word = fn(bytes: []u8, at: usize): u64 {
+            let mut out: u64 = 0;
+            for (0..8) |i| {
+                out |= @as(u64, bytes[at + i]) << @as(u64, i * 8);
+            }
+            return out;
+        };
+
+        const on = fn(
+            set: &mut builtin.CpuFeatureSet,
+            feature: builtin.CpuFeature,
+            word: u64,
+            n: u6,
+        ): void {
+            if (bit(word, n)) {
+                set.set(feature, true);
+            }
+        };
+
+        // The kernel's `AT_HWCAP` and `AT_HWCAP2`, from the auxiliary vector
+        const hwcaps = fn(): [2]u64 {
+            let mut caps: [2]mut u64 = .{ 0, 0 };
+            let handle = match (std.os.open("/proc/self/auxv", std.os.O_RDONLY, 0)) {
+                .ok => |h| h,
+                .err => return caps,
+            };
+            defer _ = std.os.close(handle);
+
+            let mut buf: [4096]mut u8 = undefined;
+            let mut len: usize = 0;
+            while (len < buf.len) {
+                let got = match (std.os.read(handle, buf[len..])) {
+                    .ok => |n| n,
+                    .err => break,
+                };
+                if (got == 0) {
+                    break;
+                }
+                len += got;
+            }
+
+            let mut at: usize = 0;
+            while (at + 16 <= len) : (at += 16) {
+                let kind = read_word(buf[0..len], at);
+                let value = read_word(buf[0..len], at + 8);
+                if (kind == AT_NULL) {
+                    break;
+                }
+                if (kind == AT_HWCAP) {
+                    caps[0] = value;
+                }
+                if (kind == AT_HWCAP2) {
+                    caps[1] = value;
+                }
+            }
+            return caps;
+        };
+
+        const detect = fn(set: &mut builtin.CpuFeatureSet): void {
+            let caps = hwcaps();
+            let hw = caps[0];
+            let hw2 = caps[1];
+            on(set, .fp_armv8, hw, 0);
+            on(set, .neon, hw, 1);
+            on(set, .aes, hw, 3);
+            on(set, .sha2, hw, 6);
+            on(set, .crc, hw, 7);
+            on(set, .lse, hw, 8);
+            on(set, .fullfp16, hw, 9);
+            on(set, .rdm, hw, 12);
+            on(set, .jsconv, hw, 13);
+            on(set, .complxnum, hw, 14);
+            on(set, .rcpc, hw, 15);
+            on(set, .ccpp, hw, 16);
+            on(set, .sha3, hw, 17);
+            on(set, .sm4, hw, 19);
+            on(set, .dotprod, hw, 20);
+            on(set, .sve, hw, 22);
+            on(set, .fp16fml, hw, 23);
+            on(set, .dit, hw, 24);
+            on(set, .rcpc_immo, hw, 26);
+            on(set, .flagm, hw, 27);
+            on(set, .ssbs, hw, 28);
+            on(set, .sb, hw, 29);
+            on(set, .pauth, hw, 30);
+            on(set, .ccdp, hw2, 0);
+            on(set, .sve2, hw2, 1);
+            on(set, .altnzcv, hw2, 7);
+            on(set, .fptoint, hw2, 8);
+            on(set, .i8mm, hw2, 13);
+            on(set, .bf16, hw2, 14);
+            on(set, .rand, hw2, 16);
+            on(set, .bti, hw2, 17);
+            on(set, .mte, hw2, 18);
+        };
+    };
+}
+
+@cfg (arch == .aarch64 and os == .macos) {
+    extern("System", "sysctlbyname") const sysctlbyname: fn(
+        name: ^u8,
+        oldp: ^mut u8,
+        oldlenp: ^mut usize,
+        newp: ^mut u8,
+        newlen: usize,
+    ): i32;
+
+    const aarch64_macos = struct {
+        // Whether the `hw.optional` sysctl `name` reads as a nonzero integer
+        const has = fn(name: [:0]u8): bool {
+            let mut value: u32 = 0;
+            let mut len: usize = 4;
+            let rc = sysctlbyname(
+                name.ptr,
+                @ptrCast(^mut u8, ^mut value),
+                ^mut len,
+                @ptrFromInt(^mut u8, 0),
+                0,
+            );
+            return rc == 0 and value != 0;
+        };
+
+        const on = fn(
+            set: &mut builtin.CpuFeatureSet,
+            feature: builtin.CpuFeature,
+            name: [:0]u8,
+        ): void {
+            if (has(name)) {
+                set.set(feature, true);
+            }
+        };
+
+        const detect = fn(set: &mut builtin.CpuFeatureSet): void {
+            on(set, .lse, "hw.optional.arm.FEAT_LSE");
+            on(set, .crc, "hw.optional.armv8_crc32");
+            on(set, .rdm, "hw.optional.arm.FEAT_RDM");
+            on(set, .sha3, "hw.optional.arm.FEAT_SHA3");
+            on(set, .dotprod, "hw.optional.arm.FEAT_DotProd");
+            on(set, .fp16fml, "hw.optional.arm.FEAT_FHM");
+            on(set, .fullfp16, "hw.optional.arm.FEAT_FP16");
+            on(set, .jsconv, "hw.optional.arm.FEAT_JSCVT");
+            on(set, .complxnum, "hw.optional.arm.FEAT_FCMA");
+            on(set, .rcpc, "hw.optional.arm.FEAT_LRCPC");
+            on(set, .rcpc_immo, "hw.optional.arm.FEAT_LRCPC2");
+            on(set, .flagm, "hw.optional.arm.FEAT_FlagM");
+            on(set, .altnzcv, "hw.optional.arm.FEAT_FlagM2");
+            on(set, .fptoint, "hw.optional.arm.FEAT_FRINTTS");
+            on(set, .i8mm, "hw.optional.arm.FEAT_I8MM");
+            on(set, .bf16, "hw.optional.arm.FEAT_BF16");
+            on(set, .dit, "hw.optional.arm.FEAT_DIT");
+            on(set, .sb, "hw.optional.arm.FEAT_SB");
+            on(set, .ssbs, "hw.optional.arm.FEAT_SSBS");
+            on(set, .bti, "hw.optional.arm.FEAT_BTI");
+            on(set, .pauth, "hw.optional.arm.FEAT_PAuth");
+        };
+    };
+}
+
+@cfg (arch == .aarch64 and os == .windows) {
+    extern("kernel32", "IsProcessorFeaturePresent") const IsProcessorFeaturePresent: extern fn(
+        feature: u32,
+    ) callconv(.winapi): i32;
+
+    const aarch64_windows = struct {
+        const on = fn(set: &mut builtin.CpuFeatureSet, feature: builtin.CpuFeature, pf: u32): void {
+            if (IsProcessorFeaturePresent(pf) != 0) {
+                set.set(feature, true);
+            }
+        };
+
+        const detect = fn(set: &mut builtin.CpuFeatureSet): void {
+            // `PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE` covers both AES and SHA2
+            on(set, .aes, 30);
+            on(set, .sha2, 30);
+            on(set, .crc, 31);
+            on(set, .lse, 34);
+            on(set, .dotprod, 43);
+            on(set, .jsconv, 44);
+            on(set, .rcpc, 45);
+            on(set, .sve, 46);
+            on(set, .sve2, 47);
+        };
+    };
+}
+
+test "detect finds every feature the code was compiled for" {
+    let found = detect();
+    for (0..found.words.len) |i| {
+        @expect((found.words[i] & builtin.cpu.features.words[i]) == builtin.cpu.features.words[i]);
+    }
+    @cfg (arch == .x86_64) {
+        @expect(found.has(.sse2));
+        @expect(found.has(.@"64bit"));
+    }
+}
+
+@cfg (arch == .x86_64) {
+    @[target_features(.avx2)] const sum_avx2 = fn(xs: []i32): i32 {
+        let mut total: i32 = 0;
+        for (xs) |x| {
+            total += x;
+        }
+        return total;
+    };
+
+    test "a target_features function runs where detect finds its features" {
+        const xs: [8]i32 = .{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        if (detect().has(.avx2)) {
+            @expect(sum_avx2(xs[0..]) == 36);
+        }
+    }
+}

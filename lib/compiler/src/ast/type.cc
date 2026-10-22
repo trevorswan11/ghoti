@@ -19,6 +19,61 @@
 
 namespace ghoti::ast {
 
+namespace {
+
+// With `current` on an identifier, whether it labels a block (`blk: { ... }`)
+[[nodiscard]] auto starts_labeled_block(syntax::parser& parser) -> bool {
+    if (!parser.peek_token_is(syntax::token_type_t::COLON)) { return false; }
+    const syntax::parser::transaction lookahead{parser};
+    parser.advance();
+    return parser.peek_token_is(syntax::token_type_t::LBRACE);
+}
+
+} // namespace
+
+auto try_parse_dyn_fn(syntax::parser& parser, bool allow_trailing_brace)
+    -> stdx::result<stdx::option<explicit_function_type>, syntax::diagnostic> {
+    const bool is_fn_sugar{[&] {
+        const syntax::parser::transaction lookahead{parser};
+        if (!parser.peek_token_is(syntax::token_type_t::IDENT) ||
+            parser.get_peek_token().slice != "Fn") {
+            return false;
+        }
+        parser.advance();
+        if (!parser.peek_token_is(syntax::token_type_t::LPAREN)) { return false; }
+        parser.advance();
+        if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
+            parser.advance();
+            return parser.peek_token_is(syntax::token_type_t::COLON) ||
+                   parser.peek_token_is(syntax::token_type_t::CALLCONV);
+        }
+        if (!parser.peek_token_is(syntax::token_type_t::IDENT)) { return false; }
+        parser.advance();
+        return parser.peek_token_is(syntax::token_type_t::COLON);
+    }()};
+    if (!is_fn_sugar) { return stdx::option<explicit_function_type>{}; }
+
+    parser.advance(); // current == Fn
+    auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
+    fn_type.is_dyn_fn = true;
+    return stdx::option<explicit_function_type>{std::move(fn_type)};
+}
+
+auto check_function_type_modifier(type_modifier modifier, const syntax::token_t& at)
+    -> stdx::result<void, syntax::diagnostic> {
+    if (modifier.is_mutable_ref() || modifier.is_mutable_ptr()) {
+        return make_syntax_err("A function type is immutable; use `&fn`/`^fn` without `mut`",
+                               syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                               at);
+    }
+    if (!(modifier.is_value() || modifier.is_ptr() || modifier.is_ref())) {
+        return make_syntax_err("Functions types may only be values, references, or pointers",
+                               syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
+                               at);
+    }
+    return {};
+}
+
 auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_function_type, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -80,11 +135,12 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
         TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
     }
 
+    const bool has_explicit_conv{parser.peek_token_is(syntax::token_type_t::CALLCONV)};
     const auto conv{TRY(try_parse_callconv(parser))};
 
     // There must be a return type but there cannot be a block
     TRY(parser.expect_peek(syntax::token_type_t::COLON));
-    const auto return_type{TRY(explicit_type::parse(parser))};
+    const auto return_type{TRY(explicit_type::parse(parser, allow_trailing_brace))};
     if (!allow_trailing_brace && parser.peek_token_is(syntax::token_type_t::LBRACE)) {
         return make_syntax_err("Function types may not have a body",
                                syntax::error::EXPLICIT_FN_TYPE_HAS_BODY,
@@ -96,7 +152,8 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
                                   .variadic             = variadic,
                                   .params_force_break   = params_force_break,
                                   .explicit_return_type = return_type,
-                                  .conv                 = conv};
+                                  .conv                 = conv,
+                                  .has_explicit_conv    = has_explicit_conv};
 }
 
 auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
@@ -113,8 +170,8 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     const type_modifier value_mod{};
     const auto          interface_type{
         name.is<dot_expr>()
-                     ? parser.add_type<dot_expr>(name_start, value_mod, parser.get_node<dot_expr>(*name))
-                     : parser.add_type<identifier_expr>(
+            ? parser.add_type<dot_expr>(name_start, value_mod, parser.get_node<dot_expr>(*name))
+            : parser.add_type<identifier_expr>(
                   name_start, value_mod, parser.get_node<identifier_expr>(*name))};
 
     std::vector<explicit_dyn_type::assoc_binding> assoc_bindings;
@@ -147,8 +204,9 @@ auto explicit_dyn_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
 auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     -> stdx::result<explicit_type_id, syntax::diagnostic> {
-    // Always check for a modifier and advance past it if present
     PROFILE_FUNCTION();
+    const auto nesting{TRY(parser.enter_nesting())};
+    // Always check for a modifier and advance past it if present
     const auto    modifier_token{parser.get_peek_token()};
     type_modifier modifier{modifier_token};
     if (modifier_token.type == syntax::token_type_t::MUT) {
@@ -162,8 +220,15 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     // `auto`, stashing the bound for `function_expr::parse` to attach to its parameter.
     if (parser.peek_token_is(syntax::token_type_t::IMPL)) {
         parser.advance(); // current == impl
+        const auto                    impl_token{parser.get_current_token()};
         std::vector<explicit_type_id> interfaces;
-        if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+        // `impl Fn(...): R`: any callable with exactly that signature, `auto` where it deduces
+        if (auto fn_type{TRY(try_parse_dyn_fn(parser, allow_trailing_brace))}) {
+            fn_type->is_dyn_fn  = false;
+            fn_type->is_impl_fn = true;
+            interfaces.emplace_back(parser.add_type<explicit_function_type>(
+                impl_token, type_modifier{impl_token}, std::move(*fn_type)));
+        } else if (parser.peek_token_is(syntax::token_type_t::LPAREN)) {
             parser.advance(); // current == (
             while (!parser.peek_token_is(syntax::token_type_t::RPAREN) &&
                    !parser.peek_token_is(syntax::token_type_t::END)) {
@@ -190,6 +255,11 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     // `dyn I` is an unsized interface object; the modifier (`&` / `^`) wraps it as a fat pointer.
     if (parser.peek_token_is(syntax::token_type_t::DYN)) {
         parser.advance(); // current == dyn
+        if (auto fn_type{TRY(try_parse_dyn_fn(parser, allow_trailing_brace))}) {
+            TRY(check_function_type_modifier(modifier, modifier_token));
+            return parser.add_type<explicit_function_type>(
+                modifier_token, modifier, std::move(*fn_type));
+        }
         auto dyn{TRY(explicit_dyn_type::parse(parser, allow_trailing_brace))};
         return parser.add_type<explicit_dyn_type>(modifier_token, modifier, std::move(dyn));
     }
@@ -205,6 +275,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
             null_terminated = true;
         } else if (!parser.peek_token_is(syntax::token_type_t::RBRACKET)) {
             parser.advance();
+            // An array's length is fixed at compile time, so a parameter it reads is too
+            const syntax::parser::array_length_scope length_scope{parser};
             dimension.emplace(TRY(parser.parse_expression()));
 
             // The null terminated marker comes after the size for explicitly sized types
@@ -216,15 +288,27 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
 
         auto mut_elements{false};
+        auto poly_elements{false};
         if (parser.peek_token_is(syntax::token_type_t::MUT)) {
             parser.advance();
             mut_elements = true;
+            // `[]mut? T`
+            if (parser.peek_token_is(syntax::token_type_t::QUESTION)) {
+                parser.advance();
+                mut_elements  = false;
+                poly_elements = true;
+            }
         }
 
         // Arrays are recursively defined
         const auto inner{TRY(explicit_type::parse(parser, allow_trailing_brace))};
-        return parser.add_type<explicit_array_type>(
-            modifier_token, modifier, dimension, null_terminated, mut_elements, inner);
+        return parser.add_type<explicit_array_type>(modifier_token,
+                                                    modifier,
+                                                    dimension,
+                                                    null_terminated,
+                                                    mut_elements,
+                                                    inner,
+                                                    poly_elements);
     }
 
     if (!type_modifier{parser.get_peek_token()}.is_value()) {
@@ -256,9 +340,14 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         }
 
         parser.advance();
+        // Indexing (`Ts[0]`) and a labeled block (`blk: { ... }`) compute the type
+        const bool computed{parser.peek_token_is(syntax::token_type_t::LBRACKET) ||
+                            starts_labeled_block(parser)};
         // Manually dispatch to prevent weird consumption
-        if (parser.peek_token_is(syntax::token_type_t::DOT) ||
+        if (computed || parser.peek_token_is(syntax::token_type_t::DOT) ||
             parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            const syntax::parser::type_expression_scope type_scope{parser};
+            const syntax::parser::compile_time_scope    cx_scope{parser, computed};
             const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
             if (parsed.is<dot_expr>()) {
                 return parser.add_type<dot_expr>(
@@ -270,8 +359,8 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
                     modifier_token, modifier, parser.get_node<call_expr>(*parsed));
             }
 
-            return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE,
-                                   parser.get_location_of(*parsed));
+            return parser.add_type<explicit_expr_type>(
+                modifier_token, modifier, explicit_expr_type{parsed});
         }
 
         const auto ident{TRY(identifier_expr::parse(parser))};
@@ -281,28 +370,36 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
 
     // The inner type is limited to functions and user-defined types
     const auto type_start{parser.get_current_token()};
-    if (parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+    const bool is_extern_fn{[&] {
+        if (!parser.peek_token_is(syntax::token_type_t::EXTERN)) { return false; }
+        syntax::parser::transaction lookahead{parser};
         parser.advance();
-        const auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
-        if (!(modifier.is_value() || modifier.is_ptr())) {
-            return make_syntax_err("Functions types may only be values or pointers",
-                                   syntax::error::ILLEGAL_FUNCTION_TYPE_MODIFIER,
-                                   type_start);
-        }
-
+        if (!parser.peek_token_is(syntax::token_type_t::FUNCTION)) { return false; }
+        lookahead.commit();
+        return true;
+    }()};
+    if (is_extern_fn || parser.peek_token_is(syntax::token_type_t::FUNCTION)) {
+        parser.advance();
+        auto fn_type{TRY(explicit_function_type::parse(parser, allow_trailing_brace))};
+        fn_type.is_extern = is_extern_fn;
+        TRY(check_function_type_modifier(modifier, type_start));
         return parser.add_type<explicit_function_type>(modifier_token, modifier, fn_type);
     }
 
     // The user-defined types can be handled by parsing any expression and verifying it
     parser.advance();
     if (parser.current_token_is(syntax::token_type_t::END)) {
-        return make_syntax_err(syntax::error::MISSING_EXPLICIT_TYPE, type_start);
+        return make_syntax_err("Expected a type, found the end of input",
+                               syntax::error::MISSING_EXPLICIT_TYPE,
+                               type_start);
     }
 
     // Parse at TYPE precedence so a following `= <init>` is not  absorbed into an assignment
-    stdx::option<explicit_type_id> id;
-    switch (const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
-            user->get_kind()) {
+    const syntax::parser::type_expression_scope type_scope{parser};
+    const syntax::parser::compile_time_scope    cx_scope{parser, true};
+    stdx::option<explicit_type_id>              id;
+    const auto user{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+    switch (user->get_kind()) {
     case node_kind::STRUCT_EXPRESSION:
         id.emplace(parser.add_type<struct_expr>(
             modifier_token, modifier, parser.get_node<struct_expr>(*user)));
@@ -325,13 +422,26 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
     if (id) {
         if (!modifier.is_value()) {
             return make_syntax_err(
-                "User-defined types can only be defined with non-modified aliases",
-                syntax::error::ILLEGAL_USING_ALIAS_WITH_MODIFIERS,
+                "A struct, union, enum, or interface literal cannot take a type modifier",
+                syntax::error::ILLEGAL_MODIFIED_TYPE_LITERAL,
                 type_start);
         }
         return *id;
     }
-    return make_syntax_err(syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
+
+    // A literal can never be a type
+    if (user.any<int_literal_expr,
+                 float_literal_expr,
+                 string_expr,
+                 bool_expr,
+                 nullptr_expr,
+                 undefined_expr,
+                 unreachable_expr>()) {
+        return make_syntax_err("Expected a type", syntax::error::ILLEGAL_EXPLICIT_TYPE, type_start);
+    }
+
+    // Anything else is an expression computing the type (`if (c) A else B`, `match (k) { ... }`)
+    return parser.add_type<explicit_expr_type>(modifier_token, modifier, explicit_expr_type{user});
 }
 
 namespace {
@@ -339,7 +449,7 @@ namespace {
 // Parses the explicit type if present and checks for an upcoming assignment for init
 [[nodiscard]] auto parse_type_and_initializer(syntax::parser& parser)
     -> stdx::result<std::pair<stdx::option<explicit_type_id>, bool>, syntax::diagnostic> {
-    if (parser.peek_token_is(syntax::token_type_t::WALRUS)) {
+    if (parser.peek_token_is(syntax::token_type_t::ASSIGN)) {
         parser.advance();
         return std::pair{stdx::none, true};
     }

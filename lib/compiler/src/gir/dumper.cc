@@ -16,6 +16,7 @@
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/keywords.hh"
 
 namespace ghoti::gir {
 
@@ -78,6 +79,13 @@ auto format_instruction(const instruction& inst) -> std::string {
                            "<missing_dst>");
     case instruction_kind::ALLOCA:
         return fmt::format("{}{} {}", prefix, instruction_kind_name(inst.kind), type_str);
+    case instruction_kind::MAKE_CALLABLE:
+        return fmt::format("{}{} {} {}, @{}",
+                           prefix,
+                           instruction_kind_name(inst.kind),
+                           type_str,
+                           !inst.operands.empty() ? format_value(inst.operands[0]) : "<missing>",
+                           inst.callee_name.value_or("<trampoline>"));
     case instruction_kind::GLOBAL_ADDR:
         return fmt::format("{}{} @{}",
                            prefix,
@@ -141,10 +149,12 @@ auto format_instruction(const instruction& inst) -> std::string {
     }
 
     // Binary / unary / comparison / cast operations
+    const auto sat{inst.is_saturating ? ".sat" : ""};
     if (!type_str.empty() && !inst.operands.empty()) {
-        return fmt::format("{}{} {} {}",
+        return fmt::format("{}{}{} {} {}",
                            prefix,
                            instruction_kind_name(inst.kind),
+                           sat,
                            type_str,
                            fmt::join(inst.operands | std::views::transform(format_value), ", "));
     }
@@ -182,7 +192,7 @@ auto dumper::dump(const function& fn) -> void {
         }
 
         auto params_str{fmt::to_string(
-            fmt::join(fn.get_params() | std::views::transform([](const parameter* p) {
+            fmt::join(fn.get_params() | std::views::transform([](const function::parameter* p) {
                           return fmt::format("{}: {}", p->name, p->type.to_string());
                       }),
                       ", "))};
@@ -194,13 +204,14 @@ auto dumper::dump(const function& fn) -> void {
             }
         }
 
-        fmt::println(out_, "fn {}({}) -> {}", fn.get_name(), params_str, return_str);
+        fmt::println(
+            out_, "fn {}({}) -> {}", syntax::ascii_spelling(fn.get_name()), params_str, return_str);
     }
 
     for (const auto& seg : fn.get_segments()) { dump(*seg); }
 }
 
-auto dumper::dump(const module& mod) -> void {
+auto dumper::dump(const module_t& mod) -> void {
     for (const auto& type_decl : mod.get_types()) {
         fmt::println(out_, "type {} = {}", type_decl->name, type_decl->type.to_string());
     }

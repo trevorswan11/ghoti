@@ -4,8 +4,9 @@
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
-#include <gsl/span>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
@@ -17,12 +18,14 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/sema/type.hh"
+#include "support/float_math.hh"
 
 namespace ghoti::codegen {
 
@@ -33,19 +36,13 @@ class llvm_lowering {
     ~llvm_lowering() = default;
     MAKE_PINNED(llvm_lowering);
 
-    auto lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>;
-    auto lower_executable(const gir::module& gir_mod, std::string_view user_main_name = "main")
+    auto lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module>;
+    // The program's `main` becomes the internal `_ghoti_main` that `std/start.gh` calls, leaving
+    // the C `main` symbol to the entry code
+    auto lower_executable(const gir::module_t& gir_mod, std::string_view user_main_name = "main")
         -> stdx::box<llvm::Module>;
-    auto emit_main_entry_wrapper(std::string_view user_main_name = "main") -> llvm::Function*;
-
-    // Lowers every function/global as usual, but synthesizes an entry point that calls each
-    // `test` block in declaration order. `recover_args` passes an empty `[][:0]u8` to `test_runner`
-    // instead when Win32 sysroot could not be loaded
-    auto lower_test_executable(const gir::module&             gir_mod,
-                               stdx::option<std::string_view> user_runner_name = stdx::none,
-                               bool recover_args = true) -> stdx::box<llvm::Module>;
-    auto emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args = true)
-        -> llvm::Function*;
+    auto lower_test_executable(const gir::module_t& gir_mod,
+                               std::string_view user_main_name = "main") -> stdx::box<llvm::Module>;
 
     [[nodiscard]] static auto to_ir_string(const llvm::Module& mod) -> std::string;
 
@@ -66,7 +63,7 @@ class llvm_lowering {
         segment_blocks_.clear();
     }
 
-    auto lower_value(const gir::value& val, const sema::type* expected_type = nullptr)
+    auto lower_value(const gir::value& val, stdx::option<const sema::type&> expected_type = nullptr)
         -> llvm::Value*;
     auto lower_instruction(const gir::instruction& inst) -> void;
 
@@ -75,8 +72,12 @@ class llvm_lowering {
     auto lower_function(const gir::function& fn) -> llvm::Function*;
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
     // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
-    auto lower_dyn_vtables(const gir::module& gir_mod) -> void;
+    auto lower_dyn_vtables(const gir::module_t& gir_mod) -> void;
     auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
+    // `{fn, trampoline}` when a thin function constant initializes an erased `fn(...)` slot
+    auto const_callable(std::string_view          fn_symbol,
+                        stdx::option<sema::type&> fn_type,
+                        llvm::Type*               ty) -> llvm::Constant*;
 
     // Populates `reserved_symbols_` with every explicit `extern`/`export` link name in the module
     auto ensure_reserved_symbols() -> void;
@@ -100,68 +101,121 @@ class llvm_lowering {
     auto emit_const(const gir::instruction& inst) -> llvm::Value*;
 
     auto emit_call(const gir::instruction& inst) -> llvm::Value*;
+    auto apply_call_modifier(ast::call_modifier modifier,
+                             llvm::BasicBlock&  block,
+                             llvm::Instruction* before) -> void;
+    auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
+
+    // `signext`/`zeroext` for a narrow integer the target's C ABI extends, if any
+    [[nodiscard]] auto integer_extension(const sema::type& type)
+        -> stdx::option<llvm::Attribute::AttrKind>;
+    // `attrs` with the C ABI's extension on each narrow parameter (from `first_param`) and result
+    [[nodiscard]] auto with_integer_extensions(llvm::AttributeList          attrs,
+                                               const sema::types::function& fn,
+                                               u32 first_param = 0) -> llvm::AttributeList;
+
+    // `code(ctx, args...)` for an erased `fn(...)`: the thin signature with a leading `ctx: ptr`
+    auto erased_code_type(const sema::types::function& fn) -> llvm::FunctionType*;
+    // One shared `(ctx, args...)` adapter per thin signature that calls `ctx` as the function
+    auto get_or_create_fn_trampoline(const sema::types::function& fn) -> llvm::Function*;
+    // Loads a by-address aggregate argument (struct, slice, closure, callable) into a value
+    [[nodiscard]] auto emit_pointer_offset(const gir::instruction& inst) -> llvm::Value*;
+    [[nodiscard]] auto emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value*;
+    [[nodiscard]] auto promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
+        -> llvm::Value*;
+    auto load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value*;
+    auto emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_builtin_call(const gir::instruction& inst) -> llvm::Value*;
     auto emit_inline_asm(const gir::instruction& inst) -> llvm::Value*;
+
+    // Widens or narrows a `@clz`/`@ctz`/`@popCount` intrinsic result to the builtin's sema return
+    // type
+    auto fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target) -> llvm::Value*;
 
     auto emit_ret(const gir::instruction& inst) -> void;
     auto emit_goto(const gir::instruction& inst) -> void;
     auto emit_cond_goto(const gir::instruction& inst) -> void;
     auto emit_unreachable() -> void;
 
-    // Builds the `[][:0]u8` argv value (a `{ ptr, len }` slice of `{ ptr, len }`
-    // elements) for an entry function
-    auto emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value*;
-
-    // Emits a freestanding ELF `_start` (Linux, no crt/libc)
-    auto emit_freestanding_start(llvm::Function* main_fn) -> void;
+    // `@testFunctions()`
+    auto emit_test_table() -> llvm::Value*;
 
     // The `__chkstk` / `___chkstk_ms` symbol name the x86 backend probes with on this
-    // target, or `none` when no synthesized stack probe is needed
+    // target (compiler_rt provides it), or `none` where nothing could
     [[nodiscard]] auto windows_stack_probe_symbol() const -> stdx::option<std::string_view>;
-    // Synthesizes a weak, runtime-free stack-probe routine when targeting x86-64 Windows
-    auto maybe_emit_windows_stack_probe() -> void;
-
-    // Provide `@memcpy`/`@memset`/`@memmove` overrides to llvm intrinsics w/o libc
-    auto maybe_emit_mem_intrinsic_fallbacks() -> void;
+    auto               declare_functions(const gir::module_t& gir_mod) -> void;
+    auto               lower_definitions(const gir::module_t& gir_mod) -> void;
+    auto               finalize_runtime_support() -> void;
+    auto               maybe_emit_mingw_main_stub() -> void;
 
     auto get_or_create_test_failed_flag() -> llvm::GlobalVariable*;
     auto get_or_create_test_skipped_flag() -> llvm::GlobalVariable*;
+    // Set by a `@require` or `@skip` in a `@[testing]` helper until its test returns
+    auto get_or_create_test_abort_flag() -> llvm::GlobalVariable*;
     auto define_test_take_skipped() -> void;
+    // Returns from the function being lowered on a `@[testing]` helper's abort
+    auto emit_testing_abort_return() -> void;
+    // After a call to `callee`, returns too if a `@[testing]` callee aborted
+    auto emit_testing_abort_check(const llvm::Function& callee) -> void;
 
-    // Calls a weak `builtin` context handler `handler(msg, file, line, column)`. `order`
-    // lists which instruction operand feeds each of those four parameters
-    auto emit_context_handler_call(const gir::instruction&   inst,
-                                   std::string_view          handler_name,
-                                   gsl::span<const usize, 4> order) -> void;
+    // Calls a weak `builtin` context handler `handler(msg, loc: SourceLocation)`
+    // A pointer or wide integer condition as an `i1` (non-null / non-zero)
+    // A constant of the target's `usize` width (slice lengths, byte offsets)
+    auto usize_const(u64 value) -> llvm::ConstantInt*;
+    auto lower_truthiness(llvm::Value* value) -> llvm::Value*;
+    // Branches to a fresh `<prefix>.fail` block (left as the insert point) when `cond` is false,
+    // returning the `<prefix>.cont` block
+    auto branch_to_failure(llvm::Value* cond, std::string_view prefix) -> llvm::BasicBlock*;
+    auto emit_context_handler_call(const gir::instruction& inst,
+                                   std::string_view        handler_name,
+                                   usize                   msg_idx,
+                                   usize                   loc_idx) -> void;
 
     auto emit_lowered_panic(std::string_view message, const gir::instruction& inst) -> void;
+    // `@sqrt`, `@sin`, ... on a runtime float
+    // A float `%`, by name where LLVM's `fmodl` would be another type's
+    auto emit_frem(llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value*;
+    auto emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value*;
     auto emit_arith_guard(llvm::Value* bad, std::string_view message, const gir::instruction& inst)
         -> void;
+    // A shift amount of any integer type, resized to `value`'s width. One past the range of
+    // that width becomes the width itself, so it still reads as out of range
+    auto fit_shift_amount(llvm::Value* value, llvm::Value* amount, bool amount_signed)
+        -> llvm::Value*;
+    // A zero divisor, and `MIN / -1` when signed, panic under runtime safety
+    auto emit_division_guards(const gir::instruction& inst,
+                              llvm::Value*            lhs,
+                              llvm::Value*            rhs,
+                              bool                    is_signed) -> void;
     auto emit_checked_arith(const gir::instruction& inst,
                             llvm::Value*            lhs,
                             llvm::Value*            rhs,
                             bool                    is_signed) -> llvm::Value*;
-
-    [[nodiscard]] constexpr auto mem_fallbacks_used() const noexcept -> bool {
-        return memcpy_used_ || memmove_used_ || memset_used_;
-    }
+    auto emit_float_to_int_guard(const gir::instruction& inst,
+                                 llvm::Value*            val,
+                                 llvm::Type*             int_ty,
+                                 bool                    is_signed) -> void;
+    auto emit_saturating_arith(const gir::instruction& inst,
+                               llvm::Value*            lhs,
+                               llvm::Value*            rhs,
+                               bool                    is_signed) -> llvm::Value*;
 
   private:
-    llvm::LLVMContext&                                                 context_;
-    stdx::box<llvm::Module>                                            llvm_module_;
-    llvm::IRBuilder<>                                                  builder_;
-    type_translator                                                    types_;
-    ankerl::unordered_dense::map<gir::local_id, llvm::Value*>          locals_;
+    llvm::LLVMContext&                                        context_;
+    stdx::box<llvm::Module>                                   llvm_module_;
+    llvm::IRBuilder<>                                         builder_;
+    type_translator                                           types_;
+    ankerl::unordered_dense::map<gir::local_id, llvm::Value*> locals_;
+    // The GIR function whose body is being lowered
+    stdx::option<const gir::function&>                                 lowering_fn_;
     ankerl::unordered_dense::map<gir::segment_id, llvm::BasicBlock*>   segment_blocks_;
     ankerl::unordered_dense::map<std::string_view, llvm::GlobalValue*> globals_;
     ankerl::unordered_dense::set<std::string>                          reserved_symbols_;
-    bool                             reserved_symbols_built_{false};
-    bool                             is_executable_{false};
-    bool                             memcpy_used_{false};
-    bool                             memmove_used_{false};
-    bool                             memset_used_{false};
-    stdx::option<const gir::module&> gir_module_;
-    std::string                      user_main_name_{"main"};
+    ankerl::unordered_dense::map<llvm::FunctionType*, llvm::Function*> fn_trampolines_;
+    bool                               reserved_symbols_built_{false};
+    bool                               is_executable_{false};
+    stdx::option<const gir::module_t&> gir_module_;
+    std::string                        user_main_name_{"main"};
 };
 
 } // namespace ghoti::codegen

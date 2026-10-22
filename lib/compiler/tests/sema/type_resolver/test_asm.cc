@@ -13,7 +13,7 @@ namespace {
 
 // Resolves `body` inside a trivial function and returns the first sema diagnostic's code
 [[nodiscard]] auto resolve_asm_error(std::string_view body) -> stdx::option<sema::error> {
-    const auto src{fmt::format("pub const f := fn(n: i64, fd: i64): void {{ {} }};", body)};
+    const auto src{fmt::format("pub const f = fn(n: i64, fd: i64): void {{ {} }};", body)};
     auto [codes, _]{helpers::resolve_diags(src)};
     if (codes.empty()) { return stdx::none; }
     return codes[0];
@@ -64,6 +64,23 @@ TEST_CASE("An asm output operand must be an lvalue") {
     CHECK(resolve_asm_error(
               R"(asm { template: "nop", outputs: ("=r" = n + fd), options: (volatile) };)") ==
           sema::error::ILLEGAL_INLINE_ASM);
+}
+
+TEST_CASE("Operand constraints must be single well-formed constraints of their direction") {
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("r11{rdx}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("={rax}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "nop", outputs: ("{rax}" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK(resolve_asm_error(
+              R"(asm { template: "syscall", inputs: ("" = n), options: (volatile) };)") ==
+          sema::error::ILLEGAL_INLINE_ASM);
+    CHECK_FALSE(resolve_asm_error(
+        R"(asm { template: "syscall", inputs: ("{rax}" = n, "r" = fd), options: (volatile) };)"));
 }
 
 } // namespace ghoti::tests

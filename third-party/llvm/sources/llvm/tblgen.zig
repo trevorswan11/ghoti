@@ -1,4 +1,4 @@
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/TableGen/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/TableGen/CMakeLists.txt
 pub const lib_root = "llvm/lib/TableGen/";
 pub const lib_sources = [_][]const u8{
     "DetailedRecordsBackend.cpp",
@@ -17,7 +17,7 @@ pub const lib_sources = [_][]const u8{
     "TGTimer.cpp",
 };
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/utils/TableGen/Basic/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/utils/TableGen/Basic/CMakeLists.txt
 pub const basic_root = utils_root ++ "Basic/";
 pub const basic_sources = [_][]const u8{
     "ARMTargetDefEmitter.cpp",
@@ -27,25 +27,25 @@ pub const basic_sources = [_][]const u8{
     "IntrinsicEmitter.cpp",
     "RISCVTargetDefEmitter.cpp",
     "RuntimeLibcallsEmitter.cpp",
+    "RuntimeLibcalls.cpp",
     "SDNodeProperties.cpp",
     "TableGen.cpp",
     "TargetFeaturesEmitter.cpp",
+    "TargetLibraryInfoEmitter.cpp",
     "VTEmitter.cpp",
 };
 
 pub const minimal_main = utils_root ++ "llvm-min-tblgen.cpp";
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/utils/TableGen/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/utils/TableGen/CMakeLists.txt
 pub const common_root = utils_root ++ "Common/";
 pub const common_sources = [_][]const u8{
     "GlobalISel/CodeExpander.cpp",
     "GlobalISel/CombinerUtils.cpp",
     "GlobalISel/CXXPredicates.cpp",
-    "GlobalISel/GlobalISelMatchTable.cpp",
     "GlobalISel/GlobalISelMatchTableExecutorEmitter.cpp",
     "GlobalISel/PatternParser.cpp",
     "GlobalISel/Patterns.cpp",
-
     "AsmWriterInst.cpp",
     "CodeGenDAGPatterns.cpp",
     "CodeGenHwModes.cpp",
@@ -54,17 +54,20 @@ pub const common_sources = [_][]const u8{
     "CodeGenRegisters.cpp",
     "CodeGenSchedule.cpp",
     "CodeGenTarget.cpp",
-    "DAGISelMatcher.cpp",
     "InfoByHwMode.cpp",
+    "InstructionEncoding.cpp",
     "OptEmitter.cpp",
     "PredicateExpander.cpp",
     "SubtargetFeatureInfo.cpp",
     "Types.cpp",
     "Utils.cpp",
     "VarLenCodeEmitterGen.cpp",
+    "GlobalISel/MatchTable/MatchTable.cpp",
+    "GlobalISel/MatchTable/Matchers.cpp",
+    "GlobalISel/MatchTable/Types.cpp",
 };
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/utils/TableGen/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/utils/TableGen/CMakeLists.txt
 pub const utils_root = "llvm/utils/TableGen/";
 pub const utils_sources = [_][]const u8{
     "AsmMatcherEmitter.cpp",
@@ -75,10 +78,13 @@ pub const utils_sources = [_][]const u8{
     "CompressInstEmitter.cpp",
     "CTagsEmitter.cpp",
     "DAGISelEmitter.cpp",
+    "DAGISelMatcher.cpp",
     "DAGISelMatcherEmitter.cpp",
     "DAGISelMatcherGen.cpp",
     "DAGISelMatcherOpt.cpp",
     "DecoderEmitter.cpp",
+    "DecoderTableEmitter.cpp",
+    "DecoderTree.cpp",
     "DFAEmitter.cpp",
     "DFAPacketizerEmitter.cpp",
     "DisassemblerEmitter.cpp",

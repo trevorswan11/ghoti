@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) !void {
     const cdb_gen: *CDBGenerator = .init(b);
 
     var compiler_flags: stdx.ArrayList([]const u8) = .fromSlice(b, &stdx.utils.base_cxx_flags);
-    compiler_flags.appendSlice(&.{ "-DMAGIC_ENUM_RANGE_MAX=255", "-DREPLXX_STATIC" });
+    compiler_flags.appendSlice(&.{ "-DMAGIC_ENUM_RANGE_MAX=255", "-DREPLXX_STATIC", "-fno-rtti" });
     const dist_flags: []const []const u8 = &.{ "-DNDEBUG", "-DGHOTI_DIST" };
 
     var package_flags = compiler_flags.clone();
@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) !void {
     const install_tests_only = b.option(
         bool,
         "install-tests-only",
-        "Install tests without running them (default: false)",
+        "Install tests without running them; plain `zig build` then also installs them (default: false)",
     ) orelse false;
 
     const site_builder = try SiteBuilder.init(b, optimize);
@@ -85,6 +85,13 @@ pub fn build(b: *std.Build) !void {
         .llvm = llvm,
         .cxx_flags = package_flags.wrapped.items,
         .compressor = stdx_dep.artifact("compressor"),
+    });
+
+    // Last, so the keep-list sees every install step. LLVM, LLD and Clang are protected.
+    const llvm_root = b.dependency("llvm", .{}).builder.build_root.path orelse "";
+    _ = try stdx.steps.addPrune(b, .{
+        .runner = stdx_dep.artifact("prune"),
+        .protected_roots = if (llvm_root.len > 0) &.{llvm_root} else &.{},
     });
 
     if (stdx.KcovBuilder.allowedTarget(b.graph.host)) {
@@ -136,6 +143,7 @@ pub const ProjectPaths = struct {
         .tests = "lib/driver/tests/",
     };
     const ghoti = "ghoti/main.cc";
+    const ghoti_dir = "ghoti/";
 
     const support: Project = .{
         .inc = "lib/support/include/",
@@ -160,8 +168,16 @@ pub const ProjectPaths = struct {
         };
     }
 
+    // Header roots each artifact can see, hashed into its dependency stamp
+    const support_deps = [_][]const u8{ support.inc, support.src };
+    const compiler_deps = support_deps ++ [_][]const u8{ compiler.inc, compiler.src };
+    const driver_deps = compiler_deps ++ [_][]const u8{ driver.inc, driver.src };
+
     const stdlib = "lib/std/";
+    const darwin_sdk = "lib/darwin/";
+    const compiler_rt = "lib/compiler_rt/";
     pub const stdlib_entry = "lib/std/std.gh";
+    pub const cabi_fixture = "lib/compiler/tests/ffi/cabi.c";
     pub const site = "site/";
     const third_party = "third-party/";
 };
@@ -182,6 +198,7 @@ const TestArtifacts = struct {
         cdb_steps: ?*stdx.ArrayList(*std.Build.Step),
         install_dir: ?[]const u8,
         install_only: bool,
+        ghoti: *std.Build.Step.Compile,
     ) !void {
         if (cdb_steps) |cdb| {
             cdb.append(&self.support_tests.step);
@@ -207,6 +224,43 @@ const TestArtifacts = struct {
                 run.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
             }
         }
+
+        // The differential suite over every type and boundary value: slow, for release prep
+        const full = b.addRunArtifact(self.compiler_tests);
+        full.addArgs(&.{ "-#", "[#test_semantics_differential]" });
+        full.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        full.setEnvironmentVariable("GHOTI_DIFF_FULL", "1");
+        full.has_side_effects = true;
+        const full_step = b.step("test-semantics", "Run the compile-time vs runtime differential suite over every type and boundary value");
+        full_step.dependOn(&full.step);
+
+        // Random-seed differential rounds for a time budget, never part of `test`
+        const fuzz_minutes = b.option(u32, "fuzz-minutes", "Time budget for fuzz-semantics and fuzz-crash (default: 20)") orelse 20;
+        const fuzz = b.addRunArtifact(self.compiler_tests);
+        fuzz.addArg("[.fuzz-semantics]");
+        fuzz.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        fuzz.setEnvironmentVariable("GHOTI_DIFF_FUZZ_MINUTES", b.fmt("{d}", .{fuzz_minutes}));
+        fuzz.has_side_effects = true;
+        const fuzz_step = b.step("fuzz-semantics", "Check compile-time folding against runtime results on random operands");
+        fuzz_step.dependOn(&fuzz.step);
+
+        // Mutated test programs fed to the installed ghoti binary, keeping the ones that crash it
+        const fuzz_replay = b.option([]const u8, "fuzz-replay", "Rerun every .gh file in this directory through fuzz-crash instead of mutating");
+        const install_ghoti = b.addInstallArtifact(ghoti, .{});
+        const crash = b.addRunArtifact(self.driver_tests);
+        crash.addArg(if (fuzz_replay != null) "[.fuzz-replay]" else "[.fuzz-crash]");
+        crash.setEnvironmentVariable("GHOTI_STDLIB", b.pathFromRoot(ProjectPaths.stdlib_entry));
+        crash.setEnvironmentVariable("GHOTI_REPO_ROOT", b.pathFromRoot("."));
+        crash.setEnvironmentVariable("GHOTI", b.getInstallPath(.bin, ghoti.out_filename));
+        crash.setEnvironmentVariable("GHOTI_FUZZ_MINUTES", b.fmt("{d}", .{fuzz_minutes}));
+        if (fuzz_replay) |dir| crash.setEnvironmentVariable("GHOTI_FUZZ_REPLAY", if (std.fs.path.isAbsolute(dir)) dir else b.pathFromRoot(dir));
+        crash.has_side_effects = true;
+        crash.step.dependOn(&install_ghoti.step);
+        const crash_step = b.step("fuzz-crash", "Feed mutated programs to ghoti and report the ones that crash it");
+        crash_step.dependOn(&crash.step);
+
+        // Otherwise `zig build -Dinstall-tests-only=true` silently leaves stale test binaries behind
+        if (install_only) b.getInstallStep().dependOn(test_step);
     }
 };
 
@@ -285,6 +339,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     if (config.auto_install) b.installArtifact(libsupport);
+    try stdx.DepStamp.add(b, libsupport, &ProjectPaths.support_deps);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libsupport.step);
 
     // LLVM is compiled from source because I like burning compute or something
@@ -332,6 +387,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     libcompiler.root_module.linkLibrary(libstdx);
+    try stdx.DepStamp.add(b, libcompiler, &ProjectPaths.compiler_deps);
     if (config.auto_install) b.installArtifact(libcompiler);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libcompiler.step);
 
@@ -356,6 +412,7 @@ fn addArtifacts(b: *std.Build, config: struct {
         }),
     });
     if (config.auto_install) b.installArtifact(libdriver);
+    try stdx.DepStamp.add(b, libdriver, &ProjectPaths.driver_deps);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&libdriver.step);
 
     // The shippable executable
@@ -382,6 +439,9 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         },
     });
+    // Deeply nested (or recursively instantiated) source recurses deeply through every pass
+    ghoti.stack_size = 64 * 1024 * 1024;
+    try stdx.DepStamp.add(b, ghoti, &(ProjectPaths.driver_deps ++ .{ProjectPaths.ghoti_dir}));
     if (config.auto_install) b.installArtifact(ghoti);
     if (config.cdb_steps) |cdb_steps| cdb_steps.append(&ghoti.step);
 
@@ -447,6 +507,37 @@ fn addArtifacts(b: *std.Build, config: struct {
         });
         compiler_tests.root_module.linkLibrary(libcompiler);
 
+        // Real C on the other side of the C ABI interop tests, installed where the tests find it
+        const cabi_fixture = b.addObject(.{
+            .name = "cabi",
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = .ReleaseFast,
+                .sanitize_c = .off,
+                .link_libc = false,
+            }),
+        });
+        cabi_fixture.root_module.addCSourceFile(.{
+            .file = b.path(ProjectPaths.cabi_fixture),
+            .flags = &.{ "-std=c23", "-ffreestanding", "-fno-stack-protector", "-fno-builtin" },
+        });
+        const fixture_name = b.fmt("{s}cabi_fixture{s}", .{
+            target.result.libPrefix(),
+            target.result.staticLibSuffix(),
+        });
+        const archive_fixture = b.addSystemCommand(&.{ b.graph.zig_exe, "ar", "rcs" });
+        const fixture_archive = archive_fixture.addOutputFileArg(fixture_name);
+        archive_fixture.addFileArg(cabi_fixture.getEmittedBin());
+        const fixture_dir: std.Build.InstallDir = .{ .custom = "tests" };
+        const install_fixture = b.addInstallFileWithDir(fixture_archive, fixture_dir, fixture_name);
+        const test_fixtures_h = b.addConfigHeader(.{ .include_path = "ghoti/test_fixtures.h" }, .{
+            .GHOTI_CABI_FIXTURE = b.getInstallPath(fixture_dir, fixture_name),
+        });
+        compiler_tests.root_module.addConfigHeader(test_fixtures_h);
+        compiler_tests.step.dependOn(&install_fixture.step);
+        try stdx.DepStamp.add(b, support_tests, &(ProjectPaths.support_deps ++ .{ProjectPaths.support.tests}));
+        try stdx.DepStamp.add(b, compiler_tests, &(ProjectPaths.compiler_deps ++ .{ProjectPaths.compiler.tests}));
+
         const driver_tests = stdx.builders.strappedTest(b, .{
             .target = target,
             .optimize = config.optimize,
@@ -481,12 +572,14 @@ fn addArtifacts(b: *std.Build, config: struct {
             },
         });
 
+        try stdx.DepStamp.add(b, driver_tests, &(ProjectPaths.driver_deps ++ .{ProjectPaths.driver.tests}));
+
         tests = .{
             .support_tests = support_tests,
             .compiler_tests = compiler_tests,
             .driver_tests = driver_tests,
         };
-        try tests.?.configure(b, config.cdb_steps, test_install_dir, config.install_tests_only);
+        try tests.?.configure(b, config.cdb_steps, test_install_dir, config.install_tests_only, ghoti);
     }
 
     return .{
@@ -500,7 +593,7 @@ fn addArtifacts(b: *std.Build, config: struct {
 
 const counted_extensions = [_][]const u8{
     ".cc", ".hh",    ".inc",  ".zig", ".gh",
-    ".go", ".templ", ".html", ".css",
+    ".go", ".templ", ".html", ".css", ".py",
 };
 
 fn addTooling(b: *std.Build, config: struct {
@@ -565,9 +658,13 @@ fn addTooling(b: *std.Build, config: struct {
     try stdx.utils.collectFilesInto(b, "ghoti", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "site", .{ .allowed_extensions = &counted_extensions }, &counted_files);
     try stdx.utils.collectFilesInto(b, "examples", .{ .allowed_extensions = &counted_extensions }, &counted_files);
+    try stdx.utils.collectFilesInto(b, "tools", .{ .allowed_extensions = &counted_extensions }, &counted_files);
+
+    const KiB = 1024;
+    const MiB = KiB * KiB;
     _ = LOCCounter.init(b, .{
         .counted_files = counted_files.wrapped.items,
-        .file_buf_size = 1000 * 1024,
+        .file_buf_size = 100 * MiB,
     });
 }
 
@@ -622,6 +719,8 @@ fn addPackageStep(b: *std.Build, config: struct {
             .{ .source = b.path("README.md"), .destination = "README.md" },
             .{ .source = b.path(".github/CHANGELOG.md"), .destination = "CHANGELOG.md" },
             .{ .source = b.path(ProjectPaths.stdlib), .destination = "lib/std", .kind = .dir },
+            .{ .source = b.path(ProjectPaths.darwin_sdk), .destination = "lib/darwin", .kind = .dir },
+            .{ .source = b.path(ProjectPaths.compiler_rt), .destination = "lib/compiler_rt", .kind = .dir },
         };
 
         packager.addArchives(.{

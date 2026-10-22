@@ -4,6 +4,7 @@
 #include <string>
 
 #include <gsl/span>
+#include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
@@ -12,16 +13,30 @@
 
 namespace ghoti::codegen {
 
+// How the compiler builtins archive is located and built when `builtins` isn't given
+struct compiler_rt_options {
+    // The root `compiler_rt.gh`; `GHOTI_COMPILER_RT` default, then `lib/compiler_rt`
+    stdx::option<std::filesystem::path> root{};
+};
+
+// A symbol a program imports from an `extern("lib", ...)` library
+struct library_import {
+    std::string library;
+    std::string symbol;
+    bool        data{false};
+};
+
 struct extra_linker_options {
     gsl::span<std::filesystem::path> objects{};
     gsl::span<std::filesystem::path> library_paths{};
     gsl::span<std::string>           libraries{};
-    // Set when the entry wrapper calls the raw Win32 APIs used to recover real argv.
-    bool needs_windows_argv_apis{false};
+    // Compiler builtins archive, linked after every other input so it only fills in what's missing
+    stdx::option<std::filesystem::path> builtins{};
+    // Builds `builtins` from ghoti sources when the object calls a runtime libcall; unset skips it
+    stdx::option<compiler_rt_options> compiler_rt{};
+    // What each library supplies; a Windows import library that can't be found is written from it
+    gsl::span<const library_import> imports{};
 };
-
-// True when an import-lib directory for the Windows Win32 APIs (kernel32 / shell32) is configured
-[[nodiscard]] auto has_windows_argv_sysroot() -> bool;
 
 [[nodiscard]] auto link_executable(const std::filesystem::path& object_file,
                                    const std::filesystem::path& output_file,

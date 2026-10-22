@@ -21,7 +21,7 @@ Ghoti is a compiled systems language powered by LLVM, C++, and Zig. It attempts 
 - Low-level with transparent memory layout
 - Manually manged memory
 - Immutability by default
-- Compile-time evaluation: Sophisticated `constexpr` evaluation with first-class types
+- Compile-time evaluation: Sophisticated `comptime` evaluation with first-class types
 - Clear Semantics: No overloading, variable shadowing, or macros
 - Flexible polymorphism: Choose between zero-cost static dispatch via `impl` monomorphization or explicit dynamic dispatch using fat-pointer `dyn`
 
@@ -43,7 +43,7 @@ The following are "standalone" dependencies, required and manually fetched by gh
 1. [stdx](https://github.com/trevorswan11/stdx.git) is a C++ standard library and zig build system extension library that drives multiple dependencies. A full breakdown of dependencies can be found at the library's github repository. All dependencies transitively brought in by this library are open source and those and linked to `ghoti` artifacts  are permissively licensed 
 2. [CLI11](https://github.com/CLIUtils/CLI11) is a command line parser for C++ that provides a rich feature set with a simple and intuitive interface. Is is licensed under the permissive 3-Clause BSD License.
 3. [replxx](https://github.com/AmokHuginnsson/replxx) is a read evaluate print loop (REPL) library that provides a cross platform interactive shell that powers terminal debugging support. Is is licensed under the permissive BSD License.
-4. [LLVM 21.1.8](https://releases.llvm.org/21.1.0/docs/ReleaseNotes.html) is used as ghoti's compilation backend. It is manually compiled and statically linked against ghoti through the build system. It is licensed under the permissive Apache License 2.0, and has the following dependencies:
+4. [LLVM 23.1.3](https://releases.llvm.org/23.1.0/docs/ReleaseNotes.html) is used as ghoti's compilation backend. It is manually compiled and statically linked against ghoti through the build system. It is licensed under the permissive Apache License 2.0, and has the following dependencies:
     - [libxml2](https://gitlab.gnome.org/GNOME/libxml2), licensed under the MIT License
     - [zlib](https://github.com/madler/zlib), licensed under the MIT License
     - [zstd](https://github.com/facebook/zstd), licensed under the BSD License
@@ -61,8 +61,8 @@ Many build functions heavily reference [allyourcodebase](https://github.com/ally
 ```ghoti
 import std;
 
-pub const main := fn(args: [][:0]u8): void {
-    const message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): void {
+    const message = "Hello, world!";
     _ = std.io.println(message);
 };
 ```
@@ -108,6 +108,8 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
     - [x] LSP
     - [x] Formatter
     - [ ] Translate C
+    - [ ] Syntactic & Semantic Checking w/o compilation 
+- [ ] Compiler RT
 - [ ] Standard library
     - [x] Cross-platform support w/o forcing libc
     - [ ] Generic data structures
@@ -125,7 +127,11 @@ If you have a suggestion that would make this better, please fork the repo and c
 2. Create your Feature Branch (`git checkout -b feat/AmazingFeature`)
 3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feat/AmazingFeature`)
-5. Open a Pull Request against `dev`
+5. Open a Pull Request against `main`
+
+### A Note on Generative AI
+
+The **responsible** use of LLMs/Generative AI/Agentic AI (whatever you want to call them) is accepted in the development of this project. Generated code will pass through human review the same way traditionally written code would, and you as the user of the tool must take full accountability for the output it generates. When AI is used in your contributions, it must be disclosed such that a reviewer can acknowledge its usage. While pure AI-driven development (aka "vibe-coding") is pervasive throughout AI-based discourse, you are expected as a human to play a non-negligible role in the development process (i.e., you can explain every design choice made along the way). I have taken great lengths to design this language and project as a while to be comfortable for me as a human to work with, and I will not accept contributions that aim to assist agentic workflows over human ones (e.g. skills, MCP tool, AGENTS.md).
 
 ### Top contributors:
 

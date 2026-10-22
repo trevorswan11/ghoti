@@ -1,0 +1,171 @@
+#include "compiler/codegen/runtime_libcalls.hh"
+
+#include <algorithm>
+#include <array>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <ankerl/unordered_dense.h>
+#include <fmt/format.h>
+#include <llvm/IR/RuntimeLibcalls.h>
+#include <llvm/TargetParser/Triple.h>
+#include <stdx/hash.hh>
+#include <stdx/memory.hh>
+#include <stdx/string.hh>
+#include <stdx/types.hh>
+
+#include "compiler/codegen/soft_f80.hh"
+#include "support/float128.hh"
+#include "support/float_math.hh"
+
+namespace ghoti::codegen {
+
+namespace {
+
+using name_set = ankerl::unordered_dense::
+    set<std::string, stdx::string_transparent_hash, stdx::string_transparent_eq>;
+// Node-based so the references handed out stay valid as other triples are added
+using triple_map = ankerl::unordered_dense::map<std::string,
+                                                stdx::box<name_set>,
+                                                stdx::string_transparent_hash,
+                                                stdx::string_transparent_eq>;
+
+[[nodiscard]] auto libcall_names(const llvm::Triple& triple) -> const name_set& {
+    static std::mutex mutex;
+    static triple_map by_triple;
+
+    const std::scoped_lock lock{mutex};
+    if (const auto it{by_triple.find(triple.str())}; it != by_triple.end()) { return *it->second; }
+
+    const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
+    auto                                   names{stdx::make_box<name_set>()};
+    for (const auto impl : llvm::RTLIB::libcall_impls()) {
+        if (!info.isAvailable(impl)) { continue; }
+        if (const auto name{llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl)};
+            !name.empty()) {
+            names->emplace(name.str());
+        }
+    }
+    return *by_triple.emplace(triple.str(), std::move(names)).first->second;
+}
+
+// `sinf128`, `fmodf64x`: the C23 names ghoti calls directly, which LLVM's tables may not list
+[[nodiscard]] auto is_c23_math_name(std::string_view symbol) -> bool {
+    for (const std::string_view suffix : {"f128", "f64x"}) {
+        if (!symbol.ends_with(suffix)) { continue; }
+        const auto base{stdx::string::substr(symbol, 0, symbol.size() - suffix.size())};
+        if (base == "fmod") { return true; }
+        for (u8 f{0}; f <= static_cast<u8>(math_function::CEIL); ++f) {
+            if (base == math_function_name(static_cast<math_function>(f))) { return true; }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+auto is_runtime_libcall(const llvm::Triple& triple, std::string_view symbol) -> bool {
+    if (needs_soft_f80(triple) && is_soft_f80_routine(symbol)) { return true; }
+    return is_c23_math_name(symbol) || libcall_names(triple).contains(symbol);
+}
+
+auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) -> bool {
+    // ghoti links no libc on most targets, so compiler_rt provides the memory routines; where a
+    // libc is linked too, it comes first and its definitions win
+    static constexpr std::array<std::string_view, 5> memory_routines{
+        "memcpy", "memmove", "memset", "memcmp", "bcmp"};
+    if (std::ranges::contains(memory_routines, symbol)) { return true; }
+    // LLVM lists the allocator among some targets' libcalls, but it is libc's, never compiler_rt's
+    static constexpr std::array<std::string_view, 4> allocation_routines{
+        "malloc", "calloc", "realloc", "free"};
+    if (std::ranges::contains(allocation_routines, symbol)) { return false; }
+    if (triple.isWindowsMSVCEnvironment() && symbol == "_fltused") { return true; }
+    if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86_64) {
+        if (symbol == (triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk")) { return true; }
+    }
+    if (triple.isOSWindows() && triple.getArch() == llvm::Triple::x86) {
+        if (symbol == (triple.isOSCygMing() ? "_alloca" : "_chkstk")) { return true; }
+    }
+    return is_runtime_libcall(triple, symbol);
+}
+
+auto math_libcall_name(const llvm::Triple& triple, math_function function, float_format format)
+    -> std::string {
+    using llvm::RTLIB::Libcall;
+    // f32, f64, f80, f128
+    const auto  variants{[&] -> std::array<Libcall, 4> {
+        namespace rt = llvm::RTLIB;
+        switch (function) {
+        case math_function::SIN:  return {rt::SIN_F32, rt::SIN_F64, rt::SIN_F80, rt::SIN_F128};
+        case math_function::COS:  return {rt::COS_F32, rt::COS_F64, rt::COS_F80, rt::COS_F128};
+        case math_function::TAN:  return {rt::TAN_F32, rt::TAN_F64, rt::TAN_F80, rt::TAN_F128};
+        case math_function::EXP:  return {rt::EXP_F32, rt::EXP_F64, rt::EXP_F80, rt::EXP_F128};
+        case math_function::EXP2: return {rt::EXP2_F32, rt::EXP2_F64, rt::EXP2_F80, rt::EXP2_F128};
+        case math_function::LOG:  return {rt::LOG_F32, rt::LOG_F64, rt::LOG_F80, rt::LOG_F128};
+        case math_function::LOG2: return {rt::LOG2_F32, rt::LOG2_F64, rt::LOG2_F80, rt::LOG2_F128};
+        case math_function::LOG10:
+            return {rt::LOG10_F32, rt::LOG10_F64, rt::LOG10_F80, rt::LOG10_F128};
+        case math_function::SQRT: return {rt::SQRT_F32, rt::SQRT_F64, rt::SQRT_F80, rt::SQRT_F128};
+        case math_function::FLOOR:
+            return {rt::FLOOR_F32, rt::FLOOR_F64, rt::FLOOR_F80, rt::FLOOR_F128};
+        case math_function::CEIL: return {rt::CEIL_F32, rt::CEIL_F64, rt::CEIL_F80, rt::CEIL_F128};
+        }
+        std::unreachable();
+    }()};
+    const usize index{format == float_format::SINGLE   ? 0UZ
+                      : format == float_format::DOUBLE ? 1UZ
+                      : format == float_format::X87    ? 2UZ
+                                                       : 3UZ};
+    // LLVM names the f128 routines `sinl` where `long double` is binary128 and even where it is
+    // not (MSVC, macOS), which would bind to the platform's own `double`/x87 `sinl`. f128 always
+    // takes the unambiguous C23 name, and so does f80 where `long double` is `double`.
+    if (format == float_format::QUAD) {
+        return fmt::format("{}f128", math_function_name(function));
+    }
+    // Without x87 hardware, `f80` math is compiler_rt's too
+    if (format == float_format::X87 && needs_soft_f80(triple)) {
+        return fmt::format("__{}x", math_function_name(function));
+    }
+    if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) {
+        return fmt::format("{}f64x", math_function_name(function));
+    }
+    // LLVM's default lowering takes the first available implementation of the call
+    const llvm::RTLIB::RuntimeLibcallsInfo info{triple};
+    for (const auto impl : llvm::RTLIB::libcall_impls()) {
+        if (info.isAvailable(impl) &&
+            llvm::RTLIB::RuntimeLibcallsInfo::getLibcallFromImpl(impl) == variants[index]) {
+            return llvm::RTLIB::RuntimeLibcallsInfo::getLibcallImplName(impl).str();
+        }
+    }
+
+    static constexpr std::array suffixes{"f", "", "l", "f128"};
+    return fmt::format("{}{}", math_function_name(function), suffixes[index]);
+}
+
+auto needs_named_math_call(const llvm::Triple& triple, float_format format) -> bool {
+    if (format == float_format::QUAD) { return true; }
+    return format == float_format::X87 && triple.isWindowsMSVCEnvironment();
+}
+
+auto fmod_libcall_name(const llvm::Triple& triple, float_format format) -> std::string {
+    if (format == float_format::QUAD) { return "fmodf128"; }
+    if (format == float_format::X87 && needs_soft_f80(triple)) { return "__fmodx"; }
+    if (format == float_format::X87 && triple.isWindowsMSVCEnvironment()) { return "fmodf64x"; }
+    const usize index{format == float_format::SINGLE   ? 0UZ
+                      : format == float_format::DOUBLE ? 1UZ
+                                                       : 2UZ};
+
+    static constexpr std::array suffixes{"f", "", "l"};
+    return fmt::format("fmod{}", suffixes[index]);
+}
+
+auto strip_global_prefix(const llvm::Triple& triple, std::string_view symbol) -> std::string_view {
+    const bool prefixed{triple.isOSBinFormatMachO() ||
+                        (triple.isOSBinFormatCOFF() && triple.getArch() == llvm::Triple::x86)};
+    if (prefixed && symbol.starts_with('_')) { symbol.remove_prefix(1); }
+    return symbol;
+}
+
+} // namespace ghoti::codegen

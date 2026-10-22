@@ -93,7 +93,7 @@ pub fn createLLDLibrary(self: *const Self, config: ArtifactCreateConfig) Artifac
     return lib;
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/Common/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/Common/CMakeLists.txt
 fn buildCommon(self: *const Self) LLDTargetArtifacts.Common {
     const b = self.b;
     const version_inc = b.addConfigHeader(.{
@@ -143,7 +143,7 @@ fn buildCommon(self: *const Self) LLDTargetArtifacts.Common {
     };
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/COFF/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/COFF/CMakeLists.txt
 fn buildCOFF(self: *const Self) ArtifactWithGen {
     const b = self.b;
     const registry = b.addWriteFiles();
@@ -162,6 +162,7 @@ fn buildCOFF(self: *const Self) ArtifactWithGen {
         self.llvm.target_artifacts.demangle,
         self.llvm.target_artifacts.tool_drivers.lib,
         self.llvm.target_artifacts.lto,
+        self.llvm.target_artifacts.dtlto,
         self.llvm.target_artifacts.machine_code.core_lib,
         self.llvm.target_artifacts.object,
         self.llvm.target_artifacts.option,
@@ -193,7 +194,7 @@ fn buildCOFF(self: *const Self) ArtifactWithGen {
     return .{ .gen = registry, .core_lib = lib };
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/ELF/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/ELF/CMakeLists.txt
 fn buildELF(self: *const Self) ArtifactWithGen {
     const b = self.b;
     const registry = b.addWriteFiles();
@@ -211,6 +212,7 @@ fn buildELF(self: *const Self) ArtifactWithGen {
         self.llvm.target_artifacts.demangle,
         self.llvm.target_artifacts.tool_drivers.lib,
         self.llvm.target_artifacts.lto,
+        self.llvm.target_artifacts.dtlto,
         self.llvm.target_artifacts.machine_code.core_lib,
         self.llvm.target_artifacts.object,
         self.llvm.target_artifacts.option,
@@ -242,7 +244,7 @@ fn buildELF(self: *const Self) ArtifactWithGen {
     return .{ .gen = registry, .core_lib = lib };
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/MachO/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MachO/CMakeLists.txt
 fn buildMachO(self: *const Self) ArtifactWithGen {
     const b = self.b;
     const registry = b.addWriteFiles();
@@ -291,7 +293,7 @@ fn buildMachO(self: *const Self) ArtifactWithGen {
     return .{ .gen = registry, .core_lib = lib };
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/MinGW/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/MinGW/CMakeLists.txt
 fn buildMinGW(self: *const Self) ArtifactWithGen {
     const b = self.b;
     const registry = b.addWriteFiles();
@@ -321,7 +323,7 @@ fn buildMinGW(self: *const Self) ArtifactWithGen {
     return .{ .gen = registry, .core_lib = lib };
 }
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/lld/wasm/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/lld/wasm/CMakeLists.txt
 fn buildWasm(self: *const Self) ArtifactWithGen {
     const b = self.b;
     const registry = b.addWriteFiles();

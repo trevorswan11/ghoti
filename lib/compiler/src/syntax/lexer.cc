@@ -1,5 +1,6 @@
 #include "compiler/syntax/lexer.hh"
 
+#include <algorithm>
 #include <cctype>
 #include <string_view>
 #include <utility>
@@ -15,6 +16,7 @@
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "compiler/syntax/trvia.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::syntax {
 
@@ -68,13 +70,19 @@ auto lexer::advance() noexcept -> token_t {
         token.type  = *maybe_misc_token_type;
     } else if (current_byte_ == '@') {
         if (peek_pos_ < input_.size() && input_[peek_pos_] == '"') { return read_raw_identifier(); }
+        if (peek_pos_ < input_.size() && input_[peek_pos_] == '[') {
+            token.slice = stdx::string::substr(input_, pos_, 2);
+            token.type  = token_type_t::AT_LBRACKET;
+            read_character(2);
+            return token;
+        }
         token.slice = read_ident(true);
         token.type  = lu_builtin(token.slice);
         return token;
-    } else if (std::isalpha(current_byte_) || current_byte_ == '_') {
+    } else if (string_utils::is_alpha(current_byte_) || current_byte_ == '_') {
         if (current_byte_ == '_') {
             const auto next_c{peek_pos_ < input_.size() ? input_[peek_pos_] : '\0'};
-            if (!std::isalnum(static_cast<u8>(next_c)) && next_c != '_') {
+            if (!string_utils::is_alnum(next_c) && next_c != '_') {
                 token.slice = stdx::string::substr(input_, pos_, 1);
                 token.type  = token_type_t::UNDERSCORE;
                 read_character();
@@ -84,12 +92,12 @@ auto lexer::advance() noexcept -> token_t {
         token.slice = read_ident(false);
         token.type  = lu_ident(token.slice);
         return token;
-    } else if (std::isdigit(current_byte_)) {
+    } else if (string_utils::is_digit(current_byte_)) {
         return read_number();
     } else if (current_byte_ == '"') {
         return read_string();
     } else if (current_byte_ == '\'') {
-        return read_byte_literal();
+        return read_char_literal();
     } else {
         token.slice = stdx::string::substr(input_, pos_, 1);
         token.type  = token_type_t::ILLEGAL;
@@ -103,7 +111,8 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
     enriched_token result;
 
     // Collect leading trivia
-    while (pos_ < input_.size() && (std::isspace(current_byte_) || current_byte_ == '/')) {
+    while (pos_ < input_.size() &&
+           (string_utils::is_space(current_byte_) || current_byte_ == '/')) {
         if (current_byte_ == '/' && peek_pos_ < input_.size() && input_[peek_pos_] != '/') {
             break;
         }
@@ -115,8 +124,9 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
         if (current_byte_ == '\n') {
             read_character();
             result.leading_trivia.emplace_back(trivia_kind::NEWLINE, "\n", start_line, start_col);
-        } else if (std::isspace(current_byte_)) {
-            while (pos_ < input_.size() && std::isspace(current_byte_) && current_byte_ != '\n') {
+        } else if (string_utils::is_space(current_byte_)) {
+            while (pos_ < input_.size() && string_utils::is_space(current_byte_) &&
+                   current_byte_ != '\n') {
                 read_character();
             }
             result.leading_trivia.emplace_back(
@@ -158,15 +168,16 @@ auto lexer::advance_enriched() noexcept -> enriched_token {
 }
 
 auto lexer::skip_whitespace() noexcept -> void {
-    while (std::isspace(current_byte_)) { read_character(); }
+    while (string_utils::is_space(current_byte_)) { read_character(); }
 }
 
 auto lexer::lu_builtin(std::string_view ident) noexcept -> token_type_t {
-    return get_builtin_opt(ident).value_or(token_type_t::ILLEGAL);
+    return builtin_token_opt(ident).value_or(token_type_t::ILLEGAL);
 }
 
 auto lexer::lu_ident(std::string_view ident) noexcept -> token_type_t {
     if (token_type::is_int_type_lexeme(ident)) { return token_type_t::INT_TYPE; }
+    if (token_type::is_c_type_lexeme(ident)) { return token_type_t::C_TYPE; }
     return get_keyword_opt(ident).value_or(token_type_t::IDENT);
 }
 
@@ -198,17 +209,25 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
     const auto start_line{line_no_};
     const auto start_col{col_no_};
 
-    if (current_byte_ == '\0') { return token_t{token_type_t::END, {}, start_line, start_col}; }
+    if (at_end()) { return token_t{token_type_t::END, {}, start_line, start_col}; }
 
     usize max_len{0};
     auto  matched_type{token_type_t::ILLEGAL};
 
     // Try extending from length 1 up to the max operator size
-    for (usize len{1}; len <= max_operator_length() && pos_ + len <= input_.size(); ++len) {
-        if (const auto op{get_operator_opt(stdx::string::substr(input_, pos_, len))}) {
-            matched_type = *op;
-            max_len      = len;
+    const auto max_len_to_try{std::min(max_operator_length(), input_.size() - pos_)};
+    for (usize len{1}; len <= max_len_to_try; ++len) {
+        const auto candidate{stdx::string::substr(input_, pos_, len)};
+        const auto op{get_operator_opt(candidate)};
+        if (!op) { continue; }
+        // An operator ending in a word (`&mut`) can't cut a name short: `&mutex` is `&` `mutex`
+        const auto last{candidate.back()};
+        if ((string_utils::is_alpha(last) || last == '_') && pos_ + len < input_.size()) {
+            const auto next{input_[pos_ + len]};
+            if (string_utils::is_alnum(next) || next == '_') { continue; }
         }
+        matched_type = *op;
+        max_len      = len;
     }
 
     // We cannot greedily consume the lexer here since the next token instruction handles that
@@ -217,10 +236,10 @@ auto lexer::read_operator() const noexcept -> stdx::option<token_t> {
 
     // A word-operator must be a whole word to allow e.g. origin to work
     if (!matched_text.empty() &&
-        (std::isalpha(static_cast<u8>(matched_text.front())) || matched_text.front() == '_') &&
+        (string_utils::is_alpha(matched_text.front()) || matched_text.front() == '_') &&
         pos_ + max_len < input_.size()) {
-        const auto next{static_cast<u8>(input_[pos_ + max_len])};
-        if (std::isalnum(next) || next == '_') { return stdx::none; }
+        const auto next{input_[pos_ + max_len]};
+        if (string_utils::is_alnum(next) || next == '_') { return stdx::none; }
     }
 
     return token_t{matched_type, matched_text, start_line, start_col};
@@ -230,8 +249,9 @@ auto lexer::read_ident(bool builtin) noexcept -> std::string_view {
     const auto start{pos_};
 
     auto passed_first{false};
-    while ((builtin && !passed_first && current_byte_ == '@') || std::isalpha(current_byte_) ||
-           current_byte_ == '_' || (passed_first && std::isdigit(current_byte_))) {
+    while ((builtin && !passed_first && current_byte_ == '@') ||
+           string_utils::is_alpha(current_byte_) || current_byte_ == '_' ||
+           (passed_first && string_utils::is_digit(current_byte_))) {
         read_character();
         passed_first = true;
     }
@@ -267,8 +287,12 @@ auto lexer::read_number() noexcept -> token_t {
     while (true) {
         const auto c{current_byte_};
 
-        // Exponent handling defaults to floats for simplicity
-        if (base == numeric_base::DECIMAL && !passed_exponent && (c == 'e' || c == 'E')) {
+        // Exponent handling defaults to floats for simplicity; hex floats use a binary `p` exponent
+        const bool exponent_marker{base == numeric_base::HEXADECIMAL ? (c == 'p' || c == 'P')
+                                                                     : (c == 'e' || c == 'E')};
+        const bool has_mantissa{base == numeric_base::DECIMAL ||
+                                (base == numeric_base::HEXADECIMAL && last_was_digit)};
+        if (has_mantissa && !passed_exponent && exponent_marker) {
             auto p{peek_pos_};
             if (p >= input_.size()) { break; }
 
@@ -279,13 +303,13 @@ auto lexer::read_number() noexcept -> token_t {
                 next = input_[p];
             }
 
-            if (!std::isdigit(next)) { break; }
+            if (!string_utils::is_digit(next)) { break; }
 
             passed_exponent = true;
             read_character();
 
             if (current_byte_ == '+' || current_byte_ == '-') { read_character(); }
-            while (std::isdigit(current_byte_)) { read_character(); }
+            while (string_utils::is_digit(current_byte_)) { read_character(); }
             last_was_digit = true;
             continue;
         }
@@ -301,10 +325,22 @@ auto lexer::read_number() noexcept -> token_t {
             continue;
         }
 
-        // Underscore can only be in between digits
+        // A hex fraction needs digits on both sides of the '.', leaving `0x1..2` and `0x1.len`
+        // alone
+        if (base == numeric_base::HEXADECIMAL && c == '.' && last_was_digit && !passed_decimal &&
+            !passed_exponent && peek_pos_ < input_.size() &&
+            digit_in_base(input_[peek_pos_], numeric_base::HEXADECIMAL)) {
+            passed_decimal = true;
+            last_was_digit = false;
+            read_character();
+            continue;
+        }
+
+        // Underscore can only be in between digits; exponent digits are always decimal
+        const auto digit_base{passed_exponent ? numeric_base::DECIMAL : base};
         if (c == '_' && last_was_digit) {
             read_character();
-            if (!digit_in_base(current_byte_, base)) {
+            if (!digit_in_base(current_byte_, digit_base)) {
                 return {token_type_t::ILLEGAL,
                         stdx::string::substr(input_, start, pos_ - start),
                         start_line,
@@ -315,7 +351,7 @@ auto lexer::read_number() noexcept -> token_t {
         }
 
         // Normal digit
-        if (digit_in_base(c, base)) {
+        if (digit_in_base(c, digit_base)) {
             last_was_digit = true;
             read_character();
             continue;
@@ -347,8 +383,8 @@ auto lexer::read_number() noexcept -> token_t {
         case 'f':
         case 'F':
             while (pos_ < input_.size() &&
-                   (std::isalpha(static_cast<u8>(current_byte_)) ||
-                    (pos_ > suffix_start && std::isdigit(static_cast<u8>(current_byte_))))) {
+                   (string_utils::is_alpha(current_byte_) ||
+                    (pos_ > suffix_start && string_utils::is_digit(current_byte_)))) {
                 read_character();
             }
             break;
@@ -357,6 +393,17 @@ auto lexer::read_number() noexcept -> token_t {
     }
     const auto suffix{stdx::string::substr(input_, suffix_start, pos_ - suffix_start)};
 
+    // Glued trailing characters (`0b102`, `1e`, `12abc`) make the whole literal malformed
+    if (!at_end() && (string_utils::is_alnum(current_byte_) || current_byte_ == '_')) {
+        while (!at_end() && (string_utils::is_alnum(current_byte_) || current_byte_ == '_')) {
+            read_character();
+        }
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start, pos_ - start),
+                start_line,
+                start_col};
+    }
+
     const auto length{pos_ - start};
     const auto lexeme{stdx::string::substr(input_, start, length)};
     if (length == 0) {
@@ -364,17 +411,16 @@ auto lexer::read_number() noexcept -> token_t {
             token_type_t::ILLEGAL, stdx::string::substr(input_, start, 1), start_line, start_col};
     }
 
-    // A trailing bare '.' or a fractional non-decimal literal is malformed.
-    if (input_[pos_ - 1] == '.' || (passed_decimal && base != numeric_base::DECIMAL)) {
+    // A trailing bare '.' or a fractional binary/octal literal is malformed.
+    const bool float_base{base == numeric_base::DECIMAL || base == numeric_base::HEXADECIMAL};
+    if (input_[pos_ - 1] == '.' || (passed_decimal && !float_base)) {
         return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
     }
 
     const bool has_float_suffix{!suffix.empty() &&
                                 (suffix.front() == 'f' || suffix.front() == 'F')};
     if (passed_decimal || passed_exponent || has_float_suffix) {
-        if (base != numeric_base::DECIMAL) {
-            return {token_type_t::ILLEGAL, lexeme, start_line, start_col};
-        }
+        if (!float_base) { return {token_type_t::ILLEGAL, lexeme, start_line, start_col}; }
         return {token_type_t::REAL, lexeme, start_line, start_col};
     }
 
@@ -383,19 +429,10 @@ auto lexer::read_number() noexcept -> token_t {
     return {type, lexeme, start_line, start_col};
 }
 
-auto lexer::read_escape() noexcept -> char {
-    read_character();
-
-    switch (current_byte_) {
-    case 'n':  return '\n';
-    case 'r':  return '\r';
-    case 't':  return '\t';
-    case '\\': return '\\';
-    case '\'': return '\'';
-    case '"':  return '"';
-    case '0':  return '\0';
-    default:   return current_byte_;
-    }
+auto lexer::read_escape() noexcept -> bool {
+    const auto scan{scan_escape(stdx::string::substr(input_, pos_))};
+    for (usize i{1}; i < scan.length; ++i) { read_character(); }
+    return scan.error.empty();
 }
 
 auto lexer::read_string() noexcept -> token_t {
@@ -404,12 +441,22 @@ auto lexer::read_string() noexcept -> token_t {
     const auto start_col{col_no_};
     read_character();
 
-    while (current_byte_ != '"' && current_byte_ != '\0') {
-        if (current_byte_ == '\\') { read_escape(); }
+    auto escapes_valid{true};
+    while (current_byte_ != '"' && !at_end()) {
+        if (current_byte_ == '\\' && !read_escape()) { escapes_valid = false; }
         read_character();
     }
 
-    if (current_byte_ == '\0') {
+    // A terminated literal with a bad escape keeps its closing quote so the parser can tell
+    if (!at_end() && !escapes_valid) {
+        read_character();
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start, pos_ - start),
+                start_line,
+                start_col};
+    }
+
+    if (at_end()) {
         return {
             token_type_t::ILLEGAL,
             stdx::string::substr(input_, start, pos_ - start),
@@ -419,8 +466,9 @@ auto lexer::read_string() noexcept -> token_t {
     }
     read_character();
 
-    return {token_type_t::STRING,
-            stdx::string::substr(input_, start, pos_ - start),
+    const auto lexeme{stdx::string::substr(input_, start, pos_ - start)};
+    return {is_valid_utf8(lexeme) ? token_type_t::STRING : token_type_t::ILLEGAL,
+            lexeme,
             start_line,
             start_col};
 }
@@ -431,9 +479,9 @@ auto lexer::read_raw_identifier() noexcept -> token_t {
     const auto start_col{col_no_};
     read_character(2); // consume '@' and the opening '"'
 
-    while (current_byte_ != '"' && current_byte_ != '\0' && current_byte_ != '\n' &&
-           current_byte_ != '\r') {
-        if (current_byte_ == '\\') { read_escape(); }
+    auto escapes_valid{true};
+    while (current_byte_ != '"' && !at_end() && current_byte_ != '\n' && current_byte_ != '\r') {
+        if (current_byte_ == '\\' && !read_escape()) { escapes_valid = false; }
         read_character();
     }
 
@@ -446,9 +494,17 @@ auto lexer::read_raw_identifier() noexcept -> token_t {
     }
     read_character(); // consume the closing '"'
 
+    if (!escapes_valid) {
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start, pos_ - start),
+                start_line,
+                start_col};
+    }
+
     // The slice keeps the whole `@"..."` lexeme for the parser to intern and interpret
-    return {token_type_t::IDENT,
-            stdx::string::substr(input_, start, pos_ - start),
+    const auto lexeme{stdx::string::substr(input_, start, pos_ - start)};
+    return {is_valid_utf8(lexeme) ? token_type_t::IDENT : token_type_t::ILLEGAL,
+            lexeme,
             start_line,
             start_col};
 }
@@ -462,9 +518,7 @@ auto lexer::read_multiline_string() noexcept -> token_t {
 
     while (true) {
         // Consume characters until newline or EOF
-        while (current_byte_ != '\n' && current_byte_ != '\r' && current_byte_ != '\0') {
-            read_character();
-        }
+        while (current_byte_ != '\n' && current_byte_ != '\r' && !at_end()) { read_character(); }
 
         // Peek positions
         usize peek_pos{peek_pos_};
@@ -504,41 +558,43 @@ auto lexer::read_multiline_string() noexcept -> token_t {
         read_character(2);
     }
 
+    const auto content{stdx::string::substr(input_, start, end_pos - start)};
+    if (!is_valid_utf8(content)) {
+        // Keep the opening `\\` marker so the parser can tell which literal was malformed
+        return {token_type_t::ILLEGAL,
+                stdx::string::substr(input_, start - 2, end_pos - start + 2),
+                start_line,
+                start_col - 2};
+    }
     return {
         token_type_t::MULTILINE_STRING,
-        stdx::string::substr(input_, start, end_pos - start),
+        content,
         start_line,
         start_col,
     };
 }
 
-// Reads a byte literal returning an illegal token for malformed literals.
+// Reads a character literal, returning an illegal token for an unterminated one.
 //
 // Assumes that the surrounding single quotes have not been consumed.
-auto lexer::read_byte_literal() noexcept -> token_t {
+auto lexer::read_char_literal() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
     read_character();
 
-    // Consume one logical character
-    if (current_byte_ == '\\') {
-        read_escape();
+    // Everything up to the closing quote; the parser checks it holds exactly one code point, and
+    // reports a malformed escape at the escape itself
+    while (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r' && !at_end()) {
+        if (current_byte_ == '\\') { DISCARD(read_escape()); }
         read_character();
-    } else if (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r') {
-        read_character();
-    } else {
-        return {token_type_t::ILLEGAL,
-                stdx::string::substr(input_, start, pos_ - start),
-                start_line,
-                start_col};
     }
 
-    // The next character MUST be closing ', otherwise illegally consume like a comment
+    // No closing quote on the line: illegally consume like a comment
     if (current_byte_ != '\'') {
         auto illegal_end{pos_};
         while (current_byte_ != '\'' && current_byte_ != '\n' && current_byte_ != '\r' &&
-               current_byte_ != '\0') {
+               !at_end()) {
             read_character();
             illegal_end = pos_;
         }
@@ -557,8 +613,10 @@ auto lexer::read_byte_literal() noexcept -> token_t {
     }
     read_character();
 
-    return {
-        token_type_t::U8, stdx::string::substr(input_, start, pos_ - start), start_line, start_col};
+    return {token_type_t::CHAR,
+            stdx::string::substr(input_, start, pos_ - start),
+            start_line,
+            start_col};
 }
 
 // Reads a comment from the token, assuming the '//' operator has been consumed
@@ -566,12 +624,12 @@ auto lexer::read_comment() noexcept -> token_t {
     const auto start{pos_};
     const auto start_line{line_no_};
     const auto start_col{col_no_};
-    while (current_byte_ != '\n' && current_byte_ != '\0') { read_character(); }
+    while (current_byte_ != '\n' && !at_end()) { read_character(); }
 
-    return {token_type_t::COMMENT,
-            stdx::string::substr(input_, start, pos_ - start),
-            start_line,
-            start_col};
+    // A CRLF line's `\r` belongs to the line break, not the comment text
+    auto slice{stdx::string::substr(input_, start, pos_ - start)};
+    if (slice.ends_with('\r')) { slice.remove_suffix(1); }
+    return {token_type_t::COMMENT, slice, start_line, start_col};
 }
 
 } // namespace ghoti::syntax

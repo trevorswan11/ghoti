@@ -1,0 +1,163 @@
+import std;
+
+import "addf3.gh" as _;
+import "comparef.gh" as _;
+import "mem.gh" as _;
+import "windows.gh" as _;
+import "divmod.gh" as _;
+import "divf3.gh" as _;
+import "mulf3.gh" as _;
+import "extendf.gh" as _;
+
+/// Exports `func` with the given name with hidden visitibility and weak linkage
+pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
+    @cfg (!testing) {
+        @export(func, .{ .name = name, .linkage = .weak, .visibility = .hidden });
+    } else {
+        _ = func;
+        _ = name;
+    }
+};
+
+pub const want_ppc_abi = @cfgValue(arch == .powerpc or arch == .powerpc64);
+
+pub const want_sparc64_abi = @cfgValue(arch == .sparc64);
+pub const want_sparc32_abi = @cfgValue(arch == .sparc);
+
+pub const is_arch_eabi = @cfgValue(
+    abi == .eabi => true,
+    abi == .eabihf => true,
+    _ => false,
+);
+
+pub const want_aeabi = @cfgValue((arch == .arm or arch == .thumb) and
+    (is_arch_eabi or abi == .musleabi or abi == .musleabihf or abi == .gnueabi or
+        abi == .gnueabihf or
+        abi == .android));
+
+pub const is_os_darwin = @cfgValue(os == .macos);
+
+/// This governs whether to use these symbol names for f16/f32 conversions
+/// rather than the standard names:
+/// * __gnu_f2h_ieee
+/// * __gnu_h2f_ieee
+/// Known correct configurations:
+///   x86_64-freestanding-none => true
+///   x86_64-linux-none => true
+///   x86_64-linux-gnu => true
+///   x86_64-linux-musl => true
+///   x86_64-linux-eabi => true
+///   arm-linux-musleabihf => true
+///   arm-linux-gnueabihf => true
+///   arm-linux-eabihf => false
+///   wasm32-freestanding-none => false
+///   x86_64-windows-gnu => true
+///   x86_64-windows-msvc => true
+///   any-macos-any => false
+pub const gnu_f16_abi = @cfgValue(
+    arch == .wasm32 => false,
+    arch == .wasm64 => false,
+    arch == .riscv32 => false,
+    arch == .riscv64 => false,
+    arch == .arm => !is_arch_eabi,
+    arch == .thumb => !is_arch_eabi,
+    arch == .x86_64 => true,
+    arch == .x86 => true,
+    _ => is_os_darwin,
+);
+
+pub const @"f80" = match comptime (@targetArch()) {
+    .x86_64, .x86 => f80,
+    _ => u80,
+};
+
+@cfg (os == .windows and abi == .msvc and !testing) {
+    /// MSVC's linker looks for this symbol in any object that uses floating point
+    export let mut _fltused: c_int = 1;
+}
+
+pub const normalize = fn(
+    comptime T: type,
+    significand: &mut @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits }),
+): i32 {
+    const Z = @typeInfo(@TypeOf(significand)).reference.child;
+    const integer_bit = @as(Z, 1) << std.math.float_fractional_bits(T);
+
+    let shift = @clz(significand) - @clz(integer_bit);
+    significand <<= @as(std.math.Log2Int(Z), @intCast(shift));
+    return @as(i32, 1) - shift;
+};
+
+/// Computes the full double-width product of `a` and `b`, split into its high and low halves.
+/// Works on half-width limbs so no integer wider than `Z` is needed.
+@[inline(.always)]
+pub const wide_multiply = fn(comptime Z: type, a: Z, b: Z, hi: &mut Z, lo: &mut Z): void {
+    const half_bits = @typeInfo(Z).int.bits / 2;
+    const lo_mask = std.math.max_int(Z) >> half_bits;
+
+    let a_lo = a & lo_mask;
+    let a_hi = a >> half_bits;
+    let b_lo = b & lo_mask;
+    let b_hi = b >> half_bits;
+
+    let lo_lo = a_lo * b_lo;
+    let lo_hi = a_lo * b_hi;
+    let hi_lo = a_hi * b_lo;
+    let hi_hi = a_hi * b_hi;
+
+    let mid = (lo_lo >> half_bits) + (lo_hi & lo_mask) + (hi_lo & lo_mask);
+    lo = (lo_lo & lo_mask) | (mid << half_bits);
+    hi = hi_hi + (lo_hi >> half_bits) + (hi_lo >> half_bits) + (mid >> half_bits);
+};
+
+@[inline(.always)] pub const fneg = fn(a: auto): @TypeOf(a) {
+    const T = @TypeOf(a);
+    comptime @assert(@typeInfo(T) == .float);
+    const bits = @typeInfo(T).float.bits;
+    const U = @Int(.{ .signedness = .unsigned, .bits = bits });
+    const sign_bit_mask = @as(U, 1) << (bits - 1);
+    let negated = @bitCast(U, a) ^ sign_bit_mask;
+    return @bitCast(negated);
+};
+
+/// Allows to access underlying bits as two equally sized lower and higher
+/// signed or unsigned integers.
+pub const HalveInt = fn(comptime T: type, comptime signed_half: bool): type {
+    return union(void) {
+        all: T,
+        @cfg (endian == .little) {
+            s: extern struct {
+                low: HalfT,
+                high: HalfT,
+            },
+        } else {
+            s: extern struct {
+                high: HalfT,
+                low: HalfT,
+            },
+        }
+
+        pub const bits = @typeInfo(T).int.bits / 2;
+        pub const HalfTU = @Int(.{ .signedness = .unsigned, .bits = bits });
+        pub const HalfTS = @Int(.{ .signedness = .signed, .bits = bits });
+        pub const HalfT = if comptime (signed_half) HalfTS else HalfTU;
+    };
+};
+
+@[inline(.always)] pub const abs_i32 = fn(x: i32): i32 {
+    return (x ^ (x >> 31)) -% (x >> 31);
+};
+
+@[inline(.always)] pub const abs_i64 = fn(x: i64): i64 {
+    return (x ^ (x >> 63)) -% (x >> 63);
+};
+
+test {
+    import "addf3.gh";
+    import "comparef.gh";
+    import "mem.gh";
+    import "divmod.gh";
+    import "divf3.gh";
+    import "mulf3.gh";
+    import "extendf.gh";
+}

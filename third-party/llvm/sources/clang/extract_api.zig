@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/ExtractAPI/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/ExtractAPI/CMakeLists.txt
 pub const root = "clang/lib/ExtractAPI";
 pub const sources = [_][]const u8{
     "API.cpp",

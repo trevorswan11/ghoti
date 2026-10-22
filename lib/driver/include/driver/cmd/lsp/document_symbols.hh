@@ -18,10 +18,10 @@ enum class symbol_kind : i32 {
 };
 
 // Classifies a top-level decl_stmt for both document and workspace symbol responses
-[[nodiscard]] auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl)
+[[nodiscard]] auto symbol_kind_of(const mod::module_t& module, const ast::decl_stmt& decl)
     -> symbol_kind;
 
 // Builds a flat, top-level-only `DocumentSymbol[]` outline of a module
-[[nodiscard]] auto document_symbols(const mod::module& module) -> nlohmann::json;
+[[nodiscard]] auto document_symbols(const mod::module_t& module) -> nlohmann::json;
 
 } // namespace ghoti::lsp

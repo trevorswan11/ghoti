@@ -16,20 +16,21 @@ namespace ghoti::tests {
 
 TEST_CASE("every node has an end_location_of that is not before its start location_of") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const x := foo(1, 2) + bar.baz;\n"
-                                    "const y := struct { a: i32 };\n",
-                            arena)};
+    auto         ast{helpers::parse("const x = foo(1, 2) + bar.baz;\n"
+                                    "const y = struct { a: i32 };\n",
+                                    arena)};
 
-    for (const auto root : ast) {
-        const auto& start{ast.location_of(root)};
-        const auto& end{ast.end_location_of(root)};
+    REQUIRE(ast.all_nodes().size() > ast.get_roots().size());
+    for (const auto id : ast.all_nodes()) {
+        const auto& start{ast.location_of(id)};
+        const auto& end{ast.end_location_of(id)};
         CHECK((end.line > start.line || (end.line == start.line && end.column >= start.column)));
     }
 }
 
 TEST_CASE("a call_expr's span ends just past its closing paren") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const x := foo(1, 2);\n", arena)};
+    auto         ast{helpers::parse("const x = foo(1, 2);\n", arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
@@ -37,13 +38,13 @@ TEST_CASE("a call_expr's span ends just past its closing paren") {
     const auto& end{ast.end_location_of(*decl.value)};
 
     CHECK(end.line == 0);
-    CHECK(end.column == 20);
+    CHECK(end.column == 19);
     CHECK(call.arguments.size() == 2);
 }
 
 TEST_CASE("a binary_expr's span starts at its lhs, not its operator") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const x := 1 + 2;\n", arena)};
+    auto         ast{helpers::parse("const x = 1 + 2;\n", arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
@@ -52,16 +53,16 @@ TEST_CASE("a binary_expr's span starts at its lhs, not its operator") {
     CHECK(bin.rhs.is<ast::int_literal_expr>());
 
     CHECK(start.line == 0);
-    CHECK(start.column == 11);
+    CHECK(start.column == 10);
 }
 
 TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const f := fn(): void {\n"
-                                    "    var x := 1;\n"
+    auto         ast{helpers::parse("const f = fn(): void {\n"
+                                    "    let mut x = 1;\n"
                                     "    x = 2;\n"
                                     "};\n",
-                            arena)};
+                                    arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
     REQUIRE(decl.value);
     const auto& fn{ast.get_as<ast::function_expr>(*decl.value)};
@@ -79,7 +80,7 @@ TEST_CASE("an assignment_expr's span starts at its lhs, not its operator") {
 
 TEST_CASE("a postfix unwrap_expr's span starts at its operand and ends past its operator") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const x := abc?;\n", arena)};
+    auto         ast{helpers::parse("const x = abc?;\n", arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
@@ -90,22 +91,22 @@ TEST_CASE("a postfix unwrap_expr's span starts at its operand and ends past its 
     const auto& start{ast.location_of(*decl.value)};
     const auto& end{ast.end_location_of(*decl.value)};
     CHECK(start.line == 0);
-    CHECK(start.column == 11); // the `a` of `abc`, not the `?`
+    CHECK(start.column == 10); // the `a` of `abc`, not the `?`
     CHECK(end.line == 0);
-    CHECK(end.column == 15); // just past the `?`
+    CHECK(end.column == 14); // just past the `?`
 }
 
 TEST_CASE("a block_stmt's span ends just past its closing brace") {
     ghoti::arena arena;
-    auto         ast{helpers::parse("const f := fn(): void {\n"
+    auto         ast{helpers::parse("const f = fn(): void {\n"
                                     "    return;\n"
                                     "};\n",
-                            arena)};
+                                    arena)};
     const auto&  decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
 
     REQUIRE(decl.value);
     const auto& fn{ast.get_as<ast::function_expr>(*decl.value)};
-    const auto& end{ast.end_location_of(fn.body)};
+    const auto& end{ast.end_location_of(UNWRAP(fn.body))};
 
     CHECK(end.line == 2);
     CHECK(end.column == 1);
@@ -113,16 +114,16 @@ TEST_CASE("a block_stmt's span ends just past its closing brace") {
 
 TEST_CASE("interface_expr records associated items and required vs default methods") {
     ghoti::arena arena;
-    auto         ast{helpers::parse(R"(const W := interface {
+    auto         ast{helpers::parse(R"(const W = interface {
     Error: type;
     Item: type = u8;
     const cap: usize = 4096;
-    pub const write := fn(&mut self, b: []u8): R;
-    const dbg := fn(&self): []u8;
-    pub const writeAll := fn(&mut self, b: []u8): R { return self.write(b); };
+    pub const write = fn(&mut self, b: []u8): R;
+    const dbg = fn(&self): []u8;
+    pub const writeAll = fn(&mut self, b: []u8): R { return self.write(b); };
 };
 )",
-                            arena)};
+                                    arena)};
 
     const auto& decl{ast.get_as<ast::decl_stmt>(*ast.begin())};
     REQUIRE(decl.value);
@@ -144,18 +145,18 @@ TEST_CASE("interface_expr records associated items and required vs default metho
 
 TEST_CASE("impl_stmt distinguishes trait, inherent, and parameterized forms") {
     ghoti::arena arena;
-    auto        inherent{helpers::parse("impl File { pub const f := fn(&self): void {}; }", arena)};
-    const auto& i0{inherent.get_as<ast::impl_stmt>(*inherent.begin())};
+    auto         inherent{helpers::parse("impl File { pub const f = fn(&self): void {}; }", arena)};
+    const auto&  i0{inherent.get_as<ast::impl_stmt>(*inherent.begin())};
     CHECK_FALSE(i0.interface_type.has_value());
     CHECK(i0.impl_params.empty());
     CHECK(i0.members.size() == 1);
 
     auto        trait{helpers::parse(
-        "impl Writer for File { pub const write := fn(&mut self, b: []u8): R { c; }; }", arena)};
+        "impl Writer for File { pub const write = fn(&mut self, b: []u8): R { c; }; }", arena)};
     const auto& i1{trait.get_as<ast::impl_stmt>(*trait.begin())};
     CHECK(i1.interface_type.has_value());
 
-    auto        param{helpers::parse("impl(H: type) Writer(H) { const cap := 8; }\n", arena)};
+    auto        param{helpers::parse("impl(H: type) Writer(H) { const cap = 8; }\n", arena)};
     const auto& i2{param.get_as<ast::impl_stmt>(*param.begin())};
     REQUIRE(i2.impl_params.size() == 1);
     CHECK_FALSE(i2.interface_type.has_value());
@@ -169,9 +170,9 @@ TEST_CASE("impl and interface parse errors recover") {
         return p.consume(parsed, arena).size();
     }};
 
-    CHECK(parse_errs("impl Foo;\n") > 0);                   // missing `{ ... }` body
-    CHECK(parse_errs("impl for Bar {}\n") > 0);             // missing interface before `for`
-    CHECK(parse_errs("const I := interface { x };\n") > 0); // malformed member
+    CHECK(parse_errs("impl Foo;\n") > 0);                  // missing `{ ... }` body
+    CHECK(parse_errs("impl for Bar {}\n") > 0);            // missing interface before `for`
+    CHECK(parse_errs("const I = interface { x };\n") > 0); // malformed member
 }
 
 } // namespace ghoti::tests

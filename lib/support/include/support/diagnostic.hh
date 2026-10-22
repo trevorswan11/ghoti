@@ -10,10 +10,12 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
+#include <stdx/hash.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
 #include <stdx/type_traits.hh>
@@ -31,6 +33,11 @@ struct source_location {
 
     source_location() noexcept = default;
     source_location(usize line, usize column) noexcept : line{line}, column{column} {}
+
+    // The 1-indexed form users see, e.g. baked into a runtime `builtin.SourceLocation`
+    [[nodiscard]] auto one_based() const noexcept -> source_location {
+        return {line + 1, column + 1};
+    }
 
     auto operator==(const source_location&) const noexcept -> bool = default;
 };
@@ -50,6 +57,17 @@ struct located_span {
     auto operator==(const located_span&) const noexcept -> bool = default;
 };
 
+struct located_span_hash {
+    [[nodiscard]] static auto operator()(const located_span& located) noexcept -> u64 {
+        return stdx::hasher{std::filesystem::hash_value(located.path)}
+            .combine(located.span.start.line)
+            .combine(located.span.start.column)
+            .combine(located.span.end.line)
+            .combine(located.span.end.column)
+            .finalize();
+    }
+};
+
 template <typename T> struct source_info;
 
 template <typename T>
@@ -67,7 +85,7 @@ template <> struct source_info<source_location> {
     static auto get(const source_location& loc) -> source_location { return loc; }
 };
 
-namespace mod { struct module; } // namespace mod
+namespace mod { struct module_t; } // namespace mod
 
 // Mappings not to be changed, tied to LSP diagnostic emission
 enum class diagnostic_level : u8 {
@@ -136,12 +154,14 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     // Moves the passed diagnostic into a new one with an error code
     diagnostic(diagnostic&& other, E err) noexcept
-        : message_{std::move(other.message_)}, loc_{other.loc_}, error_{err} {}
+        : message_{std::move(other.message_)}, loc_{other.loc_}, error_{err},
+          origin_{other.origin_} {}
 
     // Moves the passed diagnostic into a new one with a specified source location
     template <Locateable T>
     diagnostic(diagnostic&& other, const T& t) noexcept
-        : message_{std::move(other.message_)}, loc_{source_info<T>::get(t)}, error_{other.error_} {}
+        : message_{std::move(other.message_)}, loc_{source_info<T>::get(t)}, error_{other.error_},
+          origin_{other.origin_} {}
 
     [[nodiscard]] auto to_string(const stdx::option<std::string>& source_path = stdx::none,
                                  stdx::option<bool> in_terminal = stdx::none) const -> std::string {
@@ -153,6 +173,16 @@ template <stdx::ScopedEnum E> class diagnostic {
     auto operator==(const diagnostic& other) const noexcept -> bool {
         return message_ == other.message_ && loc_ == other.loc_ && error_ == other.error_ &&
                level_ == other.level_;
+    }
+
+    // A key equal for exactly the diagnostics `operator==` considers equal
+    [[nodiscard]] auto identity() const -> std::string {
+        return fmt::format("{}|{}|{}|{}|{}",
+                           message_.value_or(""),
+                           loc_ ? fmt::format("{}:{}", loc_->line, loc_->column) : "",
+                           magic_enum::enum_integer(error_),
+                           level_ ? static_cast<i32>(*level_) : -1,
+                           message_.has_value());
     }
 
     MAKE_GETTER(message, const stdx::option<std::string>&)
@@ -169,6 +199,11 @@ template <stdx::ScopedEnum E> class diagnostic {
                 level_.value_or(diagnostic_level::ERROR)};
     }
 
+    // The module whose source `location` points into, when it isn't the one whose list holds
+    // this diagnostic (a compile-time call that evaluated another module's function)
+    [[nodiscard]] auto origin() const noexcept -> const mod::module_t* { return origin_; }
+    auto               set_origin(const mod::module_t& owner) noexcept -> void { origin_ = &owner; }
+
     // Diagnostics are always ERROR by default, see `unset_level`
     auto set_level(diagnostic_level level) noexcept -> void { level_.emplace(level); }
     auto unset_level() noexcept -> void { level_.reset(); }
@@ -178,6 +213,7 @@ template <stdx::ScopedEnum E> class diagnostic {
     stdx::option<source_location>  loc_;
     E                              error_;
     stdx::option<diagnostic_level> level_{diagnostic_level::ERROR};
+    const mod::module_t*           origin_{nullptr};
 };
 
 template <typename T> struct is_diagnostic : std::false_type {};
@@ -213,10 +249,24 @@ template <Diagnostic D> class diagnostic_list {
         diagnostic_list rest{in_terminal_};
         if (from >= diagnostics_.size()) { return rest; }
         for (usize i{from}; i < diagnostics_.size(); ++i) {
-            rest.diagnostics_.push_back(diagnostics_[i]);
+            rest.diagnostics_.emplace_back(diagnostics_[i]);
         }
         diagnostics_.erase(diagnostics_.begin() + static_cast<idiff>(from), diagnostics_.end());
         return rest;
+    }
+
+    // Marks every diagnostic at or after `from` that has no origin yet as belonging to `owner`
+    auto set_origin_from(usize from, const mod::module_t& owner) -> void {
+        for (usize i{from}; i < diagnostics_.size(); ++i) {
+            if (!diagnostics_[i].origin()) { diagnostics_[i].set_origin(owner); }
+        }
+    }
+
+    // Drops later exact repeats, as when several instantiations report the same body error
+    auto remove_duplicates() -> void {
+        ankerl::unordered_dense::set<std::string> seen;
+        std::erase_if(diagnostics_,
+                      [&seen](const D& d) { return !seen.insert(d.identity()).second; });
     }
 
     operator gsl::span<const D>() const { return diagnostics_; }

@@ -1,16 +1,20 @@
 #include "compiler/sema/passes/type_checker.hh"
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/ast/expression.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
@@ -21,21 +25,53 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
 
-type_checker::type_checker(gir::module& gir_mod, context& ctx) noexcept
+namespace {
+
+// The source spelling of a binary GIR operator, for diagnostics
+[[nodiscard]] auto binary_operator_symbol(gir::instruction_kind kind) noexcept -> std::string_view {
+    switch (kind) {
+    case gir::instruction_kind::ADD: return "+";
+    case gir::instruction_kind::SUB: return "-";
+    case gir::instruction_kind::MUL: return "*";
+    case gir::instruction_kind::DIV: return "/";
+    case gir::instruction_kind::MOD: return "%";
+    case gir::instruction_kind::AND: return "&";
+    case gir::instruction_kind::OR:  return "|";
+    case gir::instruction_kind::XOR: return "^";
+    case gir::instruction_kind::SHL: return "<<";
+    case gir::instruction_kind::SHR: return ">>";
+    default:                         return gir::instruction_kind_name(kind);
+    }
+}
+
+} // namespace
+
+type_checker::type_checker(gir::module_t& gir_mod, context& ctx) noexcept
     : gir_mod_{gir_mod}, ctx_{ctx},
       target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {}
 
-auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, context& ctx)
+auto type_checker::check_types(gir::module_t& gir_mod, mod::module_t& ast_mod, context& ctx)
     -> mod::module_state {
     PROFILE_FUNCTION();
     type_checker checker{gir_mod, ctx};
 
-    for (const auto& fn : gir_mod.get_functions()) { checker.check_function(*fn); }
-    if (!ctx.diags.empty() || ast_mod.is_poisoned()) {
+    // A monomorph of another module's generic reports into that module, whose source it points at
+    bool attributed_foreign{false};
+    for (const auto& fn : gir_mod.get_functions()) {
+        const auto diags_before{ctx.diags.size()};
+        checker.check_function(*fn);
+        const auto source_mod{fn->get_source_module()};
+        if (source_mod && source_mod != &ast_mod && ctx.diags.size() > diags_before) {
+            source_mod->absorb_sema_diagnostics(ctx.diags.split_off(diags_before));
+            attributed_foreign = true;
+        }
+    }
+    if (!ctx.diags.empty() || ast_mod.is_poisoned() || attributed_foreign) {
         return ast_mod.error_out(std::move(ctx.diags), mod::module_state::POISONED_TYPE_RESOLVED);
     }
     return ast_mod.state;
@@ -43,38 +79,31 @@ auto type_checker::check_types(gir::module& gir_mod, mod::module& ast_mod, conte
 
 auto type_checker::format_store_mismatch(const type& val_t, const type& dest_t) const
     -> std::string {
-    if (const auto reason{cast_rejection_reason(val_t, dest_t, target_ptr_bits_)}) {
-        return fmt::format("Type mismatch in store: cannot assign '{}' to '{}' ({})",
-                           type_kind_display_name(val_t),
-                           type_kind_display_name(dest_t),
-                           *reason);
-    }
-    return fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                       type_kind_display_name(val_t),
-                       type_kind_display_name(dest_t));
+    return ctx_.store_mismatch_message(val_t, dest_t, target_ptr_bits_);
 }
 
 auto type_checker::format_arg_mismatch(usize                          arg_idx,
                                        const type&                    arg_t,
                                        const type&                    param_t,
                                        stdx::option<std::string_view> callee) const -> std::string {
-    const auto reason{cast_rejection_reason(arg_t, param_t, target_ptr_bits_)};
+    const auto reason{
+        cast_rejection_reason(arg_t, param_t, target_ptr_bits_, ctx_.user_type_names)};
     if (callee) {
         if (reason) {
             return fmt::format(
                 "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}' "
                 "({})",
                 arg_idx,
-                type_kind_display_name(arg_t),
-                type_kind_display_name(param_t),
+                ctx_.type_display_name(arg_t),
+                ctx_.type_display_name(param_t),
                 *callee,
                 *reason);
         }
         return fmt::format(
             "Argument {} of type '{}' is not assignable to parameter type '{}' in call to '{}'",
             arg_idx,
-            type_kind_display_name(arg_t),
-            type_kind_display_name(param_t),
+            ctx_.type_display_name(arg_t),
+            ctx_.type_display_name(param_t),
             *callee);
     }
     if (reason) {
@@ -82,29 +111,30 @@ auto type_checker::format_arg_mismatch(usize                          arg_idx,
             "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call "
             "({})",
             arg_idx,
-            type_kind_display_name(arg_t),
-            type_kind_display_name(param_t),
+            ctx_.type_display_name(arg_t),
+            ctx_.type_display_name(param_t),
             *reason);
     }
     return fmt::format(
         "Argument {} of type '{}' is not assignable to parameter type '{}' in indirect call",
         arg_idx,
-        type_kind_display_name(arg_t),
-        type_kind_display_name(param_t));
+        ctx_.type_display_name(arg_t),
+        ctx_.type_display_name(param_t));
 }
 
 auto type_checker::format_return_mismatch(const type& ret_t, const type& expected_t) const
     -> std::string {
-    if (const auto reason{cast_rejection_reason(ret_t, expected_t, target_ptr_bits_)}) {
+    if (const auto reason{
+            cast_rejection_reason(ret_t, expected_t, target_ptr_bits_, ctx_.user_type_names)}) {
         return fmt::format(
             "Return value of type '{}' is not assignable to function return type '{}' ({})",
-            type_kind_display_name(ret_t),
-            type_kind_display_name(expected_t),
+            ctx_.type_display_name(ret_t),
+            ctx_.type_display_name(expected_t),
             *reason);
     }
     return fmt::format("Return value of type '{}' is not assignable to function return type '{}'",
-                       type_kind_display_name(ret_t),
-                       type_kind_display_name(expected_t));
+                       ctx_.type_display_name(ret_t),
+                       ctx_.type_display_name(expected_t));
 }
 
 namespace {
@@ -126,16 +156,24 @@ auto type_checker::is_value_assignable(const gir::value&             val,
     if (is_assignable(val_t, dest_t)) { return true; }
     if (is_integer(val_t.get_kind()) && is_integer(dest_t.get_kind())) {
         if (const auto folded{folded_int(val)}) {
-            if (constexpr_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
+            if (comptime_int_fits(*folded, dest_t, target_ptr_bits_)) { return true; }
             emit_diagnostic(fmt::format("integer value {} is out of range for type '{}'",
                                         *folded,
-                                        type_kind_display_name(dest_t)),
+                                        ctx_.type_display_name(dest_t)),
                             error::LITERAL_OUT_OF_RANGE,
                             loc);
             return true;
         }
     }
     return false;
+}
+
+auto type_checker::is_arg_value_assignable(const gir::value&             val,
+                                           const type&                   val_t,
+                                           const type&                   param_t,
+                                           stdx::option<source_location> loc) -> bool {
+    if (param_t.is_poly() && is_arg_assignable(val_t, param_t)) { return true; }
+    return is_value_assignable(val, val_t, param_t, loc);
 }
 
 auto type_checker::emit_diagnostic(std::string_view              message,
@@ -145,16 +183,19 @@ auto type_checker::emit_diagnostic(std::string_view              message,
 }
 
 auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&> {
-    const auto concrete{[&](type& t) -> type& {
-        if (t.get_kind() == type_kind::CONSTEXPR_INT) { return ctx_.get_int(32, true); }
-        if (t.get_kind() == type_kind::CONSTEXPR_FLOAT) {
-            return ctx_.get_builtin_resolved_type(type_kind::F64);
+    if (val.type) {
+        // An untyped float the emitter coerced into an integer slot is still a float, which no
+        // integer destination accepts
+        if (val.data.is<f128>() && is_integer(val.type->get_kind())) {
+            return ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         }
-        return t;
-    }};
-    if (val.type) { return concrete(*val.type); }
+        return ctx_.default_concrete(*val.type);
+    }
+
     if (const auto lid{val.data.as_opt<gir::local_id>()}) {
-        if (auto it{locals_.find(*lid)}; it != locals_.end()) { return concrete(*it->second.type); }
+        if (auto it{locals_.find(*lid)}; it != locals_.end()) {
+            return ctx_.default_concrete(*it->second.type);
+        }
     }
     return stdx::none;
 }
@@ -175,48 +216,8 @@ auto type_checker::check_function(gir::function& fn) -> void {
                         local_info{.type = &param->type, .is_alloca = false, .is_const = false});
     }
 
-    const auto&       segments{fn.get_segments()};
-    std::vector<bool> reachable(segments.size(), false);
-    if (!segments.empty()) {
-        std::vector<gir::segment_id> worklist;
-        reachable[0] = true;
-        worklist.emplace_back(segments[0]->get_id());
-
-        while (!worklist.empty()) {
-            const auto curr_id{worklist.back()};
-            worklist.pop_back();
-
-            const auto curr_seg_opt{fn.get_segment_opt(curr_id)};
-            if (!curr_seg_opt) { continue; }
-
-            for (const auto* inst : (*curr_seg_opt)->get_instructions()) {
-                if (inst->target_segment) {
-                    const auto target_idx{std::to_underlying(*inst->target_segment)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->target_segment);
-                    }
-                }
-
-                if (inst->true_segment) {
-                    const auto target_idx{std::to_underlying(*inst->true_segment)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->true_segment);
-                    }
-                }
-
-                if (inst->false_segment) {
-                    const auto target_idx{std::to_underlying(*inst->false_segment)};
-                    if (target_idx < segments.size() && !reachable[target_idx]) {
-                        reachable[target_idx] = true;
-                        worklist.emplace_back(*inst->false_segment);
-                    }
-                }
-            }
-        }
-    }
-
+    const auto& segments{fn.get_segments()};
+    const auto  reachable{fn.reachable_segments()};
     for (const auto& seg : segments) {
         const auto idx{std::to_underlying(seg->get_id())};
         if (idx < reachable.size() && !reachable[idx]) { continue; }
@@ -226,7 +227,117 @@ auto type_checker::check_function(gir::function& fn) -> void {
 
 auto type_checker::check_segment(gir::function& fn, gir::segment& seg) -> void {
     PROFILE_FUNCTION();
-    for (const auto* inst : seg.get_instructions()) { check_instruction(fn, *inst); }
+    const auto& instructions{seg.get_instructions()};
+    for (usize i{0}; i < instructions.size(); ++i) {
+        check_instruction(fn, *instructions[i]);
+        if (instructions[i]->call_modifier) { check_call_modifier(fn, seg, i); }
+    }
+}
+
+namespace {
+
+// Whether a tail call can replace a call from `caller` to `callee`: LLVM's `musttail` needs the
+// same parameters, result, and calling convention
+[[nodiscard]] auto same_prototype(const types::function& caller, const types::function& callee)
+    -> bool {
+    if (caller.params.size() != callee.params.size() || caller.is_variadic != callee.is_variadic ||
+        caller.conv != callee.conv ||
+        !is_same_unqualified(caller.return_type, callee.return_type)) {
+        return false;
+    }
+    for (usize i{0}; i < caller.params.size(); ++i) {
+        if (!is_same_unqualified(*caller.params[i], *callee.params[i])) { return false; }
+    }
+    return true;
+}
+
+} // namespace
+
+// What `@call`'s modifier promises, checked against the call it was given
+auto type_checker::check_call_modifier(gir::function& fn, gir::segment& seg, usize index) -> void {
+    const auto& inst{*seg.get_instructions()[index]};
+    const auto  modifier{*inst.call_modifier};
+    const auto  callee{inst.callee_name ? find_function(*inst.callee_name) : stdx::none};
+    const auto  fail{[&](std::string_view why) {
+        emit_diagnostic(
+            fmt::format("'@call(.{}, ...)': {}", ast::call_modifier_name(modifier), why),
+            error::IMPOSSIBLE_CALL_MODIFIER,
+            inst.location);
+    }};
+    const auto  inlining{callee ? callee->get_attributes().inlining : stdx::none};
+
+    switch (modifier) {
+    case ast::call_modifier::NEVER_INLINE:
+        if (inlining == ast::inline_mode::ALWAYS) { fail("the function is `@[inline(.always)]`"); }
+        break;
+    case ast::call_modifier::ALWAYS_INLINE:
+        if (!callee) {
+            fail("only a call that names its function can be inlined, not one through a value");
+        } else if (callee->get_linkage() == gir::linkage::EXTERN) {
+            fail("an `extern` function has no body here to inline");
+        } else if (callee->get_attributes().naked) {
+            fail("a `@[naked]` function can't be inlined");
+        } else if (inlining == ast::inline_mode::NEVER) {
+            fail("the function is `@[inline(.never)]`");
+        }
+        break;
+    case ast::call_modifier::ALWAYS_TAIL: {
+        const auto& instructions{seg.get_instructions()};
+        const auto* next{index + 1 < instructions.size() ? instructions[index + 1] : nullptr};
+        const bool  returned{[&] {
+            if (!next || next->kind != gir::instruction_kind::RET) { return false; }
+            if (next->operands.empty()) { return !inst.result || !inst.type; }
+            const auto id{next->operands.front().data.as_opt<gir::local_id>()};
+            return inst.result && id && *id == *inst.result;
+        }()};
+        if (!returned) {
+            fail("the call must be returned directly (`return @call(.always_tail, f, ...)`), with "
+                 "no `defer` left to run after it");
+            break;
+        }
+        const auto caller_fn{fn.get_type().get_data().as_opt<types::function>()};
+        const auto callee_fn{callee ? callee->get_type().get_data().as_opt<types::function>()
+                                    : stdx::none};
+        if (caller_fn && callee_fn && !same_prototype(*caller_fn, *callee_fn)) {
+            fail("a tail call needs the same parameters, result, and calling convention as the "
+                 "function it returns from");
+            break;
+        }
+        const auto triple{codegen::resolve_target_triple(ctx_.target_opts.triple_str)};
+        if (triple.isWasm()) {
+            const auto cpu{codegen::resolve_target_cpu(ctx_.target_opts)};
+            if (!cpu || !std::ranges::contains(cpu->enabled, "tail_call")) {
+                fail("WebAssembly makes tail calls only with the `tail_call` feature "
+                     "(`--features +tail-call`)");
+            }
+        }
+        break;
+    }
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::NEVER_TAIL:
+    case ast::call_modifier::COMPILE_TIME: break;
+    }
+}
+
+auto type_checker::record_value_result(const gir::instruction& inst) -> void {
+    if (!inst.result || !inst.type) { return; }
+    locals_.insert_or_assign(*inst.result,
+                             local_info{
+                                 .type      = inst.type.get(),
+                                 .is_alloca = false,
+                                 .is_const  = false,
+                             });
+}
+
+auto type_checker::report_operator_mismatch(const gir::instruction& inst,
+                                            const type&             lhs,
+                                            const type&             rhs) -> void {
+    emit_diagnostic(fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
+                                binary_operator_symbol(inst.kind),
+                                ctx_.type_display_name(lhs),
+                                ctx_.type_display_name(rhs)),
+                    error::OPERATOR_TYPE_MISMATCH,
+                    inst.location);
 }
 
 auto type_checker::check_instruction(gir::function& fn, const gir::instruction& inst) -> void {
@@ -237,6 +348,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         if (inst.type && inst.type->get_kind() == type_kind::OPAQUE) {
             emit_diagnostic("Cannot allocate variable of opaque type",
                             error::ILLEGAL_OPAQUE_TYPE,
+                            inst.location);
+        }
+        if (inst.type && inst.type->get_kind() == type_kind::NORETURN) {
+            emit_diagnostic("Cannot declare a variable of type 'noreturn'; it has no values",
+                            error::TYPE_MISMATCH,
                             inst.location);
         }
         if (inst.result && inst.type) {
@@ -250,14 +366,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         break;
     }
     case gir::instruction_kind::LOAD: {
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::STORE: {
@@ -286,26 +395,24 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         (lhs_ptr_rhs_int ||
                          (inst.kind == gir::instruction_kind::ADD && rhs_ptr_lhs_int))};
                     if (!ptr_arith) {
-                        emit_diagnostic(
-                            fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                        gir::instruction_kind_name(inst.kind),
-                                        type_kind_display_name(*lhs_t),
-                                        type_kind_display_name(*rhs_t)),
-                            error::OPERATOR_TYPE_MISMATCH,
-                            inst.location);
+                        report_operator_mismatch(inst, *lhs_t, *rhs_t);
+                    } else {
+                        const auto& ptr_t{lhs_ptr_rhs_int ? *lhs_t : *rhs_t};
+                        const auto& pointee{ptr_t.get_data().as<types::pointer>().underlying};
+                        if (!is_value_type(pointee.get_kind())) {
+                            emit_diagnostic(
+                                fmt::format("Pointer arithmetic requires a pointee of known size; "
+                                            "'{}' has none",
+                                            ctx_.type_display_name(ptr_t)),
+                                error::OPERATOR_TYPE_MISMATCH,
+                                inst.location);
+                        }
                     }
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::AND:
@@ -320,25 +427,12 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                          is_integer(rhs_t->get_kind()) &&
                                          is_same_unqualified(*lhs_t, *rhs_t)};
                 if (!both_bool && !both_same_int) {
-                    emit_diagnostic(
-                        fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    gir::instruction_kind_name(inst.kind),
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
-                        error::OPERATOR_TYPE_MISMATCH,
-                        inst.location);
+                    report_operator_mismatch(inst, *lhs_t, *rhs_t);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::XOR:
@@ -348,27 +442,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto lhs_t{get_operand_type(inst.operands[0])};
             const auto rhs_t{get_operand_type(inst.operands[1])};
             if (lhs_t && rhs_t && !lhs_t->is_poison() && !rhs_t->is_poison()) {
+                // A shift amount is a bit count of any integer type, not a peer of the value
+                const bool is_shift{inst.kind != gir::instruction_kind::XOR};
                 if (!is_integer(lhs_t->get_kind()) || !is_integer(rhs_t->get_kind()) ||
-                    !is_same_unqualified(*lhs_t, *rhs_t)) {
-                    emit_diagnostic(
-                        fmt::format("Operator '{}' cannot be applied to types '{}' and '{}'",
-                                    gir::instruction_kind_name(inst.kind),
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
-                        error::OPERATOR_TYPE_MISMATCH,
-                        inst.location);
+                    (!is_shift && !is_same_unqualified(*lhs_t, *rhs_t))) {
+                    report_operator_mismatch(inst, *lhs_t, *rhs_t);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::EQ:
@@ -382,30 +465,23 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to aggregate types "
                                     "'{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 } else if (!is_assignable(*lhs_t, *rhs_t) && !is_assignable(*rhs_t, *lhs_t)) {
                     emit_diagnostic(
                         fmt::format("Comparison operator cannot be applied to incompatible types "
                                     "'{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::LT:
@@ -421,22 +497,15 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     emit_diagnostic(
                         fmt::format("Relational operator cannot be applied to non-numeric or "
                                     "incompatible types '{}' and '{}'",
-                                    type_kind_display_name(*lhs_t),
-                                    type_kind_display_name(*rhs_t)),
+                                    ctx_.type_display_name(*lhs_t),
+                                    ctx_.type_display_name(*rhs_t)),
                         error::OPERATOR_TYPE_MISMATCH,
                         inst.location);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::NEG: {
@@ -444,21 +513,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (!is_signed_integer(*op_t) && !is_float(op_t->get_kind())) {
-                    emit_diagnostic("Unary negation '-' requires a signed integer or float operand",
+                    emit_diagnostic(fmt::format("Unary negation '-' requires a signed integer or "
+                                                "float operand; found '{}'",
+                                                ctx_.type_display_name(*op_t)),
                                     error::OPERATOR_TYPE_MISMATCH,
                                     inst.location);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::NOT: {
@@ -466,21 +530,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (op_t->get_kind() != type_kind::BOOL) {
-                    emit_diagnostic("Logical negation '!' requires a boolean operand",
-                                    error::OPERATOR_TYPE_MISMATCH,
-                                    inst.location);
+                    emit_diagnostic(
+                        fmt::format("Logical negation '!' requires a boolean operand; found '{}'",
+                                    ctx_.type_display_name(*op_t)),
+                        error::OPERATOR_TYPE_MISMATCH,
+                        inst.location);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::BITNOT: {
@@ -488,21 +547,16 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             const auto op_t{get_operand_type(inst.operands[0])};
             if (op_t && !op_t->is_poison()) {
                 if (!is_integer(op_t->get_kind())) {
-                    emit_diagnostic("Bitwise negation '~' requires an integer operand",
-                                    error::OPERATOR_TYPE_MISMATCH,
-                                    inst.location);
+                    emit_diagnostic(
+                        fmt::format("Bitwise negation '~' requires an integer operand; found '{}'",
+                                    ctx_.type_display_name(*op_t)),
+                        error::OPERATOR_TYPE_MISMATCH,
+                        inst.location);
                 }
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::RET: {
@@ -524,7 +578,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         } else {
             if (inst.operands.empty() || inst.operands[0].data.is<gir::void_val>()) {
                 emit_diagnostic(fmt::format("Empty return in function expecting return type '{}'",
-                                            type_kind_display_name(expected_ret_t)),
+                                            ctx_.type_display_name(expected_ret_t)),
                                 error::RETURN_TYPE_MISMATCH,
                                 inst.location);
             } else if (inst.operands[0].data.is<gir::undefined_val>()) {
@@ -532,7 +586,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 if (!ret_t || ret_t->get_kind() != type_kind::NORETURN) {
                     emit_diagnostic(fmt::format("Function expecting return type '{}' does not "
                                                 "return a value on all code paths",
-                                                type_kind_display_name(expected_ret_t)),
+                                                ctx_.type_display_name(expected_ret_t)),
                                     error::RETURN_TYPE_MISMATCH,
                                     inst.location);
                 }
@@ -569,7 +623,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
                                 params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                                !is_value_assignable(
+                                !is_arg_value_assignable(
                                     inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                                 emit_diagnostic(
                                     format_arg_mismatch(
@@ -593,7 +647,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                         if (arg_t && !arg_t->is_poison() &&
                             arg_t->get_kind() != sema::type_kind::TYPE &&
                             params[i]->type.get_kind() != sema::type_kind::TYPE &&
-                            !is_value_assignable(
+                            !is_arg_value_assignable(
                                 inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                             emit_diagnostic(format_arg_mismatch(
                                                 i + 1, *arg_t, params[i]->type, *inst.callee_name),
@@ -631,10 +685,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 const auto arg_t{get_operand_type(inst.operands[i + 1])};
                                 if (arg_t && !arg_t->is_poison() &&
                                     arg_t->get_kind() != sema::type_kind::TYPE &&
-                                    !is_value_assignable(inst.operands[i + 1],
-                                                         *arg_t,
-                                                         *fn_data->params[i],
-                                                         inst.location)) {
+                                    !is_arg_value_assignable(inst.operands[i + 1],
+                                                             *arg_t,
+                                                             *fn_data->params[i],
+                                                             inst.location)) {
                                     emit_diagnostic(
                                         format_arg_mismatch(
                                             i + 1, *arg_t, *(fn_data->params[i]), stdx::none),
@@ -656,10 +710,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             const auto arg_t{get_operand_type(inst.operands[i + 1])};
                             if (arg_t && !arg_t->is_poison() &&
                                 arg_t->get_kind() != sema::type_kind::TYPE &&
-                                !is_value_assignable(inst.operands[i + 1],
-                                                     *arg_t,
-                                                     *fn_data->params[i],
-                                                     inst.location)) {
+                                !is_arg_value_assignable(inst.operands[i + 1],
+                                                         *arg_t,
+                                                         *fn_data->params[i],
+                                                         inst.location)) {
                                 emit_diagnostic(
                                     format_arg_mismatch(
                                         i + 1, *arg_t, *(fn_data->params[i]), stdx::none),
@@ -672,14 +726,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::PTR_CAST: {
@@ -692,8 +739,8 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 if (!src_is_ptr || !dest_is_ptr) {
                     emit_diagnostic(fmt::format("Cannot @ptrCast/@alignCast type '{}' to '{}'; "
                                                 "both must be pointer types",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 } else {
@@ -711,14 +758,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::INT_CAST: {
@@ -728,26 +768,19 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
-                const bool src_is_int{is_integer(src_k) || src_k == type_kind::CONSTEXPR_INT ||
+                const bool src_is_int{is_integer(src_k) || src_k == type_kind::COMPTIME_INT ||
                                       src_k == type_kind::BOOL};
                 const bool dest_is_int{is_integer(dest_k)};
                 if (!src_is_int || !dest_is_int) {
                     emit_diagnostic(fmt::format("Cannot @intCast type '{}' to '{}'",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::TRUNC_CAST: {
@@ -759,21 +792,14 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 const auto dest_k{dest_t->get_kind()};
                 if (!is_integer(src_k) || !is_integer(dest_k)) {
                     emit_diagnostic(fmt::format("Cannot @truncate type '{}' to '{}'",
-                                                type_kind_display_name(*src_t),
-                                                type_kind_display_name(*dest_t)),
+                                                ctx_.type_display_name(*src_t),
+                                                ctx_.type_display_name(*dest_t)),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::WIDEN_CAST: {
@@ -802,25 +828,25 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     if (is_implicit_widenable(*src_t, *dest_t)) {
                         allowed = true;
                     } else if (const auto folded{folded_int(inst.operands[0])}) {
-                        allowed = constexpr_int_fits(*folded, *dest_t, target_ptr_bits_);
+                        allowed = comptime_int_fits(*folded, *dest_t, target_ptr_bits_);
                     }
                 } else if (is_enum_repr_cast || is_float_cast) {
                     allowed = true;
                 }
 
                 if (!allowed) {
-                    if (const auto reason{
-                            cast_rejection_reason(*src_t, *dest_t, target_ptr_bits_)}) {
+                    if (const auto reason{cast_rejection_reason(
+                            *src_t, *dest_t, target_ptr_bits_, ctx_.user_type_names)}) {
                         emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}' ({})",
-                                                    type_kind_display_name(*src_t),
-                                                    type_kind_display_name(*dest_t),
+                                                    ctx_.type_display_name(*src_t),
+                                                    ctx_.type_display_name(*dest_t),
                                                     *reason),
                                         error::TYPE_MISMATCH,
                                         inst.location);
                     } else {
                         emit_diagnostic(fmt::format("Cannot cast type '{}' to '{}'",
-                                                    type_kind_display_name(*src_t),
-                                                    type_kind_display_name(*dest_t)),
+                                                    ctx_.type_display_name(*src_t),
+                                                    ctx_.type_display_name(*dest_t)),
                                         error::TYPE_MISMATCH,
                                         inst.location);
                     }
@@ -828,23 +854,18 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
             }
         }
 
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::COND_GOTO:
         if (!inst.operands.empty()) {
             const auto cond_t{get_operand_type(inst.operands[0])};
             if (cond_t && !cond_t->is_poison() && cond_t->get_kind() != type_kind::BOOL) {
-                emit_diagnostic("Conditional branch condition must be of type 'bool'",
-                                error::TYPE_MISMATCH,
-                                inst.location);
+                emit_diagnostic(
+                    fmt::format("Conditional branch condition must be of type 'bool'; found '{}'",
+                                ctx_.type_display_name(*cond_t)),
+                    error::TYPE_MISMATCH,
+                    inst.location);
             }
         }
         break;
@@ -882,7 +903,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                     it != locals_.end() && it->second.is_const && it->second.is_alloca &&
                     it->second.type &&
                     it->second.type->get_kind() !=
-                        type_kind::CLOSURE // closure's `const` binding only pins the binding, not
+                        type_kind::CLOSURE // closure's `let` binding only pins the binding, not
                                            // its captured env
                 ) {
                     emit_diagnostic(
@@ -892,17 +913,11 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                 }
             }
         }
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     }
     case gir::instruction_kind::DEREF:
+    case gir::instruction_kind::MAKE_CALLABLE:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:
     case gir::instruction_kind::BIT_CAST:
@@ -918,14 +933,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         break;
     case gir::instruction_kind::INLINE_ASM:
         // Operand well-formedness is enforced during type resolution
-        if (inst.result && inst.type) {
-            locals_.insert_or_assign(*inst.result,
-                                     local_info{
-                                         .type      = inst.type.get(),
-                                         .is_alloca = false,
-                                         .is_const  = false,
-                                     });
-        }
+        record_value_result(inst);
         break;
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE: break;
@@ -960,7 +968,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 if (val_t &&
                     !is_value_assignable(
                         inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                    !packed_backing_store(it->second.type, &*val_t)) {
+                    !packed_backing_store(it->second.type, val_t.get())) {
                     emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                     error::TYPE_MISMATCH,
                                     inst.location);
@@ -1004,9 +1012,9 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                         } else {
                             emit_diagnostic(
                                 fmt::format("Type mismatch in store: cannot assign '{}' to '{}'",
-                                            val_t ? type_kind_display_name(*val_t) : "unknown",
-                                            ptr_data ? type_kind_display_name(ptr_data->underlying)
-                                                     : type_kind_display_name(*it->second.type)),
+                                            val_t ? ctx_.type_display_name(*val_t) : "unknown",
+                                            ptr_data ? ctx_.type_display_name(ptr_data->underlying)
+                                                     : ctx_.type_display_name(*it->second.type)),
                                 error::TYPE_MISMATCH,
                                 inst.location);
                         }
@@ -1056,7 +1064,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
 
             if (val_t &&
                 !is_value_assignable(inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                !packed_backing_store(it->second.type, &*val_t)) {
+                !packed_backing_store(it->second.type, val_t.get())) {
                 emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                 error::TYPE_MISMATCH,
                                 inst.location);

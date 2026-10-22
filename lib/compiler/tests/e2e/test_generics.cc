@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/module/module.hh"
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -9,31 +11,31 @@ namespace ghoti::tests {
 
 using helpers::mock_file;
 
-TEST_CASE("a poisoned aggregate member does not crash a constexpr type-ctor instantiation") {
+TEST_CASE("a poisoned aggregate member does not crash a comptime type-ctor instantiation") {
     helpers::expect_compile_error(R"(
-        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
-        constexpr R := fn(T: type): type { return Result(T, i32); };
-        const S := struct {
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+        const R = fn(comptime T: type): type { return Result(T, i32); };
+        const S = struct {
             a: u32,
-            const bad := fn(&self): u32 { return s.a; };
+            const bad = fn(&self): u32 { return s.a; };
         };
-        const g := fn(): R(S) { return .{ .ok = S{ .a = 1u32 } }; };
-        pub const main := fn(): i32 { return 0; };
+        const g = fn(): R(S) { return .{ .ok = S{ .a = 1u32 } }; };
+        pub const main = fn(): i32 { return 0; };
     )");
 }
 
 TEST_CASE("@This() resolves correctly inside a generic function's body") {
     CHECK(helpers::compile_and_run(R"(
-        const S := struct {
+        const S = struct {
             x: i32,
 
-            const make := fn(v: auto): i32 {
-                const r: @This() = S{ .x = v };
+            const make = fn(v: auto): i32 {
+                let r: @This() = S{ .x = v };
                 return r.x;
             };
         };
 
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return S.make(15);
         };
     )") == 15);
@@ -41,20 +43,20 @@ TEST_CASE("@This() resolves correctly inside a generic function's body") {
 
 TEST_CASE("a static member fn returning its own struct type (with an array field)") {
     CHECK(helpers::compile_and_run(R"(
-        const List := struct {
+        const List = struct {
             buf: [4uz]mut i32,
             len: usize,
 
-            const init := fn(): @This() {
-                var l: @This() = undefined;
+            const init = fn(): @This() {
+                let mut l: @This() = undefined;
                 l.len = 7uz;
                 return l;
             };
-            const size := fn(^self): i32 { return @intCast(i32, self.len); };
+            const size = fn(^self): i32 { return @intCast(i32, self.len); };
         };
 
-        pub const main := fn(): i32 {
-            const l := List.init();
+        pub const main = fn(): i32 {
+            let l = List.init();
             return l.size();
         };
     )") == 7);
@@ -62,14 +64,14 @@ TEST_CASE("a static member fn returning its own struct type (with an array field
 
 TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instantiation") {
     CHECK(helpers::compile_and_run(R"(
-        const dup := fn(T: type, x: T): T {
-            const y := x;
-            const z := y;
+        const dup = fn(comptime T: type, x: T): T {
+            let y = x;
+            let z = y;
             return z;
         };
-        pub const main := fn(): i32 {
-            const a := dup(i32, 10);
-            const b := dup(u8, 5u8);
+        pub const main = fn(): i32 {
+            let a = dup(i32, 10);
+            let b = dup(u8, 5u8);
             return a + @intCast(i32, b);
         };
     )") == 15);
@@ -77,56 +79,96 @@ TEST_CASE("a generic fn's body-local `const` decls are re-typed for each instant
 
 TEST_CASE("the `?` operator works inside a generic function body") {
     CHECK(helpers::compile_and_run(R"(
-        const R := union { ok: i32, err: u8 };
+        const R = union(enum) { ok: i32, err: u8 };
         impl builtin.Unwrappable for R {
-            using Output = i32;
-            using Residual = u8;
-            pub const branch := fn(self): builtin.Flow(i32, u8) {
+            const Output = i32;
+            const Residual = u8;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
-                    .ok => |v| builtin.Flow(i32, u8){ .@"continue" = v },
-                    .err => |e| builtin.Flow(i32, u8){ .@"break" = e },
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
                 };
             };
         }
         impl builtin.Rewrappable for R {
-            using From = u8;
-            pub const fromResidual := fn(r: u8): @This() { return .{ .err = r }; };
+            const From = u8;
+            pub const from_residual = fn(r: u8): @This() { return .{ .err = r }; };
         }
-        const first := fn(T: type, r: R): R {
-            const v := r?;
+        const first = fn(comptime T: type, r: R): R {
+            let v = r?;
             return .{ .ok = v + 1 };
         };
-        pub const main := fn(): i32 {
-            const x := first(i32, .{ .ok = 7 });
+        pub const main = fn(): i32 {
+            let x = first(i32, .{ .ok = 7 });
             return match (x) { .ok => |v| v, .err => 0 };
         };
     )") == 8);
 }
 
+TEST_CASE("a `using` alias inside a generic body re-resolves per instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Result = fn(comptime T: type, comptime E: type): type {
+            return union(enum) {
+                ok: T,
+                err: E,
+
+                pub const mapErr = fn(&self, func: auto): auto {
+                    const fn_info = @typeInfo(@TypeOf(func));
+                    const NewErr = fn_info.function.return_type;
+                    const NewRes = Result(T, NewErr);
+                    return match (self) {
+                        .ok => |happy| NewRes{ .ok = happy },
+                        .err => |sad| NewRes{ .err = func(sad) },
+                    };
+                };
+            };
+        };
+
+        pub const main = fn(): i32 {
+            let a: Result(void, i32) = .{ .err = 1 };
+            let mapped_bool = a.mapErr(fn(val: i32): bool { return val != 0; });
+            let bool_ok = match (mapped_bool) {
+                .ok => false,
+                .err => |e| e == true,
+            };
+
+            const toU8 = fn(_: i32): u8 { return 7; };
+            let b: Result(void, i32) = .{ .err = 2 };
+            let mapped_u8 = b.mapErr(toU8);
+            let u8_ok = match (mapped_u8) {
+                .ok => false,
+                .err => |e| e == 7,
+            };
+
+            return if (bool_ok and u8_ok) 1 else 0;
+        };
+    )") == 1);
+}
+
 TEST_CASE("Multi-method struct with generic Result error checks compiles") {
     const auto exit_code{helpers::compile_and_run(R"(
-        const Result := fn(T: type, E: type): type { return union { ok: T, err: E }; };
-        const Error := enum : i32 { none, fail, _ };
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+        const Error = enum : i32 { none, fail, _ };
 
-        const File := struct {
+        const File = struct {
             fd: i32,
-            pub const open := fn(path: i32): Result(File, Error) {
+            pub const open = fn(path: i32): Result(File, Error) {
                 return if (path > 0) .{ .ok = File{ .fd = path } } else .{ .err = .fail };
             };
-            pub const read := fn(&self): Result(i32, Error) {
+            pub const read = fn(&self): Result(i32, Error) {
                 return .{ .ok = self.fd };
             };
-            pub const write := fn(&mut self, v: i32): Result(bool, Error) {
+            pub const write = fn(&mut self, v: i32): Result(bool, Error) {
                 self.fd = v;
                 return .{ .ok = true };
             };
         };
 
-        pub const main := fn(): i32 {
-            var f1 := File.open(7);
+        pub const main = fn(): i32 {
+            let mut f1 = File.open(7);
             return match (f1) {
                 .ok => |f| {
-                    const r := f.read();
+                    let r = f.read();
                     return match (r) { .ok => |v| v, .err => 0 };
                 },
                 .err => 0,
@@ -138,34 +180,34 @@ TEST_CASE("Multi-method struct with generic Result error checks compiles") {
 
 TEST_CASE("generic member functions in an inherent impl block on a non-generic struct") {
     CHECK(helpers::compile_and_run(R"(
-        const Processor := struct {
+        const Processor = struct {
             factor: i32,
         };
         impl Processor {
-            pub const identity := fn(T: type, x: T): T {
+            pub const identity = fn(comptime T: type, x: T): T {
                 return x;
             };
-            pub const apply := fn(&self, U: type, val: U): i32 {
+            pub const apply = fn(&self, comptime U: type, val: U): i32 {
                 return self.factor + @intCast(i32, val);
             };
-            pub const scale := fn(&self, constexpr multiplier: i32, val: i32): i32 {
+            pub const scale = fn(&self, comptime multiplier: i32, val: i32): i32 {
                 return (self.factor + val) * multiplier;
             };
-            pub const process_auto := fn(&self, val: auto): i32 {
+            pub const process_auto = fn(&self, val: auto): i32 {
                 return self.factor * @intCast(i32, val);
             };
         }
 
-        pub const main := fn(): i32 {
-            const p := Processor{ .factor = 2 };
-            const a := Processor.identity(i32, 5);
-            const b := Processor.identity(u8, 3u8);
-            const c := p.apply(i32, 4);
-            const d := p.apply(u8, 2u8);
-            const e := p.scale(3, 4);
-            const f := p.scale(2, 4);
-            const g := p.process_auto(5i32);
-            const h := p.process_auto(4u8);
+        pub const main = fn(): i32 {
+            let p = Processor{ .factor = 2 };
+            let a = Processor.identity(i32, 5);
+            let b = Processor.identity(u8, 3u8);
+            let c = p.apply(i32, 4);
+            let d = p.apply(u8, 2u8);
+            let e = p.scale(3, 4);
+            let f = p.scale(2, 4);
+            let g = p.process_auto(5i32);
+            let h = p.process_auto(4u8);
             return a + @intCast(i32, b) + c + d + e + f + g + h;
         };
     )") == 5 + 3 + 6 + 4 + 18 + 12 + 10 + 8);
@@ -173,37 +215,37 @@ TEST_CASE("generic member functions in an inherent impl block on a non-generic s
 
 TEST_CASE("generic member functions in an inherent impl block on a generic aggregate") {
     CHECK(helpers::compile_and_run(R"(
-        const Container := fn(T: type): type {
+        const Container = fn(comptime T: type): type {
             return struct {
                 val: T,
             };
         };
         impl(T: type) Container(T) {
-            pub const map := fn(&self, U: type, mapper: fn(x: T): U): Container(U) {
+            pub const map = fn(&self, comptime U: type, mapper: fn(x: T): U): Container(U) {
                 return .{ .val = mapper(self.val) };
             };
-            pub const fold := fn(&self, Acc: type, init_val: Acc, f: fn(acc: Acc, item: T): Acc): Acc {
+            pub const fold = fn(&self, comptime Acc: type, init_val: Acc, f: fn(acc: Acc, item: T): Acc): Acc {
                 return f(init_val, self.val);
             };
-            pub const repeat := fn(&self, constexpr N: i32): i32 {
+            pub const repeat = fn(&self, comptime N: i32): i32 {
                 return @intCast(i32, self.val) * N;
             };
         }
 
-        pub const main := fn(): i32 {
-            const c1: Container(i32) = .{ .val = 10 };
-            const dbl := fn(x: i32): i64 { return @intCast(i64, x * 2); };
-            const is_gt := fn(x: i32): bool { return x > 5; };
-            const c2 := c1.map(i64, dbl);
-            const c3 := c1.map(bool, is_gt);
+        pub const main = fn(): i32 {
+            let c1: Container(i32) = .{ .val = 10 };
+            const dbl = fn(x: i32): i64 { return @intCast(i64, x * 2); };
+            const is_gt = fn(x: i32): bool { return x > 5; };
+            let c2 = c1.map(i64, dbl);
+            let c3 = c1.map(bool, is_gt);
 
-            const add_acc := fn(acc: i32, item: i32): i32 { return acc + item; };
-            const folded := c1.fold(i32, 5, add_acc);
+            const add_acc = fn(acc: i32, item: i32): i32 { return acc + item; };
+            let folded = c1.fold(i32, 5, add_acc);
 
-            const r1 := c1.repeat(3);
-            const r2 := c1.repeat(2);
+            let r1 = c1.repeat(3);
+            let r2 = c1.repeat(2);
 
-            const b2: i32 = if (c3.val) 1 else 0;
+            let b2: i32 = if (c3.val) 1 else 0;
             return @intCast(i32, c2.val) + b2 + folded + r1 + r2;
         };
     )") == 20 + 1 + 15 + 30 + 20);
@@ -211,12 +253,12 @@ TEST_CASE("generic member functions in an inherent impl block on a generic aggre
 
 TEST_CASE("generic member functions in union and enum impl blocks") {
     CHECK(helpers::compile_and_run(R"(
-        const Opt := union {
+        const Opt = union(enum) {
             val: i32,
             none: void,
         };
         impl Opt {
-            pub const map_or := fn(&self, U: type, default_val: U, f: fn(x: i32): U): U {
+            pub const map_or = fn(&self, comptime U: type, default_val: U, f: fn(x: i32): U): U {
                 return match (*self) {
                     .val => |v| f(v),
                     .none => default_val,
@@ -224,13 +266,13 @@ TEST_CASE("generic member functions in union and enum impl blocks") {
             };
         }
 
-        const Status := enum : i32 {
+        const Status = enum : i32 {
             ok,
             err,
             _,
         };
         impl Status {
-            pub const select := fn(&self, T: type, on_ok: T, on_err: T): T {
+            pub const select = fn(&self, comptime T: type, on_ok: T, on_err: T): T {
                 return match (*self) {
                     .ok => on_ok,
                     .err => on_err,
@@ -239,21 +281,21 @@ TEST_CASE("generic member functions in union and enum impl blocks") {
             };
         }
 
-        pub const main := fn(): i32 {
-            const o1: Opt = .{ .val = 7 };
-            const o2: Opt = .{ .none = {} };
-            const add_one := fn(x: i32): i32 { return x + 1; };
-            const to_i64 := fn(x: i32): i64 { return @intCast(i64, x * 2); };
+        pub const main = fn(): i32 {
+            let o1: Opt = .{ .val = 7 };
+            let o2: Opt = .{ .none = {} };
+            const add_one = fn(x: i32): i32 { return x + 1; };
+            const to_i64 = fn(x: i32): i64 { return @intCast(i64, x * 2); };
 
-            const v1 := o1.map_or(i32, 0, add_one);
-            const v2 := o2.map_or(i32, 10, add_one);
-            const v3 := o1.map_or(i64, 0i64, to_i64);
+            let v1 = o1.map_or(i32, 0, add_one);
+            let v2 = o2.map_or(i32, 10, add_one);
+            let v3 = o1.map_or(i64, 0i64, to_i64);
 
-            const s1: Status = .ok;
-            const s2: Status = .err;
-            const sel1 := s1.select(i32, 10, 20);
-            const sel2 := s2.select(i32, 10, 20);
-            const sel3 := s1.select(u8, 5u8, 15u8);
+            let s1: Status = .ok;
+            let s2: Status = .err;
+            let sel1 = s1.select(i32, 10, 20);
+            let sel2 = s2.select(i32, 10, 20);
+            let sel3 = s1.select(u8, 5u8, 15u8);
 
             return v1 + v2 + @intCast(i32, v3) + sel1 + sel2 + @intCast(i32, sel3);
         };
@@ -262,28 +304,28 @@ TEST_CASE("generic member functions in union and enum impl blocks") {
 
 TEST_CASE("generic member functions defined inline inside aggregate definitions") {
     CHECK(helpers::compile_and_run(R"(
-        const Item := struct {
+        const Item = struct {
             x: i32,
-            pub const identity := fn(T: type, val: T): T {
+            pub const identity = fn(comptime T: type, val: T): T {
                 return val;
             };
-            pub const add_val := fn(&self, U: type, val: U): i32 {
+            pub const add_val = fn(&self, comptime U: type, val: U): i32 {
                 return self.x + @intCast(i32, val);
             };
         };
 
-        const TaggedUnion := union {
+        const TaggedUnion = union(enum) {
             num: i32,
-            pub const get_or := fn(&self, T: type, fallback: T): T {
+            pub const get_or = fn(&self, comptime T: type, fallback: T): T {
                 return fallback;
             };
         };
 
-        const DirectEnum := enum : i32 {
+        const DirectEnum = enum : i32 {
             a,
             b,
             _,
-            pub const choose := fn(&self, T: type, x: T, y: T): T {
+            pub const choose = fn(&self, comptime T: type, x: T, y: T): T {
                 return match (*self) {
                     .a => x,
                     .b => y,
@@ -292,20 +334,20 @@ TEST_CASE("generic member functions defined inline inside aggregate definitions"
             };
         };
 
-        pub const main := fn(): i32 {
-            const item := Item{ .x = 5 };
-            const id1 := Item.identity(i32, 10);
-            const id2 := Item.identity(u8, 5u8);
-            const a1 := item.add_val(i32, 5);
-            const a2 := item.add_val(u8, 3u8);
+        pub const main = fn(): i32 {
+            let item = Item{ .x = 5 };
+            let id1 = Item.identity(i32, 10);
+            let id2 = Item.identity(u8, 5u8);
+            let a1 = item.add_val(i32, 5);
+            let a2 = item.add_val(u8, 3u8);
 
-            const tu: TaggedUnion = .{ .num = 42 };
-            const g1 := tu.get_or(i32, 20);
-            const g2 := tu.get_or(u8, 7u8);
+            let tu: TaggedUnion = .{ .num = 42 };
+            let g1 = tu.get_or(i32, 20);
+            let g2 = tu.get_or(u8, 7u8);
 
-            const de: DirectEnum = .a;
-            const c1 := de.choose(i32, 1, 2);
-            const c2 := de.choose(u8, 10u8, 20u8);
+            let de: DirectEnum = .a;
+            let c1 = de.choose(i32, 1, 2);
+            let c2 = de.choose(u8, 10u8, 20u8);
 
             return id1 + @intCast(i32, id2) + a1 + a2 + g1 + @intCast(i32, g2) + c1 + @intCast(i32, c2);
         };
@@ -314,22 +356,22 @@ TEST_CASE("generic member functions defined inline inside aggregate definitions"
 
 TEST_CASE("aggregate member function implementation calling a local generic function") {
     CHECK(helpers::compile_and_run(R"(
-        const Engine := struct {
+        const Engine = struct {
             base: i32,
         };
         impl Engine {
-            pub const run := fn(&self, x: i32, y: u8): i32 {
-                const dup := fn(T: type, val: T): T {
+            pub const run = fn(&self, x: i32, y: u8): i32 {
+                const dup = fn(comptime T: type, val: T): T {
                     return val + val;
                 };
-                const r1 := dup(i32, x);
-                const r2 := dup(u8, y);
+                let r1 = dup(i32, x);
+                let r2 = dup(u8, y);
                 return self.base + r1 + @intCast(i32, r2);
             };
         }
 
-        pub const main := fn(): i32 {
-            const eng := Engine{ .base = 20 };
+        pub const main = fn(): i32 {
+            let eng = Engine{ .base = 20 };
             return eng.run(10, 5u8);
         };
     )") == 50);
@@ -337,14 +379,14 @@ TEST_CASE("aggregate member function implementation calling a local generic func
 
 TEST_CASE("cross-module aggregate impl with generic member functions") {
     constexpr std::string_view math_gh{R"(
-        pub const Box := struct {
+        pub const Box = struct {
             value: i32,
         };
         impl Box {
-            pub const transform := fn(&self, T: type, f: fn(x: i32): T): T {
+            pub const transform = fn(&self, comptime T: type, f: fn(x: i32): T): T {
                 return f(self.value);
             };
-            pub const scale_static := fn(T: type, x: T, factor: i32): i32 {
+            pub const scale_static = fn(comptime T: type, x: T, factor: i32): i32 {
                 return @intCast(i32, x) * factor;
             };
         }
@@ -353,15 +395,15 @@ TEST_CASE("cross-module aggregate impl with generic member functions") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "math.gh" as math;
-            pub const main := fn(): i32 {
-                const b := math.Box{ .value = 6 };
-                const to_i64 := fn(x: i32): i64 { return @intCast(i64, x * 2); };
-                const to_i32 := fn(x: i32): i32 { return x + 8; };
+            pub const main = fn(): i32 {
+                let b = math.Box{ .value = 6 };
+                const to_i64 = fn(x: i32): i64 { return @intCast(i64, x * 2); };
+                const to_i32 = fn(x: i32): i32 { return x + 8; };
 
-                const v1 := b.transform(i64, to_i64);
-                const v2 := b.transform(i32, to_i32);
-                const s1 := math.Box.scale_static(i32, 10, 3);
-                const s2 := math.Box.scale_static(u8, 4u8, 5);
+                let v1 = b.transform(i64, to_i64);
+                let v2 = b.transform(i32, to_i32);
+                let s1 = math.Box.scale_static(i32, 10, 3);
+                let s2 = math.Box.scale_static(u8, 4u8, 5);
 
                 return @intCast(i32, v1) + v2 + s1 + s2;
             };
@@ -375,10 +417,10 @@ TEST_CASE("cross-module aggregate impl with generic member functions") {
 TEST_CASE("a value parameter typed via an earlier `T: type` parameter infers a single-arg "
           "builtin's target type from T's bound value") {
     CHECK(helpers::compile_and_run(R"(
-        const add := fn(T: type, x: T, y: T): T { return x + y; };
-        pub const main := fn(): i32 {
-            const a := add(i32, 10, 4);
-            const b := add(u8, 5u8, @intCast(a));
+        const add = fn(comptime T: type, x: T, y: T): T { return x + y; };
+        pub const main = fn(): i32 {
+            let a = add(i32, 10, 4);
+            let b = add(u8, 5u8, @intCast(a));
             return a + @intCast(i32, b);
         };
     )") == 33);
@@ -387,33 +429,411 @@ TEST_CASE("a value parameter typed via an earlier `T: type` parameter infers a s
 TEST_CASE("a value parameter typed via an earlier `T: type` parameter rejects an argument that "
           "doesn't fit T's bound value, instead of miscompiling") {
     helpers::expect_compile_error(R"(
-        const add := fn(T: type, x: T, y: T): T { return x + y; };
-        pub const main := fn(): i32 {
-            const a := add(i32, 10, 4);
-            const b := add(u8, 5u8, a);
+        const add = fn(comptime T: type, x: T, y: T): T { return x + y; };
+        pub const main = fn(): i32 {
+            let a = add(i32, 10, 4);
+            let b = add(u8, 5u8, a);
             return a + @intCast(i32, b);
         };
     )");
 }
 
-TEST_CASE("a generic `fn(T: type, a: []T, b: []T)` call correctly types both slice arguments "
-          "when one comes from `@typeInfo` reflection") {
+TEST_CASE("a generic's body-local annotated decl is re-typed for each instantiation") {
+    SECTION("`var a: @TypeOf(value)` with two `auto` widths") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(value: auto): u8 {
+                let mut a: @TypeOf(value) = value;
+                return @intCast(a % 3);
+            };
+            pub const main = fn(): i32 {
+                return @as(i32, f(5u16)) + @as(i32, f(70000u32));   // 2 + 1
+            };
+        )") == 3);
+    }
+
+    SECTION("`var a: T` with two `T: type` arguments") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(comptime T: type, value: T): u8 {
+                let mut a: T = value;
+                return @intCast(a % 3);
+            };
+            pub const main = fn(): i32 {
+                return @as(i32, f(u16, 5)) + @as(i32, f(u32, 70000));   // 2 + 1
+            };
+        )") == 3);
+    }
+
+    SECTION("a `using` alias sized from `@typeInfo(@TypeOf(value))`") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(value: auto, base: u8): u8 {
+                const info = @typeInfo(@TypeOf(value)).int;
+                const bits = @max(info.bits, 8u16);
+                const MinInt = @Int(.{ .signedness = .unsigned, .bits = bits });
+                let mut a: MinInt = value;
+                let d = a % @intCast(MinInt, base);
+                return @intCast(d);
+            };
+            pub const main = fn(): i32 {
+                return @as(i32, f(5u16, 2)) + @as(i32, f(70003u32, 4));   // 1 + 3
+            };
+        )") == 4);
+    }
+
+    SECTION("a `[n]T` local keeps each instantiation's own element type") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(comptime T: type, value: T): i32 {
+                let mut buf: [2]mut T = undefined;
+                buf[0] = value;
+                buf[1] = value;
+                return @intCast(buf[0] + buf[1]);
+            };
+            pub const main = fn(): i32 { return f(u8, 3) + f(i64, 20); };
+        )") == 46);
+    }
+}
+
+TEST_CASE(
+    "a generic `fn(comptime T: type, a: []T, b: []T)` call correctly types both slice arguments "
+    "when one comes from `@typeInfo` reflection") {
     CHECK(helpers::compile_and_run_tests(R"(
-        pub constexpr eql := fn(T: type, a: []T, b: []T): bool {
+        pub const eql = fn(comptime T: type, a: []T, b: []T): bool {
             if (a.len != b.len) return false;
             for (a, b) |a_elem, b_elem| { if (a_elem != b_elem) return false; }
             return true;
         };
 
-        const Data := struct { count_x: u32 };
+        const Data = struct { count_x: u32 };
 
         test "field name from reflection compares correctly against another []u8 argument" {
-            const needle: []u8 = "count_x"[0..];
-            for constexpr (@typeInfo(Data).@"struct".fields) |field| {
+            let needle: []u8 = "count_x"[0..];
+            unroll for (@typeInfo(Data).@"struct".fields) |field| {
                 @expect(eql(u8, field.name, needle));
             }
         }
     )") == 0);
+}
+
+TEST_CASE("`@TypeOf(x)` nested in a compound type annotation denotes the type, not `type`") {
+    SECTION("pointer, slice, and array annotations in a non-generic body") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                let mut v: u8 = 3;
+                let p: ^mut @TypeOf(v) = ^mut v;
+                let mut arr: [2]mut u8 = .{ 4, 5 };
+                let s: []mut @TypeOf(v) = arr[0..];
+                let b: [2]@TypeOf(v) = .{ 6, 7 };
+                return @as(i32, *p) + @as(i32, s[0]) + @as(i32, b[1]);
+            };
+        )") == 14);
+    }
+
+    SECTION("writes through `^mut @TypeOf(v)` and `&mut @TypeOf(v)` reach the original") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                let mut v: i32 = 1;
+                let p: ^mut @TypeOf(v) = ^mut v;
+                *p = *p + 10;
+                let r: &mut @TypeOf(v) = &mut v;
+                r = r + 100;
+                return v;
+            };
+        )") == 111);
+    }
+
+    SECTION("a parameter typed `^@TypeOf(b)` from an earlier parameter") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(b: i32, c: ^@TypeOf(b)): i32 { return b + *c; };
+            pub const main = fn(): i32 {
+                let x: i32 = 40;
+                return f(2, ^x);
+            };
+        )") == 42);
+    }
+
+    SECTION("each generic instantiation sees its own element type") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(comptime T: type, value: T): i32 {
+                let mut copy: T = value;
+                let p: ^mut @TypeOf(copy) = ^mut copy;
+                let mut buf: [2]mut @TypeOf(value) = .{ value, value };
+                let s: []mut @TypeOf(value) = buf[0..];
+                return @intCast(*p + s[1]);
+            };
+            pub const main = fn(): i32 { return f(u8, 3) + f(i64, 20); };
+        )") == 46);
+    }
+}
+
+TEST_CASE("a `[n]T` parameter or return type of a `T: type` generic is monomorphized concretely") {
+    CHECK(helpers::compile_and_run(R"(
+        const first = fn(comptime T: type, xs: [2]T): T { return xs[0]; };
+        pub const main = fn(): i32 {
+            let values: [2]i32 = .{ 7, 8 };
+            return first(i32, values);
+        };
+    )") == 7);
+
+    CHECK(helpers::compile_and_run(R"(
+        const echo = fn(comptime T: type, xs: [2]T): [2]T { return xs; };
+        const second = fn(a: [2]i32): i32 { return a[1]; };
+        pub const main = fn(): i32 {
+            let values: [2]i32 = .{ 4, 5 };
+            let direct = echo(i32, values);
+            return second(echo(i32, .{ 4, 5 })) + direct[1];
+        };
+    )") == 10);
+
+    CHECK(helpers::compile_and_run(R"(
+        const pair = fn(comptime T: type, x: T): [2]T { return .{ x, x }; };
+        pub const main = fn(): i32 {
+            let p = pair(i32, 7);
+            return p[0] + p[1];
+        };
+    )") == 14);
+}
+
+TEST_CASE("an argument for a `@TypeOf(x)` parameter converts to, and must fit, that type") {
+    CHECK(helpers::compile_and_run(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 {
+            let a: i32 = 4;
+            let f: f32 = 1.0;
+            return echo(1, 5) + echo(a, @as(i16, 2)) + @intFromFloat(i32, echo(1.5, 2)) +
+                   @intFromFloat(i32, echo(f, 3));
+        };
+    )") == 5 + 2 + 2 + 3);
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        pub const main = fn(): i32 { let c = echo(1, true); return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const echo = fn(x: auto, y: @TypeOf(x)): auto { return y; };
+        const c = echo(1, &2);
+        pub const main = fn(): i32 { return 0; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("a generic can call itself with the same arguments") {
+    CHECK(helpers::compile_and_run(R"(
+        const fact = fn(comptime T: type, n: T): T { return if (n <= 1) 1 else n * fact(T, n - 1); };
+        const even = fn(comptime T: type, n: T): bool { return if (n == 0) true else odd(T, n - 1); };
+        const odd = fn(comptime T: type, n: T): bool { return if (n == 0) false else even(T, n - 1); };
+        const X = fact(i32, 4);
+        pub const main = fn(): i32 { return fact(i32, 5) + X + @as(i32, @intFromBool(even(i32, 6))); };
+    )") == 120 + 24 + 1);
+    CHECK(helpers::raised(R"(
+        const f = fn(n: auto): auto { return if (n <= 1) 1 else f(n - 1); };
+        pub const main = fn(): i32 { let x: i32 = 3; return f(x); };
+    )",
+                          sema::error::COMPTIME_RECURSION_LIMIT_EXCEEDED));
+}
+
+TEST_CASE("an initializer fills a `[n]T` parameter sized by a compile-time argument") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { let mut s: i32 = 0; for (a) |x| { s += x; } return s; };
+        pub const main = fn(): i32 { return sum(3, .{ 1, 2, 3 }) + sum(2, .{ 4, 4 }); };
+    )") == 14);
+
+    // The length mismatch is reported once the call is checked against the monomorph
+    helpers::expect_compile_error(R"(
+        const sum = fn(comptime n: usize, a: [n]i32): i32 { return a[0]; };
+        pub const main = fn(): i32 { return sum(4, .{ 1, 2, 3 }); };
+    )");
+}
+
+TEST_CASE("an array length makes the parameter it reads compile-time") {
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(n: usize): i32 {
+            let mut buf: [n]mut usize = undefined;
+            for (buf) |&mut e| { e = 2; }
+            let s = buf[1..];
+            return @intCast(s.len + buf[0]);
+        };
+        pub const main = fn(): i32 { return f(3) + f(2); };
+    )") == 4 + 3);
+}
+
+TEST_CASE("Same-named private generics in different modules keep their own instances") {
+    CHECK(helpers::compile_and_run(R"(
+        import "one.gh" as one;
+        import "two.gh" as two;
+        pub const main = fn(): i32 { return one.get() * 10 + two.get(); };
+    )",
+                                   {{"one.gh", R"(
+                                        const pick = fn(comptime T: type, a: T): T { return a + 1; };
+                                        pub const get = fn(): i32 { return pick(i32, 1); };
+                                    )"},
+                                    {"two.gh", R"(
+                                        const pick = fn(comptime T: type, a: T): T { return a + 2; };
+                                        pub const get = fn(): i32 { return pick(i32, 1); };
+                                    )"}}) == 23);
+}
+
+TEST_CASE("A comptime_int generic another module instantiated first still folds in a generic") {
+    CHECK(helpers::compile_and_run(R"(
+        import "limits.gh" as limits;
+        const low_half = fn(comptime T: type, v: T): T { return v & limits.max_of(u32); };
+        pub const main = fn(): i32 {
+            if (low_half(u64, 0x1234567890) != 0x34567890) { return 1; }
+            return limits.warm();
+        };
+    )",
+                                   {{"limits.gh", R"(
+                                        pub const max_of = fn(comptime T: type): comptime_int {
+                                            const bits = @typeInfo(T).int.bits;
+                                            return (1 << bits) - 1;
+                                        };
+                                        pub const warm = fn(): i32 {
+                                            let x: u64 = 7;
+                                            return @intCast((x & max_of(u32)) - 7);
+                                        };
+                                    )"}}) == 0);
+}
+
+TEST_CASE("A parameter type may reflect on an earlier type parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const shift = fn(comptime T: type, bits: ^mut @Int(.{
+            .signedness = .unsigned,
+            .bits = @typeInfo(T).float.bits,
+        })): i32 {
+            *bits = *bits << 1;
+            return @typeInfo(T).float.bits;
+        };
+        const first = fn(comptime T: type, bytes: [@typeInfo(T).float.bits / 8]u8): u8 {
+            return bytes[0] + @as(u8, @intCast(bytes.len));
+        };
+        pub const main = fn(): i32 {
+            let mut s: u32 = 3;
+            let mut d: u64 = 5;
+            let b: [4]u8 = .{ 1, 2, 3, 4 };
+            return shift(f32, ^mut s) + shift(f64, ^mut d) + @as(i32, @intCast(s + d)) +
+                first(f32, b);
+        };
+    )") == 32 + 64 + 16 + 5);
+    helpers::expect_compile_error(R"(
+        const shift = fn(comptime T: type, bits: ^mut @Int(.{
+            .signedness = .unsigned,
+            .bits = @typeInfo(T).float.bits,
+        })): void { _ = bits; };
+        pub const main = fn(): i32 {
+            let mut s: u32 = 3;
+            shift(f64, ^mut s);
+            return 0;
+        };
+    )");
+}
+
+TEST_CASE("A module only a test block imports is left out of a non-test build") {
+    CHECK(helpers::compile_and_run(R"(
+        test {
+            import "checks.gh";
+        }
+        pub const main = fn(): i32 { return 6; };
+    )",
+                                   {{"checks.gh", R"(
+                                        const check = fn(): i32 { return 1; };
+                                        test "checks" { @expect(check() == 1); }
+                                    )"}}) == 6);
+}
+
+TEST_CASE("A pointer or reference to an earlier type parameter binds through it") {
+    CHECK(helpers::compile_and_run(R"(
+        const set = fn(comptime T: type, p: ^mut T, v: T): void { *p = v; };
+        const get = fn(comptime T: type, p: &T): T { return *p; };
+        const second = fn(comptime T: type, comptime U: type, p: ^U): U { return *p; };
+
+        pub const main = fn(): i32 {
+            let mut a: u8 = 0;
+            set(u8, ^mut a, 5);
+            let b: i32 = 7;
+            return a + @as(i32, get(u8, &a)) + second(u8, i32, ^b);
+        };
+    )") == 17);
+}
+
+TEST_CASE("Folding a generic call uses that instance's typing, not the last one checked") {
+    CHECK(helpers::compile_and_run(R"(
+        const recon = fn(comptime T: type, comptime m: comptime_int): T {
+            const U = @Int(.{ .bits = @bitSizeOf(T), .signedness = .unsigned });
+            return @bitCast(T, @intCast(U, m));
+        };
+        pub const main = fn(): i32 {
+            let a: u128 = @bitCast(recon(f128, 1 << 100));
+            let b: u64 = @bitCast(recon(f64, 5));
+            return if (a == 1 << 100) @intCast(b) else 99;
+        };
+    )") == 5);
+
+    CHECK(helpers::compile_and_run(R"(
+        const fbits = fn(comptime T: type): comptime_int {
+            return match comptime (@bitSizeOf(T)) { 64 => 52, 128 => 112, _ => 0 };
+        };
+        const recon = fn(comptime T: type, comptime m: comptime_int): T {
+            const U = @Int(.{ .bits = @bitSizeOf(T), .signedness = .unsigned });
+            return @bitCast(T, @intCast(U, m));
+        };
+        const quiet = fn(comptime T: type): T { return recon(T, 1 << (fbits(T) - 1)); };
+        pub const main = fn(): i32 {
+            let q: u128 = @bitCast(quiet(f128));
+            let d: u64 = @bitCast(quiet(f64));
+            return if (q == 1 << 111 and d == 1 << 51) 0 else 1;
+        };
+    )") == 0);
+}
+
+TEST_CASE("An error folding another module's function points into that module") {
+    auto [ctx, idx]{helpers::type_check(
+        R"(
+        import "narrow.gh" as narrow;
+        pub const main = fn(): i32 {
+            const x = narrow.to_u8(300);
+            return x;
+        };
+    )",
+        {helpers::mock_file{"narrow.gh",
+                            R"(pub const to_u8 = fn(comptime n: comptime_int): u8 {
+    return @intCast(u8, n);
+};)",
+                            "narrow"}})};
+    const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()};
+    REQUIRE(diags);
+    bool found{false};
+    for (const auto& d : *diags) {
+        if (!d.get_message() || !d.get_message()->contains("out of range")) { continue; }
+        found = true;
+        REQUIRE(d.origin() != nullptr);
+        CHECK(d.origin()->path.filename() == "narrow.gh");
+    }
+    CHECK(found);
+}
+
+TEST_CASE("comptime float arguments `-0.0` and `0.0` get separate instances") {
+    CHECK(helpers::compile_and_run(R"(
+        const explicit = fn(comptime x: f64): u64 { return @bitCast(x); };
+
+        const inferred = fn(x: f32): u32 {
+            const y = x;
+            return @bitCast(y);
+        };
+
+        const Holder = fn(comptime x: f64): type {
+            return struct {
+                pub const bits: u64 = @bitCast(x);
+            };
+        };
+
+        pub const main = fn(): i32 {
+            if (explicit(-0.0) != 0x8000000000000000) { return 1; }
+            if (explicit(0.0) != 0) { return 2; }
+            if (inferred(0.0) != 0) { return 3; }
+            if (inferred(-0.0) != 0x80000000) { return 4; }
+            if (Holder(-0.0).bits != 0x8000000000000000) { return 5; }
+            if (Holder(0.0).bits != 0) { return 6; }
+            return 42;
+        };
+    )") == 42);
 }
 
 } // namespace ghoti::tests

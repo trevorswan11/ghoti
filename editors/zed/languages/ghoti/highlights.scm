@@ -5,6 +5,8 @@
 
 ; Literals
 (string_literal) @string
+(escape_sequence) @string.escape
+(multiline_string_literal) @string
 (char_literal) @string
 (integer_literal) @number
 (float_literal) @number
@@ -22,6 +24,9 @@
 ; Functions
 (call_expression function: (identifier) @function)
 (builtin_identifier) @function.builtin
+
+; `@[name(args)]` attribute lists
+(attribute name: (identifier) @attribute)
 (decl_statement name: (identifier) @function
   value: (function_expression))
 (function_expression) @function
@@ -34,20 +39,33 @@
 (enumerator name: (identifier) @property)
 (dot_expression member: (identifier) @property)
 (implicit_access_expression member: (identifier) @property)
-(module_access_expression member: (identifier) @property)
 
 ; Interface associated items and dyn associated-type bindings
 (associated_type name: (identifier) @property)
 (associated_const name: (identifier) @property)
 (dyn_assoc_binding name: (identifier) @property)
+(dyn_assoc_binding type: (identifier) @type)
 
 ; Declarations
+; A `const` whose value is spelled as a type is a type alias
+(decl_statement
+  name: (identifier) @type
+  value: [
+    (pointer_type)
+    (reference_type)
+    (array_type)
+    (dyn_type)
+    (struct_expression)
+    (union_expression)
+    (enum_expression)
+    (interface_expression)
+  ])
 (decl_statement name: (identifier) @variable)
 (parameter name: (identifier) @variable.parameter)
 (impl_parameter name: (identifier) @variable.parameter)
 (import_statement alias: (identifier) @type)
-(using_statement alias: (identifier) @type)
 (errdefer_statement capture: (identifier) @variable.parameter)
+(capture (identifier) @variable.parameter)
 
 ; Types used in position
 (decl_statement type: (identifier) @type)
@@ -60,20 +78,33 @@
 (impl_statement target: (identifier) @type)
 (impl_parameter type: (identifier) @type)
 (dyn_type interface: (identifier) @type)
+(dyn_type interface: (dot_expression member: (identifier) @type))
+(dyn_function_type name: (identifier) @type.builtin)
+(dyn_function_type return_type: (identifier) @type)
+(impl_function_type name: (identifier) @type.builtin)
+(impl_function_type return_type: (identifier) @type)
+(pointer_type inner: (identifier) @type)
+(reference_type inner: (identifier) @type)
+(array_type inner: (identifier) @type)
+(modified_type inner: (identifier) @type)
 (calling_convention) @constant.builtin
 
 ; Labels
 (labeled_statement label: (identifier) @label)
 (labeled_expression label: (identifier) @label)
+(comptime_expression label: (identifier) @label)
 (break_statement label: (identifier) @label)
 (continue_statement label: (identifier) @label)
+
+; `union(enum)` spells its inferred tag with the keyword
+(inferred_tag) @keyword
 
 ; Keywords
 [
   "fn"
-  "var"
+  "let"
   "const"
-  "constexpr"
+  "comptime"
   "struct"
   "enum"
   "union"
@@ -87,6 +118,7 @@
   "loop"
   "for"
   "while"
+  "unroll"
   "continue"
   "break"
   "import"
@@ -97,9 +129,7 @@
   "volatile"
   "mut"
   "move"
-  "naked"
   "packed"
-  "using"
   "test"
   "weak"
   "threadlocal"
@@ -127,19 +157,24 @@
 ; Operators
 [
   "="
-  ":="
   "+"
   "+="
   "+%"
   "+%="
+  "+|"
+  "+|="
   "-"
   "-="
   "-%"
   "-%="
+  "-|"
+  "-|="
   "*"
   "*="
   "*%"
   "*%="
+  "*|"
+  "*|="
   "/"
   "/="
   "%"
@@ -153,6 +188,8 @@
   "<<="
   "<<%"
   "<<%="
+  "<<|"
+  "<<|="
   ">>"
   ">>="
   "~"
@@ -165,7 +202,6 @@
   ">="
   "=="
   "!="
-  "::"
   "."
   ".."
   "..="
@@ -174,5 +210,5 @@
 ] @operator
 
 ; Punctuation
-["(" ")" "[" "]" "{" "}"] @punctuation.bracket
+["(" ")" "[" "@[" "]" "{" "}"] @punctuation.bracket
 ["," ";" ":"] @punctuation.delimiter

@@ -1,0 +1,372 @@
+import std;
+
+import "float.gh" as float;
+
+pub const is_nan = float.is_nan;
+pub const reconstruct_float = float.reconstruct_float;
+pub const mantissa_one = float.mantissa_one;
+pub const float_fractional_bits = float.float_fractional_bits;
+pub const float_mantissa_bits = float.float_mantissa_bits;
+pub const float_exponent_bits = float.float_exponent_bits;
+pub const float_exponent_min = float.float_exponent_min;
+pub const float_exponent_max = float.float_exponent_max;
+pub const nan = float.nan;
+pub const snan = float.snan;
+pub const inf = float.inf;
+pub const float_min = float.float_min;
+pub const float_true_min = float.float_true_min;
+pub const float_max = float.float_max;
+pub const float_eps = float.float_eps;
+pub const approx_eq_abs = float.approx_eq_abs;
+pub const approx_eq_rel = float.approx_eq_rel;
+pub const @"f80" = float.f80;
+
+test {
+    import "float.gh";
+}
+
+import "log2.gh" as log2_;
+
+pub const log2 = log2_.log2;
+pub const Log2Int = log2_.Log2Int;
+pub const log2_int = log2_.log2_int;
+pub const Log2IntCeil = log2_.Log2IntCeil;
+pub const log2_int_ceil = log2_.log2_int_ceil;
+
+test {
+    import "log2.gh";
+}
+
+import "sqrt.gh" as sqrt_;
+pub const sqrt = sqrt_.sqrt;
+pub const sqrt_int = sqrt_.sqrt_int;
+
+test {
+    import "sqrt.gh";
+}
+
+/// Asserts that `int` is strictly positive
+pub const is_power_of_two = fn(int: auto): bool {
+    @assert(int > 0);
+    return (int & (int - 1)) == 0;
+};
+
+test "is_power_of_two" {
+    @expect(is_power_of_two(1u8));
+    @expect(is_power_of_two(2));
+    @expect(!is_power_of_two(3i16));
+    @expect(is_power_of_two(4));
+    @expect(!is_power_of_two(31u32));
+    @expect(is_power_of_two(32));
+    @expect(!is_power_of_two(63i64));
+    @expect(is_power_of_two(128));
+    @expect(is_power_of_two(256u128));
+}
+
+/// Cast an integer to a different integer type only if it fits.
+pub const int_cast = fn(comptime T: type, x: auto): std.Option(T) {
+    comptime {
+        @assert(@typeInfo(T) == .int);
+        @assert(is_integer(@TypeOf(x)));
+    }
+
+    if comptime (@TypeOf(x) == comptime_int) {
+        if (x > max_int(T)) {
+            return .empty;
+        } else if (x < min_int(T)) {
+            return .empty;
+        }
+    } else {
+        if (max_int(@TypeOf(x)) > max_int(T) and x > max_int(T)) {
+            return .empty;
+        } else if (min_int(@TypeOf(x)) < min_int(T) and x < min_int(T)) {
+            return .empty;
+        }
+    }
+    return .of(@intCast(T, x));
+};
+
+test "int_cast" {
+    @expect(int_cast(u8, 300) == .none);
+    @expect(int_cast(u8, 300u32) == .none);
+    @expect(int_cast(i8, -200) == .none);
+    @expect(int_cast(i8, -200i32) == .none);
+    @expect(int_cast(u8, -1) == .none);
+    @expect(int_cast(u8, -1i8) == .none);
+    @expect(int_cast(u64, -1) == .none);
+    @expect(int_cast(u64, -1i8) == .none);
+
+    @expect(int_cast(u8, 255)! == 255u8);
+    @expect(int_cast(u8, 255u32)! == 255u8);
+    @expect(@TypeOf(int_cast(u8, 255)!) == u8);
+    @expect(@TypeOf(int_cast(u8, 255u32)!) == u8);
+}
+
+/// Returns the maximum value of integer type T.
+pub const max_int = fn(comptime T: type): comptime_int {
+    const info = @typeInfo(T).int;
+    const n = info.bits - @intFromBool(info.signedness == .signed);
+    return if comptime (n == 0) 0 else (1 << (n - 1)) - 1 + (1 << (n - 1));
+};
+
+test "max_int" {
+    @expect(max_int(u1) == 1);
+    @expect(max_int(u8) == 255);
+    @expect(max_int(u16) == 65535);
+    @expect(max_int(u32) == 4294967295);
+    @expect(max_int(u64) == 18446744073709551615);
+    @expect(max_int(u128) == 340282366920938463463374607431768211455);
+
+    @expect(max_int(i1) == 0);
+    @expect(max_int(i8) == 127);
+    @expect(max_int(i16) == 32767);
+    @expect(max_int(i32) == 2147483647);
+    @expect(max_int(i63) == 4611686018427387903);
+    @expect(max_int(i64) == 9223372036854775807);
+    @expect(max_int(i128) == 170141183460469231731687303715884105727);
+}
+
+/// Returns the minimum value of integer type T.
+pub const min_int = fn(comptime T: type): comptime_int {
+    const info = @typeInfo(T).int;
+    return if comptime (info.signedness == .signed) -(1 << (info.bits - 1)) else 0;
+};
+
+test "min_int" {
+    @expect(min_int(u1) == 0);
+    @expect(min_int(u8) == 0);
+    @expect(min_int(u16) == 0);
+    @expect(min_int(u32) == 0);
+    @expect(min_int(u63) == 0);
+    @expect(min_int(u64) == 0);
+    @expect(min_int(u128) == 0);
+
+    @expect(min_int(i1) == -1);
+    @expect(min_int(i8) == -128);
+    @expect(min_int(i16) == -32768);
+    @expect(min_int(i32) == -2147483648);
+    @expect(min_int(i63) == -4611686018427387904);
+    @expect(min_int(i64) == -9223372036854775808);
+    @expect(min_int(i128) == -170141183460469231731687303715884105728);
+}
+
+/// Returns the maximum of at least two values which are implicitly convertible
+pub const max = fn(a: auto, b: auto, c...): auto {
+    let mut largest = if (a > b) a else b;
+    unroll for (c) |arg| {
+        if (arg > largest) largest = arg;
+    }
+    return largest;
+};
+
+test "max" {
+    @expect(max(1, 2) == 2);
+    @expect(max(-4, -123) == -4);
+    @expect(max(-4, -123, 45) == 45);
+    @expect(max(-4, -123, 45, 78, 90, -23) == 90);
+    comptime {
+        @expect(max(1, 2) == 2);
+        @expect(max(-4, -123, 45) == 45);
+        @expect(max(-4, -123, 45, 78, 90, -23) == 90);
+    }
+}
+
+/// Returns the minimum of at least two values which are implicitly convertible
+pub const min = fn(a: auto, b: auto, c...): auto {
+    let mut smallest = if (a < b) a else b;
+    unroll for (c) |arg| {
+        if (arg < smallest) smallest = arg;
+    }
+    return smallest;
+};
+
+test "min" {
+    @expect(min(1, 2) == 1);
+    @expect(min(-4, -123) == -123);
+    @expect(min(-4, -123, 45) == -123);
+    @expect(min(-4, -1, 45, 78, 90, -23) == -23);
+    comptime {
+        @expect(min(1, 2) == 1);
+        @expect(min(-4, -123, 45) == -123);
+        @expect(min(-4, -1, 45, 78, 90, -23) == -23);
+    }
+}
+
+pub const Order = enum {
+    /// Greater than (`>`)
+    gt,
+
+    /// Less than (`<`)
+    lt,
+
+    /// Equal (`==`)
+    eq,
+};
+
+/// Given two numbers, this function returns the order they are with respect to each other.
+pub const order = fn(a: auto, b: auto): Order {
+    if (a == b) return .eq;
+    if (a < b) return .lt;
+    if (a > b) return .gt;
+    unreachable;
+};
+
+test "order" {
+    @expect(order(0, 0) == .eq);
+    @expect(order(1, 0) == .gt);
+    @expect(order(-1, 0) == .lt);
+}
+
+/// Whether a `V` compares against a `T` payload by value
+pub const compares_numerically = fn(comptime T: type, comptime V: type): bool {
+    return (is_integer(V) and (@typeInfo(T) == .int or @typeInfo(T) == .float)) or
+        (is_float(V) and @typeInfo(T) == .float);
+};
+
+const is_integer = fn(comptime V: type): bool {
+    return @typeInfo(V) == .int or @typeInfo(V) == .comptime_int;
+};
+
+const is_float = fn(comptime V: type): bool {
+    return @typeInfo(V) == .float or @typeInfo(V) == .comptime_float;
+};
+
+/// Compares `payload` with `val` by value
+///
+/// An integer equals only if it fits `payload`'s type, and a float is rounded first
+pub const numeric_eq = fn(payload: auto, val: auto): bool {
+    const P = @TypeOf(payload);
+    if comptime (@typeInfo(P) == .float) {
+        if comptime (is_float(@TypeOf(val))) return payload == @floatCast(P, val);
+        return payload == @floatFromInt(P, val);
+    }
+    return match (int_cast(P, val)) {
+        .some => |v| payload == v,
+        .none => false,
+    };
+};
+
+/// Returns the smallest integer type that can hold both from and to.
+pub const IntFittingRange = fn(comptime from: comptime_int, comptime to: comptime_int): type {
+    @assert(from <= to);
+    const signedness: builtin.Signedness = if comptime (from < 0) .signed else .unsigned;
+    return @Int(.{
+        .signedness = signedness,
+        .bits = @intFromBool(u16, signedness == .signed) +
+            match comptime (if (from < 0) @max(@abs(from) - 1, to) else to) {
+                0 => 0,
+                _ => |pos_int| 1 + log2(pos_int),
+            },
+    });
+};
+
+test "IntFittingRange" {
+    @expect(IntFittingRange(0, 0) == u0);
+    @expect(IntFittingRange(0, 1) == u1);
+    @expect(IntFittingRange(0, 2) == u2);
+    @expect(IntFittingRange(0, 3) == u2);
+    @expect(IntFittingRange(0, 4) == u3);
+    @expect(IntFittingRange(0, 7) == u3);
+    @expect(IntFittingRange(0, 8) == u4);
+    @expect(IntFittingRange(0, 9) == u4);
+    @expect(IntFittingRange(0, 15) == u4);
+    @expect(IntFittingRange(0, 16) == u5);
+    @expect(IntFittingRange(0, 17) == u5);
+    @expect(IntFittingRange(0, 4095) == u12);
+    @expect(IntFittingRange(2000, 4095) == u12);
+    @expect(IntFittingRange(0, 4096) == u13);
+    @expect(IntFittingRange(2000, 4096) == u13);
+    @expect(IntFittingRange(0, 4097) == u13);
+    @expect(IntFittingRange(2000, 4097) == u13);
+    @expect(IntFittingRange(0, 123456789123456798123456789) == u87);
+
+    @expect(IntFittingRange(-1, -1) == i1);
+    @expect(IntFittingRange(-1, 0) == i1);
+    @expect(IntFittingRange(-1, 1) == i2);
+    @expect(IntFittingRange(-2, -2) == i2);
+    @expect(IntFittingRange(-2, -1) == i2);
+    @expect(IntFittingRange(-2, 0) == i2);
+    @expect(IntFittingRange(-2, 1) == i2);
+    @expect(IntFittingRange(-2, 2) == i3);
+    @expect(IntFittingRange(-1, 2) == i3);
+    @expect(IntFittingRange(-1, 3) == i3);
+    @expect(IntFittingRange(-1, 4) == i4);
+    @expect(IntFittingRange(-1, 7) == i4);
+    @expect(IntFittingRange(-1, 8) == i5);
+    @expect(IntFittingRange(-1, 9) == i5);
+    @expect(IntFittingRange(-1, 15) == i5);
+    @expect(IntFittingRange(-1, 16) == i6);
+    @expect(IntFittingRange(-1, 17) == i6);
+    @expect(IntFittingRange(-1, 4095) == i13);
+    @expect(IntFittingRange(-4096, 4095) == i13);
+    @expect(IntFittingRange(-1, 4096) == i14);
+    @expect(IntFittingRange(-4097, 4095) == i14);
+    @expect(IntFittingRange(-1, 4097) == i14);
+    @expect(IntFittingRange(-1, 123456789123456798123456789) == i88);
+}
+
+/// Returns the next power of two (if the value is not already a power of two).
+/// Only unsigned integers can be used. Zero is not an allowed input.
+/// Result is a type with 1 more bit than the input type.
+pub const ceil_power_of_two_promote = fn(
+    comptime T: type,
+    value: T,
+): @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).int.bits + 1 }) {
+    const info = @typeInfo(T);
+    comptime @assert(info.int.signedness == .unsigned);
+    @assert(value != 0);
+    const PromotedType = std.meta.return_type(@TypeOf(ceil_power_of_two_promote));
+    const ShiftType = Log2Int(PromotedType);
+    return @as(PromotedType, 1) << @intCast(ShiftType, info.int.bits - @clz(value - 1));
+};
+
+@[testing] const test_ceil_power_of_two_promote = fn(): void {
+    @expect(ceil_power_of_two_promote(u32, 1) == 1u33);
+    @expect(ceil_power_of_two_promote(u32, 2) == 2u33);
+    @expect(ceil_power_of_two_promote(u32, 63) == 64u33);
+    @expect(ceil_power_of_two_promote(u32, 64) == 64u33);
+    @expect(ceil_power_of_two_promote(u32, 65) == 128u33);
+    @expect(ceil_power_of_two_promote(u5, 7) == 8u6);
+    @expect(ceil_power_of_two_promote(u5, 8) == 8u6);
+    @expect(ceil_power_of_two_promote(u5, 9) == 16u6);
+    @expect(ceil_power_of_two_promote(u4, 9) == 16u5);
+};
+
+test "ceil_power_of_two_promote" {
+    test_ceil_power_of_two_promote();
+    comptime test_ceil_power_of_two_promote();
+}
+
+/// Returns the next power of two (if the value is not already a power of two).
+/// Only unsigned integers can be used. Zero is not an allowed input.
+/// If the value doesn't fit, returns an error.
+pub const ceil_power_of_two = fn(comptime T: type, value: T): std.Option(T) {
+    const info = @typeInfo(T);
+    comptime {
+        @assert(info == .int);
+        @assert(info.int.signedness == .unsigned);
+    }
+
+    const PromotedType = @Int(.{ .signedness = .unsigned, .bits = info.int.bits + 1 });
+    const overflow_bit = @as(PromotedType, 1) << info.int.bits;
+    let x = ceil_power_of_two_promote(T, value);
+    if (overflow_bit & x != 0) return .empty;
+    return .of(@intCast(x));
+};
+
+@[testing] const test_ceil_power_of_two = fn(): void {
+    @expect(ceil_power_of_two(u32, 1).eq(1u32));
+    @expect(ceil_power_of_two(u32, 2).eq(2u32));
+    @expect(ceil_power_of_two(u32, 63).eq(64u32));
+    @expect(ceil_power_of_two(u32, 64).eq(64u32));
+    @expect(ceil_power_of_two(u32, 65).eq(128u32));
+    @expect(ceil_power_of_two(u5, 7).eq(8u5));
+    @expect(ceil_power_of_two(u5, 8).eq(8u5));
+    @expect(ceil_power_of_two(u5, 9).eq(16u5));
+    @expect(ceil_power_of_two(u4, 9) == .none);
+};
+
+test "ceil_power_of_two" {
+    test_ceil_power_of_two();
+    comptime test_ceil_power_of_two();
+}

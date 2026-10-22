@@ -14,59 +14,106 @@ namespace ghoti::tests {
 TEST_CASE("Function missing return type") {
     helpers::test_parser_fail(
         "fn(^mut this, a: A, b: ^B, );",
-        syntax::diagnostic{
-            "Expected token COLON, found SEMICOLON", syntax::error::UNEXPECTED_TOKEN, 0, 28});
+        syntax::diagnostic{"Expected ':', found ';'", syntax::error::UNEXPECTED_TOKEN, 0, 28});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ;",
-                              syntax::diagnostic{"No prefix parse function for SEMICOLON(;) found",
+                              syntax::diagnostic{"Expected an expression, found ';'",
                                                  syntax::error::MISSING_PREFIX_PARSER,
                                                  std::pair{0UZ, 30UZ}});
 
     helpers::test_parser_fail("fn(^mut this, a: A, b: ^B, ): ",
-                              syntax::diagnostic{syntax::error::MISSING_EXPLICIT_TYPE, 0, 28});
+                              syntax::diagnostic{"Expected a type, found the end of input",
+                                                 syntax::error::MISSING_EXPLICIT_TYPE,
+                                                 std::pair{0UZ, 28UZ}});
+}
+
+TEST_CASE("An untyped parameter with a default reports a diagnostic instead of crashing") {
+    helpers::test_parser_fail("fn(x = 1): i32;",
+                              syntax::diagnostic{"Function parameters must be explicitly typed",
+                                                 syntax::error::MISSING_EXPLICIT_TYPE,
+                                                 std::pair{0UZ, 7UZ}});
 }
 
 TEST_CASE("Function parameter missing type") {
     helpers::test_parser_fail(
         "fn(^mut this, a): i32;",
-        syntax::diagnostic{
-            "Expected token COLON, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 15});
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 15});
 }
 
 TEST_CASE("Out-of-place self parameter") {
-    helpers::test_parser_fail("fn(a: A, &self): i32;",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+    helpers::test_parser_fail(
+        "fn(a: A, &self): i32;",
+        syntax::diagnostic{
+            "Expected an identifier, found '&'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 
     helpers::test_parser_fail(
         "fn(a: A, self): i32;",
-        syntax::diagnostic{
-            "Expected token COLON, found RPAREN", syntax::error::UNEXPECTED_TOKEN, 0, 13});
+        syntax::diagnostic{"Expected ':', found ')'", syntax::error::UNEXPECTED_TOKEN, 0, 13});
 }
 
 TEST_CASE("Illegal self parameter modifier") {
-    using namespace std::string_view_literals;
-    const auto modifier{GENERATE("volatile"sv, "mut volatile"sv)};
-
     helpers::test_parser_fail(
-        fmt::format("fn({} self): i32 {{}};", modifier),
+        "fn(volatile self): i32 {};",
         syntax::diagnostic{
             "Self parameters cannot be marked volatile; they must be values, refs, or pointers",
             syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
             std::pair{0UZ, 3UZ}});
+    helpers::test_parser_fail(
+        "fn(mut volatile self): i32 {};",
+        syntax::diagnostic{"`mut volatile T` is just `volatile T`: a value's mutability comes from "
+                           "`let mut`, not its type",
+                           syntax::error::ILLEGAL_VALUE_MUT_MODIFIER,
+                           std::pair{0UZ, 3UZ}});
+}
+
+TEST_CASE("Self parameter modifier without a name") {
+    const auto modifier{GENERATE("&", "&mut", "^", "^mut")};
+
+    helpers::test_parser_fail(
+        fmt::format("fn({}): i32;", modifier),
+        syntax::diagnostic{"A `&` or `^` self parameter needs a name, like `&self`",
+                           syntax::error::ILLEGAL_SELF_PARAMETER_MODIFIER,
+                           std::pair{0UZ, 3UZ}});
 }
 
 TEST_CASE("Out-of-place variadic parameter") {
     helpers::test_parser_fail(
         "fn(a: A, ..., b: B): i32;",
         syntax::diagnostic{
-            "Expected token RPAREN, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected ')', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
-TEST_CASE("Default function parameter") {
-    helpers::test_parser_fail("fn(a: A = 2): i32;",
-                              syntax::diagnostic{"Function parameters may not have default values",
-                                                 syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                                 std::pair{0UZ, 6UZ}});
+TEST_CASE("A function type cannot give a parameter a default value") {
+    helpers::test_parser_fail(
+        "fn(a: A = 2): i32;",
+        syntax::diagnostic{"Only a function with a body or an interface method signature can give "
+                           "a parameter a default value",
+                           syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
+                           std::pair{0UZ, 10UZ}});
+}
+
+TEST_CASE("An implementation of an interface can't write defaults") {
+    syntax::parser p{R"(const Shape = interface {
+    pub const scaled = fn(&self, by: i32 = 2): i32;
+};
+impl Shape for Sq {
+    pub const scaled = fn(&self, by: i32 = 2): i32 { return by; };
+}
+)"};
+    ghoti::arena   arena;
+    ast::AST       ast;
+    const auto     errors{p.consume(ast, arena)};
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].get_error() == syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE);
+    CHECK(errors[0].get_message()->contains("calls use the interface's defaults"));
+}
+
+TEST_CASE("Default parameter values must be trailing") {
+    helpers::test_parser_fail(
+        "fn(a: i32 = 1, b: i32): i32 { return a + b; };",
+        syntax::diagnostic{"A parameter after one with a default value needs a default value too",
+                           syntax::error::FN_PARAMETER_DEFAULT_NOT_TRAILING,
+                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Noreturn function types") {
@@ -99,8 +146,10 @@ TEST_CASE("Illegal type function types") {
 }
 
 TEST_CASE("Non-terminated parameter list") {
-    helpers::test_parser_fail("fn(a: A, : i32;",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
+    helpers::test_parser_fail(
+        "fn(a: A, : i32;",
+        syntax::diagnostic{
+            "Expected an identifier, found ':'", syntax::error::ILLEGAL_IDENTIFIER, 0, 9});
 }
 
 TEST_CASE("'move' must be followed directly by 'fn'") {
@@ -126,11 +175,11 @@ TEST_CASE("Discarded function type parameters") {
             std::pair{0UZ, 11UZ}});
 
     helpers::test_parser_fail(
-        "var f: fn(_: i32): i32;",
+        "let mut f: fn(_: i32): i32;",
         syntax::diagnostic{
             "Function type parameter names cannot be discarded; a parameter name is required",
             syntax::error::FN_TYPE_PARAMETER_DISCARDED,
-            std::pair{0UZ, 10UZ}});
+            std::pair{0UZ, 14UZ}});
 }
 
 } // namespace ghoti::tests

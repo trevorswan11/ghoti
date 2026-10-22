@@ -6,6 +6,7 @@
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -22,12 +23,12 @@ namespace syms = sema::symbols;
 
 TEST_CASE("Function declaration and call type resolution") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const a := fn(b: i32, c: ^@typeOf(b), d: [:0]u8): bool {
+        const a = fn(b: i32, c: ^@TypeOf(b), d: [:0]u8): bool {
             return true;
         };
 
         const int: i32 = 12;
-        const result := a(1, ^int, "Hello, World");
+        const result = a(1, ^int, "Hello, World");
     )")};
 
     const auto& i32_type{ctx->get_int_type(32, true)};
@@ -49,11 +50,9 @@ TEST_CASE("Function declaration and call type resolution") {
 
         check_param_type("b", i32_type);
 
-        const auto& c_meta{ctx->get_type(sema::type_kind::TYPE, i32_type)};
-        const auto& c_ptr{ctx->get_type(sema::type_kind::POINTER, c_meta)};
+        // `^@TypeOf(b)` points at the type `@TypeOf(b)` denotes, not at a `type` value
+        const auto& c_ptr{ctx->get_type(sema::type_kind::POINTER, i32_type)};
         check_param_type("c", c_ptr);
-        const auto& c_meta_data = UNWRAP(c_meta.get_data().as_opt<sema::types::meta_type>());
-        CHECK(c_meta_data.instance == i32_type);
 
         const auto& u8_slice =
             ctx->get_type(sema::type_kind::SLICE, true, ctx->get_int_type(8, false));
@@ -118,57 +117,78 @@ TEST_CASE("Self parameters in structural types") {
         CHECK(expected_param_type == *fn_type_data.params[0]);
     };
 
-    check_structural_type(R"(const a := struct {
-        const foo := fn(&self): void {};
+    check_structural_type(R"(const a = struct {
+        let foo = fn(&self): void {};
     };)",
                           sema::type_kind::REFERENCE);
 
-    check_structural_type(R"(const a := enum {
+    check_structural_type(R"(const a = enum {
         b,
-        const foo := fn(&self): void {};
+        let foo = fn(&self): void {};
     };)",
                           sema::type_kind::REFERENCE);
 
-    check_structural_type(R"(const a := union {
+    check_structural_type(R"(const a = union(enum) {
         b: i32,
-        const foo := fn(^self): void {};
+        let foo = fn(^self): void {};
     };)",
                           sema::type_kind::POINTER);
 }
 
 TEST_CASE("Deferred return type from user function") {
-    auto [ctx, idx]{helpers::resolve_and_check("const a := fn(): type {}; using B = a();")};
+    auto [ctx,
+          idx]{helpers::resolve_and_check("const a = fn(): type { return u8; }; const B = a();")};
 
-    const auto [sym, sym_data, node_data, type]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("B", idx)};
+    const auto [sym, sym_data, node_data]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("B", idx)};
 
-    const auto& call =
-        UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(node_data.explicit_type));
+    // The call itself stays deferred; the alias folds it
+    const auto& call = UNWRAP(ctx->root_mod.ast.get_as_opt<ast::call_expr>(*node_data.value));
+    const auto& type{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_data.value))};
     CHECK(type == ctx->get_type(sema::type_kind::TYPE, &call));
     CHECK(&call == &UNWRAP(type.get_data().as_opt<sema::types::deferred_call>()).call);
 }
 
 TEST_CASE("Function explicit type resolution") {
-    auto [ctx, idx]{helpers::resolve_and_check("var foo: fn(p: ^i32, n: u32): bool = undefined;")};
+    auto [ctx,
+          idx]{helpers::resolve_and_check("let mut foo: fn(p: ^i32, n: u32): bool = undefined;")};
     const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>("foo", idx)};
 
-    const auto& expected_type =
-        ctx->get_type(sema::type_kind::FUNCTION,
-                      ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)),
-                      ctx->get_int_type(32, false),
-                      ctx->get_type(sema::type_kind::BOOL),
-                      ast::calling_convention::C);
-    CHECK(type == expected_type);
+    const auto& fn{UNWRAP(type.get_data().as_opt<sema::types::function>())};
+    CHECK(fn.erased);
+    REQUIRE(fn.params.size() == 2);
+    CHECK(*fn.params[0] == ctx->get_type(sema::type_kind::POINTER, ctx->get_int_type(32, true)));
+    CHECK(*fn.params[1] == ctx->get_int_type(32, false));
+    CHECK(fn.return_type == ctx->get_type(sema::type_kind::BOOL));
+    CHECK(fn.conv == ast::calling_convention::C);
+}
+
+TEST_CASE("`extern fn`, `extern` decls, and `comptime` params keep the thin function type") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        let mut a: extern fn(n: i32): i32 = undefined;
+        let mut b: fn(n: i32): i32 = undefined;
+        let mut c: &fn(n: i32): i32 = undefined;
+        extern const d: fn(n: i32): i32;
+        const use = fn(comptime f: fn(n: i32): i32, v: i32): i32 { return f(v); };
+    )")};
+    const auto erased_of = [&](std::string_view name) {
+        const auto [sym, data, type]{ctx->get_type_sym_info<syms::node_t>(name, idx)};
+        return UNWRAP(type.get_data().as_opt<sema::types::function>()).erased;
+    };
+    CHECK_FALSE(erased_of("a"));
+    CHECK(erased_of("b"));
+    CHECK(erased_of("c"));
+    CHECK_FALSE(erased_of("d"));
 }
 
 TEST_CASE("Function with syntactically ambiguous arguments") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        using a = @typeOf(^i32);
-        using b = @typeOf(^mut i32);
-        using c = @typeOf(&i32);
-        using d = @typeOf(&mut i32);
-        using e = @typeOf(^^i32);
-        using f = @typeOf(^mut ^i32);
+        const a = @TypeOf(^i32);
+        const b = @TypeOf(^mut i32);
+        const c = @TypeOf(&i32);
+        const d = @TypeOf(&mut i32);
+        const e = @TypeOf(^^i32);
+        const f = @TypeOf(^mut ^i32);
     )")};
 
     const auto check_ambiguous = [&](std::string_view  name,
@@ -193,10 +213,10 @@ TEST_CASE("Function with syntactically ambiguous arguments") {
 
 TEST_CASE("Self parameters in non-structural types") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const foo := fn(&self): void {};",
+        "const foo = fn(&self): void {};",
         sema::diagnostic{"Self parameters may only be used inside member functions",
                          sema::error::ILLEGAL_SELF_PARAMETER,
-                         std::pair{0UZ, 17UZ}})};
+                         std::pair{0UZ, 16UZ}})};
     ctx->check_poisoned<syms::node_t>("foo", idx);
 }
 
@@ -204,9 +224,9 @@ TEST_CASE("A capturing closure resolves fully when capturing its immediate enclo
     SECTION("Capturing a local from the immediate enclosing function") {
         auto [ctx, idx]{helpers::resolve_and_check(
             R"(
-                const outer := fn(): void {
-                    var offset: i32 = 0;
-                    const add := fn(x: i32): i32 {
+                const outer = fn(): void {
+                    let mut offset: i32 = 0;
+                    let add = fn(x: i32): i32 {
                         return x + offset;
                     };
                 };
@@ -223,8 +243,8 @@ TEST_CASE("A capturing closure resolves fully when capturing its immediate enclo
     SECTION("Capturing the immediate enclosing function's own parameter") {
         auto [ctx, idx]{helpers::resolve_and_check(
             R"(
-                const outer := fn(offset: i32): void {
-                    const add := fn(x: i32): i32 {
+                const outer = fn(offset: i32): void {
+                    let add = fn(x: i32): i32 {
                         return x + offset;
                     };
                 };
@@ -240,10 +260,10 @@ TEST_CASE("A capturing closure resolves fully when capturing its immediate enclo
 
 TEST_CASE("Capturing through an intermediate non-capturing function forwards the capture") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            var offset: i32 = 0;
-            const middle := fn(): void {
-                const inner := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let mut offset: i32 = 0;
+            let middle = fn(): void {
+                let inner = fn(x: i32): i32 {
                     return x + offset;
                 };
             };
@@ -274,10 +294,10 @@ TEST_CASE("Capturing through an intermediate non-capturing function forwards the
 TEST_CASE("A mutation three functions deep escalates the capture usage at every "
           "forwarding level") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            var n: i32 = 0;
-            const middle := fn(): void {
-                const inner := fn(): void {
+        const outer = fn(): void {
+            let mut n: i32 = 0;
+            let middle = fn(): void {
+                let inner = fn(): void {
                     n = n + 1;
                 };
             };
@@ -303,8 +323,8 @@ TEST_CASE("A mutation three functions deep escalates the capture usage at every 
 TEST_CASE("Module-level globals are not implicit captures") {
     helpers::resolve_and_check(R"(
         const GLOBAL: i32 = 0;
-        const outer := fn(): void {
-            const add := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let add = fn(x: i32): i32 {
                 return x + GLOBAL;
             };
         };
@@ -313,8 +333,8 @@ TEST_CASE("Module-level globals are not implicit captures") {
 
 TEST_CASE("A non-move closure that mutates a captured variable cannot be returned") {
     auto [ctx, idx]{helpers::resolve(R"(
-        const outer := fn(): auto {
-            var n: i32 = 10;
+        const outer = fn(): auto {
+            let mut n: i32 = 10;
             return fn(): i32 {
                 n = n + 5;
                 return n;
@@ -326,8 +346,8 @@ TEST_CASE("A non-move closure that mutates a captured variable cannot be returne
 
 TEST_CASE("A non-move closure capturing an aggregate by reference cannot be returned") {
     auto [ctx, idx]{helpers::resolve(R"(
-        const outer := fn(): auto {
-            var arr: [3]i32 = [_]i32{1, 2, 3};
+        const outer = fn(): auto {
+            let mut arr: [3]i32 = [_]i32{1, 2, 3};
             return fn(): i32 {
                 return arr[0];
             };
@@ -338,8 +358,8 @@ TEST_CASE("A non-move closure capturing an aggregate by reference cannot be retu
 
 TEST_CASE("A move fn may be returned even though it mutates a captured variable") {
     helpers::resolve_and_check(R"(
-        const outer := fn(): auto {
-            var n: i32 = 10;
+        const outer = fn(): auto {
+            let mut n: i32 = 10;
             return move fn(): i32 {
                 n = n + 5;
                 return n;
@@ -350,7 +370,7 @@ TEST_CASE("A move fn may be returned even though it mutates a captured variable"
 
 TEST_CASE("A closure with only value captures may be returned without move") {
     helpers::resolve_and_check(R"(
-        const outer := fn(n: i32): auto {
+        const outer = fn(n: i32): auto {
             return fn(): i32 {
                 return n;
             };
@@ -360,29 +380,29 @@ TEST_CASE("A closure with only value captures may be returned without move") {
 
 TEST_CASE("Returning a closure received as a generic parameter is not flagged as an escape") {
     helpers::resolve_and_check(R"(
-        const identity := fn(x: auto): auto {
+        const identity = fn(x: auto): auto {
             return x;
         };
 
-        const outer := fn(): void {
-            var n: i32 = 10;
-            const add := fn(): i32 {
+        const outer = fn(): void {
+            let mut n: i32 = 10;
+            let add = fn(): i32 {
                 n = n + 5;
                 return n;
             };
-            const same := identity(add);
+            let same = identity(add);
         };
     )");
 }
 
 TEST_CASE("A closure's .thunk resolves to a callable thunk including the self parameter") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const outer := fn(): void {
-            var offset: i32 = 0;
-            const add := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let mut offset: i32 = 0;
+            let add = fn(x: i32): i32 {
                 return x + offset;
             };
-            const thunk := add.thunk;
+            let thunk = add.thunk;
         };
     )")};
 
@@ -400,12 +420,12 @@ TEST_CASE("A closure's .thunk resolves to a callable thunk including the self pa
 
 TEST_CASE("Accessing an unknown field on a closure is rejected") {
     auto [ctx, idx]{helpers::resolve(R"(
-        const outer := fn(): void {
-            var offset: i32 = 0;
-            const add := fn(x: i32): i32 {
+        const outer = fn(): void {
+            let mut offset: i32 = 0;
+            let add = fn(x: i32): i32 {
                 return x + offset;
             };
-            const bogus := add.notAField;
+            let bogus = add.notAField;
         };
     )")};
     CHECK(ctx->root_mod.is_poisoned());
@@ -413,31 +433,43 @@ TEST_CASE("Accessing an unknown field on a closure is rejected") {
 
 TEST_CASE("Two distinct non-capturing functions with the same signature share one type") {
     helpers::resolve_and_check(R"(
-        const double_it := fn(x: i32): i32 {
+        const double_it = fn(x: i32): i32 {
             return x * 2;
         };
-        const square_it := fn(x: i32): i32 {
+        const square_it = fn(x: i32): i32 {
             return x * x;
         };
-        const fns := [2]fn(n: i32): i32{double_it, square_it};
+        const fns = [2]fn(n: i32): i32{double_it, square_it};
     )");
 }
 
 TEST_CASE("Declared function arity mismatch") {
     auto [ctx, idx]{helpers::test_resolver_fail(
-        "const foo := fn(a: i32, b: i32): void {}; const bar := foo(1);",
+        "const foo = fn(a: i32, b: i32): void {}; const bar = foo(1);",
         sema::diagnostic{
-            "Expected 2 arguments, found 1", sema::error::ARITY_MISMATCH, std::pair{0UZ, 55UZ}})};
+            "Expected 2 arguments, found 1", sema::error::ARITY_MISMATCH, std::pair{0UZ, 53UZ}})};
     ctx->check_poisoned<syms::node_t>("bar", idx);
 }
 
 TEST_CASE("Non-callable expression") {
-    auto [ctx,
-          idx]{helpers::test_resolver_fail("const bar := 5; const foo := bar();",
-                                           sema::diagnostic{"Expression is not callable",
-                                                            sema::error::NON_CALLABLE_EXPRESSION,
-                                                            std::pair{0UZ, 29UZ}})};
+    auto [ctx, idx]{helpers::test_resolver_fail(
+        "const bar = 5; const foo = bar();",
+        sema::diagnostic{"Expression of type 'comptime_int' is not callable",
+                         sema::error::NON_CALLABLE_EXPRESSION,
+                         std::pair{0UZ, 27UZ}})};
     ctx->check_poisoned<syms::node_t>("foo", idx);
+}
+
+TEST_CASE("An error collected in a generic body is reported, not only its failed instantiation") {
+    const auto diags{helpers::resolve_diags(R"(
+        const g = fn(comptime T: type, a: T): T {
+            if (a > 0) { let a = a; }
+            return a;
+        };
+        const x = g(i32, 1);
+    )")};
+    CHECK(diags.message_contains("Attempt to shadow identifier 'a'"));
+    CHECK(diags.message_contains("Failed to instantiate 'g'"));
 }
 
 } // namespace ghoti::tests

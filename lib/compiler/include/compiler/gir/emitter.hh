@@ -14,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -22,6 +23,7 @@
 #include "compiler/gir/builder.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/symbol_scoping.hh"
@@ -29,27 +31,28 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/sema/unwrap_shape.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
-namespace ghoti::sema { struct unwrap_info; } // namespace ghoti::sema
-
 namespace ghoti::gir {
 
 class emitter {
   public:
-    explicit emitter(sema::context& ctx, mod::module& ast_mod) noexcept
+    explicit emitter(sema::context& ctx, mod::module_t& ast_mod) noexcept
         : ctx_{ctx}, ast_module_{ast_mod}, const_eval_{ctx_, ast_mod},
           gir_module_{ast_mod, ctx_.arena}, runtime_safety_{ctx.runtime_safety},
-          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits} {
+          target_ptr_bits_{codegen::target_facts::resolve(ctx.target_opts.triple_str).ptr_bits},
+          target_layout_{codegen::type_layout::resolve(ctx.target_opts.triple_str)} {
         const_eval_.set_vtable_root_module(ast_module_);
     }
     ~emitter() = default;
     MAKE_PINNED(emitter);
 
-    [[nodiscard]] auto emit(bool include_builtin_test_runtime = false) -> module;
+    [[nodiscard]] auto emit(bool include_builtin_test_runtime = false) -> module_t;
 
   private:
     struct local_binding {
@@ -58,7 +61,8 @@ class emitter {
         bool                is_alloca{false};
         stdx::option<value> const_val;
         bool                is_const{false};
-        bool                is_constexpr_var{false}; // Mutable, but never materializes storage
+        bool                is_comptime_mut{false}; // Mutable, but never materializes storage
+        bool                is_range_counter{false};
     };
 
     // Set by `emit_generic_instantiation` for one pack function's body
@@ -68,11 +72,14 @@ class emitter {
     };
 
     struct loop_context {
-        stdx::option<std::string_view> label;
+        stdx::option<std::string_view> label{};
         segment_id                     break_target{0};
         segment_id                     continue_target{0};
-        stdx::option<local_id>         result_slot;
-        usize                          scope_depth{0};
+        stdx::option<local_id>         result_slot{};
+        // What a value broken with is converted to before it is stored
+        stdx::option<sema::type&> result_type{};
+        usize                     scope_depth{0};
+        bool                      is_comptime{false};
     };
 
     struct iterable_info {
@@ -82,6 +89,7 @@ class emitter {
         local_id                       var_slot;
         stdx::option<sema::type&>      elem_type;
         value                          end_val{};
+        stdx::option<value>            descending{}; // a closed range's runtime direction
         stdx::option<std::string_view> capture_name;
         stdx::option<value>            arr_val{};
         stdx::option<sema::type&>      capture_type;
@@ -98,18 +106,35 @@ class emitter {
     struct scope_frame {
         ankerl::unordered_dense::map<std::string_view, local_binding> bindings;
         std::vector<deferred_entry>                                   defers;
+        stdx::option<bool>           runtime_safety{}; // set by `@setRuntimeSafety`
+        stdx::option<gir::function&> safety_owner{};   // the function that called setRuntimeSafety
     };
+
+    // Whether runtime safety checks are emitted here: the innermost `@setRuntimeSafety` of the
+    // current function's enclosing blocks, else the build's setting
+    [[nodiscard]] auto safety_enabled() const -> bool;
 
     using scope_guard           = ghoti::scope_guard<std::vector<scope_frame>>;
     using loop_context_guard    = ghoti::scope_guard<std::vector<loop_context>>;
     using open_fn_name_guard    = ghoti::scope_guard<std::vector<std::string>>;
     using open_fn_closure_guard = ghoti::scope_guard<std::vector<bool>>;
-    using constexpr_frame_guard = ghoti::scope_guard<std::vector<sema::constexpr_frame>>;
+    using comptime_frame_guard  = ghoti::scope_guard<std::vector<sema::comptime_frame>>;
     using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
 
+    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
+    // holds `true`; no runtime loop, no `body_type_diff`
+    enum class unrolled_body_exit : u8 {
+        NEXT,
+        CONTINUE,
+        BREAK,
+    };
+
   private:
+    // The `undefined` literal or anything aliasing it
+    [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
+    // Whether a control-flow expression of `type` produces a value to store (not a scope/label)
+    [[nodiscard]] static auto yields_runtime_value(stdx::option<sema::type&> type) -> bool;
     auto emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -> void;
-    auto emit_top_level_using(ast::node_id id, const ast::using_stmt& using_stmt) -> void;
     auto emit_top_level_test(ast::node_id id, const ast::test_stmt& test) -> void;
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
@@ -117,7 +142,7 @@ class emitter {
     // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
                                   usize                     impl_scope_idx,
-                                  mod::module&              iface_mod,
+                                  mod::module_t&            iface_mod,
                                   ast::node_id              sig_id,
                                   const ast::function_expr& fn_expr,
                                   stdx::option<sema::type&> concrete_sig,
@@ -130,7 +155,7 @@ class emitter {
 
     // Emits one member function of a `fn(...): type` constructor's result as a method of its
     // per-instantiation aggregate type. Registered by the resolver in `type_ctor_member_emits`.
-    auto emit_type_ctor_member(mod::module& owner_mod, const sema::type_ctor_member_emit& tcm)
+    auto emit_type_ctor_member(mod::module_t& owner_mod, const sema::type_ctor_member_emit& tcm)
         -> void;
     auto emit_anonymous_function(ast::node_id id, const ast::function_expr& fn_expr) -> std::string;
     // Like emit_anonymous_function, but pre-binds `name` to itself so the body can self-recurse
@@ -141,13 +166,41 @@ class emitter {
     // Emits a capturing function_expr's implementation (once, idempotently) and constructs its
     // environment value at the current (definition-site) insertion point
     auto emit_closure(ast::node_id id, const ast::function_expr& fn_expr) -> value;
-    auto emit_closure_function(const ast::function_expr&     fn_expr,
+    auto emit_closure_function(ast::node_id                  id,
+                               const ast::function_expr&     fn_expr,
                                const sema::types::closure_t& cl,
                                sema::type&                   closure_type) -> void;
+
+    // Copies the resolved `@[...]` attributes of `owner`'s function literal `fn_node` onto `fn`
+    auto apply_fn_attributes(gir::function& fn, const mod::module_t& owner, ast::node_id fn_node)
+        -> void;
+
+    // The `@branchHint` opening `stmt`, if it is a block that starts with one
+    [[nodiscard]] auto branch_hint_of(const mod::module_t& owner, ast::node_id stmt)
+        -> stdx::option<ast::branch_hint>;
+    // Weights a two-way branch from the hints on its true and false sides
+    static auto apply_branch_hints(gir::instruction&              branch,
+                                   stdx::option<ast::branch_hint> on_true,
+                                   stdx::option<ast::branch_hint> on_false) -> void;
+
+    // The `@[align(n)]` of a declaration's own storage
+    [[nodiscard]] static auto decl_alignment(const mod::module_t& owner, ast::node_id decl)
+        -> stdx::option<u64> {
+        const auto resolved{owner.attributes_of(decl)};
+        return resolved ? resolved->alignment : stdx::none;
+    }
+
+    // The `@[visibility(...)]` of a declaration's own symbol
+    [[nodiscard]] static auto decl_visibility(const mod::module_t& owner, ast::node_id decl)
+        -> stdx::option<ast::symbol_visibility> {
+        const auto resolved{owner.attributes_of(decl)};
+        return resolved ? resolved->visibility : stdx::none;
+    }
+
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants
-    auto emit_constexpr_closure(const const_closure& cl) -> std::string;
+    auto emit_comptime_closure(const const_closure& cl) -> std::string;
 
     // Reads a captured variable's current value (VALUE mode) or address (REF/MUT_REF mode) from
     // the definition-site scope, for use when constructing an environment field
@@ -156,12 +209,16 @@ class emitter {
     auto emit_stmt(const ast::stmt_handle& stmt) -> void;
     auto emit_block(const ast::block_stmt& block) -> void;
     auto emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> void;
+    // A decl holding `type`s has no storage, but its initializer must still fold
+    auto check_comptime_value_decl(const ast::decl_stmt& decl) -> void;
     auto emit_return_stmt(ast::node_id id, const ast::return_stmt& ret) -> void;
     auto emit_defer_stmt(ast::node_id id, const ast::defer_stmt& def) -> void;
     auto emit_errdefer_stmt(ast::node_id id, const ast::errdefer_stmt& errdef) -> void;
     auto emit_break(ast::node_id id, const ast::break_stmt& brk) -> void;
     auto emit_continue(ast::node_id id, const ast::continue_stmt& cnt) -> void;
     [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt) -> value;
+    // The statement's value converted to the type its construct's values meet at
+    [[nodiscard]] auto emit_stmt_as_value(const ast::stmt_handle& stmt, sema::type& peer) -> value;
     [[nodiscard]] auto retype_if_undefined(value v, sema::type& result_type) -> value;
 
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
@@ -170,7 +227,7 @@ class emitter {
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
-    // Emits a `panic_handler(msg, file, line, column)` call followed by `unreachable`
+    // Emits a `panic_handler(msg, loc: SourceLocation)` call followed by `unreachable`
     auto emit_panic_call(std::string_view message, ast::node_id site) -> void;
     auto emit_enum_cast_guard(ast::node_id     site,
                               const value&     enum_val,
@@ -187,13 +244,15 @@ class emitter {
     auto materialize_string_slice(std::string_view text, sema::type& slice_type) -> value;
 
     auto emit_null_pointer_check(value ptr, ast::node_id site) -> void;
-    // `wrapping` forces the overflow guard off unconditionally, for `+% -% *% <<%` / `-%x`
+    // `wrapping` forces the overflow guard off unconditionally, for `+% -% *% <<%` / `-%x`;
+    // `saturating` clamps to the result range instead (`+| -| *| <<|`), which also never traps
     auto emit_checked_binary(instruction_kind kind,
                              value            lhs,
                              value            rhs,
                              sema::type&      result_type,
                              ast::node_id     site,
-                             bool             wrapping = false) -> local_id;
+                             bool             wrapping   = false,
+                             bool             saturating = false) -> local_id;
     auto emit_checked_unary(instruction_kind kind,
                             value            operand,
                             sema::type&      result_type,
@@ -203,6 +262,9 @@ class emitter {
     auto pointer_to_bool(value ptr, bool invert) -> value;
     auto coerce_condition(value cond) -> value;
     auto request_builtin_runtime(std::string_view name) -> void;
+    auto request_builtin_type_methods(const sema::type& receiver) -> bool;
+    // Queues the `builtin` impl block that gives `receiver` its `method`, if one does
+    auto request_builtin_impl_method(const sema::type& receiver, std::string_view method) -> void;
     auto ensure_builtin_runtime(std::string_view name) -> void;
     auto spill_to_temporary(value val, sema::type& type, bool is_const = false) -> value;
     auto lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value;
@@ -212,8 +274,8 @@ class emitter {
     // ordinary data-field form, where arg0 is an instance rather than a type.
     auto resolve_static_field_ref(const ast::call_expr& call)
         -> stdx::option<std::pair<gsl::not_null<sema::type*>, std::string>>;
-    // `@field(T, name)`'s static `var` / aggregate `const` member address, if `T` denotes a type
-    // and the member has real storage; `stdx::none` for a scalar `const` (no address) or the
+    // `@field(T, name)`'s static `let mut` / aggregate `const` member address, if `T` denotes a
+    // type and the member has real storage; `stdx::none` for a scalar `const` (no address) or the
     // ordinary data-field form (`v` is an instance, not a type).
     auto try_emit_static_field_builtin_addr(const ast::call_expr& call) -> stdx::option<value>;
     // `@field(T, name)`'s folded value when `name` is a scalar `const` member with no address.
@@ -232,25 +294,67 @@ class emitter {
         -> value;
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
-    auto emit_string_as_slice(const std::string& bytes, const sema::type& slice_type) -> value;
+    auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
-    auto emit_dyn_coercion(ast::expr_handle src, const sema::type& fat_type) -> value;
+    auto emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> value;
+    // Wraps a thin function or a closure into the `{ctx, code}` pair of a `fn(...)`/`^fn(...)`
+    auto emit_callable_coercion(ast::expr_handle src, sema::type& declared_type)
+        -> stdx::option<value>;
+    // A generic `fn(x: T): T` destination takes its concrete erased shape from the source
+    auto concrete_callable_type(sema::type& fat_type, sema::type& src_type) -> sema::type&;
     // Lowers `expr[lo..{=}hi]` on an array or slice to a bounds-checked `{ptr, len}` subslice.
     auto emit_slice_range(ast::node_id id, const ast::index_expr& index) -> value;
-    auto emit_coerced_expr(ast::expr_handle expr_id, const sema::type& dest_type) -> value;
-    auto emit_generic_instantiation(const sema::generic_instantiation_request& req) -> void;
+    auto fold_initializer(ast::expr_handle init, sema::type& declared) -> stdx::option<const_value>;
+    auto report_missing_enum_member(const sema::type& dest,
+                                    std::string_view  name,
+                                    ast::expr_handle  at) -> void;
+    auto emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_type) -> value;
+    auto emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type) -> value;
+    auto emit_generic_instantiation(std::string_view mangled_name) -> void;
     auto emit_expression_id(ast::node_id id) -> value;
     // Produces a value exactly as resolved, including a bare reference-typed value where
     // applicable.
     auto emit_expression_id_raw(ast::node_id id) -> value;
-    auto emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
-    auto emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
-    // @mem* decompose the slice args into a data pointer + byte length
-    auto emit_mem_intrinsic(ast::node_id          id,
-                            const ast::call_expr& call,
-                            syntax::token_type_t  builtin) -> void;
+    // Whether `id` reads from a value holding `type`s (`ts`, `ts.len`, `ts[i]`), which only
+    // exists at compile time and so must fold through const_eval
+    [[nodiscard]] auto reads_comptime_value(ast::node_id id) -> bool;
+    auto               emit_comptime_value_read(ast::node_id id) -> value;
+    auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
+    auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
+    [[nodiscard]] auto
+         fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;
+    auto bind_declared_params(gir::function&            fn,
+                              const ast::function_expr& fn_expr,
+                              const mod::module_t&      owner) -> void;
+    auto spill_written_param(const gir::function& fn, std::string_view name) -> void;
+    auto emit_implicit_return(sema::type& return_type) -> void;
+    auto emit_c_va_builtin(const ast::call_expr& call,
+                           syntax::builtin_t     builtin,
+                           sema::type&           ret_type) -> value;
+    [[nodiscard]] auto current_function_is_c_variadic() -> bool;
+
+    // @mem* decompose the slice args into a data pointer + byte length. A length check is only
+    // needed when the operands' lengths were not already proven equal statically.
+    auto emit_mem_intrinsic(ast::node_id      id,
+                            ast::expr_handle  dest_h,
+                            ast::expr_handle  rhs_h,
+                            syntax::builtin_t builtin,
+                            bool              check_lengths = true) -> void;
+
+    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
+    // and whether that is its `break` variant
+    struct flow_result {
+        value             flow_slot;
+        value             is_break;
+        sema::unwrap_info shape;
+    };
+    auto emit_flow(ast::expr_handle operand) -> flow_result;
+    // Binds an `if`/`while` payload capture to what the `continue` reference points at
+    auto bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void;
+    // Binds an `else |e|` capture to the `break` residual
+    auto bind_unwrap_residual(const ast::capture_t& capture, const flow_result& flow) -> void;
     auto emit_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> value;
     auto emit_unwrap_propagation(value                    operand_addr,
                                  const sema::unwrap_info& shape,
@@ -261,14 +365,20 @@ class emitter {
                                        ast::node_id     site) -> void;
     auto emit_initializer(ast::node_id id, const ast::initializer_expr& init) -> value;
     // Emits a struct field's `= default` expression, coerced to `field_type`
-    auto               emit_field_default(ast::expr_handle   default_expr,
-                                          const mod::module& owner,
-                                          const sema::type&  field_type) -> value;
+    auto               emit_field_default(ast::expr_handle default_expr,
+                                          mod::module_t&   owner,
+                                          sema::type&      field_type) -> value;
     auto               emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value;
     [[nodiscard]] auto dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool;
     auto               emit_index(ast::node_id id, const ast::index_expr& index) -> value;
     auto               emit_address_of(ast::node_id id, const ast::address_of_expr& addr) -> value;
     auto emit_dereference(ast::node_id id, const ast::dereference_expr& deref) -> value;
+    // `comptime <expr>`: the operand's folded value, with no code emitted for the operand
+    auto emit_comptime(ast::node_id id, const ast::comptime_expr& cx) -> value;
+    // A slice-valued expression's elements pointer, viewed as a pointer to `elems_type`
+    auto emit_slice_elements_addr(ast::expr_handle slice_expr,
+                                  sema::type&      slice_type,
+                                  sema::type&      elems_type) -> value;
     auto emit_reference(ast::node_id id, const ast::reference_expr& ref) -> value;
     auto emit_implicit_access(ast::node_id id, const ast::implicit_access_expr& imp) -> value;
     auto emit_while(ast::node_id                   id,
@@ -276,58 +386,59 @@ class emitter {
                     stdx::option<std::string_view> label       = stdx::none,
                     stdx::option<local_id>         res_slot    = stdx::none,
                     stdx::option<sema::type&>      result_type = stdx::none) -> value;
-    // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
-    // holds `true`; no runtime loop, no `body_type_diff`
-    auto emit_constexpr_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
+
+    // Emits one unrolled iteration of an unrolled loop body, consuming its break/continue flags
+    auto emit_unrolled_loop_body(const ast::block_stmt& block) -> unrolled_body_exit;
+    [[nodiscard]] auto
+    unroll_limit_reached(usize iterations, std::string_view loop_kind, ast::node_id id) -> bool;
+    [[nodiscard]] auto fold_unrolled_loop_condition(ast::expr_handle condition,
+                                                    std::string_view loop_kind)
+        -> stdx::option<bool>;
+    auto emit_unrolled_while(ast::node_id id, const ast::while_loop_expr& while_loop) -> value;
     auto emit_do_while(ast::node_id                   id,
                        const ast::do_while_loop_expr& do_while,
                        stdx::option<std::string_view> label       = stdx::none,
                        stdx::option<local_id>         res_slot    = stdx::none,
                        stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    auto emit_unrolled_do_while(ast::node_id id, const ast::do_while_loop_expr& do_while) -> value;
     auto emit_infinite_loop(ast::node_id                   id,
                             const ast::infinite_loop_expr& loop,
                             stdx::option<std::string_view> label       = stdx::none,
                             stdx::option<local_id>         res_slot    = stdx::none,
                             stdx::option<sema::type&>      result_type = stdx::none) -> value;
+    auto emit_comptime_infinite_loop(ast::node_id id, const ast::infinite_loop_expr& loop) -> value;
     auto emit_for(ast::node_id                   id,
                   const ast::for_loop_expr&      for_loop,
                   stdx::option<std::string_view> label       = stdx::none,
                   stdx::option<local_id>         res_slot    = stdx::none,
                   stdx::option<sema::type&>      result_type = stdx::none) -> value;
     // Replays each iteration the resolver already unrolled: no runtime loop, `N` straight-line
-    // blocks under that iteration's `body_type_diff` overlay and `constexpr_frame` binding.
-    auto emit_constexpr_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
+    // blocks under that iteration's `body_type_diff` overlay and `comptime_frame` binding.
+    auto emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
+    // The type two concrete numeric operands of different types are converted to before they meet
+    [[nodiscard]] auto numeric_operand_peer(ast::expr_handle lhs, ast::expr_handle rhs)
+        -> stdx::option<sema::type&>;
     // Detects `union_val == .field` and emits a tag comparison instead of a union-vs-field-type EQ
     auto try_emit_union_field_eq(ast::node_id lhs, ast::node_id rhs) -> stdx::option<local_id>;
     auto emit_union_tag_eq(value union_addr, ast::node_id member_pattern_id) -> local_id;
-    auto emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
-    auto emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
-    auto emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
+    // Whether `expr` folds, silently, to the bool `expected`
+    [[nodiscard]] auto folds_to_bool(ast::expr_handle expr, bool expected) -> bool;
+    auto               emit_logical_and(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto               emit_logical_or(ast::node_id id, const ast::binary_expr& binary) -> value;
+    auto               emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value;
     // Keeps a tagged union's runtime discriminant in sync with a direct `union.field = ...` write
     auto sync_tagged_union_tag(ast::node_id assign_lhs) -> void;
     auto emit_assignment(ast::node_id id, const ast::assignment_expr& assign) -> value;
-    // If `assign` targets a `constexpr var`, folds it and rebinds in place. `none` otherwise
-    auto try_emit_constexpr_var_assignment(ast::node_id id, const ast::assignment_expr& assign)
+    // If `assign` targets a `comptime let mut`, folds it and rebinds in place. `none` otherwise
+    auto try_emit_comptime_mut_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // One level of `p.field = ...` / `p.field += ...` into an aggregate `constexpr var`
-    auto try_emit_constexpr_var_field_assignment(ast::node_id                id,
-                                                 const ast::assignment_expr& assign,
-                                                 std::string_view            root_name,
-                                                 local_binding&              binding,
-                                                 const ast::dot_expr& dot) -> stdx::option<value>;
-    // Same shape as the field form, for `arr[k] = ...` into an array-typed `constexpr var`.
-    auto try_emit_constexpr_var_element_assignment(ast::node_id                id,
-                                                   const ast::assignment_expr& assign,
-                                                   std::string_view            root_name,
-                                                   local_binding&              binding,
-                                                   const ast::index_expr&      idx)
+    // `p.a.b = ...` / `arr[k].field += ...`: any chain of fields and elements into an aggregate
+    // `comptime let mut`
+    auto try_emit_comptime_mut_place_assignment(ast::node_id id, const ast::assignment_expr& assign)
         -> stdx::option<value>;
-    // Walks a chain of `dot_expr`/`index_expr` wrappers down to its root identifier and returns
-    // that identifier's binding if it names a `constexpr var`
-    auto constexpr_var_root_binding(ast::expr_handle expr) -> stdx::option<local_binding&>;
-    auto update_constexpr_var(std::string_view name, const_value val) -> void;
+    auto update_comptime_mut(std::string_view name, const_value val) -> void;
 
     // Bit-packed `packed struct`/`packed union` field access: shift/mask over the backing int.
     [[nodiscard]] auto emit_packed_field_read(value                        backing_addr,
@@ -379,19 +490,65 @@ class emitter {
     // The i64/u64/i128/u128 payload of a compile-time integer `value`, as a 128-bit signed
     // int; none when `v` has no integer payload.
     [[nodiscard]] static auto folded_int(const value& v) noexcept -> stdx::option<i128>;
-    // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `constexpr_int` `v` does not
+    [[nodiscard]] auto emit_comptime_return(const const_value& returned, ast::node_id at) -> bool;
+    auto               emit_skip(value msg, ast::node_id at) -> void;
+    [[nodiscard]] auto emit_comptime_skip(ast::node_id at) -> bool;
+    auto report_comptime_failure(usize diags_before, std::string_view what, ast::node_id at)
+        -> void;
+    [[nodiscard]] auto emit_union_tag_as_enum(ast::expr_handle expr_id,
+                                              sema::type&      union_type,
+                                              sema::type&      enum_type) -> value;
+    [[nodiscard]] auto
+    emit_comptime_only_call(ast::node_id id, sema::type& result, sema::type& dest) -> value;
+    [[nodiscard]] auto instantiation_result(std::string_view mangled_name)
+        -> stdx::option<sema::type&>;
+    // A runtime condition's value when it is known at compile time
+    [[nodiscard]] auto        folded_condition(ast::expr_handle condition) -> stdx::option<bool>;
+    [[nodiscard]] static auto is_concrete_float(const value& v) noexcept -> bool;
+    [[nodiscard]] static auto is_untyped_number(const value& v) noexcept -> bool;
+    // A compile-time number whose type isn't `t`
+    [[nodiscard]] static auto is_foreign_constant(const value& v, const sema::type& t) noexcept
+        -> bool;
+    // A constant operand reads as the number type its use was given, like a literal written in
+    // its place: `x + n` with `const n = 24;`, or `x & bits(T)`
+    [[nodiscard]] auto constant_as_use_type(value v, ast::node_id at) -> value;
+    // A `comptime_int`/`comptime_float` value converted to the float type `target`
+    [[nodiscard]] auto untyped_number_as_float(const value& v, sema::type& target, ast::node_id at)
+        -> value;
+    // Diagnoses a runtime `src` value headed for the untyped `target`
+    auto report_runtime_untyped(const sema::type& src, const sema::type& target, ast::node_id at)
+        -> void;
+    // Diagnoses a compile-time float that rounds to infinity in `target`
+    auto check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
+        -> void;
+    // Emits a `LITERAL_OUT_OF_RANGE` diagnostic at `at` if the `comptime_int` `v` does not
     // fit `target` (a concrete integer type). Returns `v` retyped to `target`.
-    [[nodiscard]] auto coerce_constexpr_int(value v, sema::type& target, ast::node_id at) -> value;
+    [[nodiscard]] auto coerce_comptime_int(value v, sema::type& target, ast::node_id at) -> value;
+    // Gives a `comptime_int` `@bitCast` operand an integer type as wide as `target`
+    [[nodiscard]] auto widen_untyped_bit_cast_operand(value v, sema::type& target, ast::node_id at)
+        -> value;
+    // Diagnoses a constant `<<`/`>>` amount outside `[0, width)`, then gives an untyped one the
+    // shifted type. A `<<%`/`<<|` amount is clamped to the width, where it means the same.
+    [[nodiscard]] auto
+    prepare_shift_amount(value amount, sema::type& shifted, bool checked, ast::node_id at) -> value;
     auto               emit_packed_store(const ast::dot_expr& dot, value field_val) -> void;
     [[nodiscard]] auto emit_packed_field_assign(ast::node_id                id,
                                                 const ast::dot_expr&        dot,
                                                 const ast::assignment_expr& assign,
                                                 syntax::token_type_t        op_type) -> value;
     auto               emit_call(ast::node_id id, const ast::call_expr& call) -> value;
+    auto               emit_unmodified_call(ast::node_id id, const ast::call_expr& call) -> value;
+    // A module-scope `^fn(...)` global, or `let mut` of function type, named directly as a callee
+    [[nodiscard]] auto callee_is_fn_pointer_global(const ast::identifier_expr& ident,
+                                                   ast::expr_handle            callee) -> bool;
     auto               emit_asm(ast::node_id id, const ast::asm_expr& node) -> value;
     auto               emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value;
-    // Lvalue (address) of a `var`-style global backed by a GIR global.
-    [[nodiscard]] auto global_ref_in(usize table_idx, std::string_view name) -> stdx::option<value>;
+    // Lvalue (address) of a `let mut`-style global backed by a GIR global.
+    // `allow_fn_vars` also admits a `let mut` of function type (only safe for the active module's
+    // own root table, whose symbol nodes live in the active AST)
+    [[nodiscard]] auto global_ref_in(usize            table_idx,
+                                     std::string_view name,
+                                     bool             allow_fn_vars = false) -> stdx::option<value>;
     [[nodiscard]] auto try_global_ref(std::string_view name) -> stdx::option<value>;
     [[nodiscard]] auto try_static_member_ref(const sema::type& owner, std::string_view member)
         -> stdx::option<value>;
@@ -412,10 +569,13 @@ class emitter {
         switch (tok) {
         case syntax::token_type_t::PLUS:          return instruction_kind::ADD;
         case syntax::token_type_t::PLUS_PERCENT:  return instruction_kind::ADD;
+        case syntax::token_type_t::PLUS_PIPE:     return instruction_kind::ADD;
         case syntax::token_type_t::MINUS:         return instruction_kind::SUB;
         case syntax::token_type_t::MINUS_PERCENT: return instruction_kind::SUB;
+        case syntax::token_type_t::MINUS_PIPE:    return instruction_kind::SUB;
         case syntax::token_type_t::STAR:          return instruction_kind::MUL;
         case syntax::token_type_t::STAR_PERCENT:  return instruction_kind::MUL;
+        case syntax::token_type_t::STAR_PIPE:     return instruction_kind::MUL;
         case syntax::token_type_t::SLASH:         return instruction_kind::DIV;
         case syntax::token_type_t::PERCENT:       return instruction_kind::MOD;
         case syntax::token_type_t::BW_AND:        return instruction_kind::AND;
@@ -423,6 +583,7 @@ class emitter {
         case syntax::token_type_t::CARET:         return instruction_kind::XOR;
         case syntax::token_type_t::SHL:           return instruction_kind::SHL;
         case syntax::token_type_t::SHL_PERCENT:   return instruction_kind::SHL;
+        case syntax::token_type_t::SHL_PIPE:      return instruction_kind::SHL;
         case syntax::token_type_t::SHR:           return instruction_kind::SHR;
         case syntax::token_type_t::EQ:            return instruction_kind::EQ;
         case syntax::token_type_t::NEQ:           return instruction_kind::NE;
@@ -452,6 +613,17 @@ class emitter {
         return self.active_module_->ast;
     }
 
+    // Adds a GIR function attributed to the module whose AST its body is emitted from
+    template <typename... Args> auto add_gir_function(Args&&... args) -> function& {
+        auto& fn{gir_module_.add_function(std::forward<Args>(args)...)};
+        fn.set_source_module(active_mod());
+        return fn;
+    }
+
+    // Moves diagnostics reported since `diags_before` onto `owner` when it is a foreign module,
+    // so they print against the file their locations point into
+    auto attribute_diags(mod::module_t& owner, usize diags_before) -> void;
+
     // The symbol table that owns a definition currently being emitted: the enclosing aggregate
     // literal's table for a member, otherwise the active module's root table.
     [[nodiscard]] auto current_owner_table_idx() const noexcept -> usize {
@@ -474,26 +646,35 @@ class emitter {
     }
 
   private:
-    sema::context&                ctx_;
-    mod::module&                  ast_module_;
-    stdx::option<mod::module&>    active_module_{ast_module_};
-    const_eval                    const_eval_;
-    builder                       builder_;
-    module                        gir_module_;
-    std::vector<scope_frame>      scopes_;
-    std::vector<loop_context>     loop_stack_;
-    stdx::option<value>           current_error_slot_{};
-    default_counter               anon_test_desc_counter_;
-    default_counter               anon_test_fn_counter_;
-    default_counter               anon_fn_counter_;
-    default_counter               anon_slice_lit_counter_;
-    std::vector<std::string>      open_fn_names_;
-    std::vector<bool>             open_fn_is_closure_;
-    std::vector<sema::type*>      user_type_stack_;
-    std::vector<std::string_view> pending_builtin_runtime_;
-    symbol_scoping                symbol_scoping_;
-    bool                          runtime_safety_{true};
-    u32                           target_ptr_bits_{64};
+    sema::context&               ctx_;
+    mod::module_t&               ast_module_;
+    stdx::option<mod::module_t&> active_module_{ast_module_};
+    bool                         attributed_foreign_diags_{false};
+    const_eval                   const_eval_;
+    builder                      builder_;
+    module_t                     gir_module_;
+    std::vector<scope_frame>     scopes_;
+    std::vector<loop_context>    loop_stack_;
+    bool                         unrolled_loop_continue_{false};
+    bool                         unrolled_loop_break_{false};
+    stdx::option<value>          unrolled_loop_break_value_{};
+    stdx::option<value>          current_error_slot_{};
+    default_counter              anon_test_desc_counter_;
+    default_counter              anon_test_fn_counter_;
+    default_counter              anon_fn_counter_;
+    default_counter              anon_slice_lit_counter_;
+    std::vector<std::string>     open_fn_names_;
+    // A type constructor's function-valued `comptime` arguments, bound as callables inside the
+    // member function being emitted
+    std::vector<std::pair<std::string_view, const_closure>> ctor_closure_bindings_;
+    std::vector<bool>                                       open_fn_is_closure_;
+    std::vector<sema::type*>                                user_type_stack_;
+    std::vector<std::string_view>                           pending_builtin_runtime_;
+    std::vector<ast::node_id>                               pending_builtin_impls_;
+    symbol_scoping                                          symbol_scoping_;
+    bool                                                    runtime_safety_{true};
+    u32                                                     target_ptr_bits_{64};
+    codegen::type_layout                                    target_layout_;
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).

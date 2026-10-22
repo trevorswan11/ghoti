@@ -7,7 +7,7 @@ templ SyntaxArraysPage() {
 		<li>
 			Arrays are defined with 3 key components
 			<ul>
-				<li>A size: This must be an underscore (signifying inferred size), a compile time constant (previously declared with <code>constexpr</code>), or an integer literal (suffix <code>uz</code>)</li>
+				<li>A size: This must be an underscore (signifying inferred size), a compile time constant (previously declared with <code>const</code>), or an integer literal (suffix <code>uz</code>)</li>
 				<li>A type: This can be any valid type, but it must be present and cannot be inferred</li>
 				<li>Items: These items must be of the type specified, and must match the provided size if provided</li>
 			</ul>
@@ -25,7 +25,7 @@ templ SyntaxArraysPage() {
 	<ul>
 		<li>Arrays do not decay to pointers implicitly as they do in C</li>
 		<li>
-			To call a C function that takes in a pointer that is actually an array, you can use the builtin <code>{ "@ptrFromArray" }</code>
+			To call a C function that takes in a pointer that is actually an array, pass the array's <code>.ptr</code>, a pointer to its first element (<code>[N]mut T</code> gives <code>^mut T</code>)
 			<ul>
 				<li>This erases the underlying size of the array and is not trivially reversible. It is only recommended for use with C interop</li>
 			</ul>
@@ -67,15 +67,18 @@ templ SyntaxArraysPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: &[S]&^mut T; // Normal array type
-var a: &[]&^mut T; // Analogous slice type` }
+			{ `let mut a: &[S]&^mut T; // Normal array type
+let mut a: &[]&^mut T; // Analogous slice type` }
 		</code>
 	</pre>
 	<ul>
 		<li>
-			Arrays do not implicitly 'decay' to slices or pointers
+			Arrays implicitly coerce to slices (but never to pointers)
 			<ul>
-				<li>To pass an array to a function that expects a slice, you should use the respective reference operator (<code>&amp;</code> or <code>&amp;mut</code>) depending on the context. This is similar to Zig's array/slice syntax</li>
+				<li>An array value (<code>[N]T</code>) or a reference to one (<code>&amp;[N]T</code>) can be used wherever a <code>[]T</code> is expected. The resulting slice points at the original array (it is not a copy) and its <code>len</code> is <code>N</code></li>
+				<li>The slice is only mutable when the array's elements are (<code>[N]mut T</code> -&gt; <code>[]mut T</code>)</li>
+				<li>Taking <code>&amp;arr</code> / <code>^arr</code> still yields a reference / pointer to the array itself (<code>&amp;[N]T</code> / <code>^[N]T</code>). The slice only appears when the destination is a slice type</li>
+				<li>A raw pointer to an array (<code>^[N]T</code>) does not coerce to a slice. Use <code>{ "@sliceFromPtr" }</code> or slice the array with a range instead</li>
 			</ul>
 		</li>
 	</ul>
@@ -91,6 +94,7 @@ var a: &[]&^mut T; // Analogous slice type` }
 					<ul>
 						<li>Exclusive range: <code>arr[i..j]</code></li>
 						<li>Inclusive range: <code>arr[i..=j]</code></li>
+						<li>A subscript range never counts down, so constant bounds the wrong way round (<code>arr[3..1]</code>) are an error</li>
 					</ul>
 				</li>
 			</ul>
@@ -98,16 +102,22 @@ var a: &[]&^mut T; // Analogous slice type` }
 		<li>
 			Indexing an array with a single value returns a value that is of the same type as the array's inner items
 			<ul>
-				<li>This can be used to chain array indexing as: <code>const val := matrix[0uz][1uz];</code></li>
+				<li>This can be used to chain array indexing as: <code>const val = matrix[0uz][1uz];</code></li>
 			</ul>
 		</li>
 		<li>Indexing an array with a range returns a slice that is exactly the size specified by said range</li>
+		<li>
+			A range used anywhere else is the array of values it takes, so both bounds must be known at compile time
+			<ul>
+				<li><code>0..10</code> is a <code>[10]usize</code> holding 0 through 9, and <code>1..=3</code> is a <code>[3]usize</code> holding 1, 2, 3</li>
+				<li>The elements take the expected type's element type (<code>let y: [4]u8 = 2..6;</code>), else the bounds' type, else <code>usize</code>, or <code>isize</code> when a bound is negative</li>
+				<li>A range whose start is past its end counts down: <code>3..0</code> holds 3, 2, 1</li>
+				<li>Its elements are constant like an array literal's; annotate <code>[N]mut T</code> to assign to them</li>
+			</ul>
+		</li>
 		<li>An attempt to index outside of the bounds of an array results in a crash</li>
 		<li>
 			Indexing may be done on an array, slice, or raw pointer
-			<ul>
-				<li>It is not permitted to index through a reference</li>
-			</ul>
 		</li>
 	</ul>
 	<h2>Memory layout</h2>
@@ -122,9 +132,9 @@ var a: &[]&^mut T; // Analogous slice type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
-var a: [:0]i32; // Null terminated slice type
-var a: [5uz:0]i32; // Null terminated array type` }
+			{ `const a = [_:0]u8{'a', 'b', '\0' }; // Inferred Size ending with a null byte
+let mut a: [:0]i32; // Null terminated slice type
+let mut a: [5uz:0]i32; // Null terminated array type` }
 		</code>
 	</pre>
 	<ul>
@@ -157,7 +167,7 @@ var a: [5uz:0]i32; // Null terminated array type` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const a := [_]i32{1, 2, 3, 4};
+			{ `const a = [_]i32{1, 2, 3, 4};
 for (a) |b| { ... };` }
 		</code>
 	</pre>
@@ -167,10 +177,10 @@ for (a) |b| { ... };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a := [_]i32{1, 2, 3, 4};
+			{ `let mut a = [_]i32{1, 2, 3, 4};
 for (a) |&mut b| { ... };
 
-const c := [_]i32{1, 2, 3, 4};
+const c = [_]i32{1, 2, 3, 4};
 for (c) |&mut b| { ... }; // Illegal, c is a constant` }
 		</code>
 	</pre>

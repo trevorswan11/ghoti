@@ -14,20 +14,25 @@ using operator_t = typed_identifier;
 namespace operators {
 
 constexpr operator_t ASSIGN{"=", token_type_t::ASSIGN};
-constexpr operator_t WALRUS{":=", token_type_t::WALRUS};
 constexpr operator_t PLUS{"+", token_type_t::PLUS};
 constexpr operator_t PLUS_PLUS{"++", token_type_t::PLUS_PLUS};
 constexpr operator_t PLUS_ASSIGN{"+=", token_type_t::PLUS_ASSIGN};
 constexpr operator_t PLUS_PERCENT{"+%", token_type_t::PLUS_PERCENT};
 constexpr operator_t PLUS_PERCENT_ASSIGN{"+%=", token_type_t::PLUS_PERCENT_ASSIGN};
+constexpr operator_t PLUS_PIPE{"+|", token_type_t::PLUS_PIPE};
+constexpr operator_t PLUS_PIPE_ASSIGN{"+|=", token_type_t::PLUS_PIPE_ASSIGN};
 constexpr operator_t MINUS{"-", token_type_t::MINUS};
 constexpr operator_t MINUS_ASSIGN{"-=", token_type_t::MINUS_ASSIGN};
 constexpr operator_t MINUS_PERCENT{"-%", token_type_t::MINUS_PERCENT};
 constexpr operator_t MINUS_PERCENT_ASSIGN{"-%=", token_type_t::MINUS_PERCENT_ASSIGN};
+constexpr operator_t MINUS_PIPE{"-|", token_type_t::MINUS_PIPE};
+constexpr operator_t MINUS_PIPE_ASSIGN{"-|=", token_type_t::MINUS_PIPE_ASSIGN};
 constexpr operator_t STAR{"*", token_type_t::STAR};
 constexpr operator_t STAR_ASSIGN{"*=", token_type_t::STAR_ASSIGN};
 constexpr operator_t STAR_PERCENT{"*%", token_type_t::STAR_PERCENT};
 constexpr operator_t STAR_PERCENT_ASSIGN{"*%=", token_type_t::STAR_PERCENT_ASSIGN};
+constexpr operator_t STAR_PIPE{"*|", token_type_t::STAR_PIPE};
+constexpr operator_t STAR_PIPE_ASSIGN{"*|=", token_type_t::STAR_PIPE_ASSIGN};
 constexpr operator_t SLASH{"/", token_type_t::SLASH};
 constexpr operator_t SLASH_ASSIGN{"/=", token_type_t::SLASH_ASSIGN};
 constexpr operator_t PERCENT{"%", token_type_t::PERCENT};
@@ -36,6 +41,9 @@ constexpr operator_t BANG{"!", token_type_t::BANG};
 constexpr operator_t QUESTION{"?", token_type_t::QUESTION};
 constexpr operator_t AND_MUT{"&mut", token_type_t::AND_MUT};
 constexpr operator_t CARET_MUT{"^mut", token_type_t::CARET_MUT};
+// `&mut?` / `^mut?`: a reference or pointer whose mutability is the enclosing function's `mut?`
+constexpr operator_t AND_MUT_POLY{"&mut?", token_type_t::AND_MUT_POLY};
+constexpr operator_t CARET_MUT_POLY{"^mut?", token_type_t::CARET_MUT_POLY};
 
 constexpr operator_t BW_AND{"&", token_type_t::BW_AND};
 constexpr operator_t BW_AND_ASSIGN{"&=", token_type_t::BW_AND_ASSIGN};
@@ -45,6 +53,8 @@ constexpr operator_t SHL{"<<", token_type_t::SHL};
 constexpr operator_t SHL_ASSIGN{"<<=", token_type_t::SHL_ASSIGN};
 constexpr operator_t SHL_PERCENT{"<<%", token_type_t::SHL_PERCENT};
 constexpr operator_t SHL_PERCENT_ASSIGN{"<<%=", token_type_t::SHL_PERCENT_ASSIGN};
+constexpr operator_t SHL_PIPE{"<<|", token_type_t::SHL_PIPE};
+constexpr operator_t SHL_PIPE_ASSIGN{"<<|=", token_type_t::SHL_PIPE_ASSIGN};
 constexpr operator_t SHR{">>", token_type_t::SHR};
 constexpr operator_t SHR_ASSIGN{">>=", token_type_t::SHR_ASSIGN};
 constexpr operator_t NOT{"~", token_type_t::NOT};
@@ -62,7 +72,6 @@ constexpr operator_t EQ{"==", token_type_t::EQ};
 constexpr operator_t NEQ{"!=", token_type_t::NEQ};
 
 constexpr operator_t ELLIPSIS{"...", token_type_t::ELLIPSIS};
-constexpr operator_t COLON_COLON{"::", token_type_t::COLON_COLON};
 constexpr operator_t DOT{".", token_type_t::DOT};
 constexpr operator_t DOT_DOT{"..", token_type_t::DOT_DOT};
 constexpr operator_t DOT_DOT_EQ{"..=", token_type_t::DOT_DOT_EQ};

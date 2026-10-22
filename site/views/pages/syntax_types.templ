@@ -12,8 +12,16 @@ templ SyntaxTypesPage() {
 				<li><code>^mut</code>: Denotes a mutable pointer</li>
 				<li><code>&amp;</code>: Denotes a constant reference</li>
 				<li><code>&amp;mut</code>: Denotes a mutable reference</li>
-				<li><code>volatile</code>: Denotes a <a href="https://en.wikipedia.org/wiki/Volatile_(computer_programming)">volatile</a> value, preventing certain compiler optimizations for the sake of correctness</li>
+				<li>
+					<code>volatile</code>: Denotes a <a href="https://en.wikipedia.org/wiki/Volatile_(computer_programming)">volatile</a> value, preventing certain compiler optimizations for the sake of correctness
+					<ul>
+						<li>It qualifies a value, never a pointer, reference, slice, or array itself: write <code>^volatile T</code>, <code>[]mut volatile T</code>, or <code>[N]volatile T</code> to make what they reach volatile</li>
+					</ul>
+				</li>
 			</ul>
+		</li>
+		<li>
+			<code>mut</code> only qualifies what a <code>^</code>, <code>&amp;</code>, or <code>[]</code> reaches; a value's own mutability comes from its binding (<code>let mut v: volatile i32</code>, not <code>mut volatile i32</code>)
 		</li>
 		<li>
 			Most of these modifiers act in an opposite way to languages like C, C++, and Zig, while behaving similar to Rust
@@ -34,6 +42,15 @@ templ SyntaxTypesPage() {
 					</ul>
 				</li>
 				<li>Nested types: Consist of an outer type modifier acting on any of these types in a recursive fashion</li>
+				<li>
+					Computed types: Any expression that evaluates to a type at compile time, such as <code>{ "if" }</code>, <code>match</code>, a labeled block, or indexing into an array of types
+					<ul>
+						<li>Every branch must still be a valid type; write <code>{ "if comptime" }</code> or <code>match comptime</code> to check only the branch taken</li>
+						<li>A parameter or return type may read another parameter, which makes that parameter compile-time, so each call instantiates its own types</li>
+						<li>A <code>{ "{" }</code> or <code>=</code> right after a computed type ends it, so a function's body or a declaration's value is never read as part of the type</li>
+						<li>An <code>{ "if" }</code> or <code>match</code> whose values are all types is itself a type value, so it can also be bound to a <code>const</code></li>
+					</ul>
+				</li>
 			</ul>
 		</li>
 		<li>The location of the type modifier is extremely important:</li>
@@ -58,18 +75,18 @@ templ SyntaxTypesPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const func := fn(p: type): void { ... };
+			{ `const func = fn(p: type): void { ... };
 func(&mut P);` }
 		</code>
 	</pre>
 	<ul>
 		<li>In the above example, the call expression is parsed as taking in a mutable reference to a declaration P</li>
-		<li>If you instead meant for <code>&amp;mut P</code> to be a type, you can circumvent this priority by using a <code>using</code> statement</li>
+		<li>If you instead meant for <code>&amp;mut P</code> to be a type, you can circumvent this priority by aliasing the type with a <code>const</code> declaration</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `using tP = &mut P;
-const func := fn(p: type): void { ... };
+			{ `const tP = &mut P;
+const func = fn(p: type): void { ... };
 func(tP);` }
 		</code>
 	</pre>
@@ -80,8 +97,16 @@ func(tP);` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `using Callback = fn(status: i32, result: ^bool): void;
-const register := fn(cb: Callback): void { ... };` }
+			{ `const Callback = fn(status: i32, result: ^bool): void;
+const register = fn(cb: Callback): void { ... };` }
+		</code>
+	</pre>
+	<pre>
+		<code class="language-ghoti">
+			{ `const widen = fn(x: if (WIDE) i64 else i32): if (WIDE) i64 else i32 { ... };
+const pick = fn(k: Kind, x: match (k) { .small => u8, .large => u32 }): void { ... }; // k is compile-time
+let b: TYPES[0] = 300;
+let c: blk: { break :blk u8; } = 200;` }
 		</code>
 	</pre>
 	<h2>Pointers vs. References</h2>
@@ -105,7 +130,7 @@ const register := fn(cb: Callback): void { ... };` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `var a: ^A = ...;
+			{ `let mut a: ^A = ...;
 a.b;   // Syntactic sugar
 (*a).b; // Equivalent expression` }
 		</code>
@@ -115,20 +140,57 @@ a.b;   // Syntactic sugar
 			You can get a pointer to an object using the <code>^</code> prefix operator
 			<ul>
 				<li><code>^</code>: Returns a constant pointer to the object</li>
-				<li><code>^mut</code>: Returns a constant pointer to the object</li>
+				<li><code>^mut</code>: Returns a mutable pointer to the object</li>
 			</ul>
 		</li>
 		<li>
 			You can get a reference to an object using the <code>&amp;</code> prefix operator
 			<ul>
 				<li><code>&amp;</code>: Returns a constant reference to the object</li>
-				<li><code>&amp;mut</code>: Returns a constant reference to the object</li>
+				<li><code>&amp;mut</code>: Returns a mutable reference to the object</li>
 			</ul>
 		</li>
 	</ul>
+	<h2>Caller-chosen Mutability: <code>mut?</code></h2>
+	<ul>
+		<li>
+			<code>&amp;mut?</code>, <code>^mut?</code>, <code>[]mut?</code>, and <code>[N]mut?</code> take their mutability from each call, so one function serves both mutable and immutable callers
+			<ul>
+				<li>A call is mutable only when every argument bound to a <code>mut?</code> parameter is mutable; its <code>mut?</code> result follows</li>
+			</ul>
+		</li>
+		<li>
+			Inside the function a <code>mut?</code> view can be read, narrowed (<code>&amp;mut? self.items[i]</code>), or passed on to another <code>mut?</code> function, but never written through
+			<ul>
+				<li><code>&amp;mut? x</code> needs a place reached through a <code>mut?</code> parameter, so a result can't point at the function's own locals</li>
+			</ul>
+		</li>
+		<li>
+			Only a function's parameters, result, and locals can use <code>mut?</code>, and its result needs a <code>mut?</code> parameter to take its mutability from
+			<ul>
+				<li>An interface's <code>mut?</code> method must be implemented with the same <code>mut?</code> signature, and can't be called through <code>dyn</code></li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const List = struct {
+    items: [4]mut i32,
+    pub const at = fn(&mut? self, i: usize): &mut? i32 {
+        return &mut? self.items[i];
+    };
+};
+
+let mut a: List = ...;
+a.at(0) = 5;            // a is mutable, so at returns &mut i32
+
+let b: List = ...;
+let x = b.at(0);        // b is not, so at returns &i32` }
+		</code>
+	</pre>
 	<h2>Type Introspection</h2>
 	<ul>
-		<li>You can get the type of a value by using the <code>{ "@typeOf" }</code> builtin</li>
+		<li>You can get the type of a value by using the <code>{ "@TypeOf" }</code> builtin</li>
 		<li>You can get the size of a type (in bytes) by using the <code>{ "@sizeOf" }</code> builtin</li>
 		<li>You can get the exact bit width of a type by using the <code>{ "@bitSizeOf" }</code> builtin &mdash; for <code>iN</code>/<code>uN</code> this is <code>N</code>, for a bit-packed <code>packed</code> aggregate it is the backing-integer width, and for everything else it is <code>{ "@sizeOf" }(T) * 8</code></li>
 		<li>You can get the align of a type by using the <code>{ "@alignOf" }</code> builtin</li>
@@ -146,16 +208,16 @@ a.b;   // Syntactic sugar
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Hand := union {
+			{ `const Hand = union(enum) {
     card: bool,
     pen: i32,
     shoe: void,
     deck: struct {
-        var hearts: [12uz]Card;
-        var diamonds: [12uz]Card;
-        var clubs: [12uz]Card;
-        var spades: [12uz]Card;
-        var has_jokers: bool;
+        let mut hearts: [12uz]Card;
+        let mut diamonds: [12uz]Card;
+        let mut clubs: [12uz]Card;
+        let mut spades: [12uz]Card;
+        let mut has_jokers: bool;
     },
 };` }
 		</code>
@@ -167,16 +229,39 @@ a.b;   // Syntactic sugar
 			<code>i&lt;N&gt;</code> / <code>u&lt;N&gt;</code>: A signed or unsigned integer of any width <code>N</code> from 1 to 65535 bits &mdash; <code>i1</code>, <code>u3</code>, <code>i17</code>, <code>u32</code>, <code>u100</code>, <code>i128</code>, &hellip; up to <code>u65535</code>
 			<ul>
 				<li>The familiar widths (<code>i8</code>/<code>i16</code>/<code>i32</code>/<code>i64</code> and their <code>u</code> counterparts) are simply the common cases; there is nothing special about them</li>
+				<li><code>u0</code> is the unsigned integer with no bits: its only value is <code>0</code>, and it takes no space (<code>{ "@sizeOf" }(u0) == 0</code>). It is what <code>std.math.Log2Int(u1)</code> and <code>{ "@Int" }(.{ "{" } .signedness = .unsigned, .bits = 0 { "}" })</code> give. There is no <code>i0</code>, since a signed integer needs its sign bit</li>
 				<li>An <code>iN</code>/<code>uN</code> literal is written with a width suffix, e.g. <code>7u8</code>, <code>1i9</code>, <code>255u65535</code></li>
 				<li>An arithmetic operation on <code>uN</code> wraps modulo 2<sup>N</sup>; on <code>iN</code> it is two's-complement over <code>N</code> bits</li>
 				<li>The wrapping operators <code>+% -% *% &lt;&lt;%</code> (binary), their compound forms <code>+%= -%= *%= &lt;&lt;%=</code>, and prefix <code>-%</code> always wrap silently. They never trap, even with <code>--runtime-safety</code> on. Otherwise they behave exactly like the plain operator. See the <a href="/doc/internals/builtins">builtins</a> page for <code>{ "@addWithOverflow" }</code> and friends, the overflow-flag form of the same operation</li>
+				<li>The saturating operators <code>+| -| *| &lt;&lt;|</code> and their compound forms <code>+|= -|= *|= &lt;&lt;|=</code> clamp the exact result to the operand type's range instead of wrapping, e.g. <code>250u8 +| 10</code> is <code>255</code> and <code>-100i8 *| 2</code> is <code>-128</code>. They never trap, and <code>&lt;&lt;|</code> saturates for any shift amount, including one at or past the bit width. Between two untyped integer constants there is no range to clamp to, so they fold like the plain operator</li>
+				<li>The amount of a shift (<code>&lt;&lt; &gt;&gt; &lt;&lt;% &lt;&lt;|</code> and their compound forms) is a bit count of any integer type, independent of the value shifted: <code>x &gt;&gt; s</code> with <code>x: u64</code> and <code>s: u6</code>, <code>u32</code>, or <code>i8</code> is a <code>u64</code>. For <code>&lt;&lt;</code> and <code>&gt;&gt;</code> the amount must be in <code>[0, N)</code>: a constant outside that range is a compile error, and a runtime one panics under runtime safety</li>
 				<li>A value implicitly widens to a same-signed integer of greater or equal width; narrowing needs an explicit <code>{ "@as" }</code></li>
+				<li>
+					Where values of different types meet, they are converted to their <em>peer type</em>: the one operand type every other widens into. This applies to the two sides of an arithmetic, bitwise, or comparison operator, the arms of an <code>if</code> or <code>match</code>, the values a label is broken with, and the operands of <code>{ "@min" }</code>, <code>{ "@max" }</code>, and the division and overflow builtins
+					<ul>
+						<li><code>i8</code> with <code>i64</code> is <code>i64</code>, <code>u32</code> with <code>i64</code> is <code>i64</code>, and <code>i32</code> with <code>f64</code> is <code>f64</code> (every <code>i32</code> is exact in an <code>f64</code>)</li>
+						<li>No type is invented: <code>i32</code> with <code>u32</code>, or <code>i64</code> with <code>f64</code>, has no peer and is a compile error asking for a cast</li>
+						<li>An untyped constant takes the concrete operand's type, and must fit it</li>
+						<li><code>^mut T</code> with <code>^T</code> is <code>^T</code>, <code>nullptr</code> takes the pointer's type, and arrays of different lengths meet as a slice of their element</li>
+						<li>An arm that leaves (<code>return</code>, <code>break</code>, a <code>noreturn</code> call) takes no part, and a shift keeps its left operand's type</li>
+						<li><code>{ "@TypeOf(a, b, ...)" }</code> names the peer type without evaluating anything</li>
+					</ul>
+				</li>
 				<li>Only the C-ABI widths (<code>i8/16/32/64</code>, <code>u8/16/32/64</code>) may cross an <code>extern</code> boundary</li>
 			</ul>
 		</li>
 		<li><code>isize</code> / <code>usize</code>: Platform-width signed/unsigned integers equivalent to <code>ptrdiff_t</code> / <code>size_t</code> (64-bit on 64-bit targets), written with the <code>z</code> / <code>uz</code> suffix</li>
 		<li>
-			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>constexpr_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
+			C types, for talking to C: <code>c_char</code>, <code>c_short</code>, <code>c_ushort</code>, <code>c_int</code>, <code>c_uint</code>, <code>c_long</code>, <code>c_ulong</code>, <code>c_longlong</code>, <code>c_ulonglong</code>, and <code>c_longdouble</code>
+			<ul>
+				<li>Each is sized and signed as the target's C ABI says: <code>c_long</code> is 32-bit on Windows and 32-bit targets and 64-bit elsewhere, <code>c_char</code> is unsigned on ARM and RISC-V Linux, and <code>c_longdouble</code> is an <code>f80</code> on x86, an <code>f128</code> on most other 64-bit targets, and an <code>f64</code> on Apple, Windows, and 32-bit ARM</li>
+				<li>Each is its own type: <code>c_int</code> is not <code>i32</code>, and a <code>^c_int</code> doesn't convert to a <code>^i32</code></li>
+				<li>A value converts implicitly between a C type and another integer (or float) type only where every value fits on the target, so <code>c_int</code> to <code>i32</code> works everywhere while <code>c_long</code> to <code>i32</code> works only where <code>c_long</code> is 32-bit</li>
+				<li>Arithmetic follows ghoti's rules, not C's integer promotions</li>
+			</ul>
+		</li>
+		<li>
+			An <em>unsuffixed</em> integer literal (e.g. <code>42</code>) has type <code>comptime_int</code>: compile-time known, coercible to any concrete numeric type it fits, materializing as <code>i32</code> when left un-anchored
 		</li>
 		<li>
 			<code>u8</code> doubles as the character/byte type &mdash; a character literal such as <code>'a'</code> has type <code>u8</code>
@@ -190,12 +275,18 @@ a.b;   // Syntactic sugar
 		<li><code>f16</code>: IEEE-754 binary16 (half), written with the <code>f16</code> suffix</li>
 		<li><code>f32</code>: IEEE-754 binary32 (single), written with the <code>f32</code> suffix</li>
 		<li><code>f64</code>: IEEE-754 binary64 (double), written with the <code>f64</code> suffix or an unsuffixed real literal</li>
-		<li><code>f80</code>: x86 80-bit extended precision &mdash; available on x86 / x86-64 targets only; using it elsewhere is a compile error. Written with the <code>f80</code> suffix</li>
+		<li>
+			<code>f80</code>: x87 80-bit extended precision, written with the <code>f80</code> suffix
+			<ul>
+				<li>Native on x86 / x86-64. Elsewhere it is stored as an 80-bit integer, and its arithmetic, comparisons, and conversions call compiler_rt routines</li>
+				<li>Off x86 it has no C ABI, so <code>extern</code> declarations can't use it</li>
+			</ul>
+		</li>
 		<li><code>f128</code>: IEEE-754 binary128 (quad), written with the <code>f128</code> suffix</li>
 		<li>
-			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>constexpr_float</code>, materializing as <code>f64</code> when left un-anchored
+			An unsuffixed real literal (e.g. <code>3.14</code>) has type <code>comptime_float</code>, materializing as <code>f64</code> when left un-anchored
 			<ul>
-				<li><code>f80</code> and <code>f128</code> constant expressions are <em>not</em> folded at compile time (folding them at <code>f64</code> would silently lose precision); such expressions must be evaluated at runtime</li>
+				<li><code>f80</code> and <code>f128</code> constant expressions fold at compile time with their full precision, the same on every target</li>
 			</ul>
 		</li>
 	</ul>
@@ -207,12 +298,12 @@ a.b;   // Syntactic sugar
 	<h2>Special Types</h2>
 	<ul>
 		<li>
-			<code>constexpr_int</code> / <code>constexpr_float</code>: The type of an unsuffixed integer / real literal and of pure constexpr arithmetic over them
+			<code>comptime_int</code> / <code>comptime_float</code>: The type of an unsuffixed integer / real literal and of pure compile-time arithmetic over them
 			<ul>
-				<li>Compile-time known; folds at 128-bit (int) / <code>f64</code> (float) precision</li>
-				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>constexpr_int</code> is a compile error, not a silent wrap</li>
-				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>var</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> keeps the constexpr type</li>
-				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@typeOf" }</code> of an unsuffixed literal yields</li>
+				<li>Compile-time known; a <code>comptime_int</code> is exact at any size (up to 2<sup>24</sup> bits, past which a runaway shift is an error), and a <code>comptime_float</code> folds at <code>f64</code> precision</li>
+				<li>Coerces implicitly to any concrete numeric type it fits &mdash; an out-of-range <code>comptime_int</code> is a compile error, not a silent wrap</li>
+				<li>Materializes as <code>i32</code> / <code>f64</code> at a <code>let mut</code> binding, a generic / <code>auto</code> parameter, an inferred return type, a struct field, or any un-anchored runtime use; an un-annotated <code>const</code> or <code>let</code> keeps the <code>comptime_int</code> type</li>
+				<li>Spellable in type position &mdash; mainly to alias what <code>{ "@TypeOf" }</code> of an unsuffixed literal yields</li>
 			</ul>
 		</li>
 		<li>
@@ -226,7 +317,7 @@ a.b;   // Syntactic sugar
 			<ul>
 				<li>This is restricted to values and cannot be used to represent a type, see the <code>type</code> type</li>
 				<li>This is valid for parameters and for the return type</li>
-				<li>It can also be used in declarations, but this behaves the same as the walrus (<code>:=</code>) inference operator</li>
+				<li>It can also be used in declarations, but this behaves the same as leaving the type annotation out</li>
 			</ul>
 		</li>
 		<li>

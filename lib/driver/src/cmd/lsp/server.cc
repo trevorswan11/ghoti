@@ -1,23 +1,34 @@
 #include "driver/cmd/lsp/server.hh"
 
+#include <algorithm>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <nlohmann/json.hpp>
+#include <stdx/function.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/primitive.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/declaration.hh"
 #include "compiler/sema/type.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/lsp/code_actions.hh"
@@ -25,11 +36,14 @@
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/document_symbols.hh"
+#include "driver/cmd/lsp/event_queue.hh"
 #include "driver/cmd/lsp/formatting.hh"
 #include "driver/cmd/lsp/position_index.hh"
 #include "driver/cmd/lsp/references.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "driver/cmd/lsp/snapshot.hh"
 #include "driver/cmd/lsp/text_edit.hh"
+#include "driver/cmd/lsp/worker.hh"
 #include "driver/cmd/lsp/workspace_scan.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
@@ -39,8 +53,6 @@
 namespace ghoti::cmd {
 
 namespace {
-
-constexpr i32 METHOD_NOT_FOUND{-32'601};
 
 auto make_response(const nlohmann::json& id, nlohmann::json result) -> nlohmann::json {
     return {
@@ -73,8 +85,23 @@ auto make_notification(std::string_view method, nlohmann::json params) -> nlohma
     };
 }
 
-auto position_from(const nlohmann::json& position) -> source_location {
-    return {position.at("line").get<usize>(), position.at("character").get<usize>()};
+// The text a location in another file is measured against
+auto text_at(lsp::analysis_snapshot& snap, const std::filesystem::path& path) -> std::string {
+    return snap.text_of(path).value_or(std::string{});
+}
+
+// UTF-8 when the client offers it, since compiler locations already count bytes
+auto negotiate_position_encoding(const nlohmann::json& params) -> lsp::position_encoding {
+    // Assigned, since brace-initializing a json wraps it in an array
+    const nlohmann::json offered = params.value("capabilities", nlohmann::json::object())
+                                       .value("general", nlohmann::json::object())
+                                       .value("positionEncodings", nlohmann::json::array());
+    for (const auto& encoding : offered) {
+        if (encoding.is_string() && encoding.get<std::string>() == "utf-8") {
+            return lsp::position_encoding::UTF8;
+        }
+    }
+    return lsp::position_encoding::UTF16;
 }
 
 auto write_null_id(const nlohmann::json& message) -> void {
@@ -84,10 +111,10 @@ auto write_null_id(const nlohmann::json& message) -> void {
 // The `///` doc for whatever `id` resolves to (following go-to-definition across modules),
 // falling back to an imported module's `//!` doc when `id` is an import alias.
 auto doc_comment_for(const mod::module_manager& manager,
-                     const mod::module&         entry,
+                     const mod::module_t&       entry,
                      ast::node_id               id,
                      stdx::option<sema::type&>  type) -> stdx::option<std::string> {
-    const auto lookup{[&](const mod::module& mod, source_span span) -> stdx::option<std::string> {
+    const auto lookup{[&](const mod::module_t& mod, source_span span) -> stdx::option<std::string> {
         if (const auto doc{mod.ast.doc_for(span)}) { return std::string{*doc}; }
         return stdx::none;
     }};
@@ -96,6 +123,10 @@ auto doc_comment_for(const mod::module_manager& manager,
         for (const auto& [path, mod] : manager) {
             if (path == def->path) { return lookup(*mod, def->span); }
         }
+        // The compiler-provided `builtin` module lives outside the module table
+        if (manager.has_builtin_module() && manager.builtin_module().path == def->path) {
+            return lookup(manager.builtin_module(), def->span);
+        }
         return lookup(entry, def->span);
     }
 
@@ -103,7 +134,7 @@ auto doc_comment_for(const mod::module_manager& manager,
         return own;
     }
     if (type) {
-        if (const auto mod_type{type->get_data().as_opt<sema::types::module>()}) {
+        if (const auto mod_type{type->get_data().as_opt<sema::types::module_t>()}) {
             if (const auto md{mod_type->imported.ast.module_doc()}; !md.empty()) {
                 return std::string{md};
             }
@@ -112,20 +143,159 @@ auto doc_comment_for(const mod::module_manager& manager,
     return stdx::none;
 }
 
+// An attribute's signature and summary when `target` is on its name inside an `@[...]` list
+auto attribute_hover(const mod::module_t& entry, source_location target)
+    -> stdx::option<nlohmann::json> {
+    const auto context{lsp::attribute_context_at(std::string_view{entry.source}, target)};
+    if (!context || context->in_args_of || context->after_dot) { return stdx::none; }
+    const auto spec{ast::attribute_spec_of(context->word)};
+    if (!spec) { return stdx::none; }
+
+    nlohmann::json hover;
+    hover["contents"]["kind"] = "markdown";
+    hover["contents"]["value"] =
+        fmt::format("```ghoti\n@[{}]\n```\n\n---\n\n{}", spec->signature, spec->doc);
+    return hover;
+}
+
+// `**Deprecated**: <message>` when `id` refers to a `@[deprecated]` declaration
+auto deprecation_note_for(const mod::module_t& entry, ast::node_id id)
+    -> stdx::option<std::string> {
+    const auto declaration{entry.get_identifier_declaration(id)};
+    if (!declaration || !declaration->owner || !declaration->decl) { return stdx::none; }
+    const auto& owner{*declaration->owner};
+    const auto  decl{owner.ast.get_as_opt<ast::decl_stmt>(*declaration->decl)};
+    if (!decl || !decl->attributes) { return stdx::none; }
+    const auto deprecation{decl->attributes->find(ast::attribute_kind::DEPRECATED)};
+    if (!deprecation) { return stdx::none; }
+    if (deprecation->args.empty()) { return std::string{"**Deprecated**"}; }
+    const auto message{owner.ast.get_as_opt<ast::string_expr>(deprecation->args.front())};
+    return fmt::format("**Deprecated**: {}", message ? message->value : std::string_view{});
+}
+
+// The declared parameters of the callable `id` refers to (or declares)
+auto callable_params_for(const mod::module_t& entry, ast::node_id id)
+    -> stdx::option<std::vector<sema::callable_param>> {
+    const auto declaration{entry.get_identifier_declaration(id)};
+    if (!declaration) { return stdx::none; }
+    return sema::callable_params(*declaration);
+}
+
+// `fn(a: i32, b: i32 = a * 2): i32`, naming each parameter (and its default) when the declaration
+// wrote the names down
+auto render_hover_type(const sema::type&                                      type,
+                       const stdx::option<std::vector<sema::callable_param>>& names)
+    -> std::string {
+    const sema::type* target{&type};
+    std::string_view  prefix;
+    if (const auto p{type.get_data().as_opt<sema::types::pointer>()}) {
+        prefix = "^";
+        target = &p->underlying;
+    }
+    if (const auto cl{target->get_data().as_opt<sema::types::closure_t>()}) {
+        target = &cl->signature;
+    }
+    const auto fn{target->get_data().as_opt<sema::types::function>()};
+    if (!fn || !names || names->size() != fn->params.size()) { return type.to_string(); }
+
+    std::vector<std::string> params;
+    for (usize i{0}; i < fn->params.size(); ++i) {
+        const auto& param{(*names)[i]};
+        params.emplace_back(fmt::format("{}: {}{}{}",
+                                        param.name,
+                                        fn->params[i]->to_string(),
+                                        param.default_value.empty() ? "" : " = ",
+                                        param.default_value));
+    }
+    if (fn->is_variadic) { params.emplace_back("..."); }
+    return fmt::format(
+        "{}fn({}): {}", prefix, fmt::join(params, ", "), fn->return_type.to_string());
+}
+
+// The id of a request, absent for a notification
+auto request_id(const nlohmann::json& message) -> stdx::option<nlohmann::json> {
+    if (!message.is_object() || !message.contains("id") || !message.contains("method")) {
+        return stdx::none;
+    }
+    return message["id"];
+}
+
+// Requests answered from an analysis, which must cover the text as it was when they arrived
+auto is_analysis_query(std::string_view method) -> bool {
+    return method == "textDocument/hover" || method == "textDocument/definition" ||
+           method == "textDocument/documentSymbol" || method == "workspace/symbol" ||
+           method == "textDocument/completion" || method == "textDocument/references" ||
+           method == "textDocument/rename";
+}
+
+auto write_cancelled(const nlohmann::json& id) -> void {
+    lsp::write_message(std::cout, make_error_response(id, REQUEST_CANCELLED, "request cancelled"));
+}
+
+auto is_exit(const nlohmann::json& message) -> bool {
+    return message.is_object() && message.value("method", nlohmann::json{}) == "exit";
+}
+
+// The ids every `$/cancelRequest` in `batch` names
+auto cancelled_request_ids(const std::vector<lsp::server_event>& batch)
+    -> std::vector<nlohmann::json> {
+    std::vector<nlohmann::json> ids;
+    for (const auto& event : batch) {
+        const auto message{event.as_opt<lsp::inbound_message>()};
+        if (!message || !*message || !(*message)->is_object() ||
+            (*message)->value("method", nlohmann::json{}) != "$/cancelRequest") {
+            continue;
+        }
+        const auto& params{(*message)->value("params", nlohmann::json::object())};
+        if (const auto id{params.find("id")}; id != params.end()) { ids.emplace_back(*id); }
+    }
+    return ids;
+}
+
 } // namespace
+
+// Everything one run of the server owns, torn down in reverse: the worker stops before the store
+// and the queue it reports into go away
+struct lsp_server::state {
+    lsp::event_queue<lsp::server_event> events;
+    lsp::document_store                 store;
+    lsp::analysis_worker                worker;
+
+    explicit state(std::ostream& error_stream)
+        : store{error_stream}, worker{error_stream, [this](stdx::box<lsp::analysis_snapshot> done) {
+                                          events.push(std::move(done));
+                                      }} {}
+};
 
 auto lsp_server::execute() -> stdx::result<void, clap::error> {
 #if GHOTI_WINDOWS
     win32::set_binary_stdio();
 #endif
 
-    lsp::document_store store{error_stream_, throttle_interval_};
-    while (auto message{lsp::read_message(std::cin, error_stream_)}) {
-        try {
-            if (!handle_message(*message, store)) { break; }
-        } catch (const std::exception& ex) {
-            fmt::println(error_stream_, "lsp: error handling message: {}", ex.what());
+    state server{error_stream_};
+    // The reader stops on its own after the last message the loop below acts on
+    const std::jthread reader{[&] {
+        while (true) {
+            auto       message{lsp::read_framed_message(std::cin, error_stream_)};
+            const auto last{message ? is_exit(*message)
+                                    : message.error() != lsp::read_failure::INVALID_JSON};
+            server.events.push(std::move(message));
+            if (last) { return; }
         }
+    }};
+
+    while (true) {
+        auto first{rebuild_due_ ? server.events.pop_until(*rebuild_due_)
+                                : stdx::option<lsp::server_event>{server.events.pop()}};
+        if (!first) {
+            start_analysis(server);
+            continue;
+        }
+
+        std::vector<lsp::server_event> batch;
+        batch.emplace_back(std::move(*first));
+        while (auto next{server.events.try_pop()}) { batch.emplace_back(std::move(*next)); }
+        if (!handle_batch(std::move(batch), server)) { break; }
     }
 
     // Per the spec, `exit` without a prior `shutdown` should report a non-zero exit code
@@ -133,8 +303,58 @@ auto lsp_server::execute() -> stdx::result<void, clap::error> {
     return {};
 }
 
-auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_store& store) -> bool {
-    const auto method{message.value("method", std::string{})};
+auto lsp_server::handle_batch(std::vector<lsp::server_event> batch, state& server) -> bool {
+    const auto cancelled_ids{cancelled_request_ids(batch)};
+    for (auto& event : batch) {
+        if (auto snapshot{event.as_opt<stdx::box<lsp::analysis_snapshot>>()}) {
+            handle_finished_analysis(std::move(*snapshot), server);
+            continue;
+        }
+
+        auto& message{event.as<lsp::inbound_message>()};
+        if (!message) {
+            // A body that isn't JSON leaves the stream framed, so the client can keep going
+            if (message.error() != lsp::read_failure::INVALID_JSON) { return false; }
+            lsp::write_message(std::cout, make_error_response(nullptr, PARSE_ERROR, "parse error"));
+            continue;
+        }
+
+        if (const auto id{request_id(*message)};
+            id && std::ranges::find(cancelled_ids, *id) != cancelled_ids.end()) {
+            write_cancelled(*id);
+            continue;
+        }
+
+        bool keep_going{true};
+        guarded(*message, [&] { keep_going = handle_message(*message, server); });
+        if (!keep_going) { return false; }
+    }
+    return true;
+}
+
+auto lsp_server::guarded(const nlohmann::json& message, const stdx::function<void()>& handler)
+    -> void {
+    try {
+        handler();
+    } catch (const std::exception& ex) {
+        fmt::println(error_stream_, "lsp: error handling message: {}", ex.what());
+        if (const auto id{request_id(message)}) {
+            lsp::write_message(std::cout,
+                               make_error_response(*id, INTERNAL_ERROR, "internal error"));
+        }
+    }
+}
+
+auto lsp_server::handle_message(const nlohmann::json& message, state& server) -> bool {
+    // Anything but a request/notification object is an invalid request
+    if (!message.is_object() || !message.contains("method") || !message["method"].is_string()) {
+        // Assigned, since brace-initializing a json wraps it in an array
+        const nlohmann::json id =
+            message.is_object() && message.contains("id") ? message["id"] : nlohmann::json(nullptr);
+        lsp::write_message(std::cout, make_error_response(id, INVALID_REQUEST, "invalid request"));
+        return true;
+    }
+    const auto method{message["method"].get<std::string>()};
     if (method == "initialize") {
         handle_initialize(message);
     } else if (method == "shutdown") {
@@ -142,36 +362,102 @@ auto lsp_server::handle_message(const nlohmann::json& message, lsp::document_sto
     } else if (method == "exit") {
         return false;
     } else if (method == "initialized") {
-        handle_initialized(message, store);
+        handle_initialized(message, server);
     } else if (method == "textDocument/didOpen") {
-        handle_did_open(message, store);
+        handle_did_open(message, server);
     } else if (method == "textDocument/didChange") {
-        handle_did_change(message, store);
+        handle_did_change(message, server);
     } else if (method == "textDocument/didClose") {
-        handle_did_close(message, store);
-    } else if (method == "textDocument/hover") {
-        handle_hover(message, store);
-    } else if (method == "textDocument/definition") {
-        handle_definition(message, store);
-    } else if (method == "textDocument/documentSymbol") {
-        handle_document_symbol(message, store);
-    } else if (method == "workspace/symbol") {
-        handle_workspace_symbol(message, store);
-    } else if (method == "textDocument/completion") {
-        handle_completion(message, store);
+        handle_did_close(message, server);
+    } else if (method == "$/cancelRequest") {
+        handle_cancel_request(message);
     } else if (method == "textDocument/codeAction") {
-        handle_code_action(message, store);
-    } else if (method == "textDocument/references") {
-        handle_references(message, store);
-    } else if (method == "textDocument/rename") {
-        handle_rename(message, store);
+        handle_code_action(message);
     } else if (method == "textDocument/formatting") {
-        handle_formatting(message, store);
+        handle_formatting(message, server.store);
+    } else if (is_analysis_query(method)) {
+        // Answered against the analysis of the text as it is now, once there is one
+        if (auto snapshot{server.store.snapshot()}; snapshot && server.store.is_current()) {
+            answer_query(message, *snapshot);
+        } else {
+            parked_queries_.emplace_back(message, server.store.revision());
+            start_analysis(server);
+        }
     } else if (message.contains("id")) {
         lsp::write_message(
             std::cout, make_error_response(message["id"], METHOD_NOT_FOUND, "method not found"));
     }
     return true;
+}
+
+auto lsp_server::answer_query(const nlohmann::json& message, lsp::analysis_snapshot& snap) -> void {
+    const auto method{message["method"].get<std::string>()};
+    if (method == "textDocument/hover") {
+        handle_hover(message, snap);
+    } else if (method == "textDocument/definition") {
+        handle_definition(message, snap);
+    } else if (method == "textDocument/documentSymbol") {
+        handle_document_symbol(message, snap);
+    } else if (method == "workspace/symbol") {
+        handle_workspace_symbol(message, snap);
+    } else if (method == "textDocument/completion") {
+        handle_completion(message, snap);
+    } else if (method == "textDocument/references") {
+        handle_references(message, snap);
+    } else if (method == "textDocument/rename") {
+        handle_rename(message, snap);
+    }
+}
+
+auto lsp_server::handle_finished_analysis(stdx::box<lsp::analysis_snapshot> snapshot, state& server)
+    -> void {
+    server.store.install(std::move(snapshot));
+    publish_pending_diagnostics(server.store);
+
+    // Diagnostics go first, so a query waiting on this analysis sees the client already has them
+    auto installed{server.store.snapshot()};
+    if (!installed) { return; }
+    std::erase_if(parked_queries_, [&](const parked_query& query) {
+        if (query.revision > installed->revision()) { return false; }
+        guarded(query.message, [&] { answer_query(query.message, *installed); });
+        return true;
+    });
+    if (!parked_queries_.empty()) { start_analysis(server); }
+}
+
+auto lsp_server::handle_cancel_request(const nlohmann::json& message) -> void {
+    const auto& params{message.value("params", nlohmann::json::object())};
+    const auto  id{params.find("id")};
+    if (id == params.end()) { return; }
+
+    // A request already answered has nothing left to cancel
+    std::erase_if(parked_queries_, [&](const parked_query& query) {
+        if (query.message.value("id", nlohmann::json{}) != *id) { return false; }
+        write_cancelled(*id);
+        return true;
+    });
+}
+
+auto lsp_server::note_edit(state& server) -> void {
+    // Whatever is underway analyzes text the editor no longer has
+    server.worker.cancel();
+    analyzing_revision_ = stdx::none;
+    // A waiting query shouldn't also wait out the debounce
+    if (!parked_queries_.empty() || debounce_interval_.count() == 0) {
+        start_analysis(server);
+    } else {
+        rebuild_due_ = std::chrono::steady_clock::now() + debounce_interval_;
+    }
+}
+
+auto lsp_server::start_analysis(state& server) -> void {
+    rebuild_due_ = stdx::none;
+    const auto revision{server.store.revision()};
+    if (server.store.is_current() || (analyzing_revision_ && *analyzing_revision_ == revision)) {
+        return;
+    }
+    server.worker.schedule(server.store.inputs());
+    analyzing_revision_ = revision;
 }
 
 auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
@@ -195,7 +481,10 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
         }
     }
 
+    const auto encoding{negotiate_position_encoding(params)};
+    lsp::set_position_encoding(encoding);
     const nlohmann::json capabilities{
+        {"positionEncoding", lsp::position_encoding_name(encoding)},
         {"textDocumentSync", std::to_underlying(lsp::document_sync_kind::INCREMENTAL)},
         {"hoverProvider", true},
         {"definitionProvider", true},
@@ -216,14 +505,12 @@ auto lsp_server::handle_initialize(const nlohmann::json& message) -> void {
                                      }));
 }
 
-auto lsp_server::handle_initialized(const nlohmann::json&, lsp::document_store& store) -> void {
+auto lsp_server::handle_initialized(const nlohmann::json&, state& server) -> void {
     if (workspace_roots_.empty()) { return; }
 
-    const auto discovered{
-        lsp::discover_workspace_files(workspace_roots_, workspace_excludes_, workspace_file_cap_)};
-    for (auto& [touched_path, diagnostics] : store.seed_known_roots(discovered)) {
-        publish_diagnostics(touched_path, diagnostics);
-    }
+    server.store.add_known_roots(
+        lsp::discover_workspace_files(workspace_roots_, workspace_excludes_, workspace_file_cap_));
+    note_edit(server);
 }
 
 auto lsp_server::handle_shutdown(const nlohmann::json& message) -> void {
@@ -231,59 +518,64 @@ auto lsp_server::handle_shutdown(const nlohmann::json& message) -> void {
     write_null_id(message);
 }
 
-auto lsp_server::handle_did_open(const nlohmann::json& message, lsp::document_store& store)
-    -> void {
+auto lsp_server::handle_did_open(const nlohmann::json& message, state& server) -> void {
     const auto& doc{message.at("params").at("textDocument")};
     const auto  path{path_utils::uri_to_path(doc.at("uri").get<std::string>())};
     if (!path) { return; }
 
-    for (auto& [touched_path, diagnostics] :
-         store.update(*path, doc.at("text").get<std::string>())) {
-        publish_diagnostics(touched_path, diagnostics);
-    }
+    server.store.edit(*path, doc.at("text").get<std::string>());
+    note_edit(server);
 }
 
-auto lsp_server::handle_did_change(const nlohmann::json& message, lsp::document_store& store)
-    -> void {
+auto lsp_server::handle_did_change(const nlohmann::json& message, state& server) -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     const auto& changes{params.at("contentChanges")};
     if (!path || changes.empty()) { return; }
 
-    auto text{lsp::apply_content_changes(store.text_of(*path).value_or(std::string{}), changes)};
-    for (const auto& [touched_path, diagnostics] : store.update_throttled(*path, std::move(text))) {
-        publish_diagnostics(touched_path, diagnostics);
+    auto text{
+        lsp::apply_content_changes(server.store.text_of(*path).value_or(std::string{}), changes)};
+    server.store.edit(*path, std::move(text));
+    note_edit(server);
+}
+
+auto lsp_server::handle_did_close(const nlohmann::json& message, state& server) -> void {
+    const auto uri{message.at("params").at("textDocument").at("uri").get<std::string>()};
+    if (const auto path{path_utils::uri_to_path(uri)}) {
+        server.store.close(*path);
+        note_edit(server);
     }
 }
 
-auto lsp_server::handle_did_close(const nlohmann::json& message, lsp::document_store& store)
-    -> void {
-    const auto uri{message.at("params").at("textDocument").at("uri").get<std::string>()};
-    if (const auto path{path_utils::uri_to_path(uri)}) { store.close(*path); }
-}
-
-auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store& store) -> void {
+auto lsp_server::handle_hover(const nlohmann::json& message, lsp::analysis_snapshot& snap) -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
+    const auto target{lsp::source_position(module->source, params.at("position"))};
 
-    const auto& entry_module{**result};
-    const auto  id{lsp::identifier_at(entry_module, target)};
+    const auto& entry_module{*module};
+    if (auto attribute{attribute_hover(entry_module, target)}) {
+        return lsp::write_message(std::cout,
+                                  make_response(message.at("id"), std::move(*attribute)));
+    }
+    const auto id{lsp::identifier_at(entry_module, target)};
     if (!id) { return write_null_id(message); }
 
     const auto type{entry_module.get_sema_type_opt(*id)};
     if (!type) { return write_null_id(message); }
 
-    const auto doc{doc_comment_for(store.manager(), entry_module, *id, type)};
+    auto doc{doc_comment_for(snap.manager(), entry_module, *id, type)};
+    if (const auto note{deprecation_note_for(entry_module, *id)}) {
+        doc = doc ? fmt::format("{}\n\n{}", *note, *doc) : *note;
+    }
+    const auto rendered{render_hover_type(*type, callable_params_for(entry_module, *id))};
 
-    std::string signature{type->to_string()};
+    std::string signature{rendered};
     if (const auto ident{entry_module.ast.get_as_opt<ast::identifier_expr>(*id)};
         ident && !ident->name.empty()) {
         signature = fmt::format("{}: {}", ident->name, signature);
@@ -292,73 +584,70 @@ auto lsp_server::handle_hover(const nlohmann::json& message, lsp::document_store
     nlohmann::json hover;
     hover["contents"]["kind"] = doc ? "markdown" : "plaintext";
     hover["contents"]["value"] =
-        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", signature, *doc) : type->to_string();
+        doc ? fmt::format("```ghoti\n{}\n```\n\n---\n\n{}", signature, *doc) : rendered;
 
     lsp::write_message(std::cout, make_response(message.at("id"), std::move(hover)));
 }
 
-auto lsp_server::handle_definition(const nlohmann::json& message, lsp::document_store& store)
+auto lsp_server::handle_definition(const nlohmann::json& message, lsp::analysis_snapshot& snap)
     -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
+    const auto target{lsp::source_position(module->source, params.at("position"))};
 
-    const auto& entry_module{**result};
+    const auto& entry_module{*module};
     const auto  def_loc{lsp::definition_location_at(entry_module, target)};
     if (!def_loc) { return write_null_id(message); }
 
-    lsp::write_message(std::cout,
-                       make_response(message.at("id"),
-                                     {
-                                         {"uri", path_utils::path_to_uri(def_loc->path)},
-                                         {"range", lsp::range_of(def_loc->span)},
-                                     }));
+    lsp::write_message(
+        std::cout,
+        make_response(message.at("id"),
+                      {
+                          {"uri", path_utils::path_to_uri(def_loc->path)},
+                          {"range", lsp::range_of(def_loc->span, text_at(snap, def_loc->path))},
+                      }));
 }
 
-auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::document_store& store)
+auto lsp_server::handle_document_symbol(const nlohmann::json& message, lsp::analysis_snapshot& snap)
     -> void {
     const auto path{path_utils::uri_to_path(
         message.at("params").at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    auto result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
 
-    lsp::write_message(std::cout, make_response(message.at("id"), lsp::document_symbols(**result)));
+    lsp::write_message(std::cout, make_response(message.at("id"), lsp::document_symbols(*module)));
 }
 
-auto lsp_server::handle_workspace_symbol(const nlohmann::json& message, lsp::document_store& store)
-    -> void {
+auto lsp_server::handle_workspace_symbol(const nlohmann::json&   message,
+                                         lsp::analysis_snapshot& snap) -> void {
     const auto query{message.at("params").value("query", std::string{})};
-    auto       symbols = store.workspace_symbols(query);
-    publish_pending_diagnostics(store);
+    auto       symbols = snap.workspace_symbols(query);
     lsp::write_message(std::cout, make_response(message.at("id"), std::move(symbols)));
 }
 
-auto lsp_server::handle_completion(const nlohmann::json& message, lsp::document_store& store)
+auto lsp_server::handle_completion(const nlohmann::json& message, lsp::analysis_snapshot& snap)
     -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
+    const auto target{lsp::source_position(module->source, params.at("position"))};
 
     lsp::write_message(std::cout,
-                       make_response(message.at("id"), lsp::completion_items(**result, target)));
+                       make_response(message.at("id"), lsp::completion_items(*module, target)));
 }
 
-auto lsp_server::handle_code_action(const nlohmann::json& message, lsp::document_store&) -> void {
+auto lsp_server::handle_code_action(const nlohmann::json& message) -> void {
     const auto& params{message.at("params")};
     const auto  uri{params.at("textDocument").at("uri").get<std::string>()};
     const auto& diagnostics{params.at("context").at("diagnostics")};
@@ -367,19 +656,18 @@ auto lsp_server::handle_code_action(const nlohmann::json& message, lsp::document
                        make_response(message.at("id"), lsp::code_actions(uri, diagnostics)));
 }
 
-auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_store& store)
+auto lsp_server::handle_references(const nlohmann::json& message, lsp::analysis_snapshot& snap)
     -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
+    const auto target{lsp::source_position(module->source, params.at("position"))};
 
-    const auto& entry_module{**result};
+    const auto& entry_module{*module};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
@@ -388,31 +676,32 @@ auto lsp_server::handle_references(const nlohmann::json& message, lsp::document_
 
     auto locations = nlohmann::json::array();
     if (include_declaration) {
-        locations.push_back({{"uri", path_utils::path_to_uri(definition->path)},
-                             {"range", lsp::range_of(definition->span)}});
+        locations.push_back(
+            {{"uri", path_utils::path_to_uri(definition->path)},
+             {"range", lsp::range_of(definition->span, text_at(snap, definition->path))}});
     }
-    for (const auto& ref : lsp::find_references(store.manager(), *definition)) {
+    for (const auto& ref : lsp::find_references(snap.manager(), *definition)) {
         locations.push_back({
             {"uri", path_utils::path_to_uri(ref.path)},
-            {"range", lsp::range_of(ref.span)},
+            {"range", lsp::range_of(ref.span, text_at(snap, ref.path))},
         });
     }
 
     lsp::write_message(std::cout, make_response(message.at("id"), locations));
 }
 
-auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_store& store) -> void {
+auto lsp_server::handle_rename(const nlohmann::json& message, lsp::analysis_snapshot& snap)
+    -> void {
     const auto& params{message.at("params")};
     const auto  path{
         path_utils::uri_to_path(params.at("textDocument").at("uri").get<std::string>())};
     if (!path) { return write_null_id(message); }
 
-    const auto target{position_from(params.at("position"))};
-    auto       result{store.analyze(*path)};
-    publish_pending_diagnostics(store);
-    if (!result) { return write_null_id(message); }
+    const auto module{snap.module_of(*path)};
+    if (!module) { return write_null_id(message); }
+    const auto target{lsp::source_position(module->source, params.at("position"))};
 
-    const auto& entry_module{**result};
+    const auto& entry_module{*module};
     const auto  definition{lsp::definition_location_at(entry_module, target)};
     if (!definition) { return write_null_id(message); }
 
@@ -424,13 +713,13 @@ auto lsp_server::handle_rename(const nlohmann::json& message, lsp::document_stor
         auto& edits = edits_by_uri[path_utils::path_to_uri(loc.path)];
         if (!edits.is_array()) { edits = nlohmann::json::array(); }
         edits.push_back({
-            {"range", lsp::range_of(loc.span)},
+            {"range", lsp::range_of(loc.span, text_at(snap, loc.path))},
             {"newText", new_name},
         });
     };
 
     add_edit(*definition);
-    for (const auto& ref : lsp::find_references(store.manager(), *definition)) { add_edit(ref); }
+    for (const auto& ref : lsp::find_references(snap.manager(), *definition)) { add_edit(ref); }
 
     auto changes = nlohmann::json::object();
     for (auto& [uri, edits] : edits_by_uri) { changes[uri] = std::move(edits); }

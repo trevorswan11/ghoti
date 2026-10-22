@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/statement.hh"
 #include "compiler/gir/const_eval.hh"
@@ -11,6 +12,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 #include "support/test.hh"
 
@@ -36,23 +38,23 @@ TEST_CASE("Primitive literal constant eval") {
     const auto [sym_c, _c, decl_c, type_c]{
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("c", idx)};
     const auto val_c{UNWRAP(evaluator.try_eval(*decl_c.value))};
-    CHECK(UNWRAP(val_c.as_opt<f64>()) == 3.14);
+    CHECK(UNWRAP(val_c.as_opt<f128>()).to_f64() == 3.14);
 }
 
 TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const add := 2 + 3;
-        const sub := 10 - 4;
-        const mul := 10 * 3;
-        const div := 10 / 2;
-        const mod := 10 % 3;
-        const neg := -(-3);
-        const shl := 1 << 4;
-        const shr := 16 >> 2;
-        const band := 10 & 12;
-        const bor := 10 | 5;
-        const bxor := 10 ^ 12;
-        const bnot := ~0;
+        const add = 2 + 3;
+        const sub = 10 - 4;
+        const mul = 10 * 3;
+        const div = 10 / 2;
+        const mod = 10 % 3;
+        const neg = -(-3);
+        const shl = 1 << 4;
+        const shr = 16 >> 2;
+        const band = 10 & 12;
+        const bor = 10 | 5;
+        const bxor = 10 ^ 12;
+        const bnot = ~0;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -79,13 +81,13 @@ TEST_CASE("Integer arithmetic and bitwise folding constant eval") {
 
 TEST_CASE("Boolean logic and comparisons constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const t_and := true and false;
-        const t_or := true or false;
-        const t_not := !true;
-        const t_gt := 5 > 3;
-        const t_lt := 5 < 3;
-        const t_eq := 5 == 5;
-        const t_neq := 5 != 4;
+        const t_and = true and false;
+        const t_or = true or false;
+        const t_not = !true;
+        const t_gt = 5 > 3;
+        const t_lt = 5 < 3;
+        const t_eq = 5 == 5;
+        const t_neq = 5 != 4;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -107,15 +109,15 @@ TEST_CASE("Boolean logic and comparisons constant eval") {
 
 TEST_CASE("Compile-time builtins constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const sz_u8 := @sizeOf(u8);
-        const sz_u32 := @sizeOf(u32);
-        const sz_u64 := @sizeOf(u64);
-        const sz_arr := @sizeOf([4]u8);
-        const al_u32 := @alignOf(u32);
-        const al_u64 := @alignOf(u64);
-        const v_abs := @abs(-42);
-        const v_clz := @clz(1);
-        const v_pop := @popCount(7);
+        const sz_u8 = @sizeOf(u8);
+        const sz_u32 = @sizeOf(u32);
+        const sz_u64 = @sizeOf(u64);
+        const sz_arr = @sizeOf([4]u8);
+        const al_u32 = @alignOf(u32);
+        const al_u64 = @alignOf(u64);
+        const v_abs = @abs(-42);
+        const v_clz = @clz(1);
+        const v_pop = @popCount(7);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -133,22 +135,22 @@ TEST_CASE("Compile-time builtins constant eval") {
     check_u64("al_u32", 4);
     check_u64("al_u64", 8);
     check_u64("v_abs", 42);
-    check_u64("v_clz", 63);
+    check_u64("v_clz", 31);
     check_u64("v_pop", 3);
 }
 
 TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer width") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const PtrHolder := struct {
+        const PtrHolder = struct {
             p: ^i32,
             n: u8,
         };
 
-        const sz_usize := @sizeOf(usize);
-        const al_usize := @alignOf(usize);
-        const sz_ptr := @sizeOf(^i32);
-        const sz_slice := @sizeOf([]u8);
-        const sz_struct := @sizeOf(PtrHolder);
+        const sz_usize = @sizeOf(usize);
+        const al_usize = @alignOf(usize);
+        const sz_ptr = @sizeOf(^i32);
+        const sz_slice = @sizeOf([]u8);
+        const sz_struct = @sizeOf(PtrHolder);
     )")};
 
     const auto check_u64 = [&](std::string_view name, u64 expected) {
@@ -176,13 +178,13 @@ TEST_CASE("sizeOf/alignOf of pointer-width types follow the target's pointer wid
 
 TEST_CASE("Target builtins constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const os_name := @targetOs();
-        const arch_name := @targetArch();
-        const triple_name := @targetTriple();
-        const abi_name := @targetAbi();
-        const family_name := @targetFamily();
-        const endian_name := @targetEndian();
-        const ptr_bits := @targetPtrBits();
+        const os_name = @targetOs();
+        const arch_name = @targetArch();
+        const triple_name = @targetTriple();
+        const abi_name = @targetAbi();
+        const family_name = @targetFamily();
+        const endian_name = @targetEndian();
+        const ptr_bits = @targetPtrBits();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -213,16 +215,16 @@ TEST_CASE("Target builtins constant eval") {
     CHECK(os.find_first_of("0123456789") == std::string::npos);
 
     const auto bits_val{eval_of("ptr_bits")};
-    const auto bits{UNWRAP(bits_val.as_opt<u64>())};
+    const auto bits{UNWRAP(bits_val.as_opt<i64>())};
     CHECK((bits == 64 || bits == 32 || bits == 16));
 }
 
 TEST_CASE("Target enum comparison folds against a bare member") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const here  := @targetOs();
-        const eq    := @targetOs() == here;
-        const ne    := @targetArch() != @targetArch();
-        const probe := fn(o: builtin.Os): void {};
+        const here  = @targetOs();
+        const eq    = @targetOs() == here;
+        const ne    = @targetArch() != @targetArch();
+        const probe = fn(o: builtin.Os): void {};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -239,9 +241,9 @@ TEST_CASE("Target enum comparison folds against a bare member") {
 
 TEST_CASE("MulAdd and TagName constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const v_mul_add := @mulAdd(i32, 2, 3, 4);
-        const Color := enum { RED, GREEN, BLUE };
-        const tag := @tagName(Color.GREEN);
+        const v_mul_add = @mulAdd(i32, 2, 3, 4);
+        const Color = enum { RED, GREEN, BLUE };
+        const tag = @tagName(Color.GREEN);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -258,9 +260,9 @@ TEST_CASE("MulAdd and TagName constant eval") {
 
 TEST_CASE("Const symbol reference propagation constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const N := 4;
-        const M := N * 2;
-        const K := M + N;
+        const N = 4;
+        const M = N * 2;
+        const K = M + N;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -277,7 +279,7 @@ TEST_CASE("Const symbol reference propagation constant eval") {
 
 TEST_CASE("Array dimension resolution constant eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const N := 4;
+        const N = 4;
         const a: [N * 2]u8 = [8]u8{1, 2, 3, 4, 5, 6, 7, 8};
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
@@ -297,19 +299,19 @@ TEST_CASE("Array dimension resolution constant eval") {
 
 TEST_CASE("Const eval function evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr add := fn(a: i32, b: i32): i32 {
-            const sum := a + b;
+        const add = fn(a: i32, b: i32): i32 {
+            let sum = a + b;
             return sum;
         };
-        constexpr max_val := fn(a: i32, b: i32): i32 {
+        const max_val = fn(a: i32, b: i32): i32 {
             if (a > b) {
                 return a;
             } else {
                 return b;
             }
         };
-        const res_add := add(40, 2);
-        const res_max := max_val(100, 42);
+        const res_add = add(40, 2);
+        const res_max = max_val(100, 42);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -326,18 +328,18 @@ TEST_CASE("Const eval function evaluation") {
 
 TEST_CASE("Const eval variable mutation and loops") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr loop_sum := fn(n: i32): i32 {
-            var i := 1;
-            var sum := 0;
+        const loop_sum = fn(n: i32): i32 {
+            let mut i = 1;
+            let mut sum = 0;
             while (i <= n) {
                 sum += i;
                 i += 1;
             }
             return sum;
         };
-        constexpr collatz := fn(start: i32): i32 {
-            var n := start;
-            var steps := 0;
+        const collatz = fn(start: i32): i32 {
+            let mut n = start;
+            let mut steps = 0;
             while (n > 1) {
                 if (n % 2 == 0) {
                     n /= 2;
@@ -348,8 +350,8 @@ TEST_CASE("Const eval variable mutation and loops") {
             }
             return steps;
         };
-        const sum_10 := loop_sum(10);
-        const collatz_6 := collatz(6);
+        const sum_10 = loop_sum(10);
+        const collatz_6 = collatz(6);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -366,22 +368,22 @@ TEST_CASE("Const eval variable mutation and loops") {
 
 TEST_CASE("Const eval for loops over ranges and arrays") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr range_sum := fn(n: i32): i32 {
-            var sum := 0;
+        const range_sum = fn(n: i32): i32 {
+            let mut sum = 0;
             for (1..(n + 1)) |i| {
                 sum += i;
             }
             return sum;
         };
-        constexpr arr_sum := fn(): i32 {
-            var sum := 0;
+        const arr_sum = fn(): i32 {
+            let mut sum = 0;
             for (0..3, [_]i32{10, 20, 30}) |i, val| {
                 sum += val;
             }
             return sum;
         };
-        const r_sum_10 := range_sum(10);
-        const a_sum := arr_sum();
+        const r_sum_10 = range_sum(10);
+        const a_sum = arr_sum();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -398,9 +400,9 @@ TEST_CASE("Const eval for loops over ranges and arrays") {
 
 TEST_CASE("Array constant eval indexing") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const arr := [_]i32{10, 20, 30, 40};
-        const elem0 := arr[0];
-        const elem2 := arr[2];
+        const arr = [_]i32{10, 20, 30, 40};
+        const elem0 = arr[0];
+        const elem2 = arr[2];
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -417,10 +419,10 @@ TEST_CASE("Array constant eval indexing") {
 
 TEST_CASE("Struct member constant eval access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct { x: i32, y: i32 };
-        const pt := Point{ .x = 15, .y = 25 };
-        const px := pt.x;
-        const py := pt.y;
+        const Point = struct { x: i32, y: i32 };
+        const pt = Point{ .x = 15, .y = 25 };
+        const px = pt.x;
+        const py = pt.y;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -437,10 +439,10 @@ TEST_CASE("Struct member constant eval access") {
 
 TEST_CASE("Union constant eval active and inactive member access") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Payload := union { int_val: i32, float_val: f64 };
-        const u := Payload{ .int_val = 42 };
-        const active_val := u.int_val;
-        const inactive_val := u.float_val;
+        const Payload = union(enum) { int_val: i32, float_val: f64 };
+        const u = Payload{ .int_val = 42 };
+        const active_val = u.int_val;
+        const inactive_val = u.float_val;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -458,26 +460,26 @@ TEST_CASE("Union constant eval active and inactive member access") {
 
 TEST_CASE("Match constant eval expression evaluation") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr classify := fn(x: i32): i32 {
+        const classify = fn(x: i32): i32 {
             return match (x) {
                 0 => 100,
                 1 => 200,
                 _ => 300,
             };
         };
-        const Color := enum { RED, GREEN, BLUE };
-        constexpr color_code := fn(c: Color): i32 {
+        const Color = enum { RED, GREEN, BLUE };
+        const color_code = fn(c: Color): i32 {
             return match (c) {
                 .RED => 10,
                 .GREEN => 20,
                 .BLUE => 30,
             };
         };
-        const c0 := classify(0);
-        const c1 := classify(1);
-        const c99 := classify(99);
-        const code_red := color_code(Color.RED);
-        const code_blue := color_code(.BLUE);
+        const c0 = classify(0);
+        const c1 = classify(1);
+        const c99 = classify(99);
+        const code_red = color_code(Color.RED);
+        const code_blue = color_code(.BLUE);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -509,37 +511,36 @@ TEST_CASE("Match constant eval expression evaluation") {
 
 TEST_CASE("Resolve deferred call returning type") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const choose_type := fn(is_64: bool): type {
+        const choose_type = fn(is_64: bool): type {
             if (is_64) {
                 return i64;
             } else {
                 return i32;
             }
         };
-        using TypeA = choose_type(true);
-        using TypeB = choose_type(false);
+        const TypeA = choose_type(true);
+        const TypeB = choose_type(false);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
-    const auto [sym_a, _a, node_a, type_a]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeA", idx)};
-    CHECK(type_a.get_data().is<sema::types::deferred_call>());
+    // Each call stays deferred on its own node until it is forced
+    const auto [sym_a, _a, node_a]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeA", idx)};
+    auto& call_a{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_a.value))};
+    CHECK(call_a.get_data().is<sema::types::deferred_call>());
+    CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_a))) ==
+          "i64");
 
-    const auto [sym_b, _b, node_b, type_b]{
-        ctx->get_ast_type_sym_info<syms::node_t, ast::using_stmt>("TypeB", idx)};
-    CHECK(type_b.get_data().is<sema::types::deferred_call>());
-
-    evaluator.resolve_all_deferred_types();
-
-    const auto& resolved_a{UNWRAP(ctx->root_mod.get_sema_type_opt(node_a.explicit_type))};
-    CHECK(sema::type_kind_display_name(resolved_a) == "i64");
-
-    const auto& resolved_b{UNWRAP(ctx->root_mod.get_sema_type_opt(node_b.explicit_type))};
-    CHECK(sema::type_kind_display_name(resolved_b) == "i32");
+    const auto [sym_b, _b, node_b]{
+        ctx->get_ast_sym_info<syms::node_t, ast::decl_stmt>("TypeB", idx)};
+    auto& call_b{UNWRAP(ctx->root_mod.get_sema_type_opt(*node_b.value))};
+    CHECK(call_b.get_data().is<sema::types::deferred_call>());
+    CHECK(sema::type_kind_display_name(sema::denoted_type(evaluator.force_deferred_call(call_b))) ==
+          "i32");
 }
 
 TEST_CASE("Division by zero failure handling in constant eval") {
-    auto [ctx, idx]{helpers::resolve_and_check("const bad := 10 / 0;")};
+    auto [ctx, idx]{helpers::resolve_and_check("const bad = 10 / 0;")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
     const auto [sym, _, decl, type]{
@@ -551,14 +552,14 @@ TEST_CASE("Division by zero failure handling in constant eval") {
 
 TEST_CASE("Builtin const eval @This") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Node := struct {
+        const Node = struct {
             val: i32,
 
-            using Self = @This();
-            pub const bar := fn(s: &Self): i32 { return 0; };
+            const Self = @This();
+            pub const bar = fn(s: &Self): i32 { return 0; };
         };
-        const sz := @sizeOf(Node);
-        const al := @alignOf(Node);
+        const sz = @sizeOf(Node);
+        const al = @alignOf(Node);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -576,7 +577,7 @@ TEST_CASE("Builtin const eval @This") {
 TEST_CASE("Volatile variables refuse constant folding in const eval") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
         const v: volatile i32 = 42;
-        const read_v := v;
+        const read_v = v;
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -588,11 +589,11 @@ TEST_CASE("Volatile variables refuse constant folding in const eval") {
 
 TEST_CASE("Const eval string concatenation and comparison folding") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const greeting := "Hello, " + "world!";
-        const is_same := "ghoti" == "ghoti";
-        const is_diff := "ghoti" != "c";
-        const is_less := "apple" < "banana";
-        const char_idx := "ghoti"[1];
+        const greeting = "Hello, " + "world!";
+        const is_same = "ghoti" == "ghoti";
+        const is_diff = "ghoti" != "c";
+        const is_less = "apple" < "banana";
+        const char_idx = "ghoti"[1];
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -624,13 +625,13 @@ TEST_CASE("Const eval string concatenation and comparison folding") {
 
 TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        constexpr count_loop := fn(n: i32): i32 {
+        const count_loop = fn(n: i32): i32 {
             @setEvalRecursionLimit(10);
-            var i := 0;
+            let mut i = 0;
             while (i < n) { i += 1; }
             return i;
         };
-        const res := count_loop(5);
+        const res = count_loop(5);
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -640,9 +641,10 @@ TEST_CASE("Const eval @setEvalRecursionLimit in function scope") {
     CHECK(val_res.as_int_opt() == 5);
 }
 
-TEST_CASE("Const eval @setMainSymbol sets main symbol name") {
+TEST_CASE("Const eval folds @export to void and the resolver names the entry point") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const setup := @setMainSymbol("custom_entry");
+        const custom_entry = fn(): void {};
+        const setup = @export(custom_entry, .{ .name = "main" });
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -654,13 +656,13 @@ TEST_CASE("Const eval @setMainSymbol sets main symbol name") {
 
 TEST_CASE("Const eval folds method call on struct instance") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
-            pub const sum := fn(self): i32 { return self.x + self.y; };
+            pub const sum = fn(self): i32 { return self.x + self.y; };
         };
-        const pt := Point{ .x = 10, .y = 32 };
-        const res := pt.sum();
+        const pt = Point{ .x = 10, .y = 32 };
+        const res = pt.sum();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -672,12 +674,12 @@ TEST_CASE("Const eval folds method call on struct instance") {
 
 TEST_CASE("Const eval folds impl method call") {
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Rect := struct { w: i32, h: i32 };
+        const Rect = struct { w: i32, h: i32 };
         impl Rect {
-            pub const area := fn(self): i32 { return self.w * self.h; };
+            pub const area = fn(self): i32 { return self.w * self.h; };
         }
-        const r := Rect{ .w = 6, .h = 7 };
-        const a := r.area();
+        const r = Rect{ .w = 6, .h = 7 };
+        const a = r.area();
     )")};
     gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
 
@@ -685,6 +687,332 @@ TEST_CASE("Const eval folds impl method call") {
         ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
     const auto val_a{UNWRAP(evaluator.try_eval(*decl_a.value))};
     CHECK(val_a.as_int_opt() == 42);
+}
+
+TEST_CASE("unlabeled comptime block in statement position executes at compile time") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        pub const main = fn(): i32 {
+            comptime {
+                let a = 40;
+                let b = 2;
+                @assert(a + b == 42);
+            }
+            return 0;
+        };
+    )")};
+
+    // The comptime block must have produced zero instructions in GIR, leaving only the return
+    const auto gir_text{helpers::dump_named_fn(*ctx, "main")};
+    CHECK(gir_text.contains("ret i32 0"));
+    CHECK_FALSE(gir_text.contains("add i32"));
+}
+
+TEST_CASE("Const eval rejects reached unreachable code") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const bad = fn(): i32 {
+            unreachable;
+        };
+        const call_bad = bad();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("call_bad", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    CHECK_FALSE(val.has_value());
+
+    auto& diags{ctx->analyzer.get_ctx().diags};
+    REQUIRE_FALSE(diags.empty());
+    CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+}
+
+TEST_CASE("Const eval unreachable in conditional branches") {
+    SECTION("Dead branch with unreachable does not error") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const pick = fn(x: i32): i32 {
+                if (x == 0) {
+                    return 42;
+                } else {
+                    unreachable;
+                }
+            };
+            const a = pick(0);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("a", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        REQUIRE(val.has_value());
+        CHECK(val->as_int_opt() == 42);
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        CHECK(diags.empty());
+    }
+
+    SECTION("Taken branch with unreachable errors") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const pick = fn(x: i32): i32 {
+                if (x == 0) {
+                    return 42;
+                } else {
+                    unreachable;
+                }
+            };
+            const b = pick(1);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("b", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        CHECK_FALSE(val.has_value());
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        REQUIRE_FALSE(diags.empty());
+        CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+    }
+}
+
+TEST_CASE("Const eval unreachable in match expression") {
+    SECTION("Unreached catch-all arm does not error") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const dispatch = fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    1 => 20,
+                    _ => unreachable,
+                };
+            };
+            const res = dispatch(0);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        REQUIRE(val.has_value());
+        CHECK(val->as_int_opt() == 10);
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        CHECK(diags.empty());
+    }
+
+    SECTION("Reached unreachable arm errors") {
+        auto [ctx, idx]{helpers::resolve_and_check(R"(
+            const dispatch = fn(tag: i32): i32 {
+                return match (tag) {
+                    0 => 10,
+                    _ => unreachable,
+                };
+            };
+            const res = dispatch(99);
+        )")};
+        gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+        const auto [sym, _, decl, type]{
+            ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+        const auto val{evaluator.try_eval(*decl.value)};
+        CHECK_FALSE(val.has_value());
+
+        auto& diags{ctx->analyzer.get_ctx().diags};
+        REQUIRE_FALSE(diags.empty());
+        CHECK(diags[0].get_error() == sema::error::UNREACHABLE_CODE_REACHED);
+    }
+}
+
+TEST_CASE("`unroll for` iterating over `[]u8` parameter") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const parse_usize = fn(comptime digits: []u8): usize {
+            comptime let mut n: usize = 0;
+            unroll for (digits) |c| {
+                n = n * 10 + @intCast(usize, c - '0');
+            }
+            return n;
+        };
+        const res = parse_usize("12345");
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_uint_opt() == 12'345);
+}
+
+TEST_CASE("`loop` infinite loop expression in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const find_val = fn(): i32 {
+            comptime let mut i = 0;
+            loop {
+                i = i + 1;
+                if (i < 5) { continue; }
+                if (i == 5) { break; }
+            }
+            return i;
+        };
+        const res = find_val();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 5);
+}
+
+TEST_CASE("`defer` in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const test_defer = fn(): i32 {
+            comptime let mut x = 1;
+            {
+                defer x = x + 10;
+                x = x + 1;
+            }
+            return x;
+        };
+        const res = test_defer();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 12);
+}
+
+TEST_CASE("multiple `defer` statements in `const_eval` execute in LIFO order") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const test_order = fn(): i32 {
+            comptime let mut x = 0;
+            {
+                defer x = x * 10 + 1;
+                defer x = x * 10 + 2;
+                defer x = x * 10 + 3;
+                x = 4;
+            }
+            return x;
+        };
+        const res = test_order();
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("res", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 4'321);
+}
+
+TEST_CASE("`errdefer` in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+                return match (self) {
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
+                };
+            };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            const From = E;
+            pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
+        }
+
+        const R = Result(i32, i32);
+        const fail = fn(): R { return R{ .err = 42 }; };
+        const succeed = fn(): R { return R{ .ok = 100 }; };
+
+        comptime let mut err_log: i32 = 0;
+        const test_err = fn(): R {
+            errdefer |e| err_log = e;
+            let v = fail()?;
+            return R{ .ok = v };
+        };
+
+        const _dummy = test_err();
+        const final_log = err_log;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_d, _d, decl_d, type_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_dummy", idx)};
+    DISCARD(evaluator.try_eval(*decl_d.value));
+
+    const auto [sym, _, decl, type]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_log", idx)};
+    const auto val{evaluator.try_eval(*decl.value)};
+    REQUIRE(val.has_value());
+    CHECK(val->as_int_opt() == 42);
+}
+
+TEST_CASE("`errdefer` capture by const ref and const ptr in `const_eval`") {
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Result = fn(comptime T: type, comptime E: type): type { return union(enum) { ok: T, err: E }; };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+                return match (self) {
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
+                };
+            };
+        }
+        impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
+            const From = E;
+            pub const from_residual = fn(r: E): @This() { return .{ .err = r }; };
+        }
+
+        const R = Result(i32, i32);
+        const fail = fn(): R { return R{ .err = 77 }; };
+
+        comptime let mut ref_log: i32 = 0;
+        const test_ref = fn(): R {
+            errdefer |&e| ref_log = e;
+            let v = fail()?;
+            return R{ .ok = v };
+        };
+
+        comptime let mut ptr_log: i32 = 0;
+        const test_ptr = fn(): R {
+            errdefer |^p| ptr_log = *p;
+            let v = fail()?;
+            return R{ .ok = v };
+        };
+
+        const _r = test_ref();
+        const _p = test_ptr();
+        const final_ref = ref_log;
+        const final_ptr = ptr_log;
+    )")};
+    gir::const_eval evaluator{ctx->analyzer.get_ctx(), ctx->root_mod};
+
+    const auto [sym_r_d, _rd, decl_r_d, type_r_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_r", idx)};
+    DISCARD(evaluator.try_eval(*decl_r_d.value));
+
+    const auto [sym_r, _1, decl_r, type_r]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_ref", idx)};
+    const auto val_r{evaluator.try_eval(*decl_r.value)};
+    REQUIRE(val_r.has_value());
+    CHECK(val_r->as_int_opt() == 77);
+
+    const auto [sym_p_d, _pd, decl_p_d, type_p_d]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("_p", idx)};
+    DISCARD(evaluator.try_eval(*decl_p_d.value));
+
+    const auto [sym_p, _2, decl_p, type_p]{
+        ctx->get_ast_type_sym_info<syms::node_t, ast::decl_stmt>("final_ptr", idx)};
+    const auto val_p{evaluator.try_eval(*decl_p.value)};
+    REQUIRE(val_p.has_value());
+    CHECK(val_p->as_int_opt() == 77);
 }
 
 } // namespace ghoti::tests

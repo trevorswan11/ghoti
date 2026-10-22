@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <array>
-#include <span>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
@@ -21,6 +24,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/codegen/target.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/cfg_atoms.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/token_type.hh"
@@ -43,69 +47,23 @@ using syntax::token_type_t;
 
 [[nodiscard]] auto is_cfg_atom(std::string_view name) -> bool {
     return name == "os" || name == "arch" || name == "abi" || name == "family" ||
-           name == "endian" || name == "ptr_bits";
+           name == "endian" || name == "ptr_bits" || name == "optimize" || name == "safety" ||
+           name == "testing";
 }
 
 struct atom_enum_info {
     std::string_view                  type_name;
-    std::span<const std::string_view> members;
+    gsl::span<const std::string_view> members;
 };
 
-constexpr std::array<std::string_view, 14> OS_MEMBERS{"linux",
-                                                      "macos",
-                                                      "ios",
-                                                      "windows",
-                                                      "freebsd",
-                                                      "openbsd",
-                                                      "netbsd",
-                                                      "dragonfly",
-                                                      "solaris",
-                                                      "haiku",
-                                                      "wasi",
-                                                      "emscripten",
-                                                      "uefi",
-                                                      "freestanding"};
-constexpr std::array<std::string_view, 16> ARCH_MEMBERS{"x86_64",
-                                                        "x86",
-                                                        "aarch64",
-                                                        "arm",
-                                                        "thumb",
-                                                        "riscv64",
-                                                        "riscv32",
-                                                        "wasm32",
-                                                        "wasm64",
-                                                        "powerpc64",
-                                                        "powerpc",
-                                                        "mips64",
-                                                        "mips",
-                                                        "s390x",
-                                                        "loongarch64",
-                                                        "sparc64"};
-constexpr std::array<std::string_view, 15> ABI_MEMBERS{"gnu",
-                                                       "gnueabi",
-                                                       "gnueabihf",
-                                                       "gnux32",
-                                                       "gnuabi64",
-                                                       "musl",
-                                                       "musleabi",
-                                                       "musleabihf",
-                                                       "msvc",
-                                                       "android",
-                                                       "androideabi",
-                                                       "eabi",
-                                                       "eabihf",
-                                                       "itanium",
-                                                       "none"};
-constexpr std::array<std::string_view, 4>  FAMILY_MEMBERS{"unix", "windows", "wasm", "other"};
-constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
-
 [[nodiscard]] auto atom_enum(std::string_view atom) -> stdx::option<atom_enum_info> {
-    if (atom == "os") { return atom_enum_info{"Os", OS_MEMBERS}; }
-    if (atom == "arch") { return atom_enum_info{"Arch", ARCH_MEMBERS}; }
-    if (atom == "abi") { return atom_enum_info{"Abi", ABI_MEMBERS}; }
-    if (atom == "family") { return atom_enum_info{"Family", FAMILY_MEMBERS}; }
-    if (atom == "endian") { return atom_enum_info{"Endian", ENDIAN_MEMBERS}; }
-    return stdx::none; // `ptr_bits` is integer-typed, not an enum
+    if (atom == "os") { return atom_enum_info{"Os", cfg_atoms::OS_MEMBERS}; }
+    if (atom == "arch") { return atom_enum_info{"Arch", cfg_atoms::ARCH_MEMBERS}; }
+    if (atom == "abi") { return atom_enum_info{"Abi", cfg_atoms::ABI_MEMBERS}; }
+    if (atom == "family") { return atom_enum_info{"Family", cfg_atoms::FAMILY_MEMBERS}; }
+    if (atom == "endian") { return atom_enum_info{"Endian", cfg_atoms::ENDIAN_MEMBERS}; }
+    if (atom == "optimize") { return atom_enum_info{"OptimizeMode", cfg_atoms::OPTIMIZE_MEMBERS}; }
+    return stdx::none; // `ptr_bits` is integer-typed, `safety` and `testing` are bools
 }
 
 // The closest canonical member to `needle`, if one is within a small edit distance.
@@ -136,11 +94,11 @@ constexpr std::array<std::string_view, 2>  ENDIAN_MEMBERS{"little", "big"};
 
 } // namespace
 
-auto cfg_pass::run(mod::module& module, context& ctx) -> bool {
+auto cfg_pass::run(mod::module_t& module, context& ctx) -> bool {
     PROFILE_FUNCTION();
     cfg_pass pass{module, ctx};
     pass.gather_cfg_values(module.ast.get_roots());
-    for (const auto& [name, node] : pass.cfg_value_decls_) { pass.resolve_cfg_value(node); }
+    for (const auto& [name, decl] : pass.cfg_value_decls_) { pass.resolve_cfg_value(decl.value); }
     pass.rewrite_roots(module.ast.get_roots());
     return pass.ok_;
 }
@@ -152,7 +110,7 @@ auto cfg_pass::gather_cfg_values(const std::vector<ast::node_id>& list) -> void 
         if (!decl || !decl->value) { continue; }
         if (module_.ast.get_as_opt<ast::cfg_value_expr>(*decl->value)) {
             const auto& name{module_.ast.get_as<ast::identifier_expr>(decl->name).name};
-            cfg_value_decls_.try_emplace(name, *decl->value);
+            cfg_value_decls_.try_emplace(name, cfg_decl{id, *decl->value});
         }
     }
 }
@@ -163,7 +121,8 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
     if (const auto done{cfg_value_cache_.find(key)}; done != cfg_value_cache_.end()) {
         return done->second;
     }
-    if (!in_progress_.emplace(key).second) {
+    if (!shared_->in_progress.emplace(&module_, key).second) {
+        shared_->hit_cycle = true;
         fail(node, error::CFG_VALUE_CYCLE, "@cfgValue constant depends on itself");
         return stdx::none;
     }
@@ -191,26 +150,29 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
         if (arms_ok && expr.fallback) {
             bool matched{false};
             for (const auto& guard : expr.guards) {
-                const auto b{eval_predicate(guard.predicate)};
-                if (!b) {
-                    matched = true; // error already reported; stop scanning
-                    break;
+                for (const auto predicate : guard.predicates) {
+                    const auto b{eval_predicate(predicate)};
+                    if (!b) {
+                        matched = true; // error already reported; stop scanning
+                        break;
+                    }
+                    if (*b) {
+                        record.chosen = ast::node_id{guard.value};
+                        result        = eval_term(guard.value);
+                        matched       = true;
+                        break;
+                    }
                 }
-                if (*b) {
-                    record.chosen = guard.value;
-                    result        = eval_term(guard.value);
-                    matched       = true;
-                    break;
-                }
+                if (matched) { break; }
             }
             if (!matched) {
-                record.chosen = *expr.fallback;
+                record.chosen = ast::node_id{*expr.fallback};
                 result        = eval_term(*expr.fallback);
             }
         }
     }
 
-    in_progress_.erase(key);
+    shared_->in_progress.erase({&module_, key});
     if (result) {
         cfg_value_cache_.emplace(key, *result);
         module_.cfg_value_results.emplace(key, record);
@@ -218,15 +180,146 @@ auto cfg_pass::resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value> {
     return result;
 }
 
+auto cfg_pass::to_operand(const cfg_value& value) -> operand {
+    return value.visit(
+        [](bool b) -> operand { return {.tag = operand::kind::BOOL, .boolean = b}; },
+        [](i64 i) -> operand { return {.tag = operand::kind::INT, .integer = i}; },
+        [](cfgval::member m) -> operand { return {.tag = operand::kind::MEMBER, .text = m.name}; },
+        [](cfgval::text) -> operand { return {.tag = operand::kind::STRING}; },
+        [](cfgval::diverges) -> operand { return {}; });
+}
+
+// The module a module-scope import binds to `name`, looking through `@cfg` arms that are taken
+auto cfg_pass::find_import(std::string_view name, bool public_only)
+    -> stdx::option<mod::module_t&> {
+    std::vector<ast::stmt_handle> roots;
+    for (const auto id : module_.ast.get_roots()) { roots.emplace_back(ast::stmt_handle{id}); }
+    return find_import_in(roots, name, public_only);
+}
+
+// A predicate can't use an import its own gate guards, so a statement still being selected is
+// skipped
+auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size {
+    const std::pair key{static_cast<const mod::module_t*>(&module_), id.get_index()};
+    if (const auto seen{shared_->arms.find(key)}; seen != shared_->arms.end()) {
+        return seen->second.selected ? seen->second.arm : stdx::opt_size{};
+    }
+    shared_->arms.emplace(key, shared_state::arm_choice{});
+    stdx::opt_size taken;
+    if (const auto arm{select_arm_of(cfg.arms)}) {
+        taken.emplace(static_cast<usize>(arm.get() - cfg.arms.data()));
+    }
+    shared_->arms[key] = {.selected = true, .arm = taken};
+    return taken;
+}
+
+auto cfg_pass::find_import_in(const std::vector<ast::stmt_handle>& items,
+                              std::string_view                     name,
+                              bool public_only) -> stdx::option<mod::module_t&> {
+    for (const auto item : items) {
+        const ast::node_id id{item};
+        if (const auto cfg{module_.ast.get_as_opt<ast::cfg_stmt>(id)}) {
+            const auto arm{taken_arm(id, *cfg)};
+            if (!arm) { continue; }
+            if (auto found{find_import_in(cfg->arms[*arm].items, name, public_only)}) {
+                return found;
+            }
+            continue;
+        }
+        const auto import_node{module_.ast.get_as_opt<ast::import_stmt>(id)};
+        if (!import_node) { continue; }
+        const auto named{import_node->get_name(module_.ast)};
+        if (!named || named->second != name) { continue; }
+        if (public_only && !ast::import_stmt::is_public(id)) { return stdx::none; }
+
+        const auto loaded{[&] {
+            if (const auto path{module_.ast.get_as_opt<ast::string_expr>(import_node->payload)}) {
+                return ctx_.modules.try_get_file_module(path->value, module_.parent_path);
+            }
+            return ctx_.modules.try_get_library_module(
+                module_.ast.get_as<ast::identifier_expr>(import_node->payload).name);
+        }()};
+        if (!loaded || (*loaded)->is_errored()) { return stdx::none; }
+        return **loaded;
+    }
+    return stdx::none;
+}
+
+// `mod.NAME` / `mod.sub.NAME`: a `pub` `@cfgValue` constant of an imported module, through
+// `pub import`s after the first step. Its own errors are reported when its module is collected.
+auto cfg_pass::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value> {
+    PROFILE_FUNCTION();
+    std::vector<std::string_view> path;
+    ast::node_id                  at{dot};
+    while (const auto access{module_.ast.get_as_opt<ast::dot_expr>(at)}) {
+        path.emplace_back(module_.ast.get_as<ast::identifier_expr>(access->member).name);
+        at = ast::node_id{access->object};
+    }
+    const auto root{module_.ast.get_as_opt<ast::identifier_expr>(at)};
+    if (!root) {
+        fail(dot,
+             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+             "a cfg predicate can only reference another module's `@cfgValue` constant as "
+             "`module.NAME`");
+        return stdx::none;
+    }
+    path.emplace_back(root->name);
+    std::ranges::reverse(path);
+    const auto spelled{fmt::format("{}", fmt::join(path, "."))};
+
+    // Each step reads the next module with a throwaway pass, whose errors that module reports
+    context        scratch_ctx{ctx_};
+    mod::module_t* current{&module_};
+    for (usize i{0}; i + 1 < path.size(); ++i) {
+        const bool is_foreign{current != &module_};
+        cfg_pass   step{*current, scratch_ctx, *shared_};
+        const auto next{step.find_import(path[i], is_foreign)};
+        if (!next) {
+            fail(dot,
+                 error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+                 "'{}' in '{}' isn't a{} module import",
+                 path[i],
+                 spelled,
+                 is_foreign ? " public" : "");
+            return stdx::none;
+        }
+        current = next.get();
+    }
+
+    cfg_pass owner{*current, scratch_ctx, *shared_};
+    owner.gather_cfg_values(current->ast.get_roots());
+    const auto decl{owner.cfg_value_decls_.find(path.back())};
+    if (decl == owner.cfg_value_decls_.end() ||
+        !current->ast.get_as<ast::decl_stmt>(decl->second.decl)
+             .has_modifier(ast::decl_modifiers::PUBLIC)) {
+        fail(dot,
+             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
+             "'{}' isn't a public `@cfgValue` constant, which is all a cfg predicate can read "
+             "from another module",
+             spelled);
+        return stdx::none;
+    }
+
+    const auto value{owner.resolve_cfg_value(decl->second.value)};
+    if (!value) {
+        if (shared_->hit_cycle) {
+            fail(dot, error::CFG_VALUE_CYCLE, "'{}' depends on itself", spelled);
+        } else {
+            fail(dot, error::CFG_ILLEGAL_CFG_VALUE_REFERENCE, "'{}' has errors", spelled);
+        }
+    }
+    return value;
+}
+
 auto cfg_pass::is_compile_error_call(ast::expr_handle h) -> bool {
     PROFILE_FUNCTION();
     const ast::node_id id{h};
     if (id.get_kind() != ast::node_kind::CALL_EXPRESSION) { return false; }
     const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-    return ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR;
+    return ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR;
 }
 
-// Every guard arm (and the `_ =>` fallback) must yield the same `constexpr` type
+// Every guard arm (and the `_ =>` fallback) must yield the same `comptime` type
 auto cfg_pass::check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr) -> bool {
     PROFILE_FUNCTION();
     stdx::option<cfg_value> common;
@@ -264,13 +357,73 @@ auto cfg_pass::atom_value_str(std::string_view atom) const -> std::string_view {
     if (atom == "arch") { return facts_.arch; }
     if (atom == "abi") { return facts_.abi; }
     if (atom == "family") { return facts_.family; }
+    if (atom == "optimize") { return optimize_mode_name(ctx_.build_mode); }
     return facts_.endian; // endian
 }
 
 auto cfg_pass::atom_value(std::string_view atom) -> cfg_value {
     PROFILE_FUNCTION();
     if (atom == "ptr_bits") { return cfg_value{static_cast<i64>(facts_.ptr_bits)}; }
+    if (atom == "safety") { return cfg_value{ctx_.runtime_safety}; }
+    if (atom == "testing") { return cfg_value{ctx_.testing}; }
     return cfg_value{cfgval::member{atom_value_str(atom)}};
+}
+
+// `cpu.has(.feature)`
+auto cfg_pass::is_cpu_has(const ast::call_expr& call) const -> bool {
+    const auto dot{module_.ast.get_as_opt<ast::dot_expr>(call.function)};
+    if (!dot || call.arguments.size() != 1) { return false; }
+    const auto object{module_.ast.get_as_opt<ast::identifier_expr>(dot->object)};
+    const auto member{module_.ast.get_as_opt<ast::identifier_expr>(dot->member)};
+    return object && member && object->name == "cpu" && member->name == "has";
+}
+
+// True for an enabled feature of the target's architecture, false for a disabled one or one of
+// another architecture; a name no architecture has is an error
+auto cfg_pass::cpu_has(ast::node_id at, const ast::call_expr& call) -> stdx::option<cfg_value> {
+    const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};
+    const auto access{arg ? module_.ast.get_as_opt<ast::implicit_access_expr>(*arg) : stdx::none};
+    if (!access) {
+        fail(at, error::CFG_ILLEGAL_PREDICATE, "cpu.has expects a feature, like `cpu.has(.avx2)`");
+        return stdx::none;
+    }
+    const auto& name{module_.ast.get_as<ast::identifier_expr>(access->member).name};
+
+    if (!target_cpu_) {
+        auto resolved{codegen::resolve_target_cpu(ctx_.target_opts)};
+        if (!resolved) {
+            fail(at,
+                 error::CFG_ILLEGAL_PREDICATE,
+                 "{}",
+                 resolved.error().get_message().value_or("the target CPU can't be resolved"));
+            return stdx::none;
+        }
+        target_cpu_.emplace(std::move(*resolved));
+    }
+    if (std::ranges::contains(target_cpu_->enabled, name)) { return cfg_value{true}; }
+
+    std::string_view closest;
+    usize            closest_dist{3}; // suggest only for distance <= 2
+    for (const auto family : codegen::cpu_feature_families()) {
+        if (std::ranges::contains(family->ghoti_names, name)) { return cfg_value{false}; }
+        for (const auto& candidate : family->ghoti_names) {
+            const auto dist{string_utils::edit_distance(name, candidate)};
+            if (dist < closest_dist) {
+                closest_dist = dist;
+                closest      = candidate;
+            }
+        }
+    }
+    if (closest.empty()) {
+        fail(at, error::CFG_UNKNOWN_ENUM_MEMBER, "no architecture has a CPU feature '{}'", name);
+    } else {
+        fail(at,
+             error::CFG_UNKNOWN_ENUM_MEMBER,
+             "no architecture has a CPU feature '{}'; did you mean '{}'?",
+             name,
+             closest);
+    }
+    return stdx::none;
 }
 
 auto cfg_pass::int_literal(ast::expr_handle h) -> stdx::option<i64> {
@@ -289,11 +442,12 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         const auto& name{module_.ast.get_as<ast::identifier_expr>(id).name};
         if (is_cfg_atom(name)) { return atom_value(name); }
         if (const auto ref{cfg_value_decls_.find(name)}; ref != cfg_value_decls_.end()) {
-            return resolve_cfg_value(ref->second);
+            return resolve_cfg_value(ref->second.value);
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
-             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits "
+             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
+             "optimize, safety, testing, cpu.has(.feature) "
              "(or a @cfgValue constant)",
              name);
         return stdx::none;
@@ -303,15 +457,8 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return cfg_value{
             cfgval::member{module_.ast.get_as<ast::identifier_expr>(access.member).name}};
     }
-    case ast::node_kind::DOT_EXPRESSION: {
-        const auto& dot{module_.ast.get_as<ast::dot_expr>(id)};
-        fail(id,
-             error::CFG_ILLEGAL_CFG_VALUE_REFERENCE,
-             "a `@cfg` predicate cannot reference another module's '{}'; `@cfg` is evaluated "
-             "before imports resolve; Re-derive the value locally with `@cfgValue`",
-             module_.ast.get_as<ast::identifier_expr>(dot.member).name);
-        return stdx::none;
-    }
+    case ast::node_kind::DOT_EXPRESSION:       return resolve_foreign_value(id);
+    case ast::node_kind::CFG_VALUE_EXPRESSION: return resolve_cfg_value(id);
     case ast::node_kind::BOOL_EXPRESSION:
         return cfg_value{id.get_token_type() == token_type_t::BOOLEAN_TRUE};
     case ast::node_kind::STRING_EXPRESSION:
@@ -322,10 +469,11 @@ auto cfg_pass::eval_term(ast::expr_handle h) -> stdx::option<cfg_value> {
         return stdx::none;
     case ast::node_kind::CALL_EXPRESSION: {
         const auto& call{module_.ast.get_as<ast::call_expr>(id)};
-        if (ast::node_id{call.function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR) {
+        if (ast::node_id{call.function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
             fire_compile_error(id, call);
             return cfg_value{cfgval::diverges{}};
         }
+        if (is_cpu_has(call)) { return cpu_has(id, call); }
         break;
     }
     default: break;
@@ -379,25 +527,27 @@ auto cfg_pass::classify_operand(ast::expr_handle h) -> operand {
     case ast::node_kind::IDENTIFIER_EXPRESSION: {
         const auto& name{module_.ast.get_as<ast::identifier_expr>(id).name};
         if (name == "ptr_bits") { return {.tag = operand::kind::PTR_BITS}; }
+        if (name == "safety") {
+            return {.tag = operand::kind::BOOL, .boolean = ctx_.runtime_safety};
+        }
         if (is_cfg_atom(name)) { return {.tag = operand::kind::ATOM, .text = name}; }
         if (const auto ref{cfg_value_decls_.find(name)}; ref != cfg_value_decls_.end()) {
-            const auto value{resolve_cfg_value(ref->second)};
+            const auto value{resolve_cfg_value(ref->second.value)};
             if (!value) { return {}; } // error already reported
-            return value->visit(
-                [](bool b) -> operand { return {.tag = operand::kind::BOOL, .boolean = b}; },
-                [](i64 i) -> operand { return {.tag = operand::kind::INT, .integer = i}; },
-                [](cfgval::member m) -> operand {
-                    return {.tag = operand::kind::MEMBER, .text = m.name};
-                },
-                [](cfgval::text) -> operand { return {.tag = operand::kind::STRING}; },
-                [](cfgval::diverges) -> operand { return {}; });
+            return to_operand(*value);
         }
         fail(id,
              error::CFG_UNKNOWN_ATOM,
-             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits "
+             "unknown cfg atom '{}'; valid: os, arch, abi, family, endian, ptr_bits, "
+             "optimize, safety, testing, cpu.has(.feature) "
              "(or a @cfgValue constant)",
              name);
         return {};
+    }
+    case ast::node_kind::DOT_EXPRESSION: {
+        const auto value{resolve_foreign_value(id)};
+        if (!value) { return {}; } // error already reported
+        return to_operand(*value);
     }
     case ast::node_kind::IMPLICIT_ACCESS_EXPRESSION: {
         const auto& access{module_.ast.get_as<ast::implicit_access_expr>(id)};
@@ -545,7 +695,7 @@ auto cfg_pass::compile_error_message(const ast::call_expr& call) -> stdx::option
     if (const auto str{module_.ast.get_as_opt<ast::string_expr>(*arg)}) { return str->value; }
     if (const auto ident{module_.ast.get_as_opt<ast::identifier_expr>(*arg)}) {
         if (const auto ref{cfg_value_decls_.find(ident->name)}; ref != cfg_value_decls_.end()) {
-            if (const auto value{resolve_cfg_value(ref->second)}) {
+            if (const auto value{resolve_cfg_value(ref->second.value)}) {
                 if (const auto str{value->as_opt<cfgval::text>()}) { return str->value; }
             }
         }
@@ -575,7 +725,7 @@ auto cfg_pass::fire_eager_compile_errors(const std::vector<ast::stmt_handle>& it
         if (!expr_stmt) { continue; }
         const auto call{module_.ast.get_as_opt<ast::call_expr>(expr_stmt->expression)};
         if (call &&
-            ast::node_id{call->function}.get_token_type() == token_type_t::BUILTIN_COMPILE_ERROR) {
+            ast::node_id{call->function}.get_builtin() == syntax::builtin_t::COMPILE_ERROR) {
             fire_compile_error(ast::node_id{expr_stmt->expression}, *call);
         }
     }
@@ -623,6 +773,21 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
     if (const auto expr_st{module_.ast.get_as_opt<ast::expr_stmt>(id)}) {
         recurse_into_expr(expr_st->expression);
     }
+    if (const auto ret{module_.ast.get_as_opt<ast::return_stmt>(id)}; ret && ret->expression) {
+        recurse_into_expr(*ret->expression);
+    }
+    if (const auto brk{module_.ast.get_as_opt<ast::break_stmt>(id)}; brk && brk->expression) {
+        recurse_into_expr(*brk->expression);
+    }
+    if (const auto discard{module_.ast.get_as_opt<ast::discard_stmt>(id)}) {
+        recurse_into_expr(discard->discarded);
+    }
+    if (const auto defer{module_.ast.get_as_opt<ast::defer_stmt>(id)}) {
+        recurse_into_bodies(defer->deferred);
+    }
+    if (const auto errdefer{module_.ast.get_as_opt<ast::errdefer_stmt>(id)}) {
+        recurse_into_bodies(errdefer->deferred);
+    }
     if (const auto test{module_.ast.get_as_opt<ast::test_stmt>(id)}) {
         rewrite_items(
             module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{test->block}).statements);
@@ -632,6 +797,24 @@ auto cfg_pass::recurse_into_bodies(ast::stmt_handle stmt) -> void {
 auto cfg_pass::recurse_into_block(ast::block_handle block) -> void {
     PROFILE_FUNCTION();
     rewrite_items(module_.ast.get_as_mut<ast::block_stmt>(ast::node_id{block}).statements);
+}
+
+auto cfg_pass::recurse_into_type(ast::explicit_type_id type) -> void {
+    switch (type.get_kind()) {
+    case ast::explicit_type_kind::EXPR:
+        recurse_into_expr(module_.ast.get_as<ast::explicit_expr_type>(type).expr);
+        break;
+    case ast::explicit_type_kind::RECURSIVE:
+        recurse_into_type(module_.ast.get_as<ast::explicit_type_id>(type));
+        break;
+    case ast::explicit_type_kind::ARRAY: {
+        const auto& array{module_.ast.get_as<ast::explicit_array_type>(type)};
+        if (array.dimension) { recurse_into_expr(*array.dimension); }
+        recurse_into_type(array.inner_explicit_type);
+        break;
+    }
+    default: break;
+    }
 }
 
 auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
@@ -646,18 +829,82 @@ auto cfg_pass::recurse_into_members(const ast::member_list& members) -> void {
 
 auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
     PROFILE_FUNCTION();
+    // An aggregate's gated fields and members are spliced in place
+    const auto flatten = [this](auto& node, auto& items) {
+        flatten_cfg_groups(node.cfg_groups, items);
+        flatten_cfg_groups(node.member_cfg_groups, node.members);
+        recurse_into_members(node.members);
+    };
+    const ast::node_id id{expr};
+    if (id.is<ast::struct_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::struct_expr>(id)};
+        return flatten(node, node.fields);
+    }
+    if (id.is<ast::union_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::union_expr>(id)};
+        return flatten(node, node.fields);
+    }
+    if (id.is<ast::enum_expr>()) {
+        auto& node{module_.ast.get_as_mut<ast::enum_expr>(id)};
+        return flatten(node, node.enumerations);
+    }
+
+    // Any operand can hold a block-bodied `if`, `match`, loop, or function literal
     module_.ast[expr].visit(
+        [&](const ast::binary_expr& bin) {
+            recurse_into_expr(bin.lhs);
+            recurse_into_expr(bin.rhs);
+        },
+        [&](const ast::assignment_expr& assign) {
+            recurse_into_expr(assign.lhs);
+            recurse_into_expr(assign.rhs);
+        },
+        [&](const ast::unary_expr& un) { recurse_into_expr(un.rhs); },
+        [&](const ast::reference_expr& ref) { recurse_into_expr(ref.rhs); },
+        [&](const ast::dereference_expr& deref) { recurse_into_expr(deref.rhs); },
+        [&](const ast::comptime_expr& cx) { recurse_into_expr(cx.rhs); },
+        [&](const ast::address_of_expr& adr) { recurse_into_expr(adr.rhs); },
+        [&](const ast::unwrap_expr& unwrap) { recurse_into_expr(unwrap.operand); },
+        [&](const ast::dot_expr& dot) { recurse_into_expr(dot.object); },
+        [&](const ast::index_expr& idx) {
+            recurse_into_expr(idx.array);
+            recurse_into_expr(idx.index);
+        },
+        [&](const ast::range_expr& range) {
+            if (range.lhs) { recurse_into_expr(*range.lhs); }
+            if (range.rhs) { recurse_into_expr(*range.rhs); }
+        },
+        [&](const ast::call_expr& call) {
+            if (call.modifier) { recurse_into_expr(*call.modifier); }
+            recurse_into_expr(call.function);
+            for (const auto& arg : call.arguments) {
+                if (const auto value{arg.as_opt<ast::expr_handle>()}) { recurse_into_expr(*value); }
+            }
+        },
+        [&](const ast::array_expr& array) {
+            for (const auto item : array.items) { recurse_into_expr(item); }
+        },
+        [&](const ast::initializer_expr& init) {
+            for (const auto& entry : init.initializers) { recurse_into_expr(entry.value); }
+        },
         [&](const ast::function_expr& fn) {
-            if (!fn.is_type_expr) { recurse_into_block(fn.body); }
+            for (const auto& param : fn.parameters) {
+                if (param.explicit_type) { recurse_into_type(*param.explicit_type); }
+            }
+            recurse_into_type(fn.explicit_return_type);
+            if (fn.body) { recurse_into_block(*fn.body); }
         },
         [&](const ast::if_expr& branch) {
+            if (branch.condition) { recurse_into_expr(*branch.condition); }
             recurse_into_bodies(branch.consequence);
             if (branch.alternate) { recurse_into_bodies(*branch.alternate); }
         },
         [&](const ast::match_expr& match) {
+            recurse_into_expr(match.matcher);
             for (const auto& arm : match.arms) { recurse_into_bodies(arm.dispatch); }
         },
         [&](const ast::while_loop_expr& loop) {
+            recurse_into_expr(loop.condition);
             recurse_into_block(loop.block);
             if (loop.non_break) { recurse_into_bodies(*loop.non_break); }
         },
@@ -674,21 +921,6 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
             } else {
                 recurse_into_expr(ast::expr_handle{body});
             }
-        },
-        [&](ast::struct_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.fields);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
-        },
-        [&](ast::union_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.fields);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
-        },
-        [&](ast::enum_expr& node) {
-            flatten_cfg_groups(node.cfg_groups, node.enumerations);
-            flatten_cfg_groups(node.member_cfg_groups, node.members);
-            recurse_into_members(node.members);
         },
         [](const auto&) {});
 }

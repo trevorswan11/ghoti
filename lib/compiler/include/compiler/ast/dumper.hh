@@ -8,12 +8,15 @@
 
 #include <fmt/ostream.h>
 #include <stdx/assert.hh>
+#include <stdx/option.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/ast/type.hh"
@@ -31,9 +34,12 @@ class dumper {
 
     [[nodiscard]] static auto compare_source_asts(std::string_view s1, std::string_view s2) -> bool;
 
+    // Same check against an already parsed `s1`, so only `s2` is parsed
+    [[nodiscard]] static auto compare_source_asts(const AST& s1_ast, std::string_view s2) -> bool;
+
   private:
     template <IndexableNodeID ID> auto dump(ID id) -> void {
-        ast_[id].visit([&](const auto& data) -> void { this->visit(id, data); });
+        ast_[id].visit([&](const auto& data) -> void { this->visit(node_id{id}, data); });
     }
 
     auto dump(explicit_type_id id) -> void {
@@ -44,9 +50,9 @@ class dumper {
 
     auto visit(node_id, const array_expr&) -> void;
     auto visit(node_id, const asm_expr&) -> void;
-    auto visit(node_id, const call_expr&) -> void;
+    auto visit(stdx::option<node_id>, const call_expr&) -> void;
     auto visit(node_id, const do_while_loop_expr&) -> void;
-    auto visit(node_id, const enum_expr&) -> void;
+    auto visit(stdx::option<node_id>, const enum_expr&) -> void;
     auto visit(node_id, const for_loop_expr&) -> void;
     auto visit(node_id, const function_expr&) -> void;
     auto visit(node_id, const identifier_expr&) -> void;
@@ -55,7 +61,7 @@ class dumper {
     auto visit(node_id, const infinite_loop_expr&) -> void;
     auto visit(node_id, const assignment_expr&) -> void;
     auto visit(node_id, const binary_expr&) -> void;
-    auto visit(node_id, const dot_expr&) -> void;
+    auto visit(stdx::option<node_id>, const dot_expr&) -> void;
     auto visit(node_id, const range_expr&) -> void;
     auto visit(node_id, const initializer_expr&) -> void;
     auto visit(node_id, const label_expr&) -> void;
@@ -63,6 +69,7 @@ class dumper {
     auto visit(node_id, const reference_expr&) -> void;
     auto visit(node_id, const address_of_expr&) -> void;
     auto visit(node_id, const dereference_expr&) -> void;
+    auto visit(node_id, const comptime_expr&) -> void;
     auto visit(node_id, const unary_expr&) -> void;
     auto visit(node_id, const unwrap_expr&) -> void;
     auto visit(node_id, const implicit_access_expr&) -> void;
@@ -74,9 +81,10 @@ class dumper {
     auto visit(node_id, const undefined_expr&) -> void;
     auto visit(node_id, const nullptr_expr&) -> void;
     auto visit(node_id, const unreachable_expr&) -> void;
-    auto visit(node_id, const struct_expr&) -> void;
-    auto visit(node_id, const union_expr&) -> void;
-    auto visit(node_id, const interface_expr&) -> void;
+    auto visit(node_id, const type_expr&) -> void;
+    auto visit(stdx::option<node_id>, const struct_expr&) -> void;
+    auto visit(stdx::option<node_id>, const union_expr&) -> void;
+    auto visit(stdx::option<node_id>, const interface_expr&) -> void;
     auto visit(node_id, const while_loop_expr&) -> void;
     auto visit(node_id, const cfg_value_expr&) -> void;
     auto visit(node_id, const block_stmt&) -> void;
@@ -92,7 +100,6 @@ class dumper {
     auto visit(node_id, const import_stmt&) -> void;
     auto visit(node_id, const return_stmt&) -> void;
     auto visit(node_id, const test_stmt&) -> void;
-    auto visit(node_id, const using_stmt&) -> void;
     auto visit(node_id, stdx::monostate) -> void { fmt::println(out_, "<discarded>"); }
 
     auto visit(explicit_type_id, const identifier_expr&) -> void;
@@ -106,23 +113,75 @@ class dumper {
     auto visit(explicit_type_id, const interface_expr&) -> void;
     auto visit(explicit_type_id, const explicit_array_type&) -> void;
     auto visit(explicit_type_id, const explicit_dyn_type&) -> void;
+    auto visit(explicit_type_id, const explicit_expr_type&) -> void;
 
-    template <typename T, typename Func> void dump_container(const T& container, Func&& func) {
+    template <typename T, typename Func>
+    auto dump_container(const T& container, Func&& func) -> void {
         for (auto it{container.begin()}; it != container.end(); ++it) {
             indent::guard g{indent_, std::next(it) == container.end()};
             std::forward<Func>(func)(*it);
         }
     }
 
-    template <typename T> void dump_node_list(const T& list) {
+    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture) -> void {
+        if (!capture) { return; }
+        const indent::guard g{indent_, false};
+        fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
+        if (capture->payload.is<ast::discarded>()) {
+            fmt::println(out_, "<discarded>");
+        } else {
+            fmt::println(out_,
+                         "{} (modifier: {})",
+                         ast_.get_as<identifier_expr>(*capture->payload),
+                         capture->modifier);
+        }
+    }
+
+    auto dump_attributes(const stdx::option<attribute_list>& attributes) -> void {
+        if (!attributes) { return; }
+        const indent::guard g{indent_, false};
+        fmt::println(out_, "{}Attributes:", indent_.current_branch());
+        dump_container(attributes->items, [this](const attribute& item) -> void {
+            fmt::println(out_,
+                         "{}Attribute: {}",
+                         indent_.current_branch(),
+                         attribute_spec_of(item.kind).name);
+            if (item.args.empty()) { return; }
+            const indent::guard g_args{indent_, true};
+            fmt::println(out_, "{}Args:", indent_.current_branch());
+            dump_node_list(item.args);
+        });
+    }
+
+    template <typename T> auto dump_node_list(const T& list) -> void {
         dump_container(list, [this](const auto& node_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             dump(*node_handle);
         });
     }
 
+    // The `@cfg` field groups, members, and `@cfg` member groups closing a struct or union
+    template <typename Node> auto dump_aggregate_tail(const Node& node) -> void {
+        const auto has_cfg{!node.cfg_groups.empty()};
+        const auto has_members{!node.members.empty()};
+        const auto has_member_cfg{!node.member_cfg_groups.empty()};
+        if (has_cfg) {
+            const indent::guard g{indent_, !has_members && !has_member_cfg};
+            dump_cfg_groups(node.cfg_groups);
+        }
+        if (has_members) {
+            const indent::guard g{indent_, !has_member_cfg};
+            fmt::println(out_, "{}Members:", indent_.current_branch());
+            dump_node_list(node.members);
+        }
+        if (has_member_cfg) {
+            const indent::guard g{indent_, true};
+            dump_cfg_groups(node.member_cfg_groups);
+        }
+    }
+
     // Compact dump of an aggregate's `@cfg` groups; Only enough for AST comparison.
-    template <typename Group> void dump_cfg_groups(const std::vector<Group>& groups) {
+    template <typename Group> auto dump_cfg_groups(const std::vector<Group>& groups) -> void {
         fmt::println(out_, "{}CfgGroups:", indent_.current_branch());
         dump_container(groups, [this](const Group& group) -> void {
             fmt::println(out_, "{}Group @ {}", indent_.current_branch(), group.position);
@@ -145,7 +204,7 @@ class dumper {
         });
     }
 
-    template <> void dump_node_list<member_list>(const member_list& list) {
+    template <> auto dump_node_list<member_list>(const member_list& list) -> void {
         dump_container(list, [this](const member_handle& mem_handle) -> void {
             fmt::print(out_, "{}", indent_.current_branch());
             dump(*mem_handle);

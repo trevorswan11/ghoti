@@ -18,35 +18,40 @@
 #include "compiler/ast/id.hh"
 #include "compiler/sema/type.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
+
+template <typename T>
+[[nodiscard]] constexpr auto opt_ref_matches(stdx::option<T&> opt, const T* ptr) noexcept -> bool {
+    return opt.has_value() && opt.get() == ptr;
+}
 
 // One resolved `impl [I for] T { ... }` block. `interface_type` is null for an inherent impl.
 struct impl_record {
     struct method {
-        std::string_view                 name;
-        ast::node_id                     decl;    // the `decl_stmt` in the impl body
-        stdx::option<const type&>        fn_type; // resolved once conformance runs
-        bool                             is_pub;
-        bool                             inherited{false};
-        std::string                      typing_key{};
-        stdx::option<const mod::module&> defining_mod{};
-        ast::node_id                     signature{ast::node_id::make_invalid()};
+        std::string_view             name;
+        ast::node_id                 decl;    // the `decl_stmt` in the impl body
+        stdx::option<type&>          fn_type; // resolved once conformance runs
+        bool                         is_pub;
+        bool                         inherited{false};
+        std::string                  typing_key{};
+        stdx::option<mod::module_t&> defining_mod{};
+        stdx::option<ast::node_id>   signature{};
     };
 
-    stdx::option<const type&>        interface_type;
-    stdx::option<const type&>        target_type;
-    ast::node_id                     site;           // the `impl_stmt`, for diagnostics
-    stdx::option<const mod::module&> enclosing;      // module the impl was written in
-    usize                            body_scope_idx; // the impl block's own symbol table
-    std::vector<method>              methods{};
+    stdx::option<type&>          interface_type;
+    stdx::option<type&>          target_type;
+    ast::node_id                 site;           // the `impl_stmt`, for diagnostics
+    stdx::option<mod::module_t&> enclosing;      // module the impl was written in
+    usize                        body_scope_idx; // the impl block's own symbol table
+    std::vector<method>          methods{};
 
     // Set for a record produced by expanding an `impl(P) ...` for one concrete target
-    bool                     from_parameterized{false};
-    std::string              gir_prefix{}; // The per-instantiation symbol prefix
-    std::vector<const type*> sentinels{};
-    std::vector<const type*> type_arguments{};
+    bool               from_parameterized{false};
+    std::string        gir_prefix{}; // The per-instantiation symbol prefix
+    std::vector<type*> sentinels{};
+    std::vector<type*> type_arguments{};
 
     template <typename Self>
     [[nodiscard]] auto find_method(this Self&& self, std::string_view name) noexcept
@@ -67,11 +72,12 @@ struct extension_method {
 
 // A `impl(P: type, ...) [I for] Ctor(P) { ... }` held un-expanded
 struct parameterized_impl {
-    ast::node_id                     site;           // the `impl_stmt`
-    stdx::option<const type&>        interface_type; // none for an inherent parameterized impl
-    ast::node_id                     base_ctor_fn;   // the generic ctor's `function_expr` node
-    stdx::option<const mod::module&> enclosing;      // module the impl body lives in
-    usize                            body_scope_idx; // the impl block's own symbol table
+    ast::node_id                        site;           // the `impl_stmt`
+    stdx::option<type&>                 interface_type; // none for an inherent parameterized impl
+    ast::node_id                        base_ctor_fn;   // the generic ctor's `function_expr` node
+    gsl::not_null<const mod::module_t*> base_mod;       // the module `base_ctor_fn` indexes into
+    stdx::option<mod::module_t&>        enclosing;      // module the impl body lives in
+    usize                               body_scope_idx; // the impl block's own symbol table
     // none here means the param could not be matched positionally; the impl is skipped
     std::vector<stdx::opt_size> param_to_ctor_arg{};
 };
@@ -79,8 +85,8 @@ struct parameterized_impl {
 // Lives on the shared registry so a monomorphization triggered from any consuming module can remap
 // the impl's method signatures. Method bodies are re-resolved per instantiation, not remapped.
 struct param_impl_template {
-    stdx::option<const type&> abstract_target{};
-    std::vector<const type*>  sentinels{}; // per impl param; null for a constexpr one
+    stdx::option<type&> abstract_target{};
+    std::vector<type*>  sentinels{}; // per impl param; null for a comptime one
 };
 
 class impl_registry {
@@ -105,13 +111,16 @@ class impl_registry {
     [[nodiscard]] auto lookup(this Self&& self, const type& target, const type& iface) noexcept
         -> stdx::option<stdx::const_dispatch_t<Self, impl_record>&> {
         for (auto* r : self.records_) {
-            if (r->target_type == &target && r->interface_type == &iface) { return *r; }
+            if (opt_ref_matches(r->target_type, &target) &&
+                opt_ref_matches(r->interface_type, &iface)) {
+                return *r;
+            }
         }
         return stdx::none;
     }
 
     // The record whose `impl_stmt` node is `site` (inherent or trait).
-    [[nodiscard]] auto find_by_site(ast::node_id site, const mod::module& enclosing) noexcept
+    [[nodiscard]] auto find_by_site(ast::node_id site, const mod::module_t& enclosing) noexcept
         -> stdx::option<impl_record&>;
     [[nodiscard]] auto implements(const type& target, const type& iface) const noexcept -> bool;
 
@@ -120,8 +129,8 @@ class impl_registry {
     [[nodiscard]] auto param_records(this auto&& self) noexcept -> auto& {
         return self.param_records_;
     }
-    [[nodiscard]] auto param_record_by_site(ast::node_id       site,
-                                            const mod::module& enclosing) noexcept
+    [[nodiscard]] auto param_record_by_site(ast::node_id         site,
+                                            const mod::module_t& enclosing) noexcept
         -> stdx::option<parameterized_impl&>;
 
     // The shared template resolution of a parameterized impl (see `param_impl_template`).

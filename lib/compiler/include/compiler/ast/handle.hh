@@ -21,7 +21,7 @@ template <node_kind... AllowedKinds>
 
 } // namespace detail
 
-// A pseudo-type-safe wrapper around nodes, defaulting to an invalid state
+// A pseudo-type-safe wrapper around nodes
 template <node_kind... AllowedKinds> class handle {
   public:
     constexpr explicit handle(node_id id) noexcept : id_{id} {
@@ -31,9 +31,7 @@ template <node_kind... AllowedKinds> class handle {
 
     template <node_kind... OtherKinds>
         requires(detail::any_kind_compatible<AllowedKinds...>(OtherKinds) || ...)
-    constexpr handle(handle<OtherKinds...> other) noexcept : id_{*other} {
-        ASSERT(other.is_valid(), "Attempt to create Handle from invalid Handle");
-    }
+    constexpr handle(handle<OtherKinds...> other) noexcept : id_{*other} {}
 
     [[nodiscard]] constexpr static auto any_compatible(node_kind kind) noexcept -> bool {
         return detail::any_kind_compatible<AllowedKinds...>(kind);
@@ -41,11 +39,6 @@ template <node_kind... AllowedKinds> class handle {
 
     [[nodiscard]] constexpr auto operator*() const noexcept -> node_id { return id_; }
     [[nodiscard]] constexpr auto operator->(this auto&& self) noexcept { return &self.id_; }
-
-    [[nodiscard]] constexpr auto        is_valid() const noexcept -> bool { return id_.is_valid(); }
-    [[nodiscard]] static constexpr auto make_invalid() noexcept -> handle {
-        return handle{detail::INVALID_ID};
-    }
 
     [[nodiscard]] constexpr auto get_kind() const noexcept -> node_kind { return id_.get_kind(); }
     [[nodiscard]] constexpr auto get_index() const noexcept -> usize { return id_.get_index(); }
@@ -60,10 +53,17 @@ template <node_kind... AllowedKinds> class handle {
     }
 
   private:
+    [[nodiscard]] constexpr auto        is_valid() const noexcept -> bool { return id_.is_valid(); }
+    [[nodiscard]] static constexpr auto make_invalid() noexcept -> handle {
+        return handle{detail::INVALID_ID};
+    }
+
     constexpr explicit handle(u64 raw) noexcept : id_{raw} {}
 
   private:
     node_id id_{node_id::make_invalid()};
+
+    friend struct stdx::nullable<handle>;
 };
 
 using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
@@ -89,6 +89,7 @@ using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
                            node_kind::REFERENCE_EXPRESSION,
                            node_kind::DEREFERENCE_EXPRESSION,
                            node_kind::ADDRESS_OF_EXPRESSION,
+                           node_kind::COMPTIME_EXPRESSION,
                            node_kind::IMPLICIT_ACCESS_EXPRESSION,
                            node_kind::STRING_EXPRESSION,
                            node_kind::INT_LITERAL_EXPRESSION,
@@ -102,6 +103,7 @@ using expr_handle = handle<node_kind::ARRAY_EXPRESSION,
                            node_kind::STRUCT_EXPRESSION,
                            node_kind::UNION_EXPRESSION,
                            node_kind::INTERFACE_EXPRESSION,
+                           node_kind::TYPE_EXPRESSION,
                            node_kind::WHILE_LOOP_EXPRESSION>;
 
 using identifier_handle        = handle<node_kind::IDENTIFIER_EXPRESSION>;
@@ -140,8 +142,7 @@ using stmt_handle = handle<node_kind::BLOCK_STATEMENT,
                            node_kind::RETURN_STATEMENT,
                            node_kind::BREAK_STATEMENT,
                            node_kind::CONTINUE_STATEMENT,
-                           node_kind::TEST_STATEMENT,
-                           node_kind::USING_STATEMENT>;
+                           node_kind::TEST_STATEMENT>;
 
 struct decl_stmt;
 using decl_handle   = handle<node_kind::DECL_STATEMENT>;
@@ -150,9 +151,8 @@ using import_handle = ast::handle<ast::node_kind::IMPORT_STATEMENT>;
 using import_payload_handle =
     handle<node_kind::STRING_EXPRESSION, node_kind::IDENTIFIER_EXPRESSION>;
 
-using member_handle =
-    handle<node_kind::DECL_STATEMENT, node_kind::IMPORT_STATEMENT, node_kind::USING_STATEMENT>;
-using member_list = std::vector<member_handle>;
+using member_handle = handle<node_kind::DECL_STATEMENT, node_kind::IMPORT_STATEMENT>;
+using member_list   = std::vector<member_handle>;
 
 using labeled_node_handle = handle<node_kind::DO_WHILE_LOOP_EXPRESSION,
                                    node_kind::FOR_LOOP_EXPRESSION,
@@ -174,3 +174,5 @@ template <ghoti::ast::node_kind... Kinds> struct stdx::nullable<ghoti::ast::hand
         return handle.is_valid();
     }
 };
+
+static_assert(sizeof(stdx::option<ghoti::ast::expr_handle>) == sizeof(ghoti::ast::expr_handle));

@@ -7,12 +7,12 @@ namespace ghoti::tests {
 
 #if GHOTI_ASM_HOST_X86_64
 
-TEST_CASE("E2E asm (x86-64): value flows through a bound output") {
+TEST_CASE("Value flows through a bound output") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const x: i32 = 40;
-            const y: i32 = 2;
-            var out: i32 = 0;
+        pub const main = fn(): i32 {
+            let x: i32 = 40;
+            let y: i32 = 2;
+            let mut out: i32 = 0;
             asm {
                 template: "movl %1, %0\n\taddl %2, %0",
                 outputs: ("=&r" = out),
@@ -24,11 +24,11 @@ TEST_CASE("E2E asm (x86-64): value flows through a bound output") {
     )") == 42);
 }
 
-TEST_CASE("E2E asm (x86-64): result slot feeds an expression") {
+TEST_CASE("Result slot feeds an expression") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const seed: i32 = 21;
-            const doubled := asm i32 {
+        pub const main = fn(): i32 {
+            let seed: i32 = 21;
+            let doubled = asm i32 {
                 template: "movl %1, %0\n\taddl %1, %0",
                 outputs: ("=&r" = _),
                 inputs: ("r" = seed),
@@ -41,12 +41,12 @@ TEST_CASE("E2E asm (x86-64): result slot feeds an expression") {
 
 #elif GHOTI_ASM_HOST_AARCH64
 
-TEST_CASE("E2E asm (aarch64): value flows through a bound output") {
+TEST_CASE("Value flows through a bound output") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const x: i32 = 40;
-            const y: i32 = 2;
-            var out: i32 = 0;
+        pub const main = fn(): i32 {
+            let x: i32 = 40;
+            let y: i32 = 2;
+            let mut out: i32 = 0;
             asm {
                 template: "add %0, %1, %2",
                 outputs: ("=r" = out),
@@ -58,11 +58,11 @@ TEST_CASE("E2E asm (aarch64): value flows through a bound output") {
     )") == 42);
 }
 
-TEST_CASE("E2E asm (aarch64): result slot feeds an expression") {
+TEST_CASE("Result slot feeds an expression") {
     CHECK(helpers::compile_and_run(R"(
-        pub const main := fn(): i32 {
-            const seed: i32 = 21;
-            const doubled := asm i32 {
+        pub const main = fn(): i32 {
+            let seed: i32 = 21;
+            let doubled = asm i32 {
                 template: "add %0, %1, %1",
                 outputs: ("=r" = _),
                 inputs: ("r" = seed),

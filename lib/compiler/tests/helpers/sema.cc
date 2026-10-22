@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <iostream>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -30,7 +31,7 @@
 namespace ghoti::tests::helpers {
 
 auto test_common_decl_collection(const sema::symbol_table_registry& registry,
-                                 const mod::module&                 module,
+                                 const mod::module_t&               module,
                                  usize                              idx,
                                  std::string_view                   name) -> void {
     const auto& symbol{UNWRAP(registry.get_from_opt(idx, name))};
@@ -93,16 +94,19 @@ auto sema_test_context::check_poisoned(const sema::symbol& sym, const sema::type
     check_poisoned(type);
 }
 
-auto sema_test_context::get_string_literal_size(ast::expr_handle           handle,
-                                                stdx::option<mod::module&> enclosing_mod) -> usize {
+auto sema_test_context::get_string_literal_size(ast::expr_handle             handle,
+                                                stdx::option<mod::module_t&> enclosing_mod)
+    -> usize {
     const auto& module{enclosing_mod.value_or(root_mod)};
     const auto& str_expr{UNWRAP(module.ast.get_as_opt<ast::string_expr>(handle))};
     return str_expr.value.size();
 }
 
-auto collect(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
+auto collect(std::string_view input, const std::vector<mock_file>& imports, bool testing)
+    -> ctx_idx_pair {
     auto ctx{stdx::make_box<sema_test_context>(imports, TEST_FILENAME, input)};
     check_errors<syntax::diagnostics>(ctx->root_mod);
+    ctx->analyzer.set_testing(testing);
     ctx->analyzer.collect_symbols(ctx->root_mod);
     usize idx{UNWRAP(ctx->root_mod.root_table_idx)};
     return {std::move(ctx), idx};
@@ -115,8 +119,9 @@ auto collect_and_check(std::string_view input, const std::vector<mock_file>& imp
     return {std::move(ctx), idx};
 }
 
-auto resolve(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
-    auto [ctx, idx]{collect(input, imports)};
+auto resolve(std::string_view input, const std::vector<mock_file>& imports, bool testing)
+    -> ctx_idx_pair {
+    auto [ctx, idx]{collect(input, imports, testing)};
     ctx->analyzer.resolve_types(ctx->root_mod);
     return {std::move(ctx), idx};
 }
@@ -140,8 +145,8 @@ auto resolve_for_target(std::string_view input, std::string_view target_triple) 
     return {std::move(ctx), idx};
 }
 
-auto type_check(std::string_view input, const std::vector<mock_file>& imports) -> ctx_idx_pair {
-    auto [ctx, idx]{resolve(input, imports)};
+auto type_check_for_target(std::string_view input, std::string_view target_triple) -> ctx_idx_pair {
+    auto [ctx, idx]{resolve_for_target(input, target_triple)};
     if (!ctx->root_mod.is_poisoned()) {
         auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
         if (!ctx->root_mod.is_poisoned()) { ctx->analyzer.check_types(gir_mod, ctx->root_mod); }
@@ -149,9 +154,20 @@ auto type_check(std::string_view input, const std::vector<mock_file>& imports) -
     return {std::move(ctx), idx};
 }
 
-auto type_check_and_verify(std::string_view input, const std::vector<mock_file>& imports)
+auto type_check(std::string_view input, const std::vector<mock_file>& imports, bool testing)
     -> ctx_idx_pair {
-    auto [ctx, idx]{type_check(input, imports)};
+    auto [ctx, idx]{resolve(input, imports, testing)};
+    if (!ctx->root_mod.is_poisoned()) {
+        auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
+        if (!ctx->root_mod.is_poisoned()) { ctx->analyzer.check_types(gir_mod, ctx->root_mod); }
+    }
+    return {std::move(ctx), idx};
+}
+
+auto type_check_and_verify(std::string_view              input,
+                           const std::vector<mock_file>& imports,
+                           bool                          testing) -> ctx_idx_pair {
+    auto [ctx, idx]{type_check(input, imports, testing)};
     check_errors<sema::diagnostics>(ctx->root_mod);
     return {std::move(ctx), idx};
 }
@@ -163,10 +179,10 @@ auto expect_compile_error(std::string_view source) -> ctx_idx_pair {
     return {std::move(ctx), idx};
 }
 
-auto find_nested_fn(const mod::module&        module,
+auto find_nested_fn(const mod::module_t&      module,
                     const ast::function_expr& outer,
                     std::string_view          name) -> ast::node_id {
-    const auto& block{module.ast.get_as<ast::block_stmt>(outer.body)};
+    const auto& block{module.ast.get_as<ast::block_stmt>(UNWRAP(outer.body))};
     for (const auto& stmt : block) {
         if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(stmt)}) {
             const auto& ident{module.ast.get_as<ast::identifier_expr>(decl->name)};
@@ -176,8 +192,8 @@ auto find_nested_fn(const mod::module&        module,
     FAIL("Could not find nested function named '" << name << "'");
 }
 
-auto run_cfg(std::string_view input) -> cfg_outcome {
-    auto [ctx, idx]{helpers::collect(input)};
+auto run_cfg(std::string_view input, const std::vector<mock_file>& imports) -> cfg_outcome {
+    auto [ctx, idx]{helpers::collect(input, imports)};
 
     cfg_outcome out;
     if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
@@ -192,74 +208,68 @@ auto run_cfg(std::string_view input) -> cfg_outcome {
 auto selected(std::string_view input, std::string_view name) -> bool {
     auto [ctx, idx]{helpers::collect(input)};
 
-    bool found_decl{false};
-    for (const auto root : ctx->root_mod.ast) {
-        if (ctx->root_mod.ast.get_as_opt<ast::cfg_stmt>(root)) { return false; }
-        if (const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)}) {
-            const auto& decl_name{ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name};
-            if (decl_name == name) { found_decl = true; }
-        }
+    const auto& ast{ctx->root_mod.ast};
+    // An unexpanded `@cfg` group means selection never ran
+    if (std::ranges::any_of(ast, [&](ast::node_id root) { return root.is<ast::cfg_stmt>(); })) {
+        return false;
     }
-    return found_decl;
+    return ast.find_top_level_decl(name).has_value();
 }
+
+namespace {
+
+// The value of the top-level `name = ...` when it is a `Data` literal
+template <typename Data>
+auto top_level_value(const ast::AST& ast, std::string_view name) -> stdx::option<const Data&> {
+    const auto decl{ast.find_top_level_decl(name)};
+    if (!decl || !decl->value) { return stdx::none; }
+    return ast.get_as_opt<Data>(*decl->value);
+}
+
+template <typename Range, typename Proj>
+auto names_of(const ast::AST& ast, const Range& items, Proj proj) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    for (const auto& item : items) {
+        out.emplace_back(ast.get_as<ast::identifier_expr>(proj(item)).name);
+    }
+    return out;
+}
+
+} // namespace
 
 auto struct_fields(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
-        if (!se) { break; }
-        std::vector<std::string> out;
-        for (const auto& field : se->fields) {
-            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(field.name).name);
-        }
-        return out;
-    }
-    return {};
+    const auto& ast{ctx->root_mod.ast};
+    const auto  se{top_level_value<ast::struct_expr>(ast, name)};
+    if (!se) { return {}; }
+    return names_of(ast, se->fields, [](const auto& field) { return field.name; });
 }
 
 auto enum_variants(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto ee{ctx->root_mod.ast.get_as_opt<ast::enum_expr>(*decl->value)};
-        if (!ee) { break; }
-        std::vector<std::string> out;
-        for (const auto& variant : ee->enumerations) {
-            out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(variant.name).name);
-        }
-        return out;
-    }
-    return {};
+    const auto& ast{ctx->root_mod.ast};
+    const auto  ee{top_level_value<ast::enum_expr>(ast, name)};
+    if (!ee) { return {}; }
+    return names_of(ast, ee->enumerations, [](const auto& variant) { return variant.name; });
 }
 
 auto struct_members(std::string_view input, std::string_view name) -> std::vector<std::string> {
     auto [ctx, idx]{helpers::collect(input)};
-    for (const auto root : ctx->root_mod.ast) {
-        const auto decl{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(root)};
-        if (!decl || !decl->value) { continue; }
-        if (ctx->root_mod.ast.get_as<ast::identifier_expr>(decl->name).name != name) { continue; }
-        const auto se{ctx->root_mod.ast.get_as_opt<ast::struct_expr>(*decl->value)};
-        if (!se) { break; }
-        std::vector<std::string> out;
-        for (const auto& member : se->members) {
-            if (const auto md{ctx->root_mod.ast.get_as_opt<ast::decl_stmt>(*member)}) {
-                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(md->name).name);
-            } else if (const auto mu{ctx->root_mod.ast.get_as_opt<ast::using_stmt>(*member)}) {
-                out.emplace_back(ctx->root_mod.ast.get_as<ast::identifier_expr>(mu->alias).name);
-            }
+    const auto& ast{ctx->root_mod.ast};
+    const auto  se{top_level_value<ast::struct_expr>(ast, name)};
+    if (!se) { return {}; }
+    std::vector<std::string> out;
+    for (const auto& member : se->members) {
+        if (const auto md{ast.get_as_opt<ast::decl_stmt>(*member)}) {
+            out.emplace_back(ast.get_as<ast::identifier_expr>(md->name).name);
         }
-        return out;
     }
-    return {};
+    return out;
 }
 
-auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
-    auto [ctx, idx]{helpers::resolve(src)};
+auto resolver_error_codes(std::string_view src, const std::vector<mock_file>& imports)
+    -> std::vector<sema::error> {
+    auto [ctx, idx]{helpers::resolve(src, imports)};
     std::vector<sema::error> codes;
     if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& d : *diags) { codes.emplace_back(d.get_error()); }
@@ -267,8 +277,8 @@ auto resolver_error_codes(std::string_view src) -> std::vector<sema::error> {
     return codes;
 }
 
-auto raised(std::string_view src, sema::error code) -> bool {
-    const auto codes{resolver_error_codes(src)};
+auto raised(std::string_view src, sema::error code, const std::vector<mock_file>& imports) -> bool {
+    const auto codes{resolver_error_codes(src, imports)};
     return std::ranges::contains(codes, code);
 }
 
@@ -279,16 +289,36 @@ auto resolve_result::message_contains(std::string_view needle) const -> bool {
     return false;
 }
 
-[[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {
-    auto [ctx, idx]{helpers::resolve(src)};
+namespace {
+
+[[nodiscard]] auto collect_diags(const sema_test_context& ctx) -> resolve_result {
     resolve_result out;
-    if (const auto diags{ctx->root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
+    if (const auto diags{ctx.root_mod.diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& d : *diags) {
             out.codes.emplace_back(d.get_error());
             if (const auto& msg{d.get_message()}) { out.messages.emplace_back(*msg); }
         }
     }
     return out;
+}
+
+} // namespace
+
+[[nodiscard]] auto resolve_diags_for_target(std::string_view src, std::string_view target_triple)
+    -> resolve_result {
+    sema_test_context ctx{std::vector<mock_file>{}, TEST_FILENAME, src, std::cerr, target_triple};
+    ctx.analyzer.collect_symbols(ctx.root_mod);
+    ctx.analyzer.resolve_types(ctx.root_mod);
+    return collect_diags(ctx);
+}
+
+[[nodiscard]] auto resolve_diags(std::string_view src) -> resolve_result {
+    return collect_diags(*helpers::resolve(src).first);
+}
+
+[[nodiscard]] auto type_check_diags(std::string_view src, const std::vector<mock_file>& imports)
+    -> resolve_result {
+    return collect_diags(*helpers::type_check(src, imports).first);
 }
 
 } // namespace ghoti::tests::helpers

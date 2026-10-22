@@ -1,18 +1,18 @@
 #include "compiler/syntax/parser.hh"
 
 #include <cctype>
-#include <fmt/ranges.h>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <fmt/format.h>
-#include <magic_enum/magic_enum.hpp>
+#include <fmt/ranges.h>
 #include <stdx/enum.hh>
 #include <stdx/fixed/enum_map.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "compiler/arena.hh"
@@ -21,7 +21,6 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
-#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/precedence.hh"
@@ -31,13 +30,108 @@
 
 namespace ghoti::syntax {
 
+namespace {
+
+// The first malformed escape in a literal, reported at the escape rather than the literal
+[[nodiscard]] auto malformed_escape(const token_t& token, usize opener_len)
+    -> stdx::option<diagnostic> {
+    const auto slice{token.slice};
+    usize      line{token.line};
+    usize      column{token.column};
+    for (usize i{0}; i < slice.size();) {
+        if (i >= opener_len && slice[i] == '\\') {
+            const auto scan{scan_escape(stdx::string::substr(slice, i))};
+            if (!scan.error.empty()) {
+                return diagnostic{scan.error, error::UNKNOWN_CHARACTER_ESCAPE, line, column};
+            }
+            i += scan.length;
+            column += scan.length;
+            continue;
+        }
+        if (slice[i] == '\n') {
+            ++line;
+            column = 0;
+        } else {
+            ++column;
+        }
+        ++i;
+    }
+    return stdx::none;
+}
+
+// The slice's shape reliably tells which lexer failure produced an ILLEGAL token.
+[[nodiscard]] auto describe_illegal_token(const token_t& token) -> stdx::option<diagnostic> {
+    if (token.type != token_type_t::ILLEGAL || token.slice.empty()) { return stdx::none; }
+    const auto slice{token.slice};
+    const auto closed_by_quote{
+        [&](usize opener_len) { return slice.size() > opener_len && slice.ends_with('"'); }};
+
+    switch (slice.front()) {
+    case '"':
+        if (closed_by_quote(1)) {
+            if (!is_valid_utf8(slice)) {
+                return diagnostic{"String literal is not valid UTF-8", error::INVALID_UTF8, token};
+            }
+            if (auto escape{malformed_escape(token, 1)}) { return escape; }
+            return diagnostic{"Invalid escape sequence in string literal",
+                              error::UNKNOWN_CHARACTER_ESCAPE,
+                              token};
+        }
+        return diagnostic{"Unterminated string literal", error::UNTERMINATED_STRING, token};
+    case '\'':
+        return diagnostic{
+            "Invalid or unterminated character literal", error::INVALID_CHARACTER_LITERAL, token};
+    case '@':
+        if (slice.size() > 1 && slice[1] != '"') {
+            return diagnostic{
+                fmt::format("Unknown builtin '{}'", slice), error::UNKNOWN_BUILTIN, token};
+        }
+        if (!slice.starts_with("@\"")) { break; }
+        if (closed_by_quote(2)) {
+            if (!is_valid_utf8(slice)) {
+                return diagnostic{"Raw identifier is not valid UTF-8", error::INVALID_UTF8, token};
+            }
+            if (auto escape{malformed_escape(token, 2)}) { return escape; }
+            return diagnostic{"Invalid escape sequence in raw identifier",
+                              error::UNKNOWN_CHARACTER_ESCAPE,
+                              token};
+        }
+        return diagnostic{"Unterminated raw identifier", error::UNTERMINATED_RAW_IDENTIFIER, token};
+    case '\\':
+        if (slice.starts_with("\\\\")) {
+            return diagnostic{
+                "Multiline string literal is not valid UTF-8", error::INVALID_UTF8, token};
+        }
+        break;
+    default:
+        if (std::isdigit(static_cast<u8>(slice.front()))) {
+            return diagnostic{"Invalid numeric literal", error::INVALID_NUMBER_LITERAL, token};
+        }
+        break;
+    }
+
+    // A stray byte (NUL, `#`, `$`, invalid UTF-8) must not be echoed raw into the terminal
+    const auto byte{static_cast<u8>(slice.front())};
+    const auto shown{std::isprint(byte) ? fmt::format("{}", static_cast<char>(byte))
+                                        : fmt::format("\\x{:02X}", byte)};
+    return diagnostic{
+        fmt::format("Unexpected character '{}'", shown), error::UNEXPECTED_CHARACTER, token};
+}
+
+} // namespace
+
 auto parser::reset(std::string_view input) noexcept -> void {
     ast_.reset();
     input_ = input;
     lexer_.reset(input);
     pending_docs_.clear();
     pending_module_docs_.clear();
+    synthesized_stmts_.clear();
     module_doc_locked_ = false;
+    doc_tokens_.clear();
+    claimed_docs_.clear();
+    delimiter_depth_ = 0;
+    type_expression_depth_.reset();
     advance(2);
 }
 
@@ -48,10 +142,15 @@ auto parser::next_significant_token() noexcept -> token_t {
         case token_type_t::COMMENT: continue;
         case token_type_t::DOC_COMMENT:
             pending_docs_.emplace_back(token.slice, token.line);
+            doc_tokens_.emplace(offset_of(token.slice), token);
             continue;
         case token_type_t::MODULE_DOC_COMMENT:
-            // A `//!` past the first real token is not module-level; treat it as a plain comment.
-            if (!module_doc_locked_) { pending_module_docs_.emplace_back(token.slice, token.line); }
+            // A `//!` past the first real token documents nothing
+            if (module_doc_locked_) {
+                doc_tokens_.emplace(offset_of(token.slice), token);
+            } else {
+                pending_module_docs_.emplace_back(token.slice, token.line);
+            }
             continue;
         default: return token;
         }
@@ -62,6 +161,17 @@ auto parser::advance(u8 times) noexcept -> const token_t& {
     for (u8 i = 0; i < times; ++i) {
         current_token_ = peek_token_;
         peek_token_    = next_significant_token();
+        switch (current_token_.type) {
+        case token_type_t::LPAREN:
+        case token_type_t::LBRACKET:
+        case token_type_t::LBRACE:   ++delimiter_depth_; break;
+        case token_type_t::RPAREN:
+        case token_type_t::RBRACKET:
+        case token_type_t::RBRACE:
+            if (delimiter_depth_ > 0) { --delimiter_depth_; }
+            break;
+        default: break;
+        }
     }
     return current_token_;
 }
@@ -80,11 +190,25 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
 
     // Splits `pending_docs_` around a just-parsed statement: lines above it lead, a line on its
     // last line trails, lines strictly inside it are nested and dropped, the rest carry forward.
-    const auto attach_docs = [&](ast::node_id node, usize start_line) -> void {
+    // Lines at or above `floor_line` belong to an enclosing statement.
+    const auto attach_docs = [&](this const auto& self,
+                                 ast::node_id     node,
+                                 usize            start_line,
+                                 usize            floor_line = 0) -> void {
+        // A top-level `@cfg` block's items are module-level declarations too
+        if (const auto cfg{ast.get_as_opt<ast::cfg_stmt>(node)}) {
+            for (const auto& arm : cfg->arms) {
+                for (const auto item : arm.items) {
+                    self(*item, ast.location_of(*item).line, start_line);
+                }
+            }
+        }
+
         const auto                end_line{ast.end_location_of(node).line};
         std::vector<pending_doc>  leading;
         stdx::option<pending_doc> trailing;
         std::erase_if(pending_docs_, [&](const pending_doc& doc) -> bool {
+            if (floor_line != 0 && doc.line <= floor_line) { return false; }
             if (doc.line < start_line) {
                 leading.emplace_back(doc);
                 return true;
@@ -101,14 +225,13 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         stdx::option<ast::identifier_handle> name;
         if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}) {
             name.emplace(decl->name);
-        } else if (const auto alias{ast.get_as_opt<ast::using_stmt>(node)}) {
-            name.emplace(alias->alias);
-        } else if (const auto import{ast.get_as_opt<ast::import_stmt>(node)}) {
-            if (import->alias) { name.emplace(*import->alias); }
+        } else if (const auto import_node{ast.get_as_opt<ast::import_stmt>(node)}) {
+            if (import_node->alias) { name.emplace(*import_node->alias); }
         }
         if (name) {
             ast.attach_doc({ast.location_of(*name), ast.end_location_of(*name)},
                            join_docs(leading));
+            claim_docs(leading);
         }
     };
 
@@ -120,30 +243,67 @@ auto parser::consume(ast::AST& ast, ghoti::arena& arena) -> diagnostics {
         if (skip(current_token_.type)) { while (skip(advance().type)); } // NOLINT
         if (current_token_is(token_type_t::END)) { break; }
 
-        const auto stmt_start_line{current_token_.line};
-        auto       stmt{parse_statement()};
+        const auto       stmt_start_line{current_token_.line};
+        const checkpoint stmt_start{*this};
+        auto             stmt{parse_statement()};
         if (stmt) {
             ast.add_root(**stmt);
             attach_docs(**stmt, stmt_start_line);
+            for (const auto synthesized : take_synthesized()) { ast.add_root(*synthesized); }
         } else {
             diagnostics.emplace_back(std::move(stmt.error()));
-
-            // Errors should advance up to next logical end to prevent useless errors
-            const auto stop_condition = [](token_type_t tt) -> bool {
-                switch (tt) {
-                case token_type_t::RBRACE:
-                case token_type_t::SEMICOLON:
-                case token_type_t::END:       return true;
-                default:                      return false;
-                }
-            };
-            while (!stop_condition(advance().type)); // NOLINT
+            skip_failed_statement(stmt_start);
         }
         advance();
     }
 
     pending_docs_.clear();
+    // A parse error already skips text, so its docs would only add noise
+    if (diagnostics.empty()) { report_misplaced_docs(diagnostics); }
     return diagnostics;
+}
+
+auto parser::report_misplaced_docs(diagnostics& diagnostics) const -> void {
+    for (const auto& [offset, token] : doc_tokens_) {
+        if (claimed_docs_.contains(offset)) { continue; }
+        diagnostics.emplace_back(
+            token.type == token_type_t::MODULE_DOC_COMMENT
+                ? "A `//!` module doc comment must come before any code"
+                : "A `///` doc comment must precede a declaration, member, or parameter",
+            error::MISPLACED_DOC_COMMENT,
+            token);
+    }
+}
+
+auto parser::skip_failed_statement(const checkpoint& stmt_start) -> void {
+    rollback(stmt_start);
+    const auto begins_statement{[](const token_t& token) {
+        return token.is_member_token() || token.type == token_type_t::TEST ||
+               token.type == token_type_t::IMPL || token.type == token_type_t::END;
+    }};
+
+    usize depth{0};
+    while (!current_token_is(token_type_t::END)) {
+        switch (current_token_.type) {
+        case token_type_t::LBRACE:
+        case token_type_t::LPAREN:
+        case token_type_t::LBRACKET: ++depth; break;
+        case token_type_t::RPAREN:
+        case token_type_t::RBRACKET:
+            if (depth > 0) { --depth; }
+            break;
+        case token_type_t::RBRACE:
+            if (depth > 0) { --depth; }
+            // A brace-terminated statement (`test`, `impl`) has no trailing semicolon
+            if (depth == 0 && begins_statement(peek_token_)) { return; }
+            break;
+        case token_type_t::SEMICOLON:
+            if (depth == 0) { return; }
+            break;
+        default: break;
+        }
+        advance();
+    }
 }
 
 auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) -> void {
@@ -163,6 +323,16 @@ auto parser::attach_member_doc(ast::identifier_handle name, usize floor_line) ->
     if (owned.empty()) { return; }
 
     ast_->attach_doc({ast_->location_of(name), ast_->end_location_of(name)}, join_docs(owned));
+    claim_docs(owned);
+}
+
+auto parser::enter_nesting() -> stdx::result<depth_guard, diagnostic> {
+    depth_guard guard{nesting_depth_};
+    if (nesting_depth_ > MAX_NESTING_DEPTH) {
+        return make_syntax_err(
+            "Code nested too deeply", error::EXPRESSION_NESTED_TOO_DEEPLY, current_token_);
+    }
+    return guard;
 }
 
 auto parser::expect_peek(token_type_t expected) -> stdx::result<void, diagnostic> {
@@ -180,9 +350,10 @@ auto parser::expect_semicolon() -> stdx::result<void, diagnostic> {
 }
 
 auto parser::peek_error(token_type_t expected) -> diagnostic {
-    return diagnostic{fmt::format("Expected token {}, found {}",
-                                  magic_enum::enum_name(expected),
-                                  magic_enum::enum_name(peek_token_.type)),
+    if (auto lexer_failure{describe_illegal_token(peek_token_)}) { return *lexer_failure; }
+    return diagnostic{fmt::format("Expected {}, found {}",
+                                  token_type::describe(expected),
+                                  token_type::describe(peek_token_.type)),
                       error::UNEXPECTED_TOKEN,
                       peek_token_};
 }
@@ -203,17 +374,45 @@ auto parser::get_peek_precedence() const noexcept
         .value_or(std::pair{bind_precedence::LOWEST, stdx::none});
 }
 
+// `extern struct`, `extern union`, and `extern fn` start a type, not an `extern` declaration
+auto parser::starts_extern_type() const noexcept -> bool {
+    if (!current_token_is(token_type_t::EXTERN)) { return false; }
+    switch (peek_token_.type) {
+    case token_type_t::STRUCT:
+    case token_type_t::UNION:
+    case token_type_t::PACKED:
+    case token_type_t::FUNCTION: return true;
+    default:                     return false;
+    }
+}
+
 auto parser::parse_statement(semicolon_behavior behavior)
     -> stdx::result<ast::stmt_handle, diagnostic> {
-    // Not all decls are public so the condition needs to be rechecked
     PROFILE_FUNCTION();
-    if (current_token_.type == token_type_t::PUBLIC) {
+    const auto nesting{TRY(enter_nesting())};
+    // Not all decls are public so the condition needs to be rechecked
+    if (current_token_is(token_type_t::PUBLIC)) {
         switch (peek_token_.type) {
         case token_type_t::IMPORT: return ast::import_stmt::parse(*this);
-        case token_type_t::USING:  return ast::using_stmt::parse(*this);
         default:                   return ast::decl_stmt::parse(*this);
         }
-    } else if (current_token_.is_decl_token()) {
+    } else if (current_token_is(token_type_t::COMPTIME)) {
+        if (peek_token_is(token_type_t::LBRACE)) { return ast::block_stmt::parse(*this, true); }
+        if (peek_token_is(token_type_t::LET)) { return ast::decl_stmt::parse(*this); }
+        // `comptime x = ...` / `comptime x: T` is a declaration missing its `let mut`; an
+        // assignment can't be forced to compile time anyway
+        const bool missing_let{[&] {
+            if (!peek_token_is(token_type_t::IDENT)) { return false; }
+            const transaction tx{*this};
+            advance();
+            if (peek_token_is(token_type_t::ASSIGN)) { return true; }
+            if (!peek_token_is(token_type_t::COLON)) { return false; }
+            advance();
+            return !peek_token_is(token_type_t::LBRACE);
+        }()};
+        if (missing_let) { return ast::decl_stmt::parse(*this); }
+        return ast::expr_stmt::parse(*this, behavior);
+    } else if (current_token_.is_decl_token() && !starts_extern_type()) {
         return ast::decl_stmt::parse(*this);
     }
 
@@ -229,7 +428,6 @@ auto parser::parse_statement(semicolon_behavior behavior)
     case token_type_t::IMPORT:      return ast::import_stmt::parse(*this);
     case token_type_t::RETURN:      return ast::return_stmt::parse(*this, behavior);
     case token_type_t::TEST:        return ast::test_stmt::parse(*this);
-    case token_type_t::USING:       return ast::using_stmt::parse(*this);
     default:                        return ast::expr_stmt::parse(*this, behavior);
     }
 }
@@ -238,53 +436,42 @@ auto parser::parse_expression(bind_precedence precedence)
     -> stdx::result<ast::expr_handle, diagnostic> {
     PROFILE_FUNCTION();
     if (current_token_is(token_type_t::END)) {
-        return make_syntax_err(error::END_OF_TOKEN_STREAM, current_token_);
+        return make_syntax_err("Expected an expression, found the end of input",
+                               error::END_OF_TOKEN_STREAM,
+                               current_token_);
     }
 
-    const depth_guard guard{expr_depth_};
-    if (expr_depth_ > MAX_EXPRESSION_DEPTH) {
-        return make_syntax_err(
-            "Expression nested too deeply", error::EXPRESSION_NESTED_TOO_DEEPLY, current_token_);
-    }
+    const auto nesting{TRY(enter_nesting())};
 
     const auto prefix{get_prefix_fn_opt(current_token_.type)};
     if (!prefix) {
-        // The slice's leading char reliably tells which lexer failure produced ILLEGAL.
-        if (current_token_is(token_type_t::ILLEGAL) && !current_token_.slice.empty()) {
-            switch (current_token_.slice.front()) {
-            case '"':
-                return make_syntax_err(
-                    "Unterminated string literal", error::UNTERMINATED_STRING, current_token_);
-            case '\'':
-                return make_syntax_err("Invalid or unterminated character literal",
-                                       error::INVALID_CHARACTER_LITERAL,
-                                       current_token_);
-            case '@':
-                if (current_token_.slice.starts_with("@\"")) {
-                    return make_syntax_err("Unterminated raw identifier",
-                                           error::UNTERMINATED_RAW_IDENTIFIER,
-                                           current_token_);
-                }
-                break;
-            default:
-                if (std::isdigit(static_cast<u8>(current_token_.slice.front()))) {
-                    return make_syntax_err(
-                        "Invalid numeric literal", error::INVALID_NUMBER_LITERAL, current_token_);
-                }
-                break;
-            }
+        if (auto lexer_failure{describe_illegal_token(current_token_)}) {
+            return stdx::err{std::move(*lexer_failure)};
         }
-        return make_syntax_err(fmt::format("No prefix parse function for {}({}) found",
-                                           magic_enum::enum_name(current_token_.type),
-                                           current_token_.slice),
+        if (current_token_is(token_type_t::SLASH) && peek_token_is(token_type_t::STAR)) {
+            return make_syntax_err("Block comments are not supported; use `//` line comments",
+                                   error::MISSING_PREFIX_PARSER,
+                                   current_token_);
+        }
+        return make_syntax_err(fmt::format("Expected an expression, found {}",
+                                           token_type::describe(current_token_.type)),
                                error::MISSING_PREFIX_PARSER,
                                current_token_);
     }
     auto lhs_expression{TRY((*prefix)(*this))};
 
+    // Each chained operator deepens the (left-leaning) tree the later passes recurse through
+    usize chain_length{0};
     while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
+        if (ends_type_expression()) { break; }
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
+        if (++chain_length > MAX_OPERATOR_CHAIN) {
+            return make_syntax_err(
+                "Expression chains too many operators; split it into intermediate values",
+                error::EXPRESSION_NESTED_TOO_DEEPLY,
+                peek_token_);
+        }
         advance();
         lhs_expression = TRY((*infix)(*this, lhs_expression));
     }
@@ -334,8 +521,8 @@ namespace {
 constexpr auto PREFIX_FNS = [] -> auto {
     stdx::fixed::enum_map<token_type_t, parser::prefix_fn> fns;
 
-    fns[token_type_t::IDENT]            = ast::identifier_expr::parse;
-    fns[token_type_t::U8]               = ast::int_literal_expr::parse;
+    fns[token_type_t::IDENT]            = ast::parse_identifier_reference;
+    fns[token_type_t::CHAR]             = ast::int_literal_expr::parse;
     fns[token_type_t::REAL]             = ast::float_literal_expr::parse;
     fns[token_type_t::BANG]             = ast::unary_expr::parse;
     fns[token_type_t::NOT]              = ast::unary_expr::parse;
@@ -347,6 +534,8 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::AND_MUT]          = ast::reference_expr::parse;
     fns[token_type_t::CARET]            = ast::address_of_expr::parse;
     fns[token_type_t::CARET_MUT]        = ast::address_of_expr::parse;
+    fns[token_type_t::AND_MUT_POLY]     = ast::reference_expr::parse;
+    fns[token_type_t::CARET_MUT_POLY]   = ast::address_of_expr::parse;
     fns[token_type_t::DOT]              = ast::implicit_access_expr::parse;
     fns[token_type_t::DOT_DOT]          = ast::range_expr::parse; // `..hi` / `..` in `[]`
     fns[token_type_t::DOT_DOT_EQ]       = ast::range_expr::parse; // `..=hi` in `[]`
@@ -362,10 +551,11 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::IF]               = ast::if_expr::parse;
     fns[token_type_t::FUNCTION]         = ast::function_expr::parse;
     fns[token_type_t::MOVE]             = ast::parse_move_function_expr;
-    fns[token_type_t::NAKED]            = ast::parse_naked_function_expr;
+    fns[token_type_t::AT_LBRACKET]      = ast::parse_attributed_function_expr;
     fns[token_type_t::STRUCT]           = ast::struct_expr::parse;
     fns[token_type_t::UNION]            = ast::union_expr::parse;
     fns[token_type_t::INTERFACE]        = ast::interface_expr::parse;
+    fns[token_type_t::DYN]              = ast::type_expr::parse_dyn;
     fns[token_type_t::EXTERN]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::PACKED]           = ast::parse_modified_struct_or_union;
     fns[token_type_t::ENUM]             = ast::enum_expr::parse;
@@ -376,14 +566,23 @@ constexpr auto PREFIX_FNS = [] -> auto {
     fns[token_type_t::WHILE]            = ast::while_loop_expr::parse;
     fns[token_type_t::DO]               = ast::do_while_loop_expr::parse;
     fns[token_type_t::LOOP]             = ast::infinite_loop_expr::parse;
+    fns[token_type_t::UNROLL]           = ast::parse_unrolled_loop;
 
     for (const auto tt : stdx::enum_range<token_type_t::INT_2, token_type_t::INT_16>()) {
         fns[tt] = ast::int_literal_expr::parse;
     }
 
     for (const auto tt : ALL_PRIMITIVES) { fns[tt] = ast::identifier_expr::parse; }
-    for (const auto tt : builtins::ALL_TOKEN_TYPES) { fns[tt] = ast::identifier_expr::parse; }
+    // Type keywords with no primitive spelling still name a type value (`const H = ^mut opaque;`)
+    for (const auto tt : {token_type_t::TYPE_TYPE,
+                          token_type_t::AUTO_TYPE,
+                          token_type_t::OPAQUE_TYPE,
+                          token_type_t::NORETURN}) {
+        fns[tt] = ast::identifier_expr::parse;
+    }
+    fns[token_type_t::BUILTIN]           = ast::identifier_expr::parse;
     fns[token_type_t::BUILTIN_CFG_VALUE] = ast::cfg_value_expr::parse;
+    fns[token_type_t::COMPTIME]          = ast::parse_comptime_expr;
 
     return fns;
 }();
@@ -394,10 +593,13 @@ constexpr auto INFIX_FNS = [] -> auto {
     fns[token_type_t::PLUS]                 = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PLUS]            = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PERCENT]         = ast::binary_expr::parse;
+    fns[token_type_t::PLUS_PIPE]            = ast::binary_expr::parse;
     fns[token_type_t::MINUS]                = ast::binary_expr::parse;
     fns[token_type_t::MINUS_PERCENT]        = ast::binary_expr::parse;
+    fns[token_type_t::MINUS_PIPE]           = ast::binary_expr::parse;
     fns[token_type_t::STAR]                 = ast::binary_expr::parse;
     fns[token_type_t::STAR_PERCENT]         = ast::binary_expr::parse;
+    fns[token_type_t::STAR_PIPE]            = ast::binary_expr::parse;
     fns[token_type_t::SLASH]                = ast::binary_expr::parse;
     fns[token_type_t::PERCENT]              = ast::binary_expr::parse;
     fns[token_type_t::LT]                   = ast::binary_expr::parse;
@@ -414,6 +616,7 @@ constexpr auto INFIX_FNS = [] -> auto {
     fns[token_type_t::SHR]                  = ast::binary_expr::parse;
     fns[token_type_t::SHL]                  = ast::binary_expr::parse;
     fns[token_type_t::SHL_PERCENT]          = ast::binary_expr::parse;
+    fns[token_type_t::SHL_PIPE]             = ast::binary_expr::parse;
     fns[token_type_t::DOT]                  = ast::dot_expr::parse;
     fns[token_type_t::DOT_DOT]              = ast::range_expr::parse;
     fns[token_type_t::DOT_DOT_EQ]           = ast::range_expr::parse;
@@ -425,16 +628,20 @@ constexpr auto INFIX_FNS = [] -> auto {
     fns[token_type_t::ASSIGN]               = ast::assignment_expr::parse;
     fns[token_type_t::PLUS_ASSIGN]          = ast::assignment_expr::parse;
     fns[token_type_t::PLUS_PERCENT_ASSIGN]  = ast::assignment_expr::parse;
+    fns[token_type_t::PLUS_PIPE_ASSIGN]     = ast::assignment_expr::parse;
     fns[token_type_t::MINUS_ASSIGN]         = ast::assignment_expr::parse;
     fns[token_type_t::MINUS_PERCENT_ASSIGN] = ast::assignment_expr::parse;
+    fns[token_type_t::MINUS_PIPE_ASSIGN]    = ast::assignment_expr::parse;
     fns[token_type_t::STAR_ASSIGN]          = ast::assignment_expr::parse;
     fns[token_type_t::STAR_PERCENT_ASSIGN]  = ast::assignment_expr::parse;
+    fns[token_type_t::STAR_PIPE_ASSIGN]     = ast::assignment_expr::parse;
     fns[token_type_t::SLASH_ASSIGN]         = ast::assignment_expr::parse;
     fns[token_type_t::PERCENT_ASSIGN]       = ast::assignment_expr::parse;
     fns[token_type_t::BW_AND_ASSIGN]        = ast::assignment_expr::parse;
     fns[token_type_t::BW_OR_ASSIGN]         = ast::assignment_expr::parse;
     fns[token_type_t::SHL_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::SHL_PERCENT_ASSIGN]   = ast::assignment_expr::parse;
+    fns[token_type_t::SHL_PIPE_ASSIGN]      = ast::assignment_expr::parse;
     fns[token_type_t::SHR_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::NOT_ASSIGN]           = ast::assignment_expr::parse;
     fns[token_type_t::XOR_ASSIGN]           = ast::assignment_expr::parse;
@@ -447,6 +654,13 @@ constexpr auto INFIX_FNS = [] -> auto {
 
 auto parser::get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn> {
     return PREFIX_FNS.get_opt(tt);
+}
+
+auto parser::ends_type_expression() const noexcept -> bool {
+    if (!type_expression_depth_ || *type_expression_depth_ != delimiter_depth_) { return false; }
+    if (peek_token_.type == token_type_t::LBRACE) { return true; }
+    const auto peek_binding{binding::try_get_from(peek_token_.type)};
+    return peek_binding && peek_binding->precedence == bind_precedence::ASSIGNMENT;
 }
 
 auto parser::get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn> {

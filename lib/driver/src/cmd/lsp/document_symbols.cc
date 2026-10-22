@@ -13,7 +13,7 @@
 
 namespace ghoti::lsp {
 
-auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> symbol_kind {
+auto symbol_kind_of(const mod::module_t& module, const ast::decl_stmt& decl) -> symbol_kind {
     if (decl.value) {
         if (module.ast.get_as_opt<ast::function_expr>(*decl.value)) {
             return symbol_kind::FUNCTION;
@@ -24,16 +24,16 @@ auto symbol_kind_of(const mod::module& module, const ast::decl_stmt& decl) -> sy
             return symbol_kind::STRUCT;
         }
     }
-    return decl.has_modifier(ast::decl_modifiers::CONSTANT) ? symbol_kind::CONSTANT
-                                                            : symbol_kind::VARIABLE;
+    return decl.has_modifier(ast::decl_modifiers::MUT) ? symbol_kind::VARIABLE
+                                                       : symbol_kind::CONSTANT;
 }
 
-auto document_symbols(const mod::module& module) -> nlohmann::json {
+auto document_symbols(const mod::module_t& module) -> nlohmann::json {
     auto out = nlohmann::json::array();
 
     for (const auto root_id : module.ast) {
         const auto decl{module.ast.get_as_opt<ast::decl_stmt>(root_id)};
-        if (!decl) { continue; }
+        if (!decl || decl->is_default_wrapper) { continue; }
         const auto name_ident{module.ast.get_as_opt<ast::identifier_expr>(decl->name)};
         if (!name_ident) { continue; }
 
@@ -44,8 +44,8 @@ auto document_symbols(const mod::module& module) -> nlohmann::json {
         out.push_back({
             {"name", std::string{name_ident->name}},
             {"kind", std::to_underlying(symbol_kind_of(module, *decl))},
-            {"range", range_of(full_span)},
-            {"selectionRange", range_of(name_span)},
+            {"range", range_of(full_span, module.source)},
+            {"selectionRange", range_of(name_span, module.source)},
         });
     }
     return out;

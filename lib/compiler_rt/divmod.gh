@@ -1,0 +1,739 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/udivmod.zig
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/int.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const HalveInt = compiler_rt.HalveInt;
+const Log2Int = std.math.Log2Int;
+const symbol = compiler_rt.symbol;
+const abs_i32 = compiler_rt.abs_i32;
+const abs_i64 = compiler_rt.abs_i64;
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_idiv, "__aeabi_idiv");
+        symbol(__aeabi_uidiv, "__aeabi_uidiv");
+    }
+
+    symbol(__udivmodti4, "__udivmodti4");
+    symbol(__udivmodsi4, "__udivmodsi4");
+    symbol(__udivmoddi4, "__udivmoddi4");
+
+    symbol(__divmodti4, "__divmodti4");
+    symbol(__divmodsi4, "__divmodsi4");
+    symbol(__divmoddi4, "__divmoddi4");
+
+    symbol(__divti3, "__divti3");
+    symbol(__divsi3, "__divsi3");
+    symbol(__divdi3, "__divdi3");
+
+    symbol(__udivti3, "__udivti3");
+    symbol(__udivsi3, "__udivsi3");
+    symbol(__udivdi3, "__udivdi3");
+
+    symbol(__modti3, "__modti3");
+    symbol(__modsi3, "__modsi3");
+    symbol(__moddi3, "__moddi3");
+
+    symbol(__umodti3, "__umodti3");
+    symbol(__umodsi3, "__umodsi3");
+    symbol(__umoddi3, "__umoddi3");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_idiv = fn(n: i32, d: i32) callconv(.aapcs): i32 {
+        return div_i32(n, d);
+    };
+
+    const __aeabi_uidiv = fn(n: u32, d: u32) callconv(.aapcs): u32 {
+        return div_u32(n, d);
+    };
+}
+
+const __udivmodti4 = fn(a: u128, b: u128, maybe_rem: ^mut u128) callconv(.c): u128 {
+    return udivmod(u128, a, b, maybe_rem);
+};
+
+@[testing] const test__udivmodti4 = fn(a: u128, b: u128, expected_q: u128, expected_r: u128): void {
+    let mut r: u128 = undefined;
+    let q = __udivmodti4(a, b, ^mut r);
+    @expect(expected_q == q);
+    @expect(expected_r == r);
+};
+
+test "__udivmodti4" {
+    import "cases/udivmodti4.gh" as udivmodti4_cases;
+    for (udivmodti4_cases.cases) |case| {
+        test__udivmodti4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __udivmodsi4 = fn(a: u32, b: u32, rem: ^mut u32) callconv(.c): u32 {
+    let d = __udivsi3(a, b);
+    *rem = a - d * b;
+    return d;
+};
+
+@[testing] const test__udivmodsi4 = fn(a: u32, b: u32, expected_q: u32, expected_r: u32): void {
+    let mut r: u32 = undefined;
+    let q = __udivmodsi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__udivmodsi4" {
+    import "cases/udivmodsi4.gh" as udivmodsi4_cases;
+    for (udivmodsi4_cases.cases) |case| {
+        test__udivmodsi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __udivmoddi4 = fn(a: u64, b: u64, maybe_rem: ^mut u64) callconv(.c): u64 {
+    return udivmod(u64, a, b, maybe_rem);
+};
+
+@[testing] const test__udivmoddi4 = fn(a: u64, b: u64, expected_q: u64, expected_r: u64): void {
+    let mut r: u64 = undefined;
+    let q = __udivmoddi4(a, b, ^mut r);
+    @expect(expected_q == q);
+    @expect(expected_r == r);
+};
+
+test "__udivmoddi4" {
+    import "cases/udivmoddi4.gh" as udivmoddi4_cases;
+    for (udivmoddi4_cases.cases) |case| {
+        test__udivmoddi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __divmodti4 = fn(a: i128, b: i128, rem: ^mut i128) callconv(.c): i128 {
+    let d = __divti3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmodti4 = fn(a: i128, b: i128, expected_q: i128, expected_r: i128): void {
+    let mut r: i128 = undefined;
+    let q = __divmodti4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmodti4" {
+    const cases = [_][4]i128{
+        [_]i128{ 0, 1, 0, 0 },
+        [_]i128{ 0, -1, 0, 0 },
+        [_]i128{ 2, 1, 2, 0 },
+        [_]i128{ 2, -1, -2, 0 },
+        [_]i128{ -2, 1, -2, 0 },
+        [_]i128{ -2, -1, 2, 0 },
+        [_]i128{ 7, 5, 1, 2 },
+        [_]i128{ -7, 5, -1, -2 },
+        [_]i128{ 19, 5, 3, 4 },
+        [_]i128{ 19, -5, -3, 4 },
+        [_]i128{
+            @bitCast(0x80000000000000000000000000000000u128),
+            8,
+            @bitCast(0xf0000000000000000000000000000000u128),
+            0,
+        },
+        [_]i128{
+            @bitCast(0x80000000000000000000000000000007u128),
+            8,
+            @bitCast(0xf0000000000000000000000000000001u128),
+            -1,
+        },
+    };
+
+    for (cases) |case| {
+        test__divmodti4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __divmodsi4 = fn(a: i32, b: i32, rem: ^mut i32) callconv(.c): i32 {
+    let d = __divsi3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmodsi4 = fn(a: i32, b: i32, expected_q: i32, expected_r: i32): void {
+    let mut r: i32 = undefined;
+    let q = __divmodsi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmodsi4" {
+    const cases = [_][4]i32{
+        [_]i32{ 0, 1, 0, 0 },
+        [_]i32{ 0, -1, 0, 0 },
+        [_]i32{ 2, 1, 2, 0 },
+        [_]i32{ 2, -1, -2, 0 },
+        [_]i32{ -2, 1, -2, 0 },
+        [_]i32{ -2, -1, 2, 0 },
+        [_]i32{ 7, 5, 1, 2 },
+        [_]i32{ -7, 5, -1, -2 },
+        [_]i32{ 19, 5, 3, 4 },
+        [_]i32{ 19, -5, -3, 4 },
+        [_]i32{ @bitCast(0x80000000u32), 8, @bitCast(0xf0000000u32), 0 },
+        [_]i32{ @bitCast(0x80000007u32), 8, @bitCast(0xf0000001u32), -1 },
+    };
+
+    for (cases) |case| {
+        test__divmodsi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __divmoddi4 = fn(a: i64, b: i64, rem: ^mut i64) callconv(.c): i64 {
+    let d = __divdi3(a, b);
+    *rem = a - d *% b;
+    return d;
+};
+
+@[testing] const test__divmoddi4 = fn(a: i64, b: i64, expected_q: i64, expected_r: i64): void {
+    let mut r: i64 = undefined;
+    let q: i64 = __divmoddi4(a, b, ^mut r);
+    @expect(q == expected_q);
+    @expect(r == expected_r);
+};
+
+test "__divmoddi4" {
+    const cases = [_][4]i64{
+        [_]i64{ 0, 1, 0, 0 },
+        [_]i64{ 0, -1, 0, 0 },
+        [_]i64{ 2, 1, 2, 0 },
+        [_]i64{ 2, -1, -2, 0 },
+        [_]i64{ -2, 1, -2, 0 },
+        [_]i64{ -2, -1, 2, 0 },
+        [_]i64{ 7, 5, 1, 2 },
+        [_]i64{ -7, 5, -1, -2 },
+        [_]i64{ 19, 5, 3, 4 },
+        [_]i64{ 19, -5, -3, 4 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 8, @bitCast(0xf000000000000000u64), 0 },
+        [_]i64{ @bitCast(0x8000000000000007u64), 8, @bitCast(0xf000000000000001u64), -1 },
+    };
+
+    for (cases) |case| {
+        test__divmoddi4(case[0], case[1], case[2], case[3]);
+    }
+}
+
+const __divti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+    return div(a, b);
+};
+
+@[testing] const test__divti3 = fn(a: i128, b: i128, expected: i128): void {
+    let x = __divti3(a, b);
+    @expect(x == expected);
+};
+
+test "divti3" {
+    test__divti3(0, 1, 0);
+    test__divti3(0, -1, 0);
+    test__divti3(2, 1, 2);
+    test__divti3(2, -1, -2);
+    test__divti3(-2, 1, -2);
+    test__divti3(-2, -1, 2);
+
+    test__divti3(@bitCast(i128, 0x8 << 124), 1, @bitCast(i128, 0x8 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), -1, @bitCast(i128, 0x8 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), -2, @bitCast(i128, 0x4 << 124));
+    test__divti3(@bitCast(i128, 0x8 << 124), 2, @bitCast(i128, 0xc << 124));
+}
+
+const __divsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+    return div_i32(n, d);
+};
+
+@[testing] const test__divsi3 = fn(a: i32, b: i32, expected: i32): void {
+    let q = __divsi3(a, b);
+    @expect(q == expected);
+};
+
+test "__divsi3" {
+    const cases = [_][3]i32{
+        [_]i32{ 0, 1, 0 },
+        [_]i32{ 0, -1, 0 },
+        [_]i32{ 2, 1, 2 },
+        [_]i32{ 2, -1, -2 },
+        [_]i32{ -2, 1, -2 },
+        [_]i32{ -2, -1, 2 },
+        [_]i32{ @bitCast(0x80000000u32), 1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -1, @bitCast(0x80000000u32) },
+        [_]i32{ @bitCast(0x80000000u32), -2, 0x40000000 },
+        [_]i32{ @bitCast(0x80000000u32), 2, @bitCast(0xC0000000u32) },
+    };
+
+    for (cases) |case| {
+        test__divsi3(case[0], case[1], case[2]);
+    }
+}
+
+const __divdi3 = fn(n: i64, d: i64) callconv(.c): i64 {
+    return div_i64(n, d);
+};
+
+@[testing] const test__divdi3 = fn(a: i64, b: i64, expected: i64): void {
+    let q = __divdi3(a, b);
+    @expect(q == expected);
+};
+
+test "__divdi3" {
+    const cases = [_][3]i64{
+        [_]i64{ 0, 1, 0 },
+        [_]i64{ 0, -1, 0 },
+        [_]i64{ 2, 1, 2 },
+        [_]i64{ 2, -1, -2 },
+        [_]i64{ -2, 1, -2 },
+        [_]i64{ -2, -1, 2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 1, @bitCast(0x8000000000000000u64) },
+        [_]i64{ @bitCast(0x8000000000000000u64), -1, @bitCast(0x8000000000000000u64) },
+        [_]i64{ @bitCast(0x8000000000000000u64), -2, 0x4000000000000000 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 2, @bitCast(0xC000000000000000u64) },
+    };
+
+    for (cases) |case| {
+        test__divdi3(case[0], case[1], case[2]);
+    }
+}
+
+const __udivti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+    return udivmod(u128, a, b, nullptr);
+};
+
+const __udivsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+    return div_u32(n, d);
+};
+
+@[testing] const test__udivsi3 = fn(a: u32, b: u32, expected: u32): void {
+    let q = __udivsi3(a, b);
+    @expect(q == expected);
+};
+
+test "__udivsi3" {
+    import "cases/udivsi3.gh" as udivsi3_cases;
+    for (udivsi3_cases.cases) |case| {
+        test__udivsi3(case[0], case[1], case[2]);
+    }
+}
+
+const __udivdi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+    return __udivmoddi4(a, b, nullptr);
+};
+
+@[inline(.always)] const div = fn(a: i128, b: i128): i128 {
+    let s_a = a >> 127; // s = a < 0 ? -1 : 0
+    let s_b = b >> 127; // s = b < 0 ? -1 : 0
+
+    let an = (a ^ s_a) -% s_a; // negate if s == -1
+    let bn = (b ^ s_b) -% s_b; // negate if s == -1
+
+    let r = udivmod(u128, @bitCast(an), @bitCast(bn), nullptr);
+    let s = s_a ^ s_b;
+    return (@bitCast(i128, r) ^ s) -% s; // negate if s == -1
+};
+
+const __modti3 = fn(a: i128, b: i128) callconv(.c): i128 {
+    return mod(a, b);
+};
+
+@[testing] const test__modti3 = fn(a: i128, b: i128, expected: i128): void {
+    let x = __modti3(a, b);
+    @expect(x == expected);
+};
+
+test "__modti3" {
+    test__modti3(0, 1, 0);
+    test__modti3(0, -1, 0);
+    test__modti3(5, 3, 2);
+    test__modti3(5, -3, 2);
+    test__modti3(-5, 3, -2);
+    test__modti3(-5, -3, -2);
+
+    test__modti3(0x8000000000000000, 1, 0x0);
+    test__modti3(0x8000000000000000, -1, 0x0);
+    test__modti3(0x8000000000000000, 2, 0x0);
+    test__modti3(0x8000000000000000, -2, 0x0);
+    test__modti3(0x8000000000000000, 3, 2);
+    test__modti3(0x8000000000000000, -3, 2);
+
+    const make_ti = fn(high: u64, low: u64): i128 {
+        let mut result: u128 = high;
+        result <<= 64;
+        result |= low;
+        return @bitCast(result);
+    };
+
+    test__modti3(make_ti(0x8000000000000000, 0), 1, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), -1, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), 2, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), -2, 0x0);
+    test__modti3(make_ti(0x8000000000000000, 0), 3, -2);
+    test__modti3(make_ti(0x8000000000000000, 0), -3, -2);
+}
+
+const __modsi3 = fn(n: i32, d: i32) callconv(.c): i32 {
+    return n - __divsi3(n, d) *% d;
+};
+
+@[testing] const test__modsi3 = fn(a: i32, b: i32, expected_r: i32): void {
+    let r = __modsi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__modsi3" {
+    const cases = [_][3]i32{
+        [_]i32{ 0, 1, 0 },
+        [_]i32{ 0, -1, 0 },
+        [_]i32{ 5, 3, 2 },
+        [_]i32{ 5, -3, 2 },
+        [_]i32{ -5, 3, -2 },
+        [_]i32{ -5, -3, -2 },
+        [_]i32{ @bitCast(0x80000000u32), 1, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), 2, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), -2, 0x0 },
+        [_]i32{ @bitCast(0x80000000u32), 3, -2 },
+        [_]i32{ @bitCast(0x80000000u32), -3, -2 },
+    };
+
+    for (cases) |case| {
+        test__modsi3(case[0], case[1], case[2]);
+    }
+}
+
+const __moddi3 = fn(a: i64, b: i64) callconv(.c): i64 {
+    let abs_a = abs_i64(a);
+    let abs_b = abs_i64(b);
+    let mut r: u64 = undefined;
+    _ = __udivmoddi4(@bitCast(abs_a), @bitCast(abs_b), ^mut r);
+    return (@bitCast(i64, r) ^ (a >> 63)) -% (a >> 63);
+};
+
+@[testing] const test__moddi3 = fn(a: i64, b: i64, expected_r: i64): void {
+    let r = __moddi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__moddi3" {
+    const cases = [_][3]i64{
+        [_]i64{ 0, 1, 0 },
+        [_]i64{ 0, -1, 0 },
+        [_]i64{ 5, 3, 2 },
+        [_]i64{ 5, -3, 2 },
+        [_]i64{ -5, 3, -2 },
+        [_]i64{ -5, -3, -2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 1, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -1, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 2, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -2, 0 },
+        [_]i64{ @bitCast(0x8000000000000000u64), 3, -2 },
+        [_]i64{ @bitCast(0x8000000000000000u64), -3, -2 },
+    };
+
+    for (cases) |case| {
+        test__moddi3(case[0], case[1], case[2]);
+    }
+}
+
+const __umodti3 = fn(a: u128, b: u128) callconv(.c): u128 {
+    let mut r: u128 = undefined;
+    _ = udivmod(u128, a, b, ^mut r);
+    return r;
+};
+
+const __umodsi3 = fn(n: u32, d: u32) callconv(.c): u32 {
+    return n - __udivsi3(n, d) * d;
+};
+
+@[testing] const test__umodsi3 = fn(a: u32, b: u32, expected_r: u32): void {
+    let r = __umodsi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__umodsi3" {
+    import "cases/umodsi3.gh" as umodsi3_cases;
+    for (umodsi3_cases.cases) |case| {
+        test__umodsi3(case[0], case[1], case[2]);
+    }
+}
+
+const __umoddi3 = fn(a: u64, b: u64) callconv(.c): u64 {
+    let mut r: u64 = undefined;
+    _ = __udivmoddi4(a, b, ^mut r);
+    return r;
+};
+
+@[testing] const test__umoddi3 = fn(a: u64, b: u64, expected_r: u64): void {
+    let r = __umoddi3(a, b);
+    @expect(r == expected_r);
+};
+
+test "__umoddi3" {
+    const cases = [_][3]u64{
+        [_]u64{ 0, 1, 0 },
+        [_]u64{ 2, 1, 0 },
+        [_]u64{ 0x8000000000000000, 1, 0x0 },
+        [_]u64{ 0x8000000000000000, 2, 0x0 },
+        [_]u64{ 0xFFFFFFFFFFFFFFFF, 2, 0x1 },
+    };
+
+    for (cases) |case| {
+        test__umoddi3(case[0], case[1], case[2]);
+    }
+}
+
+@[inline(.always)] const mod = fn(a: i128, b: i128): i128 {
+    let s_a = a >> 127; // s = a < 0 ? -1 : 0
+    let s_b = b >> 127; // s = b < 0 ? -1 : 0
+
+    let an = (a ^ s_a) -% s_a; // negate if s == -1
+    let bn = (b ^ s_b) -% s_b; // negate if s == -1
+
+    let mut r: u128 = undefined;
+    _ = udivmod(u128, @bitCast(an), @bitCast(bn), ^mut r);
+    return (@bitCast(i128, r) ^ s_a) -% s_a; // negate if s == -1
+};
+
+/// Returns U / divisor and sets remainder = U % divisor, where U is provided by its high and low limbs.
+const divwide_generic = fn(
+    comptime T: type,
+    u_high: T,
+    u_low: T,
+    divisor: T,
+    remainder: &mut T,
+): T {
+    const HalfT = HalveInt(T, false).HalfT;
+    const b = @as(T, 1) << (@bitSizeOf(T) / 2);
+    let mut un64: T = undefined;
+    let mut un10: T = undefined;
+
+    let s: Log2Int(T) = @intCast(@clz(divisor));
+    if (s > 0) {
+        // Normalize divisor
+        divisor <<= s;
+        un64 = (u_high << s) | (u_low >> @intCast(@bitSizeOf(T) - @intCast(T, s)));
+        un10 = u_low << s;
+    } else {
+        // Avoid UB from (u0 >> @bitSizeOf(T))
+        un64 = u_high;
+        un10 = u_low;
+    }
+
+    // Break divisor up into two 32-bit digits
+    let vn1 = divisor >> (@bitSizeOf(T) / 2);
+    let vn0 = divisor & std.math.max_int(HalfT);
+
+    // Break right half of U into two digits
+    let un1 = un10 >> (@bitSizeOf(T) / 2);
+    let un0 = un10 & std.math.max_int(HalfT);
+
+    // Compute the first quotient digit
+    let mut q1 = un64 / vn1;
+    let mut rhat = un64 -% q1 *% vn1;
+
+    // q1 has at most error 2. No more than 2 iterations
+    while (q1 >= b or q1 * vn0 > b * rhat + un1) {
+        q1 -= 1;
+        rhat += vn1;
+        if (rhat >= b) break;
+    }
+
+    let un21 = un64 *% b +% un1 -% q1 *% divisor;
+
+    // Compute the second quotient digit
+    let mut q0 = un21 / vn1;
+    rhat = un21 -% q0 *% vn1;
+
+    // q0 has at most error 2. No more than 2 iterations.
+    while (q0 >= b or q0 * vn0 > b * rhat + un0) {
+        q0 -= 1;
+        rhat += vn1;
+        if (rhat >= b) break;
+    }
+
+    remainder = (un21 *% b +% un0 -% q0 *% divisor) >> s;
+    return q1 *% b +% q0;
+};
+
+/// Returns U / divisor and sets remainder = U % divisor, where U is provided by its high and low limbs.
+const divwide = fn(comptime T: type, u_high: T, u_low: T, divisor: T, remainder: &mut T): T {
+    if comptime (T == u64 and @targetArch() == .x86_64 and @targetOs() != .windows) {
+        let mut quo: T = undefined;
+        let mut rem: T = undefined;
+        asm {
+            template: "divq %2",
+            outputs: ("={rax}" = quo, "={rdx}" = rem),
+            inputs: ("r" = divisor, "{rax}" = u_low, "{rdx}" = u_high),
+        };
+        remainder = rem;
+        return quo;
+    } else {
+        return divwide_generic(T, u_high, u_low, divisor, remainder);
+    }
+};
+
+// Returns dividend / divisor and sets maybe_rem = dividend % divisor if non-null.
+const udivmod = fn(comptime T: type, dividend: T, divisor: T, maybe_rem: ^mut T): T {
+    const HalfT = HalveInt(T, false).HalfT;
+    const half_bits = @bitSizeOf(HalfT);
+
+    if (divisor > dividend) {
+        if (maybe_rem) {
+            *maybe_rem = dividend;
+        }
+        return 0;
+    }
+
+    let a: [2]HalfT = @bitCast(dividend); // [0] is low bits, [1] is high bits
+    let b: [2]HalfT = @bitCast(divisor); // [0] is low bits, [1] is high bits
+    let mut q: [2]mut HalfT = undefined;
+    let mut r: [2]mut HalfT = undefined;
+
+    // When the divisor fits in 64 bits, an optimized path can be taken
+    if (b[1] == 0) {
+        r[1] = 0;
+        if (a[1] < b[0]) {
+            // Result fits in 64 bits
+            q[1] = 0;
+            q[0] = divwide(HalfT, a[1], a[0], b[0], &mut r[0]);
+        } else {
+            // First divide high part to get rem, then a_hi < b_lo
+            q[1] = a[1] / b[0];
+            q[0] = divwide(HalfT, a[1] % b[0], a[0], b[0], &mut r[0]);
+        }
+
+        if (maybe_rem) {
+            *maybe_rem = @bitCast(r);
+        }
+        return @bitCast(q);
+    }
+
+    // Large-divisor case: b[1] != 0, so the quotient fits in one HalfT word.
+    //
+    // Trial quotient via divwide (Knuth Vol 2, Section 4.3.1):
+    // Normalize the divisor so its high half has the MSB set, then use divwide
+    // on the top bits to get a trial quotient that is at most 1 too large.
+    // This replaces the O(shift) bit-by-bit loop with O(1) operations.
+    let s: Log2Int(HalfT) = @intCast(@clz(b[1]));
+    if (s == 0) {
+        // b[1] already has its MSB set, so b >= 2^(T_bits - 1). Since a >= b
+        // (we passed the b_ > a_ check), a >= 2^(T_bits - 1) too, meaning
+        // a[1] also has its MSB set. Therefore a / b < 2, and the quotient
+        // is exactly 1.
+        q = @bitCast(0);
+        q[0] = 1;
+        if (maybe_rem) {
+            *maybe_rem = dividend - divisor;
+        }
+        return @bitCast(q);
+    }
+
+    // Normalize b: shift left by s so bn_hi has its MSB set
+    let sr: Log2Int(
+        HalfT
+    ) = @intCast(half_bits - @as(std.math.IntFittingRange(0, half_bits), @intCast(s)));
+    let bn_hi: HalfT = (b[1] << s) | (b[0] >> sr);
+
+    // Trial numerator: the top (half_bits + s) bits of (a << s), as [a2:a1].
+    // a2 < bn_hi is guaranteed since a2 < 2^s and bn_hi >= 2^(half_bits - 1).
+    let a2: HalfT = a[1] >> sr;
+    let a1: HalfT = (a[1] << s) | (a[0] >> sr);
+
+    // Trial quotient via divwide: q_hat = floor([a2:a1] / bn_hi).
+    // By Knuth's theorem (normalized divisor), q <= q_hat <= q + 1.
+    let mut r_tmp: HalfT = undefined;
+    let mut q_hat: HalfT = divwide(HalfT, a2, a1, bn_hi, &mut r_tmp);
+
+    // Verify: q_hat * b must not exceed a.
+    // Compute the product using HalfT * HalfT -> T widening multiplications,
+    // which are native single-instruction ops when HalfT fits in a register
+    // (e.g. u64 * u64 -> u128 via mulq on x86_64, mul on aarch64).
+    // product = q_hat * [b[1]:b[0]] = [p_top : p_mid : p_lo] (3 half-words)
+    let prod_lo: T = @as(T, q_hat) * @as(T, b[0]);
+    let prod_hi: T = @as(T, q_hat) * @as(T, b[1]);
+
+    let prod_lo_parts: [2]HalfT = @bitCast(prod_lo);
+    let prod_hi_parts: [2]HalfT = @bitCast(prod_hi);
+
+    let mut p_mid: HalfT = undefined;
+    let mut overflow = @addWithOverflow(prod_hi_parts[0], prod_lo_parts[1], &mut p_mid);
+    let p_top: HalfT = prod_hi_parts[1] +% @intFromBool(overflow);
+    let mut p_lo: HalfT = prod_lo_parts[0];
+
+    // If product > a, decrement q_hat (at most once, guaranteed by Knuth).
+    if (p_top > 0 or p_mid > a[1] or (p_mid == a[1] and p_lo > a[0])) {
+        q_hat -= 1;
+
+        // Subtract b from the product for correct remainder computation.
+        // After correction, (q_hat * b) fits in T bits, so borrows into
+        // p_top cancel it to zero -- we only need [p_mid:p_lo].
+        overflow = @subWithOverflow(p_lo, b[0], &mut p_lo);
+        let mut sub_mid: HalfT = undefined;
+        _ = @subWithOverflow(p_mid, b[1], &mut sub_mid);
+        _ = @subWithOverflow(sub_mid, @intFromBool(HalfT, overflow), &mut p_mid);
+    }
+
+    q = @bitCast(0);
+    q[0] = q_hat;
+
+    if (maybe_rem) {
+        // remainder = a - q_hat * b = [a[1]:a[0]] - [p_mid:p_lo]
+        // This subtraction is non-negative since q_hat <= true quotient.
+        overflow = @subWithOverflow(a[0], p_lo, &mut r[0]);
+        let mut rem_hi: HalfT = undefined;
+        _ = @subWithOverflow(a[1], p_mid, &mut rem_hi);
+        _ = @subWithOverflow(rem_hi, @intFromBool(HalfT, overflow), &mut r[1]);
+        *maybe_rem = @bitCast(r);
+    }
+    return @bitCast(q);
+};
+
+@[inline(.always)] const div_i32 = fn(n: i32, d: i32): i32 {
+    // Set aside the sign of the quotient.
+    let sign: u32 = @bitCast((n ^ d) >> 31);
+
+    let abs_n = abs_i32(n);
+    let abs_d = abs_i32(d);
+
+    // abs(a) / abs(b) then apply sign
+    let res = @bitCast(u32, abs_n) / @bitCast(u32, abs_d);
+    return @bitCast((res ^ sign) -% sign);
+};
+
+@[inline(.always)] const div_i64 = fn(n: i64, d: i64): i64 {
+    // Set aside the sign of the quotient.
+    let sign: u64 = @bitCast((n ^ d) >> 63);
+
+    let abs_n = abs_i64(n);
+    let abs_d = abs_i64(d);
+
+    // abs(a) / abs(b) then apply sign
+    let res = __udivmoddi4(@bitCast(abs_n), @bitCast(abs_d), nullptr);
+    return @bitCast((res ^ sign) -% sign);
+};
+
+@[inline(.always)] const div_u32 = fn(n: u32, d: u32): u32 {
+    if (d == 0 or n == 0) return 0;
+    const n_uword_bits: c_uint = 32;
+    let mut sr = @bitCast(c_uint, @as(c_int, @clz(d)) - @as(c_int, @clz(n)));
+    // 0 <= sr <= n_uword_bits - 1 or sr large
+    if (sr > n_uword_bits - 1) return 0; // d > r
+    if (sr == n_uword_bits - 1) return n; // d == 1
+    sr += 1;
+
+    // 1 <= sr <= n_uword_bits - 1
+    let mut q: u32 = n << @intCast(n_uword_bits - sr);
+    let mut r: u32 = n >> @intCast(sr);
+    let mut carry: u32 = 0;
+    while (sr > 0) : (sr -= 1) {
+        r = (r << 1) | (q >> @intCast(n_uword_bits - 1));
+        q = (q << 1) | carry;
+        let s = @bitCast(i32, d -% r -% 1) >> @intCast(n_uword_bits - 1);
+        carry = @intCast(s & 1);
+        r -= d & @bitCast(u32, s);
+    }
+    q = (q << 1) | carry;
+    return q;
+};

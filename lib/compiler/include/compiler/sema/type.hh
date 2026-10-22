@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -26,6 +27,9 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "support/big_int.hh"
+#include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema {
@@ -41,8 +45,9 @@ enum class type_kind : u8 {
     F64,
     F80,
     F128,
-    CONSTEXPR_INT,
-    CONSTEXPR_FLOAT,
+    COMPTIME_INT,
+    COMPTIME_FLOAT,
+    ENUM_LITERAL,
     VOID_,
     UNDEFINED,
     NULLPTR,
@@ -109,26 +114,27 @@ class type;
     }
 }
 
-[[nodiscard]] constexpr auto is_constexpr_int(type_kind kind) noexcept -> bool {
-    return kind == type_kind::CONSTEXPR_INT;
+[[nodiscard]] constexpr auto is_comptime_int(type_kind kind) noexcept -> bool {
+    return kind == type_kind::COMPTIME_INT;
 }
 
-[[nodiscard]] constexpr auto is_constexpr_float(type_kind kind) noexcept -> bool {
-    return kind == type_kind::CONSTEXPR_FLOAT;
+[[nodiscard]] constexpr auto is_comptime_float(type_kind kind) noexcept -> bool {
+    return kind == type_kind::COMPTIME_FLOAT;
 }
 
-[[nodiscard]] constexpr auto is_constexpr_numeric(type_kind kind) noexcept -> bool {
-    return is_constexpr_int(kind) || is_constexpr_float(kind);
+// The width a character literal's untyped constant defaults to
+constexpr u16 CHAR_CONSTANT_BITS{21};
+
+[[nodiscard]] constexpr auto is_comptime_numeric(type_kind kind) noexcept -> bool {
+    return is_comptime_int(kind) || is_comptime_float(kind);
 }
 
-// A constexpr literal counts as numeric for arithmetic, comparison, and coercion purposes.
+// A comptime literal counts as numeric for arithmetic, comparison, and coercion purposes.
 [[nodiscard]] constexpr auto is_numeric(type_kind kind) noexcept -> bool {
-    return is_integer(kind) || is_float(kind) || is_constexpr_numeric(kind);
+    return is_integer(kind) || is_float(kind) || is_comptime_numeric(kind);
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
-[[nodiscard]] auto cast_rejection_reason(const type& from, const type& to, u32 ptr_bits)
-    -> stdx::option<std::string>;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
@@ -172,11 +178,66 @@ class type;
 
 class type;
 
+// Declared names of user struct/enum/union types, keyed by their type
+using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+
+// What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
+struct param_bound {
+    u32                      param_index;
+    std::vector<const type*> interfaces;
+    // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
+    // constructor's parameters
+    stdx::option<ast::explicit_type_id> callable;
+};
+
+// Every generic function's parameter bounds for a caller in any module to check
+using param_bound_map =
+    ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
+
+// Why an implicit `from` -> `to` conversion is rejected, naming user types through `names`
+[[nodiscard]] auto cast_rejection_reason(const type&                        from,
+                                         const type&                        to,
+                                         u32                                ptr_bits,
+                                         stdx::option<const type_name_map&> names = stdx::none)
+    -> stdx::option<std::string>;
+
 [[nodiscard]] auto is_same_unqualified(const type& a, const type& b) noexcept -> bool;
 [[nodiscard]] auto is_assignable(const type& src, const type& dest) noexcept -> bool;
+// An argument bound to a parameter: a `mut?` parameter takes a view of any mutability, which the
+// call's own `mut?` is then worked out from
+[[nodiscard]] auto is_arg_assignable(const type& src, const type& param) noexcept -> bool;
+// Whether `t` mentions `mut?` anywhere in its view or element types
+[[nodiscard]] auto contains_poly(const type& t) noexcept -> bool;
+
+// Same params/return/variadic/conv, ignoring whether either side is an erased callable
+[[nodiscard]] auto is_same_fn_signature(const type& a, const type& b) noexcept -> bool;
+
+// A thin function flows into an erased `fn(...)` slot, never the reverse
+[[nodiscard]] auto is_fn_assignable(const type& src, const type& dest) noexcept -> bool;
+
+// A bare `fn(...)` value: the `{ctx, code}` pair rather than a thin code pointer
+[[nodiscard]] auto is_erased_fn(const type& t) noexcept -> bool;
+
+// `fn(...)` or `^fn(...)`: both lower to the same two-word `{ctx, code}` pair
+[[nodiscard]] auto is_fat_callable(const type& t) noexcept -> bool;
+
+// The slice written through when an assignment copies elements into one (`s[lo..hi] = src` or
+// `*s = src`), rather than storing to a single place
+[[nodiscard]] auto slice_copy_destination(const mod::module_t& m, ast::node_id lhs)
+    -> stdx::option<ast::expr_handle>;
 
 // True when `t` still contains an unbound generic parameter rather than a fully concrete type.
 [[nodiscard]] auto is_generic_type(const type& t, bool unmodified = true) noexcept -> bool;
+
+// A `type`-kinded slot that takes a type argument, as opposed to a still-deferred `[n]T`
+[[nodiscard]] auto is_type_parameter_slot(const type& t) noexcept -> bool;
+
+// True when a value of `t` holds a `type`, so it only exists at compile time and has no runtime
+// representation
+[[nodiscard]] auto holds_type_values(const type& t) noexcept -> bool;
+
+// True when a value of `t` is an aggregate holding `type`s (`[2]type`, but not a bare `type`)
+[[nodiscard]] auto is_comptime_aggregate(const type& t) noexcept -> bool;
 
 namespace types {
 
@@ -185,9 +246,24 @@ struct poison {};
 
 using builtin_type = stdx::monostate;
 
+// Which C type an integer is, sized for the target; `NONE` for `iN` / `uN`
+enum class c_int_type : u8 {
+    NONE,
+    CHAR,
+    SHORT,
+    USHORT,
+    INT,
+    UINT,
+    LONG,
+    ULONG,
+    LONGLONG,
+    ULONGLONG,
+};
+
 struct integer {
-    u16  bits;
-    bool is_signed;
+    u16        bits;
+    bool       is_signed;
+    c_int_type c_type{c_int_type::NONE};
 
     [[nodiscard]] constexpr auto operator==(const integer&) const noexcept -> bool = default;
 };
@@ -216,7 +292,7 @@ struct enum_t {
     bool                                         non_exhaustive;
     type&                                        underlying;
     gsl::span<type*>                             members;
-    const mod::module&                           enclosing;
+    mod::module_t&                               enclosing;
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
@@ -225,16 +301,26 @@ struct enum_t {
         if (idx < enumeration_count) { return object_type; }
         return *members[idx - enumeration_count];
     }
+    // `none` for a member whose type is still being resolved
+    [[nodiscard]] auto type_at_opt(usize idx, type& object_type) const noexcept
+        -> stdx::option<type&> {
+        if (idx < ast_enumerations.size()) { return object_type; }
+        const auto member{idx - ast_enumerations.size()};
+        if (member >= members.size() || !members[member]) { return stdx::none; }
+        return *members[member];
+    }
 };
 
 struct union_t {
     gsl::span<type*>                        fields;
     gsl::span<const ast::union_expr::field> ast_fields;
     gsl::span<type*>                        members;
-    const mod::module&                      enclosing;
+    mod::module_t&                          enclosing;
     bool                                    is_untagged{false};
     bool                                    is_c_abi{false};
     bool                                    is_packed{false};
+    // The enum a `union(MyEnum)` is tagged by, whose variants its fields name
+    stdx::option<type&> tag_enum{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
@@ -246,13 +332,19 @@ struct union_t {
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
     }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds union's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
+    }
 };
 
 struct struct_t {
     gsl::span<type*>                         fields;
     gsl::span<const ast::struct_expr::field> ast_fields;
     gsl::span<type*>                         members;
-    const mod::module&                       enclosing;
+    mod::module_t&                           enclosing;
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
@@ -261,11 +353,22 @@ struct struct_t {
         return is_packed && !is_c_abi;
     }
 
+    // The `@[align(n)]` requested for field `idx`, or 0 when it keeps its natural alignment
+    [[nodiscard]] constexpr auto explicit_field_alignment(usize idx) const noexcept -> u64 {
+        return idx < field_alignments.size() ? field_alignments[idx] : 0;
+    }
+
     // The index location entirely depends on the number of fields which always come first
     [[nodiscard]] auto type_at(usize idx) const noexcept -> type& {
         ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
         if (idx < fields.size()) { return *fields[idx]; }
         return *members[idx - fields.size()];
+    }
+
+    // Null while the member at `idx` is itself still being resolved (e.g. a recursive method)
+    [[nodiscard]] auto type_at_opt(usize idx) const noexcept -> stdx::option<type&> {
+        ASSERT(idx < fields.size() + members.size(), "Index exceeds struct's types");
+        return idx < fields.size() ? fields[idx] : members[idx - fields.size()];
     }
 };
 
@@ -275,6 +378,7 @@ struct function {
     bool                    has_self;
     bool                    is_variadic{false};
     ast::calling_convention conv{ast::calling_convention::C};
+    bool                    erased{false}; // a `{ctx, code}` callable rather than a thin code ptr
 };
 
 // Carries no storage and is never a value type; it only describes a contract
@@ -291,7 +395,7 @@ struct interface_t {
     gsl::span<const ast::interface_expr::method>      ast_methods;
     gsl::span<const ast::interface_expr::assoc_type>  ast_assoc_types;
     gsl::span<const ast::interface_expr::assoc_const> ast_assoc_consts;
-    const mod::module&                                enclosing;
+    mod::module_t&                                    enclosing;
 
     [[nodiscard]] auto method_decl(usize i) const -> const ast::interface_expr::method& {
         return ast_methods[method_src_indices[i]];
@@ -323,8 +427,8 @@ struct closure_t {
     type&                      impl_signature; // `signature` plus a synthetic `&mut self` param
 };
 
-struct module {
-    mod::module& imported;
+struct module_t {
+    mod::module_t& imported;
 };
 
 constexpr usize MAX_BUILTIN_PARAMS{7}; // `@cmpxchgWeak`/`@cmpxchgStrong` need the most, at 7
@@ -341,16 +445,19 @@ struct meta_type {
 
 struct deferred_call {
     const ast::call_expr& call;
+    mod::module_t&        enclosing; // owns `call`'s nodes
 };
 
 struct deferred_array {
     const ast::explicit_array_type& array;
     type&                           underlying;
+    mod::module_t&                  enclosing; // owns `array`'s dimension node
 };
 
 enum class mutability_modifiers : u8 {
     CONSTANT = 1 << 0,
     VOLATILE = 1 << 1,
+    POLY     = 1 << 2, // `mut?`: the enclosing function's mutability, always with `CONSTANT`
 };
 
 MAKE_ENUM_OPERATORS(mutability_modifiers)
@@ -363,9 +470,9 @@ class key_t {
         (..., markers_.combine(markers));
         // An `INT` key spells its identity as `(bits, is_signed)` markers; mirror them into
         // named fields so width/signedness survive even on an unresolved pooled twin.
-        if constexpr (sizeof...(Markers) == 2 &&
+        if constexpr (sizeof...(Markers) >= 2 &&
                       (std::integral<std::remove_cvref_t<Markers>> && ...)) {
-            if (kind == type_kind::INT) {
+            if (kind == type_kind::INT || kind == type_kind::COMPTIME_INT) {
                 const u64 packed[]{static_cast<u64>(markers)...};
                 int_bits_   = static_cast<u16>(packed[0]);
                 int_signed_ = packed[1] != 0;
@@ -381,7 +488,7 @@ class key_t {
     auto set_kind(type_kind kind) noexcept -> void {
         kind_ = kind;
         // Repurposing a copied `INT` key to another kind must drop its width identity.
-        if (kind != type_kind::INT) {
+        if (kind != type_kind::INT && kind != type_kind::COMPTIME_INT) {
             int_bits_   = 0;
             int_signed_ = false;
         }
@@ -434,18 +541,21 @@ constexpr auto MUTABLE{static_cast<types::mutability_modifiers>(0)};
 constexpr auto CONSTANT{mutability_modifiers::CONSTANT};
 constexpr auto VOLATILE{mutability_modifiers::VOLATILE};
 constexpr auto CONSTANT_VOLATILE{CONSTANT | VOLATILE};
+// `mut?` reads like a constant inside its function, so every write through one is rejected
+constexpr auto POLY{CONSTANT | mutability_modifiers::POLY};
 
 [[nodiscard]] constexpr auto from_type_modifier(ast::type_modifier modifier) noexcept
     -> stdx::option<types::mutability_modifiers> {
     using modifier_t = ast::type_modifier::modifier;
     switch (modifier.get_raw()) {
-    case modifier_t::VALUE:        return stdx::none;
-    case modifier_t::REF:          return types::mut::CONSTANT;
-    case modifier_t::MUT_REF:      return types::mut::MUTABLE;
-    case modifier_t::PTR:          return types::mut::CONSTANT;
-    case modifier_t::MUT_PTR:      return types::mut::MUTABLE;
-    case modifier_t::VOLATILE:     return types::mut::CONSTANT_VOLATILE;
-    case modifier_t::MUT_VOLATILE: return types::mut::VOLATILE;
+    case modifier_t::VALUE:    return stdx::none;
+    case modifier_t::REF:      return types::mut::CONSTANT;
+    case modifier_t::MUT_REF:  return types::mut::MUTABLE;
+    case modifier_t::PTR:      return types::mut::CONSTANT;
+    case modifier_t::MUT_PTR:  return types::mut::MUTABLE;
+    case modifier_t::VOLATILE: return types::mut::CONSTANT_VOLATILE;
+    case modifier_t::POLY_REF:
+    case modifier_t::POLY_PTR: return types::mut::POLY;
     }
 }
 
@@ -479,7 +589,7 @@ class type {
                                  types::struct_t,
                                  types::interface_t,
                                  types::dyn_t,
-                                 types::module,
+                                 types::module_t,
                                  types::function,
                                  types::closure_t,
                                  types::builtin_function,
@@ -500,8 +610,10 @@ class type {
 
     [[nodiscard]] auto get_kind() const noexcept -> type_kind { return key_.get_kind(); }
 
-    // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool"
-    [[nodiscard]] auto to_string() const -> std::string;
+    // Renders a human-readable form, e.g. "^i32", "[]u8", "fn(i32, ...) -> bool". User aggregates
+    // found in `names`, at any depth, render by their declared name.
+    [[nodiscard]] auto to_string(stdx::option<const type_name_map&> names = stdx::none) const
+        -> std::string;
 
     // Intended for use on pass 1 only
     constexpr auto set_symbol_table_idx(usize idx) noexcept -> void {
@@ -514,6 +626,17 @@ class type {
 
     [[nodiscard]] auto get_symbol_table_idx() const noexcept { return *symbol_table_idx_; }
     [[nodiscard]] auto get_symbol_table_idx_opt() const noexcept { return symbol_table_idx_; }
+
+    // Tells apart the instances of one type constructor, which all share its body's scope. Zero
+    // for a type that is not a constructor instance (or is the ctor's own template).
+    constexpr auto     set_instance_id(u64 id) noexcept -> void { instance_id_ = id; }
+    [[nodiscard]] auto get_instance_id() const noexcept -> u64 { return instance_id_; }
+
+    // A modifier twin (`const`/`volatile`) denotes the same nominal type as `src`
+    constexpr auto copy_identity_from(const type& src) noexcept -> void {
+        if (src.symbol_table_idx_) { symbol_table_idx_.emplace(*src.symbol_table_idx_); }
+        if (src.instance_id_ != 0) { instance_id_ = src.instance_id_; }
+    }
 
     [[nodiscard]] auto is_resolved() const noexcept -> bool {
         return !data_.is<types::unresolved>();
@@ -549,6 +672,11 @@ class type {
         return static_cast<bool>(key_.get_mut() & types::mut::VOLATILE);
     }
 
+    // A `&mut?` / `^mut?` / `[]mut?` / `[N]mut?` container
+    [[nodiscard]] constexpr auto is_poly() const noexcept -> bool {
+        return static_cast<bool>(key_.get_mut() & types::mutability_modifiers::POLY);
+    }
+
     [[nodiscard]] constexpr auto operator==(const type& other) const noexcept -> bool {
         return this == &other;
     }
@@ -561,6 +689,7 @@ class type {
   private:
     types::key_t   key_;
     stdx::opt_size symbol_table_idx_;
+    u64            instance_id_{0};
     data_t         data_;
 
     // Initialization is restricted to the pool's arena exclusively
@@ -571,6 +700,14 @@ static_assert(stdx::TriviallyDestructible<type>);
 
 // `{bits, is_signed}` of a resolved `type_kind::INT`, or none for any other kind.
 [[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
+// The instance id that tells `c_longdouble` apart from the `f64` / `f80` / `f128` it's sized as
+inline constexpr u64 C_LONGDOUBLE_INSTANCE{~u64{0}};
+[[nodiscard]] auto   is_c_longdouble(const type& t) noexcept -> bool;
+// `i32`, `u7`, or the C type's own name (`c_int`)
+[[nodiscard]] auto int_display_name(const types::integer& info) -> std::string;
+// Whether every value of `from` is also a value of `to`
+[[nodiscard]] auto int_range_fits(const types::integer& from, const types::integer& to) noexcept
+    -> bool;
 
 // Bit width of a resolved `type_kind::INT`; asserts the kind.
 [[nodiscard]] auto int_width(const type& t) noexcept -> u16;
@@ -579,8 +716,21 @@ static_assert(stdx::TriviallyDestructible<type>);
 
 // Whether the compile-time integer `value` (two's-complement, up to 128 bits) is representable
 // in the concrete integer type `target`
-[[nodiscard]] auto constexpr_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept
-    -> bool;
+[[nodiscard]] auto comptime_int_fits(i128 value, const type& target, u32 ptr_bits) noexcept -> bool;
+[[nodiscard]] auto
+comptime_int_fits(const big_int& value, const type& target, u32 ptr_bits) noexcept -> bool;
+
+// The format a compile-time float of type `t` is held in; `comptime_float` keeps full `f128`
+[[nodiscard]] auto float_format_of(const type& t) noexcept -> stdx::option<float_format>;
+
+// `value` rounded into `t`'s format, unchanged when `t` is not a float type. A math result that
+// is still untyped is recomputed in a concrete `t` rather than rounded a second time.
+[[nodiscard]] auto
+fit_float(f128 value, const type& t, stdx::option<math_origin> origin = stdx::none) -> f128;
+
+// Whether the compile-time float `value` stays finite once rounded to `target`; a value that is
+// already infinite or NaN, or a target that is not a concrete float, always fits
+[[nodiscard]] auto comptime_float_fits(f128 value, const type& target) -> bool;
 
 // Bit width of `t` when used as a field of a bit-packed `packed struct`/`packed union`, or
 // none when `t` is not packed-eligible. `ptr_bits` sizes pointer-like fields.
@@ -643,26 +793,73 @@ class type_pool {
         return get_many(count, *get_or_emplace(common_key));
     }
 
-    [[nodiscard]] auto strip_const(const type& t) -> gsl::not_null<type*>;
-    [[nodiscard]] auto strip_volatile(const type& t) -> gsl::not_null<type*>;
+    template <typename Type> [[nodiscard]] auto strip_const(Type& t) -> gsl::not_null<Type*> {
+        if (!t.is_constant()) { return &t; }
+        return strip_modifiers(t, types::mut::CONSTANT);
+    }
 
-    // Returns t's const or mutable twin, whichever `is_const` asks for; t itself if it's
-    // already in that state
-    [[nodiscard]] auto with_const(const type& t, bool is_const) -> gsl::not_null<type*>;
-    [[nodiscard]] auto with_volatile(const type& t, bool is_vol) -> gsl::not_null<type*>;
+    template <typename Type> [[nodiscard]] auto strip_volatile(Type& t) -> gsl::not_null<Type*> {
+        if (!t.is_volatile()) { return &t; }
+        return strip_modifiers(t, types::mut::VOLATILE);
+    }
+
+    template <typename Type>
+    [[nodiscard]] auto with_const(Type& t, bool is_const) -> gsl::not_null<Type*> {
+        if (t.is_constant() == is_const) { return &t; }
+        if (!is_const) { return strip_modifiers(t, types::mut::CONSTANT); }
+
+        auto key{t.get_key()};
+        key.set_mut(key.get_mut() | types::mut::CONSTANT);
+        auto new_type{(*this)[key]};
+        new_type->template resolve_if<type::data_t>(t.get_data());
+        new_type->copy_identity_from(t);
+        return new_type;
+    }
+
+    template <typename Type>
+    [[nodiscard]] auto with_volatile(Type& t, bool is_vol) -> gsl::not_null<Type*> {
+        if (t.is_volatile() == is_vol) { return &t; }
+        if (!is_vol) { return strip_modifiers(t, types::mut::VOLATILE); }
+
+        auto key{t.get_key()};
+        key.set_mut(key.get_mut() | types::mut::VOLATILE);
+        auto new_type{(*this)[key]};
+        new_type->template resolve_if<type::data_t>(t.get_data());
+        new_type->copy_identity_from(t);
+        return new_type;
+    }
 
   private:
-    auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
+    [[nodiscard]] auto get_or_emplace(const types::key_t& key) -> gsl::not_null<type*>;
+    [[nodiscard]] auto strip_modifiers(const type& old_type, types::mutability_modifiers mut)
+        -> gsl::not_null<type*>;
 
   private:
     ghoti::arena&                                     arena_;
     ankerl::unordered_dense::map<types::key_t, type*> cache_;
 };
 
+// Unwraps meta_type to obtain the denoted underlying instance type
+// The signature behind a function value typed directly, by reference, or by pointer
+[[nodiscard]] auto signature_of(const type& fn_value_type) noexcept
+    -> stdx::option<const types::function&>;
+
+template <typename Type> [[nodiscard]] auto denoted_type(Type& t) noexcept -> Type& {
+    if (t.get_kind() == type_kind::TYPE) {
+        if (const auto meta{t.get_data().template as_opt<types::meta_type>()}) {
+            return meta->instance;
+        }
+    }
+    return t;
+}
+
+// The erased function behind a `fn(...)` or `^fn(...)`
+[[nodiscard]] auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::function&>;
+
 } // namespace ghoti::sema
 
 template <> struct ankerl::unordered_dense::hash<ghoti::sema::type> {
     using is_avalanching = void;
     using type_t         = ghoti::sema::type;
-    [[nodiscard]] auto operator()(const type_t& type) const noexcept { return type.hash(); }
+    [[nodiscard]] static auto operator()(const type_t& type) noexcept { return type.hash(); }
 };

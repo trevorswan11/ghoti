@@ -21,8 +21,8 @@ auto contains(const std::vector<std::filesystem::path>& files, const std::filesy
 
 TEST_CASE("discover_workspace_files finds .gh files recursively") {
     tempdir dir{"scan_basic"};
-    dir.write("a.gh", "pub const a := 1;\n");
-    dir.write("nested/b.gh", "pub const b := 1;\n");
+    dir.write("a.gh", "pub const a = 1;\n");
+    dir.write("nested/b.gh", "pub const b = 1;\n");
     dir.write("not_ghoti.txt", "irrelevant\n");
 
     const auto files{lsp::discover_workspace_files({dir.path})};
@@ -33,7 +33,7 @@ TEST_CASE("discover_workspace_files finds .gh files recursively") {
 
 TEST_CASE("discover_workspace_files is case-insensitive on the extension") {
     tempdir dir{"scan_case"};
-    dir.write("upper.GH", "pub const a := 1;\n");
+    dir.write("upper.GH", "pub const a = 1;\n");
 
     const auto files{lsp::discover_workspace_files({dir.path})};
     CHECK(contains(files, dir.path / "upper.GH"));
@@ -41,12 +41,12 @@ TEST_CASE("discover_workspace_files is case-insensitive on the extension") {
 
 TEST_CASE("discover_workspace_files skips excluded directories") {
     tempdir dir{"scan_excluded"};
-    dir.write("real.gh", "pub const a := 1;\n");
-    dir.write(".git/HEAD.gh", "pub const fake := 1;\n");
-    dir.write(".zig-cache/stale.gh", "pub const fake := 1;\n");
-    dir.write("zig-out/stale.gh", "pub const fake := 1;\n");
-    dir.write("zig-pkg/stale.gh", "pub const fake := 1;\n");
-    dir.write("editors/zed/grammars/ghoti/test/golden.gh", "pub const fake := 1;\n");
+    dir.write("real.gh", "pub const a = 1;\n");
+    dir.write(".git/HEAD.gh", "pub const fake = 1;\n");
+    dir.write(".zig-cache/stale.gh", "pub const fake = 1;\n");
+    dir.write("zig-out/stale.gh", "pub const fake = 1;\n");
+    dir.write("zig-pkg/stale.gh", "pub const fake = 1;\n");
+    dir.write("editors/zed/grammars/ghoti/test/golden.gh", "pub const fake = 1;\n");
 
     const auto files{lsp::discover_workspace_files({dir.path})};
     CHECK(contains(files, dir.path / "real.gh"));

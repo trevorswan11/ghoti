@@ -6,12 +6,14 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/arena.hh"
 #include "compiler/ast/ast.hh"
@@ -40,7 +42,9 @@ class parser {
         explicit checkpoint(const parser& parser) noexcept
             : snapshot_{parser.lexer_}, current_{parser.current_token_}, peek_{parser.peek_token_},
               pending_docs_len_{parser.pending_docs_.size()},
-              pending_module_docs_len_{parser.pending_module_docs_.size()} {}
+              pending_module_docs_len_{parser.pending_module_docs_.size()},
+              delimiter_depth_{parser.delimiter_depth_},
+              synthesized_len_{parser.synthesized_stmts_.size()} {}
 
       private:
         lexer::snapshot snapshot_;
@@ -48,6 +52,8 @@ class parser {
         token_t         peek_;
         usize           pending_docs_len_;
         usize           pending_module_docs_len_;
+        usize           delimiter_depth_;
+        usize           synthesized_len_;
 
         friend class parser;
     };
@@ -67,6 +73,118 @@ class parser {
         parser&    parser_;
         checkpoint checkpoint_;
         bool       committed_{false};
+    };
+
+    // Per function literal: the names its compile-time positions read, for implicit `comptime`
+    // params in a `const`-declared function (a nested literal gets its own frame)
+    struct compile_time_read {
+        std::string_view name;
+        ast::node_id     at;
+        bool             in_const_initializer;
+    };
+
+    struct comptime_param_frame {
+        bool infer{false};
+        u32  compile_time_depth{0};
+        // Inside an array length, which reads its names at compile time without being a
+        // compile-time position (`comptime` there isn't redundant)
+        u32                            array_length_depth{0};
+        u32                            const_initializer_depth{0};
+        std::vector<compile_time_read> compile_time_names;
+        // Names the body assigns to or takes the address of
+        std::vector<std::string_view> written_names;
+    };
+
+    class function_scope {
+      public:
+        explicit function_scope(parser& p) : parser_{p} {
+            p.comptime_param_frames_.emplace_back(comptime_param_frame{
+                .infer                   = std::exchange(p.infer_next_fn_params_, false),
+                .compile_time_depth      = 0,
+                .array_length_depth      = 0,
+                .const_initializer_depth = 0,
+                .compile_time_names      = {},
+                .written_names           = {},
+            });
+        }
+        ~function_scope() { parser_.comptime_param_frames_.pop_back(); }
+        MAKE_PINNED(function_scope);
+
+        [[nodiscard]] auto frame() const noexcept -> const comptime_param_frame& {
+            return parser_.comptime_param_frames_.back();
+        }
+
+      private:
+        parser& parser_;
+    };
+
+    // Marks an array length, whose parameter reads make those parameters `comptime`
+    class array_length_scope {
+      public:
+        explicit array_length_scope(parser& p) noexcept : parser_{p} {
+            if (!p.comptime_param_frames_.empty()) {
+                frame_ = p.comptime_param_frames_.size() - 1;
+                ++p.comptime_param_frames_[*frame_].array_length_depth;
+            }
+        }
+        ~array_length_scope() {
+            if (frame_) { --parser_.comptime_param_frames_[*frame_].array_length_depth; }
+        }
+        MAKE_PINNED(array_length_scope);
+
+      private:
+        parser&        parser_;
+        stdx::opt_size frame_;
+    };
+
+    // Ends a type expression's operators at a `{` or an assignment at its own bracket depth, so
+    // `fn(): if (c) A else B { ... }` keeps its body and `let x: if (c) A else B = v` its value
+    class type_expression_scope {
+      public:
+        explicit type_expression_scope(parser& p) noexcept
+            : parser_{p}, saved_{std::exchange(p.type_expression_depth_, p.delimiter_depth_)} {}
+        ~type_expression_scope() { parser_.type_expression_depth_ = saved_; }
+        MAKE_PINNED(type_expression_scope);
+
+      private:
+        parser&        parser_;
+        stdx::opt_size saved_;
+    };
+
+    // Marks a position evaluated at compile time: an `if`/`match comptime` or `unroll` header,
+    // a `comptime` block or label, or a `const` declaration's initializer
+    class compile_time_scope {
+      public:
+        compile_time_scope(parser& p, bool enabled, bool const_initializer = false) noexcept
+            : parser_{p}, const_initializer_{const_initializer} {
+            if (!enabled) { return; }
+            if (p.comptime_param_frames_.empty()) {
+                outside_functions_ = true;
+                ++p.compile_time_depth_outside_functions_;
+            } else {
+                frame_ = p.comptime_param_frames_.size() - 1;
+                ++p.comptime_param_frames_[*frame_].compile_time_depth;
+                if (const_initializer_) {
+                    ++p.comptime_param_frames_[*frame_].const_initializer_depth;
+                }
+            }
+        }
+        ~compile_time_scope() {
+            if (frame_) {
+                --parser_.comptime_param_frames_[*frame_].compile_time_depth;
+                if (const_initializer_) {
+                    --parser_.comptime_param_frames_[*frame_].const_initializer_depth;
+                }
+            }
+            if (outside_functions_) { --parser_.compile_time_depth_outside_functions_; }
+        }
+        MAKE_PINNED(compile_time_scope);
+
+      private:
+        parser&        parser_;
+        bool           const_initializer_;
+        stdx::opt_size frame_;
+        bool           outside_functions_{false};
     };
 
   public:
@@ -135,7 +253,7 @@ class parser {
     static auto get_prefix_fn_opt(token_type_t tt) noexcept -> stdx::option<prefix_fn>;
     static auto get_poll_infix_fn_opt(token_type_t tt) noexcept -> stdx::option<infix_fn>;
 
-    [[nodiscard]] auto get_ast() noexcept -> ast ::AST& { return *ast_; }
+    [[nodiscard]] auto get_ast() noexcept -> ast::AST& { return *ast_; }
 
     // Attaches any pending `///` lines sitting directly above `name` and below `floor_line`
     auto attach_member_doc(ast::identifier_handle name, usize floor_line) -> void;
@@ -204,14 +322,101 @@ class parser {
         return out;
     }
 
+    // The next function literal belongs to a `const` declaration
+    auto arm_comptime_param_inference() noexcept -> void { infer_next_fn_params_ = true; }
+
+    // Declarations the parser writes itself (a defaulted function's wrappers), which the statement
+    // list holding the declaration that caused them takes right after it
+    auto queue_synthesized(ast::stmt_handle stmt) -> void { synthesized_stmts_.emplace_back(stmt); }
+    [[nodiscard]] auto take_synthesized() -> std::vector<ast::stmt_handle> {
+        return std::exchange(synthesized_stmts_, {});
+    }
+    template <typename Item> auto append_synthesized(std::vector<Item>& items) -> void {
+        for (const auto stmt : take_synthesized()) { items.emplace_back(Item{stmt}); }
+    }
+
+    // Parses again from `from` with `fn`, then resumes exactly where the parser was
+    template <typename F> auto replay_from(const checkpoint& from, F&& fn) {
+        const checkpoint resume{*this};
+        auto             docs{pending_docs_};
+        auto             module_docs{pending_module_docs_};
+        auto             synthesized{synthesized_stmts_};
+        rollback(from);
+        auto result{std::forward<F>(fn)()};
+        rollback(resume);
+        pending_docs_        = std::move(docs);
+        pending_module_docs_ = std::move(module_docs);
+        synthesized_stmts_   = std::move(synthesized);
+        return result;
+    }
+
+    // Wrappers for defaulted parameters are only for analysis; the formatter wants the source as is
+    auto enable_default_wrappers() noexcept -> void { synthesize_default_wrappers_ = true; }
+    [[nodiscard]] auto synthesizes_default_wrappers() const noexcept -> bool {
+        return synthesize_default_wrappers_;
+    }
+
+    // The most recently parsed function literal with defaulted parameters, from its `fn` token
+    auto note_defaulted_function(ast::node_id fn, const checkpoint& start) -> void {
+        last_defaulted_function_.emplace(fn, start);
+    }
+    [[nodiscard]] auto defaulted_function_start(ast::node_id fn) const -> stdx::option<checkpoint> {
+        if (!last_defaulted_function_ ||
+            last_defaulted_function_->first.get_index() != fn.get_index()) {
+            return stdx::none;
+        }
+        return last_defaulted_function_->second;
+    }
+
+    // The next function literal is an interface method, whose bodyless signature may hold defaults
+    auto arm_signature_defaults() noexcept -> void { signature_defaults_armed_ = true; }
+    [[nodiscard]] auto take_signature_defaults() noexcept -> bool {
+        return std::exchange(signature_defaults_armed_, false);
+    }
+
+    // Inside `@TypeOf(x)` and friends only `x`'s type is read, never its value
+    [[nodiscard]] auto enter_type_only_operand() noexcept -> counter<u32>::guard {
+        return counter<u32>::guard{type_only_depth_};
+    }
+
+    auto note_identifier_reference(std::string_view name, ast::node_id at) -> void {
+        if (comptime_param_frames_.empty() || type_only_depth_) { return; }
+        auto& frame{comptime_param_frames_.back()};
+        if (frame.infer && (frame.compile_time_depth > 0 || frame.array_length_depth > 0)) {
+            frame.compile_time_names.emplace_back(name, at, frame.const_initializer_depth > 0);
+        }
+    }
+
+    auto note_binding_write(std::string_view name) -> void {
+        if (comptime_param_frames_.empty()) { return; }
+        comptime_param_frames_.back().written_names.emplace_back(name);
+    }
+
     [[nodiscard]] auto in_test_block() const noexcept -> bool { return test_block_depth_; }
+
+    // Whether the current position is already evaluated at compile time: a compile-time header,
+    // block or `const` initializer, or anywhere outside a function or test body
+    [[nodiscard]] auto in_compile_time_position() const noexcept -> bool {
+        if (comptime_param_frames_.empty()) {
+            return compile_time_depth_outside_functions_ > 0 || !in_test_block();
+        }
+        return comptime_param_frames_.back().compile_time_depth > 0;
+    }
     [[nodiscard]] auto enter_test_block() noexcept -> counter<u32>::guard {
         return counter<u32>::guard{test_block_depth_};
     }
 
-  private:
+    // Rewinds to a failed top-level statement and skips it as one bracket-balanced unit
+    auto skip_failed_statement(const checkpoint& stmt_start) -> void;
+
     // Bounds recursive-descent depth so deep nesting reports a diagnostic, not a stack overflow.
-    static constexpr u32 MAX_EXPRESSION_DEPTH{512};
+    [[nodiscard]] auto enter_nesting() -> stdx::result<counter<u32>::guard, diagnostic>;
+
+  private:
+    static constexpr u32 MAX_NESTING_DEPTH{512};
+    static constexpr u32 MAX_OPERATOR_CHAIN{4'096};
+
+  private:
     using depth_counter = counter<u32>;
     using depth_guard   = depth_counter::guard;
 
@@ -222,6 +427,10 @@ class parser {
     };
 
   private:
+    [[nodiscard]] auto starts_extern_type() const noexcept -> bool;
+    // Whether the peeked token ends an open type expression at its own bracket depth
+    [[nodiscard]] auto ends_type_expression() const noexcept -> bool;
+
     // Reverts the parser to the state from the checkpoint.
     auto rollback(const checkpoint& checkpoint) noexcept -> void {
         lexer_.restore(checkpoint.snapshot_);
@@ -229,11 +438,27 @@ class parser {
         peek_token_    = checkpoint.peek_;
         pending_docs_.resize(checkpoint.pending_docs_len_);
         pending_module_docs_.resize(checkpoint.pending_module_docs_len_);
+        delimiter_depth_ = checkpoint.delimiter_depth_;
+        if (synthesized_stmts_.size() > checkpoint.synthesized_len_) {
+            synthesized_stmts_.erase(synthesized_stmts_.begin() +
+                                         static_cast<isize>(checkpoint.synthesized_len_),
+                                     synthesized_stmts_.end());
+        }
     }
 
     // Like `lexer_.advance()` but siphons off `///` / `//!` comments into the pending-doc
     // buffers and skips plain comments, so callers only see significant tokens.
     [[nodiscard]] auto next_significant_token() noexcept -> token_t;
+
+    // Marks doc lines as attached to something that can carry them.
+    auto claim_docs(gsl::span<const pending_doc> lines) -> void {
+        for (const auto& line : lines) { claimed_docs_.insert(offset_of(line.text)); }
+    }
+    [[nodiscard]] auto offset_of(std::string_view text) const noexcept -> usize {
+        return static_cast<usize>(text.data() - input_.data());
+    }
+    // One error per `///` / `//!` that never attached to a declaration, member, or parameter.
+    auto report_misplaced_docs(diagnostics& diagnostics) const -> void;
 
     // Joins pending doc lines into one `\n`-separated block.
     [[nodiscard]] static auto join_docs(gsl::span<const pending_doc> lines) -> std::string {
@@ -246,14 +471,33 @@ class parser {
     token_t                 current_token_;
     token_t                 peek_token_;
     stdx::option<ast::AST&> ast_;
-    depth_counter           expr_depth_;
+    depth_counter           nesting_depth_;
 
     stdx::option<std::vector<ast::explicit_type_id>> pending_impl_bound_;
     depth_counter                                    test_block_depth_;
+    depth_counter                                    type_only_depth_;
 
-    std::vector<pending_doc> pending_docs_;
-    std::vector<pending_doc> pending_module_docs_;
-    bool                     module_doc_locked_{false};
+    std::vector<comptime_param_frame> comptime_param_frames_;
+
+    std::vector<pending_doc>                          pending_docs_;
+    std::vector<pending_doc>                          pending_module_docs_;
+    std::vector<ast::stmt_handle>                     synthesized_stmts_;
+    stdx::option<std::pair<ast::node_id, checkpoint>> last_defaulted_function_;
+
+    // Every `///` (and late `//!`) seen, in source order and keyed by its offset in the input
+    // since a rollback lexes them again. Whatever is never attached is misplaced.
+    ankerl::unordered_dense::map<usize, token_t> doc_tokens_;
+    ankerl::unordered_dense::set<usize>          claimed_docs_;
+    bool                                         module_doc_locked_{false};
+    bool                                         infer_next_fn_params_{false};
+    bool                                         signature_defaults_armed_{false};
+    bool                                         synthesize_default_wrappers_{false};
+    u32                                          compile_time_depth_outside_functions_{0};
+
+    // How many `(`, `[` and `{` enclose the current token, and that depth for an open type
+    // expression
+    usize          delimiter_depth_{0};
+    stdx::opt_size type_expression_depth_;
 };
 
 } // namespace ghoti::syntax

@@ -20,11 +20,18 @@
 #include "compiler/syntax/parser.hh"
 #include "driver/clap/error.hh"
 #include "driver/cmd/format/options.hh"
+#include "driver/platform/win32.hh"
+#include "ghoti/config.h"
 #include "support/string_utils.hh"
 
 namespace ghoti::cmd {
 
 auto formatter::execute() -> stdx::result<void, clap::error> {
+#if GHOTI_WINDOWS
+    // Text-mode stdout would write CRLF line breaks, unlike `--write`
+    win32::set_binary_stdio();
+#endif
+
     if (opts_.reading_stdin) {
         auto source_code{string_utils::read_stream(std::cin)};
         if (std::cin.bad()) {
@@ -79,8 +86,9 @@ auto formatter::process_target(std::string_view                           source
     ast_fmt.format();
     auto formatted_code{formatted_os.view()};
 
-    // Verify ASTs for each are valid before writing out the result
-    if (!ast::dumper::compare_source_asts(source_code, formatted_code)) {
+    // Verify ASTs for each are valid before writing out the result. Unchanged text needs no check
+    const bool is_different{source_code != formatted_code};
+    if (is_different && !ast::dumper::compare_source_asts(ast, formatted_code)) {
         clap::warn_error(
             error_stream_,
             display_name
@@ -89,7 +97,6 @@ auto formatter::process_target(std::string_view                           source
         return false;
     }
 
-    const bool is_different{source_code != formatted_code};
     if (opts_.check_only) {
         if (is_different) {
             clap::warn_error(error_stream_,

@@ -7,12 +7,12 @@ namespace ghoti::tests {
 TEST_CASE("A test-only source with no pub main compiles and all tests pass") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "always passes" {
-            const x := 1 + 1;
+            let x = 1 + 1;
             _ = x;
         }
 
         test "also always passes" {
-            const y := 2 + 2;
+            let y = 2 + 2;
             _ = y;
         }
     )") == 0);
@@ -39,7 +39,7 @@ TEST_CASE("`defer` is allowed in a test block and runs at block exit") {
     SECTION("a harmless defer does not disturb a passing test") {
         CHECK(helpers::compile_and_run_tests(R"(
             test "defer after asserts" {
-                var x: i32 = 0;
+                let mut x: i32 = 0;
                 defer x = 1;
                 @expect(x == 0);
             }
@@ -58,19 +58,29 @@ TEST_CASE("`defer` is allowed in a test block and runs at block exit") {
 TEST_CASE("Test with @src compiles and executes properly") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "src location check" {
-            const loc := @src();
+            let loc = @src();
             _ = loc;
         }
     )") == 0);
 }
 
-TEST_CASE("A non-weak `test_runner` overrides the builtin weak default") {
+TEST_CASE("@src reports the 1-based line and column of the builtin") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "src location is 1-based" {
+            let loc = @src();
+            @require(loc.line == 3);
+            @require(loc.column == 23);
+        }
+    )") == 0);
+}
+
+TEST_CASE("The program's own `test_runner` runs instead of the default") {
     CHECK(helpers::compile_and_run_tests(R"(
         test "ignored test" {
             @require(false);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             _ = tests;
             return 77;
@@ -88,7 +98,7 @@ TEST_CASE("The overriding `test_runner` receives the test metadata slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 2) {
                 return 42;
@@ -104,10 +114,10 @@ TEST_CASE("The overriding `test_runner` invokes a test function pointer directly
             @expect(1 + 1 == 2);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = args;
             if (tests.len == 1) {
-                const ok := tests[0].func();
+                let ok = tests[0].func();
                 if (ok) {
                     return 0;
                 }
@@ -123,9 +133,9 @@ TEST_CASE("The overriding `test_runner` can walk the argv slice") {
             @expect(true);
         }
 
-        pub const test_runner := fn(args: [][:0]u8, tests: []builtin.Test): i32 {
+        pub const test_runner = fn(args: [][:0]u8, tests: []builtin.Test): i32 {
             _ = tests;
-            var total: usize = 0;
+            let mut total: usize = 0;
             for (args) |arg| {
                 total = total + arg.len;
             }
@@ -162,6 +172,62 @@ TEST_CASE("@skip in one test does not hide a real failure in another") {
         test "skipped" { @skip("later"); }
         test "genuinely fails" { @require(false); }
     )") == 1);
+}
+
+TEST_CASE("A `@[testing]` helper's @expect fails its test without stopping it") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const check_eq = fn(a: auto, b: auto): void { @expect(a == b); };
+
+        test "fails, then keeps going" {
+            check_eq(1, 2);
+            check_eq(3u8, 3u8);
+            reached = true;
+        }
+        test "passes" { check_eq(4, 4); }
+        test "kept going" { @expect(reached); }
+    )") == 1);
+}
+
+TEST_CASE("@require in a nested `@[testing]` helper stops its test") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const must = fn(ok: bool): i32 {
+            @require(ok);
+            return 7;
+        };
+        @[testing]
+        const nested = fn(ok: bool): void {
+            let v = must(ok);
+            @expect(v == 7);
+        };
+
+        test "passes" { nested(true); }
+        test "fails at the require" {
+            nested(false);
+            reached = true;
+        }
+        test "stopped" { @expect(!reached); }
+    )") == 1);
+}
+
+TEST_CASE("@skip in a `@[testing]` helper skips its test") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        let mut reached = false;
+        @[testing]
+        const skip_unless = fn(ready: bool): void {
+            if (!ready) { @skip("not ready"); }
+        };
+
+        test "skipped" {
+            skip_unless(false);
+            reached = true;
+            @require(false);
+        }
+        test "stopped" { @expect(!reached); }
+    )") == 0);
 }
 
 } // namespace ghoti::tests

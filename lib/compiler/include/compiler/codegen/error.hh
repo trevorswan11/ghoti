@@ -24,6 +24,8 @@ enum class error : u8 {
     DIRECTORY_CREATION_FAILED,
     ARCHIVING_FAILED,
     ILLEGAL_DYLIB_RELOC_MODE,
+    COMPILER_RT_BUILD_FAILED,
+    UNKNOWN_CPU,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -9,6 +9,7 @@
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -29,16 +30,34 @@ namespace ghoti::sema {
 // An AST walker that performs 0 type checking
 class symbol_collector {
   public:
-    static auto collect_symbols(mod::module& module, context& ctx) -> mod::module_state;
+    static auto collect_symbols(mod::module_t& module, context& ctx) -> mod::module_state;
 
     template <ast::IndexableID ID> auto collect(ID id) -> void {
-        // An untyped parameter pack (`rest...`) has no type node at all; nothing to collect.
-        if (!id.is_valid()) { return; }
         collecting_.ast[id].visit([&](const auto& data) -> void { visit(id, data); });
+    }
+
+    auto collect(stdx::option<ast::explicit_type_id> id) -> void {
+        if (id) { collect(*id); }
+    }
+    auto collect(stdx::option<ast::node_id> id) -> void {
+        if (id) { collect(*id); }
     }
 
   private:
     using scope = symbol_table_stack::scope;
+
+    // `routed` selects the items that reach through to a function literal initializer
+    auto collect_attribute_args(const stdx::option<ast::attribute_list>& attributes,
+                                stdx::option<bool> routed = stdx::none) -> void {
+        if (!attributes) { return; }
+        for (const auto& item : attributes->items) {
+            if (routed && ast::routes_to_fn_literal(item.kind) != *routed) { continue; }
+            for (const auto arg : item.args) { collect(arg); }
+        }
+    }
+
+    // Shared by a call in expression and in type position
+    auto collect_call(const ast::call_expr& call) -> void;
 
   private:
     auto                                visit(ast::node_id, const ast::array_expr&) -> void;
@@ -63,6 +82,7 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::reference_expr&) -> void;
     auto                                visit(ast::node_id, const ast::address_of_expr&) -> void;
     auto                                visit(ast::node_id, const ast::dereference_expr&) -> void;
+    auto                                visit(ast::node_id, const ast::comptime_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unary_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unwrap_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
@@ -74,6 +94,7 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::undefined_expr&) -> void;
     auto visit(ast::node_id, const ast::nullptr_expr&) -> void;
     auto visit(ast::node_id, const ast::unreachable_expr&) -> void;
+    auto visit(ast::node_id, const ast::type_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::struct_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::interface_expr&) -> void;
     template <ast::IndexableID ID> auto visit(ID, const ast::union_expr&) -> void;
@@ -92,12 +113,12 @@ class symbol_collector {
     auto visit(ast::node_id, const ast::impl_stmt&) -> void;
 
     [[nodiscard]] auto collect_import_payload(const ast::import_stmt& import_stmt)
-        -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>>;
+        -> std::pair<std::string_view,
+                     stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>>;
 
     auto visit(ast::node_id, const ast::import_stmt&) -> void;
     auto visit(ast::node_id, const ast::return_stmt&) -> void;
     auto visit(ast::node_id, const ast::test_stmt&) -> void;
-    auto visit(ast::node_id, const ast::using_stmt&) -> void;
 
     auto visit(ast::explicit_type_id, const ast::identifier_expr&) -> void;
     auto visit(ast::explicit_type_id, const ast::dot_expr&) -> void;
@@ -106,6 +127,10 @@ class symbol_collector {
     auto visit(ast::explicit_type_id, ast::explicit_type_id id) -> void { collect(id); }
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
+    auto visit(ast::explicit_type_id, const ast::explicit_expr_type&) -> void;
+    // Collects the scopes of the type expressions a declaration's type spells, under its modifiers
+    // and array levels
+    auto collect_computed_types(ast::explicit_type_id type) -> void;
 
     template <typename... IterPairs>
     [[nodiscard]] auto visit_scopes(type_kind kind, IterPairs&&... pairs) -> usize {
@@ -137,6 +162,11 @@ class symbol_collector {
         return !aggregate_table_stack_.empty() && aggregate_table_stack_.back().first == table_idx_;
     }
 
+    // Declares a named capture into the current scope
+    auto declare_capture(const ast::capture_t& capture) -> void;
+    // Collects `body` inside a scope of its own that declares `capture`
+    auto collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body) -> void;
+
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};
@@ -153,13 +183,13 @@ class symbol_collector {
         return ctx_.try_result(ctx_.registry.insert_into(table_idx_, collecting_, name, node));
     }
 
-    symbol_collector(mod::module& collecting, context& ctx)
+    symbol_collector(mod::module_t& collecting, context& ctx)
         : collecting_{collecting}, table_idx_{*collecting.root_table_idx}, ctx_{ctx} {
         table_stack_.push(table_idx_);
     }
 
   private:
-    mod::module&        collecting_;
+    mod::module_t&      collecting_;
     usize               table_idx_;
     symbol_table_stack  table_stack_;
     context&            ctx_;
@@ -170,6 +200,8 @@ class symbol_collector {
     default_counter in_loop_scope_;
     default_counter in_label_scope_;
     default_counter in_test_scope_;
+    // The innermost function is `@[testing]`, so it may use the test builtins
+    bool in_testing_fn_{false};
 
     // The struct/union/enum tables currently being populated (innermost last)
     std::vector<std::pair<usize, std::string_view>> aggregate_table_stack_;

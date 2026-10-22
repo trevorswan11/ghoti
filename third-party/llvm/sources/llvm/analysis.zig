@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/Analysis/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/Analysis/CMakeLists.txt
 pub const root = "llvm/lib/Analysis/";
 pub const sources = [_][]const u8{
     "AliasAnalysis.cpp",
@@ -22,7 +22,7 @@ pub const sources = [_][]const u8{
     "CmpInstAnalysis.cpp",
     "CostModel.cpp",
     "CodeMetrics.cpp",
-    // "ConstantFolding.cpp",
+    "ConstantFolding.cpp",
     "CtxProfAnalysis.cpp",
     "CycleAnalysis.cpp",
     "DDG.cpp",
@@ -55,7 +55,6 @@ pub const sources = [_][]const u8{
     "InlineCost.cpp",
     "InlineAdvisor.cpp",
     "InlineOrder.cpp",
-    "InlineSizeEstimatorAnalysis.cpp",
     "InstCount.cpp",
     "InstructionPrecedenceTracking.cpp",
     "InstructionSimplify.cpp",
@@ -103,6 +102,7 @@ pub const sources = [_][]const u8{
     "RegionPass.cpp",
     "RegionPrinter.cpp",
     "ReplayInlineAdvisor.cpp",
+    "RuntimeLibcallInfo.cpp",
     "ScalarEvolution.cpp",
     "ScalarEvolutionAliasAnalysis.cpp",
     "ScalarEvolutionDivision.cpp",

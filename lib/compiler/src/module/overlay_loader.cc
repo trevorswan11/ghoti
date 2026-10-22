@@ -13,6 +13,7 @@
 #include <stdx/result.hh>
 
 #include "compiler/module/error.hh"
+#include "support/path_utils.hh"
 
 namespace ghoti::mod {
 
@@ -37,12 +38,12 @@ auto overlay_loader::load(const std::filesystem::path& path)
     if (auto it{overlays_.find(*normalized)}; it != overlays_.end()) { return it->second; }
     const auto& resolved{*normalized};
 
-    std::error_code ec;
-    if (!std::filesystem::exists(resolved, ec)) {
+    if (!path_utils::exists(resolved)) {
         return make_mod_err(fmt::format("Path '{}' does not exist", resolved.string()),
                             error::PATH_DOES_NOT_EXIST);
     }
 
+    std::error_code ec;
     if (!std::filesystem::is_regular_file(resolved, ec)) {
         return make_mod_err(fmt::format("Path '{}' is not a file", resolved.string()),
                             error::PATH_IS_NOT_FILE);

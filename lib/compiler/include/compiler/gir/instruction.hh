@@ -18,8 +18,12 @@
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {
@@ -67,6 +71,9 @@ enum class instruction_kind : u8 {
     PTR_CAST,
     INT_FROM_PTR,
     PTR_FROM_INT,
+
+    // `{ctx, code}` for an erased `fn(...)`; `callee_name` is the code, else a thin-fn trampoline
+    MAKE_CALLABLE,
 
     // Calls
     CALL,
@@ -174,7 +181,8 @@ struct value {
                                  u64,
                                  i128,
                                  u128,
-                                 f64,
+                                 big_int,
+                                 f128,
                                  bool,
                                  std::string,
                                  stdx::option<sema::type&>,
@@ -185,10 +193,22 @@ struct value {
 
     data_t                    data{void_val{}};
     stdx::option<sema::type&> type{stdx::none};
+    // Set on an untyped `@sin(...)`-style result until it takes a concrete float type
+    stdx::option<math_origin> origin{stdx::none};
 
     constexpr value() noexcept = default;
-    constexpr value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
-        : data{std::move(val)}, type{t} {}
+    // A float payload is rounded into its type's format
+    constexpr explicit value(data_t                    val,
+                             stdx::option<sema::type&> t        = stdx::none,
+                             stdx::option<math_origin> computed = stdx::none)
+        : data{std::move(val)}, type{t}, origin{computed} {
+        if !consteval {
+            if (auto f{data.as_opt<f128>()}; f && type) {
+                *f = sema::fit_float(*f, *type, origin);
+                if (sema::is_float(type->get_kind())) { origin.reset(); }
+            }
+        }
+    }
 
     template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return data.is<T>();
@@ -238,11 +258,18 @@ struct instruction {
     bool                          is_const{false};
     bool                          is_initializer{false};
     bool                          is_checked{false};
+    bool                          is_saturating{false}; // `+| -| *| <<|` clamp instead of wrap
     bool                          explicit_volatile{false};
 
-    stdx::option<u8> atomic_op{stdx::none};         // `@atomicRmw`'s op
-    stdx::option<u8> atomic_order{stdx::none};      // `atomic_order` is the memory order
-    stdx::option<u8> atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
+    stdx::option<u8>  atomic_op{stdx::none};         // `@atomicRmw`'s op
+    stdx::option<u8>  atomic_order{stdx::none};      // `atomic_order` is the memory order
+    stdx::option<u8>  atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
+    stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
+    stdx::option<ast::call_modifier> call_modifier{stdx::none}; // `@call(modifier, ...)`
+
+    // A `@branchHint`ed `COND_GOTO`: relative weights of its true and false targets
+    stdx::option<std::pair<u32, u32>> branch_weights{stdx::none};
+    bool                              unpredictable{false};
 
     [[nodiscard]] auto is_terminator() const noexcept -> bool { return gir::is_terminator(kind); }
     [[nodiscard]] auto has_result() const noexcept -> bool { return result.has_value(); }

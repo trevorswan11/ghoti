@@ -10,11 +10,22 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/traits.hh"
 #include "support/diagnostic.hh"
 
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
+
 namespace ghoti::sema {
+
+// Where a name was declared, in the declaring module's own AST: a `const`/`let`/`let mut`
+// declaration, or the type annotation of a parameter or aggregate field
+struct declaration_ref {
+    stdx::option<const mod::module_t&>  owner;
+    stdx::option<ast::node_id>          decl;
+    stdx::option<ast::explicit_type_id> annotation;
+};
 
 namespace detail {
 
@@ -26,7 +37,6 @@ template <ast::IndexableID ID, typename T> struct side_table {
     template <typename U>
         requires std::convertible_to<U, ID>
     [[nodiscard]] constexpr auto operator[](this auto&& self, U id) noexcept -> auto& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         return self.values[static_cast<ID>(id).get_index()];
     }
 };
@@ -45,6 +55,24 @@ struct capture_info {
     capture_usage    usage;
 };
 
+// The folded result of an `@[...]` list on a declaration or function literal
+struct resolved_attributes {
+    bool                           discardable{false};
+    stdx::option<ast::inline_mode> inlining{};
+    bool                           naked{false};
+    bool                           cold{false};    // `@branchHint(.cold)` opens the body
+    bool                           testing{false}; // `@[testing]`: a test helper
+    bool                           no_builtins{false};
+    // `@[target_features(...)]`, as LLVM spells them: `+avx2`
+    std::vector<std::string> target_features{};
+    // An attribute whose argument names a parameter so only folds per instantiation
+    stdx::option<ast::attribute_kind>    dependent{};
+    stdx::option<ast::symbol_visibility> visibility{};
+    stdx::option<u64>                    alignment{};
+
+    [[nodiscard]] auto operator==(const resolved_attributes&) const noexcept -> bool = default;
+};
+
 // Empty for any function_expr that captures nothing
 using capture_list = std::vector<capture_info>;
 
@@ -55,11 +83,14 @@ struct side_tables {
     // Indexed by the match arms' pattern
     detail::side_table<ast::node_id, stdx::option<sema::type&>> match_arm_types;
 
+    // An `if`/`while` capture's payload node to the scope it is declared in
+    detail::side_table<ast::node_id, stdx::opt_size> capture_scopes;
+
     // Call expression to monomorphized generic symbol name
     detail::side_table<ast::node_id, stdx::option<std::string>> generic_call_targets;
 
     // Reference expression (ident / dot / module-access / implicit-access) to the symbol-table
-    // index that owns the top-level function or `var` global it resolves to
+    // index that owns the top-level function or `let mut` global it resolves to
     detail::side_table<ast::node_id, stdx::opt_size> resolved_symbol_owners;
 
     // function_expr node id to the free variables it implicitly captures, see `capture_list`
@@ -74,17 +105,25 @@ struct side_tables {
     // Symbol table index that declares the symbol referenced by an identifier node
     detail::side_table<ast::node_id, stdx::opt_size> identifier_symbol_tables;
 
+    // The declaration an identifier (a use, or a declared name itself) resolves to
+    detail::side_table<ast::node_id, stdx::option<declaration_ref>> identifier_declarations;
+    detail::side_table<ast::explicit_type_id, stdx::option<declaration_ref>>
+        explicit_type_declarations;
+
     // Allocates `size` slots in all backing vectors
     constexpr auto resize(const ast::AST::data_pool_sizes& sizes) -> void {
         node_types.values.resize(sizes.nodes_size);
         explicit_types.values.resize(sizes.types_size);
         match_arm_types.values.resize(sizes.nodes_size);
+        capture_scopes.values.resize(sizes.nodes_size);
         generic_call_targets.values.resize(sizes.nodes_size);
         resolved_symbol_owners.values.resize(sizes.nodes_size);
         function_captures.values.resize(sizes.nodes_size);
         identifier_definitions.values.resize(sizes.nodes_size);
         explicit_type_definitions.values.resize(sizes.types_size);
         identifier_symbol_tables.values.resize(sizes.nodes_size);
+        identifier_declarations.values.resize(sizes.nodes_size);
+        explicit_type_declarations.values.resize(sizes.types_size);
     }
 };
 

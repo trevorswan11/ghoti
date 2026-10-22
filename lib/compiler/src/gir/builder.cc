@@ -10,6 +10,7 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/expression.hh"
 #include "compiler/gir/function.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
@@ -24,16 +25,31 @@ auto builder::emit_instruction(instruction inst) -> instruction& {
     return segment_->append(std::move(inst));
 }
 
-auto builder::emit_alloca(sema::type& type, std::string_view, bool is_const) -> local_id {
+auto builder::mark_last_call(ast::call_modifier modifier) -> void {
+    ASSERT(segment_, "Cannot mark a call without an active segment");
+    auto& instructions{segment_->get_instructions()};
+    for (auto it{instructions.rbegin()}; it != instructions.rend(); ++it) {
+        if ((*it)->kind == instruction_kind::CALL) {
+            (*it)->call_modifier = modifier;
+            return;
+        }
+    }
+}
+
+auto builder::emit_alloca(sema::type& type,
+                          std::string_view,
+                          bool              is_const,
+                          stdx::option<u64> alignment) -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit alloca without an active function");
     const auto slot{function_->next_local_id(local_kind::ALLOCA)};
     emit_instruction({
-        .kind     = instruction_kind::ALLOCA,
-        .type     = type,
-        .result   = slot,
-        .operands = {},
-        .is_const = is_const,
+        .kind      = instruction_kind::ALLOCA,
+        .type      = type,
+        .result    = slot,
+        .operands  = {},
+        .is_const  = is_const,
+        .alignment = alignment,
     });
     return slot;
 }
@@ -190,17 +206,35 @@ auto builder::emit_global_addr(std::string name, sema::type& type, bool is_const
     return dest;
 }
 
+auto builder::emit_make_callable(value                     ctx,
+                                 stdx::option<std::string> code_fn,
+                                 sema::type&               erased_fn) -> local_id {
+    PROFILE_FUNCTION();
+    ASSERT(function_, "Cannot emit make_callable instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind        = instruction_kind::MAKE_CALLABLE,
+        .type        = erased_fn,
+        .result      = dest,
+        .operands    = {std::move(ctx)},
+        .callee_name = std::move(code_fn),
+    });
+    return dest;
+}
+
 auto builder::emit_binary(
-    instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked) -> local_id {
+    instruction_kind kind, value lhs, value rhs, sema::type& type, bool checked, bool saturating)
+    -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit binary instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind       = kind,
-        .type       = type,
-        .result     = dest,
-        .operands   = {std::move(lhs), std::move(rhs)},
-        .is_checked = checked,
+        .kind          = kind,
+        .type          = type,
+        .result        = dest,
+        .operands      = {std::move(lhs), std::move(rhs)},
+        .is_checked    = checked,
+        .is_saturating = saturating,
     });
     return dest;
 }
@@ -220,15 +254,17 @@ auto builder::emit_unary(instruction_kind kind, value operand, sema::type& type,
     return dest;
 }
 
-auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type) -> local_id {
+auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target_type, bool checked)
+    -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit cast instruction without an active function");
     const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
     emit_instruction({
-        .kind     = kind,
-        .type     = target_type,
-        .result   = dest,
-        .operands = {std::move(operand)},
+        .kind       = kind,
+        .type       = target_type,
+        .result     = dest,
+        .operands   = {std::move(operand)},
+        .is_checked = checked,
     });
     return dest;
 }
@@ -264,7 +300,8 @@ auto builder::emit_builtin_call(std::string_view   callee,
                                 sema::type&        return_type,
                                 stdx::option<u8>   atomic_op,
                                 stdx::option<u8>   atomic_order,
-                                stdx::option<u8>   atomic_fail_order) -> stdx::option<local_id> {
+                                stdx::option<u8>   atomic_fail_order,
+                                bool               checked) -> stdx::option<local_id> {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit builtin call instruction without an active function");
     if (return_type.get_kind() != sema::type_kind::VOID_) {
@@ -275,6 +312,7 @@ auto builder::emit_builtin_call(std::string_view   callee,
             .result            = dest,
             .operands          = std::move(args),
             .callee_name       = std::string{callee},
+            .is_checked        = checked,
             .atomic_op         = atomic_op,
             .atomic_order      = atomic_order,
             .atomic_fail_order = atomic_fail_order,

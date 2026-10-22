@@ -1,9 +1,11 @@
 #pragma once
 
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
@@ -62,6 +64,7 @@ template <typename ID, typename Data> struct data_pool : public data_pool_base<I
 template <typename Data> struct data_pool<node_id, Data> : public data_pool_base<node_id, Data> {
     std::vector<node_id> roots;
     std::vector<u8>      paren_depths;
+    std::vector<node_id> ids; // every node's id in creation order, since ids carry a tag token
 
     // `end_token` is the last token consumed while parsing this node
     constexpr auto emplace_back(ghoti::arena&          arena,
@@ -86,6 +89,8 @@ template <typename Data> struct data_pool<node_id, Data> : public data_pool_base
 
     constexpr auto clear() noexcept -> void {
         roots.clear();
+        paren_depths.clear();
+        ids.clear();
         data_pool_base<node_id, Data>::clear();
     }
 };
@@ -119,7 +124,13 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{
             nodes_.emplace_back(get_arena(), start_token, end_token, std::forward<Data>(data))};
-        return node_id{kind, start_token.type, index};
+        auto& id{nodes_.ids.emplace_back(kind, start_token.type, index)};
+        if (const auto builtin{start_token.type == syntax::token_type_t::BUILTIN
+                                   ? syntax::builtin_from_name(start_token.slice)
+                                   : stdx::none}) {
+            id.set_builtin(*builtin);
+        }
+        return id;
     }
 
     // For infix nodes whose operator starts after the node's true span start
@@ -131,7 +142,7 @@ class AST {
         constexpr auto kind{node_kind_of<Data>::value()};
         const auto     index{
             nodes_.emplace_back(get_arena(), span_start, end_token, std::forward<Data>(data))};
-        return node_id{kind, tag_token.type, index};
+        return nodes_.ids.emplace_back(kind, tag_token.type, index);
     }
 
     template <ExplicitTypeData Data>
@@ -139,15 +150,20 @@ class AST {
                                           const syntax::token_t& end_token,
                                           type_modifier          mod,
                                           Data&&                 data) -> explicit_type_id {
-        constexpr auto kind{explicit_type_kind_of<Data>::value()};
-        const auto     index{explicit_types_.emplace_back(
+        constexpr auto   kind{explicit_type_kind_of<Data>::value()};
+        const auto       index{explicit_types_.emplace_back(
             get_arena(), start_token, end_token, std::forward<Data>(data))};
-        return explicit_type_id{kind, mod, start_token.type, index};
+        explicit_type_id id{kind, mod, start_token.type, index};
+        if (const auto builtin{start_token.type == syntax::token_type_t::BUILTIN
+                                   ? syntax::builtin_from_name(start_token.slice)
+                                   : stdx::none}) {
+            id.set_builtin(*builtin);
+        }
+        return id;
     }
 
     template <IndexableID ID>
     [[nodiscard]] constexpr auto location_of(ID id) const noexcept -> const source_location& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
             return *nodes_.locations[id.get_index()];
         } else {
@@ -158,7 +174,6 @@ class AST {
     // The position just past the node's last token; see `data_pool_base::emplace_back`
     template <IndexableID ID>
     [[nodiscard]] constexpr auto end_location_of(ID id) const noexcept -> const source_location& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         if constexpr (IndexableNodeID<ID>) {
             return *nodes_.end_locations[id.get_index()];
         } else {
@@ -168,24 +183,21 @@ class AST {
 
     // How many redundant `( )` pairs enclosed this node in the source.
     [[nodiscard]] constexpr auto paren_depth_of(node_id id) const noexcept -> u8 {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         return nodes_.paren_depths[id.get_index()];
     }
 
     // Records one more `( )` pair around an already-added node.
     constexpr auto add_parenthesization(node_id id) noexcept -> void {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
         nodes_.paren_depths[id.get_index()] += 1;
     }
 
-    // Returns the node data at the provided id
+    // Returns the node data at the provided id. Writes go through `get_as_mut`
     template <IndexableID ID>
-    [[nodiscard]] constexpr auto operator[](this auto&& self, ID id) noexcept -> auto& {
-        ASSERT(id.is_valid(), "Attempt to access invalid id");
+    [[nodiscard]] constexpr auto operator[](ID id) const noexcept -> const auto& {
         if constexpr (IndexableNodeID<ID>) {
-            return *self.nodes_.pool[id.get_index()];
+            return *nodes_.pool[id.get_index()];
         } else {
-            return *self.explicit_types_.pool[id.get_index()];
+            return *explicit_types_.pool[id.get_index()];
         }
     }
 
@@ -203,14 +215,38 @@ class AST {
     }
 
     // Mutable access to a node's payload. Caller asserts the stored alternative.
-    template <typename Data, IndexableNodeID ID>
-    [[nodiscard]] constexpr auto get_as_mut(ID id) noexcept -> Data& {
+    template <typename Data, IndexableNodeID ID> [[nodiscard]] auto get_as_mut(ID id) -> Data& {
         ASSERT(id.template is<Data>(), "Illegal node data retrieval");
+        own_node(id.get_index());
         return nodes_.pool[id.get_index()]->template as<Data>();
     }
 
+    // A copy sharing this tree's payloads, which must outlive it. New nodes and the payloads
+    // sema rewrites live in `arena`.
+    [[nodiscard]] auto borrow(ghoti::arena& arena) const -> AST;
+
     [[nodiscard]] constexpr auto get_roots(this auto&& self) noexcept -> auto& {
         return self.nodes_.roots;
+    }
+
+    // Every node in the tree, children before the parents that hold them
+    [[nodiscard]] constexpr auto all_nodes() const noexcept -> gsl::span<const node_id> {
+        return nodes_.ids;
+    }
+
+    // Every node holding `Data`, in creation order
+    template <NodeData Data> [[nodiscard]] constexpr auto nodes_of() const noexcept {
+        return nodes_.ids | std::views::filter([](node_id id) { return id.template is<Data>(); });
+    }
+
+    // The top-level declaration `name = ...` (or `name: T = ...`), if any
+    [[nodiscard]] auto find_top_level_decl(std::string_view name) const
+        -> stdx::option<const decl_stmt&> {
+        for (const auto root : nodes_.roots) {
+            const auto decl{get_as_opt<decl_stmt>(root)};
+            if (decl && get_as<identifier_expr>(decl->name).name == name) { return *decl; }
+        }
+        return stdx::none;
     }
 
     // Attaches a `///` doc comment, keyed by the span of the declared name it documents.
@@ -245,6 +281,7 @@ class AST {
         doc_comments_.clear();
         module_doc_.clear();
         if (interner_) { interner_->clear(); }
+        shared_nodes_.clear();
     }
 
   private:
@@ -253,12 +290,21 @@ class AST {
         std::string text;
     };
 
+    // Copies a node still shared with the tree this one borrowed from into this tree's arena
+    auto own_node(usize index) -> void {
+        if (index >= shared_nodes_.size() || !shared_nodes_[index]) { return; }
+        nodes_.pool[index]   = get_arena().make<node_variant>(*nodes_.pool[index]);
+        shared_nodes_[index] = false;
+    }
+
   private:
     data_pool<node_id, node_variant>          nodes_;
     data_pool<explicit_type_id, type_variant> explicit_types_;
     std::vector<doc_comment>                  doc_comments_;
     std::string                               module_doc_;
     stdx::option<syntax::string_interner>     interner_;
+    // Per node, whether its payload belongs to the tree this one was borrowed from
+    std::vector<bool> shared_nodes_;
 };
 
 } // namespace ghoti::ast

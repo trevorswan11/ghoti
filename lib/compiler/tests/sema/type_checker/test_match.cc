@@ -11,9 +11,9 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
     SECTION("Union field, mutable union") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                var u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -22,15 +22,15 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 36UZ}});
+                             std::pair{5UZ, 32UZ}});
     }
 
     SECTION("Union field, const union") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                const u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let u = U{ .a = 5 };
                 match (u) {
                     .a => |v| { v = 10; },
                     _ => {},
@@ -39,14 +39,14 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 36UZ}});
+                             std::pair{5UZ, 32UZ}});
     }
 
     SECTION("Whole-value (non-union), mutable scrutinee") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                var x: i32 = 1;
+            const f = fn(): void {
+                let mut x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
                     _ => {},
@@ -55,14 +55,14 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{4UZ, 35UZ}});
+                             std::pair{4UZ, 31UZ}});
     }
 
     SECTION("Whole-value (non-union), const scrutinee") {
         helpers::test_checker_fail(
             R"(
-            const f := fn(): void {
-                const x: i32 = 1;
+            const f = fn(): void {
+                let x: i32 = 1;
                 match (x) {
                     1 => |v| { v = 2; },
                     _ => {},
@@ -71,16 +71,16 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
         )",
             sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{4UZ, 35UZ}});
+                             std::pair{4UZ, 31UZ}});
     }
 }
 
 TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By mutable reference succeeds") {
         helpers::type_check_and_verify(R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                var u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |&mut v| { v = 10; },
                     _ => {},
@@ -92,9 +92,9 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const reference is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                var u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |&v| { v = 10; },
                     _ => {},
@@ -103,14 +103,14 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through reference",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 37UZ}});
+                             std::pair{5UZ, 33UZ}});
     }
 
     SECTION("By mutable pointer succeeds") {
         helpers::type_check_and_verify(R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                var u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |^mut v| { *v = 10; },
                     _ => {},
@@ -122,9 +122,9 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
     SECTION("By const pointer is rejected") {
         helpers::test_checker_fail(
             R"(
-            const U := union { a: i32 };
-            const f := fn(): void {
-                var u := U{ .a = 5 };
+            const U = union(enum) { a: i32 };
+            const f = fn(): void {
+                let mut u = U{ .a = 5 };
                 match (u) {
                     .a => |^v| { *v = 10; },
                     _ => {},
@@ -133,7 +133,7 @@ TEST_CASE("Mutating a match arm capture by reference/pointer") {
         )",
             sema::diagnostic{"Cannot assign to constant memory through pointer",
                              sema::error::ASSIGNMENT_TO_CONST,
-                             std::pair{5UZ, 38UZ}});
+                             std::pair{5UZ, 33UZ}});
     }
 }
 

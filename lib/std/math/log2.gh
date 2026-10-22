@@ -1,0 +1,142 @@
+import std;
+
+const math = std.math;
+
+/// Returns the base-2 logarithm of x.
+///
+/// Special Cases:
+///  - log2(+inf)  = +inf
+///  - log2(0)     = -inf
+///  - log2(x)     = nan if x < 0
+///  - log2(nan)   = nan
+pub const log2 = fn(x: auto): @TypeOf(x) {
+    const T = @TypeOf(x);
+    return match comptime (@typeInfo(T)) {
+        .comptime_float, .float => @log2(x),
+        .comptime_int => comptime {
+            @assert(x > 0);
+            comptime let mut x_shifted = x;
+            // First, calculate floorPowerOfTwo(x)
+            comptime let mut shift_amt = 1;
+            while (x_shifted >> (shift_amt << 1) != 0) {
+                shift_amt <<= 1;
+            }
+
+            // Answer is in the range [shift_amt, 2 * shift_amt - 1]
+            // We can find it in O(log(N)) using binary search.
+            comptime let mut result = 0;
+            while (shift_amt != 0) : (shift_amt >>= 1) {
+                if (x_shifted >> shift_amt != 0) {
+                    x_shifted >>= shift_amt;
+                    result += shift_amt;
+                }
+            }
+            return result;
+        },
+        .int => |int_info| math.log2_int(
+            match comptime (int_info.signedness) {
+                .signed => @Int(.{ .signedness = .unsigned, .bits = int_info.bits -| 1 }),
+                .unsigned => T,
+            },
+            @intCast(x),
+        ),
+        _ => @compileError("log2 not implemented for " ++ @typeName(T)),
+    };
+};
+
+test "log2" {
+    @expect(log2(0.2f32) == @log2(0.2));
+    @expect(log2(0.2f64) == @log2(0.2));
+
+    @expect(log2(1i32) == 0);
+    @expect(log2(15i32) == 3);
+    @expect(log2(16i32) == 4);
+
+    comptime {
+        @expect(log2(1) == 0);
+        @expect(log2(15) == 3);
+        @expect(log2(16) == 4);
+    }
+}
+
+/// Returns an unsigned int type that can hold the number of bits in T - 1.
+/// Suitable for 0-based bit indices of T.
+pub const Log2Int = fn(comptime T: type): type {
+    return match comptime (@typeInfo(T)) {
+        .comptime_int => comptime_int,
+        .int => |info| blk: {
+            const bits: u16 = @typeInfo(T).int.bits;
+            const log2_bits = if (bits <= 1) 0 else 16 - @clz(bits - 1);
+            break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
+        },
+        _ => @compileError("Log2Int requires an integer argument type, got " ++ @typeName(T)),
+    };
+};
+
+test "Log2Int construction" {
+    @expect(Log2Int(comptime_int) == comptime_int);
+    @expect(Log2Int(u1) == u0);
+    @expect(Log2Int(u64) == u6);
+    @expect(Log2Int(u65) == u7);
+    @expect(Log2Int(u32) == u5);
+}
+
+/// Return the log base 2 of integer value x, rounding down to the nearest integer.
+pub const log2_int = fn(comptime T: type, x: T): Log2Int(T) {
+    const info = @typeInfo(T);
+    if comptime (info != .int or info.int.signedness != .unsigned) {
+        @compileError("log2_int requires an unsigned integer, got " ++ @typeName(T));
+    }
+    @assert(x != 0);
+    return @intCast(Log2Int(T), info.int.bits - 1 - @clz(x));
+};
+
+test "log2_int" {
+    @expect(log2_int(u1, 1) == 0);
+    @expect(log2_int(u32, 1) == 0);
+    @expect(log2_int(u32, 2) == 1);
+    @expect(log2_int(u32, 3) == 1);
+    @expect(log2_int(u32, 4) == 2);
+    @expect(log2_int(u32, 5) == 2);
+    @expect(log2_int(u32, 6) == 2);
+    @expect(log2_int(u32, 7) == 2);
+    @expect(log2_int(u32, 8) == 3);
+    @expect(log2_int(u32, 9) == 3);
+    @expect(log2_int(u32, 10) == 3);
+}
+
+pub const Log2IntCeil = fn(comptime T: type): type {
+    return match comptime (@typeInfo(T)) {
+        .comptime_int => comptime_int,
+        .int => |info| blk: {
+            const bits: u16 = @typeInfo(T).int.bits;
+            const log2_bits = if (bits <= 1) 1 else 16 - @clz(bits);
+            break :blk @Int(.{ .bits = log2_bits, .signedness = .unsigned });
+        },
+        _ => @compileError("Log2IntCeil requires an integer argument type, got " ++ @typeName(T)),
+    };
+};
+
+pub const log2_int_ceil = fn(comptime T: type, x: T): Log2IntCeil(T) {
+    const info = @typeInfo(T);
+    if comptime (info != .int or info.int.signedness != .unsigned) {
+        @compileError("log2_int_ceil requires an unsigned integer, got " ++ @typeName(T));
+    }
+    @assert(x != 0);
+    if (x == 1) return 0;
+    let log2_val: Log2IntCeil(T) = log2_int(T, x - 1);
+    return log2_val + 1;
+};
+
+test "log2_int_ceil" {
+    @expect(log2_int_ceil(u32, 1) == 0);
+    @expect(log2_int_ceil(u32, 2) == 1);
+    @expect(log2_int_ceil(u32, 3) == 2);
+    @expect(log2_int_ceil(u32, 4) == 2);
+    @expect(log2_int_ceil(u32, 5) == 3);
+    @expect(log2_int_ceil(u32, 6) == 3);
+    @expect(log2_int_ceil(u32, 7) == 3);
+    @expect(log2_int_ceil(u32, 8) == 3);
+    @expect(log2_int_ceil(u32, 9) == 4);
+    @expect(log2_int_ceil(u32, 10) == 4);
+}

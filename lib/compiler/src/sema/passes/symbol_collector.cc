@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 #include <gsl/pointers>
 #include <gsl/span>
+#include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
 #include <stdx/option.hh>
@@ -36,6 +37,7 @@
 #include "compiler/syntax/keywords.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 
@@ -59,9 +61,40 @@ auto function_local_illegal_modifiers(const ast::decl_stmt& decl) {
     return found;
 }
 
+// The first linkage modifier on `decl`, which needs a symbol to attach to
+auto linkage_modifier(const ast::decl_stmt& decl) -> stdx::option<std::string_view> {
+    using ast::decl_modifiers;
+    static constexpr std::array<std::pair<decl_modifiers, std::string_view>, 4> linkage{{
+        {decl_modifiers::EXTERN, syntax::keywords::EXTERN.name},
+        {decl_modifiers::EXPORT, syntax::keywords::EXPORT.name},
+        {decl_modifiers::WEAK, syntax::keywords::WEAK.name},
+        {decl_modifiers::THREADLOCAL, syntax::keywords::THREADLOCAL.name},
+    }};
+    for (const auto& [flag, spelling] : linkage) {
+        if (decl.has_modifier(flag)) { return spelling; }
+    }
+    return stdx::none;
+}
+
+// A function literal marked `@[testing]`, directly or through the declaration it initializes
+auto is_testing_fn(const mod::module_t& owner, const ast::function_expr& fn) -> bool {
+    if (fn.attributes && fn.attributes->find(ast::attribute_kind::TESTING)) { return true; }
+    if (!fn.declaring_decl) { return false; }
+    const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*fn.declaring_decl)};
+    return decl && decl->attributes && decl->attributes->find(ast::attribute_kind::TESTING);
+}
+
+// A fn literal, or an `extern` function signature
+auto declares_function(const ast::decl_stmt& decl) -> bool {
+    if (decl.value) { return decl.value->is<ast::function_expr>(); }
+    return decl.explicit_type &&
+           (decl.explicit_type->get_token_type() == syntax::token_type_t::FUNCTION ||
+            decl.explicit_type->get_token_type() == syntax::token_type_t::EXTERN);
+}
+
 } // namespace
 
-auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod::module_state {
+auto symbol_collector::collect_symbols(mod::module_t& module, context& ctx) -> mod::module_state {
     PROFILE_FUNCTION();
     if (module.is_collectable()) {
         module.root_table_idx.emplace(ctx.registry.create());
@@ -84,7 +117,6 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 // Many terminal expressions are skipped on this pass
 #define MAKE_COLLECTOR_NOOPS(X) \
     X(identifier_expr)          \
-    X(dot_expr)                 \
     X(implicit_access_expr)     \
     X(string_expr)              \
     X(int_literal_expr)         \
@@ -98,6 +130,22 @@ auto symbol_collector::collect_symbols(mod::module& module, context& ctx) -> mod
 #define COLLECTOR_NOOP_X(NodeType) AST_NODE_VISITOR_NOOP(symbol_collector, NodeType)
 MAKE_COLLECTOR_NOOPS(COLLECTOR_NOOP_X)
 #undef COLLECTOR_NOOP_X
+
+// The member is a bare name, but the object may hold scoped nodes (`fn(...) {...}.x`). An
+// anonymous aggregate stays untyped so the resolver reports it as used mid-expression.
+auto symbol_collector::visit(ast::node_id, const ast::dot_expr& node) -> void {
+    PROFILE_FUNCTION();
+    if (node.object.any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
+        return;
+    }
+    const default_counter::guard g{in_expr_scope_};
+    collect(node.object);
+}
+
+auto symbol_collector::visit(ast::node_id, const ast::type_expr& node) -> void {
+    PROFILE_FUNCTION();
+    collect(node.type);
+}
 
 auto symbol_collector::visit(ast::node_id, const ast::array_expr& array) -> void {
     PROFILE_FUNCTION();
@@ -121,24 +169,27 @@ auto symbol_collector::visit(ast::node_id, const ast::asm_expr& asm_node) -> voi
 
 auto symbol_collector::visit(ast::node_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
+    collect_call(call);
+}
+
+auto symbol_collector::collect_call(const ast::call_expr& call) -> void {
     const default_counter::guard g{in_expr_scope_};
 
-    // `@expect`, `@require`, and `@skip` only make sense inside a `test` block body.
-    switch (const auto fn_tok{call.function->get_token_type()}) {
-    case syntax::token_type_t::BUILTIN_EXPECT:
-    case syntax::token_type_t::BUILTIN_REQUIRE:
-    case syntax::token_type_t::BUILTIN_SKIP:
-        if (!in_test_scope_) {
-            ctx_.diags.emplace_back(
-                fmt::format("'{}' may only be used inside a 'test' block",
-                            syntax::get_builtin_opt(fn_tok).value_or("<builtin>")),
-                error::TEST_BUILTIN_OUTSIDE_TEST,
-                collecting_.ast.location_of(call.function));
-        }
-        break;
-    default: break;
+    // `@expect`, `@require`, and `@skip` only make sense in a `test` block or `@[testing]` helper
+    using syntax::builtin_t;
+    const auto builtin{call.function->get_builtin()};
+    const bool test_only{builtin == syntax::builtin_t::EXPECT ||
+                         builtin == syntax::builtin_t::REQUIRE ||
+                         builtin == syntax::builtin_t::SKIP};
+    if (test_only && !in_test_scope_ && !in_testing_fn_) {
+        ctx_.diags.emplace_back(
+            fmt::format("'{}' may only be used inside a 'test' block or a `@[testing]` function",
+                        syntax::builtin_name(*builtin)),
+            error::TEST_BUILTIN_OUTSIDE_TEST,
+            collecting_.ast.location_of(call.function));
     }
 
+    if (call.modifier) { collect(*call.modifier); }
     collect(call.function);
     for (const auto& arg : call.arguments) {
         arg.visit([this](auto arg_id) -> void { collect(arg_id); });
@@ -204,7 +255,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::for_loop_expr& for_expr
         for (const auto& capture : for_expr.captures) {
             if (const auto ident{
                     collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
-                try_declare<symbols::for_loop_capture>(ident->name, capture);
+                try_declare<symbols::capture>(ident->name, capture);
             }
         }
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(for_expr.block)};
@@ -223,6 +274,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     const scope                  s{table_stack_, new_idx, table_idx_};
     const default_counter::guard g_fn{in_function_scope_};
     const default_counter::guard g_expr{in_expr_scope_};
+    const auto prev_testing{std::exchange(in_testing_fn_, is_testing_fn(collecting_, fn))};
+    const auto restore_testing{gsl::finally([&] { in_testing_fn_ = prev_testing; })};
 
     // Parameters belong to the parent scope
     if (fn.self) {
@@ -241,9 +294,14 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
         }
     }
     collect(fn.explicit_return_type);
+    collect_attribute_args(fn.attributes);
+    if (fn.declaring_decl) {
+        const auto& decl{collecting_.ast.get_as<ast::decl_stmt>(*fn.declaring_decl)};
+        collect_attribute_args(decl.attributes, true);
+    }
 
-    if (!fn.is_type_expr) {
-        const auto& block{collecting_.ast.get_as<ast::block_stmt>(fn.body)};
+    if (fn.body) {
+        const auto& block{collecting_.ast.get_as<ast::block_stmt>(*fn.body)};
         for (const auto& stmt : block) { collect(stmt); }
     }
 
@@ -252,17 +310,44 @@ auto symbol_collector::visit(ast::node_id id, const ast::function_expr& fn) -> v
     collecting_.set_sema_type(id, *last_type_);
 }
 
+auto symbol_collector::declare_capture(const ast::capture_t& capture) -> void {
+    if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)}) {
+        collecting_.add_identifier_position(*capture.payload);
+        try_declare<symbols::capture>(ident->name, capture);
+    }
+}
+
+auto symbol_collector::collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body)
+    -> void {
+    const auto  new_idx{ctx_.registry.create()};
+    const scope s{table_stack_, new_idx, table_idx_};
+    declare_capture(capture);
+    collecting_.sema_side_tables.capture_scopes[*capture.payload].emplace(new_idx);
+    collect(body);
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::if_expr& if_expr) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
-    collect(if_expr.condition);
-    collect(if_expr.consequence);
-    if (if_expr.alternate) { collect(*if_expr.alternate); }
+    if (if_expr.condition) { collect(*if_expr.condition); }
+    if (if_expr.payload_capture) {
+        collect_captured(*if_expr.payload_capture, if_expr.consequence);
+    } else {
+        collect(if_expr.consequence);
+    }
+    if (if_expr.alternate) {
+        if (if_expr.else_capture) {
+            collect_captured(*if_expr.else_capture, *if_expr.alternate);
+        } else {
+            collect(*if_expr.alternate);
+        }
+    }
 }
 
 auto symbol_collector::visit(ast::node_id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
+    collect(index.array);
     collect(index.index);
 }
 
@@ -284,7 +369,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::cfg_value_expr&) -> voi
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
     if (const auto& result{collecting_.cfg_value_results.find(id.get_index())};
-        result != collecting_.cfg_value_results.end() && result->second.chosen.is_valid()) {
+        result != collecting_.cfg_value_results.end()) {
         collect(result->second.chosen);
     }
 }
@@ -315,6 +400,8 @@ auto symbol_collector::visit(ast::node_id, const ast::range_expr& node) -> void 
 auto symbol_collector::visit(ast::node_id, const ast::initializer_expr& init) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};
+    // `(blk: {...}){ ... }` / `match (...) {...}{ ... }`: the type may hold scoped nodes too
+    if (init.object_type) { collect(*init.object_type); }
     for (const auto& initializer : init.initializers) { collect(initializer.value); }
 }
 
@@ -322,14 +409,17 @@ auto symbol_collector::visit(ast::node_id id, const ast::label_expr& label) -> v
     PROFILE_FUNCTION();
     const default_counter::guard g_label{in_label_scope_};
     const default_counter::guard g_expr{in_expr_scope_};
-    const auto&                  ident{collecting_.ast.get_as<ast::identifier_expr>(label.name)};
 
     // Labels and their associated nodes live in their own scope
-    const auto  new_idx{ctx_.registry.create()};
+    const auto new_idx{ctx_.registry.create()};
+    collecting_.set_symbol_table(id, new_idx);
     const scope s{table_stack_, new_idx, table_idx_};
-    if (try_declare<symbols::label>(ident.name, symbols::label::handle_t{id})) {
-        auto& sym{ctx_.registry.get_from(table_idx_, ident.name)};
-        sym.set_kind(symbol_kind::LABEL);
+    if (label.name) {
+        const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*label.name)};
+        if (try_declare<symbols::label>(ident.name, symbols::label::handle_t{id})) {
+            auto& sym{ctx_.registry.get_from(table_idx_, ident.name)};
+            sym.set_kind(symbol_kind::LABEL);
+        }
     }
     collect(label.body);
 
@@ -347,9 +437,9 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
         const scope s{table_stack_, new_idx, table_idx_};
 
         for (const auto& pattern : arm.patterns) { collect(pattern); }
-        if (arm.capture && (*arm.capture)->get_kind() == ast::node_kind::IDENTIFIER_EXPRESSION) {
-            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture)};
-            try_declare<symbols::match_capture>(ident.name, *arm.capture);
+        if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
+            const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
+            try_declare<symbols::capture>(ident.name, *arm.capture);
         }
         collect(arm.dispatch);
 
@@ -368,6 +458,7 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
 
 MAKE_PREFIX_COLLECTOR(reference_expr)
 MAKE_PREFIX_COLLECTOR(address_of_expr)
+MAKE_PREFIX_COLLECTOR(comptime_expr)
 MAKE_PREFIX_COLLECTOR(dereference_expr)
 MAKE_PREFIX_COLLECTOR(unary_expr)
 
@@ -404,6 +495,8 @@ VISITOR_TEMPLATE_INIT(symbol_collector, visit, const ast::struct_expr&)
 template <ast::IndexableID ID>
 auto symbol_collector::visit(ID id, const ast::union_expr& union_expr) -> void {
     PROFILE_FUNCTION();
+    // The tag names a type from the enclosing scope, not one of the union's own members
+    if (union_expr.tag_type) { collect(*union_expr.tag_type); }
     const auto scope_idx{visit_scopes(
         type_kind::UNION,
         stdx::iter_pair{union_expr.fields,
@@ -469,7 +562,6 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
     // The guard shouldn't enclose the else clause or condition
     const default_counter::guard g_expr{in_expr_scope_};
     collect(while_expr.condition);
-    if (while_expr.continuation) { collect(*while_expr.continuation); }
 
     usize new_idx;
     {
@@ -477,10 +569,20 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
         const scope s{table_stack_, new_idx, table_idx_};
 
         const default_counter::guard g_loop{in_loop_scope_};
+        // The payload capture is the loop body's own, so it lives in the body's scope
+        if (while_expr.payload_capture) { declare_capture(*while_expr.payload_capture); }
+        // The continuation runs after each iteration's body, so it sees the payload capture too
+        if (while_expr.continuation) { collect(*while_expr.continuation); }
         const auto& block{collecting_.ast.get_as<ast::block_stmt>(while_expr.block)};
         for (const auto& stmt : block) { collect(stmt); }
     }
-    if (while_expr.non_break) { collect(*while_expr.non_break); }
+    if (while_expr.non_break) {
+        if (while_expr.else_capture) {
+            collect_captured(*while_expr.else_capture, *while_expr.non_break);
+        } else {
+            collect(*while_expr.non_break);
+        }
+    }
 
     last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
     last_type_->set_symbol_table_idx(new_idx);
@@ -489,7 +591,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::while_loop_expr& while_
 
 auto symbol_collector::visit(ast::node_id id, const ast::block_stmt& block) -> void {
     PROFILE_FUNCTION();
-    if (!in_expr_scope_ && table_stack_.size() == 1) {
+    if (!block.is_comptime && !in_expr_scope_ && table_stack_.size() == 1) {
         ctx_.diags.emplace_back("Cannot have block at the top level",
                                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                                 collecting_.ast.location_of(id));
@@ -532,25 +634,52 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     collecting_.add_identifier_position(decl.name);
 
     // An inline `struct`/`union`/`enum`/`interface` written as the declaration's type
-    // (`var a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
+    // (`let mut a: enum { lo, hi } = .lo`) needs its anonymous scope registered here
     if (decl.explicit_type &&
         decl.explicit_type
             ->any<ast::struct_expr, ast::union_expr, ast::enum_expr, ast::interface_expr>()) {
         collect(*decl.explicit_type);
+    } else if (decl.explicit_type) {
+        collect_computed_types(*decl.explicit_type);
     }
 
     if (in_function_scope_ && !declaring_into_aggregate()) {
         if (const auto illegal{function_local_illegal_modifiers(decl)}; !illegal.empty()) {
             ctx_.diags.emplace_back(
                 fmt::format("Modifier{} '{}' cannot be used on a declaration local to a function",
-                            illegal.size() > 1 ? "s" : "",
+                            string_utils::plural_suffix(illegal.size()),
                             fmt::join(illegal, "', '")),
                 error::ILLEGAL_LOCAL_DECL_MODIFIER,
                 collecting_.ast.location_of(id));
         }
     }
 
-    if (decl.discardable_condition) { collect(*decl.discardable_condition); }
+    // Linkage attaches to a function itself, which `const` binds; data needs `let`'s storage
+    if (const auto linkage{linkage_modifier(decl)}) {
+        const bool is_fn{declares_function(decl)};
+        const bool is_comptime{decl.has_modifier(ast::decl_modifiers::COMPTIME)};
+        if (is_fn && (!is_comptime || decl.has_modifier(ast::decl_modifiers::MUT))) {
+            ctx_.diags.emplace_back(
+                fmt::format("A '{}' function is declared with 'const'", *linkage),
+                error::ILLEGAL_BINDING_KIND,
+                collecting_.ast.location_of(id));
+        } else if (!is_fn && is_comptime) {
+            ctx_.diags.emplace_back(fmt::format("'{}' needs storage, which a compile-time "
+                                                "declaration lacks; use 'let' or 'let mut'",
+                                                *linkage),
+                                    error::ILLEGAL_BINDING_KIND,
+                                    collecting_.ast.location_of(id));
+        } else if (is_fn && *linkage == syntax::keywords::THREADLOCAL.name) {
+            ctx_.diags.emplace_back("A function cannot be 'threadlocal'",
+                                    error::ILLEGAL_BINDING_KIND,
+                                    collecting_.ast.location_of(id));
+        }
+    }
+
+    // Attributes that reach through to a function literal see its parameters, so collect there
+    const bool initializes_fn_literal{decl.value && decl.value->is<ast::function_expr>()};
+    collect_attribute_args(decl.attributes,
+                           initializes_fn_literal ? stdx::option<bool>{false} : stdx::none);
     if (!try_declare<symbols::node_t>(name, id)) { return; };
     if (!decl.value) { return; }
 
@@ -559,24 +688,20 @@ auto symbol_collector::visit(ast::node_id id, const ast::decl_stmt& decl) -> voi
     const auto value{*decl.value};
     if (value.any<ast::enum_expr, ast::union_expr, ast::struct_expr, ast::interface_expr>()) {
         pending_type_name_ = name;
-        if (decl.has_modifier(ast::decl_modifiers::CONSTEXPR)) {
-            ctx_.diags.emplace_back(
-                fmt::format("All {}s are implicitly constexpr", value->display_name()),
-                error::REDUNDANT_CONSTEXPR,
+        if (!decl.has_modifier(ast::decl_modifiers::COMPTIME) ||
+            decl.has_modifier(ast::decl_modifiers::MUT)) {
+            ctx_.poison_symbol(
+                sym,
+                fmt::format("All {}s must be declared with 'const'", value->display_name()),
+                error::ILLEGAL_NON_CONST_STATEMENT,
                 collecting_.ast.location_of(id));
-        } else if (!decl.has_modifier(ast::decl_modifiers::CONSTANT)) {
-            ctx_.poison_symbol(sym,
-                               fmt::format("All {}s must be marked const", value->display_name()),
-                               error::ILLEGAL_NON_CONST_STATEMENT,
-                               collecting_.ast.location_of(id));
         } else {
             sym.set_kind(symbol_kind::TYPE);
         }
     } else if (value.is<ast::function_expr>()) {
-        if (!decl.has_modifier(ast::decl_modifiers::CONSTEXPR) &&
-            !decl.has_modifier(ast::decl_modifiers::CONSTANT)) {
+        if (decl.has_modifier(ast::decl_modifiers::MUT)) {
             ctx_.poison_symbol(sym,
-                               "All function declarations must be const or constexpr",
+                               "A function declaration is either 'const' or 'let'",
                                error::ILLEGAL_NON_CONST_STATEMENT,
                                collecting_.ast.location_of(id));
         } else {
@@ -611,7 +736,8 @@ auto symbol_collector::visit(ast::node_id id, const ast::errdefer_stmt& errdef) 
         const scope s{table_stack_, new_idx, table_idx_};
         const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(**errdef.capture)};
         collecting_.add_identifier_position(**errdef.capture);
-        try_declare<symbols::match_capture>(ident.name, **errdef.capture);
+        try_declare<symbols::capture>(ident.name,
+                                      ast::capture_t{.modifier = {}, .payload = *errdef.capture});
         collect(errdef.deferred);
         last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);
         last_type_->set_symbol_table_idx(new_idx);
@@ -637,14 +763,25 @@ auto symbol_collector::visit(ast::node_id id, const ast::expr_stmt& expr) -> voi
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
         case node_kind::FOR_LOOP_EXPRESSION:
         case node_kind::INFINITE_LOOP_EXPRESSION:
-        case node_kind::LABEL_EXPRESSION:
             ctx_.diags.emplace_back(
                 "Control-flow constructs are not allowed as statements at the top level; "
                 "use `@cfg` for conditional declarations, or bind the value with "
-                "`const x := ...`",
+                "`const x = ...`",
                 error::ILLEGAL_TOP_LEVEL_STATEMENT,
                 collecting_.ast.location_of(id));
             break;
+        case node_kind::LABEL_EXPRESSION: {
+            const auto& lbl{collecting_.ast.get_as<ast::label_expr>(*expr.expression)};
+            if (!lbl.is_comptime(collecting_.ast)) {
+                ctx_.diags.emplace_back(
+                    "Control-flow constructs are not allowed as statements at the top level; "
+                    "use `@cfg` for conditional declarations, or bind the value with "
+                    "`const x = ...`",
+                    error::ILLEGAL_TOP_LEVEL_STATEMENT,
+                    collecting_.ast.location_of(id));
+            }
+            break;
+        }
         default: break;
         }
     }
@@ -674,7 +811,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> voi
 }
 
 auto symbol_collector::collect_import_payload(const ast::import_stmt& import_stmt)
-    -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module*>, mod::diagnostic>> {
+    -> std::pair<std::string_view, stdx::result<gsl::not_null<mod::module_t*>, mod::diagnostic>> {
     const auto             named{import_stmt.get_name(collecting_.ast)};
     const std::string_view name{named ? named->second : std::string_view{}};
     if (const auto string{collecting_.ast.get_as_opt<ast::string_expr>(import_stmt.payload)}) {
@@ -691,7 +828,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
     auto [alias, mod_result]{collect_import_payload(import_stmt)};
 
     // Only set the table index if the module exists
-    stdx::option<mod::module&> imported_mod;
+    stdx::option<mod::module_t&> imported_mod;
     if (!mod_result) {
         // The token is retrieved here to avoid copying it on success
         ctx_.diags.emplace_back(mod_result.error().get_message(),
@@ -709,7 +846,7 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
         if (imported_mod && !imported_mod->is_errored()) {
             auto& type = *ctx_.pool[{
                 type_kind::MODULE, types::mut::CONSTANT, *imported_mod->root_table_idx}];
-            type.resolve<types::module>(*imported_mod);
+            type.resolve<types::module_t>(*imported_mod);
             collecting_.set_sema_type(id, type);
         } else {
             ctx_.poison_node(collecting_, id);
@@ -718,12 +855,16 @@ auto symbol_collector::visit(ast::node_id id, const ast::import_stmt& import_stm
     }
 
     collecting_.add_identifier_position(named->first);
-    try_declare<symbols::node_t>(alias, id);
+    // A clashing alias is already reported; later passes still need the node typed
+    if (!try_declare<symbols::node_t>(alias, id)) {
+        ctx_.poison_node(collecting_, id);
+        return;
+    }
     if (imported_mod && !imported_mod->is_errored()) {
         // Its much easier for other steps to get the enclosing module if we resolve now
         auto& type =
             *ctx_.pool[{type_kind::MODULE, types::mut::CONSTANT, *imported_mod->root_table_idx}];
-        type.resolve<types::module>(*imported_mod);
+        type.resolve<types::module_t>(*imported_mod);
 
         collecting_.set_sema_type(id, type);
         auto& sym{ctx_.registry.get_from(table_idx_, alias)};
@@ -773,21 +914,12 @@ auto symbol_collector::visit(ast::node_id id, const ast::test_stmt& test) -> voi
     collecting_.set_sema_type(id, *last_type_.take());
 }
 
-auto symbol_collector::visit(ast::node_id id, const ast::using_stmt& using_stmt) -> void {
-    PROFILE_FUNCTION();
-    collect(using_stmt.explicit_type);
-    const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(using_stmt.alias)};
-    collecting_.add_identifier_position(using_stmt.alias);
-    try_declare<symbols::node_t>(ident.name, id);
-    ctx_.registry.get_from(table_idx_, ident.name).set_kind(symbol_kind::TYPE);
-}
-
 AST_TYPE_VISITOR_NOOP(symbol_collector, identifier_expr)
 AST_TYPE_VISITOR_NOOP(symbol_collector, dot_expr)
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::call_expr& call) -> void {
     PROFILE_FUNCTION();
-    visit(ast::node_id::make_invalid(), call);
+    collect_call(call);
 }
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_function_type& fn) -> void {
@@ -801,6 +933,26 @@ auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_array_ty
     const default_counter::guard g{in_expr_scope_};
     if (array.dimension) { collect(*array.dimension); }
     collect(array.inner_explicit_type);
+}
+
+auto symbol_collector::collect_computed_types(ast::explicit_type_id type) -> void {
+    switch (type.get_kind()) {
+    case ast::explicit_type_kind::EXPR: collect(type); break;
+    case ast::explicit_type_kind::RECURSIVE:
+        collect_computed_types(collecting_.ast.get_as<ast::explicit_type_id>(type));
+        break;
+    case ast::explicit_type_kind::ARRAY:
+        collect_computed_types(
+            collecting_.ast.get_as<ast::explicit_array_type>(type).inner_explicit_type);
+        break;
+    default: break;
+    }
+}
+
+auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_expr_type& type) -> void {
+    PROFILE_FUNCTION();
+    const default_counter::guard g{in_expr_scope_};
+    collect(type.expr);
 }
 
 auto symbol_collector::visit(ast::explicit_type_id, const ast::explicit_dyn_type& dyn) -> void {

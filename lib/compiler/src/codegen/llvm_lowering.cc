@@ -1,8 +1,10 @@
 #include "compiler/codegen/llvm_lowering.hh"
+#include "compiler/codegen/runtime_libcalls.hh"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -10,22 +12,31 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
-#include <gsl/span>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/CallingConv.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/AtomicOrdering.h>
 #include <llvm/Support/Casting.h>
+#include <llvm/Support/MathExtras.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
@@ -34,9 +45,12 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/codegen/aggregate_abi.hh"
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/codegen/type_translator.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/function.hh"
@@ -44,24 +58,175 @@
 #include "compiler/gir/layout.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/gir/semantics.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
-#include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
+#include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::codegen {
 
 namespace {
 
-// A `constexpr_float` materializes as `f64`; a `constexpr_int` as `i32`.
+// Marks a `@[testing]` helper so calls to it check whether it aborted its test
+constexpr std::string_view TESTING_FN_ATTRIBUTE{"ghoti-testing"};
+
+// Local symbols are invisible to the linker, and LLVM requires them to keep default visibility
+auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibility> visibility)
+    -> void {
+    if (!visibility || value.hasLocalLinkage()) { return; }
+    switch (*visibility) {
+    case ast::symbol_visibility::DEFAULT:
+        value.setVisibility(llvm::GlobalValue::DefaultVisibility);
+        break;
+    case ast::symbol_visibility::HIDDEN:
+        value.setVisibility(llvm::GlobalValue::HiddenVisibility);
+        break;
+    case ast::symbol_visibility::PROTECTED:
+        value.setVisibility(llvm::GlobalValue::ProtectedVisibility);
+        break;
+    }
+}
+
+// The little-endian bytes of a scalar union payload, zero past its width
+[[nodiscard]] auto union_payload_bytes(const gir::const_value& payload, usize size) -> std::string {
+    std::string bytes(size, '\0');
+    if (const auto iv{payload.as_int_opt()}) {
+        const u64   v{static_cast<u64>(*iv)};
+        const usize copy_len{std::min<usize>(sizeof(v), size)};
+        std::memcpy(bytes.data(), &v, copy_len);
+    } else if (const auto fv{payload.as_opt<f128>()}) {
+        const auto payload_type{payload.get_type()};
+        const auto format{payload_type ? sema::float_format_of(*payload_type) : stdx::none};
+        const auto encoded{fv->encode(format.value_or(float_format::DOUBLE))};
+        const auto width{format_info(format.value_or(float_format::DOUBLE)).storage_bits};
+        const std::array<u64, 2> words{encoded.low, encoded.high};
+        const usize              copy_len{std::min<usize>(width / 8, size)};
+        std::memcpy(bytes.data(), words.data(), copy_len);
+    } else if (const auto bv{payload.as_opt<bool>()}) {
+        if (size > 0) { bytes[0] = *bv ? 1 : 0; }
+    }
+    return bytes;
+}
+
+// Reads `source`'s bytes back as a constant of `ty` starting `offset` bytes in, one scalar at a
+// time, with zeroes past its end
+[[nodiscard]] auto
+reinterpret_constant(llvm::Constant* source, llvm::Type* ty, u64 offset, const llvm::DataLayout& dl)
+    -> llvm::Constant* {
+    if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
+        const auto*                  layout{dl.getStructLayout(st)};
+        std::vector<llvm::Constant*> elems;
+        for (u32 i{0}; i < st->getNumElements(); ++i) {
+            elems.emplace_back(reinterpret_constant(
+                source, st->getElementType(i), offset + layout->getElementOffset(i), dl));
+        }
+        return llvm::ConstantStruct::get(st, elems);
+    }
+    if (auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)}) {
+        const auto stride{dl.getTypeAllocSize(at->getElementType()).getFixedValue()};
+        std::vector<llvm::Constant*> elems;
+        for (u64 i{0}; i < at->getNumElements(); ++i) {
+            elems.emplace_back(
+                reinterpret_constant(source, at->getElementType(), offset + (i * stride), dl));
+        }
+        return llvm::ConstantArray::get(at, elems);
+    }
+    if (offset >= dl.getTypeAllocSize(source->getType()).getFixedValue()) {
+        return llvm::Constant::getNullValue(ty);
+    }
+    auto* folded{llvm::ConstantFoldLoadFromConst(source, ty, llvm::APInt{64, offset}, dl)};
+    if (!folded || llvm::isa<llvm::PoisonValue, llvm::UndefValue>(folded)) {
+        return llvm::Constant::getNullValue(ty);
+    }
+    return folded;
+}
+
+// Which narrow integers a C caller extends to 32 bits for its callee, as clang does per target.
+// RV64 also sign-extends every 32-bit integer, unsigned ones included, to the full register
+enum class narrow_int_rule : u8 {
+    NONE,
+    BOOL_ONLY,
+    ALL,
+    ALL_AND_RV64_WORD,
+};
+
+[[nodiscard]] auto narrow_int_rule_for(const llvm::Triple& triple) -> narrow_int_rule {
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSWindows() || triple.isUEFI() ? narrow_int_rule::BOOL_ONLY
+                                                       : narrow_int_rule::ALL;
+    }
+    if (triple.isAArch64()) {
+        return triple.isOSDarwin() ? narrow_int_rule::ALL : narrow_int_rule::NONE;
+    }
+    if (triple.isRISCV64()) { return narrow_int_rule::ALL_AND_RV64_WORD; }
+    if (triple.getArch() == llvm::Triple::x86 || triple.isARM() || triple.isThumb() ||
+        triple.isRISCV32()) {
+        return narrow_int_rule::ALL;
+    }
+    return narrow_int_rule::NONE;
+}
+
+auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attributes& attributes)
+    -> void {
+    apply_visibility(llvm_fn, attributes.visibility);
+    if (attributes.naked) { llvm_fn.addFnAttr(llvm::Attribute::Naked); }
+    if (attributes.cold) { llvm_fn.addFnAttr(llvm::Attribute::Cold); }
+    // Keeps loop-idiom recognition from turning a hand-written `memcpy` loop into a `memcpy` call
+    if (attributes.no_builtins) { llvm_fn.addFnAttr("no-builtins"); }
+    // Joined with the target's own features once the target machine is known
+    if (!attributes.target_features.empty()) {
+        llvm_fn.addFnAttr("ghoti-target-features",
+                          fmt::format("{}", fmt::join(attributes.target_features, ",")));
+    }
+    if (attributes.alignment) { llvm_fn.setAlignment(llvm::Align{*attributes.alignment}); }
+    if (!attributes.inlining) { return; }
+    switch (*attributes.inlining) {
+    case ast::inline_mode::ALWAYS:  llvm_fn.addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::inline_mode::NEVER:   llvm_fn.addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::inline_mode::HINT:    llvm_fn.addFnAttr(llvm::Attribute::InlineHint); break;
+    case ast::inline_mode::DEFAULT: break;
+    }
+}
+
+// A `comptime_float` materializes as `f64`; a `comptime_int` as `i32`.
 [[nodiscard]] auto materialized_is_float(sema::type_kind k) noexcept -> bool {
-    return sema::is_float(k) || k == sema::type_kind::CONSTEXPR_FLOAT;
+    return sema::is_float(k) || k == sema::type_kind::COMPTIME_FLOAT;
+}
+
+// Neither `comptime_int` nor `comptime_float` has a concrete width/kind of its own
+[[nodiscard]] auto is_untyped_comptime(sema::type_kind k) noexcept -> bool {
+    return k == sema::type_kind::COMPTIME_INT || k == sema::type_kind::COMPTIME_FLOAT;
+}
+
+[[nodiscard]] auto is_comptime_only_signature(const sema::types::function& fn_data) noexcept
+    -> bool {
+    return fn_data.return_type.get_kind() == sema::type_kind::TYPE;
+}
+
+// A function over compile-time-only values (`Option(type)`'s methods, say) has no runtime form
+[[nodiscard]] auto is_comptime_only(const gir::function& fn) -> bool {
+    const auto fn_data{sema::signature_of(fn.get_type())};
+    return fn.get_linkage() != gir::linkage::EXTERN && fn_data &&
+           is_comptime_only_signature(*fn_data);
+}
+
+// The concrete peer type two operands should lower against, or none if both are
+// `is_untyped_comptime`
+[[nodiscard]] auto concrete_peer_type(stdx::option<sema::type&> op0_ty,
+                                      stdx::option<sema::type&> op1_ty)
+    -> stdx::option<sema::type&> {
+    if (op0_ty && !is_untyped_comptime(op0_ty->get_kind())) { return op0_ty; }
+    if (op1_ty && !is_untyped_comptime(op1_ty->get_kind())) { return op1_ty; }
+    return stdx::none;
 }
 
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
-    // Any float (or `constexpr_float`) operand makes the operation floating point.
+    // Any float (or `comptime_float`) operand makes the operation floating point.
     for (const auto& op : inst.operands) {
         if (op.type && materialized_is_float(op.type->get_kind())) { return true; }
     }
@@ -73,9 +238,25 @@ namespace {
     return val && val->getType()->isFloatingPointTy();
 }
 
+[[nodiscard]] auto comptime_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
+    if (const auto v{val.as_opt<i64>()}) { return *v >= 0; }
+    if (const auto v{val.as_opt<i128>()}) { return *v >= 0; }
+    return val.is<u64>() || val.is<u128>();
+}
+
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
+    if (!inst.operands.empty() && inst.operands[0].type &&
+        inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
+        // `comptime_int` alone carries no real signedness
+        for (const auto& op : inst.operands | std::views::drop(1)) {
+            if (op.type && op.type->get_kind() != sema::type_kind::COMPTIME_INT) {
+                return sema::is_signed_integer(*op.type);
+            }
+        }
+        return !std::ranges::all_of(
+            inst.operands, [](const auto& op) { return comptime_operand_is_nonnegative(op); });
+    }
     if (!inst.operands.empty() && inst.operands[0].type) {
-        if (inst.operands[0].type->get_kind() == sema::type_kind::CONSTEXPR_INT) { return true; }
         return sema::is_signed_integer(*inst.operands[0].type);
     }
     if (inst.type) { return sema::is_signed_integer(*inst.type); }
@@ -91,23 +272,42 @@ namespace {
 
 // An integer-valued constant whose GIR type is a pointer must materialize as an `inttoptr` constant
 [[nodiscard]] auto int_or_ptr_constant(u128 bits, llvm::Type* ty) -> llvm::Constant* {
+    // `u0`'s only value
+    if (ty->isStructTy()) { return llvm::ConstantAggregateZero::get(ty); }
     if (!ty->isPointerTy()) { return wide_int_constant(bits, ty); }
     if (bits == 0) { return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ty)); }
     auto* int_ty{llvm::Type::getInt64Ty(ty->getContext())};
     return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty), ty);
 }
 
-[[nodiscard]] auto to_llvm_callconv(ast::calling_convention conv) noexcept
-    -> llvm::CallingConv::ID {
-    switch (conv) {
-    case ast::calling_convention::C:            return llvm::CallingConv::C;
-    case ast::calling_convention::SYSV:         return llvm::CallingConv::X86_64_SysV;
-    case ast::calling_convention::WIN64:        return llvm::CallingConv::Win64;
-    case ast::calling_convention::X86_STDCALL:  return llvm::CallingConv::X86_StdCall;
-    case ast::calling_convention::X86_FASTCALL: return llvm::CallingConv::X86_FastCall;
-    case ast::calling_convention::AAPCS:        return llvm::CallingConv::ARM_AAPCS;
-    default:                                    return llvm::CallingConv::C;
+// The float constant of `ty` (or its elements) nearest to `value`
+// `half` and vectors read as `f32`, which LLVM's own names already serve
+[[nodiscard]] auto llvm_float_format(const llvm::Type* type) -> float_format {
+    return type->isFP128Ty()      ? float_format::QUAD
+           : type->isX86_FP80Ty() ? float_format::X87
+           : type->isDoubleTy()   ? float_format::DOUBLE
+                                  : float_format::SINGLE;
+}
+
+[[nodiscard]] auto float_constant(f128 value, llvm::Type* ty) -> llvm::Constant* {
+    auto* scalar_ty{ty->getScalarType()};
+    VERIFY(scalar_ty->isFloatingPointTy(), "A float payload must lower to a float type");
+    // `APFloat::convert` quiets a signaling NaN, so a NaN is built from its exact encoding
+    if (value.is_nan() && !scalar_ty->isPPC_FP128Ty() && !scalar_ty->isBFloatTy()) {
+        const auto               format{scalar_ty->isHalfTy() ? float_format::HALF
+                                                              : llvm_float_format(scalar_ty)};
+        const auto               bits{value.encode(format)};
+        const std::array<u64, 2> nan_words{bits.low, bits.high};
+        const auto width{static_cast<u32>(scalar_ty->getPrimitiveSizeInBits().getFixedValue())};
+        const llvm::APFloat nan{scalar_ty->getFltSemantics(), llvm::APInt{width, nan_words}};
+        return llvm::ConstantFP::get(ty, nan);
     }
+    const std::array<u64, 2> words{value.bits().low, value.bits().high};
+    llvm::APFloat            converted{llvm::APFloat::IEEEquad(), llvm::APInt{128, words}};
+    bool                     loses_info{false};
+    DISCARD(converted.convert(
+        scalar_ty->getFltSemantics(), llvm::APFloat::rmNearestTiesToEven, &loses_info));
+    return llvm::ConstantFP::get(ty, converted);
 }
 
 enum class memory_order_t : u8 { // Mirrors builtin.gh.inc
@@ -144,7 +344,14 @@ enum class atomic_rmw_op_t : u8 { // Mirrors builtin.gh.inc
     umin = 10,
 };
 
+// An atomic access's size as its alignment, which is what `atomicrmw`/`cmpxchg` assume
+[[nodiscard]] auto natural_atomic_align(const llvm::Module& module, llvm::Type* type)
+    -> llvm::Align {
+    return llvm::Align{llvm::PowerOf2Ceil(module.getDataLayout().getTypeStoreSize(type))};
+}
+
 // `op` is an `AtomicRmwOp` enum ordinal
+
 [[nodiscard]] auto to_llvm_rmw_op(u8 op) noexcept -> llvm::AtomicRMWInst::BinOp {
     using Op = llvm::AtomicRMWInst::BinOp;
     switch (static_cast<atomic_rmw_op_t>(op)) {
@@ -177,13 +384,15 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
     return out;
 }
 
-auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module> {
-    PROFILE_FUNCTION();
-    gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+// Every function is declared up front so bodies and vtables can reference any of them
+auto llvm_lowering::declare_functions(const gir::module_t& gir_mod) -> void {
+    PROFILE_SCOPE("llvm_lowering: declare functions");
+    for (const auto* fn : gir_mod.get_functions()) {
+        if (!is_comptime_only(*fn)) { declare_function(*fn); }
     }
+}
+
+auto llvm_lowering::lower_definitions(const gir::module_t& gir_mod) -> void {
     {
         PROFILE_SCOPE("llvm_lowering: lower vtables");
         lower_dyn_vtables(gir_mod);
@@ -194,14 +403,45 @@ auto llvm_lowering::lower(const gir::module& gir_mod) -> stdx::box<llvm::Module>
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
+        for (const auto* fn : gir_mod.get_functions()) {
+            if (!is_comptime_only(*fn)) { lower_function(*fn); }
+        }
     }
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+}
+
+auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module> {
+    PROFILE_FUNCTION();
+    gir_module_.emplace(gir_mod);
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
+auto llvm_lowering::finalize_runtime_support() -> void {
+    lower_c_abi(*llvm_module_, types_.union_members(), types_.padded_structs());
+    lower_large_aggregates(*llvm_module_);
+    maybe_emit_mingw_main_stub();
+    // ghoti never unwinds; without this, ARM EHABI references libgcc's `__aeabi_unwind_cpp_pr*`
+    for (auto& fn : *llvm_module_) { fn.addFnAttr(llvm::Attribute::NoUnwind); }
+}
+
+// MinGW codegen injects a `__main` (static-ctor hook) call into any function named `main`
+auto llvm_lowering::maybe_emit_mingw_main_stub() -> void {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isWindowsGNUEnvironment() || llvm_module_->getFunction("__main")) { return; }
+    const auto* main_fn{llvm_module_->getFunction("main")};
+    if (!main_fn || main_fn->isDeclaration()) { return; }
+
+    auto*             stub_ty{llvm::FunctionType::get(llvm::Type::getVoidTy(context_), false)};
+    auto*             stub{llvm::Function::Create(
+        stub_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
+    llvm::IRBuilder<> stub_builder{llvm::BasicBlock::Create(context_, "entry", stub)};
+    stub_builder.CreateRetVoid();
+    llvm::appendToUsed(*llvm_module_, {stub});
+}
+
+auto llvm_lowering::lower_dyn_vtables(const gir::module_t& gir_mod) -> void {
     PROFILE_FUNCTION();
     auto* ptr_ty{types_.get_ptr_ty()};
     for (const auto& vt : gir_mod.get_ast_module().dyn_vtables) {
@@ -224,693 +464,111 @@ auto llvm_lowering::lower_dyn_vtables(const gir::module& gir_mod) -> void {
     }
 }
 
-auto llvm_lowering::lower_executable(const gir::module& gir_mod, std::string_view user_main_name)
+auto llvm_lowering::lower_executable(const gir::module_t& gir_mod, std::string_view user_main_name)
     -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    {
-        PROFILE_SCOPE("llvm_lowering: declare functions");
-        for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower vtables");
-        lower_dyn_vtables(gir_mod);
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower globals");
-        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    }
-    {
-        PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
-    }
-    emit_main_entry_wrapper(user_main_name_);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    declare_functions(gir_mod);
+    lower_definitions(gir_mod);
+    finalize_runtime_support();
     return std::move(llvm_module_);
-}
-
-auto llvm_lowering::emit_main_entry_wrapper(std::string_view user_main_name) -> llvm::Function* {
-    PROFILE_FUNCTION();
-    auto* user_fn{llvm_module_->getFunction("_ghoti_main")};
-    if (!user_fn) { user_fn = llvm_module_->getFunction(user_main_name); }
-    ASSERT(user_fn, "User main function not found in LLVM module");
-
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
-    }
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-
-    // Nothing reads args unless user main takes the `[][:0]u8` parameter.
-    const bool takes_arg{user_fn->getFunctionType()->getNumParams() == 1};
-    auto*      outer_val{emit_argv_slice(main_fn, takes_arg)};
-
-    if (user_fn->getReturnType()->isVoidTy()) {
-        if (takes_arg) {
-            builder_.CreateCall(user_fn, {outer_val});
-        } else {
-            builder_.CreateCall(user_fn, {});
-        }
-        builder_.CreateRet(builder_.getInt32(0));
-    } else {
-        auto* ret_val{takes_arg ? builder_.CreateCall(user_fn, {outer_val}, "main.res")
-                                : builder_.CreateCall(user_fn, {}, "main.res")};
-        auto* ret_i32{builder_.CreateIntCast(ret_val, types_.get_int32_ty(), true, "main.res.i32")};
-        builder_.CreateRet(ret_i32);
-    }
-
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
-    return main_fn;
-}
-
-auto llvm_lowering::emit_freestanding_start(llvm::Function* main_fn) -> void {
-    PROFILE_FUNCTION();
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    std::string asm_text;
-    switch (triple.getArch()) {
-    case llvm::Triple::x86_64:
-        asm_text = "xorl %ebp, %ebp\n\t"    // mark the outermost frame
-                   "movq (%rsp), %rdi\n\t"  // argc
-                   "leaq 8(%rsp), %rsi\n\t" // argv
-                   "andq $$-16, %rsp\n\t"   // realign for the SysV call
-                   "call main\n\t"
-                   "movl %eax, %edi\n\t"  // exit code <- main()'s return
-                   "movl $$231, %eax\n\t" // __NR_exit_group
-                   "syscall\n\t"
-                   "ud2\n\t";
-        break;
-    case llvm::Triple::aarch64:
-        asm_text = "mov x29, xzr\n\t"
-                   "mov x30, xzr\n\t"
-                   "ldr x0, [sp]\n\t"   // argc (read before realigning sp)
-                   "add x1, sp, #8\n\t" // argv
-                   "mov x2, sp\n\t"
-                   "and x2, x2, #-16\n\t"
-                   "mov sp, x2\n\t"
-                   "bl main\n\t"
-                   "mov w8, #94\n\t" // __NR_exit_group
-                   "svc #0\n\t"
-                   "brk #0\n\t";
-        break;
-    case llvm::Triple::riscv64:
-        asm_text = "li s0, 0\n\t"
-                   "ld a0, 0(sp)\n\t"   // argc
-                   "addi a1, sp, 8\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::riscv32:
-        asm_text = "li s0, 0\n\t"
-                   "lw a0, 0(sp)\n\t"   // argc (32-bit word)
-                   "addi a1, sp, 4\n\t" // argv
-                   "andi sp, sp, -16\n\t"
-                   "call main\n\t"
-                   "li a7, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "ecall\n\t"
-                   "unimp\n\t";
-        break;
-    case llvm::Triple::arm:
-    case llvm::Triple::thumb:
-        // One template for A32 and T32. The kernel delivers an 8-byte aligned sp at
-        // entry (AAPCS), so no realign is needed before the call to `main`
-        asm_text = "ldr r0, [sp, #0]\n\t" // argc
-                   "add r1, sp, #4\n\t"   // argv
-                   "bl main\n\t"
-                   "movs r7, #248\n\t" // __NR_exit_group  (ARM EABI)
-                   "svc #0\n\t"
-                   "udf #0\n\t";
-        break;
-    case llvm::Triple::loongarch64:
-        // LoongArch registers are spelled `$a0` etc.; `$` is the operand sigil in
-        // an LLVM asm string, so each one is escaped as `$$`.
-        asm_text = "move $$fp, $$zero\n\t"
-                   "ld.d $$a0, $$sp, 0\n\t"   // argc
-                   "addi.d $$a1, $$sp, 8\n\t" // argv
-                   "bl main\n\t"
-                   "ori $$a7, $$zero, 94\n\t" // __NR_exit_group  (asm-generic table)
-                   "syscall 0\n\t"
-                   "break 0\n\t";
-        break;
-    default:
-        // Linux arch with a diagnostic before lowering runs. Kept as a safe no-op.
-        return;
-    }
-
-    auto* void_ty{llvm::Type::getVoidTy(context_)};
-    auto* start_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_fn{llvm::Function::Create(
-        start_ty, llvm::Function::ExternalLinkage, "_start", llvm_module_.get())};
-    start_fn->addFnAttr(llvm::Attribute::Naked);
-    start_fn->addFnAttr(llvm::Attribute::NoInline);
-    start_fn->addFnAttr(llvm::Attribute::NoUnwind);
-    start_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    start_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", start_fn)};
-    builder_.SetInsertPoint(entry_bb);
-
-    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* start_asm{
-        llvm::InlineAsm::get(asm_ty, asm_text, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
-    builder_.CreateCall(start_asm, {});
-    builder_.CreateUnreachable();
-    llvm::appendToUsed(*llvm_module_, {start_fn, main_fn});
 }
 
 auto llvm_lowering::windows_stack_probe_symbol() const -> stdx::option<std::string_view> {
     const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) { return stdx::none; }
-    return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
-}
-
-// Emit a weak, self-contained probe so `no-stack-arg-probe` can stay off on Windows and
-// large frames grow the stack one 4 KiB page at a time. Weak + its own section: a build
-// with no big frame drops it at link time (`--gc-sections` / `/opt:ref`).
-auto llvm_lowering::maybe_emit_windows_stack_probe() -> void {
-    const auto sym{windows_stack_probe_symbol()};
-    if (!sym || llvm_module_->getFunction(*sym)) { return; }
-
-    auto* void_ty{llvm::Type::getVoidTy(context_)};
-    auto* fn_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* probe_fn{
-        llvm::Function::Create(fn_ty, llvm::GlobalValue::WeakAnyLinkage, *sym, llvm_module_.get())};
-    probe_fn->setComdat(llvm_module_->getOrInsertComdat(*sym));
-    probe_fn->addFnAttr(llvm::Attribute::Naked);
-    probe_fn->addFnAttr(llvm::Attribute::NoInline);
-    probe_fn->addFnAttr(llvm::Attribute::NoUnwind);
-    probe_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    probe_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    // Allocation size is passed in %rax; %rsp is left untouched. Every register except the saved
-    // scratch is preserved. This is libgcc's `___chkstk_ms`, which also satisfies the MSVC
-    // `__chkstk` contract on x64.
-    static constexpr std::string_view probe_asm{R"(push %rcx
-	push %rax
-	cmp $$0x1000, %rax
-	lea 0x18(%rsp), %rcx
-	jb 2f
-	1:
-	sub $$0x1000, %rcx
-	orq $$0x0, (%rcx)
-	sub $$0x1000, %rax
-	cmp $$0x1000, %rax
-	ja 1b
-	2:
-	sub %rax, %rcx
-	orq $$0x0, (%rcx)
-	pop %rax
-	pop %rcx
-	ret
-	)"};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", probe_fn)};
-    builder_.SetInsertPoint(entry_bb);
-    auto* asm_ty{llvm::FunctionType::get(void_ty, false)};
-    auto* probe_asm_val{
-        llvm::InlineAsm::get(asm_ty, probe_asm, "~{memory}", true, false, llvm::InlineAsm::AD_ATT)};
-    builder_.CreateCall(probe_asm_val, {});
-    builder_.CreateUnreachable();
-}
-
-auto llvm_lowering::maybe_emit_mem_intrinsic_fallbacks() -> void {
-    if (!mem_fallbacks_used()) { return; }
-
-    // COFF/ELF dedupe weak defs via a COMDAT
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    // MachO has no COMDATs but folds weak symbols on its own
-    const bool want_comdat{!triple.isOSBinFormatMachO()};
-
-    auto* i8_ty{llvm::Type::getInt8Ty(context_)};
-    auto* i32_ty{llvm::Type::getInt32Ty(context_)};
-    auto* i64_ty{llvm::Type::getInt64Ty(context_)};
-    auto* ptr{types_.get_ptr_ty()};
-    auto* zero64{llvm::ConstantInt::get(i64_ty, 0)};
-    auto* one64{llvm::ConstantInt::get(i64_ty, 1)};
-
-    const auto new_fn{[&](std::string_view name, bool set) -> llvm::Function* {
-        if (llvm_module_->getFunction(name)) { return nullptr; }
-        auto* second{set ? static_cast<llvm::Type*>(i32_ty) : static_cast<llvm::Type*>(ptr)};
-        auto* fn_ty{llvm::FunctionType::get(ptr, {ptr, second, i64_ty}, false)};
-        auto* fn{llvm::Function::Create(
-            fn_ty, llvm::GlobalValue::WeakAnyLinkage, name, llvm_module_.get())};
-        if (want_comdat) { fn->setComdat(llvm_module_->getOrInsertComdat(std::string{name})); }
-        fn->addFnAttr(llvm::Attribute::NoInline);
-        fn->addFnAttr(llvm::Attribute::NoUnwind);
-        fn->addFnAttr(llvm::Attribute::NoBuiltin);
-        // `optnone` stops loop-idiom recognition from turning the byte loop back into a
-        // `llvm.mem*` intrinsic, which lowers to this same (recursive) libcall.
-        fn->addFnAttr(llvm::Attribute::OptimizeNone);
-        return fn;
-    }};
-
-    // Emits, from the current insert point, a `dst[k] = <byte>` loop (`k` runs 0..n, or n..0
-    // when `backward`) that branches to `after` when done.
-    const auto byte_loop{[&](gsl::not_null<llvm::Function*>   fn,
-                             gsl::not_null<llvm::Value*>      dst,
-                             gsl::not_null<llvm::Value*>      mid,
-                             gsl::not_null<llvm::Value*>      n,
-                             bool                             set,
-                             bool                             backward,
-                             gsl::not_null<llvm::BasicBlock*> after) {
-        auto* iv{builder_.CreateAlloca(i64_ty, nullptr, "i")};
-        builder_.CreateStore(backward ? n.get() : static_cast<llvm::Value*>(zero64), iv);
-        auto* head{llvm::BasicBlock::Create(context_, "head", fn)};
-        auto* body{llvm::BasicBlock::Create(context_, "body", fn)};
-        builder_.CreateBr(head);
-
-        builder_.SetInsertPoint(head);
-        auto* i{builder_.CreateLoad(i64_ty, iv, "i.cur")};
-        auto* cont{backward ? builder_.CreateICmpNE(i, zero64) : builder_.CreateICmpULT(i, n)};
-        builder_.CreateCondBr(cont, body, after);
-
-        builder_.SetInsertPoint(body);
-        auto* idx{backward ? builder_.CreateSub(i, one64) : i};
-        auto* dp{builder_.CreateGEP(i8_ty, dst, idx, "dp")};
-        if (set) {
-            builder_.CreateStore(builder_.CreateTrunc(mid, i8_ty), dp);
-        } else {
-            auto* sp{builder_.CreateGEP(i8_ty, mid, idx, "sp")};
-            builder_.CreateStore(builder_.CreateLoad(i8_ty, sp, "b"), dp);
-        }
-        builder_.CreateStore(backward ? idx : builder_.CreateAdd(i, one64), iv);
-        builder_.CreateBr(head);
-    }};
-
-    // A simple non-overlapping memory intrinsic
-    const auto simple{[&](std::string_view name, bool set, bool backward) {
-        auto* fn{new_fn(name, set)};
-        if (!fn) { return; }
-        auto  arg{fn->arg_begin()};
-        auto* dst{arg++};
-        auto* mid{arg++};
-        auto* n{arg};
-        auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-        builder_.SetInsertPoint(done);
-        builder_.CreateRet(dst);
-        builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, done));
-        byte_loop(fn, dst, mid, n, set, backward, done);
-    }};
-
-    if (memcpy_used_) { simple("memcpy", false, false); }
-    if (memset_used_) { simple("memset", true, false); }
-    if (memmove_used_) {
-        if (auto* fn{new_fn("memmove", false)}) {
-            auto  arg{fn->arg_begin()};
-            auto* dst{arg++};
-            auto* src{arg++};
-            auto* n{arg};
-            auto* done{llvm::BasicBlock::Create(context_, "done", fn)};
-            builder_.SetInsertPoint(done);
-            builder_.CreateRet(dst);
-
-            auto* fwd{llvm::BasicBlock::Create(context_, "fwd", fn, done)};
-            auto* bwd{llvm::BasicBlock::Create(context_, "bwd", fn, done)};
-            builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", fn, fwd));
-            auto* di{builder_.CreatePtrToInt(dst, i64_ty)};
-            auto* si{builder_.CreatePtrToInt(src, i64_ty)};
-            builder_.CreateCondBr(builder_.CreateICmpULT(di, si), fwd, bwd);
-
-            builder_.SetInsertPoint(fwd);
-            byte_loop(fn, dst, src, n, false, false, done);
-            builder_.SetInsertPoint(bwd);
-            byte_loop(fn, dst, src, n, false, true, done);
-        }
+    if (!triple.isOSWindows()) { return stdx::none; }
+    if (triple.getArch() == llvm::Triple::x86_64) {
+        return triple.isOSCygMing() ? "___chkstk_ms" : "__chkstk";
     }
-}
-
-auto llvm_lowering::emit_argv_slice(llvm::Function* entry_fn, bool want_real_args) -> llvm::Value* {
-    PROFILE_FUNCTION();
-    auto*              slice_ty{types_.translate_slice_type()};
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-
-    // Windows raw PE entry point
-    if (triple.isOSWindows()) {
-        // BaseThreadInitThunk calls entry with no argc/argv, unlike the POSIX path below.
-        llvm::Value* outer_val{nullptr};
-        if (!want_real_args) {
-            // Nothing reads args -- skip the WinAPI calls entirely and pass an empty slice
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(llvm::ConstantPointerNull::get(types_.get_ptr_ty()), outer_data);
-            builder_.CreateStore(builder_.getInt64(0), outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        } else {
-            // Recover argv via raw Win32 APIs (no CRT): split into wide args, convert to UTF-8.
-            auto* get_cmdline_ty{llvm::FunctionType::get(types_.get_ptr_ty(), {}, false)};
-            auto  get_cmdline_fn{
-                llvm_module_->getOrInsertFunction("GetCommandLineW", get_cmdline_ty)};
-
-            auto* cmdline_to_argv_ty{llvm::FunctionType::get(
-                types_.get_ptr_ty(), {types_.get_ptr_ty(), types_.get_ptr_ty()}, false)};
-            auto  cmdline_to_argv_fn{
-                llvm_module_->getOrInsertFunction("CommandLineToArgvW", cmdline_to_argv_ty)};
-
-            auto* wc2mb_ty{llvm::FunctionType::get(types_.get_int32_ty(),
-                                                   {types_.get_int32_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_int32_ty(),
-                                                    types_.get_ptr_ty(),
-                                                    types_.get_ptr_ty()},
-                                                   false)};
-            auto  wc2mb_fn{llvm_module_->getOrInsertFunction("WideCharToMultiByte", wc2mb_ty)};
-
-            constexpr u64 max_args{16};
-            constexpr u64 max_arg_bytes{1'024};
-            constexpr u32 cp_utf8{65'001};
-
-            auto* nargs_slot{builder_.CreateAlloca(types_.get_int32_ty(), nullptr, "nargs")};
-            auto* cmdline{builder_.CreateCall(get_cmdline_fn, {}, "cmdline")};
-            auto* wargv{builder_.CreateCall(cmdline_to_argv_fn, {cmdline, nargs_slot}, "wargv")};
-            auto* nargs_i32{builder_.CreateLoad(types_.get_int32_ty(), nargs_slot, "nargs.val")};
-            auto* raw_argc_i64{builder_.CreateSExt(nargs_i32, types_.get_int64_ty(), "argc.i64")};
-
-            auto* max_args_v{builder_.getInt64(max_args)};
-            auto* slice_array{builder_.CreateAlloca(slice_ty, max_args_v, "args.array")};
-            auto* arg_bufs{builder_.CreateAlloca(
-                types_.get_int8_ty(), builder_.getInt64(max_args * max_arg_bytes), "arg.bufs")};
-            auto* argc_i64{builder_.CreateSelect(builder_.CreateICmpSLT(raw_argc_i64, max_args_v),
-                                                 raw_argc_i64,
-                                                 max_args_v,
-                                                 "argc.bounded")};
-
-            auto* loop_cond{llvm::BasicBlock::Create(context_, "wargs.cond", entry_fn)};
-            auto* loop_body{llvm::BasicBlock::Create(context_, "wargs.body", entry_fn)};
-            auto* loop_inc{llvm::BasicBlock::Create(context_, "wargs.inc", entry_fn)};
-            auto* loop_end{llvm::BasicBlock::Create(context_, "wargs.end", entry_fn)};
-
-            auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "wi")};
-            builder_.CreateStore(builder_.getInt64(0), i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_cond);
-            auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "wcur.i")};
-            auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "wcmp")};
-            builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-            builder_.SetInsertPoint(loop_body);
-            auto* wargv_elem_ptr{
-                builder_.CreateGEP(types_.get_ptr_ty(), wargv, {cur_i}, "wargv.elem.ptr")};
-            auto* wstr_ptr{builder_.CreateLoad(types_.get_ptr_ty(), wargv_elem_ptr, "wstr.ptr")};
-            auto* buf_off{builder_.CreateMul(cur_i, builder_.getInt64(max_arg_bytes), "buf.off")};
-            auto* buf_ptr{builder_.CreateGEP(types_.get_int8_ty(), arg_bufs, {buf_off}, "buf.ptr")};
-
-            // Subtract one to exclude the converted null terminator, matching strlen-style.
-            constexpr u32 auto_len{0xFFFFFFFFu}; // cchWideChar = -1: source is null-terminated
-            auto*         converted{
-                builder_.CreateCall(wc2mb_fn,
-                                            {builder_.getInt32(cp_utf8),
-                                             builder_.getInt32(0),
-                                             wstr_ptr,
-                                             builder_.getInt32(auto_len),
-                                             buf_ptr,
-                                             builder_.getInt32(max_arg_bytes),
-                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty()),
-                                             llvm::ConstantPointerNull::get(types_.get_ptr_ty())},
-                                    "converted.len")};
-            auto* converted_i64{
-                builder_.CreateSExt(converted, types_.get_int64_ty(), "converted.i64")};
-            auto* final_len{builder_.CreateSub(converted_i64, builder_.getInt64(1), "final.len")};
-
-            auto* dest_slice_ptr{
-                builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "wdest.slice.ptr")};
-            auto* dest_data_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX),
-                                         "wdest.data")};
-            auto* dest_len_field{
-                builder_.CreateStructGEP(slice_ty,
-                                         dest_slice_ptr,
-                                         static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX),
-                                         "wdest.len")};
-            builder_.CreateStore(buf_ptr, dest_data_field);
-            builder_.CreateStore(final_len, dest_len_field);
-            builder_.CreateBr(loop_inc);
-
-            builder_.SetInsertPoint(loop_inc);
-            auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "winc.i")};
-            builder_.CreateStore(inc_i, i_var);
-            builder_.CreateBr(loop_cond);
-
-            builder_.SetInsertPoint(loop_end);
-            auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-            auto* outer_data{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-            auto* outer_len{builder_.CreateStructGEP(
-                slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-            builder_.CreateStore(slice_array, outer_data);
-            builder_.CreateStore(argc_i64, outer_len);
-            outer_val = builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
-        }
-
-        return outer_val;
+    if (triple.getArch() == llvm::Triple::x86) {
+        return triple.isOSCygMing() ? "_alloca" : "_chkstk";
     }
-
-    auto* argc{entry_fn->getArg(0)};
-    argc->setName("argc");
-    auto* argv{entry_fn->getArg(1)};
-    argv->setName("argv");
-
-    auto* raw_argc_i64{builder_.CreateSExt(argc, types_.get_int64_ty(), "argc.i64")};
-
-    // Fixed 128-slot buffer of {ptr, len} pairs; small enough to avoid stack probing.
-    auto* max_args{builder_.getInt64(128)};
-    auto* slice_array{builder_.CreateAlloca(slice_ty, max_args, "args.array")};
-    auto* argc_i64{builder_.CreateSelect(
-        builder_.CreateICmpSLT(raw_argc_i64, max_args), raw_argc_i64, max_args, "argc.bounded")};
-
-    auto* loop_cond{llvm::BasicBlock::Create(context_, "loop.cond", entry_fn)};
-    auto* loop_body{llvm::BasicBlock::Create(context_, "loop.body", entry_fn)};
-    auto* loop_inc{llvm::BasicBlock::Create(context_, "loop.inc", entry_fn)};
-    auto* loop_end{llvm::BasicBlock::Create(context_, "loop.end", entry_fn)};
-
-    auto* i_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "i")};
-    builder_.CreateStore(builder_.getInt64(0), i_var);
-    builder_.CreateBr(loop_cond);
-
-    // Loop condition: i < argc_i64
-    builder_.SetInsertPoint(loop_cond);
-    auto* cur_i{builder_.CreateLoad(types_.get_int64_ty(), i_var, "cur.i")};
-    auto* cmp{builder_.CreateICmpSLT(cur_i, argc_i64, "cmp")};
-    builder_.CreateCondBr(cmp, loop_body, loop_end);
-
-    // Loop body: measure strlen(argv[i]) and store into slice_array[i]
-    builder_.SetInsertPoint(loop_body);
-    auto* argv_elem_ptr{builder_.CreateGEP(types_.get_ptr_ty(), argv, {cur_i}, "argv.elem.ptr")};
-    auto* str_ptr{builder_.CreateLoad(types_.get_ptr_ty(), argv_elem_ptr, "str.ptr")};
-
-    // Calculate strlen(str_ptr) via a sub-loop
-    auto* str_len_cond{llvm::BasicBlock::Create(context_, "strlen.cond", entry_fn)};
-    auto* str_len_body{llvm::BasicBlock::Create(context_, "strlen.body", entry_fn)};
-    auto* str_len_end{llvm::BasicBlock::Create(context_, "strlen.end", entry_fn)};
-
-    auto* len_var{builder_.CreateAlloca(types_.get_int64_ty(), nullptr, "str.len")};
-    builder_.CreateStore(builder_.getInt64(0), len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_cond);
-    auto* cur_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "cur.len")};
-    auto* char_ptr{builder_.CreateGEP(types_.get_int8_ty(), str_ptr, {cur_len}, "char.ptr")};
-    auto* char_val{builder_.CreateLoad(types_.get_int8_ty(), char_ptr, "char.val")};
-    auto* is_not_null{builder_.CreateICmpNE(char_val, builder_.getInt8(0), "not.null")};
-    builder_.CreateCondBr(is_not_null, str_len_body, str_len_end);
-
-    builder_.SetInsertPoint(str_len_body);
-    auto* next_len{builder_.CreateAdd(cur_len, builder_.getInt64(1), "next.len")};
-    builder_.CreateStore(next_len, len_var);
-    builder_.CreateBr(str_len_cond);
-
-    builder_.SetInsertPoint(str_len_end);
-    auto* final_len{builder_.CreateLoad(types_.get_int64_ty(), len_var, "final.len")};
-
-    // Store { str_ptr, final_len } into slice_array[cur_i]
-    auto* dest_slice_ptr{builder_.CreateGEP(slice_ty, slice_array, {cur_i}, "dest.slice.ptr")};
-    auto* dest_data_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "dest.data")};
-    auto* dest_len_field{builder_.CreateStructGEP(
-        slice_ty, dest_slice_ptr, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "dest.len")};
-    builder_.CreateStore(str_ptr, dest_data_field);
-    builder_.CreateStore(final_len, dest_len_field);
-    builder_.CreateBr(loop_inc);
-
-    // Loop increment: i++
-    builder_.SetInsertPoint(loop_inc);
-    auto* inc_i{builder_.CreateAdd(cur_i, builder_.getInt64(1), "inc.i")};
-    builder_.CreateStore(inc_i, i_var);
-    builder_.CreateBr(loop_cond);
-
-    builder_.SetInsertPoint(loop_end);
-    auto* outer_slice{builder_.CreateAlloca(slice_ty, nullptr, "outer.slice")};
-    auto* outer_data{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX), "outer.data")};
-    auto* outer_len{builder_.CreateStructGEP(
-        slice_ty, outer_slice, static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX), "outer.len")};
-    builder_.CreateStore(slice_array, outer_data);
-    builder_.CreateStore(argc_i64, outer_len);
-    return builder_.CreateLoad(slice_ty, outer_slice, "outer.val");
+    return stdx::none;
 }
 
-auto llvm_lowering::lower_test_executable(const gir::module&             gir_mod,
-                                          stdx::option<std::string_view> user_runner_name,
-                                          bool recover_args) -> stdx::box<llvm::Module> {
+auto llvm_lowering::usize_const(u64 value) -> llvm::ConstantInt* {
+    return llvm::ConstantInt::get(types_.get_usize_ty(), value);
+}
+
+auto llvm_lowering::lower_test_executable(const gir::module_t& gir_mod,
+                                          std::string_view     user_main_name)
+    -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
-    user_main_name_ =
-        user_runner_name.transform([](auto sv) { return std::string{sv}; }).value_or(std::string{});
-    is_executable_ = true;
+    is_executable_  = true;
+    user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
-    for (const auto* fn : gir_mod.get_functions()) { declare_function(*fn); }
+    declare_functions(gir_mod);
     define_test_take_skipped();
-    lower_dyn_vtables(gir_mod);
-    for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
-    for (const auto* fn : gir_mod.get_functions()) { lower_function(*fn); }
-    emit_test_entry_wrapper(gir_mod, recover_args);
-    maybe_emit_windows_stack_probe();
-    maybe_emit_mem_intrinsic_fallbacks();
+    lower_definitions(gir_mod);
+    finalize_runtime_support();
     return std::move(llvm_module_);
 }
 
-auto llvm_lowering::emit_test_entry_wrapper(const gir::module& gir_mod, bool recover_args)
-    -> llvm::Function* {
+// `@testFunctions()`: a `[]builtin.Test` over every test function, built once
+auto llvm_lowering::emit_test_table() -> llvm::Value* {
     PROFILE_FUNCTION();
-    auto* main_fn_ty{llvm::FunctionType::get(
-        types_.get_int32_ty(), {types_.get_int32_ty(), types_.get_ptr_ty()}, false)};
-    auto* main_fn{llvm::Function::Create(
-        main_fn_ty, llvm::Function::ExternalLinkage, "main", llvm_module_.get())};
-    main_fn->addFnAttr(llvm::Attribute::NoBuiltin);
-    main_fn->addFnAttr("no-builtins");
-    main_fn->addFnAttr("no-stack-arg-probe", "true");
-
-    const llvm::Triple triple{llvm_module_->getTargetTriple()};
-    if (triple.isWindowsGNUEnvironment() && !llvm_module_->getFunction("__main")) {
-        auto*             void_ty{llvm::Type::getVoidTy(context_)};
-        auto*             dummy_main_ty{llvm::FunctionType::get(void_ty, false)};
-        auto*             dummy_main{llvm::Function::Create(
-            dummy_main_ty, llvm::Function::ExternalLinkage, "__main", llvm_module_.get())};
-        auto*             dummy_bb{llvm::BasicBlock::Create(context_, "entry", dummy_main)};
-        llvm::IRBuilder<> dummy_builder{dummy_bb};
-        dummy_builder.CreateRetVoid();
-        llvm::appendToUsed(*llvm_module_, {dummy_main});
+    auto* slice_ty{types_.translate_slice_type()};
+    if (auto* table{llvm_module_->getGlobalVariable("__ghoti_tests_slice", true)}) {
+        return builder_.CreateLoad(slice_ty, table, "tests.slice");
     }
 
-    auto* slice_ty{types_.translate_slice_type()};
-    // Mirrors `builtin::Test { name: []u8, file: []u8, line: u32, column: u32, func: fn(): bool }`
-    auto* test_struct_ty{llvm::StructType::get(
-        context_,
-        {slice_ty, slice_ty, types_.get_int32_ty(), types_.get_int32_ty(), types_.get_ptr_ty()})};
+    // Mirrors `builtin.SourceLocation { file: []u8, line: u32, column: u32 }`
+    auto* loc_struct_ty{
+        llvm::StructType::get(context_, {slice_ty, types_.get_int32_ty(), types_.get_int32_ty()})};
+    // Mirrors `builtin.Test { name: []u8, loc: SourceLocation, func: extern fn(): bool }`
+    auto* test_struct_ty{
+        llvm::StructType::get(context_, {slice_ty, loc_struct_ty, types_.get_ptr_ty()})};
 
-    const auto& test_fns{gir_mod.get_test_functions()};
+    const auto& test_fns{gir_module_->get_test_functions()};
     const auto  test_count{test_fns.size()};
 
-    std::vector<llvm::Constant*> test_descriptors;
-    test_descriptors.reserve(test_count);
+    const auto string_slice{[&](std::string_view text, std::string_view name) {
+        auto* data{llvm::ConstantDataArray::getString(context_, text, false)};
+        auto* gvar{new llvm::GlobalVariable(
+            *llvm_module_, data->getType(), true, llvm::GlobalValue::InternalLinkage, data, name)};
+        return llvm::ConstantStruct::get(
+            slice_ty, {gvar, llvm::ConstantInt::get(types_.get_usize_ty(), text.size())});
+    }};
 
+    std::vector<llvm::Constant*> descriptors;
+    descriptors.reserve(test_count);
     for (usize i{0}; i < test_count; ++i) {
         const auto* fn{test_fns[i]};
-        const auto& fn_symbol_name{fn->get_name()};
-        auto*       test_llvm_fn{llvm_module_->getFunction(fn_symbol_name)};
-        ASSERT(test_llvm_fn, "Test function must already be declared before the entry wrapper");
+        auto*       test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+        ASSERT(test_llvm_fn, "Test function must already be declared before the test table");
 
-        const auto& desc_name{fn->get_test_desc().empty() ? fn_symbol_name : fn->get_test_desc()};
-        auto*       name_str{llvm::ConstantDataArray::getString(context_, desc_name, false)};
-        auto*       name_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                 name_str->getType(),
-                                                 true,
-                                                 llvm::GlobalValue::InternalLinkage,
-                                                 name_str,
-                                                 fmt::format("str.test_name.{}", i))};
-        auto*       name_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {name_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), desc_name.size())})};
-
-        const auto file_path{fn->get_test_file().empty() ? gir_mod.get_ast_module().path.string()
-                                                         : fn->get_test_file()};
-        auto*      file_str{llvm::ConstantDataArray::getString(context_, file_path, false)};
-        auto*      file_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                 file_str->getType(),
-                                                 true,
-                                                 llvm::GlobalValue::InternalLinkage,
-                                                 file_str,
-                                                 fmt::format("str.test_file.{}", i))};
-        auto*      file_slice{llvm::ConstantStruct::get(
-            slice_ty,
-            {file_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), file_path.size())})};
-
-        auto* line_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
-        auto* col_val{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
-
-        test_descriptors.emplace_back(llvm::ConstantStruct::get(
-            test_struct_ty, {name_slice, file_slice, line_val, col_val, test_llvm_fn}));
+        const auto& desc{fn->get_test_desc().empty() ? fn->get_name() : fn->get_test_desc()};
+        const auto  file{fn->get_test_file().empty() ? gir_module_->get_ast_module().path.string()
+                                                     : fn->get_test_file()};
+        auto*       line{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_line())};
+        auto*       col{llvm::ConstantInt::get(types_.get_int32_ty(), fn->get_test_column())};
+        auto*       loc{llvm::ConstantStruct::get(
+            loc_struct_ty, {string_slice(file, fmt::format("str.test_file.{}", i)), line, col})};
+        descriptors.emplace_back(llvm::ConstantStruct::get(
+            test_struct_ty,
+            {string_slice(desc, fmt::format("str.test_name.{}", i)), loc, test_llvm_fn}));
     }
 
-    auto* test_array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
-    auto* test_array_init{test_count > 0 ? llvm::ConstantArray::get(test_array_ty, test_descriptors)
-                                         : llvm::ConstantAggregateZero::get(test_array_ty)};
-    auto* test_array_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   test_array_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_array_init,
-                                                   "__ghoti_tests_data")};
-
-    auto* test_slice_const{llvm::ConstantStruct::get(
-        slice_ty, {test_array_gvar, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)})};
-    auto* test_slice_gvar{new llvm::GlobalVariable(*llvm_module_,
-                                                   slice_ty,
-                                                   true,
-                                                   llvm::GlobalValue::InternalLinkage,
-                                                   test_slice_const,
-                                                   "__ghoti_tests_slice")};
-
-    auto* entry_bb{llvm::BasicBlock::Create(context_, "entry", main_fn)};
-    builder_.SetInsertPoint(entry_bb);
-
-    // The runner is always `test_runner(args: [][:0]u8, tests: []Test): i32`
-    auto* runner_fn{llvm_module_->getFunction("test_runner")};
-    VERIFY(runner_fn, "a `test_runner` (builtin weak default or user override) must be linked");
-
-    auto* args_slice_val{emit_argv_slice(main_fn, recover_args)};
-    auto* test_slice_val{builder_.CreateLoad(slice_ty, test_slice_gvar, "tests.slice")};
-    auto* call_res{builder_.CreateCall(runner_fn, {args_slice_val, test_slice_val})};
-    if (runner_fn->getReturnType()->isIntegerTy(32)) {
-        builder_.CreateRet(call_res);
-    } else {
-        builder_.CreateRet(builder_.getInt32(0));
-    }
-
-    // Same freestanding-entry story as a normal executable (see emit_main_entry_wrapper).
-    if (triple.isOSLinux()) { emit_freestanding_start(main_fn); }
-
-    return main_fn;
+    auto* array_ty{llvm::ArrayType::get(test_struct_ty, std::max(test_count, usize{1}))};
+    auto* array_init{test_count > 0 ? llvm::ConstantArray::get(array_ty, descriptors)
+                                    : llvm::ConstantAggregateZero::get(array_ty)};
+    auto* array{new llvm::GlobalVariable(*llvm_module_,
+                                         array_ty,
+                                         true,
+                                         llvm::GlobalValue::InternalLinkage,
+                                         array_init,
+                                         "__ghoti_tests_data")};
+    auto* table{new llvm::GlobalVariable(
+        *llvm_module_,
+        slice_ty,
+        true,
+        llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(
+            slice_ty, {array, llvm::ConstantInt::get(types_.get_usize_ty(), test_count)}),
+        "__ghoti_tests_slice")};
+    return builder_.CreateLoad(slice_ty, table, "tests.slice");
 }
 
 auto llvm_lowering::get_or_create_test_failed_flag() -> llvm::GlobalVariable* {
@@ -933,6 +591,45 @@ auto llvm_lowering::get_or_create_test_skipped_flag() -> llvm::GlobalVariable* {
                                     llvm::GlobalValue::InternalLinkage,
                                     builder_.getInt1(false),
                                     "__ghoti_test_skipped");
+}
+
+auto llvm_lowering::get_or_create_test_abort_flag() -> llvm::GlobalVariable* {
+    PROFILE_FUNCTION();
+    if (auto* gvar{llvm_module_->getGlobalVariable("__ghoti_test_aborted", true)}) { return gvar; }
+    return new llvm::GlobalVariable(*llvm_module_,
+                                    builder_.getInt1Ty(),
+                                    false,
+                                    llvm::GlobalValue::InternalLinkage,
+                                    builder_.getInt1(false),
+                                    "__ghoti_test_aborted");
+}
+
+auto llvm_lowering::emit_testing_abort_return() -> void {
+    auto* ret_ty{builder_.GetInsertBlock()->getParent()->getReturnType()};
+    if (ret_ty->isVoidTy()) {
+        builder_.CreateRetVoid();
+    } else if (lowering_fn_ && lowering_fn_->get_is_test()) {
+        // The test's own result folds in the failed flag, so a skip passes and a require fails
+        builder_.CreateRet(builder_.getInt1(true));
+    } else {
+        // The caller returns too without reading the value
+        builder_.CreateRet(llvm::PoisonValue::get(ret_ty));
+    }
+}
+
+auto llvm_lowering::emit_testing_abort_check(const llvm::Function& callee) -> void {
+    if (!callee.hasFnAttribute(TESTING_FN_ATTRIBUTE) || !lowering_fn_ ||
+        (!lowering_fn_->get_is_test() && !lowering_fn_->get_attributes().testing)) {
+        return;
+    }
+    auto* fn{builder_.GetInsertBlock()->getParent()};
+    auto* aborted{builder_.CreateLoad(builder_.getInt1Ty(), get_or_create_test_abort_flag())};
+    auto* abort_bb{llvm::BasicBlock::Create(context_, "test.abort", fn)};
+    auto* cont_bb{llvm::BasicBlock::Create(context_, "test.continue", fn)};
+    builder_.CreateCondBr(aborted, abort_bb, cont_bb);
+    builder_.SetInsertPoint(abort_bb);
+    emit_testing_abort_return();
+    builder_.SetInsertPoint(cont_bb);
 }
 
 auto llvm_lowering::define_test_take_skipped() -> void {
@@ -958,25 +655,41 @@ auto llvm_lowering::define_test_take_skipped() -> void {
     b.CreateRet(was_skipped);
 }
 
-auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
-                                              std::string_view          handler_name,
-                                              gsl::span<const usize, 4> order) -> void {
+auto llvm_lowering::lower_truthiness(llvm::Value* value) -> llvm::Value* {
+    auto* type{value->getType()};
+    if (type->isPointerTy()) {
+        return builder_.CreateICmpNE(
+            value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), "tobool");
+    }
+    if (type->isIntegerTy() && type->getIntegerBitWidth() != 1) {
+        return builder_.CreateICmpNE(value, llvm::Constant::getNullValue(type), "tobool");
+    }
+    return value;
+}
+
+auto llvm_lowering::branch_to_failure(llvm::Value* cond, std::string_view prefix)
+    -> llvm::BasicBlock* {
+    auto* cur_fn{builder_.GetInsertBlock()->getParent()};
+    auto* fail_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.fail", prefix), cur_fn)};
+    auto* cont_bb{llvm::BasicBlock::Create(context_, fmt::format("{}.cont", prefix), cur_fn)};
+    builder_.CreateCondBr(cond, cont_bb, fail_bb);
+    builder_.SetInsertPoint(fail_bb);
+    return cont_bb;
+}
+
+auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
+                                              std::string_view        handler_name,
+                                              usize                   msg_idx,
+                                              usize                   loc_idx) -> void {
     PROFILE_FUNCTION();
     auto* handler_fn{llvm_module_->getFunction(handler_name)};
     if (!handler_fn) { return; }
 
     auto* fn_ty{handler_fn->getFunctionType()};
-    if (fn_ty->getNumParams() != 4) { return; }
-    for (const auto idx : order) {
-        if (idx >= inst.operands.size()) { return; }
-    }
+    if (fn_ty->getNumParams() != 2) { return; }
+    if (msg_idx >= inst.operands.size() || loc_idx + 2 >= inst.operands.size()) { return; }
 
-    std::vector<llvm::Value*> args;
-    args.reserve(4);
-    for (u32 param_idx{0}; param_idx < 4; ++param_idx) {
-        auto*       param_ty{fn_ty->getParamType(param_idx)};
-        const auto& op{inst.operands[order[param_idx]]};
-
+    const auto make_arg{[&](const gir::value& op, llvm::Type* param_ty) -> llvm::Value* {
         if (const auto str{op.as_opt<std::string>()}) {
             // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
             auto* gstr{builder_.CreateGlobalString(*str, "ch.str")};
@@ -985,56 +698,72 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction&   inst,
                 slice = builder_.CreateInsertValue(
                     slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 slice = builder_.CreateInsertValue(slice,
-                                                   builder_.getInt64(str->size()),
+                                                   usize_const(str->size()),
                                                    {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
-                args.push_back(slice);
-            } else {
-                args.push_back(gstr);
+                return slice;
             }
-            continue;
+            return gstr;
         }
 
         auto* v{lower_value(op)};
-        if (!v) { return; }
-        if (v->getType() != param_ty && v->getType()->isIntegerTy() && param_ty->isIntegerTy()) {
+        if (v && v->getType() != param_ty && v->getType()->isIntegerTy() &&
+            param_ty->isIntegerTy()) {
             v = builder_.CreateZExtOrTrunc(v, param_ty);
         }
-        args.push_back(v);
-    }
+        return v;
+    }};
 
-    builder_.CreateCall(handler_fn, args);
+    auto* msg_arg{make_arg(inst.operands[msg_idx], fn_ty->getParamType(0))};
+    if (!msg_arg) { return; }
+
+    auto* loc_ty{llvm::cast<llvm::StructType>(fn_ty->getParamType(1))};
+    auto* file_arg{make_arg(inst.operands[loc_idx], loc_ty->getElementType(0))};
+    auto* line_v{lower_value(inst.operands[loc_idx + 1])};
+    auto* col_v{lower_value(inst.operands[loc_idx + 2])};
+    if (!file_arg || !line_v || !col_v) { return; }
+
+    llvm::Value* loc_arg{llvm::UndefValue::get(loc_ty)};
+    loc_arg = builder_.CreateInsertValue(loc_arg, file_arg, {0U});
+    loc_arg = builder_.CreateInsertValue(loc_arg, line_v, {1U});
+    loc_arg = builder_.CreateInsertValue(loc_arg, col_v, {2U});
+
+    builder_.CreateCall(handler_fn, {msg_arg, loc_arg});
 }
 
 auto llvm_lowering::emit_lowered_panic(std::string_view message, const gir::instruction& inst)
     -> void {
     PROFILE_FUNCTION();
     auto* panic_fn{llvm_module_->getFunction("panic_handler")};
-    if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 4) {
+    if (!panic_fn || panic_fn->getFunctionType()->getNumParams() != 2) {
         auto* trap{
             llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
         builder_.CreateCall(trap, {});
         return;
     }
 
-    auto*      slice_ty{types_.translate_slice_type()};
-    const auto make_slice{[&](std::string_view text) -> llvm::Value* {
+    const auto make_slice{[&](std::string_view text, llvm::Type* slice_ty) -> llvm::Value* {
         auto*        gstr{builder_.CreateGlobalString(std::string{text}, "panic.str")};
         llvm::Value* slice{llvm::UndefValue::get(slice_ty)};
         slice =
             builder_.CreateInsertValue(slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
         slice = builder_.CreateInsertValue(
-            slice, builder_.getInt64(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
+            slice, usize_const(text.size()), {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
         return slice;
     }};
 
-    const auto                loc{inst.location.value_or(source_location{})};
-    std::vector<llvm::Value*> args{
-        make_slice(message),
-        make_slice(llvm_module_->getName()),
-        builder_.getInt32(static_cast<u32>(loc.line)),
-        builder_.getInt32(static_cast<u32>(loc.column)),
-    };
-    builder_.CreateCall(panic_fn, args);
+    auto* msg_ty{panic_fn->getFunctionType()->getParamType(0)};
+    auto* loc_ty{llvm::cast<llvm::StructType>(panic_fn->getFunctionType()->getParamType(1))};
+
+    const auto   loc{inst.location.value_or(source_location{}).one_based()};
+    llvm::Value* loc_arg{llvm::UndefValue::get(loc_ty)};
+    loc_arg = builder_.CreateInsertValue(
+        loc_arg, make_slice(llvm_module_->getName(), loc_ty->getElementType(0)), {0U});
+    loc_arg =
+        builder_.CreateInsertValue(loc_arg, builder_.getInt32(static_cast<u32>(loc.line)), {1U});
+    loc_arg =
+        builder_.CreateInsertValue(loc_arg, builder_.getInt32(static_cast<u32>(loc.column)), {2U});
+
+    builder_.CreateCall(panic_fn, {make_slice(message, msg_ty), loc_arg});
 }
 
 auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
@@ -1053,6 +782,36 @@ auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
     builder_.SetInsertPoint(ok_bb);
 }
 
+auto llvm_lowering::fit_shift_amount(llvm::Value* value, llvm::Value* amount, bool amount_signed)
+    -> llvm::Value* {
+    auto*      value_ty{llvm::cast<llvm::IntegerType>(value->getType())};
+    auto*      amount_ty{llvm::cast<llvm::IntegerType>(amount->getType())};
+    const auto width{value_ty->getBitWidth()};
+    if (amount_ty->getBitWidth() <= width) {
+        // A negative amount sign-extends to one no unsigned compare finds in range
+        return builder_.CreateIntCast(amount, value_ty, amount_signed, "shamt");
+    }
+    auto* limit{llvm::ConstantInt::get(amount_ty, width)};
+    auto* clamped{builder_.CreateSelect(builder_.CreateICmpUGE(amount, limit), limit, amount)};
+    return builder_.CreateTrunc(clamped, value_ty, "shamt");
+}
+
+auto llvm_lowering::emit_division_guards(const gir::instruction& inst,
+                                         llvm::Value*            lhs,
+                                         llvm::Value*            rhs,
+                                         bool                    is_signed) -> void {
+    auto*      int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    const auto width{int_ty->getBitWidth()};
+    auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
+    emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
+    if (!is_signed) { return; }
+    auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
+    auto* neg_one{llvm::ConstantInt::getSigned(int_ty, -1)};
+    auto* edge{builder_.CreateAnd(builder_.CreateICmpEQ(lhs, int_min),
+                                  builder_.CreateICmpEQ(rhs, neg_one))};
+    emit_arith_guard(edge, "signed division overflow", inst);
+}
+
 auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
                                        llvm::Value*            lhs,
                                        llvm::Value*            rhs,
@@ -1060,7 +819,7 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     PROFILE_FUNCTION();
     auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
     if (!int_ty) { return nullptr; }
-    const unsigned width{int_ty->getBitWidth()};
+    const auto width{int_ty->getBitWidth()};
 
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
@@ -1087,18 +846,9 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
         return builder_.CreateExtractValue(pair, {0U});
     }
     case gir::instruction_kind::DIV:
-    case gir::instruction_kind::MOD: {
-        auto* zero{llvm::ConstantInt::get(int_ty, 0)};
-        emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
-        if (is_signed) {
-            auto* int_min{llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width))};
-            auto* neg_one{llvm::ConstantInt::getSigned(int_ty, -1)};
-            auto* edge{builder_.CreateAnd(builder_.CreateICmpEQ(lhs, int_min),
-                                          builder_.CreateICmpEQ(rhs, neg_one))};
-            emit_arith_guard(edge, "signed division overflow", inst);
-        }
+    case gir::instruction_kind::MOD:
+        emit_division_guards(inst, lhs, rhs, is_signed);
         return nullptr;
-    }
     case gir::instruction_kind::SHL:
     case gir::instruction_kind::SHR: {
         auto* limit{llvm::ConstantInt::get(rhs->getType(), width)};
@@ -1109,6 +859,88 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
     }
 }
 
+auto llvm_lowering::emit_float_to_int_guard(const gir::instruction& inst,
+                                            llvm::Value*            val,
+                                            llvm::Type*             int_ty,
+                                            bool                    is_signed) -> void {
+    // Truncation fits iff MIN - 1 < val < MAX + 1. The upper bound is a power of two (exact or
+    // infinite); the lower one rounds down, which admits no extra float. NaN fails both checks.
+    const auto  width{int_ty->getIntegerBitWidth()};
+    const auto& semantics{val->getType()->getFltSemantics()};
+    const auto  to_float = [&](const llvm::APInt& bound, llvm::APFloat::roundingMode mode) {
+        llvm::APFloat f{semantics};
+        DISCARD(f.convertFromAPInt(bound, true, mode));
+        return llvm::ConstantFP::get(val->getType(), f);
+    };
+
+    const auto min{is_signed ? llvm::APInt::getSignedMinValue(width).sext(width + 2)
+                             : llvm::APInt{width + 2, 0}};
+    auto*      lo{to_float(min - 1, llvm::APFloat::rmTowardNegative)};
+    auto*      hi{to_float(llvm::APInt::getOneBitSet(width + 2, is_signed ? width - 1 : width),
+                           llvm::APFloat::rmNearestTiesToEven)};
+
+    auto* in_range{
+        builder_.CreateAnd(builder_.CreateFCmpOGT(val, lo), builder_.CreateFCmpOLT(val, hi))};
+    emit_arith_guard(
+        builder_.CreateNot(in_range), "float value out of range for integer cast", inst);
+}
+
+auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
+                                          llvm::Value*            lhs,
+                                          llvm::Value*            rhs,
+                                          bool                    is_signed) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    switch (inst.kind) {
+    case gir::instruction_kind::ADD:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::uadd_sat, lhs, rhs);
+    case gir::instruction_kind::SUB:
+        return builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::ssub_sat : llvm::Intrinsic::usub_sat, lhs, rhs);
+    case gir::instruction_kind::MUL: {
+        // There's no plain `mul.sat`, but a fixed-point multiply with scale 0 is exactly that
+        const auto id{is_signed ? llvm::Intrinsic::smul_fix_sat : llvm::Intrinsic::umul_fix_sat};
+        auto*      fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, {int_ty})};
+        return builder_.CreateCall(fn, {lhs, rhs, builder_.getInt32(0)}, "mulsat");
+    }
+    case gir::instruction_kind::SHL: {
+        // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
+        const auto width{int_ty->getBitWidth()};
+        auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
+        auto*      in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
+        auto*      amount{builder_.CreateSelect(in_range, rhs, zero)};
+        auto*      shifted{builder_.CreateBinaryIntrinsic(
+            is_signed ? llvm::Intrinsic::sshl_sat : llvm::Intrinsic::ushl_sat, lhs, amount)};
+
+        llvm::Value* limit{llvm::ConstantInt::get(int_ty, llvm::APInt::getMaxValue(width))};
+        if (is_signed) {
+            limit = builder_.CreateSelect(
+                builder_.CreateICmpSLT(lhs, zero),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMinValue(width)),
+                llvm::ConstantInt::get(int_ty, llvm::APInt::getSignedMaxValue(width)));
+        }
+        auto* saturated{builder_.CreateSelect(builder_.CreateICmpEQ(lhs, zero), zero, limit)};
+        return builder_.CreateSelect(in_range, shifted, saturated, "shlsat");
+    }
+    default: UNREACHABLE("Only + - * << have saturating forms");
+    }
+}
+
+auto llvm_lowering::const_callable(std::string_view          fn_symbol,
+                                   stdx::option<sema::type&> fn_type,
+                                   llvm::Type*               ty) -> llvm::Constant* {
+    auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+    if (!st || st->getNumElements() != 2 || !st->getElementType(1)->isPointerTy()) {
+        return nullptr;
+    }
+    const auto fn{fn_type ? fn_type->get_data().as_opt<sema::types::function>() : stdx::none};
+    if (!fn || fn->erased) { return nullptr; }
+    auto* code_ptr{resolve_named_function(fn_symbol)};
+    if (!code_ptr) { return nullptr; }
+    return llvm::ConstantStruct::get(st, {code_ptr, get_or_create_fn_trampoline(*fn)});
+}
+
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
     PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
@@ -1116,12 +948,13 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
     if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
     if (const auto w{cv.as_opt<i128>()}) { return int_or_ptr_constant(static_cast<u128>(*w), ty); }
     if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
-    if (const auto f{cv.as_opt<f64>()}) { return llvm::ConstantFP::get(ty, *f); }
+    if (const auto f{cv.as_opt<f128>()}) { return float_constant(*f, ty); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
     if (const auto e{cv.as_opt<gir::const_enum>()}) {
         return llvm::ConstantInt::get(ty, static_cast<u64>(e->value), true);
     }
     if (const auto s{cv.as_opt<std::string>()}) {
+        if (auto* callable{const_callable(*s, cv.get_type(), ty)}) { return callable; }
         if (auto* st{llvm::dyn_cast<llvm::StructType>(ty)}) {
             if (st->getNumElements() == 2 && st->getElementType(0)->isPointerTy() &&
                 st->getElementType(1)->isIntegerTy()) {
@@ -1131,11 +964,11 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 const bool add_nul{slice_data && slice_data->null_terminated};
                 auto*      data{llvm::ConstantDataArray::getString(context_, *s, add_nul)};
                 auto*      data_gv{new llvm::GlobalVariable{*llvm_module_,
-                                                       data->getType(),
-                                                       true,
-                                                       llvm::GlobalValue::PrivateLinkage,
-                                                       data,
-                                                       ".str.data"}};
+                                                            data->getType(),
+                                                            true,
+                                                            llvm::GlobalValue::PrivateLinkage,
+                                                            data,
+                                                            ".str.data"}};
                 data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
                 auto* len{llvm::ConstantInt::get(st->getElementType(1), s->size())};
                 return llvm::ConstantStruct::get(st, {data_gv, len});
@@ -1198,18 +1031,21 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         }
 
         if (ud->is_untagged) {
-            auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
-            if (!at) { return llvm::Constant::getNullValue(ty); }
-            const auto  max_size{static_cast<usize>(at->getNumElements())};
-            std::string bytes(max_size, '\0');
-            if (!un->payload.empty()) {
-                if (const auto iv{un->payload.front().as_int_opt()}) {
-                    u64         v{static_cast<u64>(*iv)};
-                    const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                    std::memcpy(bytes.data(), &v, copy_len);
-                }
+            auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
+            if (!st || un->payload.empty() || active_idx >= ud->fields.size()) {
+                return llvm::Constant::getNullValue(ty);
             }
-            return llvm::ConstantDataArray::getString(context_, bytes, false);
+            const auto& payload{un->payload.front()};
+            auto*       member_ty{types_.translate(*ud->fields[active_idx])};
+            auto*       member{const_to_llvm(payload, member_ty)};
+            if (member_ty == st->getElementType(0)) {
+                std::vector<llvm::Constant*> elems{member};
+                if (st->getNumElements() > 1) {
+                    elems.emplace_back(llvm::Constant::getNullValue(st->getElementType(1)));
+                }
+                return llvm::ConstantStruct::get(st, elems);
+            }
+            return reinterpret_constant(member, ty, 0, llvm_module_->getDataLayout());
         }
 
         auto* st{llvm::dyn_cast<llvm::StructType>(ty)};
@@ -1224,22 +1060,10 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
         }
 
-        const auto  max_size{static_cast<usize>(payload_arr_ty->getNumElements())};
-        std::string bytes(max_size, '\0');
-        if (!un->payload.empty()) {
-            const auto& p{un->payload.front()};
-            if (const auto iv{p.as_int_opt()}) {
-                u64         v{static_cast<u64>(*iv)};
-                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                std::memcpy(bytes.data(), &v, copy_len);
-            } else if (const auto fv{p.as_opt<f64>()}) {
-                f64         v{*fv};
-                const usize copy_len{std::min<usize>(sizeof(v), max_size)};
-                std::memcpy(bytes.data(), &v, copy_len);
-            } else if (const auto bv{p.as_opt<bool>()}) {
-                bytes[0] = *bv ? 1 : 0;
-            }
-        }
+        const auto bytes{
+            un->payload.empty()
+                ? std::string(payload_arr_ty->getNumElements(), '\0')
+                : union_payload_bytes(un->payload.front(), payload_arr_ty->getNumElements())};
         auto* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
@@ -1249,15 +1073,17 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         const auto sd{sema_ty ? sema_ty->get_data().as_opt<sema::types::struct_t>() : stdx::none};
         if (!llvm_st || !sd) { return llvm::Constant::getNullValue(ty); }
         std::vector<llvm::Constant*> elems;
-        elems.reserve(sd->fields.size());
-        for (usize i{0}; i < sd->fields.size() && i < llvm_st->getNumElements(); ++i) {
+        elems.reserve(llvm_st->getNumElements());
+        for (auto* elem_ty : llvm_st->elements()) {
+            elems.emplace_back(llvm::Constant::getNullValue(elem_ty));
+        }
+        for (usize i{0}; i < sd->fields.size(); ++i) {
+            const auto elem_idx{types_.struct_field_index(llvm_st, static_cast<u32>(i))};
+            if (elem_idx >= elems.size()) { break; }
             const auto& fname{
                 sd->enclosing.ast.get_as<ast::identifier_expr>(sd->ast_fields[i].name).name};
-            auto* felem_ty{llvm_st->getElementType(static_cast<u32>(i))};
             if (const auto fv{st->get_field_opt(fname)}) {
-                elems.emplace_back(const_to_llvm(*fv, felem_ty));
-            } else {
-                elems.emplace_back(llvm::Constant::getNullValue(felem_ty));
+                elems[elem_idx] = const_to_llvm(*fv, llvm_st->getElementType(elem_idx));
             }
         }
         return llvm::ConstantStruct::get(llvm_st, elems);
@@ -1285,10 +1111,12 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     if (auto* existing{llvm_module_->getGlobalVariable(g.name)}) { return existing; }
     ensure_reserved_symbols();
 
-    auto*      g_type{types_.translate(g.type)};
+    auto* g_type{types_.translate(g.type)};
+    // A `void` global has no storage to emit
+    if (g_type->isVoidTy() || g_type->isFunctionTy()) { return nullptr; }
     const bool is_const{g.is_constant};
-    auto       g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
-                                                               : llvm::GlobalValue::ExternalLinkage};
+    auto g_linkage{(g.linkage == gir::linkage::INTERNAL) ? llvm::GlobalValue::InternalLinkage
+                                                         : llvm::GlobalValue::ExternalLinkage};
     if (g.is_weak && g_linkage != llvm::GlobalValue::InternalLinkage) {
         g_linkage = (g.linkage == gir::linkage::EXTERN) ? llvm::GlobalValue::ExternalWeakLinkage
                                                         : llvm::GlobalValue::WeakAnyLinkage;
@@ -1307,6 +1135,13 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         gvar->setThreadLocalMode(is_executable_ ? llvm::GlobalValue::LocalExecTLSModel
                                                 : llvm::GlobalValue::GeneralDynamicTLSModel);
     }
+    const auto wanted_alignment{
+        std::max(g.alignment.value_or(0), types_.explicit_alignment_of(g.type).value_or(0))};
+    if (wanted_alignment > 0) {
+        const auto natural{llvm_module_->getDataLayout().getPrefTypeAlign(g_type)};
+        gvar->setAlignment(std::max(natural, llvm::Align{wanted_alignment}));
+    }
+    apply_visibility(*gvar, g.visibility);
     globals_[g.name] = gvar;
 
     llvm::Constant* init{nullptr};
@@ -1314,22 +1149,25 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         init = const_to_llvm(*g.const_init, g_type);
     } else if (g.init_value && g.init_value->is<std::string>() &&
                g.type.get_kind() == sema::type_kind::SLICE) {
-        // The folded value of a constexpr str slice is a bare str, but the global's type is a slice
+        // The folded value of a comptime str slice is a bare str, but the global's type is a slice
         const auto& bytes{g.init_value->as<std::string>()};
         const auto  slice_data{g.type.get_data().as_opt<sema::types::slice>()};
         const bool  add_nul{slice_data && slice_data->null_terminated};
         auto*       data{llvm::ConstantDataArray::getString(context_, bytes, add_nul)};
         auto*       data_gv{new llvm::GlobalVariable{*llvm_module_,
-                                               data->getType(),
-                                               true,
-                                               llvm::GlobalValue::PrivateLinkage,
-                                               data,
-                                               ".str.data"}};
+                                                     data->getType(),
+                                                     true,
+                                                     llvm::GlobalValue::PrivateLinkage,
+                                                     data,
+                                                     ".str.data"}};
         data_gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
         init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
     } else if (g.init_value) {
-        auto* init_v{lower_value(*g.init_value, &g.type)};
+        if (const auto fn_symbol{g.init_value->as_opt<std::string>()}) {
+            init = const_callable(*fn_symbol, g.init_value->type, g_type);
+        }
+        auto* init_v{init ? nullptr : lower_value(*g.init_value, &g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
             init = llvm::cast<llvm::Constant>(init_v);
         }
@@ -1345,6 +1183,8 @@ auto llvm_lowering::ensure_reserved_symbols() -> void {
     PROFILE_FUNCTION();
     if (reserved_symbols_built_) { return; }
     reserved_symbols_built_ = true;
+    // The synthesized C entry point owns `main` in any linked executable
+    if (is_executable_) { reserved_symbols_.emplace("main"); }
     if (!gir_module_) { return; }
     for (const auto* f : gir_module_->get_functions()) {
         if (!f->get_link_name().empty()) { reserved_symbols_.emplace(f->get_link_name()); }
@@ -1369,15 +1209,7 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
     ensure_reserved_symbols();
 
-    const auto* target_t{&fn.get_type()};
-    if (const auto ref{target_t->get_data().as_opt<sema::types::reference>()}) {
-        target_t = &ref->underlying;
-    }
-    if (const auto ptr{target_t->get_data().as_opt<sema::types::pointer>()}) {
-        target_t = &ptr->underlying;
-    }
-
-    const auto fn_data{target_t->get_data().as_opt<sema::types::function>()};
+    const auto fn_data{sema::signature_of(fn.get_type())};
     ASSERT(fn_data, "Function must have function sema type");
     auto* fn_ty{types_.translate_function_type(*fn_data)};
 
@@ -1415,22 +1247,35 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
     }
 
     auto* llvm_fn{llvm::Function::Create(fn_ty, g_linkage, fn_name, llvm_module_.get())};
+    llvm_fn->setAttributes(with_integer_extensions(llvm_fn->getAttributes(), *fn_data));
     llvm_fn->addFnAttr(llvm::Attribute::NoBuiltin);
     // Non x86-64 Windows links no runtime that could provide a probe symbol
     if (!windows_stack_probe_symbol()) { llvm_fn->addFnAttr("no-stack-arg-probe", "true"); }
     if (fn.get_calling_conv() != ast::calling_convention::C) {
-        llvm_fn->setCallingConv(to_llvm_callconv(fn.get_calling_conv()));
+        llvm_fn->setCallingConv(
+            to_llvm_callconv(fn.get_calling_conv(), llvm::Triple{llvm_module_->getTargetTriple()}));
     }
-    if (fn.get_is_naked()) {
-        llvm_fn->addFnAttr(llvm::Attribute::Naked);
-        llvm_fn->addFnAttr(llvm::Attribute::NoInline);
-    }
+    apply_fn_attributes(*llvm_fn, fn.get_attributes());
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
         if (p_ty->isVoidTy()) { continue; }
         auto* arg{llvm_fn->getArg(static_cast<u32>(arg_idx++))};
         arg->setName(param->name);
     }
+
+    // Every further `@export` name is another symbol for the same code
+    for (const auto& alias : fn.get_aliases()) {
+        auto* symbol{llvm::GlobalAlias::create(fn_ty,
+                                               0,
+                                               alias.weak ? llvm::GlobalValue::WeakAnyLinkage
+                                                          : llvm::GlobalValue::ExternalLinkage,
+                                               alias.name,
+                                               llvm_fn,
+                                               llvm_module_.get())};
+        apply_visibility(*symbol, alias.visibility);
+    }
+
+    if (fn.get_attributes().testing) { llvm_fn->addFnAttr(TESTING_FN_ATTRIBUTE); }
 
     globals_[fn.get_name()] = llvm_fn;
     return llvm_fn;
@@ -1439,8 +1284,14 @@ auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function*
 auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
     auto* llvm_fn{declare_function(fn)};
-    if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty()) { return llvm_fn; }
+    if (!llvm_fn) { return llvm_fn; }
+    const auto fn_data{sema::signature_of(fn.get_type())};
+    if (fn.get_linkage() == gir::linkage::EXTERN || fn.get_segments().empty() ||
+        (fn_data && is_comptime_only_signature(*fn_data))) {
+        return llvm_fn;
+    }
     clear_locals();
+    lowering_fn_.emplace(fn);
 
     // Pre-allocate basic blocks for all segments
     for (const auto* seg : fn.get_segments()) {
@@ -1453,7 +1304,11 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     builder_.SetInsertPoint(segment_blocks_[fn.get_segments()[0]->get_id()]);
     for (usize arg_idx{0}; const auto& param : fn.get_params()) {
         auto* p_ty{types_.translate(param->type)};
-        if (p_ty->isVoidTy()) { continue; }
+        if (p_ty->isVoidTy()) {
+            // Void params have no LLVM argument but are still referenced like void loads
+            set_local(param->id, nullptr);
+            continue;
+        }
         auto* arg{llvm_fn->getArg(static_cast<u32>(arg_idx++))};
         if (param->type.get_kind() == sema::type_kind::SLICE) {
             // Slices need to be addressable for runtime-indexed element access so spill the
@@ -1469,12 +1324,19 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     if (fn.get_is_test()) {
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_failed_flag());
         builder_.CreateStore(builder_.getInt1(false), get_or_create_test_skipped_flag());
+        builder_.CreateStore(builder_.getInt1(false), get_or_create_test_abort_flag());
     }
 
-    // Lower each segment
+    // Lower each segment; dead code after a diverging expression was never type checked
+    const auto reachable{fn.reachable_segments()};
     for (const auto* seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
         builder_.SetInsertPoint(bb);
+        if (const auto idx{std::to_underlying(seg->get_id())};
+            idx < reachable.size() && !reachable[idx]) {
+            builder_.CreateUnreachable();
+            continue;
+        }
 
         for (const auto* inst : seg->get_instructions()) { lower_instruction(*inst); }
         if (!bb->getTerminator()) {
@@ -1500,7 +1362,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
         for (auto& bb : *llvm_fn) {
             if (auto* ret{llvm::dyn_cast<llvm::ReturnInst>(bb.getTerminator())}) {
                 if (auto* rv{ret->getReturnValue()}; rv && rv->getType()->isIntegerTy(1)) {
-                    rets.push_back(ret);
+                    rets.emplace_back(ret);
                 }
             }
         }
@@ -1517,8 +1379,8 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     return llvm_fn;
 }
 
-auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expected_type)
-    -> llvm::Value* {
+auto llvm_lowering::lower_value(const gir::value&               val,
+                                stdx::option<const sema::type&> expected_type) -> llvm::Value* {
     PROFILE_FUNCTION();
     return val.data.visit(
         [this](gir::local_id loc) -> llvm::Value* {
@@ -1528,39 +1390,78 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         },
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
+                                              (i < std::numeric_limits<i32>::min() ||
+                                               i > std::numeric_limits<i32>::max())
+                                          ? types_.get_int64_ty()
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(static_cast<u128>(i), ty);
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
+                                              u > std::numeric_limits<u32>::max()
+                                          ? types_.get_int64_ty()
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(u, ty);
         },
         [this, &val, expected_type](i128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
-                                   : types_.get_int64_ty()};
+                     : val.type
+                         ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
+                                    (w < static_cast<i128>(std::numeric_limits<i32>::min()) ||
+                                     w > static_cast<i128>(std::numeric_limits<i32>::max()))
+                                ? (w < static_cast<i128>(std::numeric_limits<i64>::min()) ||
+                                           w > static_cast<i128>(std::numeric_limits<i64>::max())
+                                       ? llvm::Type::getInt128Ty(context_)
+                                       : types_.get_int64_ty())
+                                : types_.translate(*val.type))
+                         : types_.get_int64_ty()};
             return int_or_ptr_constant(static_cast<u128>(w), ty);
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
-                     : val.type    ? types_.translate(*val.type)
+                     : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
+                                              w > std::numeric_limits<u32>::max()
+                                          ? (w > std::numeric_limits<u64>::max()
+                                                 ? llvm::Type::getInt128Ty(context_)
+                                                 : types_.get_int64_ty())
+                                          : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
             return int_or_ptr_constant(w, ty);
         },
-        [this, &val, expected_type](f64 f) -> llvm::Value* {
+        [this, &val, expected_type](const big_int& b) -> llvm::Value* {
+            auto* ty{expected_type ? types_.translate(*expected_type)
+                     : val.type    ? types_.translate(*val.type)
+                                   : nullptr};
+            if (!ty || !ty->isIntegerTy()) {
+                ty = llvm::IntegerType::get(context_, static_cast<u32>(b.signed_bits()));
+            }
+            const auto width{ty->getIntegerBitWidth()};
+            const auto words{b.to_words(width)};
+            return llvm::ConstantInt::get(context_, llvm::APInt(width, words));
+        },
+        [this, &val, expected_type](f128 f) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? types_.translate(*val.type)
                                    : types_.get_double_ty()};
-            return llvm::ConstantFP::get(ty, f);
+            return float_constant(f, ty);
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
-            const sema::type* ty{expected_type};
-            if (!ty && val.type) { ty = &*val.type; }
-            // A fn-typed string value names a function rather than holding string data
+            auto ty{expected_type};
+            if (!ty && val.type) { ty = val.type; }
+            // A fn-typed string value names a function rather than holding string data, even when
+            // stored into a `^fn(...)` slot (that pointer is the function's own address)
+            if (val.type && val.type->get_kind() == sema::type_kind::FUNCTION) {
+                ty = val.type;
+            } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>()
+                                       : stdx::none};
+                       p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
+                ty = p->underlying;
+            }
             if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
                 if (auto* fn{resolve_named_function(str)}) { return fn; }
                 // Not yet declared in this translation unit for the linnker to resolve
@@ -1579,13 +1480,13 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
             // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back
             // to the expected type.
-            const auto        usable{[](const sema::type* t) {
+            const auto usable{[](stdx::option<const sema::type&> t) {
                 return t && !t->is_poison() && t->get_kind() != sema::type_kind::UNDEFINED;
             }};
-            const sema::type* ty{usable(val.type ? &*val.type : nullptr) ? &*val.type
-                                 : usable(expected_type)                 ? expected_type
-                                                                         : nullptr};
-            auto*             llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
+            const auto ty{usable(val.type)        ? val.type
+                          : usable(expected_type) ? expected_type
+                                                  : stdx::none};
+            auto*      llty{ty ? types_.translate(*ty) : types_.get_int64_ty()};
             if (llty->isVoidTy()) { return nullptr; }
             return llvm::UndefValue::get(llty);
         },
@@ -1600,7 +1501,7 @@ auto llvm_lowering::lower_value(const gir::value& val, const sema::type* expecte
         [this](gir::nullptr_val) -> llvm::Value* {
             return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
         },
-        [](const stdx::option<sema::type&>&) -> llvm::Value* { return nullptr; });
+        [](stdx::option<sema::type&>) -> llvm::Value* { return nullptr; });
 }
 
 auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
@@ -1642,13 +1543,22 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::PTR_CAST:
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
-    case gir::instruction_kind::CALL:            result_val = emit_call(inst); break;
-    case gir::instruction_kind::BUILTIN_CALL:    result_val = emit_builtin_call(inst); break;
-    case gir::instruction_kind::INLINE_ASM:      result_val = emit_inline_asm(inst); break;
-    case gir::instruction_kind::RET:             emit_ret(inst); return;
-    case gir::instruction_kind::GOTO:            emit_goto(inst); return;
-    case gir::instruction_kind::COND_GOTO:       emit_cond_goto(inst); return;
-    case gir::instruction_kind::UNREACHABLE:     emit_unreachable(); return;
+    case gir::instruction_kind::MAKE_CALLABLE:   result_val = emit_make_callable(inst); break;
+    case gir::instruction_kind::CALL:            {
+        auto*              block{builder_.GetInsertBlock()};
+        llvm::Instruction* before{block && !block->empty() ? &block->back() : nullptr};
+        result_val = emit_call(inst);
+        if (inst.call_modifier && block) {
+            apply_call_modifier(*inst.call_modifier, *block, before);
+        }
+        break;
+    }
+    case gir::instruction_kind::BUILTIN_CALL: result_val = emit_builtin_call(inst); break;
+    case gir::instruction_kind::INLINE_ASM:   result_val = emit_inline_asm(inst); break;
+    case gir::instruction_kind::RET:          emit_ret(inst); return;
+    case gir::instruction_kind::GOTO:         emit_goto(inst); return;
+    case gir::instruction_kind::COND_GOTO:    emit_cond_goto(inst); return;
+    case gir::instruction_kind::UNREACHABLE:  emit_unreachable(); return;
     }
 
     if (result_val && inst.result) { set_local(*inst.result, result_val); }
@@ -1664,7 +1574,14 @@ auto llvm_lowering::emit_alloca(const gir::instruction& inst) -> llvm::Value* {
         return dummy;
     }
 
-    auto* slot{builder_.CreateAlloca(elem_ty, nullptr, "slot")};
+    // Every slot lives in the entry block: one placed where a loop body declares it would take
+    // fresh stack on each iteration
+    auto&             entry{builder_.GetInsertBlock()->getParent()->getEntryBlock()};
+    llvm::IRBuilder<> entry_builder{&entry, entry.getFirstInsertionPt()};
+    auto*             slot{entry_builder.CreateAlloca(elem_ty, nullptr, "slot")};
+    const auto        wanted{
+        std::max(inst.alignment.value_or(0), types_.explicit_alignment_of(*inst.type).value_or(0))};
+    if (wanted > slot->getAlign().value()) { slot->setAlignment(llvm::Align{wanted}); }
     if (inst.result) { set_local(*inst.result, slot); }
     return slot;
 }
@@ -1697,29 +1614,29 @@ auto llvm_lowering::emit_load(const gir::instruction& inst) -> llvm::Value* {
 
 auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
-    const auto is_volatile{inst.is_volatile()};
-    if (inst.operands.size() >= 2) {
-        auto* dest_ptr{lower_value(inst.operands[0])};
-        auto* val{lower_value(inst.operands[1], inst.type ? &*inst.type : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
-    } else if (inst.result && !inst.operands.empty()) {
-        auto* dest_ptr{lower_value(gir::value{*inst.result})};
-        auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
-        if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val ||
-            val->getType()->isVoidTy()) {
-            return;
-        }
-        builder_.CreateStore(val, dest_ptr, is_volatile);
+    // Either `store val, dest` or a result slot initialized from its single operand
+    const bool has_explicit_dest{inst.operands.size() >= 2};
+    if (!has_explicit_dest && (!inst.result || inst.operands.empty())) { return; }
+
+    auto* dest_ptr{has_explicit_dest ? lower_value(inst.operands[0])
+                                     : lower_value(gir::value{*inst.result})};
+    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0], inst.type.raw())};
+    if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val || val->getType()->isVoidTy()) {
+        return;
     }
+    builder_.CreateStore(val, dest_ptr, inst.is_volatile());
 }
 
 auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "GEP requires base and at least one index");
+    // A void element has no storage (e.g. the payload of an all-void union), so there is no field
+    if (inst.type && types_.translate(*inst.type)->isVoidTy()) {
+        auto* dummy{llvm::UndefValue::get(types_.get_ptr_ty())};
+        if (inst.result) { set_local(*inst.result, dummy); }
+        return dummy;
+    }
+
     auto* base_ptr{lower_value(inst.operands[0])};
     ASSERT(base_ptr, "GEP base pointer must be non-null");
 
@@ -1730,6 +1647,12 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
             if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)}) {
                 extract_indices.emplace_back(static_cast<u32>(ci->getZExtValue()));
             }
+        }
+        if (!extract_indices.empty() && inst.operands[0].type &&
+            (inst.operands[0].type->get_kind() == sema::type_kind::STRUCT ||
+             inst.operands[0].type->get_kind() == sema::type_kind::CLOSURE)) {
+            extract_indices.front() =
+                types_.struct_field_index(base_ptr->getType(), extract_indices.front());
         }
         auto* extracted{builder_.CreateExtractValue(base_ptr, extract_indices, "extval")};
         if (inst.result) { set_local(*inst.result, extracted); }
@@ -1751,6 +1674,13 @@ auto llvm_lowering::emit_get_element_ptr(const gir::instruction& inst) -> llvm::
                 auto* idx{lower_value(operand)};
                 if (idx && idx->getType()->isIntegerTy(64)) {
                     idx = builder_.CreateIntCast(idx, types_.get_int32_ty(), false);
+                }
+                const bool is_field_index{indices.size() == 1 &&
+                                          base_type.get_kind() != sema::type_kind::UNION};
+                if (auto* ci{llvm::dyn_cast_or_null<llvm::ConstantInt>(idx)};
+                    ci && is_field_index) {
+                    const auto field{static_cast<u32>(ci->getZExtValue())};
+                    idx = builder_.getInt32(types_.struct_field_index(source_elem_ty, field));
                 }
                 indices.emplace_back(idx);
             }
@@ -1866,16 +1796,78 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
     return gv;
 }
 
+// `ptr + n` / `ptr - n` step by whole pointees, like C
+auto llvm_lowering::emit_pointer_offset(const gir::instruction& inst) -> llvm::Value* {
+    const auto& pointee{inst.operands[0].type->get_data().as<sema::types::pointer>().underlying};
+    auto*       base{lower_value(inst.operands[0])};
+    auto*       offset{lower_value(inst.operands[1])};
+    ASSERT(base && offset, "Pointer arithmetic operands must lower to non-null LLVM values");
+
+    auto*      index_ty{llvm_module_->getDataLayout().getIntPtrType(context_)};
+    const auto offset_int{inst.operands[1].type ? sema::as_integer(*inst.operands[1].type)
+                                                : stdx::option<sema::types::integer>{}};
+    const bool is_signed_offset{!offset_int || offset_int->is_signed};
+    offset = builder_.CreateIntCast(offset, index_ty, is_signed_offset, "ptr.offset");
+    if (inst.kind == gir::instruction_kind::SUB) { offset = builder_.CreateNeg(offset); }
+    return builder_.CreateGEP(types_.translate(pointee), base, offset, "ptr.step");
+}
+
+namespace {
+
+// Whether `t` is `u0`, whose every value is 0 and whose LLVM form holds no bits
+[[nodiscard]] auto is_zero_bit_int(const sema::type* t) -> bool {
+    return t && t->get_kind() == sema::type_kind::INT && sema::int_width(*t) == 0;
+}
+
+// A `u0` operand read as an integer: the constant 0
+[[nodiscard]] auto as_int_operand(llvm::Value* v, const sema::type* t) -> llvm::Value* {
+    if (!is_zero_bit_int(t)) { return v; }
+    return llvm::ConstantInt::get(llvm::Type::getInt1Ty(v->getContext()), 0);
+}
+
+} // namespace
+
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
-    auto* lhs{lower_value(inst.operands[0])};
-    auto* rhs{lower_value(inst.operands[1])};
+    if (is_zero_bit_int(inst.type.raw())) {
+        return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
+    }
+    const auto op0_ty{inst.operands[0].type};
+    const auto op1_ty{inst.operands[1].type};
+    const bool is_offset_op{inst.kind == gir::instruction_kind::ADD ||
+                            inst.kind == gir::instruction_kind::SUB};
+    if (is_offset_op && op0_ty && op0_ty->get_kind() == sema::type_kind::POINTER) {
+        return emit_pointer_offset(inst);
+    }
+    const bool is_shift{inst.kind == gir::instruction_kind::SHL ||
+                        inst.kind == gir::instruction_kind::SHR};
+    const auto peer_ty{is_shift ? op0_ty : concrete_peer_type(op0_ty, op1_ty)};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), op0_ty.raw())};
+    auto*      rhs{
+        as_int_operand(lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty), op1_ty.raw())};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
 
+    if (is_shift && !is_flt) {
+        rhs = fit_shift_amount(lhs, rhs, op1_ty && sema::is_signed_integer(*op1_ty));
+    } else if (!is_flt && lhs->getType() != rhs->getType()) {
+        if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
+            if (auto* rhs_int{llvm::dyn_cast<llvm::IntegerType>(rhs->getType())}) {
+                if (lhs_int->getBitWidth() < rhs_int->getBitWidth()) {
+                    lhs = is_sgn ? builder_.CreateSExt(lhs, rhs_int, "arithext")
+                                 : builder_.CreateZExt(lhs, rhs_int, "arithext");
+                } else if (rhs_int->getBitWidth() < lhs_int->getBitWidth()) {
+                    rhs = is_sgn ? builder_.CreateSExt(rhs, lhs_int, "arithext")
+                                 : builder_.CreateZExt(rhs, lhs_int, "arithext");
+                }
+            }
+        }
+    }
+
+    if (inst.is_saturating && !is_flt) { return emit_saturating_arith(inst, lhs, rhs, is_sgn); }
     if (inst.is_checked && !is_flt) {
         if (auto* checked{emit_checked_arith(inst, lhs, rhs, is_sgn)}) { return checked; }
     }
@@ -1895,13 +1887,22 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
         return is_sgn ? builder_.CreateSDiv(lhs, rhs, "divtmp")
                       : builder_.CreateUDiv(lhs, rhs, "divtmp");
     case gir::instruction_kind::MOD:
-        if (is_flt) { return builder_.CreateFRem(lhs, rhs, "modtmp"); }
+        if (is_flt) { return emit_frem(lhs, rhs); }
         return is_sgn ? builder_.CreateSRem(lhs, rhs, "modtmp")
                       : builder_.CreateURem(lhs, rhs, "modtmp");
     case gir::instruction_kind::AND: return builder_.CreateAnd(lhs, rhs, "andtmp");
     case gir::instruction_kind::OR:  return builder_.CreateOr(lhs, rhs, "ortmp");
     case gir::instruction_kind::XOR: return builder_.CreateXor(lhs, rhs, "xortmp");
-    case gir::instruction_kind::SHL: return builder_.CreateShl(lhs, rhs, "shltmp");
+    case gir::instruction_kind::SHL: {
+        // Unchecked (`<<%`, or safety off): shifting every bit out leaves 0, not poison
+        auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+        auto* in_range{builder_.CreateICmpULT(
+            rhs, llvm::ConstantInt::get(rhs->getType(), int_ty->getBitWidth()))};
+        auto* amount{
+            builder_.CreateSelect(in_range, rhs, llvm::ConstantInt::get(rhs->getType(), 0))};
+        return builder_.CreateSelect(
+            in_range, builder_.CreateShl(lhs, amount, "shltmp"), llvm::ConstantInt::get(int_ty, 0));
+    }
     case gir::instruction_kind::SHR:
         return is_sgn ? builder_.CreateAShr(lhs, rhs, "shrtmp")
                       : builder_.CreateLShr(lhs, rhs, "shrtmp");
@@ -1912,6 +1913,9 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Unary instruction requires an operand");
+    if (is_zero_bit_int(inst.type.raw())) {
+        return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
+    }
     auto* val{lower_value(inst.operands[0])};
     ASSERT(val, "Unary operand must lower to a non-null LLVM value");
 
@@ -1937,17 +1941,55 @@ auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Comparison requires 2 operands");
-    auto* lhs{lower_value(inst.operands[0])};
-    auto* rhs{lower_value(inst.operands[1])};
+    const auto op0_ty{inst.operands[0].type};
+    const auto op1_ty{inst.operands[1].type};
+    const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), peer_ty.raw())};
+    auto*      rhs{as_int_operand(lower_value(inst.operands[1], peer_ty), peer_ty.raw())};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
+
+    // A `^fn(...)` is null exactly when its code half is
+    const auto callable_code{[&](llvm::Value* v) -> llvm::Value* {
+        const bool fat{(op0_ty && sema::is_fat_callable(*op0_ty)) ||
+                       (op1_ty && sema::is_fat_callable(*op1_ty))};
+        if (!fat || !v->getType()->isStructTy()) { return v; }
+        return builder_.CreateExtractValue(v, {1U}, "callable.code");
+    }};
+    lhs = callable_code(lhs);
+    rhs = callable_code(rhs);
 
     const bool is_flt{is_float_type(inst, lhs)};
     const bool is_sgn{is_signed_type(inst)};
 
+    if (!is_flt && lhs->getType() != rhs->getType()) {
+        if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
+            if (auto* rhs_int{llvm::dyn_cast<llvm::IntegerType>(rhs->getType())}) {
+                if (lhs_int->getBitWidth() < rhs_int->getBitWidth()) {
+                    lhs = is_sgn ? builder_.CreateSExt(lhs, rhs_int, "cmpext")
+                                 : builder_.CreateZExt(lhs, rhs_int, "cmpext");
+                } else if (rhs_int->getBitWidth() < lhs_int->getBitWidth()) {
+                    rhs = is_sgn ? builder_.CreateSExt(rhs, lhs_int, "cmpext")
+                                 : builder_.CreateZExt(rhs, lhs_int, "cmpext");
+                }
+            }
+        }
+    }
+
+    // Every narrower float format is exactly representable in a wider one
+    if (is_flt && lhs->getType() != rhs->getType() && lhs->getType()->isFloatingPointTy() &&
+        rhs->getType()->isFloatingPointTy()) {
+        if (lhs->getType()->getPrimitiveSizeInBits() < rhs->getType()->getPrimitiveSizeInBits()) {
+            lhs = builder_.CreateFPExt(lhs, rhs->getType(), "cmpext");
+        } else {
+            rhs = builder_.CreateFPExt(rhs, lhs->getType(), "cmpext");
+        }
+    }
+
     if (is_flt) {
         switch (inst.kind) {
         case gir::instruction_kind::EQ: return builder_.CreateFCmpOEQ(lhs, rhs, "cmptmp");
-        case gir::instruction_kind::NE: return builder_.CreateFCmpONE(lhs, rhs, "cmptmp");
+        case gir::instruction_kind::NE:
+            return builder_.CreateFCmpUNE(lhs, rhs, "cmptmp"); // NaN != anything
         case gir::instruction_kind::LT: return builder_.CreateFCmpOLT(lhs, rhs, "cmptmp");
         case gir::instruction_kind::LE: return builder_.CreateFCmpOLE(lhs, rhs, "cmptmp");
         case gir::instruction_kind::GT: return builder_.CreateFCmpOGT(lhs, rhs, "cmptmp");
@@ -1983,14 +2025,22 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Cast instruction requires an operand");
     ASSERT(inst.type, "Cast instruction requires a target type");
-    auto* val{lower_value(inst.operands[0])};
+    // The operand must lower as its own type, not the cast's target type
+    auto* val{as_int_operand(lower_value(inst.operands[0]), inst.operands[0].type.raw())};
     auto* target_ty{types_.translate(*inst.type)};
     ASSERT(val && target_ty, "Cast operand and target type must be valid");
+    // Every value cast to `u0` is 0; whether it fit was checked before the cast
+    if (is_zero_bit_int(inst.type.raw())) { return llvm::ConstantAggregateZero::get(target_ty); }
 
     auto* src_ty{val->getType()};
     switch (inst.kind) {
-    case gir::instruction_kind::INT_CAST:
-        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
+    case gir::instruction_kind::INT_CAST: {
+        const bool is_sgn{inst.operands[0].type &&
+                                  inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT
+                              ? !comptime_operand_is_nonnegative(inst.operands[0])
+                              : is_signed_type(inst)};
+        return builder_.CreateIntCast(val, target_ty, is_sgn);
+    }
     case gir::instruction_kind::TRUNC_CAST: return builder_.CreateTrunc(val, target_ty, "trunc");
     case gir::instruction_kind::WIDEN_CAST: {
         const bool src_is_flt{src_ty->isFloatingPointTy()};
@@ -2003,12 +2053,31 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
         }
         if (src_is_flt && !dst_is_flt) {
             const bool dst_is_sgn{sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_float_to_int_guard(inst, val, target_ty, dst_is_sgn); }
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
         return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
     }
-    case gir::instruction_kind::BIT_CAST: return builder_.CreateBitCast(val, target_ty, "bitcast");
+    case gir::instruction_kind::BIT_CAST: {
+        if (!src_ty->isAggregateType() && !target_ty->isAggregateType()) {
+            return builder_.CreateBitCast(val, target_ty, "bitcast");
+        }
+        // LLVM can't bitcast an array or struct (`u128` <-> `[2]u64`), so the bytes go through
+        // a slot big enough for either view
+        const auto& layout{llvm_module_->getDataLayout()};
+        auto*       slot_ty{layout.getTypeAllocSize(src_ty) >= layout.getTypeAllocSize(target_ty)
+                                ? src_ty
+                                : target_ty};
+        auto&       entry{builder_.GetInsertBlock()->getParent()->getEntryBlock()};
+        llvm::IRBuilder<> entry_builder{&entry, entry.getFirstInsertionPt()};
+        auto*             slot{entry_builder.CreateAlloca(slot_ty, nullptr, "bitcast.slot")};
+        const auto        align{
+            std::max(layout.getABITypeAlign(src_ty), layout.getABITypeAlign(target_ty))};
+        slot->setAlignment(align);
+        builder_.CreateAlignedStore(val, slot, align);
+        return builder_.CreateAlignedLoad(target_ty, slot, align, "bitcast");
+    }
     case gir::instruction_kind::PTR_CAST:
         return builder_.CreatePointerCast(val, target_ty, "ptrcast");
     case gir::instruction_kind::INT_FROM_PTR:
@@ -2022,7 +2091,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
-    auto* val{lower_value(inst.operands[0], inst.type ? &*inst.type : nullptr)};
+    auto* val{lower_value(inst.operands[0], inst.type.raw())};
     if (inst.result) { set_local(*inst.result, val); }
     return val;
 }
@@ -2061,14 +2130,40 @@ auto llvm_lowering::resolve_named_constant(std::string_view name) -> llvm::Const
     return nullptr;
 }
 
+// `@call(modifier, ...)`: finds the call lowering just made after `before` and marks it
+auto llvm_lowering::apply_call_modifier(ast::call_modifier modifier,
+                                        llvm::BasicBlock&  block,
+                                        llvm::Instruction* before) -> void {
+    llvm::CallInst* call{nullptr};
+    for (auto it{block.rbegin()}; it != block.rend() && &*it != before; ++it) {
+        if (auto* candidate{llvm::dyn_cast<llvm::CallInst>(&*it)};
+            candidate && !llvm::isa<llvm::IntrinsicInst>(candidate)) {
+            call = candidate;
+            break;
+        }
+    }
+    if (!call) { return; }
+    switch (modifier) {
+    case ast::call_modifier::NEVER_TAIL: call->setTailCallKind(llvm::CallInst::TCK_NoTail); break;
+    case ast::call_modifier::ALWAYS_TAIL:
+        call->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        break;
+    case ast::call_modifier::NEVER_INLINE:  call->addFnAttr(llvm::Attribute::NoInline); break;
+    case ast::call_modifier::ALWAYS_INLINE: call->addFnAttr(llvm::Attribute::AlwaysInline); break;
+    case ast::call_modifier::AUTO:
+    case ast::call_modifier::COMPILE_TIME:  break;
+    }
+}
+
 auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     if (inst.callee_name) {
         if (auto* callee_fn{resolve_named_function(*inst.callee_name)}) {
             std::vector<llvm::Value*> args;
             args.reserve(inst.operands.size());
+            auto* callee_fn_ty{callee_fn->getFunctionType()};
             for (const auto& op : inst.operands) {
-                if (op.type && op.type->get_kind() == sema::type_kind::TYPE) { continue; }
+                if (op.type && sema::is_type_parameter_slot(*op.type)) { continue; }
                 auto* arg_val{lower_value(op)};
                 if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
                 if (op.type && op.type->get_kind() == sema::type_kind::ARRAY &&
@@ -2090,18 +2185,15 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
                             slice_val, ptr_val, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                         slice_val = builder_.CreateInsertValue(
                             slice_val,
-                            builder_.getInt64(static_cast<u64>(arr_data->len)),
+                            usize_const(static_cast<u64>(arr_data->len)),
                             {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
                         arg_val = slice_val;
                     }
-                } else if (op.type &&
-                           (op.type->get_kind() == sema::type_kind::STRUCT ||
-                            op.type->get_kind() == sema::type_kind::UNION ||
-                            op.type->get_kind() == sema::type_kind::SLICE ||
-                            op.type->get_kind() == sema::type_kind::CLOSURE) &&
-                           arg_val->getType()->isPointerTy()) {
-                    auto* llvm_struct_ty{types_.translate(*op.type)};
-                    arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+                } else {
+                    arg_val = load_aggregate_arg(op, arg_val);
+                }
+                if (args.size() >= callee_fn_ty->getNumParams() && callee_fn_ty->isVarArg()) {
+                    arg_val = promote_c_variadic_arg(arg_val, op.type);
                 }
                 args.emplace_back(arg_val);
             }
@@ -2111,6 +2203,7 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
             auto* call_inst{builder_.CreateCall(callee_fn, args, is_void ? "" : "calltmp")};
             call_inst->setCallingConv(callee_fn->getCallingConv());
             if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
+            emit_testing_abort_check(*callee_fn);
             return call_inst;
         }
     }
@@ -2118,30 +2211,31 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Indirect call requires callee operand");
     auto* callee_val{lower_value(inst.operands[0])};
     ASSERT(inst.operands[0].type, "Indirect callee must have function type");
-    auto ind_target{inst.operands[0].type};
-    if (const auto ref{ind_target->get_data().as_opt<sema::types::reference>()}) {
-        ind_target.emplace(ref->underlying);
-    }
-    if (const auto ptr{ind_target->get_data().as_opt<sema::types::pointer>()}) {
-        ind_target.emplace(ptr->underlying);
-    }
-    const auto ind_fn_data{ind_target->get_data().as_opt<sema::types::function>()};
+    const auto ind_fn_data{sema::signature_of(*inst.operands[0].type)};
     ASSERT(ind_fn_data, "Indirect callee must have function type");
-    auto* fn_ty{types_.translate_function_type(*ind_fn_data)};
+    // A folded `const f: fn(...) = g;` reaches here as `g` itself: call it directly
+    const bool is_erased{ind_fn_data->erased && !llvm::isa<llvm::Function>(callee_val)};
+    auto*      fn_ty{is_erased ? erased_code_type(*ind_fn_data)
+                               : types_.translate_function_type(*ind_fn_data)};
 
     std::vector<llvm::Value*> args;
-    args.reserve(inst.operands.size() - 1);
+    args.reserve(inst.operands.size());
+    if (is_erased) {
+        auto* fat_ty{types_.translate(*inst.operands[0].type)};
+        if (callee_val->getType()->isPointerTy()) {
+            callee_val = builder_.CreateLoad(fat_ty, callee_val, "callable");
+        }
+        args.emplace_back(builder_.CreateExtractValue(callee_val, {0U}, "callable.ctx"));
+        callee_val = builder_.CreateExtractValue(callee_val, {1U}, "callable.code");
+    }
     for (const auto& operand : inst.operands | std::views::drop(1)) {
+        // Match the direct-callee branch above
+        if (operand.type && sema::is_type_parameter_slot(*operand.type)) { continue; }
         auto* arg_val{lower_value(operand)};
         if (!arg_val || arg_val->getType()->isVoidTy()) { continue; }
-        if (operand.type &&
-            (operand.type->get_kind() == sema::type_kind::STRUCT ||
-             operand.type->get_kind() == sema::type_kind::UNION ||
-             operand.type->get_kind() == sema::type_kind::SLICE ||
-             operand.type->get_kind() == sema::type_kind::CLOSURE) &&
-            arg_val->getType()->isPointerTy()) {
-            auto* llvm_struct_ty{types_.translate(*operand.type)};
-            arg_val = builder_.CreateLoad(llvm_struct_ty, arg_val, "struct_arg");
+        arg_val = load_aggregate_arg(operand, arg_val);
+        if (args.size() >= fn_ty->getNumParams() && fn_ty->isVarArg()) {
+            arg_val = promote_c_variadic_arg(arg_val, operand.type);
         }
         args.emplace_back(arg_val);
     }
@@ -2149,130 +2243,327 @@ auto llvm_lowering::emit_call(const gir::instruction& inst) -> llvm::Value* {
     const bool is_void{!inst.type || inst.type->get_kind() == sema::type_kind::VOID_ ||
                        inst.type->get_kind() == sema::type_kind::NORETURN};
     auto*      call_inst{builder_.CreateCall(fn_ty, callee_val, args, is_void ? "" : "calltmp")};
+    call_inst->setAttributes(
+        with_integer_extensions(call_inst->getAttributes(), *ind_fn_data, is_erased ? 1U : 0U));
     // An indirect call's target may have a non-default calling convention now that it's part of
     // `types::function`'s own identity
-    call_inst->setCallingConv(to_llvm_callconv(ind_fn_data->conv));
+    call_inst->setCallingConv(
+        is_erased
+            ? llvm::CallingConv::C
+            : to_llvm_callconv(ind_fn_data->conv, llvm::Triple{llvm_module_->getTargetTriple()}));
     if (inst.result && !is_void) { set_local(*inst.result, call_inst); }
     return call_inst;
 }
 
+// LLVM's generic `va_arg` expansion steps Win64's 8-byte slots by the type's own size, so walk
+// them by hand the way clang does; larger or odd-sized values are passed by reference
+auto llvm_lowering::emit_va_arg(llvm::Value* list, llvm::Type* ty) -> llvm::Value* {
+    const llvm::Triple triple{llvm_module_->getTargetTriple()};
+    if (!triple.isOSWindows() || triple.getArch() != llvm::Triple::x86_64) {
+        return builder_.CreateVAArg(list, ty, "vaarg");
+    }
+
+    constexpr u64 win64_slot_size{8};
+    const auto&   layout{llvm_module_->getDataLayout()};
+    const auto    size{layout.getTypeAllocSize(ty).getFixedValue()};
+    const bool    by_reference{size > win64_slot_size || !llvm::isPowerOf2_64(size)};
+
+    auto* ptr_ty{types_.get_ptr_ty()};
+    auto* slot{builder_.CreateLoad(ptr_ty, list, "va.slot")};
+    auto* next{builder_.CreateConstInBoundsGEP1_64(
+        builder_.getInt8Ty(), slot, win64_slot_size, "va.next")};
+    builder_.CreateStore(next, list);
+    auto* value_addr{by_reference ? builder_.CreateLoad(ptr_ty, slot, "va.indirect") : slot};
+    return builder_.CreateLoad(ty, value_addr, "vaarg");
+}
+
+// C's default argument promotions: a variadic slot never carries a sub-`int` integer or a `float`
+auto llvm_lowering::promote_c_variadic_arg(llvm::Value* arg_val, stdx::option<sema::type&> type)
+    -> llvm::Value* {
+    auto* arg_ty{arg_val->getType()};
+    if (arg_ty->isIntegerTy() && arg_ty->getIntegerBitWidth() < 32) {
+        bool is_signed{false};
+        if (type) {
+            if (const auto int_info{sema::as_integer(*type)}) { is_signed = int_info->is_signed; }
+        }
+        return builder_.CreateIntCast(arg_val, builder_.getInt32Ty(), is_signed, "vararg.promote");
+    }
+    if (arg_ty->isHalfTy() || arg_ty->isBFloatTy() || arg_ty->isFloatTy()) {
+        return builder_.CreateFPExt(arg_val, builder_.getDoubleTy(), "vararg.promote");
+    }
+    return arg_val;
+}
+
+auto llvm_lowering::load_aggregate_arg(const gir::value& op, llvm::Value* arg_val) -> llvm::Value* {
+    if (!op.type || !arg_val->getType()->isPointerTy()) { return arg_val; }
+    const auto kind{op.type->get_kind()};
+    const bool by_value_aggregate{
+        kind == sema::type_kind::STRUCT || kind == sema::type_kind::UNION ||
+        kind == sema::type_kind::SLICE || kind == sema::type_kind::CLOSURE ||
+        sema::is_fat_callable(*op.type)};
+    if (!by_value_aggregate) { return arg_val; }
+    return builder_.CreateLoad(types_.translate(*op.type), arg_val, "struct_arg");
+}
+
+auto llvm_lowering::integer_extension(const sema::type& type)
+    -> stdx::option<llvm::Attribute::AttrKind> {
+    if (const auto en{type.get_data().as_opt<sema::types::enum_t>()}) {
+        return integer_extension(en->underlying);
+    }
+    auto* llvm_ty{types_.translate(type)};
+    if (!llvm_ty->isIntegerTy() || llvm_ty->getIntegerBitWidth() > 32) { return stdx::none; }
+
+    const auto rule{narrow_int_rule_for(llvm::Triple{llvm_module_->getTargetTriple()})};
+    if (llvm_ty->getIntegerBitWidth() == 32) {
+        if (rule != narrow_int_rule::ALL_AND_RV64_WORD) { return stdx::none; }
+        return llvm::Attribute::SExt;
+    }
+    if (rule == narrow_int_rule::NONE) { return stdx::none; }
+    if (type.get_kind() == sema::type_kind::BOOL) { return llvm::Attribute::ZExt; }
+    if (rule == narrow_int_rule::BOOL_ONLY) { return stdx::none; }
+    return sema::is_signed_integer(type) ? llvm::Attribute::SExt : llvm::Attribute::ZExt;
+}
+
+auto llvm_lowering::with_integer_extensions(llvm::AttributeList          attrs,
+                                            const sema::types::function& fn,
+                                            u32 first_param) -> llvm::AttributeList {
+    auto& context{llvm_module_->getContext()};
+    if (const auto ext{integer_extension(fn.return_type)}) {
+        attrs = attrs.addRetAttribute(context, *ext);
+    }
+    u32 idx{first_param};
+    for (const auto* param : fn.params) {
+        if (types_.translate(*param)->isVoidTy()) { continue; }
+        if (const auto ext{integer_extension(*param)}) {
+            attrs = attrs.addParamAttribute(context, idx, *ext);
+        }
+        ++idx;
+    }
+    return attrs;
+}
+
+auto llvm_lowering::erased_code_type(const sema::types::function& fn) -> llvm::FunctionType* {
+    auto*                    thin_ty{types_.translate_function_type(fn)};
+    std::vector<llvm::Type*> params{types_.get_ptr_ty()};
+    params.insert(params.end(), thin_ty->param_begin(), thin_ty->param_end());
+    return llvm::FunctionType::get(thin_ty->getReturnType(), params, false);
+}
+
+auto llvm_lowering::get_or_create_fn_trampoline(const sema::types::function& fn)
+    -> llvm::Function* {
+    auto* thin_ty{types_.translate_function_type(fn)};
+    if (const auto it{fn_trampolines_.find(thin_ty)}; it != fn_trampolines_.end()) {
+        return it->second;
+    }
+
+    auto* trampoline{llvm::Function::Create(erased_code_type(fn),
+                                            llvm::GlobalValue::InternalLinkage,
+                                            private_symbol_name("fn_trampoline"),
+                                            llvm_module_.get())};
+    fn_trampolines_.emplace(thin_ty, trampoline);
+
+    const llvm::IRBuilderBase::InsertPointGuard guard{builder_};
+    builder_.SetInsertPoint(llvm::BasicBlock::Create(context_, "entry", trampoline));
+    std::vector<llvm::Value*> forwarded;
+    for (auto& arg : trampoline->args() | std::views::drop(1)) { forwarded.emplace_back(&arg); }
+    auto* call{builder_.CreateCall(thin_ty, trampoline->getArg(0), forwarded)};
+    call->setCallingConv(to_llvm_callconv(fn.conv, llvm::Triple{llvm_module_->getTargetTriple()}));
+    call->setTailCall();
+    if (thin_ty->getReturnType()->isVoidTy()) {
+        builder_.CreateRetVoid();
+    } else {
+        builder_.CreateRet(call);
+    }
+    return trampoline;
+}
+
+auto llvm_lowering::emit_make_callable(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    ASSERT(inst.type && !inst.operands.empty(), "make_callable requires a type and a context");
+    const auto fn{sema::fat_callable_fn(*inst.type)};
+    ASSERT(fn, "make_callable must produce an erased fn");
+
+    auto*        fat_ty{types_.translate(*inst.type)};
+    auto*        ctx{lower_value(inst.operands[0])};
+    llvm::Value* code{inst.callee_name ? resolve_named_function(*inst.callee_name)
+                                       : get_or_create_fn_trampoline(*fn)};
+    ASSERT(ctx && code, "make_callable operands must lower");
+
+    llvm::Value* fat{llvm::PoisonValue::get(fat_ty)};
+    fat = builder_.CreateInsertValue(fat, ctx, {0U});
+    fat = builder_.CreateInsertValue(fat, code, {1U}, "callable");
+    if (inst.result) { set_local(*inst.result, fat); }
+    return fat;
+}
+
+auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target)
+    -> llvm::Value* {
+    if (!target) { return res; }
+    auto* target_ty{types_.translate(*target)};
+    if (!target_ty || res->getType() == target_ty) { return res; }
+    const auto res_bits{res->getType()->getIntegerBitWidth()};
+    const auto target_bits{target_ty->getIntegerBitWidth()};
+    if (target_bits > res_bits) { return builder_.CreateZExt(res, target_ty); }
+    if (target_bits < res_bits) { return builder_.CreateTrunc(res, target_ty); }
+    return res;
+}
+
+auto llvm_lowering::emit_frem(llvm::Value* lhs, llvm::Value* rhs) -> llvm::Value* {
+    auto*       type{lhs->getType()};
+    const auto  format{llvm_float_format(type)};
+    const auto& triple{llvm_module_->getTargetTriple()};
+    if (!needs_named_math_call(triple, format)) { return builder_.CreateFRem(lhs, rhs, "modtmp"); }
+    // LLVM would call `fmodl`, which is `long double`'s and not this type's
+    auto* fn_type{llvm::FunctionType::get(type, {type, type}, false)};
+    auto  callee{llvm_module_->getOrInsertFunction(fmod_libcall_name(triple, format), fn_type)};
+    auto* call{builder_.CreateCall(callee, {lhs, rhs}, "modtmp")};
+    call->addFnAttr(llvm::Attribute::NoBuiltin);
+    return call;
+}
+
+auto llvm_lowering::emit_math_call(math_function function, llvm::Value* operand) -> llvm::Value* {
+    auto*      type{operand->getType()};
+    const auto format{llvm_float_format(type)};
+    // Exact operations: LLVM's intrinsics, and its folding of them, give the one right answer,
+    // except where LLVM would call them by a `long double` name that isn't this type's
+    const auto exact{[&] -> stdx::option<llvm::Intrinsic::ID> {
+        // x87's `fsqrt` is exact, so only f80 `floor`/`ceil` need MSVC's named routines
+        const bool native_sqrt{function == math_function::SQRT && format == float_format::X87};
+        if (!native_sqrt && needs_named_math_call(llvm_module_->getTargetTriple(), format)) {
+            return stdx::none;
+        }
+        switch (function) {
+        case math_function::SQRT:  return llvm::Intrinsic::sqrt;
+        case math_function::FLOOR: return llvm::Intrinsic::floor;
+        case math_function::CEIL:  return llvm::Intrinsic::ceil;
+        default:                   return stdx::none;
+        }
+    }()};
+    if (exact) {
+        auto* fn{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), *exact, {type})};
+        return builder_.CreateCall(fn, {operand});
+    }
+
+    // `f16` has no routine of its own; it goes through `f32` like LLVM's own libcalls do
+    if (type->isHalfTy()) {
+        auto* widened{builder_.CreateFPExt(operand, builder_.getFloatTy(), "math.ext")};
+        return builder_.CreateFPTrunc(emit_math_call(function, widened), type, "math.trunc");
+    }
+
+    // A direct, `nobuiltin` call rather than `llvm.sin` and friends: LLVM folds those with the
+    // host's libm, which would replace a correctly rounded constant with a host-dependent one
+    const auto name{math_libcall_name(llvm_module_->getTargetTriple(), function, format)};
+    auto*      fn_type{llvm::FunctionType::get(type, {type}, false)};
+    auto       callee{llvm_module_->getOrInsertFunction(name, fn_type)};
+    auto*      call{builder_.CreateCall(callee, {operand})};
+    call->addFnAttr(llvm::Attribute::NoBuiltin);
+    return call;
+}
+
+// `@llvmIntrinsic(name, ...)`: sema already matched the types against the intrinsic, so its
+// overloads follow from the lowered operands
+auto llvm_lowering::emit_llvm_intrinsic_call(const gir::instruction& inst) -> llvm::Value* {
+    const auto id{llvm::Intrinsic::lookupIntrinsicID(*inst.callee_name)};
+    ASSERT(id != llvm::Intrinsic::not_intrinsic, "@llvmIntrinsic names an intrinsic");
+
+    std::vector<llvm::Value*> args;
+    std::vector<llvm::Type*>  params;
+    for (const auto& operand : inst.operands) {
+        auto* arg{lower_value(operand)};
+        args.emplace_back(arg);
+        params.emplace_back(arg->getType());
+    }
+    auto* ret{inst.type ? types_.translate(*inst.type) : types_.get_void_ty()};
+    auto* fn_type{llvm::FunctionType::get(ret, params, false)};
+
+    llvm::SmallVector<llvm::Type*, 4> overloads;
+    const bool matched{llvm::Intrinsic::isSignatureValid(id, fn_type, overloads)};
+    ASSERT(matched, "@llvmIntrinsic's types were checked against the intrinsic");
+    auto* callee{llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), id, overloads)};
+    return builder_.CreateCall(callee, args);
+}
+
 auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
-    stdx::option<syntax::token_type_t> builtin_tok;
+    if (inst.callee_name && inst.callee_name->starts_with("llvm.")) {
+        return emit_llvm_intrinsic_call(inst);
+    }
+    stdx::option<syntax::builtin_t> builtin_tok;
     if (inst.callee_name) {
-        builtin_tok = syntax::get_builtin_opt(*inst.callee_name);
+        builtin_tok = syntax::builtin_from_name(*inst.callee_name);
         if (!builtin_tok && !inst.callee_name->starts_with('@')) {
             const auto at_name{fmt::format("@{}", *inst.callee_name)};
-            builtin_tok = syntax::get_builtin_opt(at_name);
+            builtin_tok = syntax::builtin_from_name(at_name);
         }
     }
 
     if (builtin_tok) {
         switch (*builtin_tok) {
-        case syntax::token_type_t::BUILTIN_PANIC:
-        case syntax::token_type_t::BUILTIN_TRAP:  {
+        case syntax::builtin_t::PANIC:
+        case syntax::builtin_t::TRAP:  {
             auto* trap_fn{
                 llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(), llvm::Intrinsic::trap)};
             builder_.CreateCall(trap_fn, {});
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_RETURN_ADDRESS: {
-            auto* retaddr_fn{llvm::Intrinsic::getOrInsertDeclaration(
-                llvm_module_.get(), llvm::Intrinsic::returnaddress)};
+        case syntax::builtin_t::TEST_FUNCTIONS: return emit_test_table();
+        case syntax::builtin_t::RETURN_ADDRESS: {
+            // Overloaded on the code pointer it yields, which lives in the program address space
+            const auto code_space{llvm_module_->getDataLayout().getProgramAddressSpace()};
+            auto*      retaddr_fn{
+                llvm::Intrinsic::getOrInsertDeclaration(llvm_module_.get(),
+                                                        llvm::Intrinsic::returnaddress,
+                                                        {builder_.getPtrTy(code_space)})};
             auto* call_val{builder_.CreateCall(retaddr_fn, {builder_.getInt32(0)})};
             auto* target_ty{inst.type ? types_.translate(*inst.type) : nullptr};
             if (!target_ty) { target_ty = builder_.getIntPtrTy(llvm_module_->getDataLayout()); }
             return builder_.CreatePtrToInt(call_val, target_ty, "return_address");
         }
-        case syntax::token_type_t::BUILTIN_EXPECT: {
+        case syntax::builtin_t::EXPECT: {
             if (inst.operands.empty()) { return builder_.getInt1(true); }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return builder_.getInt1(true); }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "expect.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "expect.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "expect")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_context_handler_call(inst, "expect_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+            emit_context_handler_call(inst, "expect_handler", 4UZ, 1UZ);
             builder_.CreateBr(cont_bb);
 
             builder_.SetInsertPoint(cont_bb);
             if (inst.result) { set_local(*inst.result, cond_val); }
             return cond_val;
         }
-        case syntax::token_type_t::BUILTIN_REQUIRE: {
+        case syntax::builtin_t::REQUIRE: {
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(context_, "require.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(context_, "require.cont", cur_fn)};
-
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, "require")};
             auto* failed_flag{get_or_create_test_failed_flag()};
             builder_.CreateStore(builder_.getInt1(true), failed_flag);
-            emit_context_handler_call(inst, "require_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
-            builder_.CreateRet(builder_.getInt1(false));
+            emit_context_handler_call(inst, "require_handler", 4UZ, 1UZ);
+            if (lowering_fn_ && lowering_fn_->get_attributes().testing) {
+                builder_.CreateStore(builder_.getInt1(true), get_or_create_test_abort_flag());
+                emit_testing_abort_return();
+            } else {
+                builder_.CreateRet(builder_.getInt1(false));
+            }
 
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ASSERT:
-        case syntax::token_type_t::BUILTIN_VERIFY: {
-            const bool is_verify{*builtin_tok == syntax::token_type_t::BUILTIN_VERIFY};
+        case syntax::builtin_t::ASSERT:
+        case syntax::builtin_t::VERIFY: {
+            const bool is_verify{*builtin_tok == syntax::builtin_t::VERIFY};
             if (inst.operands.empty()) { return nullptr; }
             auto* cond_val{lower_value(inst.operands[0])};
             if (!cond_val) { return nullptr; }
-            if (cond_val->getType()->isPointerTy()) {
-                cond_val =
-                    builder_.CreateICmpNE(cond_val,
-                                          llvm::ConstantPointerNull::get(
-                                              llvm::cast<llvm::PointerType>(cond_val->getType())),
-                                          "tobool");
-            } else if (cond_val->getType()->isIntegerTy() &&
-                       cond_val->getType()->getIntegerBitWidth() != 1) {
-                cond_val = builder_.CreateICmpNE(
-                    cond_val, llvm::Constant::getNullValue(cond_val->getType()), "tobool");
-            }
+            cond_val = lower_truthiness(cond_val);
 
-            auto* cur_fn{builder_.GetInsertBlock()->getParent()};
-            auto* fail_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.fail" : "assert.fail", cur_fn)};
-            auto* cont_bb{llvm::BasicBlock::Create(
-                context_, is_verify ? "verify.cont" : "assert.cont", cur_fn)};
-            builder_.CreateCondBr(cond_val, cont_bb, fail_bb);
-
-            builder_.SetInsertPoint(fail_bb);
+            auto* cont_bb{branch_to_failure(cond_val, is_verify ? "verify" : "assert")};
             if (is_verify) {
                 std::string_view msg{"verification failed"};
                 if (inst.operands.size() > 4) {
@@ -2281,19 +2572,26 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 emit_lowered_panic(msg, inst);
                 builder_.CreateUnreachable();
             } else {
-                emit_context_handler_call(inst, "assert_handler", std::array{4UZ, 1UZ, 2UZ, 3UZ});
+                emit_context_handler_call(inst, "assert_handler", 4UZ, 1UZ);
                 builder_.CreateBr(cont_bb);
             }
 
             builder_.SetInsertPoint(cont_bb);
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SKIP: {
+        case syntax::builtin_t::SKIP: {
             builder_.CreateStore(builder_.getInt1(true), get_or_create_test_skipped_flag());
-            emit_context_handler_call(inst, "skip_handler", std::array{0UZ, 1UZ, 2UZ, 3UZ});
+            emit_context_handler_call(inst, "skip_handler", 0UZ, 1UZ);
+            // A test returns right after; a `@[testing]` helper unwinds to it here
+            if (lowering_fn_ && lowering_fn_->get_attributes().testing) {
+                builder_.CreateStore(builder_.getInt1(true), get_or_create_test_abort_flag());
+                emit_testing_abort_return();
+                builder_.SetInsertPoint(llvm::BasicBlock::Create(
+                    context_, "skip.after", builder_.GetInsertBlock()->getParent()));
+            }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_SRC: {
+        case syntax::builtin_t::SRC: {
             ASSERT(inst.type, "@src must carry its SourceLocation result type");
             ASSERT(inst.operands.size() >= 3, "@src expects [file, line, column] operands");
             auto* struct_ty{llvm::cast<llvm::StructType>(types_.translate(*inst.type))};
@@ -2306,7 +2604,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                     file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
                 file_slice =
                     builder_.CreateInsertValue(file_slice,
-                                               builder_.getInt64(path->size()),
+                                               usize_const(path->size()),
                                                {static_cast<u32>(gir::SLICE_LEN_FIELD_INDEX)});
             }
 
@@ -2319,57 +2617,52 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (col_v) { agg = builder_.CreateInsertValue(agg, col_v, {2U}); }
             return agg;
         }
-        case syntax::token_type_t::BUILTIN_TARGET_OS: {
+        case syntax::builtin_t::TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_ARCH: {
+        case syntax::builtin_t::TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{
                 std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
         }
-        case syntax::token_type_t::BUILTIN_TARGET_TRIPLE: {
+        case syntax::builtin_t::TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
             return lower_value(gir::value{triple.str(), inst.type});
         }
 
         // Memory operations
-        case syntax::token_type_t::BUILTIN_MEMCPY: {
+        case syntax::builtin_t::MEMCPY: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemCpy(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memcpy_used_ = true;
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMSET: {
+        case syntax::builtin_t::MEMSET: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
-            if (dest && val && len) {
-                builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign());
-                memset_used_ = true;
-            }
+            if (dest && val && len) { builder_.CreateMemSet(dest, val, len, llvm::MaybeAlign()); }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_MEMMOVE: {
+        case syntax::builtin_t::MEMMOVE: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
             auto* len{lower_value(inst.operands[2])};
             if (dest && src && len) {
                 builder_.CreateMemMove(dest, llvm::MaybeAlign(), src, llvm::MaybeAlign(), len);
-                memmove_used_ = true;
             }
             return nullptr;
         }
 
         // C Varargs
-        case syntax::token_type_t::BUILTIN_C_VA_START: {
+        case syntax::builtin_t::C_VA_START: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2378,7 +2671,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_COPY: {
+        case syntax::builtin_t::C_VA_COPY: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* dest{lower_value(inst.operands[0])};
             auto* src{lower_value(inst.operands[1])};
@@ -2391,7 +2684,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_END: {
+        case syntax::builtin_t::C_VA_END: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
@@ -2400,68 +2693,47 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_C_VA_ARG: {
+        case syntax::builtin_t::C_VA_ARG: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* list{lower_value(inst.operands[0])}; list && inst.type) {
-                if (auto* ty{types_.translate(*inst.type)}) {
-                    return builder_.CreateVAArg(list, ty, "vaarg");
-                }
+                if (auto* ty{types_.translate(*inst.type)}) { return emit_va_arg(list, ty); }
             }
             return nullptr;
         }
 
-        // Bit operations
-        case syntax::token_type_t::BUILTIN_CLZ: {
+        case syntax::builtin_t::CLZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctlz, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_CTZ: {
+        case syntax::builtin_t::CTZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::cttz, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val, builder_.getInt1(false)})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_POPCOUNT: {
+        case syntax::builtin_t::POPCOUNT: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                     llvm_module_.get(), llvm::Intrinsic::ctpop, {val->getType()})};
                 auto* res{builder_.CreateCall(fn, {val})};
-                if (inst.type) {
-                    if (auto* target_ty{types_.translate(*inst.type)};
-                        target_ty && res->getType() != target_ty) {
-                        return builder_.CreateZExt(res, target_ty);
-                    }
-                }
-                return res;
+                return fixup_bit_count_result(res, inst.type);
             }
             return nullptr;
         }
 
         // Fused multiply add
-        case syntax::token_type_t::BUILTIN_MUL_ADD: {
+        case syntax::builtin_t::MUL_ADD: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             const usize base_idx{inst.operands.size() >= 4 ? 1u : 0u};
             auto*       a{lower_value(inst.operands[base_idx])};
@@ -2479,7 +2751,24 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_ABS: {
+        case syntax::builtin_t::SQRT:
+        case syntax::builtin_t::SIN:
+        case syntax::builtin_t::COS:
+        case syntax::builtin_t::TAN:
+        case syntax::builtin_t::EXP:
+        case syntax::builtin_t::EXP2:
+        case syntax::builtin_t::LOG:
+        case syntax::builtin_t::LOG2:
+        case syntax::builtin_t::LOG10:
+        case syntax::builtin_t::FLOOR:
+        case syntax::builtin_t::CEIL:  {
+            VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
+            auto* operand{lower_value(inst.operands[0])};
+            if (!operand || !operand->getType()->isFloatingPointTy()) { return nullptr; }
+            return emit_math_call(*gir::semantics::math_function_of(*builtin_tok), operand);
+        }
+
+        case syntax::builtin_t::ABS: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {
                 if (val->getType()->isFloatingPointTy()) {
@@ -2488,6 +2777,14 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                     return builder_.CreateCall(fn, {val});
                 }
                 if (val->getType()->isIntegerTy()) {
+                    if (inst.is_checked) {
+                        const auto width{val->getType()->getIntegerBitWidth()};
+                        auto*      int_min{llvm::ConstantInt::get(
+                            val->getType(), llvm::APInt::getSignedMinValue(width))};
+                        emit_arith_guard(builder_.CreateICmpEQ(val, int_min),
+                                         "signed absolute value overflow",
+                                         inst);
+                    }
                     auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
                         llvm_module_.get(), llvm::Intrinsic::abs, {val->getType()})};
                     return builder_.CreateCall(fn, {val, builder_.getInt1(false)});
@@ -2496,7 +2793,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
-        case syntax::token_type_t::BUILTIN_FIELD_PARENT_PTR: {
+        case syntax::builtin_t::FIELD_PARENT_PTR: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* field_ptr{lower_value(inst.operands[0])};
             if (!field_ptr || !inst.type) { return nullptr; }
@@ -2510,27 +2807,39 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (!idx_const) { return nullptr; }
             const auto  field_idx{idx_const->getZExtValue()};
             const auto& layout{llvm_module_->getDataLayout()};
+            const auto  elem_idx{types_.struct_field_index(struct_ty, static_cast<u32>(field_idx))};
             const auto  offset{layout.getStructLayout(llvm::cast<llvm::StructType>(struct_ty))
-                                  ->getElementOffset(static_cast<u32>(field_idx))};
+                                   ->getElementOffset(elem_idx)};
 
-            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_int64_ty(), "fpp.i")};
-            auto* parent_int{builder_.CreateSub(field_int, builder_.getInt64(offset), "fpp.base")};
+            auto* field_int{builder_.CreatePtrToInt(field_ptr, types_.get_usize_ty(), "fpp.i")};
+            auto* parent_int{builder_.CreateSub(field_int, usize_const(offset), "fpp.base")};
             return builder_.CreateIntToPtr(parent_int, types_.get_ptr_ty(), "fpp.p");
         }
 
-        case syntax::token_type_t::BUILTIN_MIN:
-        case syntax::token_type_t::BUILTIN_MAX: {
+        case syntax::builtin_t::MIN:
+        case syntax::builtin_t::MAX: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
-            const bool is_max{*builtin_tok == syntax::token_type_t::BUILTIN_MAX};
+            const bool is_max{*builtin_tok == syntax::builtin_t::MAX};
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
             if (a->getType()->isFloatingPointTy()) {
-                auto  id{is_max ? llvm::Intrinsic::maxnum : llvm::Intrinsic::minnum};
-                auto* fn{llvm::Intrinsic::getOrInsertDeclaration(
-                    llvm_module_.get(), id, {a->getType()})};
-                return builder_.CreateCall(fn, {a, b});
+                // IEEE minimumNumber/maximumNumber, spelled out so every float type lowers on
+                // every target: a NaN loses, and equal zeros are ordered by sign (-0 < +0)
+                auto* a_nan{builder_.CreateFCmpUNO(a, a)};
+                auto* b_nan{builder_.CreateFCmpUNO(b, b)};
+                auto* a_wins{is_max ? builder_.CreateFCmpOGT(a, b) : builder_.CreateFCmpOLT(a, b)};
+                auto* equal{builder_.CreateFCmpOEQ(a, b)};
+                auto* bits_ty{builder_.getIntNTy(
+                    static_cast<u32>(a->getType()->getPrimitiveSizeInBits().getFixedValue()))};
+                auto* a_negative{builder_.CreateICmpSLT(builder_.CreateBitCast(a, bits_ty),
+                                                        llvm::ConstantInt::get(bits_ty, 0))};
+                auto* zero_pick{builder_.CreateSelect(
+                    is_max ? builder_.CreateNot(a_negative) : a_negative, a, b)};
+                auto* ordered{
+                    builder_.CreateSelect(a_wins, a, builder_.CreateSelect(equal, zero_pick, b))};
+                return builder_.CreateSelect(a_nan, b, builder_.CreateSelect(b_nan, a, ordered));
             }
             auto  id{is_max ? (is_signed ? llvm::Intrinsic::smax : llvm::Intrinsic::umax)
                             : (is_signed ? llvm::Intrinsic::smin : llvm::Intrinsic::umin)};
@@ -2539,28 +2848,47 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return builder_.CreateCall(fn, {a, b});
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_TRUNC:
-        case syntax::token_type_t::BUILTIN_REM:       {
+        case syntax::builtin_t::DIV_TRUNC:
+        case syntax::builtin_t::REM:       {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
-            const bool is_rem{*builtin_tok == syntax::token_type_t::BUILTIN_REM};
+            if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
+            const bool is_rem{*builtin_tok == syntax::builtin_t::REM};
             if (is_rem) {
                 return is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b);
             }
             return is_signed ? builder_.CreateSDiv(a, b) : builder_.CreateUDiv(a, b);
         }
 
-        case syntax::token_type_t::BUILTIN_DIV_FLOOR:
-        case syntax::token_type_t::BUILTIN_MOD:       {
+        case syntax::builtin_t::DIV_EXACT: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
             if (!a || !b) { return nullptr; }
             const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
-            const bool is_mod{*builtin_tok == syntax::token_type_t::BUILTIN_MOD};
+            if (inst.is_checked) {
+                emit_division_guards(inst, a, b, is_signed);
+                auto* r{is_signed ? builder_.CreateSRem(a, b) : builder_.CreateURem(a, b)};
+                emit_arith_guard(builder_.CreateICmpNE(r, llvm::ConstantInt::get(a->getType(), 0)),
+                                 "exact division produced a remainder",
+                                 inst);
+            }
+            // Unchecked, a remainder makes the quotient poison
+            return is_signed ? builder_.CreateExactSDiv(a, b) : builder_.CreateExactUDiv(a, b);
+        }
+
+        case syntax::builtin_t::DIV_FLOOR:
+        case syntax::builtin_t::MOD:       {
+            VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
+            auto* a{lower_value(inst.operands[0])};
+            auto* b{lower_value(inst.operands[1])};
+            if (!a || !b) { return nullptr; }
+            const bool is_signed{inst.type && sema::is_signed_integer(*inst.type)};
+            if (inst.is_checked) { emit_division_guards(inst, a, b, is_signed); }
+            const bool is_mod{*builtin_tok == syntax::builtin_t::MOD};
             if (!is_signed) {
                 return is_mod ? builder_.CreateURem(a, b) : builder_.CreateUDiv(a, b);
             }
@@ -2585,10 +2913,10 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 adjust, builder_.CreateSub(q, llvm::ConstantInt::get(a->getType(), 1)), q);
         }
 
-        case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_MUL_WITH_OVERFLOW:
-        case syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW: {
+        case syntax::builtin_t::ADD_WITH_OVERFLOW:
+        case syntax::builtin_t::SUB_WITH_OVERFLOW:
+        case syntax::builtin_t::MUL_WITH_OVERFLOW:
+        case syntax::builtin_t::SHL_WITH_OVERFLOW: {
             VERIFY(inst.operands.size() >= 3, "Arity mismatch not verified during resolution");
             auto* a{lower_value(inst.operands[0])};
             auto* b{lower_value(inst.operands[1])};
@@ -2599,19 +2927,30 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
 
             llvm::Value* result{nullptr};
             llvm::Value* overflow{nullptr};
-            if (*builtin_tok == syntax::token_type_t::BUILTIN_SHL_WITH_OVERFLOW) {
-                result = builder_.CreateShl(a, b);
-                auto* back{is_signed ? builder_.CreateAShr(result, b)
-                                     : builder_.CreateLShr(result, b)};
-                overflow = builder_.CreateICmpNE(back, a);
+            if (*builtin_tok == syntax::builtin_t::SHL_WITH_OVERFLOW) {
+                // The count keeps its own type. Shifting every bit out leaves 0, which overflowed
+                // unless the value already was 0
+                const bool count_signed{inst.operands[1].type &&
+                                        sema::is_signed_integer(*inst.operands[1].type)};
+                b = fit_shift_amount(a, b, count_signed);
+                auto* zero{llvm::ConstantInt::get(a->getType(), 0)};
+                auto* in_range{builder_.CreateICmpULT(
+                    b, llvm::ConstantInt::get(a->getType(), a->getType()->getIntegerBitWidth()))};
+                auto* amount{builder_.CreateSelect(in_range, b, zero)};
+                auto* shifted{builder_.CreateShl(a, amount)};
+                auto* back{is_signed ? builder_.CreateAShr(shifted, amount)
+                                     : builder_.CreateLShr(shifted, amount)};
+                result   = builder_.CreateSelect(in_range, shifted, zero);
+                overflow = builder_.CreateSelect(
+                    in_range, builder_.CreateICmpNE(back, a), builder_.CreateICmpNE(a, zero));
             } else {
                 llvm::Intrinsic::ID id{};
                 switch (*builtin_tok) {
-                case syntax::token_type_t::BUILTIN_ADD_WITH_OVERFLOW:
+                case syntax::builtin_t::ADD_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::sadd_with_overflow
                                    : llvm::Intrinsic::uadd_with_overflow;
                     break;
-                case syntax::token_type_t::BUILTIN_SUB_WITH_OVERFLOW:
+                case syntax::builtin_t::SUB_WITH_OVERFLOW:
                     id = is_signed ? llvm::Intrinsic::ssub_with_overflow
                                    : llvm::Intrinsic::usub_with_overflow;
                     break;
@@ -2630,24 +2969,29 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return overflow;
         }
 
-        case syntax::token_type_t::BUILTIN_ATOMIC_LOAD: {
+        case syntax::builtin_t::ATOMIC_LOAD: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             if (!ptr || !inst.type) { return nullptr; }
-            auto* load{builder_.CreateLoad(types_.translate(*inst.type), ptr)};
+            auto* type{types_.translate(*inst.type)};
+            auto* load{builder_.CreateLoad(type, ptr)};
+            // Naturally aligned like `atomicrmw`/`cmpxchg`, even where the ABI aligns less
+            // (`u64` on i686 Linux), so it stays an instruction rather than a libcall
+            load->setAlignment(natural_atomic_align(*llvm_module_, type));
             load->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return load;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_STORE: {
+        case syntax::builtin_t::ATOMIC_STORE: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
             if (!ptr || !val) { return nullptr; }
             auto* store{builder_.CreateStore(val, ptr)};
+            store->setAlignment(natural_atomic_align(*llvm_module_, val->getType()));
             store->setAtomic(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }
-        case syntax::token_type_t::BUILTIN_ATOMIC_RMW: {
+        case syntax::builtin_t::ATOMIC_RMW: {
             VERIFY(inst.operands.size() >= 2, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* val{lower_value(inst.operands[1])};
@@ -2658,8 +3002,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                             llvm::MaybeAlign(),
                                             to_llvm_ordering(inst.atomic_order.value_or(0)));
         }
-        case syntax::token_type_t::BUILTIN_CMPXCHG_WEAK:
-        case syntax::token_type_t::BUILTIN_CMPXCHG_STRONG: {
+        case syntax::builtin_t::CMPXCHG_WEAK:
+        case syntax::builtin_t::CMPXCHG_STRONG: {
             VERIFY(inst.operands.size() >= 4, "Arity mismatch not verified during resolution");
             auto* ptr{lower_value(inst.operands[0])};
             auto* expected{lower_value(inst.operands[1])};
@@ -2673,13 +3017,13 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                                              llvm::MaybeAlign(),
                                              to_llvm_ordering(inst.atomic_order.value_or(0)),
                                              to_llvm_ordering(inst.atomic_fail_order.value_or(0)))};
-            cmpxchg->setWeak(*builtin_tok == syntax::token_type_t::BUILTIN_CMPXCHG_WEAK);
+            cmpxchg->setWeak(*builtin_tok == syntax::builtin_t::CMPXCHG_WEAK);
             auto* cx_result{builder_.CreateExtractValue(cmpxchg, {0U})};
             auto* success{builder_.CreateExtractValue(cmpxchg, {1U})};
             builder_.CreateStore(cx_result, out_ptr);
             return success;
         }
-        case syntax::token_type_t::BUILTIN_FENCE: {
+        case syntax::builtin_t::FENCE: {
             builder_.CreateFence(to_llvm_ordering(inst.atomic_order.value_or(0)));
             return nullptr;
         }
@@ -2737,6 +3081,14 @@ auto llvm_lowering::emit_inline_asm(const gir::instruction& inst) -> llvm::Value
 
     auto* call{builder_.CreateCall(fn_ty, inline_asm, args)};
     call->addFnAttr(llvm::Attribute::NoUnwind);
+    // Assembler errors report this cookie back, so they can name the `asm` block's location
+    if (inst.location) {
+        const auto cookie{(static_cast<u64>(inst.location->line) << 32U) |
+                          static_cast<u32>(inst.location->column)};
+        call->setMetadata(
+            "srcloc",
+            llvm::MDNode::get(context_, llvm::ConstantAsMetadata::get(builder_.getInt64(cookie))));
+    }
     if (info.is_noreturn) { call->setDoesNotReturn(); }
 
     // Store each bound output back through its target address.
@@ -2801,7 +3153,15 @@ auto llvm_lowering::emit_cond_goto(const gir::instruction& inst) -> void {
     const auto false_it{segment_blocks_.find(*inst.false_segment)};
     ASSERT(true_it != segment_blocks_.end() && false_it != segment_blocks_.end(),
            "COND_GOTO branch target blocks not found");
-    builder_.CreateCondBr(cond_val, true_it->second, false_it->second);
+    auto*           branch{builder_.CreateCondBr(cond_val, true_it->second, false_it->second)};
+    llvm::MDBuilder md{context_};
+    if (inst.branch_weights) {
+        const auto [on_true, on_false]{*inst.branch_weights};
+        branch->setMetadata(llvm::LLVMContext::MD_prof, md.createBranchWeights(on_true, on_false));
+    }
+    if (inst.unpredictable) {
+        branch->setMetadata(llvm::LLVMContext::MD_unpredictable, md.createUnpredictable());
+    }
 }
 
 auto llvm_lowering::emit_unreachable() -> void { builder_.CreateUnreachable(); }

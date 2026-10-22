@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/Target
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/Target
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -14,8 +14,10 @@ pub const base_sources = [_][]const u8{
 pub const parser_root = "llvm/lib/TargetParser";
 pub const parser_sources = [_][]const u8{
     "AArch64TargetParser.cpp",
+    "AMDGPUTargetParser.cpp",
     "ARMTargetParserCommon.cpp",
     "ARMTargetParser.cpp",
+    "AVRTargetParser.cpp",
     "CSKYTargetParser.cpp",
     "Host.cpp",
     "LoongArchTargetParser.cpp",
@@ -25,7 +27,9 @@ pub const parser_sources = [_][]const u8{
     "SubtargetFeature.cpp",
     "TargetParser.cpp",
     "Triple.cpp",
+    "TargetDataLayout.cpp",
     "X86TargetParser.cpp",
+    "XtensaTargetParser.cpp",
 };
 
 const SythesizeWithInclude = struct {
@@ -84,6 +88,8 @@ pub const parser_synthesize_pairs = [_]SythesizeWithInclude{
 const BackendAction = struct {
     name: []const u8,
     td_args: []const []const u8,
+    /// Overrides the backend's .td file
+    td_file: ?[]const u8 = null,
 };
 
 pub const AArch64 = struct {
@@ -101,6 +107,7 @@ pub const AArch64 = struct {
         "GISel/AArch64PostSelectOptimize.cpp",
         "GISel/AArch64RegisterBankInfo.cpp",
         "AArch64A57FPLoadBalancing.cpp",
+        "AArch64CodeLayoutOpt.cpp",
         "AArch64AdvSIMDScalarPass.cpp",
         "AArch64Arm64ECCallLowering.cpp",
         "AArch64AsmPrinter.cpp",
@@ -120,6 +127,7 @@ pub const AArch64 = struct {
         "AArch64CompressJumpTables.cpp",
         "AArch64ConditionOptimizer.cpp",
         "AArch64RedundantCopyElimination.cpp",
+        "AArch64RedundantCondBranchPass.cpp",
         "AArch64ISelDAGToDAG.cpp",
         "AArch64ISelLowering.cpp",
         "AArch64InstrInfo.cpp",
@@ -130,11 +138,13 @@ pub const AArch64 = struct {
         "AArch64MacroFusion.cpp",
         "AArch64MIPeepholeOpt.cpp",
         "AArch64MCInstLower.cpp",
+        "AArch64PerfectShuffle.cpp",
         "AArch64PointerAuth.cpp",
         "AArch64PostCoalescerPass.cpp",
         "AArch64PromoteConstant.cpp",
         "AArch64PBQPRegAlloc.cpp",
         "AArch64RegisterInfo.cpp",
+        "AArch64SMEAttributes.cpp",
         "AArch64SLSHardening.cpp",
         "AArch64SelectionDAGInfo.cpp",
         "AArch64SpeculationHardening.cpp",
@@ -145,10 +155,13 @@ pub const AArch64 = struct {
         "AArch64TargetMachine.cpp",
         "AArch64TargetObjectFile.cpp",
         "AArch64TargetTransformInfo.cpp",
-        "SMEABIPass.cpp",
         "SMEPeepholeOpt.cpp",
         "SVEIntrinsicOpts.cpp",
+        "SVEShuffleOpts.cpp",
+        "MachineSMEABIPass.cpp",
+        "AArch64SRLTDefineSuperRegs.cpp",
         "AArch64SIMDInstrOpt.cpp",
+        "AArch64PrologueEpilogue.cpp",
     };
 
     pub const actions = [_]BackendAction{
@@ -159,7 +172,7 @@ pub const AArch64 = struct {
         .{ .name = "AArch64GenDAGISel", .td_args = &.{"-gen-dag-isel"} },
         .{ .name = "AArch64GenDisassemblerTables", .td_args = &.{"-gen-disassembler"} },
         .{ .name = "AArch64GenFastISel", .td_args = &.{"-gen-fast-isel"} },
-        .{ .name = "AArch64GenGlobalISel", .td_args = &.{"-gen-global-isel"} },
+        .{ .name = "AArch64GenGlobalISel", .td_args = &.{ "-gen-global-isel", "-gisel-extended-llt" } },
         .{
             .name = "AArch64GenO0PreLegalizeGICombiner",
             .td_args = &.{ "-gen-global-isel-combiner", "-combiners=AArch64O0PreLegalizerCombiner" },
@@ -205,6 +218,7 @@ pub const AArch64 = struct {
         "AArch64MCAsmInfo.cpp",
         "AArch64MCCodeEmitter.cpp",
         "AArch64MCExpr.cpp",
+        "AArch64MCLFIRewriter.cpp",
         "AArch64MCTargetDesc.cpp",
         "AArch64MachObjectWriter.cpp",
         "AArch64TargetStreamer.cpp",
@@ -218,7 +232,6 @@ pub const AArch64 = struct {
     pub const utils_root = backend_root ++ "Utils";
     pub const utils_sources = [_][]const u8{
         "AArch64BaseInfo.cpp",
-        "AArch64SMEAttributes.cpp",
     };
 };
 
@@ -231,10 +244,11 @@ pub const X86 = struct {
         "X86AvoidTrailingCall.cpp",
         "X86CallFrameOptimization.cpp",
         "X86CallingConv.cpp",
+        "X86CleanupLocalDynamicTLS.cpp",
         "X86CmovConversion.cpp",
         "X86CodeGenPassBuilder.cpp",
         "X86DomainReassignment.cpp",
-        "X86DiscriminateMemOps.cpp",
+        "X86GlobalBaseReg.cpp",
         "X86LowerTileCopy.cpp",
         "X86LowerAMXType.cpp",
         "X86LowerAMXIntrinsics.cpp",
@@ -259,8 +273,9 @@ pub const X86 = struct {
         "X86ISelLoweringCall.cpp",
         "X86IndirectBranchTracking.cpp",
         "X86IndirectThunks.cpp",
+        "X86InsertVZeroUpper.cpp",
+        "X86InsertX87Wait.cpp",
         "X86InterleavedAccess.cpp",
-        "X86InsertPrefetch.cpp",
         "X86InstCombineIntrinsic.cpp",
         "X86InstrFMA3Info.cpp",
         "X86InstrFoldTables.cpp",
@@ -285,13 +300,14 @@ pub const X86 = struct {
         "X86TargetMachine.cpp",
         "X86TargetObjectFile.cpp",
         "X86TargetTransformInfo.cpp",
-        "X86VZeroUpper.cpp",
         "X86WinEHState.cpp",
         "X86WinEHUnwindV2.cpp",
-        "X86InsertWait.cpp",
+        "X86WinEHUnwindV3.cpp",
         "GISel/X86CallLowering.cpp",
         "GISel/X86InstructionSelector.cpp",
         "GISel/X86LegalizerInfo.cpp",
+        "GISel/X86PostLegalizerCombiner.cpp",
+        "GISel/X86PreLegalizerCombiner.cpp",
         "GISel/X86RegisterBankInfo.cpp",
     };
 
@@ -314,6 +330,15 @@ pub const X86 = struct {
         .{ .name = "X86GenRegisterBank", .td_args = &.{"-gen-register-bank"} },
         .{ .name = "X86GenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "X86GenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "X86GenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
+        .{
+            .name = "X86GenPreLegalizeGICombiner",
+            .td_args = &.{ "-gen-global-isel-combiner", "-combiners=X86PreLegalizerCombiner" },
+        },
+        .{
+            .name = "X86GenPostLegalizeGICombiner",
+            .td_args = &.{ "-gen-global-isel-combiner", "-combiners=X86PostLegalizerCombiner" },
+        },
         .{ .name = "X86GenFoldTables", .td_args = &.{ "-gen-x86-fold-tables", "-asmwriternum=1" } },
     };
 
@@ -338,6 +363,7 @@ pub const X86 = struct {
         "X86MCTargetDesc.cpp",
         "X86MCAsmInfo.cpp",
         "X86MCCodeEmitter.cpp",
+        "X86MCLFIRewriter.cpp",
         "X86MachObjectWriter.cpp",
         "X86MnemonicTables.cpp",
         "X86ELFObjectWriter.cpp",
@@ -419,6 +445,7 @@ pub const Arm = struct {
         .{ .name = "ARMGenRegisterBank", .td_args = &.{"-gen-register-bank"} },
         .{ .name = "ARMGenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "ARMGenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "ARMGenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
         .{ .name = "ARMGenSystemRegister", .td_args = &.{"-gen-searchable-tables"} },
     };
 
@@ -481,11 +508,14 @@ pub const RiscV = struct {
         "RISCVLoadStoreOptimizer.cpp",
         "RISCVMachineFunctionInfo.cpp",
         "RISCVMakeCompressible.cpp",
+        "RISCVMachineScheduler.cpp",
         "RISCVMergeBaseOffset.cpp",
         "RISCVMoveMerger.cpp",
         "RISCVOptWInstrs.cpp",
         "RISCVPostRAExpandPseudoInsts.cpp",
+        "RISCVPromoteConstant.cpp",
         "RISCVPushPopOptimizer.cpp",
+        "RISCVQCRelaxMarking.cpp",
         "RISCVRedundantCopyElimination.cpp",
         "RISCVRegisterInfo.cpp",
         "RISCVSelectionDAGInfo.cpp",
@@ -497,8 +527,11 @@ pub const RiscV = struct {
         "RISCVVectorPeephole.cpp",
         "RISCVVLOptimizer.cpp",
         "RISCVVMV0Elimination.cpp",
+        "RISCVVSETVLIInfoAnalysis.cpp",
         "RISCVZacasABIFix.cpp",
+        "RISCVZilsdOptimizer.cpp",
         "GISel/RISCVCallLowering.cpp",
+        "GISel/RISCVInlineAsmLowering.cpp",
         "GISel/RISCVInstructionSelector.cpp",
         "GISel/RISCVLegalizerInfo.cpp",
         "GISel/RISCVPostLegalizerCombiner.cpp",
@@ -513,7 +546,7 @@ pub const RiscV = struct {
         .{ .name = "RISCVGenCompressInstEmitter", .td_args = &.{"-gen-compress-inst-emitter"} },
         .{ .name = "RISCVGenMacroFusion", .td_args = &.{"-gen-macro-fusion-pred"} },
         .{ .name = "RISCVGenDAGISel", .td_args = &.{"-gen-dag-isel"} },
-        .{ .name = "RISCVGenDisassemblerTables", .td_args = &.{"-gen-disassembler"} },
+        .{ .name = "RISCVGenDisassemblerTables", .td_args = &.{ "-gen-disassembler", "--specialize-decoders-per-bitwidth" } },
         .{ .name = "RISCVGenInstrInfo", .td_args = &.{"-gen-instr-info"} },
         .{ .name = "RISCVGenMCCodeEmitter", .td_args = &.{"-gen-emitter"} },
         .{ .name = "RISCVGenMCPseudoLowering", .td_args = &.{"-gen-pseudo-lowering"} },
@@ -558,6 +591,7 @@ pub const RiscV = struct {
         "RISCVMCExpr.cpp",
         "RISCVMCObjectFileInfo.cpp",
         "RISCVMCTargetDesc.cpp",
+        "RISCVMachObjectWriter.cpp",
         "RISCVMatInt.cpp",
         "RISCVTargetStreamer.cpp",
         "RISCVELFStreamer.cpp",
@@ -595,7 +629,6 @@ pub const WebAssembly = struct {
         "WebAssemblyInstrInfo.cpp",
         "WebAssemblyLowerBrUnless.cpp",
         "WebAssemblyLowerEmscriptenEHSjLj.cpp",
-        "WebAssemblyLowerRefTypesIntPtrConv.cpp",
         "WebAssemblyMachineFunctionInfo.cpp",
         "WebAssemblyMCInstLower.cpp",
         "WebAssemblyMCLowerPrePass.cpp",
@@ -603,6 +636,7 @@ pub const WebAssembly = struct {
         "WebAssemblyOptimizeLiveIntervals.cpp",
         "WebAssemblyOptimizeReturned.cpp",
         "WebAssemblyPeephole.cpp",
+        "WebAssemblyReduceToAnyAllTrue.cpp",
         "WebAssemblyRefTypeMem2Local.cpp",
         "WebAssemblyRegisterInfo.cpp",
         "WebAssemblyRegColoring.cpp",
@@ -619,6 +653,12 @@ pub const WebAssembly = struct {
         "WebAssemblyTargetObjectFile.cpp",
         "WebAssemblyTargetTransformInfo.cpp",
         "WebAssemblyUtilities.cpp",
+        "GISel/WebAssemblyCallLowering.cpp",
+        "GISel/WebAssemblyInstructionSelector.cpp",
+        "GISel/WebAssemblyPostLegalizerCombiner.cpp",
+        "GISel/WebAssemblyPreLegalizerCombiner.cpp",
+        "GISel/WebAssemblyLegalizerInfo.cpp",
+        "GISel/WebAssemblyRegisterBankInfo.cpp",
     };
 
     pub const actions = [_]BackendAction{
@@ -631,6 +671,19 @@ pub const WebAssembly = struct {
         .{ .name = "WebAssemblyGenMCCodeEmitter", .td_args = &.{"-gen-emitter"} },
         .{ .name = "WebAssemblyGenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "WebAssemblyGenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "WebAssemblyGenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
+        .{ .name = "WebAssemblyGenGlobalISel", .td_args = &.{ "-gen-global-isel", "-gisel-extended-llt" }, .td_file = backend_root ++ "WebAssemblyGISel.td" },
+        .{ .name = "WebAssemblyGenRegisterBank", .td_args = &.{"-gen-register-bank"} },
+        .{
+            .name = "WebAssemblyGenPreLegalizeGICombiner",
+            .td_args = &.{ "-gen-global-isel-combiner", "-combiners=WebAssemblyPreLegalizerCombiner" },
+            .td_file = backend_root ++ "WebAssemblyGISel.td",
+        },
+        .{
+            .name = "WebAssemblyGenPostLegalizeGICombiner",
+            .td_args = &.{ "-gen-global-isel-combiner", "-combiners=WebAssemblyPostLegalizerCombiner" },
+            .td_file = backend_root ++ "WebAssemblyGISel.td",
+        },
     };
 
     pub const asm_parser_root = backend_root ++ "AsmParser";
@@ -672,6 +725,7 @@ pub const Xtensa = struct {
         "XtensaISelDAGToDAG.cpp",
         "XtensaISelLowering.cpp",
         "XtensaRegisterInfo.cpp",
+        "XtensaSelectionDAGInfo.cpp",
         "XtensaSubtarget.cpp",
         "XtensaTargetMachine.cpp",
     };
@@ -686,6 +740,7 @@ pub const Xtensa = struct {
         .{ .name = "XtensaGenMCCodeEmitter", .td_args = &.{"-gen-emitter"} },
         .{ .name = "XtensaGenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "XtensaGenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "XtensaGenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
     };
 
     pub const asm_parser_root = backend_root ++ "AsmParser";
@@ -719,7 +774,6 @@ pub const PowerPC = struct {
         "PPCBranchSelector.cpp",
         "PPCBranchCoalescing.cpp",
         "PPCCallingConv.cpp",
-        "PPCCCState.cpp",
         "PPCCTRLoops.cpp",
         "PPCCTRLoopsVerify.cpp",
         "PPCExpandAtomicPseudoInsts.cpp",
@@ -736,6 +790,7 @@ pub const PowerPC = struct {
         "PPCMachineScheduler.cpp",
         "PPCMacroFusion.cpp",
         "PPCMIPeephole.cpp",
+        "PPCPrepareIFuncsOnAIX.cpp",
         "PPCRegisterInfo.cpp",
         "PPCSelectionDAGInfo.cpp",
         "PPCSubtarget.cpp",
@@ -744,7 +799,7 @@ pub const PowerPC = struct {
         "PPCTargetTransformInfo.cpp",
         "PPCTOCRegDeps.cpp",
         "PPCTLSDynamicCall.cpp",
-        "PPCVSXCopy.cpp",
+        "PPCVSXWACCCopy.cpp",
         "PPCReduceCRLogicals.cpp",
         "PPCVSXFMAMutate.cpp",
         "PPCVSXSwapRemoval.cpp",
@@ -767,6 +822,7 @@ pub const PowerPC = struct {
         .{ .name = "PPCGenMCCodeEmitter", .td_args = &.{"-gen-emitter"} },
         .{ .name = "PPCGenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "PPCGenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "PPCGenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
         .{ .name = "PPCGenExegesis", .td_args = &.{"-gen-exegesis"} },
         .{ .name = "PPCGenRegisterBank", .td_args = &.{"-gen-register-bank"} },
         .{ .name = "PPCGenGlobalISel", .td_args = &.{"-gen-global-isel"} },
@@ -812,8 +868,10 @@ pub const LoongArch = struct {
         "LoongArchMergeBaseOffset.cpp",
         "LoongArchOptWInstrs.cpp",
         "LoongArchRegisterInfo.cpp",
+        "LoongArchSelectionDAGInfo.cpp",
         "LoongArchSubtarget.cpp",
         "LoongArchTargetMachine.cpp",
+        "LoongArchTargetObjectFile.cpp",
         "LoongArchTargetTransformInfo.cpp",
     };
 
@@ -827,6 +885,7 @@ pub const LoongArch = struct {
         .{ .name = "LoongArchGenMCCodeEmitter", .td_args = &.{"-gen-emitter"} },
         .{ .name = "LoongArchGenRegisterInfo", .td_args = &.{"-gen-register-info"} },
         .{ .name = "LoongArchGenSubtargetInfo", .td_args = &.{"-gen-subtarget"} },
+        .{ .name = "LoongArchGenSDNodeInfo", .td_args = &.{"-gen-sd-node-info"} },
     };
 
     pub const asm_parser_root = backend_root ++ "AsmParser";

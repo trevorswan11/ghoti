@@ -1,0 +1,18 @@
+//! The running process: how a program reports how it went.
+
+/// What a value means as the process's exit code, so `main` can return it. Every sized integer
+/// implements it; see `builtin.ExitCode`.
+pub const ExitCode = builtin.ExitCode;
+
+test {
+    let a: i32 = 7;
+    let b: u8 = 250;
+    let c: i64 = 0x1_0000_0003;
+    let d: u32 = 0xFFFF_FFFF;
+    @expect(a.to_exit_code() == 7);
+    @expect(b.to_exit_code() == 250);
+    @expect(c.to_exit_code() == 3);
+    @expect(d.to_exit_code() == -1);
+    @expect(@implements(i16, ExitCode));
+    @expect(!@implements(bool, ExitCode));
+}

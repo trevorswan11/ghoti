@@ -1,3 +1,4 @@
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -24,8 +25,8 @@ namespace {
 constexpr std::string_view main_gh{R"(
 import std;
 
-pub const main := fn(args: [][:0]u8): i32 {
-    const message := "Hello, world!";
+pub const main = fn(args: [][:0]u8): i32 {
+    let message = "Hello, world!";
     std.io.println(message);
     return 0;
 };
@@ -36,18 +37,18 @@ pub import "io.gh" as io;
 )"};
 
 constexpr std::string_view io_gh{R"(
-pub const println := fn(str: []u8): void {};
+pub const println = fn(str: []u8): void {};
 )"};
 
 // The table index should point to the table where the module was first declared
 [[nodiscard]] auto check_inner_module(helpers::sema_test_context& ctx,
-                                      mod::module&                enclosing_module,
+                                      mod::module_t&              enclosing_module,
                                       std::string_view            name,
                                       usize                       table_idx,
                                       bool                        is_public)
-    -> std::pair<mod::module&, const sema::type&> {
+    -> std::pair<mod::module_t&, const sema::type&> {
     const auto [sym, sym_data, node_data, type, type_data]{
-        ctx.get_full_sym_info<syms::node_t, ast::import_stmt, types::module>(
+        ctx.get_full_sym_info<syms::node_t, ast::import_stmt, types::module_t>(
             name, table_idx, enclosing_module)};
 
     CHECK(sym.get_kind_opt() == sema::symbol_kind::MODULE);
@@ -68,7 +69,7 @@ TEST_CASE("Full sema pipeline") {
                                    mock_file{.path = "io.gh", .source = io_gh})};
     ctx->verify_registry_resolved();
 
-    REQUIRE(ctx->analyzer.get_registry().size() == 44);
+    REQUIRE(ctx->analyzer.get_registry().size() == 81);
     auto& root_module{ctx->root_mod};
     CHECK(root_module.root_table_idx == 0);
     auto [std_module, std_module_type]{check_inner_module(*ctx, root_module, "std", 0, false)};
@@ -104,7 +105,7 @@ TEST_CASE("Full sema pipeline") {
             CHECK(param_type == u8_slice_slice_type);
 
             const auto& args_param_explicit_type =
-                UNWRAP(root_module.get_sema_type_opt(param_sym_data.explicit_type));
+                UNWRAP(root_module.get_sema_type_opt(UNWRAP(param_sym_data.explicit_type)));
             CHECK(args_param_explicit_type == u8_slice_slice_type);
             CHECK(*main_type_data.params[0] == u8_slice_slice_type);
         }
@@ -127,7 +128,8 @@ TEST_CASE("Full sema pipeline") {
             CHECK(msg_type == ctx->get_type(sema::type_kind::ARRAY, true, msg_size, u8_type));
 
             const auto& call_expr{helpers::lookup_expression<ast::call_expr>(
-                UNWRAP(root_module.ast.get_as_opt<ast::block_stmt>(fn_expr.body)), root_module)};
+                UNWRAP(root_module.ast.get_as_opt<ast::block_stmt>(UNWRAP(fn_expr.body))),
+                root_module)};
 
             CHECK(call_expr.arguments.size() == 1);
             const auto arg{UNWRAP(call_expr.arguments[0].as_opt<ast::expr_handle>())};
@@ -179,7 +181,7 @@ TEST_CASE("Full sema pipeline") {
             CHECK(param_type == u8_slice_type);
 
             const auto& str_param_explicit_type =
-                UNWRAP(io_module.get_sema_type_opt(param_sym_data.explicit_type));
+                UNWRAP(io_module.get_sema_type_opt(UNWRAP(param_sym_data.explicit_type)));
             CHECK(str_param_explicit_type == u8_slice_type);
             CHECK(*println_type_data.params[0] == u8_slice_type);
         }
@@ -191,6 +193,26 @@ TEST_CASE("Full sema pipeline") {
             CHECK(return_type == void_type);
         }
     }
+}
+
+TEST_CASE("A root that reaches a failed module through an import cycle is not lowered") {
+    std::stringstream errors;
+    auto              ctx{helpers::analyze(
+        "a.gh",
+        errors,
+        "import \"lib.gh\" as lib;\npub const a = fn(): i32 { return lib.b.two(); };\n",
+        mock_file{.path   = "lib.gh",
+                  .source = "pub import \"b.gh\" as b;\npub import \"bad.gh\" as bad;\n"},
+        mock_file{.path = "b.gh",
+                  .source =
+                      "import \"lib.gh\" as lib;\npub const two = fn(): i32 { return 2; };\n"},
+        mock_file{.path = "bad.gh", .source = "pub const bad: i32 = undeclared;\n"})};
+    CHECK(ctx->root_mod.is_poisoned());
+
+    const auto b_module{UNWRAP(ctx->manager.try_get_file_module("b.gh"))};
+    REQUIRE_FALSE(b_module->is_poisoned());
+    const auto gir{UNWRAP(ctx->analyzer.analyze("b.gh"))};
+    CHECK(gir.get_functions().empty());
 }
 
 } // namespace ghoti::tests

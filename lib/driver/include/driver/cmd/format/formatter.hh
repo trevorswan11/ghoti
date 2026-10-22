@@ -18,12 +18,16 @@ namespace ghoti::cmd {
 
 class formatter final : public command {
   public:
+    static constexpr auto KIND{command_kind::FORMAT};
+
+  public:
     explicit formatter(format::options opts,
                        std::ostream&   error_stream = std::cerr,
                        std::ostream&   out_stream   = std::cout)
         : command{error_stream}, out_stream_{out_stream}, opts_{std::move(opts)} {}
 
     [[nodiscard]] auto execute() -> stdx::result<void, clap::error> override;
+    [[nodiscard]] auto get_kind() const noexcept -> command_kind override { return KIND; }
 
     MAKE_GETTER(opts, const format::options&);
 

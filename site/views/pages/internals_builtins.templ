@@ -21,7 +21,22 @@ templ InternalsBuiltinsPage() {
 	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
 	<h3>{ "@as" }</h3>
 	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
-	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>.</p>
+	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> { "for" } <code>bool</code>, <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> { "for" } enums, and <code>{ "@intFromFloat" }</code> / <code>{ "@floatFromInt" }</code> { "for" } float &harr; integer conversions that could lose information, and <code>{ "@floatCast" }</code> to narrow a float. An integer whose every value the float represents exactly (e.g. <code>i32</code> to <code>f64</code>) still converts with <code>{ "@as" }</code>, or implicitly.</p>
+	<h3>{ "@intFromFloat" }</h3>
+	<pre><code class="language-ghoti">{ `@intFromFloat(T: type, expression: auto): T` }</code></pre>
+	<p>Converts a float to the integer type <code>T</code>, truncating toward zero. <code>T</code> can be omitted when inferable from context. A compile-time-known operand that doesn't fit <code>T</code> is a compile error; at runtime, under runtime safety, an out-of-range or NaN operand panics.</p>
+	<h3>{ "@floatFromInt" }</h3>
+	<pre><code class="language-ghoti">{ `@floatFromInt(T: type, expression: auto): T` }</code></pre>
+	<p>Converts an integer to the float type <code>T</code>, rounding to the nearest representable value when it isn't exact (e.g. <code>16777217</code> becomes <code>16777216.0</code> as an <code>f32</code>). <code>T</code> can be omitted when inferable from context.</p>
+	<h3>{ "@floatCast" }</h3>
+	<pre><code class="language-ghoti">{ `@floatCast(T: type, expression: auto): T` }</code></pre>
+	<p>Converts a float to the float type <code>T</code>, whether that narrows, widens, or keeps the type, rounding to the nearest representable value. <code>T</code> can be omitted when inferable from context. A compile-time-known finite operand that overflows <code>T</code> is a compile error; at runtime the conversion follows IEEE 754 and an overflow rounds to infinity, with no runtime safety check. An integer operand is rejected; use <code>{ "@floatFromInt" }</code>.</p>
+	<h3>{ "@backingInt" }</h3>
+	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
+	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>
+	<h3>{ "@fromBackingInt" }</h3>
+	<pre><code class="language-ghoti">{ `@fromBackingInt(T: type, expression: BackingInt(T)): T` }</code></pre>
+	<p>The inverse of <code>{ "@backingInt" }</code> { "for" } an enum, <code>packed struct</code>, or <code>packed union</code> <code>T</code>, which can be omitted when inferable from context (<code>{ "const c: Color = @fromBackingInt(n);" }</code>). <code>expression</code> must be implicitly convertible to <code>T</code>'s backing integer. Under runtime safety, a value that names no variant of an exhaustive enum panics; a non-exhaustive enum (<code>_</code>) accepts every value. A tagged union can't be built this way because its payload would be undefined.</p>
 	<h3>{ "@dynCast" }</h3>
 	<pre><code class="language-ghoti">{ `@dynCast(T: type, expression: auto): T` }</code></pre>
 	<p><strong>Unsafe.</strong> Recovers a concrete pointer or reference from a <code>&amp;dyn I</code> / <code>^dyn I</code> fat pointer: <code>T</code> must be a pointer/reference type and <code>expression</code> a <code>&amp;dyn</code> / <code>^dyn</code>. It reinterprets the erased <code>data</code> pointer with <strong>no runtime type check</strong>. If <code>expression</code> does not actually point at the underlying type of <code>T</code>, behavior is undefined. The caller acknowledges the risk.</p>
@@ -32,9 +47,6 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@ptrFromInt" }</h3>
 	<pre><code class="language-ghoti">{ `@ptrFromInt(T: type, expression: usize): T` }</code></pre>
 	<p>Returns a pointer type <code>T</code> at the memory address represented by the <code>usize</code> integer. <code>T</code> must be a pointer type.</p>
-	<h3>{ "@ptrFromArray" }</h3>
-	<pre><code class="language-ghoti">{ `@ptrFromArray(expression: auto): auto` }</code></pre>
-	<p>Returns a pointer to the first element of the array-yielding expression.</p>
 	<h3>{ "@sliceFromPtr" }</h3>
 	<pre><code class="language-ghoti">{ `@sliceFromPtr(expression: auto, len: usize): auto` }</code></pre>
 	<p>Constructs a slice from the pointer-yielding expression and length.</p>
@@ -47,14 +59,15 @@ templ InternalsBuiltinsPage() {
 		undefined if <code>ptr</code> does not actually point at that field of a live <code>Parent</code>.
 	</p>
 	<h2>Introspection &amp; Metadata</h2>
+	<p><code>{ "@alignOf" }</code>, <code>{ "@sizeOf" }</code>, and <code>{ "@bitSizeOf" }</code> return a <code>comptime_int</code>, so the result takes the integer type its use site asks for, like a literal: <code>{ "const n: u8 = @sizeOf(u32);" }</code> and <code>{ "i + @sizeOf(T)" }</code> with an <code>i32</code> <code>i</code> need no cast.</p>
 	<h3>{ "@alignOf" }</h3>
-	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@alignOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the alignment of the provided expression in bytes.</p>
 	<h3>{ "@sizeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@sizeOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the size of the provided expression in bytes (its ABI allocation size, so a 9-bit <code>u9</code> reports <code>2</code>).</p>
 	<h3>{ "@bitSizeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@bitSizeOf(expression: auto): usize` }</code></pre>
+	<pre><code class="language-ghoti">{ `@bitSizeOf(expression: auto): comptime_int` }</code></pre>
 	<p>Computes the exact bit width of the provided type or value, which is distinct from <code>{ "@sizeOf" }</code>'s ABI byte size:</p>
 	<ul>
 		<li><code>iN</code> / <code>uN</code> &rarr; <code>N</code></li>
@@ -64,9 +77,9 @@ templ InternalsBuiltinsPage() {
 		<li>a bit-packed <code>packed struct</code> / <code>packed union</code> &rarr; the backing-integer width</li>
 		<li>anything else &rarr; <code>{ "@sizeOf" }(T) * 8</code></li>
 	</ul>
-	<h3>{ "@typeOf" }</h3>
-	<pre><code class="language-ghoti">{ `@typeOf(expression: auto): type` }</code></pre>
-	<p>Returns the type of the provided expression.</p>
+	<h3>{ "@TypeOf" }</h3>
+	<pre><code class="language-ghoti">{ `@TypeOf(expressions: auto...): type` }</code></pre>
+	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> { "for" } <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
 	<h3>{ "@this" }</h3>
 	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
 	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>
@@ -81,7 +94,7 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@implements" }</h3>
 	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, I: type): bool` }</code></pre>
 	<p>
-		A <code>constexpr</code> is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@typeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
+		A compile-time is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
 	</p>
 	<h2>Target Information</h2>
 	<h3>{ "@targetOs" }</h3>
@@ -121,17 +134,22 @@ templ InternalsBuiltinsPage() {
 	<pre><code class="language-ghoti">{ `@mulAdd(T: type, a: T, b: T, c: T): T` }</code></pre>
 	<p>Fused multiply-add, similar to (a * b) + c, except only rounds once, and is thus more accurate. T must be a floating point type.</p>
 	<h3>{ "@clz" }</h3>
-	<pre><code class="language-ghoti">{ `@clz(expression: auto): usize` }</code></pre>
-	<p>Count the number of leading zeros in the expression's bit representation.</p>
+	<pre><code class="language-ghoti">{ `@clz(expression: auto): uN` }</code></pre>
+	<p>Count the number of leading zeros in the expression's bit representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
 	<h3>{ "@ctz" }</h3>
-	<pre><code class="language-ghoti">{ `@ctz(expression: auto): usize` }</code></pre>
-	<p>Count the number of trailing zeros in the expression's bit representation.</p>
+	<pre><code class="language-ghoti">{ `@ctz(expression: auto): uN` }</code></pre>
+	<p>Count the number of trailing zeros in the expression's bit representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
 	<h3>{ "@popCount" }</h3>
-	<pre><code class="language-ghoti">{ `@popCount(expression: auto): usize` }</code></pre>
-	<p>Computes the number of set bits in the expression's binary representation.</p>
+	<pre><code class="language-ghoti">{ `@popCount(expression: auto): uN` }</code></pre>
+	<p>Computes the number of set bits in the expression's binary representation. The result is the narrowest unsigned integer that holds the operand's bit width: <code>u4</code> { "for" } an 8-bit operand, <code>u7</code> { "for" } a 64-bit one. A zero operand gives the full width.</p>
+	<h3>{ "@sqrt, @sin, @cos, @tan, @exp, @exp2, @log, @log2, @log10, @floor, @ceil" }</h3>
+	<pre><code class="language-ghoti">{ `@sin(x: T): T` }</code></pre>
+	<p>Square root, the trigonometric functions (in radians), <code>e^x</code>, <code>2^x</code>, the natural, base-2, and base-10 logarithms, and rounding down or up to a whole number. <code>x</code> is a float of any type and the result has the same type; an integer is rejected, so convert it with <code>{ "@floatFromInt" }</code> first. An untyped constant takes the float type its context asks for, or stays an untyped float.</p>
+	<p>At compile time every result is <strong>correctly rounded</strong>: the exact mathematical value rounded once to the nearest value of the result type, whatever the argument's size (<code>{ "@sin" }(1e300)</code> reduces the argument exactly). An untyped result that later lands in a narrower type is computed again in that type rather than rounded twice. Special values follow IEEE 754: <code>{ "@log" }(0.0)</code> is negative infinity, <code>{ "@sqrt" }(-1.0)</code> is NaN, and a finite <code>{ "@exp" }</code> result past the type's range is a compile error.</p>
+	<p>At runtime <code>{ "@sqrt" }</code>, <code>{ "@floor" }</code>, and <code>{ "@ceil" }</code> use the target's instructions where it has them. The others call the target's math routines from compiler_rt (<code>sinf</code>, <code>sin</code>, ...; <code>f16</code> goes through the <code>f32</code> routine), so their accuracy is whatever those routines provide.</p>
 	<h3>{ "@abs" }</h3>
-	<pre><code class="language-ghoti">{ `@abs(expression: auto): @typeOf(expression)` }</code></pre>
-	<p>Computes the absolute value of the passed expression.</p>
+	<pre><code class="language-ghoti">{ `@abs(expression: auto): @TypeOf(expression)` }</code></pre>
+	<p>Computes the absolute value of the passed expression. For a signed integer, <code>{ "@abs" }(MIN)</code> has no result: it is a compile error when folded and a panic under runtime safety.</p>
 	<h3>{ "@min / @max" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -139,33 +157,34 @@ templ InternalsBuiltinsPage() {
 @max(a: T, b: T): T` }
 		</code>
 	</pre>
-	<p>Smallest / largest of two operands of the same integer or floating-point type.</p>
-	<h3>{ "@divTrunc / @divFloor / @rem / @mod" }</h3>
+	<p>Smallest / largest of two integer or floating-point operands, which are converted to their <a href="/doc/syntax/types">peer type</a> <code>T</code> first. For floats these are IEEE <code>minimumNumber</code> / <code>maximumNumber</code>: a NaN operand loses to a number, and <code>-0.0</code> is less than <code>+0.0</code>.</p>
+	<h3>{ "@divTrunc / @divFloor / @divExact / @rem / @mod" }</h3>
 	<pre>
 		<code class="language-ghoti">
 			{ `@divTrunc(a: T, b: T): T  // integer division truncated toward zero
 @divFloor(a: T, b: T): T  // integer division rounded toward negative infinity
+@divExact(a: T, b: T): T  // integer division the caller guarantees leaves no remainder
 @rem(a: T, b: T): T       // remainder; sign follows the dividend
 @mod(a: T, b: T): T       // modulo; sign follows the divisor` }
 		</code>
 	</pre>
-	<p>Integer-only. A zero divisor in a compile-time constant expression is an error.</p>
+	<p>Integer-only; the operands are converted to their peer type <code>T</code> first. A zero divisor, or <code>MIN</code> divided by <code>-1</code> { "for" } a signed type, is a compile error when folded and a panic under runtime safety. So is a nonzero remainder from <code>{ "@divExact" }</code>; with safety off it is undefined behavior, which lets the optimizer assume the division is exact.</p>
 	<h3>{ "@addWithOverflow / @subWithOverflow / @mulWithOverflow / @shlWithOverflow" }</h3>
 	<pre><code class="language-ghoti">{ `@addWithOverflow(a: T, b: T, result: &mut T): bool` }</code></pre>
-	<p>Integer-only. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>.</p>
+	<p>Integer-only. The operands are converted to their peer type <code>T</code>, which is what <code>result</code> must point at; a shift's count keeps its own type. Writes the wrapped result through <code>result</code> and returns whether the operation overflowed. For the same wrapped value without the overflow flag, use the wrapping operators <code>+% -% *% &lt;&lt;%</code> (see the <a href="/doc/syntax/types">types</a> page). Unlike the plain operators, they never trap under <code>--runtime-safety</code>. To clamp to the type's range on overflow instead, use the saturating operators <code>+| -| *| &lt;&lt;|</code>.</p>
 	<h2>Atomics</h2>
 	<p>
-		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums that must be referenced through the <code>{ "builtin" }</code> module; e.g. <code>{ "builtin::MemoryOrder.seq_cst" }</code>, <code>{ "builtin::AtomicRmwOp.add" }</code> &mdash; and given as a compile-time constant; a runtime value is a compile error.
+		The order and (for <code>{ "@atomicRmw" }</code>) op arguments below are <code>{ "MemoryOrder" }</code> / <code>{ "AtomicRmwOp" }</code> members, both compiler-provided enums in the <code>{ "builtin" }</code> module. The argument already has that type, so a bare variant names it: <code>{ ".seq_cst" }</code> and <code>{ ".add" }</code> mean <code>{ "builtin.MemoryOrder.seq_cst" }</code> and <code>{ "builtin.AtomicRmwOp.add" }</code>, the same way <code>{ "@Int(.{ ... })" }</code> takes an implicit <code>{ "IntInfo" }</code>. Either way the argument must be a compile-time constant; a runtime value is a compile error.
 	</p>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub const MemoryOrder := enum { relaxed, acquire, release, acq_rel, seq_cst };
-pub const AtomicRmwOp := enum {
+			{ `pub const MemoryOrder = enum { relaxed, acquire, release, acq_rel, seq_cst };
+pub const AtomicRmwOp = enum {
     xchg, add, sub, band, nand, bor, bxor, max, min, umax, umin,
 };` }
 		</code>
 	</pre>
-	<p><code>{ "ptr" }</code> is the atomic memory location itself (e.g. <code>{ "^mut i32" }</code>), evaluated as a normal expression &mdash; no <code>{ "&" }</code> needed. Every operand's width must be a native atomic width for the target: 8/16/32/64 bits always, 128 only on x86_64/aarch64.</p>
+	<p><code>{ "ptr" }</code> is the atomic memory location itself (e.g. <code>{ "^mut i32" }</code>), evaluated as a normal expression &mdash; no <code>{ "&" }</code> needed. Every operand's width must be a native atomic width for the target: 8/16/32/64 bits always, 128 only on x86_64/aarch64. <code>{ "ptr" }</code> must be aligned to the operand's size, even where the ABI aligns that type less (a <code>{ "u64" }</code> on i686 Linux). A target with no instruction for a width (64 bits on riscv32 or thumb) calls compiler_rt's <code>{ "__atomic_*" }</code> routines instead.</p>
 	<h3>{ "@atomicLoad / @atomicStore" }</h3>
 	<pre>
 		<code class="language-ghoti">
@@ -207,10 +226,28 @@ pub const AtomicRmwOp := enum {
 	<p>Explicit alignment modifier specifier applied to struct fields or types.</p>
 	<h3>{ "@setEvalRecursionLimit" }</h3>
 	<pre><code class="language-ghoti">{ `@setEvalRecursionLimit(limit: usize): void` }</code></pre>
-	<p>Sets the maximum recursion depth limit for compile-time (<code>constexpr</code>) expression evaluation.</p>
-	<h3>{ "@setMainSymbol" }</h3>
-	<pre><code class="language-ghoti">{ `@setMainSymbol(symbol_name: [:0]u8): void` }</code></pre>
-	<p>Overrides the default entry point symbol name used by the compiler when linking the executable.</p>
+	<p>Sets the maximum recursion depth limit for compile-time expression evaluation.</p>
+	<h3>{ "@export" }</h3>
+	<pre><code class="language-ghoti">{ `@export(function: auto, options: builtin.ExportOptions): void` }</code></pre>
+	<p>Defines <code>function</code>, a function declared with <code>const</code>, under the symbol <code>options.name</code>. <code>options.linkage</code> is <code>.strong</code> (the default) or <code>.weak</code>, which lets another definition of the symbol replace this one at link time, and <code>options.visibility</code> is <code>.default</code>, <code>.hidden</code>, or <code>.protected</code> (ELF only), as for the <code>{ `@[visibility(...)]` }</code> attribute.</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `const add = fn(a: f128, b: f128): f128 { ... };
+@export(add, .{ .name = "__addtf3", .linkage = .weak, .visibility = .hidden });
+@cfg(arch == .arm) { @export(add, .{ .name = "__aeabi_addtf3", .linkage = .weak, .visibility = .hidden }); }` }
+		</code>
+	</pre>
+	<p>Export one function as many times as it needs names; each extra export is an alias of the same code. Every symbol name can be exported once, a generic function can't be exported (export a wrapper around one instantiation), and a declaration written <code>{ `export("...")` }</code> already has its symbol, so it can't also use <code>{ "@export" }</code>. An exported function is kept even when nothing in the program calls it, in any module.</p>
+	<p><code>{ "@export" }</code> also takes a function passed to a <code>comptime</code> parameter, so one helper can fix the options for a whole library:</p>
+	<pre>
+		<code class="language-ghoti">
+			{ `pub const symbol = fn(comptime f: auto, comptime name: [:0]u8): void {
+    @export(f, .{ .name = name, .linkage = .weak, .visibility = .hidden });
+};
+symbol(addtf3, "__addtf3");` }
+		</code>
+	</pre>
+	<p>Exporting a function as <code>main</code> makes it the program's entry point instead of <code>{ `pub const main` }</code>; it needn't be <code>pub</code>. Only the root module can do this, and not while it also declares <code>main</code>.</p>
 	<h2>Control Flow</h2>
 	<h3>{ "@panic" }</h3>
 	<pre><code class="language-ghoti">{ `@panic(message: [:0]u8): noreturn` }</code></pre>

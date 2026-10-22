@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -13,13 +14,17 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/diagnostic.hh"
 
 namespace ghoti {
 
 namespace syntax { class parser; } // namespace syntax
 
 namespace ast {
+
+class AST;
 
 struct array_expr {
     stdx::option<expr_handle> size;
@@ -29,10 +34,25 @@ struct array_expr {
     bool                      items_force_break{false}; // trailing comma before `}`
     explicit_type_id          item_explicit_type;
     std::vector<expr_handle>  items;
+    bool                      poly_elements{false}; // `[]mut? T`: the function's `mut?`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+// Mirrors `builtin.CallModifier`
+enum class call_modifier : u8 {
+    AUTO,
+    NEVER_TAIL,
+    NEVER_INLINE,
+    ALWAYS_TAIL,
+    ALWAYS_INLINE,
+    COMPILE_TIME,
+};
+
+[[nodiscard]] auto call_modifier_from_name(std::string_view name) noexcept
+    -> stdx::option<call_modifier>;
+[[nodiscard]] auto call_modifier_name(call_modifier modifier) noexcept -> std::string_view;
 
 struct call_expr {
     using argument = stdx::variant<expr_handle, explicit_type_id>;
@@ -42,6 +62,8 @@ struct call_expr {
     bool                  args_force_break{false}; // trailing comma before `)`
     // Parallel to `arguments`: true where that argument was written `expr...` (pack expansion).
     std::vector<bool> pack_expansions{};
+    // `@call(modifier, f, args...)` parses as a call of `f` carrying the modifier
+    stdx::option<expr_handle> modifier{};
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle function)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -88,16 +110,20 @@ struct asm_expr {
 struct do_while_loop_expr {
     block_handle block;
     expr_handle  condition;
+    bool         is_unrolled{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
 // A `@cfg(...) ...` group inside an aggregate  body
 template <typename Item> struct cfg_item_group {
     struct arm {
-        stdx::option<expr_handle> predicate; // unset on the trailing bare `else`
-        std::vector<Item>         items;
+        stdx::option<expr_handle>     predicate; // unset on the trailing bare `else`
+        std::vector<Item>             items;
+        stdx::option<source_location> close; // the `}` of a braced body, for its comments
     };
 
     usize            position{0}; // index in the aggregate's item list this group expands at
@@ -125,21 +151,27 @@ struct enum_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// `|v|`, `|&mut v|`, or `|_|`: a name a construct binds the value it hands to its body
+struct capture_t {
+    // Only meaningful when `capture` holds a real (non-discarded) identifier
+    type_modifier            modifier;
+    discardable_ident_handle payload;
+};
+
 struct for_loop_expr {
-    struct capture {
-        type_modifier            modifier;
-        discardable_ident_handle payload;
-    };
+    using capture_t = ast::capture_t;
 
     std::vector<expr_handle>  iterables;
-    std::vector<capture>      captures;
+    std::vector<capture_t>    captures;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
     bool                      iterables_force_break{false}; // trailing comma before `)`
     bool                      captures_force_break{false};  // trailing comma before `|`
-    bool                      is_constexpr{false};          // `for constexpr (...)`
+    bool                      is_unrolled{false};           // `unroll for (...)`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
@@ -154,12 +186,12 @@ struct self_parameter {
 
 template <> struct stdx::nullable<ghoti::ast::self_parameter> {
     [[nodiscard]] static constexpr auto invalid() noexcept -> ghoti::ast::self_parameter {
-        return {.modifier = {}, .name = ghoti::ast::identifier_handle::make_invalid()};
+        return {.modifier = {}, .name = stdx::nullable<ghoti::ast::identifier_handle>::invalid()};
     }
 
     [[nodiscard]] static constexpr auto is_valid(const ghoti::ast::self_parameter& self) noexcept
         -> bool {
-        return self.name.is_valid();
+        return stdx::nullable<ghoti::ast::identifier_handle>::is_valid(self.name);
     }
 };
 
@@ -174,10 +206,28 @@ namespace ghoti::ast {
 
 struct function_expr {
     struct parameter {
-        discardable_ident_handle name;
-        explicit_type_id         explicit_type;
-        bool                     is_constexpr{false};
-        bool                     is_pack{false}; // `rest...` / `rest: impl I...`
+        discardable_ident_handle       name;
+        stdx::option<explicit_type_id> explicit_type;
+        bool                           is_comptime{false};
+        bool                           is_pack{false}; // `rest...` / `rest: impl I...`
+        // `is_comptime` may also be inferred
+        bool is_comptime_written{false};
+        // Where the body reads an inferred `comptime` param at compile time
+        stdx::option<ast::node_id> comptime_read{};
+        bool                       comptime_read_in_const{false};
+        // The body assigns to the parameter or takes its address
+        bool                      is_written{false};
+        stdx::option<expr_handle> default_value{};
+
+        // Whether the parameter is annotated `type`, as in `comptime T: type`
+        [[nodiscard]] constexpr auto spells_type() const noexcept -> bool {
+            return explicit_type &&
+                   explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE;
+        }
+
+        [[nodiscard]] constexpr auto takes_mut_ref() const noexcept -> bool {
+            return explicit_type && explicit_type->get_modifier().is_mutable_ref();
+        }
     };
 
     // The parameter's `auto` type must infer to a type that implements every interface in
@@ -190,30 +240,37 @@ struct function_expr {
     stdx::option<self_parameter> self;
     std::vector<parameter>       parameters;
     explicit_type_id             explicit_return_type;
-    block_handle                 body;
+    stdx::option<block_handle>   body;
     bool                         variadic;
     bool                         is_move{false};
-    bool                         is_naked{false};
     bool                         is_type_expr{false};
     bool                         params_force_break{false};
     calling_convention           conv{calling_convention::C};
+    bool                         has_explicit_conv{false};
+    bool                         is_extern{false}; // `extern fn(...): R` bodyless type value
     std::vector<impl_bound>      impl_bounds{};
+    stdx::option<attribute_list> attributes{};
+    stdx::option<node_id>        declaring_decl{}; // set when this literal initializes a decl
 
     // Parse the function as a value. Meant for the parser LUT
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
-        return parse(parser, false, false);
+        return parse(parser, false);
     }
-    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_naked)
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_move, bool is_extern = false)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
 // Consumes a leading `move` modifier before delegating to function_expr::parse
+// An identifier used as an expression; records compile-time reads for `comptime` inference
+[[nodiscard]] auto parse_identifier_reference(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
 [[nodiscard]] auto parse_move_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
-// Consumes a leading `naked` modifier before delegating to function_expr::parse
-[[nodiscard]] auto parse_naked_function_expr(syntax::parser& parser)
+// `@[...] fn(...) {...}`: an attribute list applied to a function literal in expression position
+[[nodiscard]] auto parse_attributed_function_expr(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
 struct grouped_expr {
@@ -229,10 +286,17 @@ struct identifier_expr {
 };
 
 struct if_expr {
-    bool                      constexpr_condition;
-    expr_handle               condition;
+    bool                      comptime_condition;
+    stdx::option<expr_handle> condition; // absent only for `if comptime { ... }`
     stmt_handle               consequence;
     stdx::option<stmt_handle> alternate;
+    stdx::option<capture_t>   payload_capture{}; // `if (x) |v|`: an unwrapped payload
+    stdx::option<capture_t>   else_capture{};    // `else |e|`: the residual
+
+    // `if comptime a else b`: `a` under compile-time evaluation, `b` at runtime
+    [[nodiscard]] auto is_evaluation_context_branch() const noexcept -> bool {
+        return comptime_condition && !condition;
+    }
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
@@ -248,17 +312,22 @@ struct index_expr {
 
 struct infinite_loop_expr {
     block_handle block;
+    bool         is_unrolled{false};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
-// `@cfgValue(<pred>)` -> constexpr bool, or the guard form
-// `@cfgValue(<pred> => <val>, ..., _ => <val>)` -> constexpr T
+// `@cfgValue(<pred>)` -> comptime bool, or the guard form
+// `@cfgValue(<pred>, ... => <val>, ..., _ => <val>)` -> comptime T
 struct cfg_value_expr {
+    // Taken when any of its predicates holds
     struct guard {
-        expr_handle predicate;
-        expr_handle value;
+        std::vector<expr_handle> predicates;
+        expr_handle              value;
+        bool                     force_break{false}; // trailing comma before `=>`
     };
 
     stdx::option<expr_handle> predicate;
@@ -326,26 +395,32 @@ struct initializer_expr {
 };
 
 struct label_expr {
-    identifier_handle   name;
-    labeled_node_handle body;
+    stdx::option<identifier_handle> name;
+    labeled_node_handle             body;
 
     [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle name)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 
-  private:
+    [[nodiscard]] auto is_comptime(const AST& ast) const noexcept -> bool;
+
     [[nodiscard]] static auto deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         -> stdx::result<labeled_node_handle, syntax::diagnostic>;
 };
 
+[[nodiscard]] auto parse_comptime_expr(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
+// `unroll for`/`while`/`do`/`loop`
+[[nodiscard]] auto parse_unrolled_loop(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic>;
+
 struct match_expr {
     struct arm {
         // One arm may list several patterns (`a, b, 1..8 => ...`) or a single discard
-        std::vector<match_pattern_handle>      patterns;
-        stdx::option<discardable_ident_handle> capture;
-        // Only meaningful when `capture` holds a real (non-discarded) identifier
-        type_modifier modifier;
-        stmt_handle   dispatch;
-        bool          force_break{false};
+        std::vector<match_pattern_handle> patterns;
+        stdx::option<capture_t>           capture;
+        stmt_handle                       dispatch;
+        bool                              force_break{false};
 
         // The canonical pattern used for side-table keying and diagnostic locations.
         [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {
@@ -356,7 +431,7 @@ struct match_expr {
     expr_handle      matcher;
     std::vector<arm> arms;
     stdx::opt_size   catch_all_idx;
-    bool             is_constexpr{false};
+    bool             is_comptime{false};
     bool             arms_force_break{false}; // trailing comma after the last arm
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
@@ -382,6 +457,8 @@ DECLARE_PREFIX_EXPRESSION(unary_expr)
 DECLARE_PREFIX_EXPRESSION(reference_expr)
 DECLARE_PREFIX_EXPRESSION(dereference_expr)
 DECLARE_PREFIX_EXPRESSION(address_of_expr)
+// `comptime <expr>`: `rhs` is evaluated at compile time
+DECLARE_PREFIX_EXPRESSION(comptime_expr)
 
 struct implicit_access_expr {
     identifier_handle member;
@@ -395,13 +472,16 @@ struct implicit_access_expr {
 struct struct_expr {
     // Field publicity is baked into the identifier's token type
     struct field {
-        identifier_handle         name;
-        explicit_type_id          explicit_type;
-        stdx::option<expr_handle> default_value;
-        stdx::option<expr_handle> explicit_alignment;
+        identifier_handle            name;
+        explicit_type_id             explicit_type;
+        stdx::option<expr_handle>    default_value;
+        stdx::option<attribute_list> attributes;
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;
+        }
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
         }
     };
 
@@ -425,22 +505,35 @@ struct struct_expr {
 };
 
 struct union_expr {
+    // What a union's `(...)` names as its tag
+    enum class tag_kind : u8 {
+        NONE,     // `extern union` / `packed union`, which have no tag
+        INFERRED, // `union(enum)`, tagged by its own fields
+        EXPLICIT, // `union(MyEnum)` tagged by an enum, or `union(void)` untagged
+    };
+
     struct field {
-        identifier_handle         name;
-        explicit_type_id          explicit_type;
-        stdx::option<expr_handle> explicit_alignment;
+        identifier_handle            name;
+        explicit_type_id             explicit_type;
+        stdx::option<attribute_list> attributes;
+
+        [[nodiscard]] auto explicit_alignment() const noexcept -> stdx::option<expr_handle> {
+            return attribute_arg(attributes, attribute_kind::ALIGN);
+        }
     };
 
     using cfg_group        = cfg_item_group<field>;
     using member_cfg_group = cfg_item_group<member_handle>;
 
-    std::vector<field>            fields;
-    std::vector<cfg_group>        cfg_groups;
-    member_list                   members;
-    std::vector<member_cfg_group> member_cfg_groups;
-    bool                          is_extern{false};
-    bool                          is_packed{false};
-    bool                          fields_force_break{false}; // trailing comma in the field list
+    std::vector<field>             fields;
+    std::vector<cfg_group>         cfg_groups;
+    member_list                    members;
+    std::vector<member_cfg_group>  member_cfg_groups;
+    bool                           is_extern{false};
+    bool                           is_packed{false};
+    bool                           fields_force_break{false}; // trailing comma in the field list
+    tag_kind                       tag{tag_kind::NONE};
+    stdx::option<explicit_type_id> tag_type; // set for `tag_kind::EXPLICIT`
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic> {
@@ -473,8 +566,9 @@ struct interface_expr {
 
     // Bodyless signature is a requirement; one with a body is a default method.
     struct method {
-        identifier_handle name; // Publicity hides in here
-        function_handle   signature;
+        identifier_handle            name; // Publicity hides in here
+        function_handle              signature;
+        stdx::option<attribute_list> attributes{};
 
         [[nodiscard]] constexpr auto is_public() const noexcept -> bool {
             return name->get_token_type() == syntax::token_type_t::PUBLIC;
@@ -489,15 +583,64 @@ struct interface_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// A type with no expression spelling, written where a value is expected (`const D = &dyn I;`)
+struct type_expr {
+    explicit_type_id type;
+
+    // Starts on `dyn`
+    [[nodiscard]] static auto parse_dyn(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 struct while_loop_expr {
     expr_handle               condition;
     stdx::option<expr_handle> continuation;
     block_handle              block;
     stdx::option<stmt_handle> non_break;
-    bool                      is_constexpr{false}; // `while constexpr (...)`
+    bool                      is_unrolled{false}; // `unroll while (...)`
+    stdx::option<capture_t>   payload_capture{};  // `while (x) |v|`: an unwrapped payload
+    stdx::option<capture_t>   else_capture{};     // `else |e|`: the residual that ended it
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
+    [[nodiscard]] static auto parse(syntax::parser& parser, bool is_unrolled)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
 };
+
+// A function literal's `(...)`, from its `fn` token through the `)`
+struct function_header {
+    stdx::option<self_parameter>           self;
+    std::vector<function_expr::parameter>  parameters;
+    std::vector<function_expr::impl_bound> impl_bounds;
+    bool                                   variadic{false};
+    bool                                   params_force_break{false};
+};
+
+[[nodiscard]] auto parse_function_header(syntax::parser& parser)
+    -> stdx::result<function_header, syntax::diagnostic>;
+
+// `__ghoti_f@default1`: the hidden decl calling `fn_name` with the defaults after its first `kept`
+// params
+[[nodiscard]] auto default_wrapper_name(std::string_view fn_name, usize kept) -> std::string;
+
+// One hidden wrapper for a defaulted function
+struct default_wrapper {
+    usize             kept; // The first `kept` parameters
+    identifier_handle name;
+    function_handle   fn;
+};
+
+// The wrappers for the function literal just parsed at `fn`, re-parsing its parameters for each so
+// their defaults are nodes of their own. `keep_return_type` spells the result out instead of `auto`
+[[nodiscard]] auto build_default_wrappers(syntax::parser&        parser,
+                                          function_handle        fn,
+                                          const syntax::token_t& name_token,
+                                          std::string_view       fn_name,
+                                          bool                   keep_return_type)
+    -> stdx::result<std::vector<default_wrapper>, syntax::diagnostic>;
+
+// A parameter's declared name, or empty for a discarded `_`
+[[nodiscard]] auto parameter_name(const AST& ast, const function_expr::parameter& param)
+    -> std::string_view;
 
 } // namespace ghoti::ast

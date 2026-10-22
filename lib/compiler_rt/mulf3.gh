@@ -1,0 +1,487 @@
+//! Ported from:
+//!
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/compiler-rt/lib/builtins/fp_mul_impl.inc
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulf3.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_fmul, "__aeabi_fmul");
+        symbol(__aeabi_dmul, "__aeabi_dmul");
+    }
+
+    symbol(__mulsf3, "__mulsf3");
+    symbol(__muldf3, "__muldf3");
+    symbol(__mulxf3, "__mulxf3");
+    symbol(__multf3, "__multf3");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_fmul = fn(a: f32, b: f32) callconv(.aapcs): f32 {
+        return mul_f32(a, b);
+    };
+
+    const __aeabi_dmul = fn(a: f64, b: f64) callconv(.aapcs): f64 {
+        return mul_f64(a, b);
+    };
+}
+
+const __mulsf3 = fn(a: f32, b: f32) callconv(.c): f32 {
+    return mul_f32(a, b);
+};
+
+const nan_rep_f32: u32 = @bitCast(math.nan(f32));
+
+@[testing] const test__mulsf3 = fn(a: u32, b: u32, expected: u32): bool {
+    let rep: u32 = @bitCast(__mulsf3(@bitCast(a), @bitCast(b)));
+    if (rep == expected) return true;
+
+    // Any NaN encoding is accepted when the canonical NaN is expected
+    if (expected == nan_rep_f32) {
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) return true;
+    }
+    return false;
+};
+
+test "__mulsf3" {
+    import "cases/mulsf3.gh" as mulsf3_cases;
+    for (mulsf3_cases.cases) |case| {
+        @expect(test__mulsf3(case[0], case[1], case[2]));
+    }
+}
+
+const mul_f32 = fn(a: f32, b: f32): f32 {
+    return mulf3(f32, a, b);
+};
+
+const __muldf3 = fn(a: f64, b: f64) callconv(.c): f64 {
+    return mul_f64(a, b);
+};
+
+const nan_rep_f64: u64 = @bitCast(math.nan(f64));
+
+@[testing] const test__muldf3 = fn(a: u64, b: u64, expected: u64): bool {
+    let rep: u64 = @bitCast(__muldf3(@bitCast(a), @bitCast(b)));
+    if (rep == expected) return true;
+
+    // Any NaN encoding is accepted when the canonical NaN is expected
+    if (expected == nan_rep_f64) {
+        if ((rep & 0x7ff0000000000000) == 0x7ff0000000000000 and
+            (rep & 0xfffffffffffff) > 0) return true;
+    }
+    return false;
+};
+
+test "__muldf3" {
+    import "cases/muldf3.gh" as muldf3_cases;
+    for (muldf3_cases.cases) |case| {
+        @expect(test__muldf3(case[0], case[1], case[2]));
+    }
+}
+
+const mul_f64 = fn(a: f64, b: f64): f64 {
+    return mulf3(f64, a, b);
+};
+
+const __mulxf3 = fn(a: compiler_rt.f80, b: compiler_rt.f80) callconv(.c): compiler_rt.f80 {
+    return @bitCast(mul_f80(@bitCast(a), @bitCast(b)));
+};
+
+const qnan80 = math.nan(f80);
+
+@[testing] const test__mulxf3 = fn(a: f80, b: f80, expected: u80): bool {
+    let x = mul_f80(a, b);
+    let rep: u80 = @bitCast(x);
+
+    if (rep == expected) return true;
+    return math.is_nan(@bitCast(f80, expected)) and math.is_nan(x);
+};
+
+// Ported from:
+//
+// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulf3_test.zig
+test "__mulxf3" {
+    // NaN * any = NaN
+    @expect(test__mulxf3(qnan80, 0x1.23456789abcdefp+5, @bitCast(qnan80)));
+    @expect(test__mulxf3(
+        @bitCast(0x7fff_8000_8000_3000_0000u80),
+        0x1.23456789abcdefp+5,
+        @bitCast(qnan80),
+    ));
+
+    // any * NaN = NaN
+    @expect(test__mulxf3(0x1.23456789abcdefp+5, qnan80, @bitCast(qnan80)));
+    @expect(test__mulxf3(
+        0x1.23456789abcdefp+5,
+        @bitCast(0x7fff_8000_8000_3000_0000u80),
+        @bitCast(qnan80),
+    ));
+
+    // NaN * inf = NaN
+    @expect(test__mulxf3(qnan80, math.inf(f80), @bitCast(qnan80)));
+
+    // inf * NaN = NaN
+    @expect(test__mulxf3(math.inf(f80), qnan80, @bitCast(qnan80)));
+
+    // inf * inf = inf
+    @expect(test__mulxf3(math.inf(f80), math.inf(f80), @bitCast(math.inf(f80))));
+
+    // inf * -inf = -inf
+    @expect(test__mulxf3(math.inf(f80), -math.inf(f80), @bitCast(-math.inf(f80))));
+
+    // -inf * inf = -inf
+    @expect(test__mulxf3(-math.inf(f80), math.inf(f80), @bitCast(-math.inf(f80))));
+
+    // inf * any = inf
+    @expect(test__mulxf3(
+        math.inf(f80),
+        0x1.2335653452436234723489432abcdefp+5,
+        @bitCast(math.inf(f80)),
+    ));
+
+    // any * inf = inf
+    @expect(test__mulxf3(
+        0x1.2335653452436234723489432abcdefp+5,
+        math.inf(f80),
+        @bitCast(math.inf(f80)),
+    ));
+
+    // any * any
+    @expect(test__mulxf3(0x1.0p+0, 0x1.dcba987654321p+5, 0x4004_ee5d_4c3b_2a19_0800));
+    @expect(test__mulxf3(0x1.0000_0000_0000_0004p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0003)); // exact
+
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+5, 0x4004_8000_0000_0000_0001)); // exact
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.7ffep+5, 0x4004_BFFF_0000_0000_0001)); // round down
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8p+5, 0x4004_C000_0000_0000_0002)); // round up to even
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.8002p+5, 0x4004_C001_0000_0000_0002)); // round up
+    @expect(test__mulxf3(0x1.0000_0000_0000_0002p+0, 0x1.0p+6, 0x4005_8000_0000_0000_0001)); // exact
+
+    @expect(test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001p+0, 0x3FFF_8000_0001_0000_0000)); // round down to even
+    @expect(test__mulxf3(0x1.0000_0001p+0, 0x1.0000_0001_0002p+0, 0x3FFF_8000_0001_0001_0001)); // round up
+
+    // denormal -> normal
+    @expect(test__mulxf3(0x0.8000_0000_0000_0000p-16382, 2.0, 0x0001_8000_0000_0000_0000));
+    @expect(test__mulxf3(
+        0x0.7fff_ffff_ffff_fffep-16382,
+        0x2.0000_0000_0000_0008p0,
+        0x0001_8000_0000_0000_0000,
+    ));
+
+    // denormal -> denormal
+    @expect(test__mulxf3(
+        0x0.7fff_ffff_ffff_fffep-16382,
+        0x1.0000_0000_0000_0000p0,
+        0x0000_3FFF_FFFF_FFFF_FFFF,
+    ));
+}
+
+const mul_f80 = fn(a: f80, b: f80): f80 {
+    return mulf3(f80, a, b);
+};
+
+const __multf3 = fn(a: f128, b: f128) callconv(.c): f128 {
+    return mul_f128(a, b);
+};
+
+const qnan128: f128 = @bitCast(0x7fff800000000000u128 << 64);
+
+@[testing] const test__multf3 = fn(a: f128, b: f128, expected_hi: u64, expected_lo: u64): bool {
+    let rep: u128 = @bitCast(__multf3(a, b));
+    let hi: u64 = @truncate(rep >> 64);
+    let lo: u64 = @truncate(rep);
+
+    if (hi == expected_hi and lo == expected_lo) return true;
+
+    // test other possible NaN representation (signal NaN)
+    if (expected_hi == 0x7fff800000000000 and expected_lo == 0x0) {
+        if ((hi & 0x7fff000000000000) == 0x7fff000000000000 and
+            ((hi & 0xffffffffffff) > 0 or lo > 0)) return true;
+    }
+    return false;
+};
+
+// Ported from:
+//
+// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/mulf3_test.zig
+// with the widening multiply carry case from
+// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/compiler-rt/test/builtins/Unit/multf3_test.c
+test "__multf3" {
+    // qNaN * any = qNaN
+    @expect(test__multf3(qnan128, 0x1.23456789abcdefp+5, 0x7fff800000000000, 0x0));
+
+    // NaN * any = NaN
+    @expect(test__multf3(
+        @bitCast(f128, (0x7fff000000000000u128 << 64) | (0x800030000000u128 << 64)),
+        0x1.23456789abcdefp+5,
+        0x7fff800000000000,
+        0x0,
+    ));
+
+    // inf * any = inf
+    @expect(test__multf3(math.inf(f128), 0x1.23456789abcdefp+5, 0x7fff000000000000, 0x0));
+
+    // any * any
+    @expect(test__multf3(
+        @bitCast(0x40042eab345678439abcdefea5678234u128),
+        @bitCast(0x3ffeedcb34a235253948765432134675u128),
+        0x400423e7f9e3c9fc,
+        0xd906c2c2a85777c4,
+    ));
+    @expect(test__multf3(
+        @bitCast(0x3fcd353e45674d89abacc3a2ebf3ff50u128),
+        @bitCast(0x3ff6ed8764648369535adf4be3214568u128),
+        0x3fc52a163c6223fc,
+        0xc94c4bf0430768b4,
+    ));
+    @expect(test__multf3(
+        0x1.234425696abcad34a35eeffefdcbap+456,
+        0x451.ed98d76e5d46e5f24323dff21ffp+600,
+        0x44293a91de5e0e94,
+        0xe8ed17cc2cdf64ac,
+    ));
+    @expect(test__multf3(
+        @bitCast(0x3f154356473c82a9fabf2d22ace345dfu128),
+        @bitCast(0x3e38eda98765476743ab21da23d45679u128),
+        0x3d4f37c1a3137cae,
+        0xfc6807048bc2836a,
+    ));
+
+    // underflow
+    @expect(test__multf3(0x1.23456734245345p-10000, 0x1.edcba524498724p-6497, 0x0, 0x0));
+
+    // carry between lo and hi in widening multiply
+    @expect(test__multf3(
+        0x0.7fffffffffffffffffffffffffffp-16382,
+        0x1.7fffffffffffffffffffffffffffp+1,
+        0x00017fffffffffff,
+        0xfffffffffffffffc,
+    ));
+
+    // denormal operands
+    @expect(
+        test__multf3(0x0.0000000000000000000000000001p-16382, 0x1p16383, 0x3f90000000000000, 0x0),
+    );
+    @expect(
+        test__multf3(0x1p16383, 0x0.0000000000000000000000000001p-16382, 0x3f90000000000000, 0x0),
+    );
+
+    @expect(test__multf3(
+        0x1.0000_0000_0000_0000_0000_0000_0001p+0,
+        0x1.8p+5,
+        0x4004_8000_0000_0000,
+        0x0000_0000_0000_0002,
+    ));
+    @expect(test__multf3(
+        0x1.0000_0000_0000_0000_0000_0000_0002p+0,
+        0x1.8p+5,
+        0x4004_8000_0000_0000,
+        0x0000_0000_0000_0003,
+    ));
+    @expect(test__multf3(2.0, math.float_true_min(f128), 0x0, 0x2));
+}
+
+const mul_f128 = fn(a: f128, b: f128): f128 {
+    return mulf3(f128, a, b);
+};
+
+@[inline(.always)] const mulf3 = fn(comptime T: type, a: T, b: T): T {
+    const type_width = @typeInfo(T).float.bits;
+    const significand_bits = math.float_mantissa_bits(T);
+    const fractional_bits = math.float_fractional_bits(T);
+    const exponent_bits = math.float_exponent_bits(T);
+
+    const Z = @Int(.{ .signedness = .unsigned, .bits = type_width });
+    const ZSignificand = PowerOfTwoSignificandZ(T); // Large enough to contain the significand, including an explicit integer bit
+    const ZSignificandBits = @typeInfo(ZSignificand).int.bits;
+    const ZExp = if comptime (type_width >= 32) u32 else Z;
+
+    const round_bit = 1 << (ZSignificandBits - 1);
+    const sign_bit = @as(Z, 1) << (significand_bits + exponent_bits);
+    const max_exponent = (1 << exponent_bits) - 1;
+    const exponent_bias = max_exponent >> 1;
+
+    const integer_bit = @as(ZSignificand, 1) << fractional_bits;
+    const quiet_bit = integer_bit >> 1;
+    const significand_mask = (@as(Z, 1) << significand_bits) - 1;
+
+    const abs_mask = sign_bit - 1;
+    const qnan_rep = @bitCast(Z, math.nan(T)) | quiet_bit;
+    const inf_rep: Z = @bitCast(math.inf(T));
+    const min_normal_rep: Z = @bitCast(math.float_min(T));
+
+    let a_exponent: ZSignificand = @truncate(@bitCast(Z, a) >> significand_bits) & max_exponent;
+    let b_exponent: ZSignificand = @truncate(@bitCast(Z, b) >> significand_bits) & max_exponent;
+    let product_sign: Z = (@bitCast(Z, a) ^ @bitCast(Z, b)) & sign_bit;
+
+    let mut a_significand: ZSignificand = @intCast(@bitCast(Z, a) & significand_mask);
+    let mut b_significand: ZSignificand = @intCast(@bitCast(Z, b) & significand_mask);
+    let mut scale: i32 = 0;
+
+    // Detect if a or b is zero, denormal, infinity, or NaN.
+    if (a_exponent -% 1 >= max_exponent - 1 or b_exponent -% 1 >= max_exponent - 1) {
+        let a_abs: Z = @bitCast(Z, a) & abs_mask;
+        let b_abs: Z = @bitCast(Z, b) & abs_mask;
+
+        // NaN * anything = qNaN
+        if (a_abs > inf_rep) return @bitCast(@bitCast(Z, a) | quiet_bit);
+        // anything * NaN = qNaN
+        if (b_abs > inf_rep) return @bitCast(@bitCast(Z, b) | quiet_bit);
+
+        if (a_abs == inf_rep) {
+            // infinity * non-zero = +/- infinity
+            if (b_abs != 0) {
+                return @bitCast(a_abs | product_sign);
+            } else {
+                // infinity * zero = NaN
+                return @bitCast(qnan_rep);
+            }
+        }
+
+        if (b_abs == inf_rep) {
+            // non-zero * infinity = +/- infinity
+            if (a_abs != 0) {
+                return @bitCast(b_abs | product_sign);
+            } else {
+                // zero * infinity = NaN
+                return @bitCast(qnan_rep);
+            }
+        }
+
+        // zero * anything = +/- zero
+        if (a_abs == 0) return @bitCast(product_sign);
+        // anything * zero = +/- zero
+        if (b_abs == 0) return @bitCast(product_sign);
+
+        // one or both of a or b is denormal, the other (if applicable) is a
+        // normal number. Renormalize one or both of a and b, and set scale to
+        // include the necessary exponent adjustment.
+        if (a_abs < min_normal_rep) scale += normalize(T, &mut a_significand);
+        if (b_abs < min_normal_rep) scale += normalize(T, &mut b_significand);
+    }
+
+    // Or in the implicit significand bit. (If we fell through from the
+    // denormal path it was already set by normalize( ), but setting it twice
+    // won't hurt anything.)
+    a_significand |= integer_bit;
+    b_significand |= integer_bit;
+
+    // Get the significand of a*b. Before multiplying the significands, shift
+    // one of them left to left-align it in the field. Thus, the product will
+    // have (exponentBits + 2) integral digits, all but two of which must be
+    // zero. Normalizing this result is just a conditional left-shift by one
+    // and bumping the exponent accordingly.
+    let mut product_hi: ZSignificand = undefined;
+    let mut product_lo: ZSignificand = undefined;
+    const left_align_shift = ZSignificandBits - fractional_bits - 1;
+    compiler_rt.wide_multiply(
+        ZSignificand,
+        a_significand,
+        b_significand << left_align_shift,
+        &mut product_hi,
+        &mut product_lo,
+    );
+
+    let mut product_exponent: i32 = @intCast(i32, a_exponent + b_exponent) - exponent_bias + scale;
+
+    // Normalize the significand, adjust exponent if needed.
+    if ((product_hi & integer_bit) != 0) {
+        product_exponent +%= 1;
+    } else {
+        product_hi = (product_hi << 1) | (product_lo >> (ZSignificandBits - 1));
+        product_lo <<= 1;
+    }
+
+    // If we have overflowed the type, return +/- infinity.
+    if (product_exponent >= max_exponent) return @bitCast(inf_rep | product_sign);
+
+    let mut result: Z = undefined;
+    if (product_exponent <= 0) {
+        // Result is denormal before rounding
+        //
+        // If the result is so small that it just underflows to zero, return
+        // a zero of the appropriate sign.  Mathematically there is no need to
+        // handle this case separately, but we make it a special case to
+        // simplify the shift logic.
+        let shift: u32 = @truncate(@as(Z, 1) -% @bitCast(u32, product_exponent));
+        if (shift >= ZSignificandBits) return @bitCast(product_sign);
+
+        // Otherwise, shift the significand of the result so that the round
+        // bit is the high bit of productLo.
+        let sticky = wide_shr_with_truncation(
+            ZSignificand,
+            &mut product_hi,
+            &mut product_lo,
+            shift,
+        );
+        product_lo |= @intFromBool(sticky);
+        result = product_hi;
+
+        // We include the integer bit so that rounding will carry to the exponent,
+        // but it will be removed later if the result is still denormal
+        if (significand_bits != fractional_bits) result |= integer_bit;
+    } else {
+        // Result is normal before rounding; insert the exponent.
+        result = product_hi & significand_mask;
+        result |= @intCast(Z, product_exponent) << significand_bits;
+    }
+
+    // Final rounding. The final result may overflow to infinity, or underflow
+    // to zero, but those are the correct results in those cases. We use the
+    // default IEEE-754 round-to-nearest, ties-to-even rounding mode.
+    if (product_lo > round_bit) result +%= 1;
+    if (product_lo == round_bit) result +%= result & 1;
+
+    // Restore any explicit integer bit, if it was rounded off
+    if (significand_bits != fractional_bits) {
+        if ((result >> significand_bits) != 0) {
+            result |= integer_bit;
+        } else {
+            result &= ~integer_bit;
+        }
+    }
+
+    // Insert the sign of the result
+    result |= product_sign;
+    return @bitCast(result);
+};
+
+/// Returns `true` if the right shift is inexact (i.e. any bit shifted out is non-zero)
+///
+/// This is analogous to a shr version of `@shlWithOverflow`
+const wide_shr_with_truncation = fn(comptime Z: type, hi: &mut Z, lo: &mut Z, count: u32): bool {
+    const type_width = @typeInfo(Z).int.bits;
+    let mut inexact = false;
+    if (count < type_width) {
+        inexact = (lo << @intCast(type_width -% count)) != 0;
+        lo = (hi << @intCast(type_width -% count)) | (lo >> @intCast(count));
+        hi >>= @intCast(count);
+    } else if (count < 2 * type_width) {
+        inexact = (hi << @intCast(2 * type_width -% count) | lo) != 0;
+        lo = hi >> @intCast(count -% type_width);
+        hi = 0;
+    } else {
+        inexact = (hi | lo) != 0;
+        lo = 0;
+        hi = 0;
+    }
+    return inexact;
+};
+
+// Slightly different from the one in compiler rt (varies by bit widths only)
+const normalize = fn(comptime T: type, significand: &mut PowerOfTwoSignificandZ(T)): i32 {
+    const Z = PowerOfTwoSignificandZ(T);
+    const integer_bit = @as(Z, 1) << math.float_fractional_bits(T);
+
+    let shift = @clz(significand) - @clz(integer_bit);
+    significand <<= @intCast(shift);
+    return 1i32 - shift;
+};
+
+const PowerOfTwoSignificandZ = fn(comptime T: type): type {
+    const bits = math.ceil_power_of_two(u16, math.float_fractional_bits(T) + 1)!;
+    return @Int(.{ .signedness = .unsigned, .bits = bits });
+};

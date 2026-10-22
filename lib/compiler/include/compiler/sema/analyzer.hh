@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <ostream>
 #include <string>
@@ -43,6 +44,14 @@ struct target_options;
 
 namespace sema {
 
+// What a build produces, which decides how its GIR is pruned and lowered
+enum class build_artifact : u8 {
+    OBJECT,
+    EXECUTABLE,
+    TEST_EXECUTABLE,
+    LIBRARY,
+};
+
 // The manager for all steps of semantic analysis.
 class analyzer {
   public:
@@ -69,9 +78,27 @@ class analyzer {
     ~analyzer() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(analyzer);
 
+    auto set_optimize_mode(optimize_mode mode) noexcept -> void { ctx_.build_mode = mode; }
+    // Whether the program is being built as a test executable, for `@cfg(testing)`
+    auto set_testing(bool testing) noexcept -> void { ctx_.testing = testing; }
+
+    // Stops at the next declaration once `flag` is set, leaving the analysis incomplete
+    auto set_cancellation(const std::atomic<bool>& flag) noexcept -> void {
+        ctx_.cancellation.emplace(flag);
+    }
+    auto set_runtime_safety(bool enabled) noexcept -> void { ctx_.runtime_safety = enabled; }
+    auto set_deprecation_policy(deprecation_policy policy) noexcept -> void {
+        ctx_.deprecated_policy = policy;
+    }
+    // Whether a library keeps its `panic_handler`-style overrides visible (weak) for the program
+    // linking it; compiler_rt's builtins never panic, so theirs would only drag in std's I/O
+    auto set_library_keeps_handlers(bool keep) noexcept -> void { library_keeps_handlers_ = keep; }
+    // Whether the program is built as an executable, which `std/start.gh`'s entry code joins
+    auto set_entry_point(bool entry_point) noexcept -> void { entry_point_ = entry_point; }
+
     // Runs the entire sema pipeline
     auto analyze(const std::filesystem::path& entry_path, bool for_test_executable = false)
-        -> stdx::result<gir::module, diagnostic>;
+        -> stdx::result<gir::module_t, diagnostic>;
 
     [[nodiscard]] auto get_table(this auto&& self, usize idx) -> auto& {
         return self.registry_.get(idx);
@@ -92,62 +119,64 @@ class analyzer {
         return ctx_.prelude_index;
     }
 
-    auto collect_symbols(mod::module& module) -> mod::module_state;
-    auto resolve_types(mod::module& module) -> mod::module_state;
-    auto emit_gir(mod::module& module, bool for_test_executable = false) -> gir::module;
-    auto check_types(gir::module& gir_module, mod::module& ast_module) -> mod::module_state;
-    [[nodiscard]] auto validate_main_entry(const mod::module& root_module) const
+    auto collect_symbols(mod::module_t& module) -> mod::module_state;
+    auto resolve_types(mod::module_t& module) -> mod::module_state;
+    auto emit_gir(mod::module_t& module, bool for_test_executable = false) -> gir::module_t;
+    auto check_types(gir::module_t& gir_module, mod::module_t& ast_module) -> mod::module_state;
+    [[nodiscard]] auto validate_main_entry(const mod::module_t& root_module) const
         -> stdx::result<void, diagnostic>;
 
     // Checks a user-defined `test_runner` override has sig `fn(args: [][:0]u8, tests: []Test): i32`
     // A no-op when the module relies on the `weak` `builtin` default.
-    [[nodiscard]] auto validate_test_entry(const mod::module& root_module) const
+    [[nodiscard]] auto validate_test_entry(const mod::module_t& root_module) const
         -> stdx::result<void, diagnostic>;
 
-    [[nodiscard]] auto emit_llvm_ir(gir::module&                      gir_module,
+    [[nodiscard]] auto emit_llvm_ir(gir::module_t&                    gir_module,
                                     llvm::LLVMContext&                context,
                                     const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
-    // Lowers `gir_module` and returns the resulting module's textual LLVM IR.
-    [[nodiscard]] auto emit_llvm_ir_text(gir::module&                      gir_module,
-                                         const codegen::optimizer_options& options)
+    // Textual LLVM IR / native assembly of `gir_module` exactly as `artifact`'s real build emits it
+    [[nodiscard]] auto emit_llvm_ir_text(gir::module_t&                    gir_module,
+                                         const codegen::target_options&    target_opts,
+                                         const codegen::optimizer_options& opt_options,
+                                         build_artifact                    artifact)
+        -> stdx::result<std::string, codegen::diagnostic>;
+    [[nodiscard]] auto emit_asm_text(gir::module_t&                    gir_module,
+                                     const codegen::target_options&    target_opts,
+                                     const codegen::optimizer_options& opt_options,
+                                     build_artifact                    artifact)
         -> stdx::result<std::string, codegen::diagnostic>;
 
-    // Lowers `gir_module` for `target_opts` and returns the resulting native assembly as text.
-    [[nodiscard]] auto emit_asm_text(gir::module&                      gir_module,
-                                     const codegen::target_options&    target_opts,
-                                     const codegen::optimizer_options& opt_options)
-        -> stdx::result<std::string, codegen::diagnostic>;
-    [[nodiscard]] auto emit_llvm_ir_executable(gir::module&                      gir_module,
+    [[nodiscard]] auto emit_llvm_ir_executable(gir::module_t&                    gir_module,
                                                llvm::LLVMContext&                context,
                                                const codegen::optimizer_options& options,
                                                std::string_view user_main_name = "main")
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
-    [[nodiscard]] auto emit_llvm_ir_test_executable(gir::module&                      gir_module,
+    [[nodiscard]] auto emit_llvm_ir_test_executable(gir::module_t&                    gir_module,
                                                     llvm::LLVMContext&                context,
                                                     const codegen::optimizer_options& options)
         -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
 
-    [[nodiscard]] auto emit_object(gir::module&                      gir_module,
+    [[nodiscard]] auto emit_object(gir::module_t&                    gir_module,
                                    const codegen::target_options&    target_opts,
                                    const codegen::optimizer_options& opt_options,
                                    const std::filesystem::path&      output_path)
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto emit_object(gir::module&                      gir_module,
+    [[nodiscard]] auto emit_object(gir::module_t&                    gir_module,
                                    llvm::LLVMContext&                context,
                                    const codegen::target_options&    target_opts,
                                    const codegen::optimizer_options& opt_options,
                                    const std::filesystem::path&      output_path)
         -> stdx::result<void, codegen::diagnostic>;
 
-    [[nodiscard]] auto emit_executable(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_executable(gir::module_t&                       gir_module,
                                        const codegen::target_options&       target_opts,
                                        const codegen::optimizer_options&    opt_options,
                                        const std::filesystem::path&         output_path,
                                        const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto emit_executable(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_executable(gir::module_t&                       gir_module,
                                        llvm::LLVMContext&                   context,
                                        const codegen::target_options&       target_opts,
                                        const codegen::optimizer_options&    opt_options,
@@ -155,13 +184,13 @@ class analyzer {
                                        const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
-    [[nodiscard]] auto emit_test_executable(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_test_executable(gir::module_t&                       gir_module,
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
                                             const std::filesystem::path&         output_path,
                                             const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto emit_test_executable(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_test_executable(gir::module_t&                       gir_module,
                                             llvm::LLVMContext&                   context,
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
@@ -169,13 +198,13 @@ class analyzer {
                                             const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
-    [[nodiscard]] auto emit_static_library(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_static_library(gir::module_t&                       gir_module,
                                            const codegen::target_options&       target_opts,
                                            const codegen::optimizer_options&    opt_options,
                                            const std::filesystem::path&         output_path,
                                            const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto emit_static_library(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_static_library(gir::module_t&                       gir_module,
                                            llvm::LLVMContext&                   context,
                                            const codegen::target_options&       target_opts,
                                            const codegen::optimizer_options&    opt_options,
@@ -183,13 +212,13 @@ class analyzer {
                                            const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
 
-    [[nodiscard]] auto emit_dynamic_library(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_dynamic_library(gir::module_t&                       gir_module,
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
                                             const std::filesystem::path&         output_path,
                                             const codegen::extra_linker_options& linker_opts = {})
         -> stdx::result<void, codegen::diagnostic>;
-    [[nodiscard]] auto emit_dynamic_library(gir::module&                         gir_module,
+    [[nodiscard]] auto emit_dynamic_library(gir::module_t&                       gir_module,
                                             llvm::LLVMContext&                   context,
                                             const codegen::target_options&       target_opts,
                                             const codegen::optimizer_options&    opt_options,
@@ -198,7 +227,30 @@ class analyzer {
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
-    auto optimize_llvm(llvm::Module& module, const codegen::optimizer_options& options)
+    // Analyzes `std/start.gh` against `root`, unless `root` has no valid entry to call
+    [[nodiscard]] auto attach_start_module(mod::module_t& root, bool for_test_executable)
+        -> stdx::result<void, diagnostic>;
+
+    // The entry code's `@compileError`s are about the user's entry function, so they're reported
+    // at its declaration in `root` instead of in `std/start.gh`
+    auto report_entry_errors_at(mod::module_t&   root,
+                                mod::module_t&   start,
+                                std::string_view entry_name) -> void;
+
+    // Prunes, lowers, verifies, and optimizes `gir_module` the way `artifact`'s build requires
+    [[nodiscard]] auto lower_artifact(gir::module_t&                    gir_module,
+                                      llvm::LLVMContext&                context,
+                                      const codegen::optimizer_options& options,
+                                      build_artifact                    artifact)
+        -> stdx::result<stdx::box<llvm::Module>, codegen::diagnostic>;
+
+    [[nodiscard]] auto link_artifact(gir::module_t&                       gir_module,
+                                     llvm::LLVMContext&                   context,
+                                     const codegen::target_options&       target_opts,
+                                     const codegen::optimizer_options&    opt_options,
+                                     const std::filesystem::path&         output_path,
+                                     const codegen::extra_linker_options& linker_opts,
+                                     build_artifact                       artifact)
         -> stdx::result<void, codegen::diagnostic>;
 
   private:
@@ -212,6 +264,8 @@ class analyzer {
     std::ostream&               error_stream_;
     stdx::option<bool>          in_terminal_;
     bool                        tolerate_syntax_errors_;
+    bool                        library_keeps_handlers_{true};
+    bool                        entry_point_{false};
 
     context ctx_;
 };

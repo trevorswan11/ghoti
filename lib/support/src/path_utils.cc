@@ -4,6 +4,8 @@
 #include <charconv>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <ios>
 #include <iterator>
 #include <string>
 #include <string_view>
@@ -95,6 +97,11 @@ auto uri_to_path(std::string_view uri) -> stdx::option<std::filesystem::path> {
     return std::filesystem::path{string_utils::to_u8string(decoded)};
 }
 
+auto display(const std::filesystem::path& path) -> std::string {
+    const auto utf8{path.u8string()};
+    return {utf8.begin(), utf8.end()};
+}
+
 auto path_to_uri(const std::filesystem::path& path) -> std::string {
     PROFILE_FUNCTION();
     const auto utf8{string_utils::to_utf8(path.generic_u8string())};
@@ -105,6 +112,22 @@ auto path_to_uri(const std::filesystem::path& path) -> std::string {
     const std::string_view prefix{};
 #endif
     return fmt::format("file://{}{}", prefix, percent_encode(utf8));
+}
+
+auto exists(const std::filesystem::path& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+auto is_file(const std::filesystem::path& path) -> bool {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) && !std::filesystem::is_directory(path, ec);
+}
+
+[[nodiscard]] auto read_file(const std::filesystem::path& path, std::ios::openmode mode)
+    -> std::string {
+    std::ifstream in{path, mode};
+    return string_utils::read_stream(in);
 }
 
 } // namespace ghoti::path_utils

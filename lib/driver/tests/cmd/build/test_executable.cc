@@ -12,6 +12,7 @@
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/options.hh"
 #include "support/bin_utils.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -21,8 +22,8 @@ TEST_CASE("build_exe command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_exe      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out_exe",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out_exe",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
@@ -35,7 +36,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -52,7 +53,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -65,7 +66,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): i32 {{
+                pub const main = fn(args: [][:0]u8): i32 {{
                     return @intCast(i32, args.len);
                 }};
             )");
@@ -82,7 +83,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -94,7 +95,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 42;
                 }};
             )");
@@ -110,7 +111,7 @@ TEST_CASE("build_exe command execution") {
                 },
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 
@@ -122,7 +123,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -141,7 +142,7 @@ TEST_CASE("build_exe command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
         CHECK(bin_utils::check_elf_header(exe_file));
     }
@@ -154,7 +155,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                const main := fn(args: [][:0]u8): void {{
+                const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -175,7 +176,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(): bool {{
+                pub const main = fn(): bool {{
                     return true;
                 }};
             )");
@@ -196,9 +197,9 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                const X := 1;
+                const X = 1;
 
-                pub const main := fn(): i32 {{
+                pub const main = fn(): i32 {{
                     return 1 +;
                 }};
             )");
@@ -220,7 +221,7 @@ TEST_CASE("build_exe command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");

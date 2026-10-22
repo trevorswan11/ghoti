@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/tree/llvmorg-21.1.8/llvm/examples/Kaleidoscope
+//! https://github.com/llvm/llvm-project/tree/llvmorg-23.1.3/llvm/examples/Kaleidoscope
 const std = @import("std");
 
 const LLVMBuilder = @import("../../LLVMBuilder.zig");

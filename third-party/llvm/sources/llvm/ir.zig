@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/lib/IR/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/lib/IR/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -11,6 +11,7 @@ pub const sources = [_][]const u8{
     "AutoUpgrade.cpp",
     "BasicBlock.cpp",
     "BuiltinGCs.cpp",
+    "BundleAttributes.cpp",
     "Comdat.cpp",
     "ConstantFold.cpp",
     "ConstantFPRange.cpp",
@@ -40,6 +41,7 @@ pub const sources = [_][]const u8{
     "GVMaterializer.cpp",
     "Globals.cpp",
     "Intrinsics.cpp",
+    "NVVMIntrinsicUtils.cpp",
     "IRBuilder.cpp",
     "IRPrintingPasses.cpp",
     "SSAContext.cpp",
@@ -59,6 +61,7 @@ pub const sources = [_][]const u8{
     "ModuleSummaryIndex.cpp",
     "Operator.cpp",
     "OptBisect.cpp",
+    "PatternMatch.cpp",
     "Pass.cpp",
     "PassInstrumentation.cpp",
     "PassManager.cpp",
@@ -81,6 +84,7 @@ pub const sources = [_][]const u8{
     "ValueSymbolTable.cpp",
     "VectorTypeUtils.cpp",
     "Verifier.cpp",
+    "VerifierAMDGPU.cpp",
     "VFABIDemangler.cpp",
     "RuntimeLibcalls.cpp",
 };
@@ -119,6 +123,16 @@ pub const synthesize_configs = [_]SynthesizeHeaderConfig{
         },
         .virtual_path = "llvm/IR/IntrinsicImpl.inc",
     },
+
+    // https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/include/llvm/Analysis/CMakeLists.txt
+    .{
+        .gen_conf = .{
+            .name = "TargetLibraryInfo",
+            .td_file = "llvm/include/llvm/Analysis/TargetLibraryInfo.td",
+            .instruction = .{ .action = "-gen-target-library-info" },
+        },
+        .virtual_path = "llvm/Analysis/TargetLibraryInfo.inc",
+    },
 };
 
 const Intrinsic = struct {
@@ -126,7 +140,7 @@ const Intrinsic = struct {
     prefix: []const u8,
 };
 
-/// https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/llvm/include/llvm/IR/CMakeLists.txt
+/// https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/include/llvm/IR/CMakeLists.txt
 pub const intrinsic_info = [_]Intrinsic{
     .{ .arch = "AArch64", .prefix = "aarch64" },     .{ .arch = "AMDGPU", .prefix = "amdgcn" },
     .{ .arch = "ARM", .prefix = "arm" },             .{ .arch = "BPF", .prefix = "bpf" },
@@ -137,4 +151,5 @@ pub const intrinsic_info = [_]Intrinsic{
     .{ .arch = "SPIRV", .prefix = "spv" },           .{ .arch = "S390", .prefix = "s390" },
     .{ .arch = "WebAssembly", .prefix = "wasm" },    .{ .arch = "X86", .prefix = "x86" },
     .{ .arch = "XCore", .prefix = "xcore" },         .{ .arch = "VE", .prefix = "ve" },
+    .{ .arch = "AVR", .prefix = "avr" },
 };

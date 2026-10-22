@@ -2,12 +2,16 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
+#include <stdx/option.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/codegen/c_abi.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::codegen {
@@ -39,6 +43,17 @@ class type_translator {
     [[nodiscard]] auto get_void_ty() const noexcept -> llvm::Type*;
     [[nodiscard]] auto get_ptr_ty() const noexcept -> llvm::PointerType*;
 
+    // The LLVM element index of ghoti field `field` in `struct_ty`, past any inserted padding
+    [[nodiscard]] auto struct_field_index(llvm::Type* struct_ty, u32 field) const -> u32;
+    // A struct (or array of them) whose `@[align(n)]` fields raise its alignment past LLVM's
+    [[nodiscard]] auto explicit_alignment_of(const sema::type& type) -> stdx::option<u64>;
+    [[nodiscard]] auto union_members() const noexcept -> const union_member_map& {
+        return union_members_;
+    }
+    [[nodiscard]] auto padded_structs() const noexcept -> const padded_struct_map& {
+        return padded_structs_;
+    }
+
   private:
     using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
     using aggregate_identity_cache_t =
@@ -47,9 +62,21 @@ class type_translator {
   private:
     auto translate_slice(const sema::types::slice& s) -> llvm::Type*;
     auto translate_array(const sema::types::array& a) -> llvm::Type*;
+    // An array element or struct field: a zero-sized `void` / `type` one is an empty struct
+    auto translate_slot(const sema::type& slot) -> llvm::Type*;
     auto translate_struct(const sema::types::struct_t& s, const sema::type& original)
         -> llvm::Type*;
+    auto set_struct_body(llvm::StructType*            struct_ty,
+                         const sema::types::struct_t& s,
+                         gsl::span<llvm::Type* const> element_types) -> void;
+    // Lays `element_types` out at the offsets sema gave them (`wanted_alignments`, `@[align(n)]`
+    // included) wherever LLVM's own alignment would put them elsewhere
+    auto set_padded_body(llvm::StructType*            struct_ty,
+                         gsl::span<llvm::Type* const> element_types,
+                         gsl::span<const u64>         wanted_alignments,
+                         bool                         is_packed) -> void;
     auto translate_union(const sema::types::union_t& u, const sema::type& original) -> llvm::Type*;
+    auto set_untagged_union_body(llvm::StructType* union_ty, const sema::types::union_t& u) -> void;
     auto translate_enum(const sema::types::enum_t& e) -> llvm::Type*;
     auto translate_closure(const sema::types::closure_t& c, const sema::type& original)
         -> llvm::Type*;
@@ -62,6 +89,9 @@ class type_translator {
     type_cache_t               closure_cache_;
     aggregate_identity_cache_t struct_identity_cache_;
     aggregate_identity_cache_t union_identity_cache_;
+
+    padded_struct_map padded_structs_;
+    union_member_map  union_members_;
 };
 
 } // namespace ghoti::codegen

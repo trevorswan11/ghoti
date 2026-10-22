@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <ios>
 #include <string>
 #include <string_view>
 
@@ -17,5 +18,15 @@ namespace ghoti::path_utils {
 
 // Renders a filesystem path as a `file://` URI per the LSP spec's URI conventions
 [[nodiscard]] auto path_to_uri(const std::filesystem::path& path) -> std::string;
+
+// The path as UTF-8 for printing; `path.string()` goes through the Windows code page instead,
+// which turns anything it can't hold into '?'
+[[nodiscard]] auto display(const std::filesystem::path& path) -> std::string;
+
+[[nodiscard]] auto exists(const std::filesystem::path& path) -> bool;
+[[nodiscard]] auto is_file(const std::filesystem::path& path) -> bool;
+
+[[nodiscard]] auto read_file(const std::filesystem::path& path,
+                             std::ios::openmode           mode = std::ios::binary) -> std::string;
 
 } // namespace ghoti::path_utils

@@ -134,13 +134,13 @@ TEST_CASE("Type translate struct and enum types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Color := enum {
+        const Color = enum {
             RED,
             GREEN,
             BLUE,
         };
 
-        const Point := struct {
+        const Point = struct {
             x: i32,
             y: i32,
             color: Color,
@@ -169,7 +169,7 @@ TEST_CASE("Type translate tagged union types from parsed programs") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const Value := union {
+        const Value = union(enum) {
             none: void,
             small: i32,
             big: f64,
@@ -195,7 +195,7 @@ TEST_CASE("Type translate untagged extern union types") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const RawUnion := extern union {
+        const RawUnion = extern union {
             i: i32,
             f: f64,
         };
@@ -204,10 +204,11 @@ TEST_CASE("Type translate untagged extern union types") {
     const auto [union_sym, union_data, union_type]{
         ctx->get_type_sym_info<sema::symbols::node_t>("RawUnion", idx)};
     auto* union_llvm{translator.translate(union_type)};
-    REQUIRE(union_llvm->isArrayTy());
-    auto* arr_ty{llvm::cast<llvm::ArrayType>(union_llvm)};
-    CHECK(arr_ty->getNumElements() == 8);
-    CHECK(arr_ty->getElementType()->isIntegerTy(8));
+    // Stored as its most aligned member, as clang does
+    REQUIRE(union_llvm->isStructTy());
+    CHECK(union_llvm->getStructNumElements() == 1);
+    CHECK(union_llvm->getStructElementType(0)->isDoubleTy());
+    CHECK(mod.getDataLayout().getTypeAllocSize(union_llvm) == 8);
 }
 
 TEST_CASE("Untagged union payload size follows the module's target data layout") {
@@ -217,7 +218,7 @@ TEST_CASE("Untagged union payload size follows the module's target data layout")
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const RawUnion := extern union {
+        const RawUnion = extern union {
             p: ^i32,
         };
     )")};
@@ -225,8 +226,8 @@ TEST_CASE("Untagged union payload size follows the module's target data layout")
     const auto [union_sym, union_data, union_type]{
         ctx->get_type_sym_info<sema::symbols::node_t>("RawUnion", idx)};
     auto* union_llvm{translator.translate(union_type)};
-    REQUIRE(union_llvm->isArrayTy());
-    CHECK(llvm::cast<llvm::ArrayType>(union_llvm)->getNumElements() == 4);
+    REQUIRE(union_llvm->isStructTy());
+    CHECK(mod.getDataLayout().getTypeAllocSize(union_llvm) == 4);
 }
 
 TEST_CASE("usize/isize/slice-length follow the module's target data layout") {
@@ -256,7 +257,7 @@ TEST_CASE("Type translate packed struct types") {
     codegen::type_translator translator{context, mod};
 
     auto [ctx, idx]{helpers::resolve_and_check(R"(
-        const PackedHeader := packed struct {
+        const PackedHeader = packed struct {
             flag: u8,
             val: u32,
         };

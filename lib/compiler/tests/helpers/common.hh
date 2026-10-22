@@ -26,14 +26,14 @@ template <typename E> auto check_errors(gsl::span<const E> errors) {
 }
 
 // Checks if the error list is empty, dumping the list's contents otherwise.
-template <typename DiagList> auto check_errors(const mod::module& module) {
+template <typename DiagList> auto check_errors(const mod::module_t& module) {
     if (const auto diags{module.diagnostics.as_opt<DiagList>()}) {
         check_errors<typename DiagList::value_type>(*diags);
     }
 }
 
 // Checks if the error list is matches the expected, dumping the list's contents otherwise.
-template <typename E, std::same_as<E>... Es>
+template <typename E, std::convertible_to<E>... Es>
 auto check_errors_against(gsl::span<const E> errors, Es&&... expected_errors) {
     const std::array expected_arr{std::forward<Es>(expected_errors)...};
     constexpr auto   expected_count{sizeof...(Es)};
@@ -53,7 +53,7 @@ auto check_errors_against(gsl::span<const E> errors, Es&&... expected_errors) {
 }
 
 template <typename DiagList, std::same_as<typename DiagList::value_type>... Es>
-auto check_errors_against(const mod::module& module, Es&&... expected_errors) {
+auto check_errors_against(const mod::module_t& module, Es&&... expected_errors) {
     const auto& diags{UNWRAP(module.diagnostics.as_opt<DiagList>())};
     check_errors_against<typename DiagList::value_type>(diags,
                                                         std::forward<Es>(expected_errors)...);

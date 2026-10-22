@@ -68,6 +68,10 @@ go.work.sum
 site/tmp
 go.sum
 
+# Python
+__pycache__/
+*.pyc
+
 # Templ
 *_templ.go
 

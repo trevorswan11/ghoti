@@ -4,14 +4,18 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <stdx/memory.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "driver/cmd/lsp/document_store.hh"
 #include "driver/cmd/lsp/rpc.hh"
+#include "driver/cmd/lsp/server.hh"
 #include "support/path_utils.hh"
 #include "support/subprocess.hh"
 #include "support/tempfile.hh"
@@ -20,7 +24,7 @@
 namespace ghoti::tests {
 
 TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -49,7 +53,7 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
                        });
 
     constexpr std::string_view uri{"file:///test_e2e.gh"};
-    constexpr std::string_view text{"pub const x := 5;\npub const y := x + 1;\n"};
+    constexpr std::string_view text{"pub const x = 5;\npub const y = x + 1;\n"};
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -86,14 +90,14 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
                                        "position",
                                        {
                                            {"line", 1},
-                                           {"character", 15},
+                                           {"character", 14},
                                        },
                                    },
                                },
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "comptime_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
@@ -103,8 +107,32 @@ TEST_CASE("ghoti lsp answers initialize/didOpen/hover/shutdown over a real child
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp answers malformed messages with JSON-RPC errors and keeps serving") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    constexpr std::string_view bad_body{"{not json"};
+    proc.stdin_stream() << fmt::format("Content-Length: {}\r\n\r\n{}", bad_body.size(), bad_body);
+    proc.stdin_stream().flush();
+    const auto parse_error = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(parse_error.at("error").at("code") == cmd::PARSE_ERROR);
+    CHECK(parse_error.at("id").is_null());
+
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"id", 4}});
+    const auto invalid_request = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(invalid_request.at("error").at("code") == cmd::INVALID_REQUEST);
+    CHECK(invalid_request.at("id") == 4);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 5}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("id") == 5);
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 TEST_CASE("ghoti lsp hover surfaces a `///` doc comment on an enum variant and its uses") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -129,16 +157,16 @@ TEST_CASE("ghoti lsp hover surfaces a `///` doc comment on an enum variant and i
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_field_doc.gh"};
-    constexpr std::string_view text{R"(pub const Color := enum : u32 {
+    constexpr std::string_view text{R"(pub const Color = enum : u32 {
     /// The warm one.
     red = 1u32,
     blue = 2u32, /// the cool one
 };
-pub const Stat := struct {
+pub const Stat = struct {
     dev: i32, /// device id
     mode: u16,
 };
-pub const main := fn(): i32 {
+pub const main = fn(): i32 {
     return if (Color.red == Color.red) 0 else 1;
 };
 )"};
@@ -197,8 +225,273 @@ pub const main := fn(): i32 {
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
 }
 
+TEST_CASE("ghoti lsp hover surfaces the `builtin` module's doc comments") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_builtin_doc.gh"};
+    constexpr std::string_view text{R"(pub const main = fn(): i32 {
+    let set: builtin.CpuFeatureSet = .{};
+    _ = set;
+    return if (builtin.cpu.model.len == 0) 1 else 0;
+};
+const mode = builtin.CallModifier.never_inline;
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    CHECK(hover_at(2, 1, 24).contains("A set of the target architecture's `CpuFeature`s"));
+    CHECK(hover_at(3, 3, 25).contains("The CPU code is generated for"));
+    CHECK(hover_at(4, 5, 40).contains("Never inlined"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp shows default parameter values and hides their wrappers") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_default_params.gh"};
+    constexpr std::string_view text{R"(const scale = 3;
+const area = fn(w: i32, h: i32 = w * scale): i32 { return w * h; };
+pub const main = fn(): i32 {
+    return area(2);
+};
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    // The call site names the declaration, defaults and all
+    CHECK(hover_at(2, 3, 12) == "fn(w: i32, h: i32 = w * scale): i32");
+    // A name inside a default resolves like any other use
+    CHECK(hover_at(3, 1, 39) == "i32");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 5},
+                           {"method", "textDocument/documentSymbol"},
+                           {"params", {{"textDocument", {{"uri", uri}}}}},
+                       });
+    // Assigned, since brace-initializing a json wraps it in an array
+    const auto symbols = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)).at("result");
+    CHECK(symbols.size() == 3); // scale, area, main; not __ghoti_area@default1
+    CHECK_FALSE(lsp::has_field(symbols, "name", "__ghoti_area@default1"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp hover names a callable's parameters") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_param_names.gh"};
+    constexpr std::string_view text{
+        R"(const add = fn(lhs: i32, rhs: i32): i32 { return lhs + rhs; };
+const Callback = fn(code: i32): bool;
+const Handler = struct { on_event: Callback, raw: fn(value: i32): void };
+const run = fn(cb: fn(n: i32): i32, h: Handler): i32 {
+    let ok = h.on_event(cb(1));
+    h.raw(add(2, 3));
+    return if (ok) 1 else 0;
+};
+pub const main = fn(): i32 { return 0; };
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    // A function literal, an erased `fn`-typed param, a field typed through an alias, and a
+    // field typed by an inline `fn(...)` all keep the names their declarations wrote
+    CHECK(hover_at(2, 5, 10) == "fn(lhs: i32, rhs: i32): i32");
+    CHECK(hover_at(3, 4, 25) == "fn(n: i32): i32");
+    CHECK(hover_at(4, 4, 16) == "fn(code: i32): bool");
+    CHECK(hover_at(5, 5, 6) == "fn(value: i32): void");
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
 TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -224,7 +517,7 @@ TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child proc
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_code_action.gh"};
-    constexpr std::string_view text{"pub const x := 5\n"}; // missing trailing ';'
+    constexpr std::string_view text{"pub const x = 5\n"}; // missing trailing ';'
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -289,7 +582,7 @@ TEST_CASE("ghoti lsp offers a missing-semicolon quick fix over a real child proc
 }
 
 TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -315,7 +608,7 @@ TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") 
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_incremental.gh"};
-    constexpr std::string_view text{"pub const x := 5;\npub const y := x + 1;\n"};
+    constexpr std::string_view text{"pub const x = 5;\npub const y = x + 1;\n"};
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -364,7 +657,7 @@ TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") 
                                                        },
                                                    },
                                                },
-                                               {"text", "pub const z := 99;\n"},
+                                               {"text", "pub const z = 99;\n"},
                                            },
                                        },
                                    },
@@ -410,7 +703,7 @@ TEST_CASE("ghoti lsp applies an incremental didChange edit and re-analyzes it") 
 }
 
 TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same file") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -436,9 +729,9 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_mixed_errors.gh"};
-    constexpr std::string_view text{"pub const x := 5;\n"
-                                    "pub const y := undeclared_thing;\n"
-                                    "pub const broken := 1\n"};
+    constexpr std::string_view text{"pub const x = 5;\n"
+                                    "pub const y = undeclared_thing;\n"
+                                    "pub const broken = 1\n"};
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -490,7 +783,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
                            },
                        });
     const auto hover_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
-    CHECK(hover_resp.at("result").at("contents").at("value") == "constexpr_int");
+    CHECK(hover_resp.at("result").at("contents").at("value") == "comptime_int");
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -505,7 +798,7 @@ TEST_CASE("ghoti lsp reports both a syntax error and a sema error in the same fi
 }
 
 TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -531,7 +824,7 @@ TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
                        });
 
     constexpr std::string_view uri{"file:///test_e2e_workspace_symbol.gh"};
-    constexpr std::string_view text{"pub const findable_thing := 1;\npub const other := 2;\n"};
+    constexpr std::string_view text{"pub const findable_thing = 1;\npub const other = 2;\n"};
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -583,7 +876,7 @@ TEST_CASE("ghoti lsp answers workspace/symbol over a real child process") {
 }
 
 TEST_CASE("ghoti lsp resolves go-to-definition and references across an import") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -611,9 +904,9 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     // Both files share a directory so the relative import resolves without touching real disk
     constexpr std::string_view helper_uri{"file:///C:/ghoti_e2e_xmod/helper.gh"};
     constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_xmod/main.gh"};
-    constexpr std::string_view helper_text{"pub const value := 42;\n"};
+    constexpr std::string_view helper_text{"pub const value = 42;\n"};
     constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
-                                         "pub const x := helper.value;\n"};
+                                         "pub const x = helper.value;\n"};
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -667,7 +960,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     }
     REQUIRE_FALSE(canonical_main_uri.empty());
 
-    // Line 1, column 22 lands on `value` in `helper.value`
+    // Line 1, column 21 lands on `value` in `helper.value`
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -681,7 +974,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                        "position",
                                        {
                                            {"line", 1},
-                                           {"character", 22},
+                                           {"character", 21},
                                        },
                                    },
                                },
@@ -700,7 +993,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                "params",
                                {
                                    {"textDocument", {{"uri", main_uri}}},
-                                   {"position", {{"line", 1}, {"character", 22}}},
+                                   {"position", {{"line", 1}, {"character", 21}}},
                                    {
                                        "context",
                                        {
@@ -714,7 +1007,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     const auto& locations{refs_resp.at("result")};
     REQUIRE(locations.size() == 1);
     CHECK(locations[0].at("uri") == canonical_main_uri);
-    CHECK(locations[0].at("range").at("start").at("character") == 22);
+    CHECK(locations[0].at("range").at("start").at("character") == 21);
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -739,7 +1032,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
     const auto& upstream_locations{upstream_refs_resp.at("result")};
     REQUIRE(upstream_locations.size() == 1);
     CHECK(upstream_locations[0].at("uri") == canonical_main_uri);
-    CHECK(upstream_locations[0].at("range").at("start").at("character") == 22);
+    CHECK(upstream_locations[0].at("range").at("start").at("character") == 21);
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -755,8 +1048,8 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
                                            {
                                                {"text",
                                                 "import \"helper.gh\" as helper;\n"
-                                                "pub const x := helper.value;\n"
-                                                "pub const y := helper.value;\n"},
+                                                "pub const x = helper.value;\n"
+                                                "pub const y = helper.value;\n"},
                                            },
                                        },
                                    },
@@ -800,7 +1093,7 @@ TEST_CASE("ghoti lsp resolves go-to-definition and references across an import")
 }
 
 TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -824,9 +1117,9 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
 
     constexpr std::string_view helper_uri{"file:///C:/ghoti_e2e_rename_xmod/helper.gh"};
     constexpr std::string_view main_uri{"file:///C:/ghoti_e2e_rename_xmod/main.gh"};
-    constexpr std::string_view helper_text{"pub const value := 42;\n"};
+    constexpr std::string_view helper_text{"pub const value = 42;\n"};
     constexpr std::string_view main_text{"import \"helper.gh\" as helper;\n"
-                                         "pub const x := helper.value;\n"};
+                                         "pub const x = helper.value;\n"};
 
     lsp::write_message(proc.stdin_stream(),
                        {
@@ -886,7 +1179,7 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
     const auto& main_edits{changes.at(canonical_main_uri)};
     REQUIRE(main_edits.size() == 1);
     CHECK(main_edits[0].at("newText") == "renamed");
-    CHECK(main_edits[0].at("range").at("start").at("character") == 22);
+    CHECK(main_edits[0].at("range").at("start").at("character") == 21);
 
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
@@ -898,7 +1191,7 @@ TEST_CASE("ghoti lsp renames a symbol from its upstream importer's usage") {
 
 TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-fresh") {
     // A large explicit window so every didChange in the rapid burst below must land inside it
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "5000"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "5000"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -937,7 +1230,7 @@ TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-f
                                            {"uri", uri},
                                            {"languageId", "ghoti"},
                                            {"version", 1},
-                                           {"text", "pub const x := 1;\n"},
+                                           {"text", "pub const x = 1;\n"},
                                        },
                                    },
                                },
@@ -948,8 +1241,8 @@ TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-f
 
     // Five rapid edits, none read in between
     for (i32 i{2}; i <= 6; ++i) {
-        const auto text{i == 6 ? std::string{"pub const x := 1;\npub const z := 99;\n"}
-                               : fmt::format("pub const x := {};\n", i)};
+        const auto text{i == 6 ? std::string{"pub const x = 1;\npub const z = 99;\n"}
+                               : fmt::format("pub const x = {};\n", i)};
         lsp::write_message(proc.stdin_stream(),
                            {{"jsonrpc", "2.0"},
                             {"method", "textDocument/didChange"},
@@ -999,12 +1292,12 @@ TEST_CASE("ghoti lsp throttles rapid didChange notifications but stays content-f
 
 TEST_CASE("ghoti lsp discovers workspace files and resolves references without opening them") {
     tempdir dir{"e2e_workspace_scan"};
-    dir.write("helper.gh", "pub const value := 42;\n");
+    dir.write("helper.gh", "pub const value = 42;\n");
     dir.write("main.gh",
               "import \"helper.gh\" as helper;\n"
-              "pub const x := helper.value;\n");
+              "pub const x = helper.value;\n");
 
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     const auto workspace_uri{path_utils::path_to_uri(dir.path)};
@@ -1071,7 +1364,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
     const auto& locations{refs_resp.at("result")};
     REQUIRE(locations.size() == 1);
     CHECK(locations[0].at("uri") == main_uri);
-    CHECK(locations[0].at("range").at("start").at("character") == 22);
+    CHECK(locations[0].at("range").at("start").at("character") == 21);
     lsp::write_message(proc.stdin_stream(),
                        {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
     const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
@@ -1081,7 +1374,7 @@ TEST_CASE("ghoti lsp discovers workspace files and resolves references without o
 }
 
 TEST_CASE("ghoti lsp formats an unformatted document over a real child process") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1164,7 +1457,7 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
 
     // Document with syntax errors should return null
     constexpr std::string_view broken_uri{"file:///test_e2e_format_broken.gh"};
-    constexpr std::string_view broken_text{"pub const broken := ;\n"};
+    constexpr std::string_view broken_text{"pub const broken = ;\n"};
     lsp::write_message(proc.stdin_stream(),
                        {
                            {"jsonrpc", "2.0"},
@@ -1231,7 +1524,7 @@ TEST_CASE("ghoti lsp formats an unformatted document over a real child process")
 }
 
 TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
-    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--throttle-ms", "0"}};
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
     REQUIRE(proc.is_running());
 
     lsp::write_message(proc.stdin_stream(),
@@ -1258,8 +1551,8 @@ TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
         {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
 
     constexpr std::string_view uri{"file:///test_e2e_doc.gh"};
-    constexpr std::string_view text{"/// The magic number.\npub const answer := 42;\n"
-                                    "pub const echo := answer;\n"};
+    constexpr std::string_view text{"/// The magic number.\npub const answer = 42;\n"
+                                    "pub const echo = answer;\n"};
     lsp::write_message(
         proc.stdin_stream(),
         {{"jsonrpc", "2.0"},
@@ -1306,6 +1599,349 @@ TEST_CASE("ghoti lsp includes `///` doc comments in hover contents") {
     CHECK(shutdown_resp.at("result").is_null());
     lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
     CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+TEST_CASE("ghoti lsp hover shows the peer type of a mixed-type binding") {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"processId", nullptr},
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+
+    constexpr std::string_view uri{"file:///test_e2e_peer_hover.gh"};
+    constexpr std::string_view text{R"(let mut small: i8 = 1;
+let mut wide: i64 = 2;
+pub const main = fn(): i32 {
+    let sum = small + wide;
+    let pick = if (small < wide) small else wide;
+    return 0;
+};
+)"};
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+
+    const auto hover_at = [&](i32 id, i32 line, i32 character) -> std::string {
+        lsp::write_message(proc.stdin_stream(),
+                           {
+                               {"jsonrpc", "2.0"},
+                               {"id", id},
+                               {"method", "textDocument/hover"},
+                               {"params",
+                                {{"textDocument", {{"uri", uri}}},
+                                 {"position", {{"line", line}, {"character", character}}}}},
+                           });
+        return UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr))
+            .at("result")
+            .at("contents")
+            .at("value")
+            .get<std::string>();
+    };
+
+    CHECK(hover_at(2, 3, 9).contains("i64"));
+    CHECK(hover_at(3, 4, 9).contains("i64"));
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "shutdown"}});
+    CHECK(lsp::read_message(proc.stdout_stream(), std::cerr));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+namespace {
+
+// Renames the emoji identifier from its second use and returns the edits' start columns
+auto rename_emoji_columns(const nlohmann::json& client_capabilities) -> std::vector<i64> {
+    piped_process proc{mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", "0"}};
+    REQUIRE(proc.is_running());
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"id", 1},
+         {"method", "initialize"},
+         {"params", {{"processId", nullptr}, {"capabilities", client_capabilities}}}});
+    const auto init_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    const auto encoding{
+        init_resp.at("result").at("capabilities").at("positionEncoding").get<std::string>()};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"}, {"method", "initialized"}, {"params", nlohmann::json::object()}});
+
+    constexpr std::string_view uri{"file:///C:/ghoti_e2e_unicode/main.gh"};
+    const std::string text{"const @\"\xF0\x9F\x98\x80\" = 1;\n"
+                           "pub const x = @\"\xF0\x9F\x98\x80\" + @\"\xF0\x9F\x98\x80\";\n"};
+    lsp::write_message(
+        proc.stdin_stream(),
+        {{"jsonrpc", "2.0"},
+         {"method", "textDocument/didOpen"},
+         {"params",
+          {{"textDocument",
+            {{"uri", uri}, {"languageId", "ghoti"}, {"version", 1}, {"text", text}}}}}});
+    DISCARD(UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)));
+
+    // The second use starts at byte 25, which is UTF-16 unit 23
+    const i64 second_use{encoding == "utf-8" ? 25 : 23};
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"},
+                        {"id", 2},
+                        {"method", "textDocument/rename"},
+                        {"params",
+                         {{"textDocument", {{"uri", uri}}},
+                          {"position", {{"line", 1}, {"character", second_use}}},
+                          {"newName", "smile"}}}});
+    const auto       rename_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    std::vector<i64> columns;
+    for (const auto& [file, edits] : rename_resp.at("result").at("changes").items()) {
+        for (const auto& edit : edits) {
+            columns.emplace_back(edit.at("range").at("start").at("character").get<i64>());
+        }
+    }
+    std::ranges::sort(columns);
+
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "shutdown"}});
+    DISCARD(UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr)));
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+    return columns;
+}
+
+} // namespace
+
+TEST_CASE("ghoti lsp counts UTF-16 units by default and bytes when the client offers UTF-8") {
+    CHECK(rename_emoji_columns(nlohmann::json::object()) == std::vector<i64>{6, 14, 22});
+    const nlohmann::json utf8{
+        {"general", {{"positionEncodings", nlohmann::json::array({"utf-8", "utf-16"})}}}};
+    CHECK(rename_emoji_columns(utf8) == std::vector<i64>{6, 14, 24});
+}
+
+namespace {
+
+// An initialized child server that debounces edits by `debounce_ms`
+auto start_server(std::string_view debounce_ms) -> stdx::box<piped_process> {
+    auto proc{stdx::make_box<piped_process>(
+        mock_argv{ghoti_binary_path().string(), "lsp", "--debounce-ms", std::string{debounce_ms}})};
+    REQUIRE(proc->is_running());
+
+    lsp::write_message(proc->stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", 1},
+                           {"method", "initialize"},
+                           {
+                               "params",
+                               {
+                                   {"capabilities", nlohmann::json::object()},
+                               },
+                           },
+                       });
+    CHECK(lsp::read_message(proc->stdout_stream(), std::cerr));
+    lsp::write_message(proc->stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "initialized"},
+                           {"params", nlohmann::json::object()},
+                       });
+    return proc;
+}
+
+auto open_document(piped_process& proc, std::string_view uri, std::string_view text) -> void {
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didOpen"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"languageId", "ghoti"},
+                                           {"version", 1},
+                                           {"text", text},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+}
+
+// `start_server` with `uri` opened as `text`, its first diagnostics already read
+auto start_with_document(std::string_view debounce_ms, std::string_view uri, std::string_view text)
+    -> stdx::box<piped_process> {
+    auto proc{start_server(debounce_ms)};
+    open_document(*proc, uri, text);
+    const auto opened = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(opened.at("method") == "textDocument/publishDiagnostics");
+    return proc;
+}
+
+auto request_hover(piped_process& proc, i32 id, std::string_view uri, i32 line, i32 character)
+    -> void {
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"id", id},
+                           {"method", "textDocument/hover"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                       },
+                                   },
+                                   {
+                                       "position",
+                                       {
+                                           {"line", line},
+                                           {"character", character},
+                                       },
+                                   },
+                               },
+                           },
+                       });
+}
+
+auto replace_all(piped_process& proc, std::string_view uri, i32 version, std::string_view text)
+    -> void {
+    lsp::write_message(proc.stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "textDocument/didChange"},
+                           {
+                               "params",
+                               {
+                                   {
+                                       "textDocument",
+                                       {
+                                           {"uri", uri},
+                                           {"version", version},
+                                       },
+                                   },
+                                   {
+                                       "contentChanges",
+                                       {
+                                           {
+                                               {"text", text},
+                                           },
+                                       },
+                                   },
+                               },
+                           },
+                       });
+}
+
+auto shut_down(piped_process& proc) -> void {
+    lsp::write_message(proc.stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 99}, {"method", "shutdown"}});
+    const auto shutdown_resp = UNWRAP(lsp::read_message(proc.stdout_stream(), std::cerr));
+    CHECK(shutdown_resp.at("id") == 99);
+    lsp::write_message(proc.stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc.close_stdin_and_wait()) == 0);
+}
+
+} // namespace
+
+TEST_CASE("ghoti lsp publishes a debounced edit's diagnostics with no request after it") {
+    constexpr std::string_view uri{"file:///test_e2e_debounced.gh"};
+    auto                       proc{start_with_document("50", uri, "pub const x = 5;\n")};
+
+    // Nothing follows the edit, so only the debounce timer can publish its diagnostics
+    replace_all(*proc, uri, 2, "pub const x: i32 = true;\n");
+    const auto published = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(published.at("method") == "textDocument/publishDiagnostics");
+    CHECK(published.at("params").at("diagnostics").size() == 1);
+
+    shut_down(*proc);
+}
+
+TEST_CASE("ghoti lsp answers a query right after an edit without waiting out the debounce") {
+    constexpr std::string_view uri{"file:///test_e2e_parked.gh"};
+    auto                       proc{start_server("600000")};
+
+    // The hover needs the opened text analyzed, which starts at once instead of in ten minutes
+    open_document(*proc, uri, "pub const x = 5;\npub const y = x + 1;\n");
+    request_hover(*proc, 2, uri, 1, 14);
+
+    // The analysis's diagnostics come before the answer that waited on it
+    const auto published = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(published.at("method") == "textDocument/publishDiagnostics");
+    const auto hover = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+    CHECK(hover.at("id") == 2);
+    CHECK(hover.at("result").at("contents").at("value") == "comptime_int");
+
+    shut_down(*proc);
+}
+
+TEST_CASE("ghoti lsp answers a request it was asked to cancel exactly once") {
+    constexpr std::string_view uri{"file:///test_e2e_cancel.gh"};
+    auto                       proc{start_with_document("0", uri, "pub const x = 5;\n")};
+
+    replace_all(*proc, uri, 2, "pub const x = 6;\n");
+    request_hover(*proc, 7, uri, 0, 10);
+    lsp::write_message(proc->stdin_stream(),
+                       {
+                           {"jsonrpc", "2.0"},
+                           {"method", "$/cancelRequest"},
+                           {"params", {{"id", 7}}},
+                       });
+
+    // Cancelled, or answered if the cancellation came too late; either way only once
+    usize answers{0};
+    lsp::write_message(proc->stdin_stream(),
+                       {{"jsonrpc", "2.0"}, {"id", 99}, {"method", "shutdown"}});
+    while (true) {
+        const auto message = UNWRAP(lsp::read_message(proc->stdout_stream(), std::cerr));
+        if (!message.contains("id")) { continue; }
+        if (message.at("id") == 99) { break; }
+        CHECK(message.at("id") == 7);
+        if (message.contains("error")) {
+            CHECK(message.at("error").at("code") == cmd::REQUEST_CANCELLED);
+        }
+        ++answers;
+    }
+    CHECK(answers == 1);
+
+    lsp::write_message(proc->stdin_stream(), {{"jsonrpc", "2.0"}, {"method", "exit"}});
+    CHECK(UNWRAP(proc->close_stdin_and_wait()) == 0);
 }
 
 } // namespace ghoti::tests

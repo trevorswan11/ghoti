@@ -1,4 +1,4 @@
-//! https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/clang/lib/Parse/CMakeLists.txt
+//! https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/clang/lib/Parse/CMakeLists.txt
 const LLVMBuilder = @import("../../LLVMBuilder.zig");
 const SynthesizeHeaderConfig = LLVMBuilder.SynthesizeHeaderConfig;
 
@@ -24,6 +24,7 @@ pub const sources = [_][]const u8{
     "ParseTentative.cpp",
     "Parser.cpp",
     "ParseOpenACC.cpp",
+    "ParseReflect.cpp",
 };
 
 const attr_td = basic.attr_td;

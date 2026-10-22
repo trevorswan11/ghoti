@@ -20,34 +20,23 @@ namespace ghoti::sema {
 
 namespace {
 
-[[nodiscard]] auto denoted_type(const type& t) noexcept -> const type& {
-    if (t.get_kind() == type_kind::TYPE) {
-        if (const auto meta{t.get_data().as_opt<types::meta_type>()}) { return meta->instance; }
-    }
-    return t;
-}
-
-[[nodiscard]] auto unref_type(const type& t) noexcept -> const type& {
+[[nodiscard]] auto unref_type(type& t) noexcept -> type& {
     if (const auto ref{t.get_data().as_opt<types::reference>()}) { return ref->underlying; }
     return t;
 }
 
 } // namespace
 
-// Looks up an associated type alias (`using Output = ...` or `const Output := ...`)
+// Looks up an associated type alias (`const Output = ...`)
 // in the impl's body scope. If the impl is parameterized (`from_parameterized`), any
 // sentinel types are remapped to concrete type arguments.
 auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_view name)
-    -> stdx::option<const type&> {
+    -> stdx::option<type&> {
     if (const auto bsym{ctx.registry.get_from_opt(rec.body_scope_idx, name)}) {
         if (const auto bnode{bsym->get_data().as_opt<symbols::node_t>()}) {
-            const auto& mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
-            stdx::option<const type&> result;
-            if (const auto bu{mod.ast.get_as_opt<ast::using_stmt>(*bnode)}) {
-                if (const auto t{mod.get_sema_type_opt(bu->explicit_type)}) {
-                    if (t->is_resolved() && !t->is_poison()) { result.emplace(denoted_type(*t)); }
-                }
-            } else if (const auto bd{mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
+            auto&               mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
+            stdx::option<type&> result;
+            if (const auto bd{mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
                 if (const auto t{mod.get_sema_type_opt(*bd->value)}) {
                     if (t->is_resolved() && !t->is_poison()) { result.emplace(denoted_type(*t)); }
                 }
@@ -57,11 +46,10 @@ auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_vie
                 // replace sentinels with the actual concrete type arguments instantiated for this
                 // target.
                 if (rec.from_parameterized) {
-                    stdx::option<type&> r{const_cast<type&>(*result)};
+                    stdx::option<type&> r{result};
                     for (usize i{0}; i < rec.sentinels.size() && i < rec.type_arguments.size();
                          ++i) {
-                        r.emplace(remap_type(
-                            ctx, *r, *rec.sentinels[i], *const_cast<type*>(rec.type_arguments[i])));
+                        r.emplace(remap_type(ctx, *r, *rec.sentinels[i], *rec.type_arguments[i]));
                     }
                     return *r;
                 }
@@ -109,34 +97,28 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
         [&](types::pointer p) -> type& {
             auto& u{remap_type(ctx, p.underlying, from, to)};
             if (&u == &p.underlying) { return t; }
-            return ctx.get_pointer(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE, u);
+            return ctx.get_pointer(t.get_key().get_mut(), u);
         },
         [&](types::reference r) -> type& {
             auto& u{remap_type(ctx, r.underlying, from, to)};
             if (&u == &r.underlying) { return t; }
-            return ctx.get_reference(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                     u);
+            return ctx.get_reference(t.get_key().get_mut(), u);
         },
         [&](types::slice sl) -> type& {
             auto& u{remap_type(ctx, sl.underlying, from, to)};
             if (&u == &sl.underlying) { return t; }
-            return ctx.get_slice(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 sl.null_terminated,
-                                 u);
+            return ctx.get_slice(t.get_key().get_mut(), sl.null_terminated, u);
         },
         [&](types::array ar) -> type& {
             auto& u{remap_type(ctx, ar.underlying, from, to)};
             if (&u == &ar.underlying) { return t; }
-            return ctx.get_array(t.is_constant() ? types::mut::CONSTANT : types::mut::MUTABLE,
-                                 ar.null_terminated,
-                                 ar.len,
-                                 u);
+            return ctx.get_array(t.get_key().get_mut(), ar.null_terminated, ar.len, u);
         },
         [&](types::deferred_array da) -> type& {
             auto& u{remap_type(ctx, da.underlying, from, to)};
             if (&u == &da.underlying) { return t; }
             auto& nt{*ctx.pool[{type_kind::TYPE, t.get_key().get_mut(), &da.array, &u}]};
-            nt.resolve_if<types::deferred_array>(da.array, u);
+            nt.resolve_if<types::deferred_array>(da.array, u, da.enclosing);
             return nt;
         },
         [&](types::function fn) -> type& {
@@ -155,8 +137,31 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             key.imprint(new_ret);
             key.imprint(static_cast<u64>(fn.has_self));
             key.imprint(static_cast<u64>(fn.is_variadic));
+            key.imprint(fn.conv);
+            key.imprint(static_cast<u64>(fn.erased));
+            if (t.has_symbol_table_idx()) { key.imprint(t.get_symbol_table_idx()); }
             auto& nt{*ctx.pool[key]};
-            nt.resolve_if<types::function>(new_params, new_ret, fn.has_self, fn.is_variadic);
+            nt.resolve_if<types::function>(
+                new_params, new_ret, fn.has_self, fn.is_variadic, fn.conv, fn.erased);
+            if (t.has_symbol_table_idx()) { nt.set_symbol_table_idx(t.get_symbol_table_idx()); }
+
+            if (&nt != &t) {
+                if (auto info{ctx.generic_functions.get_opt(t)}) {
+                    stdx::option<type&> remapped_enclosing{info->enclosing_type};
+                    if (info->enclosing_type) {
+                        remapped_enclosing.emplace(
+                            remap_type(ctx, *info->enclosing_type, from, to));
+                    }
+                    ctx.generic_functions.register_function(nt,
+                                                            *info->module,
+                                                            info->node_id,
+                                                            *info->fn_expr,
+                                                            info->name,
+                                                            remapped_enclosing,
+                                                            info->enclosing_fn_table_idx);
+                }
+            }
+
             return nt;
         },
         [&t](const auto&) -> type& { return t; });
@@ -165,20 +170,19 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
 // Queries whether `operand` implements `builtin.Unwrappable`. If so, extracts the
 // associated `Output` and `Residual` types and the `Flow(Output, Residual)` return
 // type of `branch(self)`.
-auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_info> {
+auto unwrap_shape_of(context& ctx, type& operand) -> stdx::option<unwrap_info> {
     if (!ctx.prelude_index) { return stdx::none; }
 
-    const auto& base{unref_type(denoted_type(operand))};
+    auto&       base{unref_type(denoted_type(operand))};
     const auto& iface{denoted_type(ctx.get_builtin_type(builtin_impl::UNWRAPPABLE))};
 
     const auto rec_opt{lookup_impl(ctx.impls, base, iface)};
     if (!rec_opt) { return stdx::none; }
     const auto& rec{*rec_opt};
 
-    stdx::option<const type&> output_type{find_assoc_type_alias(ctx, rec, builtin_impl::OUTPUT)};
-    stdx::option<const type&> residual_type{
-        find_assoc_type_alias(ctx, rec, builtin_impl::RESIDUAL)};
-    stdx::option<const type&> flow_type;
+    stdx::option<type&> output_type{find_assoc_type_alias(ctx, rec, builtin_impl::OUTPUT)};
+    stdx::option<type&> residual_type{find_assoc_type_alias(ctx, rec, builtin_impl::RESIDUAL)};
+    stdx::option<type&> flow_type;
 
     // Retrieve concrete `Flow(...)` return type from `branch(self)`
     if (const auto m{rec.find_method(builtin_impl::BRANCH)}; m && m->fn_type) {
@@ -201,17 +205,17 @@ auto unwrap_shape_of(context& ctx, const type& operand) -> stdx::option<unwrap_i
     };
 }
 
-auto rewrap_shape_of(context& ctx, const type& return_type) -> stdx::option<rewrap_info> {
+auto rewrap_shape_of(context& ctx, type& return_type) -> stdx::option<rewrap_info> {
     if (!ctx.prelude_index) { return stdx::none; }
 
-    const auto& base{unref_type(denoted_type(return_type))};
+    auto&       base{unref_type(denoted_type(return_type))};
     const auto& iface{denoted_type(ctx.get_builtin_type(builtin_impl::REWRAPPABLE))};
 
     const auto rec_opt{lookup_impl(ctx.impls, base, iface)};
     if (!rec_opt) { return stdx::none; }
     const auto& rec{*rec_opt};
 
-    stdx::option<const type&> from_type;
+    stdx::option<type&> from_type;
     if (const auto m{rec.find_method(builtin_impl::FROM_RESIDUAL)}; m && m->fn_type) {
         if (const auto fd{m->fn_type->get_data().as_opt<types::function>()}) {
             if (!fd->params.empty()) { from_type.emplace(*fd->params[0]); }

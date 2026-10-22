@@ -10,28 +10,28 @@ namespace ghoti::tests {
 namespace {
 
 constexpr std::string_view K1{R"(
-    pub var counter: i32 = 10;
-    pub const bump := fn(): void { counter = counter + 1; };
-    pub const get  := fn(): i32  { return counter; };
-    pub const tag  := fn(): i32  { return 3; };
+    pub let mut counter: i32 = 10;
+    pub const bump = fn(): void { counter = counter + 1; };
+    pub const get  = fn(): i32  { return counter; };
+    pub const tag  = fn(): i32  { return 3; };
 )"};
 
 constexpr std::string_view K2{R"(
-    pub var counter: i32 = 50;
-    pub const bump := fn(): void { counter = counter + 10; };
-    pub const get  := fn(): i32  { return counter; };
-    pub const tag  := fn(): i32  { return 7; };
+    pub let mut counter: i32 = 50;
+    pub const bump = fn(): void { counter = counter + 10; };
+    pub const get  = fn(): i32  { return counter; };
+    pub const tag  = fn(): i32  { return 7; };
 )"};
 
 } // namespace
 
-TEST_CASE("E2E: same-named `pub const fn` in two modules stay distinct") {
+TEST_CASE("Same-named `pub const fn` in two modules stay distinct") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
             import "k2.gh" as k2;
 
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return k1.tag() * 10 + k2.tag();   // 37
             };
         )",
@@ -43,13 +43,13 @@ TEST_CASE("E2E: same-named `pub const fn` in two modules stay distinct") {
     CHECK(exit_code == 37);
 }
 
-TEST_CASE("E2E: same-named `pub var` in two modules have independent storage") {
+TEST_CASE("Same-named `pub var` in two modules have independent storage") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
             import "k2.gh" as k2;
 
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 k1.bump();
                 k2.bump();
                 k2.bump();
@@ -63,16 +63,16 @@ TEST_CASE("E2E: same-named `pub var` in two modules have independent storage") {
     CHECK(exit_code == 81);
 }
 
-TEST_CASE("E2E: a module-scope alias of a colliding cross-module function") {
+TEST_CASE("A module-scope alias of a colliding cross-module function") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "k1.gh" as k1;
             import "k2.gh" as k2;
 
-            const first  := k1.tag;
-            const second := k2.tag;
+            const first  = k1.tag;
+            const second = k2.tag;
 
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return first() * 10 + second();   // 37
             };
         )",
@@ -83,41 +83,41 @@ TEST_CASE("E2E: a module-scope alias of a colliding cross-module function") {
     CHECK(exit_code == 37);
 }
 
-TEST_CASE("E2E: two structs in one module with a same-named static method") {
+TEST_CASE("Two structs in one module with a same-named static method") {
     CHECK(helpers::compile_and_run(R"(
-        const A := struct {
+        const A = struct {
             n: i32,
-            const make := fn(v: i32): @This() { return .{ .n = v }; };
+            const make = fn(v: i32): @This() { return .{ .n = v }; };
         };
-        const B := struct {
+        const B = struct {
             m: i32,
-            const make := fn(v: i32): @This() { return .{ .m = v * 3 }; };
+            const make = fn(v: i32): @This() { return .{ .m = v * 3 }; };
         };
 
-        pub const main := fn(): i32 {
-            const a := A.make(10);
-            const b := B.make(4);
+        pub const main = fn(): i32 {
+            let a = A.make(10);
+            let b = B.make(4);
             return a.n + b.m;   // 10 + 12 = 22
         };
     )") == 22);
 }
 
-TEST_CASE("E2E: two structs in one module with a same-named `^self` method") {
+TEST_CASE("Two structs in one module with a same-named `^self` method") {
     CHECK(helpers::compile_and_run(R"(
-        const A := struct {
+        const A = struct {
             n: i32,
-            const make := fn(v: i32): @This() { return .{ .n = v }; };
-            const value := fn(^self): i32 { return self.n + 1; };
+            const make = fn(v: i32): @This() { return .{ .n = v }; };
+            const value = fn(^self): i32 { return self.n + 1; };
         };
-        const B := struct {
+        const B = struct {
             n: i32,
-            const make := fn(v: i32): @This() { return .{ .n = v }; };
-            const value := fn(^self): i32 { return self.n * 2; };
+            const make = fn(v: i32): @This() { return .{ .n = v }; };
+            const value = fn(^self): i32 { return self.n * 2; };
         };
 
-        pub const main := fn(): i32 {
-            const a := A.make(10);
-            const b := B.make(10);
+        pub const main = fn(): i32 {
+            let a = A.make(10);
+            let b = B.make(10);
             return a.value() + b.value();   // 11 + 20 = 31
         };
     )") == 31);
@@ -126,34 +126,34 @@ TEST_CASE("E2E: two structs in one module with a same-named `^self` method") {
 namespace {
 
 constexpr std::string_view SHAPE_A{R"(
-    pub const Shape := struct {
+    pub const Shape = struct {
         k: i32,
-        pub const make := fn(v: i32): @This() { return .{ .k = v }; };
-        pub const area := fn(^self): i32 { return self.k + 1; };
+        pub const make = fn(v: i32): @This() { return .{ .k = v }; };
+        pub const area = fn(^self): i32 { return self.k + 1; };
     };
 )"};
 
 constexpr std::string_view SHAPE_B{R"(
-    pub const Shape := struct {
+    pub const Shape = struct {
         k: i32,
-        pub const make := fn(v: i32): @This() { return .{ .k = v }; };
-        pub const area := fn(^self): i32 { return self.k * 5; };
+        pub const make = fn(v: i32): @This() { return .{ .k = v }; };
+        pub const area = fn(^self): i32 { return self.k * 5; };
     };
 )"};
 
 } // namespace
 
-TEST_CASE("E2E: same-named method on same-named struct in two modules") {
+TEST_CASE("Same-named method on same-named struct in two modules") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "sa.gh" as sa;
             import "sb.gh" as sb;
 
-            pub const main := fn(): i32 {
-                const a := sa.Shape.make(4);   // area -> 5
-                const b := sb.Shape.make(4);   // area -> 20
-                const viaObj := a.area();
-                const viaType := sb.Shape.area(^b);
+            pub const main = fn(): i32 {
+                let a = sa.Shape.make(4);   // area -> 5
+                let b = sb.Shape.make(4);   // area -> 20
+                let viaObj = a.area();
+                let viaType = sb.Shape.area(^b);
                 return viaObj + viaType;        // 5 + 20 = 25
             };
         )",
@@ -164,17 +164,17 @@ TEST_CASE("E2E: same-named method on same-named struct in two modules") {
     CHECK(exit_code == 25);
 }
 
-TEST_CASE("E2E: a module function and a struct method sharing a name do not cross-talk") {
+TEST_CASE("A module function and a struct method sharing a name do not cross-talk") {
     CHECK(helpers::compile_and_run(R"(
-        const make := fn(v: i32): i32 { return v + 100; };
+        const make = fn(v: i32): i32 { return v + 100; };
 
-        const Widget := struct {
+        const Widget = struct {
             n: i32,
-            const make := fn(v: i32): @This() { return .{ .n = v * 2 }; };
+            const make = fn(v: i32): @This() { return .{ .n = v * 2 }; };
         };
 
-        pub const main := fn(): i32 {
-            const w := Widget.make(9);   // n = 18
+        pub const main = fn(): i32 {
+            let w = Widget.make(9);   // n = 18
             return make(7) + w.n;        // 107 + 18 = 125
         };
     )") == 125);
@@ -183,26 +183,111 @@ TEST_CASE("E2E: a module function and a struct method sharing a name do not cros
 namespace {
 
 constexpr std::string_view EXPORTER{R"(
-    export("ghoti_exported_answer") const answer := fn(): i32 { return 42; };
+    export("ghoti_exported_answer") const answer = fn(): i32 { return 42; };
     extern("ghoti_fake_libc", "answer") const raw_answer: fn(): i32;
-    pub const relay := fn(): i32 { return answer(); };
+    pub const relay = fn(): i32 { return answer(); };
 )"};
 
 } // namespace
 
-TEST_CASE("E2E: an `export`ed name still resolves alongside a colliding internal one") {
+TEST_CASE("An `export`ed name still resolves alongside a colliding internal one") {
     const auto exit_code{helpers::compile_and_run(
         R"(
             import "exp.gh" as exp;
 
-            const answer := fn(): i32 { return 7; };
+            const answer = fn(): i32 { return 7; };
 
-            pub const main := fn(): i32 {
+            pub const main = fn(): i32 {
                 return answer() * 10 + exp.relay();   // 7*10 + 42 = 112
             };
         )",
         {helpers::mock_file{"exp.gh", EXPORTER, "exp"}})};
     CHECK(exit_code == 112);
+}
+
+namespace {
+
+constexpr std::string_view CASES_A{R"(
+    pub const cases = [_][4]u32{
+        [_]u32{ 1, 2, 3, 4 },
+        [_]u32{ 5, 6, 7, 8 },
+    };
+    pub const Point = struct { pub x: i32, pub y: i32 };
+    pub const origin: Point = .{ .x = 1, .y = 2 };
+    pub const limit: i32 = 3;
+)"};
+
+constexpr std::string_view CASES_B{R"(
+    pub const cases = [_][3]u32{
+        [_]u32{ 10, 20, 30 },
+        [_]u32{ 40, 50, 60 },
+    };
+    pub const Point = struct { pub x: i32, pub y: i32 };
+    pub const origin: Point = .{ .x = 30, .y = 40 };
+    pub const limit: i32 = 9;
+)"};
+
+} // namespace
+
+TEST_CASE("Same-named `const` aggregates in two modules keep their own storage") {
+    const auto exit_code{helpers::compile_and_run(
+        R"(
+            import "ca.gh" as ca;
+            import "cb.gh" as cb;
+
+            pub const main = fn(): i32 {
+                let mut sum: u32 = 0;
+                for (ca.cases) |case| { sum += case[0] + case[3]; }   // 18
+                for (cb.cases) |case| { sum += case[0] + case[2]; }   // 140
+                let o = ca.origin.x + ca.origin.y + cb.origin.x + cb.origin.y;   // 73
+                return @intCast(sum) - 100 + o + *(^ca.limit) * 10 + *(^cb.limit);   // 58 + 73 + 39
+            };
+        )",
+        {
+            helpers::mock_file{"ca.gh", CASES_A, "ca"},
+            helpers::mock_file{"cb.gh", CASES_B, "cb"},
+        })};
+    CHECK(exit_code == helpers::portable_exit_code(170));
+}
+
+TEST_CASE("Same-named `const` aggregates imported in separate test scopes stay distinct") {
+    CHECK(helpers::compile_and_run_tests(
+              R"(
+                test "a" {
+                    import "ca.gh" as a_cases;
+                    let mut sum: u32 = 0;
+                    for (a_cases.cases) |case| { sum += case[0] + case[3]; }
+                    @expect(sum == 18);
+                }
+
+                test "b" {
+                    import "cb.gh" as b_cases;
+                    let mut sum: u32 = 0;
+                    for (b_cases.cases) |case| { sum += case[0] + case[2]; }
+                    @expect(sum == 140);
+                }
+            )",
+              {
+                  helpers::mock_file{"ca.gh", CASES_A, "ca"},
+                  helpers::mock_file{"cb.gh", CASES_B, "cb"},
+              }) == 0);
+}
+
+TEST_CASE("Two structs in one module with a same-named `const` array static member") {
+    CHECK(helpers::compile_and_run(R"(
+        const A = struct {
+            const table = [_]i32{ 1, 2, 3 };
+            const sum = fn(): i32 { return table[0] + table[1] + table[2]; };
+        };
+        const B = struct {
+            const table = [_]i32{ 10, 20 };
+            const sum = fn(): i32 { return table[0] + table[1]; };
+        };
+
+        pub const main = fn(): i32 {
+            return A.sum() + B.sum() + A.table[2] + B.table[1];   // 6 + 30 + 3 + 20
+        };
+    )") == 59);
 }
 
 } // namespace ghoti::tests

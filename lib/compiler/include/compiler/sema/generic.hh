@@ -14,21 +14,23 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 
-namespace ghoti::mod { struct module; } // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
 
 class type;
 
-// A template when it has an `auto`/`type` parameter or a `constexpr` parameter
+// A template when it has an `auto`/`type` parameter or a `comptime` parameter
 struct generic_function_info {
-    gsl::not_null<mod::module*>              module;
+    gsl::not_null<mod::module_t*>            module;
     ast::node_id                             node_id;
     gsl::not_null<const ast::function_expr*> fn_expr;
     gsl::not_null<type*>                     fn_type;
     stdx::option<std::string_view>           name;
     // Enclosing struct/union/enum, if any; may not be resolved
     stdx::option<type&> enclosing_type{stdx::none};
+    // For a method declared directly in an aggregate returned by a `fn(...): type` ctor
+    stdx::option<usize> enclosing_fn_table_idx{stdx::none};
 };
 
 class generic_function_registry {
@@ -38,27 +40,27 @@ class generic_function_registry {
     MAKE_MOVE_CONSTRUCTABLE_ONLY(generic_function_registry);
 
     auto register_function(type&                          fn_type,
-                           mod::module&                   module,
+                           mod::module_t&                 module,
                            ast::node_id                   node_id,
                            const ast::function_expr&      fn_expr,
                            stdx::option<std::string_view> name           = stdx::none,
-                           stdx::option<type&>            enclosing_type = stdx::none) -> void {
+                           stdx::option<type&>            enclosing_type = stdx::none,
+                           stdx::option<usize> enclosing_fn_table_idx    = stdx::none) -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
-                              .module         = &module,
-                              .node_id        = node_id,
-                              .fn_expr        = &fn_expr,
-                              .fn_type        = &fn_type,
-                              .name           = name,
-                              .enclosing_type = enclosing_type,
+                              .module                 = &module,
+                              .node_id                = node_id,
+                              .fn_expr                = &fn_expr,
+                              .fn_type                = &fn_type,
+                              .name                   = name,
+                              .enclosing_type         = enclosing_type,
+                              .enclosing_fn_table_idx = enclosing_fn_table_idx,
                           });
     }
 
     [[nodiscard]] auto get_opt(const type& fn_type) const noexcept
         -> stdx::option<const generic_function_info&> {
-        if (auto it{registry_.find(const_cast<type*>(&fn_type))}; it != registry_.end()) {
-            return it->second;
-        }
+        if (auto it{registry_.find(&fn_type)}; it != registry_.end()) { return it->second; }
         return stdx::none;
     }
 
@@ -82,34 +84,36 @@ class generic_function_registry {
     }
 
     // For `mangle_arg_type` to distinguish e.g. `foo(Vec(i32))` from `foo(Vec(i64))`.
-    auto set_clone_disc(const type& clone, std::string disc) -> void {
-        clone_discs_.insert_or_assign(&clone, std::move(disc));
+    // Keyed by instance id so a `const`/`volatile` twin of the clone mangles the same.
+    auto set_clone_disc(u64 instance_id, std::string disc) -> void {
+        clone_discs_.insert_or_assign(instance_id, std::move(disc));
     }
 
-    [[nodiscard]] auto get_clone_disc(const type& clone) const noexcept
+    [[nodiscard]] auto get_clone_disc(u64 instance_id) const noexcept
         -> stdx::option<std::string_view> {
-        if (const auto it{clone_discs_.find(&clone)}; it != clone_discs_.end()) {
+        if (instance_id == 0) { return stdx::none; }
+        if (const auto it{clone_discs_.find(instance_id)}; it != clone_discs_.end()) {
             return std::string_view{it->second};
         }
         return stdx::none;
     }
 
   private:
-    ankerl::unordered_dense::map<type*, generic_function_info> registry_;
-    ankerl::unordered_dense::map<const type*, std::string>     type_ctor_member_prefixes_;
-    ankerl::unordered_dense::map<const type*, std::string>     clone_discs_;
+    ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
+    ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
+    ankerl::unordered_dense::map<u64, std::string>                   clone_discs_;
 };
 
 struct generic_instantiation_request {
-    gsl::not_null<type*>        generic_fn_type;
-    gsl::span<type*>            arg_types;
-    gsl::not_null<type*>        return_type;
-    std::string                 mangled_name;
-    ast::node_id                fn_node_id;
-    gsl::not_null<mod::module*> module;
+    gsl::not_null<type*>          generic_fn_type;
+    gsl::span<type*>              arg_types;
+    gsl::not_null<type*>          return_type;
+    std::string                   mangled_name;
+    ast::node_id                  fn_node_id;
+    gsl::not_null<mod::module_t*> module;
 };
 
-// One `const m := fn ...` member of an aggregate returned by a `fn(...): type` constructor
+// One `const m = fn ...` member of an aggregate returned by a `fn(...): type` constructor
 struct type_ctor_member_emit {
     gsl::not_null<type*> owner_clone; // the per-instantiation aggregate type
     ast::node_id         member_decl;

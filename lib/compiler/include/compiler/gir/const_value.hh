@@ -16,10 +16,13 @@
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
+#include "support/float128.hh"
+#include "support/float_math.hh"
 #include "support/int128.hh"
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
-namespace ghoti::mod { struct module; }   // namespace ghoti::mod
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::gir {
 
@@ -57,10 +60,10 @@ struct const_union {
 };
 
 struct const_closure {
-    ast::node_id               fn_node;
-    stdx::option<mod::module&> module{};
-    const_struct               captures;
-    [[nodiscard]] auto         operator==(const const_closure& other) const noexcept -> bool;
+    ast::node_id                 fn_node;
+    stdx::option<mod::module_t&> module{};
+    const_struct                 captures;
+    [[nodiscard]] auto           operator==(const const_closure& other) const noexcept -> bool;
 };
 
 struct const_addr {
@@ -69,6 +72,37 @@ struct const_addr {
     // identifies the address, or when the pointee's value genuinely isn't const-known.
     std::vector<const_value> pointee;
     [[nodiscard]] auto       operator==(const const_addr& other) const noexcept -> bool;
+};
+
+// One step from a compile-time place into a part of it
+struct ref_step {
+    enum class kind : u8 {
+        FIELD,   // a struct field
+        PAYLOAD, // a union's payload, as variant `name`
+        INDEX,   // an array element
+    };
+
+    kind               step{kind::FIELD};
+    std::string        name;
+    usize              index{0};
+    [[nodiscard]] auto operator==(const ref_step&) const noexcept -> bool = default;
+};
+
+// A reference or pointer to a binding of a compile-time call frame, or to a part of one. Frames
+// are identified by a unique id, so a reference that outlives its frame is detected, not followed
+struct const_ref {
+    // The elements `[lo, lo + len)` of the array place a slice views
+    struct window_t {
+        usize              lo{0};
+        usize              len{0};
+        [[nodiscard]] auto operator==(const window_t&) const noexcept -> bool = default;
+    };
+
+    u64                    frame{0};
+    std::string            binding;
+    std::vector<ref_step>  path;
+    stdx::option<window_t> window{};
+    [[nodiscard]] auto     operator==(const const_ref&) const noexcept -> bool = default;
 };
 
 struct const_dyn_fat_ptr {
@@ -83,7 +117,8 @@ class const_value {
                                  u64,
                                  i128,
                                  u128,
-                                 f64,
+                                 big_int, // only an integer no 128-bit arm holds
+                                 f128,
                                  bool,
                                  std::string,
                                  stdx::option<sema::type&>,
@@ -93,6 +128,7 @@ class const_value {
                                  const_union,
                                  const_closure,
                                  const_addr,
+                                 const_ref,
                                  const_dyn_fat_ptr,
                                  void_val,
                                  undefined_val,
@@ -103,8 +139,11 @@ class const_value {
     constexpr const_value() noexcept = default;
     constexpr explicit const_value(sema::type& t) noexcept
         : data_{stdx::option<sema::type&>{t}}, type_{t} {}
-    constexpr explicit const_value(data_t val, stdx::option<sema::type&> t = stdx::none) noexcept
-        : data_{std::move(val)}, type_{t} {}
+    // A float payload is rounded into its type's format, so folding sees what runtime would
+    constexpr explicit const_value(data_t val, stdx::option<sema::type&> t = stdx::none)
+        : data_{std::move(val)}, type_{t} {
+        if !consteval { fit_float_payload(); }
+    }
 
     [[nodiscard]] static constexpr auto make_poison() noexcept -> const_value {
         return const_value{poison_val{}};
@@ -135,6 +174,32 @@ class const_value {
         if (is<i128>()) { return as<i128>(); }
         if (is<u128>()) { return static_cast<i128>(as<u128>()); }
         if (is<const_enum>()) { return as<const_enum>().value; }
+        return stdx::none;
+    }
+
+    // The exact integer any integer arm holds, however wide
+    [[nodiscard]] auto as_big_int_opt() const -> stdx::option<big_int> {
+        if (const auto b{as_opt<big_int>()}) { return *b; }
+        if (const auto u{as_uint_opt()}; u && !is<const_enum>()) { return big_int{*u}; }
+        if (const auto i{as_int_opt()}; i && !is<const_enum>()) { return big_int{*i}; }
+        return stdx::none;
+    }
+
+    // `v` in the narrowest arm that holds it exactly
+    [[nodiscard]] static auto from_big_int(const big_int& v, stdx::option<sema::type&> t)
+        -> const_value {
+        if (v.fits(64, true)) { return const_value{static_cast<i64>(*v.to_i128()), t}; }
+        if (v.fits(64, false)) { return const_value{static_cast<u64>(*v.to_u128()), t}; }
+        if (const auto i{v.to_i128()}) { return const_value{*i, t}; }
+        if (const auto u{v.to_u128()}) { return const_value{*u, t}; }
+        return const_value{v, t};
+    }
+
+    // An integer payload rounded into `format`, reading unsigned payloads as unsigned
+    [[nodiscard]] auto int_as_float_opt(float_format format = float_format::QUAD) const
+        -> stdx::option<f128> {
+        if (const auto u{as_uint_opt()}) { return f128::from_uint(*u, format); }
+        if (const auto i{as_int_opt()}) { return f128::from_int(*i, format); }
         return stdx::none;
     }
 
@@ -171,19 +236,61 @@ class const_value {
         return stdx::none;
     }
 
+    // A string, or the bytes of a folded byte array
+    [[nodiscard]] auto as_string_opt() const -> stdx::option<std::string> {
+        if (const auto s{as_opt<std::string>()}) { return *s; }
+        const auto arr{as_opt<const_array>()};
+        if (!arr) { return stdx::none; }
+        std::string out;
+        out.reserve(arr->elements.size());
+        for (usize i{0}; i < arr->elements.size(); ++i) {
+            const auto byte{arr->elements[i].as_u64_opt()};
+            if (!byte || *byte > 0xFF) { return stdx::none; }
+            // A `[N:0]u8`'s sentinel isn't part of the text
+            if (*byte == 0 && i + 1 == arr->elements.size()) { break; }
+            out.push_back(static_cast<char>(*byte));
+        }
+        return out;
+    }
+
     MAKE_GETTER(type, stdx::option<sema::type&>);
     MAKE_DEDUCING_GETTER(data);
 
-    constexpr auto     set_type(stdx::option<sema::type&> t) noexcept -> void { type_ = t; }
+    constexpr auto set_type(stdx::option<sema::type&> t) -> void {
+        type_ = t;
+        if !consteval { fit_float_payload(); }
+    }
+    // Marks an untyped math result so a later concrete float type recomputes it
+    auto set_origin(math_origin origin) -> void {
+        origin_.emplace(origin);
+        fit_float_payload();
+    }
+    MAKE_GETTER(origin, stdx::option<math_origin>);
     [[nodiscard]] auto to_gir_value() const noexcept -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
+    // `==`, except floats compare by bit pattern: `-0.0` and `0.0` differ, a NaN matches itself.
+    // For keying on a value, where numerically equal floats are still different arguments.
+    [[nodiscard]] auto identical(const const_value& other) const noexcept -> bool;
 
     [[nodiscard]] auto hash() const noexcept -> u64;
     [[nodiscard]] auto mangle() const -> std::string;
 
   private:
+    auto fit_float_payload() -> void {
+        if (auto f{data_.as_opt<f128>()}; f && type_) {
+            *f = sema::fit_float(*f, *type_, origin_);
+            if (sema::is_float(type_->get_kind())) { origin_.reset(); }
+        }
+    }
+
+  private:
     data_t                    data_{poison_val{}};
     stdx::option<sema::type&> type_;
+    stdx::option<math_origin> origin_;
 };
+
+// A number as its declared type rather than its untyped initializer's: an integer bound to a float
+// type converts, other numbers just retype, and anything else is returned unchanged
+[[nodiscard]] auto with_declared_type(const_value value, sema::type& declared) -> const_value;
 
 } // namespace ghoti::gir

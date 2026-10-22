@@ -1,32 +1,131 @@
-pub constexpr Option := fn(T: type): type {
-    return union {
+import std;
+
+pub const Option = fn(comptime T: type): type {
+    return union(enum) {
         some: T,
         none: void,
 
-        pub constexpr of := fn(val: T): @This() {
+        pub const of = fn(val: T): @This() {
             return .{ .some = val };
         };
 
-        pub constexpr empty := fn(): @This() {
-            return .{ .none = {} };
+        pub const empty: @This() = .{ .none = {} };
+
+        /// Returns the contained `some` value or a provided default.
+        pub const unwrap_or = fn(&self, default: T): T {
+            return match (self) {
+                .some => |s| s,
+                .none => default,
+            };
+        };
+
+        /// Checks that the option is equal to the passed T or Option(T)
+        pub const eq = fn(&self, val: auto): bool {
+            const Val = @TypeOf(val);
+            if comptime (@This() == Val) {
+                return match (self) {
+                    .some => |s1| match (val) {
+                        .some => |s2| s1 == s2,
+                        .none => false,
+                    },
+                    .none => match (val) { .some => false, .none => true },
+                };
+            } else if comptime (T == Val) {
+                return match (self) {
+                    .some => |s| s == val,
+                    .none => false,
+                };
+            } else if comptime (std.math.compares_numerically(T, Val)) {
+                return match (self) {
+                    .some => |s| std.math.numeric_eq(s, val),
+                    .none => false,
+                };
+            } else @compileError("Option.eq expects Option(T) or T, found " ++ @typeName(Val));
         };
     };
 };
 
+test "Option.unwrap_or returns the default when disengaged" {
+    let mut o: Option(i32) = .of(1);
+    @expect(o.unwrap_or(20) == 1);
+    o = .empty;
+    @expect(o.unwrap_or(42) == 42);
+}
+
+test "Option.eq on T" {
+    let mut o: Option(i32) = .of(1);
+    @expect(o.eq(1));
+    o = .empty;
+    @expect(!o.eq(1));
+}
+
+test "Option.eq on Option(T)" {
+    {
+        let mut o1: Option(i32) = .of(1);
+        let mut o2: Option(i32) = .of(1);
+        @expect(o1.eq(o2));
+    }
+
+    {
+        let mut o1: Option(bool) = .of(true);
+        let mut o2: Option(bool) = .empty;
+        @expect(!o1.eq(o2));
+    }
+
+    {
+        let mut o1: Option(i9) = .empty;
+        let mut o2: Option(i9) = .of(4);
+        @expect(!o1.eq(o2));
+    }
+
+    {
+        let mut o1: Option(i9) = .empty;
+        let mut o2: Option(i9) = .empty;
+        @expect(o1.eq(o2));
+    }
+}
+
+test "Option.eq on an untyped literal" {
+    let n: Option(usize) = .of(3);
+    @expect(n.eq(3));
+    @expect(!n.eq(4));
+    @expect(!n.eq(-1));
+
+    let b: Option(u8) = .of(255);
+    @expect(b.eq(255));
+    @expect(!b.eq(511)); // doesn't fit, so it can't be equal
+
+    let f: Option(f32) = .of(0.1);
+    @expect(f.eq(0.1));
+    let g: Option(f64) = .of(2.0);
+    @expect(g.eq(2));
+
+    let e: Option(usize) = .empty;
+    @expect(!e.eq(3));
+}
+
+test "Option.eq on a number of another type" {
+    let n: Option(i16) = .of(-7);
+    let wide: i64 = -7;
+    let other: u8 = 7;
+    @expect(n.eq(wide));
+    @expect(!n.eq(other));
+}
+
 impl(T: type) builtin.Unwrappable for Option(T) {
-    using Output = T;
-    using Residual = void;
-    pub const branch := fn(self): builtin.Flow(T, void) {
+    const Output = T;
+    const Residual = void;
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
         return match (self) {
-            .some => |v| builtin.Flow(T, void){ .@"continue" = v },
-            .none => builtin.Flow(T, void){ .@"break" = {} },
+            .some => |&mut? v| .{ .continue = v },
+            .none => .{ .break = {} },
         };
     };
 }
 
 impl(T: type) builtin.Rewrappable for Option(T) {
-    using From = void;
-    pub const fromResidual := fn(_: void): @This() {
+    const From = void;
+    pub const from_residual = fn(_: void): @This() {
         return .{ .none = {} };
     };
 }

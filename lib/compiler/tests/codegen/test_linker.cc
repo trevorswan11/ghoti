@@ -1,20 +1,26 @@
 #include <array>
 #include <filesystem>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/TargetParser/Triple.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/enum.hh>
 #include <stdx/harness/hooks.hh>
 #include <stdx/memory.hh>
 #include <stdx/result.hh>
 
+#include "compiler/codegen/linker.hh"
 #include "compiler/codegen/llvm_scope.hh"
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
 #include "ghoti/config.h"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "support/path_utils.hh"
+#include "support/subprocess.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -26,7 +32,7 @@ TEST_CASE("In-process LLD execution for main entry point across targets and opti
 
     // No `args` param, so this links even without a real sysroot for the target.
     constexpr auto input = R"(
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             return 0;
         };
     )";
@@ -58,7 +64,7 @@ TEST_CASE("In-process LLD execution for main entry point across targets and opti
                 };
 
                 CHECK(helpers::emit_executable(*ctx, context, out_file, target_opts, opt_opts));
-                CHECK(std::filesystem::exists(out_file));
+                CHECK(path_utils::exists(out_file));
                 CHECK(std::filesystem::file_size(out_file) > 0);
             }
         }
@@ -71,7 +77,7 @@ TEST_CASE("extern targets are forwarded to the real linker invocation") {
 
     constexpr auto input = R"(
         extern("ghoti_test_missing_lib_9f3a") const foo: fn(): void;
-        pub const main := fn(): i32 {
+        pub const main = fn(): i32 {
             foo();
             return 0;
         };
@@ -92,12 +98,123 @@ TEST_CASE("extern targets are forwarded to the real linker invocation") {
             tempfile                out_file{"test_extern_lib_link"};
             codegen::target_options target_opts{.triple_str = triple_str};
 
-            const auto  result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
-            const auto& diag{UNWRAP_ERR(result)};
-            REQUIRE(diag.get_message());
-            CHECK(diag.get_message()->contains("ghoti_test_missing_lib_9f3a"));
+            // Windows writes the missing import library itself; elsewhere the linker names it
+            const auto result{helpers::emit_executable(*ctx, context, out_file, target_opts)};
+            if (codegen::resolve_target_triple(triple_str).isOSWindows()) {
+                CHECK(result);
+            } else {
+                const auto& diag{UNWRAP_ERR(result)};
+                REQUIRE(diag.get_message());
+                CHECK(diag.get_message()->contains("ghoti_test_missing_lib_9f3a"));
+            }
         }
     }
+}
+
+TEST_CASE("macOS targets link against libSystem from any host") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    constexpr auto input = R"(
+        extern("System", "write") const sys_write: fn(fd: i32, buf: ^u8, count: usize): isize;
+        pub const main = fn(): i32 {
+            let msg = "hi";
+            return @as(i32, sys_write(1, msg.ptr, msg.len));
+        };
+    )";
+
+    constexpr std::array target_triples{
+        "x86_64-apple-macos",
+        "arm64-apple-macos",
+    };
+
+    for (const auto triple_str : target_triples) {
+        DYNAMIC_SECTION("Target: " << triple_str) {
+            llvm::LLVMContext context;
+            auto [ctx, idx]{helpers::resolve_and_check(input)};
+            REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+
+            tempfile                out_file{"test_macos_libsystem_link"};
+            codegen::target_options target_opts{.triple_str = triple_str};
+
+            CHECK(helpers::emit_executable(*ctx, context, out_file, target_opts));
+            CHECK(std::filesystem::file_size(out_file) > 0);
+        }
+    }
+}
+
+TEST_CASE("a builtins archive fills symbols that nothing else defines") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    // Linking the object directly skips the `extern` library, so only the archive can satisfy it
+    constexpr auto user     = R"(
+        extern("ghoti_unused_lib", "ghoti_builtins_probe") const probe: fn(): i32;
+        pub const main = fn(): i32 {
+            return probe();
+        };
+    )";
+    constexpr auto builtins = R"(
+        export("ghoti_builtins_probe") const probe = fn(): i32 { return 0; };
+    )";
+
+    llvm::LLVMContext context;
+    tempfile          user_obj{"test_builtins_user.o"};
+    tempfile          archive{"test_builtins.a"};
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(user)};
+        REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+        REQUIRE(helpers::emit_object(*ctx, context, user_obj));
+    }
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(builtins)};
+        REQUIRE(helpers::emit_static_lib(*ctx, context, archive));
+    }
+
+    tempfile out_file{"test_builtins_exe"};
+    CHECK_FALSE(codegen::link_executable(user_obj, out_file, {}));
+    CHECK(codegen::link_executable(user_obj, out_file, {}, {.builtins = archive.path}));
+    CHECK(std::filesystem::file_size(out_file) > 0);
+}
+
+TEST_CASE("a builtins archive wins over the platform library's copy of a routine") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    constexpr auto user     = R"(
+        extern("ghoti_unused_lib", "abs") const c_abs: fn(x: c_int): c_int;
+        pub const main = fn(): i32 {
+            return c_abs(-1);
+        };
+    )";
+    constexpr auto builtins = R"(
+        const abs = fn(x: c_int): c_int {
+            _ = x;
+            return 42;
+        };
+        @export(abs, .{ .name = "abs", .linkage = .weak, .visibility = .hidden });
+    )";
+
+    llvm::LLVMContext context;
+    tempfile          user_obj{"test_builtins_precedence_user.o"};
+    tempfile          archive{"test_builtins_precedence.a"};
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(user)};
+        REQUIRE(ctx->analyzer.validate_main_entry(ctx->root_mod));
+        REQUIRE(helpers::emit_object(*ctx, context, user_obj));
+    }
+    {
+        auto [ctx, idx]{helpers::resolve_and_check(builtins)};
+        REQUIRE(helpers::emit_static_lib(*ctx, context, archive));
+    }
+
+    const auto extension{codegen::get_default_output_extension(codegen::output_type::EXECUTABLE)};
+    const tempfile exe{std::in_place,
+                       fmt::format("{}{}",
+                                   tempfile::make_temp_path("test_builtins_precedence").string(),
+                                   extension)};
+    REQUIRE(codegen::link_executable(user_obj, exe.path, {}, {.builtins = archive.path}));
+    CHECK(helpers::portable_exit_code(UNWRAP(spawn_child(mock_argv{exe.path.string()}))) == 42);
 }
 
 TEST_CASE("windows entry point argv link failure includes sysroot hint") {
@@ -105,7 +222,7 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
     stdx::untracked_scope untracked_guard;
 
     constexpr auto input = R"(
-        pub const main := fn(args: [][:0]u8): i32 {
+        pub const main = fn(args: [][:0]u8): i32 {
             return @as(i32, args.len);
         };
     )";
@@ -125,6 +242,40 @@ TEST_CASE("windows entry point argv link failure includes sysroot hint") {
 #else
         CHECK(UNWRAP(diag.get_message()).contains("error: unable to find library"));
 #endif
+    }
+}
+
+TEST_CASE("A Windows import library that can't be found is written from what the program uses") {
+    codegen::llvm_scope   scope;
+    stdx::untracked_scope untracked_guard;
+
+    // No SDK ships `kernelbase.lib`, so every host links this through a written import library
+    constexpr auto input = R"(
+        extern("kernelbase", "GetTickCount") const ticks: extern fn() callconv(.winapi): u32;
+        pub const main = fn(): i32 {
+            let a = ticks();
+            return if (ticks() >= a) 7 else 1;
+        };
+    )";
+
+    // 32-bit x86 links against the stdcall-decorated `_GetTickCount@0`
+    for (const std::string_view triple : {"x86_64-pc-windows-msvc",
+                                          "x86_64-w64-windows-gnu",
+                                          "i686-pc-windows-msvc",
+                                          "i686-w64-windows-gnu"}) {
+        DYNAMIC_SECTION("Target: " << triple) {
+            llvm::LLVMContext context;
+            auto [ctx, idx]{helpers::type_check_and_verify(input, {}, false)};
+            const tempfile exe{
+                std::in_place,
+                fmt::format("{}.exe", tempfile::make_temp_path("test_written_implib").string())};
+            const codegen::target_options target_opts{.triple_str = std::string{triple}};
+            REQUIRE(helpers::emit_executable(*ctx, context, exe.path, target_opts));
+#if GHOTI_WINDOWS
+            CHECK(helpers::portable_exit_code(UNWRAP(spawn_child(mock_argv{exe.path.string()}))) ==
+                  7);
+#endif
+        }
     }
 }
 

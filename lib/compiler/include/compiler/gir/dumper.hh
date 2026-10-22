@@ -13,7 +13,7 @@ class dumper {
   public:
     explicit dumper(std::ostream& out) noexcept : out_{out} {}
 
-    auto dump(const module& mod) -> void;
+    auto dump(const module_t& mod) -> void;
     auto dump(const function& fn) -> void;
     auto dump(const segment& seg) -> void;
     auto dump(const instruction& inst) -> void;

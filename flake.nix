@@ -33,6 +33,15 @@
             (final: prev: {
               zig = zig-flake.packages.${system}."0.16.0";
               zls = zls-flake.packages.${system}.default;
+
+              # lldb's CMake signs its binaries via `xcrun codesign`, which isn't in the sandbox
+              llvmPackages_23 = prev.llvmPackages_23 // {
+                lldb = prev.llvmPackages_23.lldb.overrideAttrs (old: {
+                  nativeBuildInputs =
+                    (old.nativeBuildInputs or [ ])
+                    ++ prev.lib.optional prev.stdenv.hostPlatform.isDarwin prev.darwin.sigtool;
+                });
+              };
             })
             rust-overlay.overlays.default
           ];
@@ -59,8 +68,9 @@
             templ
             prettier
             rustToolchain
+            (python3.withPackages (ps: [ ps.mpmath ]))
           ]
-          ++ (with llvmPackages_21; [
+          ++ (with llvmPackages_23; [
             clang-tools
             lldb
           ]);
@@ -71,7 +81,7 @@
             export NIX_LDFLAGS=$(echo $NIX_LDFLAGS | sed 's/-fmacro-prefix-map=[^ ]*//g')
 
             # Required for LLDB on macOS (stinky)
-            ${lib.optionalString stdenv.isDarwin ''
+            ${lib.optionalString stdenv.hostPlatform.isDarwin ''
               # Tested both paths on my machine and they both work (adds some flexibility)
               if [[ -z "$LLDB_DEBUGSERVER_PATH" ]]; then
                 XCODE_PATH="/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"

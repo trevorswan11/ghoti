@@ -7,6 +7,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/variant.hh>
@@ -47,7 +48,7 @@ using value = stdx::variant<bool, i64, member, text, diverges>;
 // Technically a preprocessor but not really, run it before symbol collection
 class cfg_pass {
   public:
-    [[nodiscard]] static auto run(mod::module& module, context& ctx) -> bool;
+    [[nodiscard]] static auto run(mod::module_t& module, context& ctx) -> bool;
 
   private:
     using cfg_value = cfgval::value;
@@ -69,10 +70,35 @@ class cfg_pass {
         bool             boolean{false};
     };
 
+    // A module-scope `@cfgValue` constant
+    struct cfg_decl {
+        ast::node_id decl;
+        ast::node_id value;
+    };
+
+    // Shared by a pass and the passes it starts to read other modules' constants
+    struct shared_state {
+        // `@cfgValue` constants mid-evaluation, by module and node index
+        ankerl::unordered_dense::set<std::pair<const mod::module_t*, usize>> in_progress;
+        bool                                                                 hit_cycle{false};
+
+        // `@cfg` statements searched for imports and the arm each takes; `selected` is false
+        // while one is still being selected
+        struct arm_choice {
+            bool           selected{false};
+            stdx::opt_size arm;
+        };
+        ankerl::unordered_dense::map<std::pair<const mod::module_t*, usize>, arm_choice> arms;
+    };
+
   private:
-    cfg_pass(mod::module& module, context& ctx)
+    cfg_pass(mod::module_t& module, context& ctx)
         : module_{module}, ctx_{ctx},
           facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)} {}
+
+    cfg_pass(mod::module_t& module, context& ctx, shared_state& shared)
+        : module_{module}, ctx_{ctx},
+          facts_{codegen::target_facts::resolve(ctx.target_opts.triple_str)}, shared_{&shared} {}
 
     template <typename... Args>
     auto fail(ast::node_id at, error code, fmt::format_string<Args...> spec, Args&&... args)
@@ -84,6 +110,17 @@ class cfg_pass {
 
     auto               gather_cfg_values(const std::vector<ast::node_id>& list) -> void;
     auto               resolve_cfg_value(ast::node_id node) -> stdx::option<cfg_value>;
+    [[nodiscard]] auto is_cpu_has(const ast::call_expr& call) const -> bool;
+    [[nodiscard]] auto cpu_has(ast::node_id at, const ast::call_expr& call)
+        -> stdx::option<cfg_value>;
+    [[nodiscard]] auto to_operand(const cfg_value& value) -> operand;
+    [[nodiscard]] auto find_import(std::string_view name, bool public_only)
+        -> stdx::option<mod::module_t&>;
+    [[nodiscard]] auto taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size;
+    [[nodiscard]] auto find_import_in(const std::vector<ast::stmt_handle>& items,
+                                      std::string_view                     name,
+                                      bool public_only) -> stdx::option<mod::module_t&>;
+    [[nodiscard]] auto resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value>;
     [[nodiscard]] auto is_compile_error_call(ast::expr_handle h) -> bool;
     [[nodiscard]] auto check_guard_arm_types(ast::node_id node, const ast::cfg_value_expr& expr)
         -> bool;
@@ -135,17 +172,22 @@ class cfg_pass {
     auto recurse_into_bodies(ast::stmt_handle stmt) -> void;
     auto recurse_into_expr(ast::expr_handle expr) -> void;
     auto recurse_into_block(ast::block_handle block) -> void;
+    // Signature types can be expressions (`fn(): if (c) A else B`) holding `@cfg` blocks
+    auto recurse_into_type(ast::explicit_type_id type) -> void;
     auto recurse_into_members(const ast::member_list& members) -> void;
 
   private:
-    mod::module&          module_;
+    mod::module_t&        module_;
     context&              ctx_;
     codegen::target_facts facts_;
     bool                  ok_{true};
+    // Resolved on the first `cpu.has(...)`
+    stdx::option<codegen::target_cpu> target_cpu_;
 
-    ankerl::unordered_dense::map<std::string_view, ast::node_id> cfg_value_decls_;
-    ankerl::unordered_dense::map<usize, cfg_value>               cfg_value_cache_;
-    ankerl::unordered_dense::set<usize>                          in_progress_;
+    ankerl::unordered_dense::map<std::string_view, cfg_decl> cfg_value_decls_;
+    ankerl::unordered_dense::map<usize, cfg_value>           cfg_value_cache_;
+    shared_state                                             own_shared_;
+    gsl::not_null<shared_state*>                             shared_{&own_shared_};
 };
 
 } // namespace ghoti::sema

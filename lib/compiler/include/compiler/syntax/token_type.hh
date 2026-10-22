@@ -2,11 +2,13 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include <ankerl/unordered_dense.h>
+#include <magic_enum/magic_enum.hpp>
 #include <stdx/assert.hh>
 #include <stdx/fixed/hash_table.hh>
 #include <stdx/hash.hh>
@@ -27,10 +29,9 @@ enum class token_type_t : u8 {
 
     REAL,
     STRING,
-    U8,
+    CHAR,
 
     ASSIGN,
-    WALRUS,
     PLUS,
     PLUS_PLUS,
     MINUS,
@@ -52,6 +53,12 @@ enum class token_type_t : u8 {
     STAR_PERCENT,
     SHL_PERCENT,
 
+    // Saturating (clamp-to-range) arithmetic
+    PLUS_PIPE,
+    MINUS_PIPE,
+    STAR_PIPE,
+    SHL_PIPE,
+
     PLUS_ASSIGN,
     MINUS_ASSIGN,
     STAR_ASSIGN,
@@ -68,6 +75,11 @@ enum class token_type_t : u8 {
     MINUS_PERCENT_ASSIGN,
     STAR_PERCENT_ASSIGN,
     SHL_PERCENT_ASSIGN,
+
+    PLUS_PIPE_ASSIGN,
+    MINUS_PIPE_ASSIGN,
+    STAR_PIPE_ASSIGN,
+    SHL_PIPE_ASSIGN,
 
     LT,
     LT_EQ,
@@ -90,7 +102,6 @@ enum class token_type_t : u8 {
     COMMA,
     COLON,
     SEMICOLON,
-    COLON_COLON,
     ELLIPSIS,
 
     LPAREN,
@@ -99,17 +110,19 @@ enum class token_type_t : u8 {
     RBRACE,
     LBRACKET,
     RBRACKET,
+    AT_LBRACKET, // `@[` opening an attribute list
 
     SINGLE_QUOTE,
     UNDERSCORE,
-    USING,
     AND_MUT,
     CARET_MUT,
+    AND_MUT_POLY,
+    CARET_MUT_POLY,
 
     FUNCTION,
-    VAR,
+    LET,
     CONSTANT,
-    CONSTEXPR,
+    COMPTIME,
     STRUCT,
     ENUM,
     UNION,
@@ -124,6 +137,7 @@ enum class token_type_t : u8 {
     LOOP,
     FOR,
     WHILE,
+    UNROLL,
     CONTINUE,
     BREAK,
     IMPORT,
@@ -142,6 +156,7 @@ enum class token_type_t : u8 {
     DYN,
 
     INT_TYPE, // `iN` / `uN` for N in 1..65535; width and sign carried in the lexeme
+    C_TYPE,   // `c_int`, `c_ulong`, ...: which C type is carried in the lexeme
     ISIZE_TYPE,
     USIZE_TYPE,
     F16_TYPE,
@@ -149,8 +164,8 @@ enum class token_type_t : u8 {
     F64_TYPE,
     F80_TYPE,
     F128_TYPE,
-    CONSTEXPR_INT_TYPE,
-    CONSTEXPR_FLOAT_TYPE,
+    COMPTIME_INT_TYPE,
+    COMPTIME_FLOAT_TYPE,
     BOOL_TYPE,
     VOID_TYPE,
 
@@ -159,7 +174,6 @@ enum class token_type_t : u8 {
     EXPORT,
     THREADLOCAL,
     WEAK,
-    NAKED,
     CALLCONV,
     VOLATILE,
     MUT,
@@ -169,101 +183,10 @@ enum class token_type_t : u8 {
     NULLPTR,
     UNREACHABLE,
 
-    BUILTIN_ALIGN_CAST,
-    BUILTIN_PTR_CAST,
-    BUILTIN_BIT_CAST,
-    BUILTIN_CONST_CAST,
-    BUILTIN_VOLATILE_CAST,
-    BUILTIN_AS,
-    BUILTIN_INT_CAST,
-    BUILTIN_TRUNCATE,
-    BUILTIN_BOOL_FROM_INT,
-    BUILTIN_INT_FROM_BOOL,
-    BUILTIN_INT_FROM_PTR,
-    BUILTIN_PTR_FROM_INT,
-    BUILTIN_PTR_FROM_ARRAY,
-    BUILTIN_SLICE_FROM_PTR,
-    BUILTIN_FIELD_PARENT_PTR,
-    BUILTIN_ALIGN_OF,
-    BUILTIN_SIZE_OF,
-    BUILTIN_BIT_SIZE_OF,
-    BUILTIN_TYPE_OF,
-    BUILTIN_THIS,
-    BUILTIN_TAG_NAME,
-    BUILTIN_TYPE_NAME,
-    BUILTIN_TYPE_INFO,
-    BUILTIN_HAS_FIELD,
-    BUILTIN_FIELD_TYPE,
-    BUILTIN_FIELD,
-    BUILTIN_INT,
-    BUILTIN_FLOAT,
-    BUILTIN_POINTER,
-    BUILTIN_REFERENCE,
-    BUILTIN_SLICE,
-    BUILTIN_ARRAY,
-    BUILTIN_FN,
-    BUILTIN_FIELD_DEFAULT,
-    BUILTIN_STRUCT,
-    BUILTIN_UNION,
-    BUILTIN_ENUM,
-    BUILTIN_MEMCPY,
-    BUILTIN_MEMSET,
-    BUILTIN_MEMMOVE,
-    BUILTIN_MUL_ADD,
-    BUILTIN_CLZ, // Count leading zeroes
-    BUILTIN_CTZ, // Count trailing zeroes
-    BUILTIN_POPCOUNT,
-    BUILTIN_ABS,
-    BUILTIN_MIN,
-    BUILTIN_MAX,
-    BUILTIN_DIV_TRUNC,
-    BUILTIN_DIV_FLOOR,
-    BUILTIN_REM,
-    BUILTIN_MOD,
-    BUILTIN_ADD_WITH_OVERFLOW,
-    BUILTIN_SUB_WITH_OVERFLOW,
-    BUILTIN_MUL_WITH_OVERFLOW,
-    BUILTIN_SHL_WITH_OVERFLOW,
-    BUILTIN_C_VA_START,
-    BUILTIN_C_VA_ARG,
-    BUILTIN_C_VA_COPY,
-    BUILTIN_C_VA_END,
-    BUILTIN_ALIGNAS,
-    BUILTIN_TARGET_OS,
-    BUILTIN_TARGET_ARCH,
-    BUILTIN_TARGET_TRIPLE,
-    BUILTIN_TARGET_ABI,
-    BUILTIN_TARGET_PTR_BITS,
-    BUILTIN_TARGET_ENDIAN,
-    BUILTIN_TARGET_FAMILY,
-    BUILTIN_SET_EVAL_RECURSION_LIMIT,
-    BUILTIN_SET_EVAL_UNROLL_LIMIT,
-    BUILTIN_SET_MAIN_SYMBOL,
-    BUILTIN_PANIC,
-    BUILTIN_TRAP,
-    BUILTIN_FN_CTX,
-    BUILTIN_SRC,
-    BUILTIN_EXPECT,
-    BUILTIN_REQUIRE,
-    BUILTIN_SKIP,
-    BUILTIN_IMPLEMENTS,
-    BUILTIN_ASSERT,
-    BUILTIN_VERIFY,
-    BUILTIN_DYN_CAST,
-    BUILTIN_ATOMIC_LOAD,
-    BUILTIN_ATOMIC_STORE,
-    BUILTIN_ATOMIC_RMW,
-    BUILTIN_CMPXCHG_WEAK,
-    BUILTIN_CMPXCHG_STRONG,
-    BUILTIN_FENCE,
-    BUILTIN_COMPILE_ERROR,
-    BUILTIN_EMBED,
-    BUILTIN_RETURN_ADDRESS,
+    BUILTIN, // `@name`: which builtin is carried in the lexeme, as a `builtin_t`
 
     BUILTIN_CFG,
     BUILTIN_CFG_VALUE,
-
-    BUILTIN_DISCARDABLE,
 
     ILLEGAL,
 };
@@ -281,13 +204,16 @@ enum class numeric_base : u8 {
     HEXADECIMAL = 16,
 };
 
-[[nodiscard]] auto base_idx(numeric_base base) noexcept -> int;
+[[nodiscard]] auto base_idx(numeric_base base) noexcept -> i32;
 [[nodiscard]] auto digit_in_base(char c, numeric_base base) noexcept -> bool;
 
 namespace token_type {
 
 [[nodiscard]] auto to_base(token_type_t tt) noexcept -> stdx::option<numeric_base>;
 [[nodiscard]] auto misc_from_char(char c) noexcept -> stdx::option<token_type_t>;
+
+// How a diagnostic names a token kind: its spelling in quotes, or a phrase for literal classes
+[[nodiscard]] auto describe(token_type_t tt) -> std::string;
 
 [[nodiscard]] constexpr auto is_int(token_type_t tt) noexcept -> bool {
     return token_type_t::INT_2 <= tt && tt <= token_type_t::INT_16;
@@ -301,6 +227,20 @@ namespace token_type {
 
 // Whether `s` has the shape of an arbitrary-width integer type: `i`/`u` then `[1-9][0-9]*`
 [[nodiscard]] auto is_int_type_lexeme(std::string_view s) noexcept -> bool;
+// `c_char`, `c_int`, `c_ulonglong`, ...: the C ABI's types, sized for the target
+[[nodiscard]] auto is_c_type_lexeme(std::string_view s) noexcept -> bool;
+
+// Indexed by `sema::c_int_type` (minus its `NONE`)
+inline constexpr std::array<std::string_view, 9> C_TYPE_NAMES{"c_char",
+                                                              "c_short",
+                                                              "c_ushort",
+                                                              "c_int",
+                                                              "c_uint",
+                                                              "c_long",
+                                                              "c_ulong",
+                                                              "c_longlong",
+                                                              "c_ulonglong"};
+inline constexpr std::string_view                C_LONGDOUBLE_NAME{"c_longdouble"};
 
 // Check whether the token is an ident, primitive type, or builtin function.
 [[nodiscard]] auto is_valid_ident(token_type_t type) noexcept -> bool;
@@ -323,6 +263,10 @@ namespace token_type {
     case syntax::token_type_t::MINUS_PERCENT_ASSIGN: return syntax::token_type_t::MINUS_PERCENT;
     case syntax::token_type_t::STAR_PERCENT_ASSIGN:  return syntax::token_type_t::STAR_PERCENT;
     case syntax::token_type_t::SHL_PERCENT_ASSIGN:   return syntax::token_type_t::SHL_PERCENT;
+    case syntax::token_type_t::PLUS_PIPE_ASSIGN:     return syntax::token_type_t::PLUS_PIPE;
+    case syntax::token_type_t::MINUS_PIPE_ASSIGN:    return syntax::token_type_t::MINUS_PIPE;
+    case syntax::token_type_t::STAR_PIPE_ASSIGN:     return syntax::token_type_t::STAR_PIPE;
+    case syntax::token_type_t::SHL_PIPE_ASSIGN:      return syntax::token_type_t::SHL_PIPE;
     default:                                         return stdx::none;
     }
 }
@@ -334,6 +278,16 @@ namespace token_type {
     case syntax::token_type_t::STAR_PERCENT:
     case syntax::token_type_t::SHL_PERCENT:   return true;
     default:                                  return false;
+    }
+}
+
+[[nodiscard]] constexpr auto is_saturating_op(syntax::token_type_t tok) noexcept -> bool {
+    switch (tok) {
+    case syntax::token_type_t::PLUS_PIPE:
+    case syntax::token_type_t::MINUS_PIPE:
+    case syntax::token_type_t::STAR_PIPE:
+    case syntax::token_type_t::SHL_PIPE:   return true;
+    default:                               return false;
     }
 }
 

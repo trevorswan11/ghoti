@@ -1,34 +1,34 @@
 import std;
 
 /// A horribly inefficient allocator that allocates full OS pages at a time
-pub const PageAllocator := struct {};
+pub const PageAllocator = struct {};
 
 impl std.mem.AllocatorVTable for PageAllocator {
-    pub const alloc := fn(
+    pub const alloc = fn(
         &mut self,
         len: usize,
         alignment: std.mem.Alignment,
     ): std.Option(^mut u8) {
         @assert(
-            @as(usize, alignment) <= std.os.page_size(),
+            1uz << @as(usize, @backingInt(alignment)) <= std.os.page_size(),
             "PageAllocator: alignment above the page size is not supported",
         );
         return match (std.os.alloc(len)) {
-            .ok => |p| .{ .some = p },
-            .err => .{ .none = {} },
+            .ok => |p| .of(p),
+            .err => .empty,
         };
     };
 
-    pub const resize := fn(
+    pub const resize = fn(
         &mut self,
         memory: []mut u8,
         alignment: std.mem.Alignment,
         new_len: usize,
     ): bool {
-        return std.mem.roundUpPage(new_len) <= std.mem.roundUpPage(memory.len);
+        return std.mem.round_up_page(new_len) <= std.mem.round_up_page(memory.len);
     };
 
-    pub const remap := fn(
+    pub const remap = fn(
         &mut self,
         memory: []mut u8,
         alignment: std.mem.Alignment,
@@ -37,10 +37,10 @@ impl std.mem.AllocatorVTable for PageAllocator {
         if (self.resize(memory, alignment, new_len)) {
             return .{ .some = memory.ptr };
         }
-        return .{ .none = {} };
+        return .empty;
     };
 
-    pub const free := fn(
+    pub const free = fn(
         &mut self,
         memory: []mut u8,
         _: std.mem.Alignment,
@@ -54,25 +54,39 @@ impl std.mem.AllocatorVTable for PageAllocator {
 test "PageAllocator: alloc/write/free round-trips through the global singleton" {
     match (std.heap.page_allocator.alloc(u8, 64uz)) {
         .ok => |buf| {
+            defer std.heap.page_allocator.free(buf);
             @expect(buf.len == 64uz);
             buf[0] = 42u8;
             buf[63] = 7u8;
             @expect(buf[0] == 42u8);
             @expect(buf[63] == 7u8);
-            std.heap.page_allocator.free(u8, buf);
         },
-        .err => @panic("PageAllocator.alloc failed"),
+        .err => @expect(false, "PageAllocator.alloc failed"),
     }
 }
 
 test "PageAllocator: a local instance also works, not just the global singleton" {
-    var local: PageAllocator = .{};
-    const a := std.mem.Allocator{ .vtable = ^mut local };
+    let mut local: PageAllocator = .{};
+    let a = std.mem.Allocator{ .vtable = ^mut local };
     match (a.alloc(u8, std.os.page_size() * 2uz)) {
         .ok => |buf| {
+            defer a.free(buf);
             buf[0] = 1u8;
-            a.free(u8, buf);
         },
-        .err => @panic("PageAllocator.alloc failed"),
+        .err => @expect(false, "PageAllocator.alloc failed"),
+    }
+}
+
+test "PageAllocator: create/destroy round-trips a single item" {
+    const Pair = struct { a: u64, b: u32 };
+
+    match (std.heap.page_allocator.create(Pair)) {
+        .ok => |p| {
+            defer std.heap.page_allocator.destroy(p);
+            p.a = 1u64;
+            p.b = 2u32;
+            @expect(p.a + @as(u64, p.b) == 3u64);
+        },
+        .err => @expect(false, "PageAllocator.create failed"),
     }
 }

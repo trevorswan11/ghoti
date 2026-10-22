@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <ios>
+#include <iostream>
 #include <istream>
 #include <ostream>
 #include <streambuf>
@@ -12,6 +13,7 @@
 
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <fmt/ostream.h>
 #include <gsl/span>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
@@ -19,8 +21,10 @@
 #include <stdx/types.hh>
 
 #include "ghoti/config.h"
+#include "support/path_utils.hh"
 
 #if GHOTI_WINDOWS
+#    include <algorithm>
 #    include <iterator>
 #    include <ranges>
 #    include <string_view>
@@ -48,6 +52,7 @@
 #if !GHOTI_WINDOWS
 #    include <algorithm>
 #    include <csignal>
+#    include <fcntl.h>
 #    include <signal.h>
 #    include <stdlib.h>
 #    include <sys/wait.h>
@@ -102,8 +107,100 @@ auto self_exe_path() -> std::filesystem::path {
     return buffer.data();
 }
 
-auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
-    // `milliseconds::max()` means "wait forever"
+namespace {
+
+#if GHOTI_WINDOWS
+
+// How many timeouts' worth of wall time a stalled (mostly idle) child gets
+constexpr i64 STALL_GRACE_FACTOR{10};
+
+struct cpu_times {
+    std::chrono::milliseconds user;
+    std::chrono::milliseconds kernel;
+};
+
+auto process_cpu_times(::HANDLE process) -> cpu_times {
+    ::FILETIME created, exited, kernel, user;
+    if (!::GetProcessTimes(process, &created, &exited, &kernel, &user)) { return {}; }
+    const auto to_ms = [](::FILETIME t) {
+        const auto ticks{(static_cast<u64>(t.dwHighDateTime) << 32) | t.dwLowDateTime};
+        return std::chrono::milliseconds{static_cast<i64>(ticks / 10'000)}; // 100 ns ticks
+    };
+    return {to_ms(user), to_ms(kernel)};
+}
+
+// Waits until the child exits, has burned `timeout` of CPU time, or has had
+// `STALL_GRACE_FACTOR` timeouts of wall time
+auto wait_for_child(::HANDLE process, std::chrono::milliseconds timeout, bool no_timeout)
+    -> ::DWORD {
+    if (no_timeout) { return ::WaitForSingleObject(process, INFINITE); }
+    const auto wall_limit{timeout * STALL_GRACE_FACTOR};
+    auto       waited{std::chrono::milliseconds::zero()};
+    while (true) {
+        const auto slice{std::min(timeout, wall_limit - waited)};
+        const auto result{::WaitForSingleObject(process, static_cast<::DWORD>(slice.count()))};
+        if (result != WAIT_TIMEOUT) { return result; }
+        waited += slice;
+        const auto [user, kernel]{process_cpu_times(process)};
+        if (user + kernel >= timeout || waited >= wall_limit) { return WAIT_TIMEOUT; }
+    }
+}
+
+// Opens `log` for the child to inherit as its stdout and stderr
+auto open_child_log(const std::filesystem::path& log) -> ::HANDLE {
+    ::SECURITY_ATTRIBUTES sa;
+    ::ZeroMemory(&sa, sizeof(sa));
+    sa.nLength        = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    return ::CreateFileW(log.c_str(),
+                         GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_DELETE,
+                         &sa,
+                         CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL,
+                         nullptr);
+}
+
+// Starts the child with `log` as its only inherited handle, so a spawn on another thread can't
+// leak its own log into this child
+auto create_logged_process(std::string& cmd_line, ::HANDLE log, ::PROCESS_INFORMATION& pi) -> bool {
+    usize list_size{0};
+    ::InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
+    std::string list_storage(list_size, '\0');
+    auto*       list{reinterpret_cast<::LPPROC_THREAD_ATTRIBUTE_LIST>(list_storage.data())};
+    if (!::InitializeProcThreadAttributeList(list, 1, 0, &list_size)) { return false; }
+    const bool listed{
+        ::UpdateProcThreadAttribute(
+            list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &log, sizeof(log), nullptr, nullptr) !=
+        FALSE};
+
+    ::STARTUPINFOEXA si;
+    ::ZeroMemory(&si, sizeof(si));
+    si.StartupInfo.cb         = sizeof(si);
+    si.StartupInfo.dwFlags    = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdOutput = log;
+    si.StartupInfo.hStdError  = log;
+    si.lpAttributeList        = list;
+    const bool created{listed && ::CreateProcessA(nullptr,
+                                                  cmd_line.data(),
+                                                  nullptr,
+                                                  nullptr,
+                                                  TRUE,
+                                                  EXTENDED_STARTUPINFO_PRESENT,
+                                                  nullptr,
+                                                  nullptr,
+                                                  &si.StartupInfo,
+                                                  &pi) != FALSE};
+    ::DeleteProcThreadAttributeList(list);
+    return created;
+}
+
+#endif
+
+// `timeout = milliseconds::max()` means "wait forever"
+auto spawn(const mock_argv&                           args,
+           std::chrono::milliseconds                  timeout,
+           stdx::option<const std::filesystem::path&> log) -> stdx::option<u32> {
     const bool no_timeout{timeout == std::chrono::milliseconds::max()};
 #if GHOTI_WINDOWS
     auto cmd_line{quote_arg_windows(args[0])};
@@ -113,21 +210,35 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
     }
 
     // I don't think you understand how much I hate working with the windows API
-    ::STARTUPINFOA si;
-    ::ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-
     ::PROCESS_INFORMATION pi;
     ::ZeroMemory(&pi, sizeof(pi));
 
-    if (!::CreateProcessA(
-            nullptr, cmd_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-        return stdx::none;
+    if (log) {
+        const auto log_handle{open_child_log(*log)};
+        if (log_handle == INVALID_HANDLE_VALUE) { return stdx::none; }
+        const bool created{create_logged_process(cmd_line, log_handle, pi)};
+        ::CloseHandle(log_handle);
+        if (!created) { return stdx::none; }
+    } else {
+        ::STARTUPINFOA si;
+        ::ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
+        if (!::CreateProcessA(
+                nullptr, cmd_line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            return stdx::none;
+        }
     }
 
-    const auto wait_result{::WaitForSingleObject(
-        pi.hProcess, no_timeout ? INFINITE : static_cast<::DWORD>(timeout.count()))};
+    // A child that hasn't used its budget of CPU time is stalled, not looping, e.g. held by an
+    // antivirus scan of the freshly linked exe, so it gets more time
+    const auto wait_result{wait_for_child(pi.hProcess, timeout, no_timeout)};
     if (wait_result == WAIT_TIMEOUT) {
+        const auto [user, kernel]{process_cpu_times(pi.hProcess)};
+        fmt::println(std::cerr,
+                     "spawn_child: killed `{}` for timing out (CPU: {} ms user, {} ms kernel)",
+                     args[0],
+                     user.count(),
+                     kernel.count());
         ::TerminateProcess(pi.hProcess, spawn_child_timeout_exit_code);
         ::WaitForSingleObject(pi.hProcess, INFINITE);
         ::CloseHandle(pi.hProcess);
@@ -141,14 +252,29 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
     ::CloseHandle(pi.hThread);
     return static_cast<u32>(exit_code);
 #else
+    // Close-on-exec keeps a concurrent spawn's child from inheriting this log; dup2 clears it
+    i32 log_fd{-1};
+    if (log) {
+        log_fd = ::open(log->c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (log_fd < 0) { return stdx::none; }
+    }
+
     const auto pid{::fork()};
-    if (pid < 0) { return stdx::none; }
+    if (pid < 0) {
+        if (log_fd >= 0) { ::close(log_fd); }
+        return stdx::none;
+    }
 
     if (pid == 0) {
         // Child
+        if (log_fd >= 0) {
+            ::dup2(log_fd, STDOUT_FILENO);
+            ::dup2(log_fd, STDERR_FILENO);
+        }
         ::execvp(args[0], args.argv());
         std::_Exit(127); // execvp failed
     }
+    if (log_fd >= 0) { ::close(log_fd); }
 
     // Poll for exit rather than blocking on waitpid indefinitely to prevent stall on trap
     const auto now{std::chrono::steady_clock::now()};
@@ -162,6 +288,7 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
         if (reaped < 0) { return stdx::none; }
 
         if (!no_timeout && std::chrono::steady_clock::now() >= deadline) {
+            fmt::println(std::cerr, "spawn_child: killed `{}` for timing out", args[0]);
             ::kill(pid, SIGKILL);
             ::waitpid(pid, &status, 0); // reap to avoid leaving a zombie
             return spawn_child_timeout_exit_code;
@@ -175,17 +302,29 @@ auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> st
 #endif
 }
 
+} // namespace
+
+auto spawn_child(const mock_argv& args, std::chrono::milliseconds timeout) -> stdx::option<u32> {
+    return spawn(args, timeout, stdx::none);
+}
+
+auto spawn_child_logged(const mock_argv&             args,
+                        const std::filesystem::path& log,
+                        std::chrono::milliseconds    timeout) -> stdx::option<u32> {
+    return spawn(args, timeout, log);
+}
+
 auto ghoti_binary_path() -> std::filesystem::path {
     auto path{self_exe_path().parent_path().parent_path() / "bin" / "ghoti"};
 #if GHOTI_WINDOWS
     path += ".exe";
 #endif
-    if (!std::filesystem::exists(path)) {
+    if (!path_utils::exists(path)) {
         auto fallback{std::filesystem::current_path() / "zig-out" / "bin" / "ghoti"};
 #if GHOTI_WINDOWS
         fallback += ".exe";
 #endif
-        if (std::filesystem::exists(fallback)) { return fallback; }
+        if (path_utils::exists(fallback)) { return fallback; }
     }
     return path;
 }

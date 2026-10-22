@@ -32,8 +32,7 @@ TEST_CASE("Match without condition") {
 
     helpers::test_parser_fail(
         "match { b => c, };",
-        syntax::diagnostic{
-            "Expected token LPAREN, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+        syntax::diagnostic{"Expected '(', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 }
 
 TEST_CASE("Armless match expression") {
@@ -46,11 +45,10 @@ TEST_CASE("Armless match expression") {
 TEST_CASE("Malformed arm pattern") {
     helpers::test_parser_fail(
         "match {  => c, };",
-        syntax::diagnostic{
-            "Expected token LPAREN, found LBRACE", syntax::error::UNEXPECTED_TOKEN, 0, 6});
+        syntax::diagnostic{"Expected '(', found '{'", syntax::error::UNEXPECTED_TOKEN, 0, 6});
 
     helpers::test_parser_fail(
-        "match (a) { for (0..3) |i| { var a: i32 = undefined; } => |b| c };",
+        "match (a) { for (0..3) |i| { let mut a: i32 = undefined; } => |b| c };",
         syntax::diagnostic{"Unmatchable expression 'for loop' used as a match arm pattern",
                            syntax::error::ILLEGAL_MATCH_PATTERN,
                            std::pair{0UZ, 12UZ}});
@@ -65,7 +63,7 @@ TEST_CASE("Arm missing fat arrow") {
     helpers::test_parser_fail(
         "match (a) { b c, };",
         syntax::diagnostic{
-            "Expected token FAT_ARROW, found IDENT", syntax::error::UNEXPECTED_TOKEN, 0, 14});
+            "Expected '=>', found an identifier", syntax::error::UNEXPECTED_TOKEN, 0, 14});
 }
 
 TEST_CASE("Arm separated by semicolon instead of comma") {
@@ -80,12 +78,6 @@ TEST_CASE("Illegal match catch-all") {
         "match (a) { b => c, _ => f, _ => g, };",
         syntax::diagnostic{
             "Duplicate catch-all match arm", syntax::error::ILLEGAL_MATCH_CATCH_ALL, 0, 28});
-
-    helpers::test_parser_fail(
-        "match (a) { _ => |b| c, };",
-        syntax::diagnostic{"Catch-all match arms may not have a capture clause",
-                           syntax::error::ILLEGAL_MATCH_CATCH_ALL,
-                           std::pair{0UZ, 18UZ}});
 }
 
 TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
@@ -104,11 +96,32 @@ TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
 }
 
 TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
-    helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
+    helpers::test_parser_fail(
+        "match (a) { b => |&mut _| c, };",
+        syntax::diagnostic{
+            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
 
-    helpers::test_parser_fail("match (a) { b => |^ _| c, };",
-                              syntax::diagnostic{syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+    helpers::test_parser_fail(
+        "match (a) { b => |^ _| c, };",
+        syntax::diagnostic{
+            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+}
+
+TEST_CASE("Malformed `if` / `while` captures") {
+    helpers::test_parser_fail(
+        "if (a) {} else |e| {};",
+        syntax::diagnostic{"An `else` capture needs a payload capture after the condition",
+                           syntax::error::ILLEGAL_CAPTURE,
+                           std::pair{0UZ, 10UZ}});
+    helpers::test_parser_fail(
+        "while (a) {} else |e| {};",
+        syntax::diagnostic{"An `else` capture needs a payload capture after the condition",
+                           syntax::error::ILLEGAL_CAPTURE,
+                           std::pair{0UZ, 13UZ}});
+    helpers::test_parser_fail("if (a) |&mut _| {};",
+                              syntax::diagnostic{"A discarded capture `_` can't take a modifier",
+                                                 syntax::error::ILLEGAL_CAPTURE,
+                                                 std::pair{0UZ, 13UZ}});
 }
 
 } // namespace ghoti::tests

@@ -1,5 +1,7 @@
 #include "compiler/sema/context.hh"
 
+#include <algorithm>
+#include <array>
 #include <concepts>
 #include <filesystem>
 #include <fstream>
@@ -8,13 +10,21 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gsl/pointers>
+#include <gsl/span>
+#include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/attributes.hh"
+#include "compiler/codegen/target.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/passes/symbol_collector.hh"
@@ -52,6 +62,48 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
     auto& type{*pool[{type_kind::REFERENCE, mutability, underlying}]};
     type.resolve_if<types::reference>(underlying);
     return type;
+}
+
+constexpr u64 ERASED_FN_MARKER{0x455241534544}; // distinguishes `fn` from `extern fn` keys
+
+auto context::get_function(gsl::span<type*>        params,
+                           type&                   return_type,
+                           bool                    is_variadic,
+                           ast::calling_convention conv,
+                           bool                    erased) -> type& {
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    if (is_variadic) { key.imprint(is_variadic); }
+    key.imprint(conv);
+    if (erased) { key.imprint(ERASED_FN_MARKER); }
+
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, false, is_variadic, conv, erased);
+    return fn;
+}
+
+auto context::get_function_like(gsl::span<type*>        params,
+                                type&                   return_type,
+                                bool                    has_self,
+                                bool                    is_variadic,
+                                ast::calling_convention conv,
+                                bool                    erased) -> type& {
+    if (!has_self) { return get_function(params, return_type, is_variadic, conv, erased); }
+
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+    for (const auto* p : params) { key.imprint(*p); }
+    key.imprint(return_type);
+    key.imprint(conv);
+    auto& fn{*pool[key]};
+    fn.resolve_if<types::function>(params, return_type, true, is_variadic, conv);
+    return fn;
+}
+
+auto context::with_erasure(type& fn, bool erased) -> type& {
+    const auto data{fn.get_data().as_opt<types::function>()};
+    if (!data || data->erased == erased || data->has_self) { return fn; }
+    return get_function(data->params, data->return_type, data->is_variadic, data->conv, erased);
 }
 
 auto context::get_array(types::mut::mutability_modifiers mutability,
@@ -98,8 +150,10 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::F64, type_kind::F64);
     inject_type(kws::F80, type_kind::F80);
     inject_type(kws::F128, type_kind::F128);
-    inject_type(kws::CONSTEXPR_INT, type_kind::CONSTEXPR_INT);
-    inject_type(kws::CONSTEXPR_FLOAT, type_kind::CONSTEXPR_FLOAT);
+    inject_type(kws::COMPTIME_INT, type_kind::COMPTIME_INT);
+    inject_type(kws::COMPTIME_FLOAT, type_kind::COMPTIME_FLOAT);
+    // No keyword spells it; `@EnumLiteral()` names it
+    pool[{type_kind::ENUM_LITERAL, types::mut::CONSTANT}]->resolve<types::builtin_type>();
     inject_type(kws::BOOL, type_kind::BOOL);
     inject_type(kws::VOID, type_kind::VOID_);
 
@@ -112,17 +166,73 @@ auto inject_types(symbol_table& prelude, type_pool& pool) -> void {
     inject_type(kws::NORETURN, type_kind::NORETURN);
 }
 
+struct c_type_layout {
+    types::c_int_type kind;
+    u16               bits;
+    bool              is_signed;
+};
+
+// `c_int` & co. are their own integer types, sized and signed as the target's C ABI says
+auto inject_c_types(symbol_table& prelude, type_pool& pool, const codegen::target_facts& facts)
+    -> void {
+
+    const auto       long_bits{static_cast<u16>(facts.c_long_bits)};
+    const std::array layouts{
+        c_type_layout{types::c_int_type::CHAR, 8, facts.c_char_signed},
+        c_type_layout{types::c_int_type::SHORT, 16, true},
+        c_type_layout{types::c_int_type::USHORT, 16, false},
+        c_type_layout{types::c_int_type::INT, 32, true},
+        c_type_layout{types::c_int_type::UINT, 32, false},
+        c_type_layout{types::c_int_type::LONG, long_bits, true},
+        c_type_layout{types::c_int_type::ULONG, long_bits, false},
+        c_type_layout{types::c_int_type::LONGLONG, 64, true},
+        c_type_layout{types::c_int_type::ULONGLONG, 64, false},
+    };
+    for (const auto& layout : layouts) {
+        const auto name{syntax::token_type::C_TYPE_NAMES[std::to_underlying(layout.kind) - 1]};
+        auto&      type{*pool[{type_kind::INT,
+                               types::mut::CONSTANT,
+                               layout.bits,
+                               layout.is_signed,
+                               std::to_underlying(layout.kind)}]};
+        type.resolve_if<types::integer>(layout.bits, layout.is_signed, layout.kind);
+        prelude.insert_unchecked(
+            name, symbols::builtin{syntax::keyword_t{name, syntax::token_type_t::C_TYPE}, type});
+        auto& symbol{prelude.get(name)};
+        symbol.set_kind(symbol_kind::TYPE);
+        symbol.set_status(symbol_status::RESOLVED);
+    }
+}
+
+// `c_longdouble` is the target's `long double`: a float of that width, but its own type
+auto inject_c_longdouble(symbol_table& prelude, type_pool& pool, const codegen::target_facts& facts)
+    -> void {
+    const auto kind{facts.c_longdouble_bits == 80    ? type_kind::F80
+                    : facts.c_longdouble_bits == 128 ? type_kind::F128
+                                                     : type_kind::F64};
+    auto&      type{*pool[{kind, types::mut::CONSTANT, C_LONGDOUBLE_INSTANCE}]};
+    type.resolve_if<types::builtin_type>();
+    type.set_instance_id(C_LONGDOUBLE_INSTANCE);
+    const auto name{syntax::token_type::C_LONGDOUBLE_NAME};
+    prelude.insert_unchecked(
+        name, symbols::builtin{syntax::keyword_t{name, syntax::token_type_t::C_TYPE}, type});
+    auto& symbol{prelude.get(name)};
+    symbol.set_kind(symbol_kind::TYPE);
+    symbol.set_status(symbol_status::RESOLVED);
+}
+
 auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     PROFILE_FUNCTION();
-    const auto inject_function = [&](const syntax::builtin_t& builtin,
-                                     types::builtin_params&&  param_types,
-                                     type&                    return_type) -> void {
+    const auto inject_function = [&](const syntax::builtin_def& def,
+                                     types::builtin_params&&    param_types,
+                                     type&                      return_type) -> void {
         for (const auto& param_type : param_types) {
             ASSERT(param_type->is_resolved(), "Builtins must be fully resolved");
         }
         ASSERT(return_type.is_resolved(), "Builtins must be fully resolved");
 
-        types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
+        const syntax::typed_identifier builtin{def.name, syntax::token_type_t::BUILTIN};
+        types::key_t                   key{type_kind::FUNCTION, types::mut::CONSTANT};
         key.imprint(builtin);
         auto& type{*pool[key]};
         ASSERT(!type.is_resolved(), "Builtin functions should only be resolved once");
@@ -143,6 +253,7 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     auto& t_void{*pool[{type_kind::VOID_, types::mut::CONSTANT}]};
     auto& t_type{*pool[{type_kind::TYPE, types::mut::CONSTANT}]};
     auto& t_usize{*pool[{type_kind::USIZE, types::mut::CONSTANT}]};
+    auto& t_comptime_int{*pool[{type_kind::COMPTIME_INT, types::mut::CONSTANT}]};
     auto& t_auto{*pool[{type_kind::AUTO, types::mut::CONSTANT}]};
     auto& t_noreturn{*pool[{type_kind::NORETURN, types::mut::CONSTANT}]};
     auto& t_bool{*pool[{type_kind::BOOL, types::mut::CONSTANT}]};
@@ -162,16 +273,20 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TRUNCATE, params(t_type, t_auto), t_auto);
     inject_function(bis::BOOL_FROM_INT, params(t_auto), t_bool);
     inject_function(bis::INT_FROM_BOOL, params(t_type, t_bool), t_auto);
+    inject_function(bis::BACKING_INT, params(t_auto), t_auto);
+    inject_function(bis::FROM_BACKING_INT, params(t_type, t_auto), t_auto);
+    inject_function(bis::INT_FROM_FLOAT, params(t_type, t_auto), t_auto);
+    inject_function(bis::FLOAT_FROM_INT, params(t_type, t_auto), t_auto);
+    inject_function(bis::FLOAT_CAST, params(t_type, t_auto), t_auto);
 
     inject_function(bis::INT_FROM_PTR, params(t_auto), t_usize);
     inject_function(bis::PTR_FROM_INT, params(t_type, t_usize), t_auto);
-    inject_function(bis::PTR_FROM_ARRAY, params(t_auto), t_auto);
     inject_function(bis::SLICE_FROM_PTR, params(t_auto, t_usize), t_auto);
     inject_function(bis::FIELD_PARENT_PTR, params(t_type, t_c_str, t_auto), t_auto);
 
-    inject_function(bis::ALIGN_OF, params(t_auto), t_usize);
-    inject_function(bis::SIZE_OF, params(t_auto), t_usize);
-    inject_function(bis::BIT_SIZE_OF, params(t_auto), t_usize);
+    inject_function(bis::ALIGN_OF, params(t_auto), t_comptime_int);
+    inject_function(bis::SIZE_OF, params(t_auto), t_comptime_int);
+    inject_function(bis::BIT_SIZE_OF, params(t_auto), t_comptime_int);
     inject_function(bis::TYPE_OF, params(t_auto), t_type);
     inject_function(bis::THIS, params(), t_type);
     inject_function(bis::TAG_NAME, params(t_auto), t_c_str);
@@ -202,11 +317,23 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::CTZ, params(t_auto), t_usize);
     inject_function(bis::POPCOUNT, params(t_auto), t_usize);
     inject_function(bis::ABS, params(t_auto), t_auto);
+    inject_function(bis::SQRT, params(t_auto), t_auto);
+    inject_function(bis::SIN, params(t_auto), t_auto);
+    inject_function(bis::COS, params(t_auto), t_auto);
+    inject_function(bis::TAN, params(t_auto), t_auto);
+    inject_function(bis::EXP, params(t_auto), t_auto);
+    inject_function(bis::EXP2, params(t_auto), t_auto);
+    inject_function(bis::LOG, params(t_auto), t_auto);
+    inject_function(bis::LOG2, params(t_auto), t_auto);
+    inject_function(bis::LOG10, params(t_auto), t_auto);
+    inject_function(bis::FLOOR, params(t_auto), t_auto);
+    inject_function(bis::CEIL, params(t_auto), t_auto);
 
     inject_function(bis::MIN, params(t_auto, t_auto), t_auto);
     inject_function(bis::MAX, params(t_auto, t_auto), t_auto);
     inject_function(bis::DIV_TRUNC, params(t_auto, t_auto), t_auto);
     inject_function(bis::DIV_FLOOR, params(t_auto, t_auto), t_auto);
+    inject_function(bis::DIV_EXACT, params(t_auto, t_auto), t_auto);
     inject_function(bis::REM, params(t_auto, t_auto), t_auto);
     inject_function(bis::MOD, params(t_auto, t_auto), t_auto);
     inject_function(bis::ADD_WITH_OVERFLOW, params(t_auto, t_auto, t_auto), t_bool);
@@ -223,21 +350,32 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::TARGET_ARCH, params(), t_c_str);
     inject_function(bis::TARGET_TRIPLE, params(), t_c_str);
     inject_function(bis::TARGET_ABI, params(), t_c_str);
-    inject_function(bis::TARGET_PTR_BITS, params(), t_usize);
+    inject_function(bis::TARGET_PTR_BITS, params(), t_comptime_int);
     inject_function(bis::TARGET_ENDIAN, params(), t_c_str);
     inject_function(bis::TARGET_FAMILY, params(), t_c_str);
+    inject_function(bis::OPTIMIZE_MODE, params(), t_c_str);
+    inject_function(bis::RUNTIME_SAFETY, params(), t_bool);
+    inject_function(bis::SET_RUNTIME_SAFETY, params(t_bool), t_void);
+    inject_function(bis::BRANCH_HINT, params(t_auto), t_void);
 
     inject_function(bis::SET_EVAL_RECURSION_LIMIT, params(t_usize), t_void);
     inject_function(bis::SET_EVAL_UNROLL_LIMIT, params(t_usize), t_void);
-    inject_function(bis::SET_MAIN_SYMBOL, params(t_c_str), t_void);
+    inject_function(bis::EXPORT, params(t_auto, t_auto), t_void);
 
     inject_function(bis::PANIC, params(t_c_str), t_noreturn);
     inject_function(bis::TRAP, params(), t_noreturn);
     inject_function(bis::RETURN_ADDRESS, params(), t_usize);
     inject_function(bis::COMPILE_ERROR, params(t_c_str), t_noreturn);
     inject_function(bis::EMBED, params(t_c_str), t_auto);
+    inject_function(bis::ENUM_LITERAL, params(), t_type);
+    // `@llvmIntrinsic(name, ReturnType, args...)`: the arguments after the type are variadic
+    inject_function(bis::LLVM_INTRINSIC, params(t_c_str, t_type), t_auto);
+    // Only `std/start.gh` may name the program's `main` and its tests
+    inject_function(bis::ENTRY_MAIN, params(), t_auto);
+    inject_function(bis::ENTRY_TEST_RUNNER, params(), t_auto);
+    inject_function(bis::TEST_FUNCTIONS, params(), t_auto);
 
-    // `@implements(T | value, I)` -> bool (constexpr)
+    // `@implements(T | value, I)` -> bool (comptime)
     inject_function(bis::IMPLEMENTS, params(t_auto, t_auto), t_bool);
     inject_function(bis::FN_CTX, params(), t_auto);
 
@@ -265,13 +403,118 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
 constexpr std::string_view BUILTIN_MODULE_SOURCE{
 #include "builtin.gh.inc"
 };
+// recompile
 
 constexpr std::string_view BUILTIN_NAMESPACE{"builtin"};
+
+// A feature name that can't be a bare identifier is written as a raw one: `@"64bit"`
+[[nodiscard]] auto feature_identifier(std::string_view name) -> std::string {
+    const bool int_like{name.size() > 1 && (name.front() == 'i' || name.front() == 'u') &&
+                        std::ranges::all_of(stdx::string::substr(name, 1),
+                                            [](char c) { return c >= '0' && c <= '9'; })};
+    const bool plain{!name.empty() && !(name.front() >= '0' && name.front() <= '9') && !int_like &&
+                     !syntax::get_keyword_opt(name) && std::ranges::all_of(name, [](char c) {
+                         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                (c >= '0' && c <= '9') || c == '_';
+                     })};
+    return plain ? std::string{name} : fmt::format("@\"{}\"", name);
+}
+
+// The `builtin` declarations that depend on the target CPU: the target architecture family's
+// feature enum, also named `CpuFeature`, and `cpu`, the CPU code is generated for
+[[nodiscard]] auto cpu_builtin_source(const codegen::target_options& target_opts) -> std::string {
+    // Only the target's own family: code naming another architecture's features sits behind an
+    // `@cfg` that removes it, and resolving every family's enum would slow every compilation
+    const auto cpu{codegen::resolve_target_cpu(target_opts)};
+    const auto target_family{
+        codegen::cpu_feature_family_of(codegen::resolve_target_triple(target_opts.triple_str))};
+    std::string out;
+    if (target_family) {
+        const auto& f{*target_family};
+        out += fmt::format("\npub const {} = struct {{\n"
+                           "    /// {} CPU features, named as LLVM names them with `-` and `.` as "
+                           "`_`\n"
+                           "    pub const Feature = enum : u16 {{\n",
+                           f.name,
+                           f.name);
+        for (usize i{0}; i < f.ghoti_names.size(); ++i) {
+            out += fmt::format("        /// {} (LLVM: `{}`)\n        {},\n",
+                               f.descriptions[i],
+                               f.llvm_names[i],
+                               feature_identifier(f.ghoti_names[i]));
+        }
+        out += "    };\n};\n";
+    }
+
+    const usize      feature_count{target_family ? target_family->ghoti_names.size() : 0};
+    const usize      word_count{std::max<usize>(1, (feature_count + 63) / 64)};
+    std::vector<u64> words(word_count, 0);
+    if (target_family && cpu) {
+        for (const auto& name : cpu->enabled) {
+            const auto at{std::ranges::find(target_family->ghoti_names, name)};
+            if (at == target_family->ghoti_names.end()) { continue; }
+            const auto index{static_cast<usize>(at - target_family->ghoti_names.begin())};
+            words[index / 64] |= u64{1} << (index % 64);
+        }
+    }
+
+    out += fmt::format(
+        R"(
+/// The target architecture's CPU features
+pub const CpuFeature = {0};
+
+/// A set of the target architecture's `CpuFeature`s
+pub const CpuFeatureSet = struct {{
+    pub words: [{1}]mut u64 = .{{ {2} }},
+
+    pub const has = fn(&self, feature: CpuFeature): bool {{
+        let index = @as(usize, @backingInt(feature));
+        return (self.words[index / 64] >> @intCast(u64, index % 64)) & 1 == 1;
+    }};
+
+    pub const set = fn(&mut self, feature: CpuFeature, enabled: bool): void {{
+        let index = @as(usize, @backingInt(feature));
+        let bit = @as(u64, 1) << @intCast(u64, index % 64);
+        if (enabled) {{
+            self.words[index / 64] |= bit;
+        }} else {{
+            self.words[index / 64] &= ~bit;
+        }}
+    }};
+}};
+
+/// A CPU model and the features code for it may use
+pub const Cpu = struct {{
+    pub model: []u8,
+    pub features: CpuFeatureSet,
+
+    pub const has = fn(&self, feature: CpuFeature): bool {{
+        return self.features.has(feature);
+    }};
+}};
+
+/// The CPU code is generated for: `--cpu` (`generic` unless given) and `--features`
+pub const cpu: Cpu = .{{
+    .model = "{3}",
+    .features = .{{ .words = .{{ {4} }} }},
+}};
+)",
+        target_family ? fmt::format("{}.Feature", target_family->name)
+                      : std::string{"enum : u16 { _ }"},
+        word_count,
+        fmt::join(std::vector<std::string>(word_count, "0"), ", "),
+        cpu ? cpu->model : target_opts.cpu,
+        fmt::join(words | std::views::transform([](u64 w) { return fmt::format("0x{:x}", w); }),
+                  ", "));
+    return out;
+}
 
 auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(BUILTIN_MODULE_SOURCE)};
+    const auto source{
+        fmt::format("{}{}", BUILTIN_MODULE_SOURCE, cpu_builtin_source(ctx.target_opts))};
+    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(source)};
     symbol_collector::collect_symbols(builtin_mod, ctx);
     type_resolver::resolve_types(builtin_mod, ctx);
     VERIFY(!builtin_mod.is_poisoned() && ctx.diags.empty(),
@@ -280,7 +523,7 @@ auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     // Expose the module under one prelude name, reusing the ordinary module-access machinery
     auto& mod_type{
         *ctx.pool[{type_kind::MODULE, types::mut::CONSTANT, *builtin_mod.root_table_idx}]};
-    mod_type.resolve_if<types::module>(builtin_mod);
+    mod_type.resolve_if<types::module_t>(builtin_mod);
 
     auto& prelude{ctx.registry.get(prelude_idx)};
     prelude.insert_unchecked(
@@ -300,8 +543,29 @@ auto context::inject_prelude() -> void {
     prelude_index.emplace(registry.create());
 
     inject_types(registry.get(*prelude_index), pool);
+    const auto facts{codegen::target_facts::resolve(target_opts.triple_str)};
+    inject_c_types(registry.get(*prelude_index), pool, facts);
+    inject_c_longdouble(registry.get(*prelude_index), pool, facts);
     inject_functions(registry.get(*prelude_index), pool);
     inject_builtin_module(*this, *prelude_index);
+}
+
+auto context::get_char_constant() -> type& {
+    auto& type{*pool[{type_kind::COMPTIME_INT, types::mut::CONSTANT, CHAR_CONSTANT_BITS, false}]};
+    if (!type.is_resolved()) { type.resolve<types::builtin_type>(); }
+    return type;
+}
+
+auto context::default_concrete(type& t) -> type& {
+    switch (t.get_kind()) {
+    case type_kind::COMPTIME_INT:
+        if (t.get_key().get_int_bits() == CHAR_CONSTANT_BITS) {
+            return get_int(CHAR_CONSTANT_BITS, false);
+        }
+        return get_int(32, true);
+    case type_kind::COMPTIME_FLOAT: return get_builtin_resolved_type(type_kind::F64);
+    default:                        return t;
+    }
 }
 
 auto context::get_builtin_resolved_type(type_kind kind) -> type& {
@@ -310,10 +574,33 @@ auto context::get_builtin_resolved_type(type_kind kind) -> type& {
     return type;
 }
 
-auto context::lookup_constexpr_binding(std::string_view name) const
+auto context::lookup_comptime_binding(std::string_view name) const
     -> stdx::option<const gir::const_value&> {
-    for (const auto& frame : constexpr_binding_frames | std::views::reverse) {
+    for (const auto& frame : comptime_binding_frames | std::views::reverse) {
         if (const auto it{frame.find(name)}; it != frame.end()) { return it->second; }
+    }
+    return stdx::none;
+}
+
+auto context::entry_test_runner_module() -> stdx::option<mod::module_t&> {
+    const auto declares_runner{[&](const mod::module_t& m) {
+        return m.root_table_idx && registry.get_from_opt(*m.root_table_idx, "test_runner");
+    }};
+    if (entry_root && declares_runner(*entry_root)) { return *entry_root; }
+
+    if (const auto std_mod{modules.find_loaded_library_module("std")};
+        std_mod && std_mod->root_table_idx) {
+        const auto testing_sym{registry.get_from_opt(*std_mod->root_table_idx, "testing")};
+        const auto node{testing_sym ? testing_sym->get_data().as_opt<symbols::node_t>()
+                                    : stdx::none};
+        const auto testing_type{node ? std_mod->get_sema_type_opt(*node) : stdx::none};
+        const auto testing_mod{testing_type ? testing_type->get_data().as_opt<types::module_t>()
+                                            : stdx::none};
+        if (testing_mod && declares_runner(testing_mod->imported)) { return testing_mod->imported; }
+    }
+
+    if (modules.has_builtin_module() && declares_runner(modules.builtin_module())) {
+        return modules.builtin_module();
     }
     return stdx::none;
 }
@@ -325,6 +612,40 @@ auto context::get_builtin_type(std::string_view name) -> type& {
     return builtin_mod.get_sema_type(builtin_sym.get_data().as<symbols::node_t>());
 }
 
+auto context::backing_int_type(const type& t, u32 ptr_bits) -> stdx::option<type&> {
+    const auto& data{t.get_data()};
+    if (const auto en{data.as_opt<types::enum_t>()}) { return en->underlying; }
+    if (const auto st{data.as_opt<types::struct_t>()}; st && st->is_bit_packed()) {
+        if (const auto bits{packed_backing_bits(*st, ptr_bits)}) {
+            return get_int(static_cast<u16>(*bits), false);
+        }
+    }
+    if (const auto un{data.as_opt<types::union_t>()}) {
+        if (un->is_bit_packed()) {
+            if (const auto bits{packed_union_backing_bits(*un, ptr_bits)}) {
+                return get_int(static_cast<u16>(*bits), false);
+            }
+        } else if (!un->is_untagged && !un->is_c_abi) {
+            return get_int(32, true);
+        }
+    }
+    return stdx::none;
+}
+
+auto context::store_mismatch_message(const type& from, const type& to, u32 ptr_bits) const
+    -> std::string {
+    const auto from_name{type_display_name(from)};
+    const auto to_name{type_display_name(to)};
+    auto       message{
+        fmt::format("Type mismatch in store: cannot assign '{}' to '{}'", from_name, to_name)};
+    if (const auto reason{cast_rejection_reason(from, to, ptr_bits, user_type_names)}) {
+        message += fmt::format(" ({})", *reason);
+    } else if (from_name == to_name) {
+        message += " (they are distinct types that share a name)";
+    }
+    return message;
+}
+
 auto context::type_display_name(const type& t) const -> std::string {
     gsl::not_null<const type*> denoted{&t};
     if (denoted->get_kind() == type_kind::TYPE) {
@@ -333,10 +654,7 @@ auto context::type_display_name(const type& t) const -> std::string {
         }
     }
 
-    if (const auto it{user_type_names.find(denoted)}; it != user_type_names.end()) {
-        return std::string{it->second};
-    }
-    return denoted->to_string();
+    return denoted->to_string(&user_type_names);
 }
 
 auto context::read_embed_file(const std::filesystem::path& path)

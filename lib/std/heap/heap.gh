@@ -1,14 +1,16 @@
 import std;
 
-import "page_allocator.gh" as page_alloc;
+@cfg (std.os.HAS_BACKEND) {
+    import "page_allocator.gh" as page_alloc;
 
-test {
-    import "page_allocator.gh";
+    test {
+        import "page_allocator.gh";
+    }
+
+    pub const PageAllocator = page_alloc.PageAllocator;
+
+    let mut page_alloc_impl: PageAllocator = .{};
+    pub let mut page_allocator: std.mem.Allocator = .{
+        .vtable = ^mut page_alloc_impl,
+    };
 }
-
-pub using PageAllocator = page_alloc.PageAllocator;
-
-var page_alloc_impl: PageAllocator = .{};
-pub var page_allocator: std.mem.Allocator = .{
-    .vtable = ^mut page_alloc_impl,
-};

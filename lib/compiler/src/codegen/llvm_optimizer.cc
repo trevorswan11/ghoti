@@ -1,10 +1,14 @@
 #include "compiler/codegen/llvm_optimizer.hh"
 
-#include <fmt/format.h>
+#include <algorithm>
 #include <string>
+#include <string_view>
 
+#include <fmt/format.h>
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/PassInstrumentation.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/PassTimingInfo.h>
@@ -15,12 +19,9 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/IPO/Internalize.h>
-
-#include <algorithm>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
-#include <string_view>
 
 #include "compiler/codegen/error.hh"
 #include "compiler/codegen/opt_level.hh"
@@ -36,10 +37,21 @@ namespace {
     case opt_level::O1: return llvm::OptimizationLevel::O1;
     case opt_level::O2: return llvm::OptimizationLevel::O2;
     case opt_level::O3: return llvm::OptimizationLevel::O3;
-    case opt_level::Os: return llvm::OptimizationLevel::Os;
-    case opt_level::Oz: return llvm::OptimizationLevel::Oz;
+    case opt_level::Os: return llvm::OptimizationLevel::O2;
+    case opt_level::Oz: return llvm::OptimizationLevel::O2;
     }
     return llvm::OptimizationLevel::O0;
+}
+
+// What clang does for -Os/-Oz: `optsize`, plus `minsize` for -Oz, on every definition
+auto mark_size_optimized(llvm::Module& module, opt_level level) -> void {
+    if (level != opt_level::Os && level != opt_level::Oz) { return; }
+    for (auto& fn : module) {
+        // `minsize` and `optnone` are incompatible, and optnone already means no optimizing
+        if (fn.isDeclaration() || fn.hasFnAttribute(llvm::Attribute::OptimizeNone)) { continue; }
+        fn.addFnAttr(llvm::Attribute::OptimizeForSize);
+        if (level == opt_level::Oz) { fn.addFnAttr(llvm::Attribute::MinSize); }
+    }
 }
 
 [[nodiscard]] auto verify_mod(llvm::Module& module, std::string_view phase)
@@ -88,7 +100,23 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
 
     // Set up pass builder
     llvm::PipelineTuningOptions pto;
-    llvm::PassBuilder           pb{options.target_machine, pto, stdx::none, pic ? &*pic : nullptr};
+    llvm::PassBuilder           pb{
+        options.target_machine,
+        pto,
+        stdx::none,
+        pic.transform([](auto& p) { return &p; }).value_or(nullptr),
+    };
+
+    // Freestanding: the optimizer may only introduce the memory routines compiler_rt provides,
+    // never `strlen`, libm, ...
+    llvm::TargetLibraryInfoImpl tlii{module.getTargetTriple()};
+    tlii.disableAllFunctions();
+    tlii.setAvailable(llvm::LibFunc_memcpy);
+    tlii.setAvailable(llvm::LibFunc_memset);
+    tlii.setAvailable(llvm::LibFunc_memmove);
+    tlii.setAvailable(llvm::LibFunc_memcmp);
+    tlii.setAvailable(llvm::LibFunc_bcmp);
+    fam.registerPass([&tlii] { return llvm::TargetLibraryAnalysis{tlii}; });
 
     // Register all the basic analyses with the managers
     pb.registerModuleAnalyses(mam);
@@ -97,6 +125,7 @@ auto llvm_optimizer::optimize(llvm::Module& module, const optimizer_options& opt
     pb.registerLoopAnalyses(lam);
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
+    mark_size_optimized(module, options.level);
     const auto              llvm_level{to_llvm_opt_level(options.level)};
     llvm::ModulePassManager mpm;
 

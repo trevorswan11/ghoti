@@ -14,6 +14,7 @@
 #include "compiler/ast/dumper.hh"
 #include "compiler/ast/formatter.hh"
 #include "compiler/syntax/parser.hh"
+#include "driver/cmd/lsp/text_edit.hh"
 
 namespace ghoti::lsp {
 
@@ -36,7 +37,7 @@ namespace {
 
     return {
         {"start", {{"line", 0}, {"character", 0}}},
-        {"end", {{"line", line}, {"character", character}}},
+        {"end", client_position(text, {line, character})},
     };
 }
 
@@ -53,8 +54,10 @@ namespace {
     ast_fmt.format();
     std::string formatted_code{formatted_os.str()};
 
-    // Verify ASTs for each are valid before returning result
-    if (!ast::dumper::compare_source_asts(source_code, formatted_code)) { return stdx::none; }
+    // Verify ASTs for each are valid before returning result. Unchanged text needs no check
+    if (formatted_code != source_code && !ast::dumper::compare_source_asts(ast, formatted_code)) {
+        return stdx::none;
+    }
     return formatted_code;
 }
 

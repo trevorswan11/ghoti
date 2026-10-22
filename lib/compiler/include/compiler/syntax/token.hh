@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 
+#include <stdx/option.hh>
 #include <stdx/types.hh>
 
 #include "compiler/syntax/token_type.hh"
@@ -11,6 +12,45 @@
 namespace ghoti {
 
 namespace syntax {
+
+// The byte a `\c` escape sequence denotes, or `none` when ghoti does not recognize `c`.
+[[nodiscard]] constexpr auto decode_escape(char code) noexcept -> stdx::option<char> {
+    switch (code) {
+    case 'n':  return '\n';
+    case 'r':  return '\r';
+    case 't':  return '\t';
+    case '\\': return '\\';
+    case '\'': return '\'';
+    case '"':  return '"';
+    case '0':  return '\0';
+    default:   return stdx::none;
+    }
+}
+
+// Whether `bytes` is well-formed UTF-8 (no overlongs, surrogates, or code points past U+10FFFF)
+[[nodiscard]] auto is_valid_utf8(std::string_view bytes) noexcept -> bool;
+
+// One escape sequence read from the start of `text`, which begins with its backslash
+struct escape_scan {
+    usize       length{0}; // bytes consumed, backslash included
+    std::string bytes;     // what the escape stands for: one byte, or a scalar value as UTF-8
+    u32         value{0};  // the byte's value, or the scalar value
+    std::string error;     // empty when the escape is well-formed
+};
+
+// `\n`-style escapes, `\xHH` for one byte, and `\u{H...}` for a Unicode scalar value
+[[nodiscard]] auto scan_escape(std::string_view text) -> escape_scan;
+
+[[nodiscard]] auto encode_utf8(u32 code_point) -> std::string;
+
+struct decoded_code_point {
+    u32   value;
+    usize length;
+};
+
+// The UTF-8 code point at the start of `text`; none when it's malformed
+[[nodiscard]] auto decode_code_point(std::string_view text) noexcept
+    -> stdx::option<decoded_code_point>;
 
 struct token_t {
     token_type_t     type{};

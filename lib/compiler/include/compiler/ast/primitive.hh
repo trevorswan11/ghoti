@@ -9,6 +9,8 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti {
@@ -31,15 +33,26 @@ struct int_literal_expr {
     bool                 is_size{false};
     syntax::numeric_base base{syntax::numeric_base::DECIMAL};
     std::string_view     spelling;
+    // A character literal: an untyped code point that defaults to `u21`
+    bool is_char{false};
+    // Past 128 bits, so `value` is unused and `exact_value` reads the spelling instead
+    bool is_big{false};
+
+    // The literal's value, however wide
+    [[nodiscard]] auto exact_value() const -> big_int;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
 struct float_literal_expr {
-    f64              value{0};
+    f128             value;
     u8               width{0}; // `width == 0` means coercible
     std::string_view spelling;
+    std::string_view mantissa; // the source digits, empty for a synthesized literal
+
+    // The literal rounded once into `format`, straight from its source digits when it has them
+    [[nodiscard]] auto value_in(float_format format) const -> f128;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

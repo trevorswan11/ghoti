@@ -18,20 +18,25 @@ namespace {
 
 constexpr auto ALL_OPERATORS{
     string_utils::make_constexpr_map<token_type_t>(operators::ASSIGN,
-                                                   operators::WALRUS,
                                                    operators::PLUS,
                                                    operators::PLUS_PLUS,
                                                    operators::PLUS_ASSIGN,
                                                    operators::PLUS_PERCENT,
                                                    operators::PLUS_PERCENT_ASSIGN,
+                                                   operators::PLUS_PIPE,
+                                                   operators::PLUS_PIPE_ASSIGN,
                                                    operators::MINUS,
                                                    operators::MINUS_ASSIGN,
                                                    operators::MINUS_PERCENT,
                                                    operators::MINUS_PERCENT_ASSIGN,
+                                                   operators::MINUS_PIPE,
+                                                   operators::MINUS_PIPE_ASSIGN,
                                                    operators::STAR,
                                                    operators::STAR_ASSIGN,
                                                    operators::STAR_PERCENT,
                                                    operators::STAR_PERCENT_ASSIGN,
+                                                   operators::STAR_PIPE,
+                                                   operators::STAR_PIPE_ASSIGN,
                                                    operators::SLASH,
                                                    operators::SLASH_ASSIGN,
                                                    operators::PERCENT,
@@ -40,6 +45,8 @@ constexpr auto ALL_OPERATORS{
                                                    operators::QUESTION,
                                                    operators::AND_MUT,
                                                    operators::CARET_MUT,
+                                                   operators::AND_MUT_POLY,
+                                                   operators::CARET_MUT_POLY,
                                                    operators::BW_AND,
                                                    operators::BW_AND_ASSIGN,
                                                    operators::BW_OR,
@@ -48,6 +55,8 @@ constexpr auto ALL_OPERATORS{
                                                    operators::SHL_ASSIGN,
                                                    operators::SHL_PERCENT,
                                                    operators::SHL_PERCENT_ASSIGN,
+                                                   operators::SHL_PIPE,
+                                                   operators::SHL_PIPE_ASSIGN,
                                                    operators::SHR,
                                                    operators::SHR_ASSIGN,
                                                    operators::NOT,
@@ -63,7 +72,6 @@ constexpr auto ALL_OPERATORS{
                                                    operators::EQ,
                                                    operators::NEQ,
                                                    operators::ELLIPSIS,
-                                                   operators::COLON_COLON,
                                                    operators::DOT,
                                                    operators::DOT_DOT,
                                                    operators::DOT_DOT_EQ,
@@ -78,14 +86,15 @@ constexpr auto ALL_OPERATORS_TT{[] -> auto {
     return operators;
 }()};
 
+// The lexer asks for this on every operator it reads, so it is computed once
+constexpr auto MAX_OPERATOR_LENGTH{
+    std::ranges::max_element(ALL_OPERATORS, [](auto a, auto b) -> bool {
+        return a.first.size() < b.first.size();
+    })->first.size()};
+
 } // namespace
 
-auto max_operator_length() noexcept -> usize {
-    return std::ranges::max_element(
-               ALL_OPERATORS,
-               [](auto a, auto b) -> bool { return a.first.size() < b.first.size(); })
-        ->first.size();
-}
+auto max_operator_length() noexcept -> usize { return MAX_OPERATOR_LENGTH; }
 
 auto get_operator_opt(std::string_view sv) noexcept -> stdx::option<token_type_t> {
     return ALL_OPERATORS.get_opt(sv).materialize();

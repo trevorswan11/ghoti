@@ -17,10 +17,10 @@ using helpers::mock_file;
 
 TEST_CASE("Import aliases correctly used") {
     auto [ctx, idx]{helpers::collect_and_check(
-        R"(import foo as A; import "f.gh" as F; const foo := bar;)",
+        R"(import foo as A; import "f.gh" as F; const foo = bar;)",
         helpers::make_vector<mock_file>(
-            mock_file{.path = "foo.gh", .source = "const foo := bar;", .name = "foo"},
-            mock_file{.path = "f.gh", .source = "const foo := bar;"}))};
+            mock_file{.path = "foo.gh", .source = "const foo = bar;", .name = "foo"},
+            mock_file{.path = "f.gh", .source = "const foo = bar;"}))};
 
     const auto& registry{ctx->analyzer.get_registry()};
     REQUIRE(registry.size() == 3);
@@ -28,8 +28,8 @@ TEST_CASE("Import aliases correctly used") {
 
     const auto test_import_inner = [&](std::string_view import_name, usize inner_idx) -> void {
         const auto [sym, sym_data, type, type_data]{
-            ctx->get_full_type_sym_info<sema::symbols::node_t, sema::types::module>(import_name,
-                                                                                    idx)};
+            ctx->get_full_type_sym_info<sema::symbols::node_t, sema::types::module_t>(import_name,
+                                                                                      idx)};
         CHECK(sym.get_kind_opt() == sema::symbol_kind::MODULE);
 
         CHECK(type == ctx->get_type(sema::type_kind::MODULE, inner_idx));
@@ -44,7 +44,7 @@ TEST_CASE("Public import query") {
     auto [ctx, idx]{helpers::collect_and_check(
         "pub import std;",
         helpers::make_vector<mock_file>(
-            mock_file{.path = "std.gh", .source = "var a: i32 = undefined;", .name = "std"}))};
+            mock_file{.path = "std.gh", .source = "let mut a: i32 = undefined;", .name = "std"}))};
 
     auto&       table{UNWRAP(ctx->analyzer.get_table_opt(idx))};
     const auto& std_import{UNWRAP(table.get_opt("std"))};
@@ -118,6 +118,20 @@ TEST_CASE("Unknown file module") {
            ^
 )"};
     CHECK(ss.view() == expected);
+}
+
+TEST_CASE("A failed import's diagnostics print once across repeated reports") {
+    std::ostringstream ss;
+    auto               ctx{helpers::analyze(helpers::TEST_FILENAME,
+                                            ss,
+                                            R"(import "a.gh" as _;)",
+                                            mock_file{"a.gh", R"(const x: i32 = true;)", "a"})};
+    const auto         first{ss.str()};
+    CHECK(first.contains("a.gh"));
+
+    // A driver reports whatever failed after analysis, which the analyzer already printed
+    ctx->manager.print_all_diagnostics(ss);
+    CHECK(ss.str() == first);
 }
 
 } // namespace ghoti::tests

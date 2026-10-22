@@ -358,3 +358,579 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - The constant evaluator can still not read or write to volatile memory post-init
 - Resolve an issue that made function pointers always emit monomorphized intantiations
 - Add `@returnAddress` builtin to get the return address of the current function as a usize
+
+## alpha.2
+
+## Language Features and Fixes
+- **Breaking:** the `@discardable` declaration modifier is replaced by an attribute list; write `@[discardable]` (or `@[discardable(cond)]`) before the declaration, ahead of `pub`
+- Attribute lists `@[a, b(args)]` annotate declarations and function literals (`const f := @[discardable] fn(): i32 { ... };`)
+    - Arguments are compile-time expressions; unknown, repeated, or misplaced attributes are errors
+    - `ghoti fmt` keeps a list beside a declaration head that fits and puts it on its own line otherwise, or when the list ends in a trailing comma (`@[discardable,]`)
+    - `@[discardable]` also applies to `extern` function declarations and to function literals
+- **Breaking:** the `naked` keyword is removed; write `@[naked]` on the declaration or the function literal (`const stub := @[naked] fn(): void { ... };`)
+- `@[inline(.always)]`, `@[inline(.never)]`, and `@[inline(.hint)]` control inlining, backed by the new `builtin.Inline` enum
+    - The argument may be computed at compile time: `@[inline(if (FAST) .always else .never)]`
+    - `.always` is honored at `-O0` too
+    - A function-only attribute written on a declaration applies to its function literal initializer, and is an error on any other declaration
+- **Breaking:** `@alignas(n)` is removed; write `@[align(n)]` before the field (`@[align(16)] data: [4]f32`)
+- `@[align(n)]` also raises the alignment of globals, static members, locals, and functions; `n` must be a compile-time power of two
+- Fixed: an explicitly aligned struct field was accepted but ignored; it now moves the field to its aligned offset and raises the struct's alignment and size, in `@sizeOf`/`@alignOf` and in generated code
+    - `align` on a union field is now an error instead of being silently ignored
+- Attribute arguments are evaluated per instantiation: a function's attributes see its `type` and `constexpr` parameters, and attributes inside generic bodies and type constructors see the instantiation's bindings
+    - `@[inline(if (@sizeOf(T) <= 16) .always else .hint)] const swap := fn(T: type, ...)`
+    - `struct { @[align(@alignOf(T) * 4)] value: T }` inside a `fn(T: type): type`
+- `@[discardable]` on an interface method applies to calls through `dyn` and `impl` receivers and to the implementing methods
+- `@[deprecated]` / `@[deprecated("message")]` on declarations, fields, and interface methods: naming one reports a warning, the compiler's first
+    - Uses inside a deprecated item (including a deprecated generic's instantiations) stay quiet
+    - Initializing a deprecated field (`.{ .x = 1 }`, `P{ .x = 1 }`, a union's `.{ .legacy = v }`) warns too, including inside generic and type-constructor instantiations, once per site
+    - `--deprecated=warn|error|ignore` on `build-*`, `run`, and `test` controls the report; `warn` is the default and never fails the build
+    - The LSP publishes it as a warning tagged `Deprecated` (rendered struck through) and hover shows the message
+- `@optimizeMode()` returns the build's `builtin.OptimizeMode` (`.debug`, `.release_safe`, `.release_fast`, `.release_small`) and `@runtimeSafety()` whether runtime safety checks are on; both fold at compile time
+    - `optimize` and `safety` are also `@cfg` / `@cfgValue` names: `@cfg (optimize == .debug) { ... }`, `@cfg (safety) { ... }`
+- `@setRuntimeSafety(bool)` turns runtime safety checks on or off for the rest of its block, nested blocks included; it never reaches into called functions, and `@runtimeSafety()` observes it
+- `@branchHint(hint)` as the first statement of an `if`/`else` branch or `match` arm weights that branch (`builtin.BranchHint`: `.none`, `.likely`, `.unlikely`, `.cold`, `.unpredictable`)
+    - `@branchHint(.cold)` as the first statement of a function body marks the function cold
+- `@typeInfo` of a function declaration reports its attributes in `FnInfo` (`inline_mode`, `naked`, `discardable`, `cold`, `alignment`); a bare function type reports defaults
+    - It also reads through member access (`S.f`, `Box(u8).get`); a type constructor's member reports that instantiation's attributes
+    - On a generic function it reports the attributes whose arguments ignore the parameters; one that depends on them is an error outside an instantiation, and reflects that instantiation's value inside its body
+    - `StructFieldInfo.alignment` reflects a field's `@[align(n)]` (0 when natural), and `@Struct` honors it
+    - `builtin.Inline` gains `.default`, which leaves inlining to the optimizer (`@[inline(if (fast) .always else .default)]`)
+- Constexpr can now be applied to labels and blocks (expression slots and top level)
+    - They must be constant evaluatable and will error if not
+- `@assert` and `@verify` have been hardened such that they can work correctly in constexpr contexts
+- Resolve an issue where implicit access would not work in some contexts
+    - Notably when accessing static constants (non-functions) in generic types
+- Do-while and infinite loops can now be marked `constexpr`
+    - `do ... while constexpr (cond)` unrolls the loop upto the unroll limit
+    - `loop constexpr { ... }` unrolls the loop upto the unroll limit
+- Fixes a bug where compile time non-exhaustive enums could emit illegal instructions from `@tagName`
+- Fully support `constexpr var` in all compile time contexts
+    - This includes indexing, which was currently a blindspot of the evaluator
+- Allow control flow in constexpr loops only when in a compile time context
+- Add `unreachable` code detection to compile time code execution
+- Defer statements (includes errdefer with captures) now work in compile time contexts
+- Support global `constexpr var` declarations
+- Resolve a codegen error that resulted in misrepresenting signedness in constexpr int literals
+- `return`/`break`/`continue` nested inside a match arm's `if` (no `else`) no longer require a trailing semicolon
+- The formatter now supports `match` arms whose body is a jump statement
+- Fixed a bug where string literals could not be returned from functions
+- Builtin handlers now take in a `builtin.SourceLocation` instead of listing the parameters manually
+- `builtin.Test` now holds a `builtin.SourceLocation` instead of the members directly
+- Rename typeOf builtin to TypeOf
+- Make int info signed flag represented by an enum with enumerations `signed` and `unsigned`
+- Map `constexpr_int` and `constexpr_float` to their own unique variants in the type info tagged union
+- Remove `TypeKind` artifact from builtin types
+- Calls to functions returning `[N]T` are now typed as arrays (#338)
+    - Previously the result was typed `type` unless the call could be evaluated at compile time. That broke runtime arguments, aliases (`const g := f`), and module-qualified or re-exported calls (`m.f()`)
+- Dereferencing a slice whose length is known at compile time copies it into an array: `*s[i..][0..2]` is a `[2]u8` (#339)
+    - A length is known for constant-bounded ranges (`x[lo..hi]`), `x[lo..]` over a known-length array or slice, chains like `s[i..][0..n]`, and `const` bindings to any of these
+    - `*s` also works as an assignment target
+- Assigning to a constant-bounded slice range copies elements in: `buf[i..][0..2] = digits` (#340)
+    - The source may be an array, a known-length slice, or `.{ ... }`; lengths and element types are checked at compile time and the destination needs `mut` elements
+    - Lowered as a memmove, so overlapping source and destination ranges are safe
+    - Assigning to a slice variable (`s = other`) still re-points the slice
+    - Works in compile time contexts, which also fixes writes like `buf[i..][0] = v` never reaching `buf` at compile time
+- A constant range that runs past a known container length (`a[1..9]` on a `[4]T`) is now a compile error
+- Arrays with `const` elements can be copied into `mut`-element storage (`var m: [3]mut u8 = const_arr;`)
+    - Copies still cannot gain mutability through pointer or slice elements
+- A reference to an array (`&[N]T` / `&mut [N]T`) now implicitly converts to a slice aliasing the array
+- Fix nested arrays (`[N][M]T`, `[][N]T`) whose inner dimension was never resolved
+- Array sizes from another module are now evaluated in the module that declared them
+    - `@sizeOf`, `@alignOf`, `@bitSizeOf`, `@typeInfo`, `@typeName`, and `@implements` on an imported `[N]T` (or a type with one as a field) could silently read the wrong `N`
+- `@typeName` reports the declared name of imported aggregates and of aggregates nested inside compound types (`^Point`, `[]Point`, ...)
+- Fix generics whose body-local declarations were not re-typed per instantiation
+    - e.g. `var a: @TypeOf(value)`, `var a: T`, or a `using` alias built from `@typeInfo(@TypeOf(value))` kept the first instantiation's type
+- Errors inside an imported generic's instantiation are now reported against the imported module, instead of a bogus location in the importer
+- `@TypeOf(x)` inside a compound type annotation (`^@TypeOf(x)`, `[]@TypeOf(x)`, `[N]@TypeOf(x)`) now denotes the type instead of `type`
+- `@Int` / `@Float` / `@Pointer` / `@Reference` / `@Slice` / `@Array` / `@Fn` are recomputed for each generic instantiation
+- Type mismatch diagnostics print full types (`'^u8'`, `'&i32'`, `'[2]u8'`) instead of just the kind (`'pointer'`, `'array'`) (towards #276)
+- Passing a reference where a pointer is expected now errors with "A reference does not implicitly convert to a pointer", plus a hint to use `^` instead of `&` when the value is a `&` expression
+- Fix a crash emitting object files that contain compile-time-only functions (those returning `type`)
+- `ghoti test --emit-llvm-ir` no longer tries to lower unreachable compile-time-only functions
+- Remove the leftover `::` operator token
+- Resolve a bug where break values would not be cleared on re-resolutions of monomorphs
+- Unions can now have fully void payloads without crashing
+- Function parameters can now safely load void parameters
+- **Breaking:** the `using` keyword is removed (#320); declare type aliases with `const` instead (`using A = i32;` becomes `const A := i32;`)
+    - Whether a declaration aliases a type or binds a value is decided by what its right-hand side denotes, so `const P := ^i32;` is a type and `const p := ^x;` is a pointer
+    - `constexpr` may be used in place of `const` for an alias with no change in meaning; aliases never occupy storage
+    - `using` is now an ordinary identifier
+- Local `const` / `constexpr` aliases of a type constructor call (`constexpr NewRes := Result(T, E);`) are compile-time types instead of runtime calls, fixing an LLVM crash (#334)
+    - Module-scope aliases of a module (`const io := std.io;`) and of `void` no longer emit storage
+- `dyn I`, `opaque`, `type`, and `noreturn` are valid in value position (`const Any := &dyn Writer;`, `const Handle := ^mut opaque;`)
+- `^` / `&` over a `type` value (`^@TypeOf(x)`, `^fn(a: i32): i32`) points at the denoted type
+- A type used where a value is expected is now an error (`const p: ^i32 = P;` where `P` is a type)
+    - Covers annotated declarations, assignments, returns, call arguments, and aggregate / array elements
+- A `var` binding whose value is a type (`var T := i32;`) is rejected like `var T: type = i32;`
+- `^` / `&` applied directly to a struct, union, enum, or interface literal is rejected in value position as it already was in type position
+- Fix `@sizeOf(Ctor(T))` in a generic body folding to another instantiation's layout
+- Fix `@sizeOf` / `@alignOf` / packed-field sizing of `&dyn I` / `^dyn I` fat pointers (two words, not one)
+- `^f` of a function converts to a `^fn(...)`, and `*p` of a `^fn(...)` is the callable itself; calling through a local, field, or module-scope `^fn(...)` / `var fn(...)` no longer crashes
+- Struct and union fields typed by a `type` value (`f: @TypeOf(g)`, `f: FnAlias`) store the denoted type, so function-typed fields are callable
+- Non-generic type constructors that return an existing scalar type (`fn(wide: bool): type { return i64; }`) now fold, so values annotated with them are typed correctly
+- **Breaking:** a bare `fn(...)` type is an erased callable: a two-word `{ctx, code}` value that holds either a plain function or a capturing closure
+    - Usable as a local, parameter, return type, aggregate field, or array element; `var f: fn(n: i32): i32 = add;` and `f = some_closure;` both work
+    - A capturing closure passed to a `fn(...)` parameter is erased instead of monomorphizing the callee per closure; use an `auto` parameter for the zero-cost, specialized form
+    - Returning a capturing closure through a `fn(...)` return type is an error (even with `move fn`), since the closure's captures live in the returning frame; return it by its own type with an `auto` return instead
+    - `&fn(...)` is accepted and means the same as `fn(...)`; `^fn(...)` is the same two words but nullable and compares against `nullptr`; `&mut fn` / `^mut fn` are rejected
+    - An erased `fn(...)` cannot be an `extern struct` / `extern union` field, and a C-variadic function never converts to one
+- `extern fn(...)` is the thin, C-ABI function pointer that a bare `fn(...)` used to be
+    - `callconv(...)` on a function type now requires `extern fn`
+    - `extern` / `export` declarations (`extern("kernel32") const f: fn(...): R;`) and `constexpr` function parameters keep the thin type automatically
+    - `builtin.Test.func` is now `extern fn(): bool`
+- `dyn Fn(name: T): R` is accepted as another spelling of `fn(name: T): R`, including behind `&` / `^`
+    - A user-defined `interface Fn` still works with `dyn Fn` / `dyn Fn(Out = T)`
+- A function literal's return type may be a function type written directly before its body: `fn(): fn(n: i32): i32 { ... }`
+- A call's result can be called directly: `make()(1)`, `make_maker()()(40)`
+- `builtin.FnInfo` gains `erased: bool = true`; `@typeInfo(T).function.erased` tells an erased `fn(...)` from a thin function type, and `@Fn` builds the same type the spelled-out `fn(...)` / `extern fn(...)` would
+    - `@Fn` rejects an erased descriptor that has `has_self` or a calling convention other than `.c`
+- `if constexpr a else b` without a condition runs `a` when evaluated at compile time and `b` at runtime (#336)
+    - Compile-time evaluation means `constexpr { }` blocks and labels, `constexpr` declaration initializers, and other compile-time folds; both branches are type checked
+    - `if constexpr (cond) ...` with a parenthesized condition is unchanged
+- Functions with a parameter pack (`rest...`) can be called at compile time: `rest.len`, `rest[k]`, `for constexpr (rest)`, and `f(rest...)` forwarding all fold (#336)
+- In a `constexpr`-declared function, a parameter read by a compile-time construct (`if` / `match` / `for` / `while constexpr` headers, `constexpr` blocks, local `constexpr` initializers) is implicitly `constexpr` (#337)
+    - Operands of `@TypeOf` / `@sizeOf` / `@alignOf` / `@bitSizeOf` and `T: type` parameters don't count
+    - Passing a runtime value to such a parameter reports the usual call-site error with a note explaining why the parameter is `constexpr`
+- A bare `dyn I` can be aliased without indirection (`const Bound := dyn io.Writer(Error = io.Error);`) and used as `&Bound` / `^Bound` (#328)
+- An interface or bare `dyn I` used by value as a field, parameter, return type, local, or array element is now rejected with a hint to use `&dyn I` / `^dyn I`
+    - Previously only locals were checked
+- Fix a defaulted associated type on an interface from another module resolving to garbage through `&dyn I`, which also crashed the LSP (#317)
+- `&dyn I(Out = i32)` and `&dyn I(Out = u8)` are now distinct types instead of silently interchangeable
+- Diagnostics print interface names and full `dyn` types (`dyn Sink(Out = i32)`) instead of `interface` / `dyn`
+- A function-type alias used as a return type (`fn(): Callback`) now returns a callable value
+- A generic instantiated with both a thin and an erased function type argument now produces distinct instantiations
+- Function types rebuilt while substituting unwrap shapes no longer drop their calling convention
+- Diagnostics show full types everywhere instead of bare kinds like `array` / `slice` / `enum` (#341)
+    - `Type '[3]i32' has no field named 'x'` (previously the variable's name or `array`), `Expression of type 'S' is not callable`
+    - Unary `-` / `!` / `~` and non-`bool` conditions report the operand type they found
+    - Binary operator errors use the source spelling (`'+'`, `'<<'`) instead of internal names (`'add'`, `'shl'`)
+- Saturating operators `+| -| *| <<|` and compound forms `+|= -|= *|= <<|=` clamp to the operand type's range instead of wrapping or trapping (#321)
+    - `<<|` saturates for any shift amount, including one at or past the bit width
+    - Fold at compile time; between two untyped integer constants they fold like the plain operator
+- `@backingInt(x)` returns the integer backing an enum, a `packed struct` / `packed union`, or a tagged union's active tag; `@fromBackingInt(T, n)` (or `@fromBackingInt(n)` with an inferred `T`) converts back for enums and packed aggregates (#327)
+    - Converting an unlisted value to an exhaustive enum panics under runtime safety
+- **Breaking:** `@as` no longer converts between enums and integers; use `@backingInt` / `@fromBackingInt` (#327)
+- `@intFromFloat(T, x)` truncates a float toward zero and `@floatFromInt(T, x)` rounds an integer to the nearest float; both infer `T` from context when omitted (#324)
+    - An out-of-range compile-time `@intFromFloat` is a compile error; at runtime an out-of-range or NaN operand panics under runtime safety
+- **Breaking:** `@as` no longer converts floats to integers, or integers to floats that can't represent every value exactly (`@as(f64, i32_val)` still works); use `@intFromFloat` / `@floatFromInt` (#324)
+- `import` accepts an absolute path (`import "/abs/path/lib.gh" as lib;`), resolving to the same module as any relative spelling of that file
+- `undefined` can be aliased with a `const` binding (`const U := undefined;`); every use of the alias behaves like the literal
+    - `@TypeOf(undefined)` names its type, which only a `const` binding may have; `var` bindings, parameters, return types, fields, and array elements of that type are rejected
+- **Breaking:** `@typeName(T).len` no longer counts the trailing null terminator, matching string literals
+- Hexadecimal float literals: `0x1.8p3`, `0x1p-4`, `0xA.8`; the `p` exponent is a decimal power of two, and a width suffix (`0x1.8p3f32`) may follow it
+- A compile-time float that would round to infinity in its type (`const x: f32 = 1e300;`, `const h: f16 = 70000;`, `@as(f32, BIG)`, `@floatFromInt(f16, 100000)`) is now a `LITERAL_OUT_OF_RANGE` error instead of silently becoming `inf`
+- Fixed: an untyped integer literal above `i128` max (up to `u128` max) was treated as negative, so `340282366920938463463374607431768211455 < 0` was true and converting it to a float gave a negative value
+- Compile-time floats are exact IEEE binary128 values computed in software, never a host `double`
+    - A typed operation rounds once in its type's format, so a folded `f16`/`f32`/`f64` result matches runtime bit for bit
+    - `f80` and `f128` constants now fold at compile time with full precision (`const q: f128 = 1.0 / 3.0;`)
+    - A typed literal is read straight from its digits into its type, never rounded twice
+    - Untyped float constants carry `f128` range (about 1.19e4932) until they meet a type
+    - A nonzero literal that would round to zero in its type (`const x: f32 = 1e-50;`) is a `LITERAL_OUT_OF_RANGE` error
+    - `@intFromFloat` folds across the whole 128-bit range
+- Signed integer overflow in a compile-time expression with a concrete type (`i32` max `+ 1`, `-i32_min`, `min / -1`, including `i128`) is an error, matching the runtime overflow panic; unsigned results and shifts wrap to the type's width like runtime
+- Fixed: 64-bit compile-time integer arithmetic could overflow inside the compiler (`111334094107016374 * 242`) or wrap modulo 2^64 (`9223372036854775808 * 4` folded to 0); it now folds exactly
+- Fixed: a runtime `@mulAdd` crashed the compiler; its operands are now coerced to and checked against `T`
+- Fixed: comparing floats of different widths (`f32 < f64`), or an untyped integer result with a float (`@abs(3) < x`), crashed code generation
+- Fixed: a typed module constant built from an untyped constant (`const a: f32 = big;`, `const b: u8 = two_hundred;`) folded as the untyped type, crashing `@bitCast` and friends; an integer constant bound to a float global (`const f: f32 = five;`) crashed too
+- Fixed: nested untyped constant arithmetic next to a typed float (`((c * c) + c) * f32_value`) was rejected
+- Fixed: a compile-time-false `@assert` in an `if` or `match` arm that a folded condition rules out was an error, e.g. `if (N > 4) { @assert(N > 4); }` with `N = 2`, including inside generic instantiations
+- `@[visibility(.default)]`, `@[visibility(.hidden)]`, and `@[visibility(.protected)]` set a symbol's visibility, backed by the new `builtin.Visibility` enum
+    - Allowed on `pub`, `export`, `extern`, and `weak` declarations; `.protected` only on ELF targets
+    - `@typeInfo(f).function.visibility` reflects it
+- Fixed: several malformed programs crashed the compiler instead of reporting an error, including `@hasField` with a non-type or non-string argument, `return 1.5` from an integer function, `-i64`, `@bitCast(undefined)`, a `noreturn` field or variable, a pack parameter used as a return type, and a match mixing type and value arms
+- Fixed: code after a `match` or `if` whose arms all return is treated as dead instead of miscompiling
+- Compile-time evaluation and runtime code now share one definition of every integer and float operation, and a differential test checks that each folded result is bit-identical to the one computed at runtime
+    - **Breaking:** float division by zero folds to an infinity or NaN like it runs, instead of being a compile error
+    - **Breaking:** `@divTrunc`, `@divFloor`, `@rem`, and `@mod` panic on division by zero and on `MIN / -1` under runtime safety, and signed `@abs(MIN)` panics; each was already a compile error when folded
+    - `x <<% n` with `n` at or past the bit width is `0` both folded and at runtime
+    - Float `@min` / `@max` are IEEE `minimumNumber` / `maximumNumber`: a NaN operand loses and `-0 < +0`, folded and at runtime
+    - Float `%` folds exactly, with the sign of the dividend, like it runs
+    - `f80` operands with an encoding x87 rejects (unnormals, pseudo-infinities, pseudo-NaNs) fold to NaN like they run
+- Fixed: a float `!=` with a NaN operand was `false` at runtime (it folded to `true`); `x != x` now detects NaN everywhere
+- Fixed: `@floatFromInt` of an integer wider than 113 bits could round twice when folded
+- Fixed: a float `@as` never folded, so `const x: u8 = @intFromFloat(u8, @as(f32, 3.5));` was rejected at module scope
+- **Breaking:** `@floatFromInt` of a typed integer past the target's range folds to an infinity, like it runs, instead of being a compile error; an out-of-range untyped literal is still rejected
+- Fixed: on Windows, `f80` arithmetic and conversions rounded to `f64` precision, because the x87 unit starts in 53-bit mode there; executables and test binaries now switch it to full 64-bit precision at startup
+- Fixed: a `@as`, `@bitCast`, `@intCast`, or `@truncate` operand took its type from the surrounding expression, so `@bitCast(f32, @as(u32, 5)) >= x` treated `5` as a float and was rejected
+- Fixed: a type declaration emitted a zeroed global the size of the type, so declaring a huge type (`struct { data: [100000000000]u8 }`) ran the compiler out of memory writing the object file
+- Fixed: more malformed programs crashed the compiler instead of reporting an error, including a type whose layout depends on its own `@sizeOf`/`@alignOf`, assigning to an array's `.len`, indexing a block, `@cfg` inside an `if` used as an operand, and passing a type (or the `type` keyword) where a value is expected, including to a generic `[]T` parameter
+- Fixed: some operations on 128-bit and odd-width integers (`+|`, `-|`, `-%`, `~`) could not be folded, or folded to a different value than the one computed at runtime
+- Values of different types now meet at their *peer type*: the one operand type every other widens into
+    - Mixed-width arithmetic, bitwise operators, and comparisons convert both sides first: `an_i8 + an_i64` is an `i64`, `a_u32 < an_i64` compares as `i64`, and `an_i32 * an_f64` is an `f64`
+    - The arms of an `if` or `match` and the values a label is broken with meet the same way, replacing "the first arm decides"; an arm that leaves (`return`, `break`, a `noreturn` call) takes no part
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@rem`, `@mod`, and the `*WithOverflow` builtins convert their operands to the peer type (`@shlWithOverflow`'s count keeps its own)
+    - Pointers and slices meet at the least mutable (`^mut T` with `^T` is `^T`), `nullptr` takes the pointer's type, and arrays of different lengths meet as a slice of their element
+    - No type is invented: `i32` with `u32`, or `i64` with `f64`, is a `NO_PEER_TYPE` error naming both types and the cast to write
+    - Compile-time folding converts operands the same way, so a folded mixed-type expression equals the one computed at runtime
+- Fixed `f(fn(x: i32): i32 { ... })[i]`: a function literal passed to a call whose result is indexed crashed the compiler
+- A module-level `const` with an array annotation now checks its initializer against it (`const P: [3]u8 = "ABC";` is a type mismatch, as it already was inside a function)
+- A call folded at module scope now rejects a number passed for an array, slice, struct, union, or function parameter
+- A type is rejected as a range bound, as an asm input (including the `type` keyword), as `@backingInt`'s operand, and as an atomic builtin's operand; `@cVaArg` requires a concrete value type; a binary operator rejects an `undefined` operand
+- `@export(f, .{ .name = "sym", .linkage = .weak, .visibility = .hidden })` defines a function under another symbol name, once per name, like Zig's `@export`; `builtin.ExportOptions` and `builtin.Linkage` describe the options
+    - **Breaking:** `@setMainSymbol` is removed; write `@export(entry, .{ .name = "main" })` in the root module instead (the entry needn't be `pub`)
+    - An exported function (`@export` or `export(...)`) in an imported module is no longer dropped when nothing calls it
+    - `@export` also takes a function passed to a `constexpr` parameter, so a Zig-style `symbol(f, name)` helper works
+- Fixed a type constructor's member calling a function passed to its `constexpr` parameter (`Wrap(i32, f)` with `f(self.val)` in a method) crashing the compiler
+- Fixed a function passed to another module's `constexpr` parameter resolving by name in the callee's module (it could call the callee's own function of the same name)
+- A keyword is a name right after `.`: `.weak`, `x.type`, `.{ .export = 1 }`; declaring such a field or variant still takes `@"..."`
+- Unicode escapes: `\u{H...}` encodes a scalar value as UTF-8, and `\xHH` is one raw byte, in strings, character literals, and raw identifiers (#325); a malformed escape is reported at the escape
+- **Breaking:** a character literal is its code point, an untyped integer constant that defaults to `u21` (`var c := 'a';` is a `u21`); it still coerces to `u8` wherever one is expected, and `'é'`, `'😀'`, and `'\u{1F600}'` work. A literal with more than one code point is an error
+- Raw identifiers must be valid UTF-8, match byte for byte after decoding escapes (no normalization), and stay raw when formatted (#326)
+- Diagnostics place the caret by display width, so it lines up after emoji, CJK text, and combining marks; a diagnostic's file path prints as UTF-8 on Windows instead of through the code page
+- `ghoti lsp` speaks UTF-16 positions by default and UTF-8 when the client offers it (`positionEncoding`), so hover, go-to-definition, references, rename, diagnostics, and edits land correctly on lines with non-ASCII text
+- `ghoti fmt` measures line width in display columns
+- `@sqrt`, `@sin`, `@cos`, `@tan`, `@exp`, `@exp2`, `@log`, `@log2`, `@log10`, `@floor`, and `@ceil` are back (#352)
+    - Folded at compile time with correct rounding in every float type, including exact reduction of huge trigonometric arguments; an untyped result is computed again in the type it lands in rather than rounded twice
+    - At runtime `@sqrt`/`@floor`/`@ceil` use LLVM's intrinsics and the rest call the target's math routines directly (never `llvm.sin` and friends, which LLVM folds with the host's libm)
+- `@floatCast(T, x)` converts between float types, narrowing or widening, rounding to nearest (#349)
+    - A compile-time finite value that overflows `T` is a compile error; at runtime an overflow rounds to an infinity, with no safety check
+    - **Breaking:** `@as` no longer narrows a float (`@as(f32, some_f64)`); use `@floatCast`. Widening and literal coercion (`@as(f32, 0.1)`) are unchanged
+- `@TypeOf(a, b, ...)` takes any number of operands and returns their peer type, in type positions, `if constexpr` conditions, and generic signatures (`fn(a: auto, b: auto): @TypeOf(a, b)`)
+- Fixed: a local declared in a loop body took new stack space on every iteration, so a long loop with a large local overflowed the stack
+- Fixed: an `if` or `match` used as a statement was rejected when its arms had different types (`if (c) x = 1 else flag = true;`)
+- Fixed: `if (c) value else return e` stored a `void` into the result instead of skipping the arm
+- **Breaking:** declarations are `const` (known at compile time), `let` (an immutable runtime value), or `let mut` (a mutable one), replacing `constexpr`, `const`, and `var`
+    - A compile-time mutable local is `comptime let mut` (was `constexpr var`); `comptime let` is an error, since that is `const`
+    - Types, `undefined` aliases, and values holding `type`s are declared with `const`; a closure that captures runtime state is declared with `let`
+    - `extern`, `export`, `weak`, and `threadlocal` data needs `let` or `let mut`; a function with linkage is declared with `const` (`pub weak const panic_handler = fn ...`, `extern const puts: fn(...)`)
+    - A `let` still folds where a compile-time value is needed (`let n = 4; let a: [n]u8 = ...`); `let mut` never does
+- **Breaking:** the walrus operator `:=` is removed; an unannotated declaration is written with `=` (`const x = 5;`, `let mut n = 0;`), as are interface methods (`const area = fn(self): f64;`)
+- **Breaking:** every other `constexpr` is spelled `comptime`: parameters (`fn(comptime n: usize)`), `impl(comptime N: usize)`, `if`/`match`/`for`/`while`/`loop comptime`, `do ... while comptime`, and `comptime { ... }` / `comptime name: { ... }` blocks
+- **Breaking:** `constexpr_int` and `constexpr_float` are renamed `comptime_int` and `comptime_float` (and the matching `builtin.TypeInfo` variants); diagnostic codes named `CONSTEXPR_*` are renamed `COMPTIME_*`
+- Every function declared with `const` infers its compile-time parameters: a parameter its body reads at compile time (`if comptime (a < b)`, `const s = @sizeOf(@TypeOf(x))`) is compile-time at each call, as only `constexpr`-declared functions did before
+- `comptime <expr>` evaluates one expression at compile time (`let table = comptime build(64);`, `comptime validate(fmt);`); it binds like a prefix operator, so `comptime f(x) + y` folds only `f(x)`, and writing it where evaluation is already compile-time is an error
+- Fixed: a `void` function whose body runs off its end couldn't be called at compile time (`comptime { check(); }`)
+- A `comptime let mut` can hold a type (`comptime let mut T: type = u8; T = Wrap(T);`); each use names the type it holds at that point, including across `for comptime` and `while comptime` iterations, and only a type can be assigned to it
+- Fixed: a function that fills an `undefined` array or struct one element or field at a time (for example in a runtime `while` loop) couldn't be evaluated at compile time; reading an element that was never written is now a compile error
+- Fixed: compiler crashes on four kinds of invalid code, which are now errors:
+    - a closure assigning to a captured binding that isn't a `let mut` (a `let`, a parameter, or a loop capture); writing through a captured slice, pointer, or reference still works
+    - a range nested inside a `for` iterable or subscript instead of being the whole of it (`for (n = 0..3)`, `a[blk: { break :blk 0..1; }]`)
+    - a member reached through a slice, array, pointer, or function type rather than a value of it (`[3]i32.len`, `(fn(): S).x`)
+    - a generic function declared C-variadic (`fn(a: auto, ...)`); use a parameter pack instead
+- Fixed: match patterns missing a comma (`.a .b => x`, which parsed as a member of `.a`)
+- `mut?` lets one function serve both mutable and immutable callers: `&mut? T`, `^mut? T`, `[]mut? T`, and `[N]mut? T` take their mutability from the call
+    - `pub const at = fn(&mut? self, i: usize): &mut? T { return &mut? self.items[i]; };` returns `&mut T` through a `let mut` receiver and `&T` through a `let` one; a call is mutable only when every argument bound to a `mut?` parameter is
+    - Inside the function a `mut?` view can be read, narrowed (`&mut? self.items[i]`, `|&mut? v|` in `match` and `for`), or passed to another `mut?` function, but not written through
+    - `&mut? x` needs a place reached through a `mut?` parameter, and a struct or union field, a global, or a function without a `mut?` parameter can't use `mut?`
+    - An interface's `mut?` method must be implemented with the same `mut?` signature, and can't be called through `dyn`
+    - Generic functions work the same way: `fn(T: type, s: []mut? T): &mut? T` returns `&mut T` for a mutable slice
+- **Breaking:** `builtin.Unwrappable.branch` is now `fn(&mut? self): Flow(&mut? Output, Residual)`, so it hands back a reference into the operand instead of a copy of its payload; an impl writes its success arm as `.some => |&mut? v| .{ .continue = v }`. `?` and `!` read through that reference and are otherwise unchanged
+- `if` and `while` unwrap any `builtin.Unwrappable` (`Option`, `Result`, ...) with a capture after the condition: `if (opt) |v| { ... } else { ... }`, `if (res) |v| v else |e| fallback(e)`, `while (it.next()) |item| : (i += 1) { ... } else |err| { ... }`
+    - The capture takes the same forms as a `match` arm: `|v|`, `|&v|`, `|&mut v|`, `|^v|`, `|^mut v|`, `|&mut? v|`, and `|_|`; `|&mut v|` writes into the operand, which must be a mutable place
+    - `else |e|` captures the residual by value; it is an error when the residual is `void` (an `Option`), and needs a capture after the condition
+    - An `Unwrappable` condition without a capture is an error (write `|_|` to ignore the payload), and a capture on any other condition (a `bool`, a pointer) is an error
+    - `while` calls `branch` before every iteration and runs its `else` when it breaks; a `break` statement skips the `else`, as before
+    - The payload capture is also in scope in the continuation: `while (it.next()) |x| : (sum += x)`
+    - Everything works at compile time, including `if comptime (x) |v|`, `while comptime (x) |v|` (by-value captures), and constants such as `const X = if (OPT) |v| v else 0;`
+- Fixed: at compile time, a `?` that returned early from inside a `let` initializer, an expression statement, or a `return` made the whole call fail to evaluate
+- Fixed: `&mutex`, `^mutable`, and other names starting with `mut` right after `&` or `^` were split into `&mut` and the rest of the name
+- Fixed: compile-time evaluation copied whatever a reference or slice pointed at, so writes through it were lost and some calls folded to a different value than at runtime. References, pointers, and slices now refer to the variable or element itself:
+    - `let p = &mut x; p = 8;`, a `match` arm's `|&mut v|`, and a `for` loop's `|&mut e|` gave the old value; they now write through
+    - writing through a slice of an array (`fill(arr)`, `let s = arr[1..]; s[0] = 5;`) changed only a copy; it now changes the array
+    - `&mut` parameters, `^mut` pointers, and `&mut self` methods called through a reference can now be evaluated at compile time
+    - a pointer into an array steps through its elements: `let p: ^mut i32 = a.ptr; p[2] = 4;`
+    - returning a reference to a callee's own local, or using a reference after its variable's scope ended, is a compile error
+    - passing `&mut x` of a `let mut` local to a function that matches on it could fail with "Non-exhaustive match in compile-time constant evaluation", because the call was folded with a copy of `x`'s initializer
+- Fixed: a parameterized `impl` could expand for a type constructor from another module (such as the prelude's `builtin.Flow`) whose declaration happened to sit at the same position as its own, so unrelated edits made errors like "Cannot take a reference to an already-reference-typed value" appear inside the `impl`
+- Fixed nine compiler crashes:
+    - an array or struct field of type `void` (`[3]void`, `struct { a: void, ... }`); it now takes no space
+    - a module constant referring to a literal (`const N = &22;`, `const P = ^@as(i32, 7);`) when read at runtime
+    - an array literal whose element type is `noreturn` (`[3]noreturn{...}`), which is now an error like any other `noreturn` slot
+    - a member of a method reference (`let make = S.make; make.item`), which resolved against the method's return type; it is now an error
+    - calling a capturing function literal where it is written (`fn(x: i32): i32 { return x + offset; }(5)`)
+    - comparing two `void` values (`s.a == {}`), which now folds to `true`
+    - naming a `dyn` method without calling it (`v.x + 1`), which is now an error
+    - comparing an untyped integer expression with a float literal in a condition (`if (0 - 2 != 0.25)`), which now folds
+    - a `&` or `^` self parameter with no name (`fn(&): i32`), which was silently dropped and is now a syntax error
+- **Breaking:** `@ptrFromArray(a)` is removed; `a.ptr` already gives the same pointer to the first element, for arrays and slices alike
+- **Breaking:** a `for` range over untyped bounds (`for (0..3) |i|`) counts in `usize`, or in `isize` when a bound is negative, instead of `i32`
+    - when the bounds are known at compile time, the counter also converts implicitly to any integer type that holds every value it takes, so `s += i` with an `i32` `s` and `take_u8(i)` keep working
+    - `let x = i;` still gets the counter's own type, so `return x` from an `i32` function needs `@intCast`
+    - `for comptime` is unchanged: it unrolls into constants of the default integer type
+- Assignment into a `comptime let mut` aggregate can go any number of levels deep through fields and elements (`p.a.b = v`, `arr[i].xs[j] += v`); only one level was supported before
+- **Breaking:** a `for` range whose start is past its end counts down (`3..0` is 3, 2, 1; `-1..=-8` is -1 through -8), including with runtime bounds, where `for (i..n)` with `i > n` used to run zero times
+    - a subscript range still only counts up, so constant bounds the wrong way round (`a[3..1]`) are an error
+- A range with bounds known at compile time is a value anywhere outside a `for` iterable or subscript: the array of values it takes (`let x = 0..10;` is a `[10]usize`, `let y: [4]u8 = 2..6;`, `f(0..8)`), counting down when its start is past its end
+- A type position (a parameter, return, declaration, field, or element type) takes any expression that computes a type at compile time: `fn(x: if (WIDE) i64 else i32)`, `x: match (k) { .small => u8, .large => u32 }`, `let v: blk: { break :blk u8; } = 3;`, `let b: TYPES[0] = 1;`
+    - every branch must still be a type; `if comptime` / `match comptime` check only the branch taken
+    - a parameter that a type expression reads becomes compile-time, so each call instantiates its own types
+- Fixed: an `if` or `match` whose values are types (`const T = if (c) u8 else S;`) was typed as the types' peer, so it only compiled when they had one, and as a local it was given storage
+- Fixed: `lo..=hi` never stopped when `hi` was its type's maximum (`for (a..=b)` with `b: u8 = 255`), since the counter wrapped around
+- Fixed: a `for` over `lo..=hi` in a function run at compile time left out `hi`
+- Fixed: taking the address of a `for` range capture (`&i`) crashed the compiler
+- `\\` multiline strings format like Zig's: after `=` they start their own indented line, and a list never gets a trailing comma alone on the line after one
+- Returning `&x` or `^x` of a local, a by-value parameter, or a field or element of one is an error (`ESCAPING_LOCAL_REFERENCE`), since the reference would outlive the function's frame
+- A loop without a label used as a value (`let r = while (c) { ... } else 7;`) is an error instead of being typed as an internal block; a labeled loop yields its `else` value even when nothing breaks out of it
+- A generic function can call itself with the same arguments (`fact(T, n - 1)`); one with an inferred `auto` return type that does is reported instead of exceeding the instantiation limit
+- Fixed: `.{ ... }` couldn't initialize a `[n]T` parameter sized by a `comptime` argument (`sum(3, .{ 1, 2, 3 })`)
+- Fixed: `let p: ^T = nullptr;` read as the untyped `nullptr` rather than a `^T`, so `if (p)` and `!p` were rejected
+- Fixed: an implicit `.field` naming a struct field (not a constant or function) resolved to the field's type; assigning it to a packed struct compiled silently. It is now an error
+- Fixed seven more compiler crashes, now errors or working code:
+    - a `fn(...): type` constructor taking an untyped value pack (`fn(c...): type`)
+    - `@bitCast` of an untyped float to a type that isn't 8 bytes (it has `f64`'s bit pattern)
+    - a closure assigning a binding declared after it
+    - a type used as an `if` or `while` condition (`if (bool)`)
+    - `_` as an `asm` input operand
+    - calling a static member that holds a function pointer (`const open = ^g;`, `S.open(7)`)
+    - a type written where a value argument goes (`f(impl a)`)
+- A parameter used as an array length (`let buf: [n]T`) is inferred `comptime` like any other compile-time read
+- Fixed: a `for` loop couldn't capture `|&mut e|` over a `let mut` array whose type was written out (`let mut buf: [3]mut u8 = ...`)
+- Fixed: a module constant whose initializer reads itself is reported as a cycle; reading it more than once used to take exponential time before failing
+- Fixed more crashes on invalid code, now errors:
+    - a type where a value belongs: `@ptrCast(^mut opaque, ^mut u8)`, `if (b) u8 else 1`, a type pattern in a `match` on a value
+    - naming an `impl` method of a primitive without calling it (`val.format`)
+    - a global array initialized with a non-array (`let mut buffer: [4]u8 = true;`)
+    - a non-function passed to a `comptime f: fn(...)` parameter
+    - a `const` static member whose initializer reads a `let mut` one
+- Fixed crashes on valid code: `-2 != 0.25` in a condition, and `@shlWithOverflow(a, 3, &mut out)` with an untyped shift count
+- Fixed: a function literal passed straight to a `comptime f: fn(...)` parameter (`apply(fn(n: i32): i32 { return n + 1; }, 4)`) was rejected as not compile-time
+- Fixed: an argument for a `y: @TypeOf(x)` parameter was never checked against or converted to that type, so `echo(1, true)` compiled and `echo(a, @as(i16, 2))` crashed
+- `auto` under pointer, reference, slice, and array levels restricts what it deduces from (#362): `x: &auto`, `p: ^mut auto`, `xs: []auto`, `xs: []mut auto`, `xs: [3]auto`, `x: &mut? auto`, and nestings like `&[]auto` or `^^auto`
+    - each level must match the argument and `auto` binds what's left, so `&auto` given `&mut i64` makes the parameter `&i64`
+    - `impl I` works in the same positions (`xs: []impl Area`, `x: &impl Area`) and checks `I` against what `auto` bound to
+    - **Breaking:** an argument that doesn't match is an error at the call; before, `x: &auto` and `x: ^auto` silently took a plain value and became that value's type
+- `impl Fn(v: T): R` parameters accept any function, closure, erased `fn` value, or `^fn` whose signature is exactly that, and report a mismatch at the call (#362)
+    - `auto` in the signature deduces from the callable: `impl Fn(v: T): auto`, `impl Fn(x: auto): bool`
+- Fixed: `impl I` bounds were never checked for a call from another module or from inside another generic's body
+- Fixed: a plain `auto` parameter given a reference (`f(&a)`) failed with a mismatch between the reference and its referent
+- Fixed: a closure in a `test` block that captured one of the test's locals crashed the compiler
+- Fixed: the code after an `if comptime` arm that always returns was still checked, so an `@assert` or a union field read past it failed on a path that never runs
+- Fixed: a `match` statement with a block arm next to a value arm (`1 => { ... }, _ => @expect(false)`) tried to store the block's `void` as the other arm's value
+- Fixed: a type constructor called through an alias (`const A = Box;`) or another module (`m.Box(u8)`) couldn't be compared at compile time (`A(u8) == A(u8)`)
+- Fixed: a crash resolving a generic call whose arguments themselves instantiated another generic
+- Fixed: distinct instances of one type constructor were treated as the same type: `let b: Box(u16) = a` with `a: Box(u8)` compiled, passing one to the other crashed the compiler, and `Box(u8) != Box(u16)` was false
+- Diagnostics and `@typeName` name a type constructor's instance by its arguments (`Box(u8)`, `Arr(i32, 4)`) instead of `struct`
+- Fixed: a type constructor member whose signature names its own constructor (`fn(&self): Pair(i64)` inside `Pair`, or a dependent `Result(U, E)` return inside `Result`) recursed forever, crashed, or mixed up the instances' field and parameter types
+- Fixed: a generic member called on two instances of one type constructor (`Box(u8).make(f)` and `Box(i64).make(f)`), or same-named generic members of unrelated types, shared one instantiation
+- Add C types for talking to C, sized and signed by the target's C ABI: `c_char`, `c_short`, `c_ushort`, `c_int`, `c_uint`, `c_long`, `c_ulong`, `c_longlong`, `c_ulonglong`, and `c_longdouble`
+    - Each is its own type (`c_int` isn't `i32`, and `^c_int` doesn't convert to `^i32`); a value converts implicitly only where every value fits on the target, so `c_long` to `i32` compiles only where `c_long` is 32-bit
+    - Arithmetic stays ghoti's: no C integer promotions
+- `@cfg(testing)` and `@cfgValue(testing)` are true while building a test executable (`ghoti test`), so test-only helpers can sit next to the code they test
+    - **Breaking:** `test` blocks are only checked in a test build; `build-*` and `run` no longer report errors inside them
+- A `@cfg` / `@cfgValue` predicate can read another module's `pub` `@cfgValue` constant through its imports (`@cfg (std.os.HAS_BACKEND) { ... }`), so a gate shared across modules is written once
+- A runtime argument to a parameter that a `const` function infers `comptime` names where the body reads it at compile time, and suggests `let` when that read is a `const` initializer (#365)
+- Fixed: a statement starting with `extern struct`, `extern union`, or `extern fn`, like a `match` arm yielding `.little => extern struct { ... }`, was parsed as an `extern` declaration (#366)
+- Fixed: a raw identifier spelling a primitive (`const @"f128" = struct { ... }`) took over the primitive's name, so `f128` meant the struct inside its own module, while `@"u8"` named the primitive instead of the declaration
+- `@[testing]` marks a test helper: it may use `@expect`, `@require`, and `@skip`, so a check that takes more than one expression can live in a function instead of returning a `bool`
+    - A `@require` or `@skip` in a helper stops the test that called it, through any helpers in between
+    - A helper is only called directly, from a test or another `@[testing]` function
+- `@expect`, `@require`, and `@skip` work at compile time, so a test checks a `comptime` value with the testing builtins instead of `@assert`: `comptime { @expect(max(1, 2) == 2); }`
+    - A failing `@expect` is a compile error and the rest of the evaluation still runs and reports; a failing `@require` stops it
+    - A compile-time `@skip`, directly or through a `@[testing]` helper (`comptime skip_unless(ready)`), skips the test it was evaluated in
+    - A `const` initializer is compile time, so `const ok = @expect(...)` checks at compile time while `let ok = @expect(...)` stays a runtime check
+- `@[no_builtins]` keeps the optimizer from turning a function's loops into calls to `memcpy`, `memset`, and other library routines, as freestanding code implementing them needs
+    - `@typeInfo(f).function.no_builtins` reflects it
+- CPU features are visible to ghoti code
+    - `@cfg (cpu.has(.avx2)) { ... }` and `@cfgValue(cpu.has(.neon))` test the target CPU; a feature of another architecture is simply absent, so `arch == .x86_64 and cpu.has(.avx2)` works on every target, and a name no architecture has is an error suggesting the closest
+    - `builtin.cpu` is the CPU code is generated for (`model` and `features`), and `builtin.cpu.has(.sse4_2)` works at compile time and at runtime
+    - `builtin.<arch>.Feature` (`builtin.x86.Feature`, `builtin.aarch64.Feature`, ...) names the target architecture's features as LLVM does, with `-` and `.` as `_`; `builtin.CpuFeature` is the target's, and `builtin.CpuFeatureSet` is a set of them that can be built at runtime
+- `@[target_features(.avx2, .fma)]` compiles one function for CPU features beyond the target's, so it can use them while the rest of the program runs anywhere
+    - Its arguments are compile-time `builtin.CpuFeature`s; calling the function on a CPU without them is undefined, so guard the call with `std.cpu.detect()`
+- `@llvmIntrinsic(name, ReturnType, args...)` calls an LLVM intrinsic directly: `@llvmIntrinsic("llvm.x86.sse2.pause", void)`, `@llvmIntrinsic("llvm.ctpop", u32, x)`
+    - The name must be one LLVM knows, a target intrinsic must be the target architecture's, the types must fit one of its overloads (a mangled name like `llvm.ctpop.i32` must match the arguments), and arguments it takes as immediates must be known at compile time
+    - Untyped literal arguments are `i32` / `f64`, as when they bind an `auto` parameter
+- Enum literals: a `.name` with no type to name a member of has its own compile-time-only type, `@EnumLiteral()`
+    - It becomes any enum with a variant of that name, or any tagged union whose field of that name is `void`, wherever one is expected: `const mode = .fast; let l: Level = mode;`, `takes_level(mode)`, `let o: Option(i32) = nothing;`
+    - `.a == x` works with the literal on either side, two literals compare by name, and `@tagName(.fast)` is `"fast"`
+    - A `comptime` / `auto` parameter can take one (`pick(.small)` with `match comptime (k) { .small => ... }`); a runtime `let` or runtime `auto` parameter can't hold one, and says so
+    - `@typeInfo(@EnumLiteral())` is `.enum_literal`
+- `@call(modifier, f, args...)` calls `f` with `args` as `f(args...)` does, but how `builtin.CallModifier` asks: `.auto`, `.never_tail`, `.never_inline`, `.always_tail`, `.always_inline`, or `.compile_time`
+    - Arguments are a variadic tail rather than a tuple, so `@call(.never_inline, f, rest...)` forwards a pack
+    - A modifier that can't be honored is an error: an inline modifier against the function's own `@[inline(...)]`, `.always_inline` on an `extern`, `@[naked]`, or indirect call, `.always_tail` when the call isn't returned directly (a `defer` would run after it) or the signatures differ, and a `.compile_time` call that doesn't fold
+- Program entry is ghoti code: `lib/std/start.gh` joins every executable and test executable, holding the Linux `_start`, the C or Windows `main`, the `[][:0]u8` arguments, and the call into `main` or the tests
+    - `main` gets every argument: the old limits of 16 arguments of 1 KiB each on Windows and 128 elsewhere, past which arguments were silently dropped, are gone
+    - Windows arguments are split as `CommandLineToArgvW` splits them, so programs no longer link `shell32`
+    - `@entryMain()` (the program's `main`), `@entryTestRunner()` (the `test_runner` a test build calls), and `@testFunctions()` (a test build's `[]builtin.Test`) are valid only there; `GHOTI_START` points the compiler at another copy
+    - A test build calls the root module's own `test_runner`, else `std.testing`'s when the program uses `std`, else `builtin`'s, rather than relying on which one wins at link time; its signature is checked by the entry code and reported at the `test_runner`
+    - `main` may return `void`, `noreturn`, anything implementing `builtin.ExitCode` (`std.process.ExitCode`), or a `Result` whose error implements it and whose value is `void` or implements it; the exit code is the value's `to_exit_code()`, taken as given, so an error whose code is `0` exits `0`
+        - Every sized integer implements `ExitCode`; wider than `i32` keeps the low 32 bits
+        - Enums that do not implement exit code will try to utilize the `ExitCode` for their backing int
+    - The entry code, not the compiler, checks `main`'s parameters and return type, and its errors point at `main`
+- `callconv(.winapi)` is the Win32 API's convention: `stdcall` on 32-bit x86 and the C convention everywhere else, so one `extern` declaration fits every Windows target
+    - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
+- Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it
+- compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
+- `f80` works on every target, not only x86
+    - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
+    - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
+    - `f80` constants fold at compile time identically on every target
+    - Off x86 it has no C ABI, so `extern` declarations can't use it
+- Fixed: the LSP could crash while a standard library file was mid-edit, when a file reached the broken module only through an import cycle (`std` -> `heap` -> `std`); a root that reaches a failed module is no longer lowered (#368)
+- Fixed: an untyped constant bound to a name (`const n = 24;`, or a call to a function returning `comptime_int`) took a fixed `i32`/`usize` type next to a typed operand, so `x >> n` and `x + n` with `x: u64` were rejected; it now takes the other operand's type like a literal written in its place (#372)
+- Fixed: an error found while collecting a generic's body (a shadowing `let`) was replaced by the `Failed to instantiate` it caused, so only the latter was reported (#370)
+- Fixed: a parameter type reflecting on an earlier type parameter (`bits: ^mut @Int(.{ .bits = @typeInfo(T).float.bits, ... })`, `[@typeInfo(T).float.bits / 8]u8`) was evaluated before `T` was bound and reported an inactive union field (#371)
+- Fixed: a non-test build crashed on a file whose `test` block imports a module (`test { import "x.gh"; }`), since that module is never resolved outside a test build
+- Fixed: same-named generic functions in different modules (two files' private `helper`s) shared one instance per argument list, so a call could run the other module's body
+- An atomic builtin's order and op arguments take a bare variant, as `@Int` takes an implicit `IntInfo`: `@atomicRmw(u32, p, .add, 1, .seq_cst)`, `@fence(.acquire)`
+- Fixed: an untyped literal passed to `@atomicStore`, `@atomicRmw`, or `@cmpxchg*` was typed by the context the call sat in rather than by the atomic's operand type: `@atomicStore(^mut x, 3, ...)` on a `u64` stored only 4 bytes (and on a `u16`, 4 bytes past it), and `let w: u64 = @atomicRmw(u16, p, .add, 1, ...)` was rejected
+- Fixed: `@floatFromInt`/`@intFromFloat` between `f16`/`f32`/`f64`/`f128` and an integer wider than 128 bits crashed LLVM on every target but x86; they now call compiler_rt's `__floateisf`, `__fixdfei`, ... routines, like `f80` does
+- `@intCast`, `@intFromFloat`, `@floatCast`, and `@floatFromInt` accept `comptime_int` / `comptime_float` as a target when the operand is known at compile time: `@intCast(comptime_int, x)` with `const x: i32 = 5`
+    - A runtime value headed for an untyped type is an error, whether cast (`@as(comptime_int, x)`) or bound (`let y: comptime_int = x`)
+    - `let mut y: comptime_int` is rejected in favor of `comptime let mut`; it was silently stored as a runtime integer
+    - `@truncate` and `@bitCast` to an untyped type explain that it has no width or bit layout
+- Fixed: a 1-argument `@intCast`, `@truncate`, or `@bitCast` passed its inferred target type into its operand, so `s >>= @intCast(4 - e)` with `s: u128` and `e: i32` was rejected as mixing `u128` and `i32`
+- Fixed: `@as(comptime_int, x)` with a compile-time `x: i32` failed to fold, while `@as(comptime_float, ...)` worked
+- Fixed: `@bitCast(f128, 0)` (or a 1-argument `@bitCast(0)` to `f128`) crashed LLVM; an untyped operand now reinterprets at the target's width
+- Fixed: comparing two untyped numbers outside a `const` initializer (`return if (@as(comptime_float, d) == 0.1) ...`) rounded both to `f64` first, so the result could differ from the same comparison in a `const`
+- Fixed: `self == .none` on a `&self` receiver (or any `&` reference to a tagged union) was rejected as comparing aggregate types; it compares the active field like `u == .none` does
+- **Breaking:** `and` binds tighter than `or`, so `a or b and c` is `a or (b and c)`; both used to share one precedence and group left to right, making it `(a or b) and c`
+- Fixed: a `@compileError` message built at compile time (`"found " ++ @typeName(T)`) was reported as `compilation aborted by @compileError`
+- Fixed: a `@compileError` reached while instantiating a generic only pointed into the generic's body; the call that instantiated it now reports `Failed to instantiate` too
+- Fixed: comparing a `const` bound to a value holding `type`s against a variant (`const t = @typeInfo(T); t == .int`) was rejected as a runtime read, while `@typeInfo(T) == .int` folded
+- Fixed: a call folded at compile time saw an untyped literal argument to an `auto` parameter as `comptime_int`, while the same call at runtime saw `i32`, so `@TypeOf(val)` could pick a different branch depending on whether the call folded
+- Fixed: an `extern` function declared with an `extern fn(...) callconv(...)` type was called with the C convention
+- Fixed: on i686 Windows, a function with a stack frame over 4 KiB could skip the guard page and crash, as no stack probe was emitted
+- Fixed: a generic type instantiated with `type` (`Option(type)`) emitted declarations for its compile-time-only methods that failed LLVM verification, so a module using one could not be built on its own
+- Fixed: indexing a pointer to a struct (`p[i]` with `p: ^mut S`) produced invalid LLVM IR and failed to compile
+- Fixed: a type first used inside a function made its methods closures of that function when they called a sibling (`let n = helper();`), crashing codegen with `Function must have function sema type`
+- Fixed: a test build could report a false `Cross-module cyclic dependency` when a module's `test` block, resolved while one of its importers was still mid-resolution, reached that importer's unfinished declarations (`std.Option` from `std.math` while `std` resolved); tests now resolve after every module's declarations
+- Fixed: a parameterized `impl` whose target names its constructor through an alias (`impl(T: type) I for alias.Bag(T)` where `alias.gh` has `pub const Bag = bag.Bag;`) never applied, so the type had none of its methods
+- Fixed: the right side of a compile-time `false and` / `true or` was still checked, so `params.len == 0 or params[0] == T` failed for an empty `params` with an out-of-bounds error
+- Fixed: a statement calling a `noreturn` function (`exit(1);`) didn't end its path, so a function returning a value that ended with one was rejected for not returning on all code paths
+- **Breaking:** a `///` doc comment must document something: a declaration (including one inside a top-level `@cfg` block), an aggregate or interface member, or a function parameter
+    - One anywhere else (before a statement in a function body, a `test`, an `impl`, or a `@cfg` block, or with nothing after it) is an error; it used to be dropped silently
+    - A `//!` module doc comment after the first line of code is an error too, rather than a plain comment
+- `///` doc comments on function parameters (including `self`) and on interface members (methods, associated types and `const`s) are kept for hover
+- **Breaking:** a parameter of type `type` must be written `comptime T: type`; a bare `T: type` is an error. This used to be the other way around, where `comptime` on a `type` parameter was reported as redundant, so every compile-time parameter is now spelled the same way
+- Function parameters can have default values: `const area = fn(w: i32, h: i32 = w): i32 { ... };` is called as `area(3)` or `area(3, 4)`
+    - A default is any expression, evaluated by each call that leaves its argument off, and can read the parameters before it (other defaults included)
+    - Defaults are trailing: every parameter after a defaulted one needs a default too, except a closing `rest...` pack, which gets the arguments past the parameters
+    - `comptime` parameters can have defaults: `fn(x: i32, comptime T: type = i64): T`
+    - Defaults belong to the declaration: a direct call, a method call, `Type.method(obj)`, a call through another module, and a `const` alias of the function (`const g = f;`) see them, while a function value (`let p = f;`, `^fn`, closures, `dyn Fn`) does not, and a function type cannot declare them
+    - Calls that leave defaults off fold at compile time like any other call
+    - An interface method can declare defaults (`pub const read = fn(&mut self, buf: []u8, n: usize = buf.len): usize;`), which every call sees: on an implementing type, through `&dyn I`, and through an `impl I` bound
+    - An implementation inherits its interface's defaults and can't write any of its own
+- **Breaking:** a `@Struct` field is private unless its `StructFieldInfo` sets `.is_pub = true`, like a hand-written field; they used to be always public (#383)
+    - `@typeInfo` reports each field's `is_pub`, so `@Struct(@typeInfo(T).@"struct")` keeps `T`'s private fields private
+- Fixed: a statement starting with `if`, `match`, `for`, `while`, `loop`, or `do` now ends at its closing brace; `if (c) { ... }` followed by `*p = 1;` used to parse as `(if ...) * p = 1`
+- Fixed: structs, unions, and arrays passed or returned by value now cross the C ABI the way C does on x86-64 (SysV and Win64), AArch64 (Linux and Darwin), i386 (cdecl and stdcall), 32-bit ARM (AAPCS and AAPCS-VFP, except Apple and Windows), and RISC-V (every LP64 and ILP32 float ABI); most of them used to reach C with the wrong values or crash (#379)
+    - Narrow integers and `bool` (and every 32-bit integer on RV64) are sign or zero extended wherever the target's C ABI expects the caller to
+    - Every function follows these rules, so any function can become a C callback through `extern fn`
+    - Unions classify as C does: an `extern union` of floats travels in SSE registers on x86-64 and as an HFA on AArch64, and `f80`, `f128`, `i128`, and 16-byte vector fields take their two-register C classes
+    - Fields placed by `@[align(n)]` classify by their real offsets and alignment, with the padding before them ignored as C ignores it
+    - Other targets reject an aggregate passed by value where a call can cross into C (an `extern` or `export` declaration, `@export`, or an `extern fn(...)` type) instead of passing it wrongly; ghoti-only calls, including ones taking slices, still compile
+- A shift amount may be any integer type, independent of the value shifted: `x >> s` with `x: u64` and `s: u6`, `u32`, or `i8` is a `u64`, for `<< >> <<% <<|`, their compound forms, and `@shlWithOverflow`'s count
+    - A constant amount outside `[0, N)` for `<<` / `>>` is a compile error, even when the shifted value is only known at runtime (`x << 64` with `x: u64`)
+    - `@shlWithOverflow` with a count at or past the width writes `0` and reports an overflow unless the value was `0`
+- Fixed: a generic function whose parameter or return type instantiates a type constructor that rejects a non-integer (`fn(comptime T: type, x: T): Log2Int(T)`, where `Log2Int` reaches `@compileError` for anything else) failed at its declaration, because its own signature was checked with `T` unbound; each instantiation now checks it with `T` known
+- Fixed: `x <<% s` and `x <<| s` took the peer type of both operands rather than `x`'s type
+- `@sizeOf`, `@alignOf`, `@bitSizeOf`, and `@targetPtrBits` return `comptime_int` instead of `usize`, so they coerce to the integer type of their use site (`const n: u8 = @sizeOf(u32);`, `i32_value + @sizeOf(T)`) without a cast
+    - Like an integer literal, a `let mut` binding with no annotation now gets `i32`, not `usize`; annotate it to keep `usize`
+- `@divExact(a, b)` divides integers that are known to divide evenly; a remainder is a compile error when folded, a panic under runtime safety, and undefined behavior otherwise
+- Fixed: struct layout now takes `f64`, 64-bit integer, and `f80` sizes and alignments from the target, so on i386 Linux, macOS, and the BSDs `f64` and `i64` fields sit at 4-byte offsets and `f80` is 12 bytes (16 on macOS) as in C; `extern struct { f: f32, d: f64 }` used to be 16 bytes there instead of C's 12
+- Fixed: an `extern union` whose largest member isn't its most aligned one (`extern union { a: [3]f32, d: f64 }`) was missing its tail padding (12 bytes instead of 16) and was only 1-byte aligned in memory, and a constant `extern union` holding a float (`.{ .d = 3.0 }`) was all zeroes
+- Fixed: a module-scope `const` or `let` whose initializer has the wrong type (`let x: i32 = "s";`) is now a type error instead of a codegen crash
+- Fixed: a generic method of a type-constructor instance that takes `self` by value no longer crashes codegen
+- Fixed: `&f` of a function now coerces to an erased `fn(...)` parameter, as `^f` does
+- Fixed: a compile-time call that returns a reference parameter by value reads through it, instead of crashing a global's initializer
+- Fixed: compiler crashes on a `match` over an `f16`, `f80`, `f128`, or enum literal value, a `@cfg` block in a function signature, and an enum member reached from its own body before it resolves
+- **Breaking:** an untyped number passed to a bare `auto` parameter stays `comptime_int` / `comptime_float`, as in Zig, instead of becoming `i32` / `f64`; the parameter is then implicitly `comptime` for that instantiation
+    - `log2(123456789123456798123456789)` and `std.math.IntFittingRange(0, 1 << 100)` work, since the value no longer has to fit an `i32`
+    - A `y: @TypeOf(x)` or `y: T` parameter follows an `x` / `T` bound that way
+    - A call returning `comptime_int` / `comptime_float` always folds; its instantiation is never emitted as a runtime function
+- An `auto` return type is the peer of every `return`, not the first one's type: `return low` (a `comptime_int`) then `return val` (an `i64`) infers `i64`
+- A statement `if` whose condition is known at compile time only emits the arm it takes, so the dead arm (an `@intCast` the `if` guards) is never checked
+- `comptime { ...; return r; }` returns `r` from the enclosing function, including as a `match comptime` arm
+- Fixed: a generic instantiated from inside another generic saw the outer one's `comptime` bindings by name, so a local `const T` in the inner function could read the caller's `T`
+- Fixed: errors raised in a module that had already reported errors were printed against the calling file, sometimes with an `<invalid line>` excerpt
+- A catch-all `match` arm may capture the scrutinee: `_ => |v| v * 2`, or `|&mut v|` to alias it; on a tagged union the capture is the whole union, so it can be matched again
+- **Breaking:** a union names its tag: `union(enum) { ... }` is the tagged union a bare `union { ... }` used to be, and a bare `union` no longer parses; `extern union` is unchanged and can't name a tag, nor can `packed union`
+    - `union(MyEnum) { ... }` is tagged by `MyEnum`: it has one field per variant, in any order, and reads as `MyEnum` (`const k: MyEnum = u;`); a non-exhaustive `MyEnum` works, since the union only holds its named variants
+    - `union(void) { ... }` is an untagged union with Ghoti's own layout, so a field can be reinterpreted without the C ABI rules of `extern union`
+    - `@typeInfo(U).@"union".tag_type` is the tag enum (`void` otherwise), and `@Union` accepts one
+- Reading another field of an untagged union whose value is known at compile time is left to runtime instead of reporting an inactive field
+- `u0`, the zero-bit unsigned integer: its only value is 0 and it takes no space (`@sizeOf(u0) == 0`); `@Int(.{ .signedness = .unsigned, .bits = 0 })` builds it, and `std.math.Log2Int(u1)` is now `u0`. There is no `i0`
+- `@Int` rejects widths past 65535 and a zero-bit signed integer instead of building a truncated type
+- `comptime_int` is arbitrary precision: it grows past 128 bits (`1 << 200`, `(1 << 127) * 4`), and a literal of any length is exact; only a runaway result past 2^24 bits is an error
+    - An integer type wider than 128 bits (`u256`) holds a constant of its full width, and folds past 128 bits at compile time
+    - `@min`, `@max`, `@divTrunc`, `@divFloor`, `@divExact`, `@rem`, and `@mod` of two untyped integers stay `comptime_int` instead of becoming `i32`
+- Fixed: a suffixed integer literal was not checked against its own type, so `300u8` silently wrapped; it must now fit (`-128i8` still does)
+- A rejected assignment (to a constant, a non-mutable element, or of the wrong type) points at the start of its target (`q` in `q[1] = 0`) instead of the value being assigned
+- Fixed: `@bitCast` between an integer and an array or struct of the same size (`u128` and `[2]u64`) crashed the compiler with an LLVM assertion; it now goes through memory
+- Fixed: a versioned environment (`aarch64-linux-android24`) made `abi` / `@targetAbi()` the raw string `android24`, matching no member; it is now `.android`. `builtin.Abi` gains `android`, which `@cfg` accepted but `builtin.Abi` lacked
+    - **Breaking:** `abi == .androideabi` is removed; it could never hold, since LLVM normalizes `androideabi` to `android`. Arm Android is `abi == .android and arch == .arm`
+- Fixed: on big-endian targets (`armeb`, `thumbeb`, `aarch64_be`, `ppcle`, `sparcel`), `arch` / `@targetArch()` did not name the base arch, so arch-gated code was skipped; byte order is `endian`'s, as it already was for `mipsel` and `ppc64le`. `builtin.Arch` gains `sparc`
+- x86-64 targets enable `cmpxchg16b` by default, so 128-bit atomics compile to instructions instead of `__atomic_*_16` calls
+- **Breaking:** `mut` on a type only qualifies what a `^`, `&`, or `[]` reaches, so `mut volatile T` is rejected: a value's mutability is its binding's (`let mut v: volatile i32`), and the `mut` was ignored before
+- **Breaking:** `volatile` applied directly to a pointer, reference, slice, or array type is rejected, and so is a repeated `volatile`
+    - Before, it overwrote the qualifier of what the pointer reached: `volatile &mut i32` became `&volatile i32` (losing `mut`), `mut volatile &i32` became `&mut volatile i32` (gaining it), and a `^volatile ^mut volatile T` lost the inner `mut`
+    - `volatile [N]T` was dropped silently; write `[N]volatile T`
+- Fixed: a store to an element of an array or slice of `volatile` elements (`a[i] = x` with `a: [4]mut volatile i32`) was not volatile; only loads were
+- Fixed: folding a call to a generic function at compile time used the typing of whichever instance was checked last, so `std.math.nan(f128)` followed by `std.math.nan(f64)` reported an `@intCast` out of range for `u64`, and other orders could fold silently wrong values
+- Fixed: folding a generic method of a type constructor's instance (`a.eq(b)` with an `auto` parameter) used whichever instance was checked last, so `@This()` could name another instance: `!a.eq(b)` on `Option(i32)` failed after `eq` was used on an `Option(bool)`
+- Fixed: an error raised while folding another module's function at compile time was printed against the calling file, with an `<invalid line>` excerpt; it now points into the module it came from
+- Fixed: a compile-time-folded `const` let a raw identifier take a primitive's place, so `const @"f80" = f80;` reported that `f80` depends on its own value, `@sizeOf(@"u8")` of a struct named `@"u8"` folded to 1, and a local `@"f32"` replaced `f32`; a primitive keyword always names the primitive, as it already did outside folding
+- Fixed: a generic parameter typed as a pointer or reference to an earlier type parameter (`fn(T: type, p: ^mut T)`, `p: &T`) was checked as if it were `T` itself, so every call was rejected with "not assignable to parameter type 'T'"
+- Fixed: `@atomicLoad`/`@atomicStore` of a `u64` on i686 Linux called libatomic's `__atomic_load`/`__atomic_store`, since they used the ABI's 4-byte alignment while `@atomicRmw`/`@cmpxchg*` assumed 8; every atomic now assumes its operand is aligned to its size
+- **Breaking:** RISC-V Linux targets default to `generic-rv64`/`generic-rv32` with `+m,+a,+f,+d,+c` and the `lp64d`/`ilp32d` hard-float ABI their libc uses; bare-metal RISC-V stays at `generic`
+- Prefix `-%` accepts unsigned integers and wraps modulo the width, so `-%x` is `0 -% x` (`-%@as(u8, 1) == 255`)
+- Fixed: a generic function or type constructor instantiated with `-0.0` and with `0.0` reused whichever instance came first, since the two compare equal; comptime arguments now match by bit pattern
+- Fixed: a `for comptime` or a per-iteration `while comptime` in a generic function kept the first instantiation's types from its second iteration on, so `y = @truncate(...)` in the loop reported "cannot assign 'u64' to 'u32'" once the function was also used with a wider type
+- `@truncate` accepts a target as wide as its operand, so `@truncate(T, x)` works in generic code when `T` is `x`'s own type (`u128` to `u128`); it keeps the bits as they are, and only a wider target is rejected
+- A `@cfgValue` guard arm may list several predicates and is taken when any of them holds: `arch == .wasm32, arch == .wasm64 => false` (#392)
+    - As with `match`, a trailing comma before `=>` (`a, b, => x`) puts one predicate per line
+    - An arm's value may itself be a `@cfgValue`: `arch == .arm => @cfgValue(abi == .eabi => false, _ => true)`
+- **Breaking:** unrolled loops are spelled with a leading `unroll`: `unroll for`, `unroll while`, `unroll do { ... } while (c)`, and `unroll loop` replace `for comptime`, `while comptime`, `do { ... } while comptime (c)`, and `loop comptime` (#395)
+    - `unroll` is now a keyword
+    - `comptime` before any loop (`comptime unroll for (...)`, `comptime for (...)`) runs it at compile time, as `comptime { ... }` around it does; it used to be rejected as not evaluable
+
+## Standard Library
+- Add `std.math.min` / `std.math.max` over two or more values
+    - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
+- `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
+- Add `std.cpu.detect()`, the features of the CPU the program is running on: `builtin.cpu.features` plus whatever the machine reports
+    - x86 asks `cpuid` (and the OS, through `xgetbv`, whether AVX, AVX-512, and AMX state is saved); AArch64 reads `AT_HWCAP` on Linux, `hw.optional` sysctls on macOS, and `IsProcessorFeaturePresent` on Windows
+- Add `std.meta` with `return_type(T)`, the return type of a function, closure, or erased `fn` type, directly or through `^` / `&`
+- `std.Result.map` and `map_err` take an `impl Fn(...)`, so passing a function of the wrong shape is reported at your call instead of inside `std`
+    - Their return types are written out (`Result(std.meta.return_type(@TypeOf(func)), E)`) rather than `auto`
+- Add `eq` to `std.Option(T)` and `std.Result(T, E)`: `opt.eq(3)` holds when it is `.some` with that value, and `res.eq(other)` when both hold the same variant with equal payloads
+    - `Result.eq` also takes an `E`, comparing against `.err`
+    - A number of another numeric type compares by value: an integer that doesn't fit `T` is never equal, and a float is rounded to `T` as a literal would be
+- Fixed: `std.mem.Allocator.destroy` freed the size and alignment of the pointer rather than of what it points to; it takes `^mut auto` now
+- Fixed: a skipped test printed `Test failed: <file>: (SKIPP ED)<message>`; it prints `Test skipped: <file>: (SKIPPED) <message>`
+- **Breaking:** `std.mem.Allocator.free` takes just the slice (`allocator.free(buf)`); the element type comes from the slice instead of a separate `T` argument (#278)
+- `import std;` works on every target, including ones std has no OS backend for (wasm, freestanding, Linux beyond x86_64 and aarch64)
+    - There `std.os` is empty, and the parts built on it are left out: `std.io.File` and the standard streams, `std.heap`'s page allocator, `std.mem.round_up_page`, the test runner, and std's panic and assert handlers (the builtin defaults trap instead)
+    - `std.os.HAS_BACKEND` says whether the target has one
+
+## Tooling
+- `ghoti fmt` puts a multiline (`\\`) asm template on lines of its own, with the `,` after it on the next
+- Fixed: `ghoti fmt` moved comments out of `@cfg` arms: ones in a statement arm landed after the whole `@cfg` chain, and ones in a struct, union, or enum `@cfg` group after the whole type (#391)
+- Fixed: `ghoti fmt` dropped a blank line between a comment and the code after it (`// section`, blank line, then a statement)
+- Lexing is faster: the longest operator's length is computed once instead of on every operator read, which made parsing a large file several times slower than it needed to be
+- `--cpu native` targets the build machine's CPU and every feature it has; `run` accepts `--cpu` and `--features` too
+- An unknown `--cpu` model or `--features` name is an error; LLVM warned and quietly ignored it
+- **Breaking:** `-M, --mode debug|release_safe|release_fast|release_small` replaces `-O`, `--release`, and `--unsafe` on `build-*`, `run`, and `test`
+    - `debug` (the default) is `-O0` with runtime safety, `release_safe` is `-O2` with safety, `release_fast` is `-O3` without, and `release_small` is `-Oz` without
+    - The LSP analyzes as `debug`
+- Releases ship a `lib/compiler_rt` directory of ghoti sources for the routines LLVM calls on its own (`__addtf3`, `__divti3`, `fmodf`, ...)
+    - A link whose object needs one builds `lib/compiler_rt` for the target (at most once per process) and links it last; `GHOTI_COMPILER_RT=<file>` points at another root
+    - `--no-compiler-rt` on `build-exe`, `build-lib`, `run`, and `test` skips it
+    - A routine that fails to compile, or that compiles into a call to itself, is a build error naming its file
+    - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
+    - `lib/compiler_rt` can `import std;` like any program
+    - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
+    - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
+    - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
+- LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)
+    - Each target CPU feature in `builtin.<arch>.Feature` is documented with LLVM's description and its LLVM spelling
+- LSP hover on a function shows its parameters' defaults (`fn(w: i32, h: i32 = w * scale): i32`)
+- Fixed: a `build-lib --dynamic` DLL for an MSVC target exported nothing; Windows DLLs now export every non-hidden symbol, like `.so` and `.dylib`
+- **Breaking:** a library built with `build-lib` keeps only its `export`ed symbols visible; everything else it holds, such as its copy of `std`, is internal so it can't collide with the program linking it, and a `panic_handler` / `assert_handler` it carries is weak so the program's own wins
+- Fixed: `ghoti fmt` moved a comment between an `if`'s closing brace and its `else` into the `else` block, and one trailing the brace (`} // note`) into the block before it (#369)
+- LSP completes attribute names inside `@[...]` and enum arguments like `@[visibility(.hidden)]`, and hover describes an attribute
+- Fixed: the LSP kept workspace symbols and diagnostics for files that disappeared, such as ones on an unmounted drive, and logged a failed reanalysis for each of them on every edit
+- Fixed: `ghoti fmt` left a line past 100 columns when what followed a group on that line (like `): void {` after a parameter list) pushed it over; a trailing comment still never forces a break
+- Cross compiling for macOS links from any host: releases ship `libSystem.tbd` and `SDKSettings.json` in `lib/darwin`, used when neither `SDKROOT` nor `xcrun` names an SDK (#342)
+    - The linker stamps the SDK version from `SDKSettings.json` into the image instead of reusing the minimum OS version
+- LSP hover names a callable's parameters: `fn(lhs: i32, rhs: i32): i32` instead of `fn(i32, i32): i32` (#305)
+    - Covers function declarations, `fn`-typed parameters and fields, `dyn Fn` aliases, and aliases like `f: Callback`, `f: mod.Callback`, or `const g := mod.f;`, including across modules
+- Building from source: editing any header or `.inc` now always rebuilds the objects that include it
+    - Zig 0.16 drops a cached object's headers from the library's cache manifest, so edits to them were silently ignored; the header stamp now comes from stdx, whose `zig build verify-deps` checks it against a fixture
+    - `zig build -Dinstall-tests-only=true` now installs the test binaries instead of doing nothing
+    - `zig build prune` deletes superseded `.zig-cache` generations and stale `zig-out` files, never LLVM unless `-Dprune-protected=true` (`-Dprune-dry-run=true` to preview)
+        - Paths compare case-insensitively only on Windows and macOS, and either separator is accepted on every host
+- LLVM, LLD and the bundled clang-format are now 23.1.3 (from 21.1.8)
+    - Fixed: compiling for riscv64 in `release_fast` crashed the compiler on an add of `0x8000000000000000` to a 128-bit value, an LLVM overflow fixed upstream
+    - `-Os` and `-Oz` run LLVM's O2 pipeline and mark every function `optsize` (plus `minsize` for `-Oz`), as clang does; LLVM 23 removed its size-specific pipelines
+- `ghoti fmt` can now be locally disabled with `ghoti fmt: off` and re-enabled with `ghoti fmt: on`

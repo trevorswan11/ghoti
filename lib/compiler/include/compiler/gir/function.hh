@@ -17,28 +17,39 @@
 #include "compiler/ast/attributes.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/segment.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/type.hh"
+
+namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::gir {
 
-struct parameter {
-    std::string name;
-    sema::type& type;
-    local_id    id;
-};
-
 class function {
+  public:
+    struct parameter {
+        std::string name;
+        sema::type& type;
+        local_id    id;
+    };
+
+    // Another symbol for this function, from a second `@export`
+    struct alias {
+        std::string            name;
+        bool                   weak{false};
+        ast::symbol_visibility visibility{ast::symbol_visibility::DEFAULT};
+    };
+
   public:
     function(ghoti::arena& arena,
              std::string   name,
              sema::type&   type,
-             bool          is_test      = false,
-             bool          is_constexpr = false,
-             bool          is_variadic  = false,
-             gir::linkage  linkage      = linkage::INTERNAL,
-             std::string   abi_name     = "c") noexcept
+             bool          is_test     = false,
+             bool          is_comptime = false,
+             bool          is_variadic = false,
+             gir::linkage  linkage     = linkage::INTERNAL,
+             std::string   abi_name    = "c") noexcept
         : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
-          is_constexpr_{is_constexpr}, is_variadic_{is_variadic}, linkage_{linkage},
+          is_comptime_{is_comptime}, is_variadic_{is_variadic}, linkage_{linkage},
           abi_name_{std::move(abi_name)} {}
     ~function() = default;
     MAKE_PINNED(function);
@@ -46,13 +57,13 @@ class function {
     MAKE_GETTER(name, std::string_view);
     MAKE_GETTER(type, sema::type&);
     MAKE_GETTER(is_test, bool);
-    MAKE_GETTER(is_constexpr, bool);
+    MAKE_GETTER(is_comptime, bool);
     MAKE_GETTER(is_variadic, bool);
     MAKE_GETTER(linkage, gir::linkage);
     MAKE_GETTER(abi_name, std::string_view);
     MAKE_GETTER(link_name, std::string_view);
     MAKE_GETTER(is_weak, bool);
-    MAKE_GETTER(is_naked, bool);
+    MAKE_GETTER(attributes, const sema::resolved_attributes&);
     MAKE_GETTER(calling_conv, ast::calling_convention);
     MAKE_GETTER(test_desc, std::string_view);
     MAKE_GETTER(test_file, std::string_view);
@@ -61,9 +72,23 @@ class function {
     MAKE_DEDUCING_GETTER(params);
     MAKE_DEDUCING_GETTER(segments);
 
+    // The AST module this function's body was emitted from, which owns its diagnostics' locations
+    [[nodiscard]] auto get_source_module() const noexcept -> stdx::option<mod::module_t&> {
+        return source_module_;
+    }
+    auto set_source_module(mod::module_t& m) -> void { source_module_.emplace(m); }
+
+    [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
+        return aliases_;
+    }
+    auto add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
+
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
-    auto set_naked(bool naked) -> void { is_naked_ = naked; }
+    auto set_linkage(gir::linkage linkage) -> void { linkage_ = linkage; }
+    auto set_attributes(const sema::resolved_attributes& attributes) -> void {
+        attributes_ = attributes;
+    }
     auto set_calling_conv(ast::calling_convention conv) -> void { calling_conv_ = conv; }
     auto set_test_desc(std::string desc) -> void { test_desc_ = std::move(desc); }
     auto set_test_location(std::string file, u32 line, u32 col) -> void {
@@ -95,26 +120,33 @@ class function {
 
     [[nodiscard]] auto local_count() const noexcept -> usize { return next_local_index_; }
 
+    // Which segments control can reach from the entry, indexed by segment id.
+    //
+    // Code after a diverging expression is still emitted into a segment nothing branches to.
+    [[nodiscard]] auto reachable_segments() const -> std::vector<bool>;
+
   private:
-    ghoti::arena&           arena_;
-    std::string             name_;
-    sema::type&             type_;
-    std::vector<parameter*> params_;
-    std::vector<segment*>   segments_;
-    usize                   next_local_index_{0};
-    bool                    is_test_{false};
-    bool                    is_constexpr_{false};
-    bool                    is_variadic_{false};
-    bool                    is_weak_{false};
-    bool                    is_naked_{false};
-    ast::calling_convention calling_conv_{ast::calling_convention::C};
-    gir::linkage            linkage_{linkage::INTERNAL};
-    std::string             abi_name_{"c"};
-    std::string             link_name_;
-    std::string             test_desc_;
-    std::string             test_file_;
-    u32                     test_line_{1};
-    u32                     test_column_{1};
+    ghoti::arena&                arena_;
+    std::string                  name_;
+    sema::type&                  type_;
+    std::vector<parameter*>      params_;
+    std::vector<segment*>        segments_;
+    usize                        next_local_index_{0};
+    bool                         is_test_{false};
+    bool                         is_comptime_{false};
+    bool                         is_variadic_{false};
+    bool                         is_weak_{false};
+    sema::resolved_attributes    attributes_{};
+    ast::calling_convention      calling_conv_{ast::calling_convention::C};
+    gir::linkage                 linkage_{linkage::INTERNAL};
+    std::string                  abi_name_{"c"};
+    std::string                  link_name_;
+    std::vector<alias>           aliases_;
+    std::string                  test_desc_;
+    std::string                  test_file_;
+    u32                          test_line_{1};
+    u32                          test_column_{1};
+    stdx::option<mod::module_t&> source_module_;
 };
 
 } // namespace ghoti::gir

@@ -10,4 +10,12 @@ namespace ghoti::mod {
 // If this path cannot be resolved, searches up to 5 levels up for "lib/std/std.gh"
 [[nodiscard]] auto find_stdlib() -> stdx::option<std::filesystem::path>;
 
+// Resolves a path inside the shipped `lib` directory, searched the same way
+// as the stdlib: next to an overridden GHOTI_STDLIB first, then up from the executable
+[[nodiscard]] auto find_lib_path(const std::filesystem::path& relative)
+    -> stdx::option<std::filesystem::path>;
+
+// The program entry code `lib/std/start.gh`: GHOTI_START, else found like `find_lib_path`
+[[nodiscard]] auto find_start() -> stdx::option<std::filesystem::path>;
+
 } // namespace ghoti::mod

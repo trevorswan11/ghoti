@@ -1,7 +1,6 @@
 #include "compiler/gir/const_value.hh"
 
 #include <algorithm>
-#include <bit>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -18,6 +17,8 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/type.hh"
+#include "support/big_int.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 
 namespace ghoti::gir {
@@ -64,18 +65,50 @@ auto const_value::to_gir_value() const noexcept -> value {
         [this](const const_union&) -> value { return value{void_val{}, type_}; },
         [this](const const_closure&) -> value { return value{void_val{}, type_}; },
         [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
+        [this](const const_ref&) -> value { return value{void_val{}, type_}; },
         [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
+        [this](const f128& f) -> value { return value{f, type_, origin_}; },
         [this](const auto& v) -> value { return value{v, type_}; });
 }
 
 auto const_value::operator==(const const_value& other) const noexcept -> bool {
     if (data_.index() != other.data_.index()) {
-        const auto l_int{as_int_opt()};
-        const auto r_int{other.as_int_opt()};
+        const auto l_int{as_big_int_opt()};
+        const auto r_int{other.as_big_int_opt()};
         if (l_int && r_int) { return *l_int == *r_int; }
         return false;
     }
     return data_ == other.data_;
+}
+
+auto const_value::identical(const const_value& other) const noexcept -> bool {
+    const auto all_identical{
+        [](const std::vector<const_value>& l, const std::vector<const_value>& r) {
+            return std::ranges::equal(
+                l, r, [](const const_value& a, const const_value& b) { return a.identical(b); });
+        }};
+
+    if (const auto l{data_.as_opt<f128>()}) {
+        const auto r{other.data_.as_opt<f128>()};
+        return r && l->bits() == r->bits();
+    }
+    if (const auto l{data_.as_opt<const_array>()}) {
+        const auto r{other.data_.as_opt<const_array>()};
+        return r && all_identical(l->elements, r->elements);
+    }
+    if (const auto l{data_.as_opt<const_union>()}) {
+        const auto r{other.data_.as_opt<const_union>()};
+        return r && l->active_field == r->active_field && all_identical(l->payload, r->payload);
+    }
+    if (const auto l{data_.as_opt<const_struct>()}) {
+        const auto r{other.data_.as_opt<const_struct>()};
+        if (!r || l->fields.size() != r->fields.size()) { return false; }
+        return std::ranges::all_of(l->fields, [&](const auto& field) {
+            const auto rf{r->get_field_opt(field.first)};
+            return rf && field.second.identical(*rf);
+        });
+    }
+    return *this == other;
 }
 
 auto const_value::hash() const noexcept -> u64 {
@@ -88,8 +121,17 @@ auto const_value::hash() const noexcept -> u64 {
 
     stdx::hasher h{static_cast<u64>(data_.index()) + 2};
     data_.visit([&](const std::string& s) { h.combine<std::string_view>(s); },
-                [&](f64 v) { h.combine(std::bit_cast<u64>(v)); },
+                [&](f128 v) {
+                    // `-0 == +0`, so both zeros hash alike
+                    const auto bits{v.is_zero() ? u128{} : v.bits()};
+                    h.combine(bits.low);
+                    h.combine(bits.high);
+                },
                 [&](bool v) { h.combine(v ? 1U : 0U); },
+                [&](const big_int& v) {
+                    h.combine(v.is_negative() ? 1U : 0U);
+                    for (const auto limb : v.magnitude().limbs()) { h.combine(limb); }
+                },
                 [&](const stdx::option<sema::type&>& t) {
                     h.combine(t ? reinterpret_cast<u64>(t.get()) : 0U);
                 },
@@ -119,6 +161,14 @@ auto const_value::hash() const noexcept -> u64 {
                     }
                 },
                 [&](const const_addr& a) { h.combine<std::string_view>(a.symbol); },
+                [&](const const_ref& r) {
+                    h.combine(r.frame);
+                    h.combine<std::string_view>(r.binding);
+                    for (const auto& step : r.path) {
+                        h.combine<std::string_view>(step.name);
+                        h.combine(static_cast<u64>(step.index));
+                    }
+                },
                 [&](const const_dyn_fat_ptr& d) {
                     h.combine<std::string_view>(d.data_symbol);
                     h.combine<std::string_view>(d.vtable_symbol);
@@ -133,7 +183,11 @@ auto const_value::mangle() const -> std::string {
         [](u64 v) { return fmt::to_string(v); },
         [](i128 v) { return fmt::to_string(v); },
         [](u128 v) { return fmt::to_string(v); },
-        [](f64 v) { return fmt::format("{}", v); },
+        [](const big_int& v) { return v.to_string(); },
+        [this](f128 v) {
+            const auto format{type_ ? sema::float_format_of(*type_) : stdx::none};
+            return v.to_string(format.value_or(float_format::QUAD));
+        },
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {
             std::string out;
@@ -175,10 +229,23 @@ auto const_value::mangle() const -> std::string {
             return fmt::format("cl.{}.{}", c.fn_node.get_index(), fmt::join(parts, "."));
         },
         [](const const_addr& a) { return fmt::format("addr.{}", a.symbol); },
+        [](const const_ref& r) { return fmt::format("ref.{}.{}", r.frame, r.binding); },
         [](const const_dyn_fat_ptr& d) {
             return fmt::format("dyn.{}.{}", d.data_symbol, d.vtable_symbol);
         },
         [](const auto&) -> std::string { return "v"; });
+}
+
+auto with_declared_type(const_value value, sema::type& declared) -> const_value {
+    const bool is_number{value.is<i64>() || value.is<u64>() || value.is<i128>() ||
+                         value.is<u128>() || value.is<f128>()};
+    if (!is_number || !sema::is_numeric(declared.get_kind())) { return value; }
+    const auto format{sema::float_format_of(declared)};
+    if (format && !value.is<f128>()) {
+        return const_value{*value.int_as_float_opt(*format), declared};
+    }
+    value.set_type(declared);
+    return value;
 }
 
 } // namespace ghoti::gir

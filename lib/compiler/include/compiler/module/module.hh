@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <filesystem>
 #include <iostream>
@@ -26,8 +27,10 @@
 #include "compiler/ast/ast.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/ast/statement.hh"
 #include "compiler/ast/traits.hh"
 #include "compiler/module/error.hh"
+#include "compiler/module/parse_cache.hh"
 #include "compiler/module/source_loader.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
@@ -36,7 +39,12 @@
 #include "support/diagnostic.hh"
 #include "support/source_file.hh"
 
-namespace ghoti::sema { struct body_type_diff; } // namespace ghoti::sema
+namespace ghoti::sema {
+
+struct body_type_diff;
+struct body_write_log;
+
+} // namespace ghoti::sema
 
 namespace ghoti::mod {
 
@@ -58,12 +66,12 @@ using diagnotic_list_variant =
     stdx::variant<stdx::monostate, syntax::diagnostics, sema::diagnostics>;
 
 struct cfg_value_result {
-    bool         boolean{false};
-    bool         is_predicate{true};
-    ast::node_id chosen{ast::node_id::make_invalid()};
+    bool                       boolean{false};
+    bool                       is_predicate{true};
+    stdx::option<ast::node_id> chosen{};
 };
 
-// Which arm of an `if constexpr` the resolver folded to
+// Which arm of an `if comptime` the resolver folded to
 enum class if_branch : u8 {
     CONSEQUENCE,
     ALTERNATE,
@@ -74,7 +82,13 @@ struct dyn_vtable {
     std::vector<std::string> slots;
 };
 
-struct module {
+// Why a `decl_stmt` has no runtime storage
+enum class storageless_kind : u8 {
+    ALIAS,          // Aliases a type or module
+    COMPTIME_VALUE, // Value holds types
+};
+
+struct module_t {
     std::filesystem::path                            path;
     std::filesystem::path                            parent_path;
     source_file                                      source;
@@ -82,7 +96,8 @@ struct module {
     sema::side_tables                                sema_side_tables;
     stdx::opt_size                                   root_table_idx;
     module_state                                     state{module_state::PARSED};
-    std::vector<sema::generic_instantiation_request> generic_instantiations;
+    // Mangled names of the monomorphs this module requested, in emit order
+    std::vector<std::string> generic_instantiations;
 
     // Member functions of `fn(...): type` constructor results defined in this module
     std::vector<sema::type_ctor_member_emit> type_ctor_member_emits;
@@ -96,17 +111,27 @@ struct module {
     // `@cfgValue` node index -> the cfg pass's evaluated verdict
     ankerl::unordered_dense::map<usize, cfg_value_result> cfg_value_results;
 
-    // `if constexpr` node index -> the arm the type resolver folded to
-    ankerl::unordered_dense::map<usize, if_branch> if_constexpr_results;
+    // `if comptime` node index -> the arm the type resolver folded to
+    ankerl::unordered_dense::map<usize, if_branch> if_comptime_results;
 
     // `match` (on a compile-time `type`) node index -> the arm index the resolver selected
     ankerl::unordered_dense::map<usize, usize> match_arm_results;
 
     // Active emit-local overlay for generic instantiations / type ctor members / inherited defaults
     stdx::option<const sema::body_type_diff&> active_body_diff;
+    stdx::option<sema::body_write_log&>       active_write_log{};
 
-    // Cond discardable `decl_stmt` node index -> the folded truth of the condition
-    ankerl::unordered_dense::map<usize, bool> discardable_conditions;
+    // `@runtimeSafety()` call node index -> the lexically scoped safety it observed
+    ankerl::unordered_dense::map<usize, bool> scoped_runtime_safety;
+
+    // `@call(modifier, ...)` call node index -> its folded modifier
+    ankerl::unordered_dense::map<usize, ast::call_modifier> call_modifiers;
+
+    // Attributed `decl_stmt` / `function_expr` node index -> its folded `@[...]` list
+    ankerl::unordered_dense::map<usize, sema::resolved_attributes> node_attributes;
+
+    // `decl_stmt` node index -> whether (and why) it has no runtime storage
+    ankerl::unordered_dense::map<usize, stdx::option<storageless_kind>> storageless_decls;
 
     // Every identifier_expr references and uses encountered during symbol collection/resolution
     std::vector<ast::node_id> identifier_positions;
@@ -114,30 +139,98 @@ struct module {
     // Every `import` node in this module, at any nesting depth
     std::vector<ast::node_id> import_nodes;
 
+    // `std/start.gh`, the program's entry code
+    bool is_start{false};
+
+    // Root `test` blocks waiting for every module's declarations to resolve (test builds only)
+    std::vector<ast::node_id> deferred_tests;
+
     diagnotic_list_variant diagnostics{stdx::monostate{}};
 
     // A permanent copy of the syntax diagnostics found at parse time, if any
     std::vector<diagnostic_snapshot> parse_diagnostics;
 
-    module(std::filesystem::path path,
-           std::filesystem::path parent_path,
-           source_file           source) noexcept :path{std::move(path)},
-        parent_path{std::move(parent_path)}, source{std::move(source)} {}
+    // Reported alongside `diagnostics` but never errors the module out
+    sema::diagnostics warnings;
 
-    ~module() = default;
-    MAKE_MOVE_ONLY(module)
+    // The cached parse `ast` borrows its payloads from, if any
+    stdx::rc<const parse_cache::entry> parsed_from;
+
+    auto record_node_write(usize idx) noexcept -> void;
+    auto record_explicit_write(usize idx) noexcept -> void;
+
+    // Overlay-aware, so a monomorph's emit sees the attributes its own instantiation folded
+    [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
+        -> stdx::option<const sema::resolved_attributes&>;
+    auto set_node_attributes(ast::node_id id, const sema::resolved_attributes& resolved) -> void;
+
+    // A declaration's function literal initializer, or `node` itself when it already is one
+    [[nodiscard]] auto fn_literal_node(ast::node_id node) const -> ast::node_id {
+        if (const auto decl{ast.get_as_opt<ast::decl_stmt>(node)}; decl && decl->value) {
+            return *decl->value;
+        }
+        return node;
+    }
+
+    [[nodiscard]] auto get_storageless_kind(ast::node_id id) const noexcept
+        -> stdx::option<storageless_kind> {
+        const auto it{storageless_decls.find(id.get_index())};
+        return it != storageless_decls.end() ? it->second : stdx::none;
+    }
+
+    [[nodiscard]] auto is_storageless_decl(ast::node_id id) const noexcept -> bool {
+        return get_storageless_kind(id).has_value();
+    }
+
+    // Every use of a compile-time-only value decl must fold through const_eval
+    [[nodiscard]] auto is_comptime_value_decl(ast::node_id id) const noexcept -> bool {
+        return get_storageless_kind(id) == storageless_kind::COMPTIME_VALUE;
+    }
+
+    module_t(std::filesystem::path path,
+             std::filesystem::path parent_path,
+             source_file           source) noexcept
+        : path{std::move(path)}, parent_path{std::move(parent_path)}, source{std::move(source)} {}
+
+    ~module_t() = default;
+    MAKE_MOVE_ONLY(module_t);
 
     // Errors out the module regardless of previous state and emplaces the diagnostics
     template <typename DiagList>
         requires(!std::same_as<std::remove_cvref_t<DiagList>, stdx::monostate>)
     auto error_out(DiagList&& list, module_state error_state) noexcept -> mod::module_state {
         state = error_state;
+        list.remove_duplicates();
         diagnostics.emplace<DiagList>(std::forward<DiagList>(list));
         return state;
     }
 
+    // Poisons the module with `list`, keeping any sema diagnostics it already reported
+    auto absorb_sema_diagnostics(sema::diagnostics&& list) -> void {
+        if (list.empty()) { return; }
+        if (auto existing{diagnostics.as_opt<sema::diagnostics>()}) {
+            for (const auto& d : list) { existing->emplace_back(d); }
+            existing->remove_duplicates();
+            if (is_ok()) { state = module_state::POISONED_TYPE_RESOLVED; }
+            return;
+        }
+        error_out(std::move(list), module_state::POISONED_TYPE_RESOLVED);
+    }
+
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
+
+    // The source text a node was parsed from
+    [[nodiscard]] auto source_of(ast::node_id id) const -> std::string_view;
+
+    // Whether this module's own error list holds a diagnostic equal to `diag`
+    template <Diagnostic D> [[nodiscard]] auto reports(const D& diag) const -> bool {
+        if (is_ok()) { return false; }
+        const auto own{diagnostics.as_opt<diagnostic_list<D>>()};
+        return own && std::ranges::any_of(
+                          *own, [&](const D& d) { return d.identity() == diag.identity(); });
+    }
+    auto print_warnings(std::ostream& os) const -> void;
 
     // Errored modules cannot be used in any future compilation step
     [[nodiscard]] auto is_errored() const noexcept -> bool {
@@ -168,6 +261,8 @@ struct module {
         -> stdx::option<stdx::option<sema::type&>>;
     [[nodiscard]] auto get_overlay_explicit_type(usize idx) const noexcept
         -> stdx::option<stdx::option<sema::type&>>;
+    [[nodiscard]] auto get_overlay_call_target(usize idx) const noexcept
+        -> stdx::option<stdx::option<std::string_view>>;
     [[nodiscard]] auto get_if_branch_opt(usize node_idx) const noexcept -> stdx::option<if_branch>;
     [[nodiscard]] auto get_match_arm_opt(usize node_idx) const noexcept -> stdx::opt_size;
 
@@ -221,6 +316,9 @@ struct module {
     [[nodiscard]] auto get_generic_call_target_opt(ID id) const noexcept
         -> stdx::option<std::string_view> {
         if constexpr (ast::IndexableNodeID<ID>) {
+            if (active_body_diff) {
+                if (const auto ov{get_overlay_call_target(id.get_index())}) { return *ov; }
+            }
             if (const auto& target{sema_side_tables.generic_call_targets[id]}) {
                 return std::string_view{*target};
             }
@@ -275,8 +373,10 @@ struct module {
     constexpr auto set_sema_type(ID id, sema::type& type) noexcept -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.node_types[id].emplace(type);
+            record_node_write(id.get_index());
         } else {
             sema_side_tables.explicit_types[id].emplace(type);
+            record_explicit_write(id.get_index());
         }
     }
 
@@ -286,8 +386,10 @@ struct module {
         if (has_sema_type(id)) { return false; }
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.node_types[id].emplace(type);
+            record_node_write(id.get_index());
         } else {
             sema_side_tables.explicit_types[id].emplace(type);
+            record_explicit_write(id.get_index());
         }
         return true;
     }
@@ -336,6 +438,25 @@ struct module {
         }
     }
 
+    template <ast::IndexableID ID>
+    auto set_identifier_declaration(ID id, sema::declaration_ref declaration) -> void {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            sema_side_tables.identifier_declarations[id].emplace(declaration);
+        } else {
+            sema_side_tables.explicit_type_declarations[id].emplace(declaration);
+        }
+    }
+
+    template <ast::IndexableID ID>
+    [[nodiscard]] auto get_identifier_declaration(ID id) const
+        -> stdx::option<sema::declaration_ref> {
+        if constexpr (ast::IndexableNodeID<ID>) {
+            return sema_side_tables.identifier_declarations[id];
+        } else {
+            return sema_side_tables.explicit_type_declarations[id];
+        }
+    }
+
     // Given a relative path, returns its absolute rep from the module's perspective
     [[nodiscard]] auto make_path_absolute(const std::filesystem::path& p) -> std::filesystem::path {
         if (p.is_relative()) { return parent_path / p; }
@@ -348,10 +469,10 @@ struct module {
 };
 
 struct body_diff_guard {
-    module&                                   mod;
+    module_t&                                 mod;
     stdx::option<const sema::body_type_diff&> prev{};
 
-    explicit body_diff_guard(module& m, stdx::option<const sema::body_type_diff&> diff) noexcept
+    explicit body_diff_guard(module_t& m, stdx::option<const sema::body_type_diff&> diff) noexcept
         : mod{m}, prev{std::exchange(m.active_body_diff, diff)} {}
 
     ~body_diff_guard() noexcept { mod.active_body_diff = prev; }
@@ -364,7 +485,7 @@ class module_manager {
                                                          std::filesystem::path,
                                                          stdx::string_transparent_hash,
                                                          stdx::string_transparent_eq>;
-    using module_table    = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module>>;
+    using module_table = ankerl::unordered_dense::map<std::filesystem::path, stdx::box<module_t>>;
     MAKE_ITERATOR(modules, module_table, modules_)
 
   public:
@@ -373,49 +494,73 @@ class module_manager {
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module_manager)
 
+    // Borrows file modules from `cache` instead of parsing them, adding what it lacks
+    auto set_parse_cache(parse_cache& cache) noexcept -> void { parse_cache_ = &cache; }
+
     // Attempts to load the path from the loader and parse its contents.
     //
-    // Asserts that the path is relative and its parent is absolute
+    // A relative `path` resolves against `parent_path`, which must be absolute or empty
     [[nodiscard]] auto try_get_file_module(const std::filesystem::path& path,
                                            const std::filesystem::path& parent_path = {})
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
 
     // Attempts to load the module from the loader and parse its contents
     [[nodiscard]] auto try_get_library_module(std::string_view name)
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
+
+    // The module already loaded for `path`, without loading it if it isn't
+    [[nodiscard]] auto find_file_module(const std::filesystem::path& path)
+        -> stdx::option<module_t&>;
+
+    // The library module registered as `name`, if something has already loaded it
+    [[nodiscard]] auto find_loaded_library_module(std::string_view name) -> stdx::option<module_t&>;
 
     // Adds a library module and its underlying path to the lookup table
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
         -> stdx::result<void, diagnostic>;
 
-    // Prints every poisoned/errored module's diagnostics
+    // Prints every poisoned/errored module's diagnostics not already printed by an earlier call
     auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
+    auto print_all_warnings(std::ostream& os = std::cerr) const -> void;
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;
-    [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module&;
+    [[nodiscard]] auto get_or_create_builtin_module(std::string_view source) -> module_t&;
 
-    [[nodiscard]] auto builtin_module() -> module& {
-        ASSERT(builtin_module_, "the `builtin` module has not been created yet");
-        return *builtin_module_;
+    [[nodiscard]] auto builtin_module(this auto& self) -> auto& {
+        ASSERT(self.builtin_module_, "the `builtin` module has not been created yet");
+        return *self.builtin_module_;
     }
 
     [[nodiscard]] auto has_builtin_module() const noexcept -> bool {
         return static_cast<bool>(builtin_module_);
     }
 
+    // Parses `std/start.gh` from `source` the first time; `path` names it in diagnostics
+    [[nodiscard]] auto get_or_create_start_module(const std::filesystem::path& path,
+                                                  std::string_view             source) -> module_t&;
+
     // The returned reference is guaranteed to be stable even across moves of the manager
     [[nodiscard]] auto arena() noexcept -> ghoti::arena& { return *arena_; }
 
   private:
     [[nodiscard]] auto try_get(const std::filesystem::path& path)
-        -> stdx::result<gsl::not_null<module*>, diagnostic>;
+        -> stdx::result<gsl::not_null<module_t*>, diagnostic>;
+
+    // Whether `path` is `lib/std/start.gh`, opened like any other file (by the LSP, say)
+    [[nodiscard]] auto is_start_path(const std::filesystem::path& path) -> bool;
+
+    auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
 
   private:
-    source_loader&          loader_;
-    module_table            modules_;
-    stdx::box<module>       builtin_module_;
-    stdx::box<ghoti::arena> arena_{stdx::make_box<ghoti::arena>()};
+    source_loader&                                        loader_;
+    module_table                                          modules_;
+    stdx::box<module_t>                                   builtin_module_;
+    stdx::box<module_t>                                   start_module_;
+    stdx::option<stdx::option<std::filesystem::path>>     start_path_;
+    stdx::box<ghoti::arena>                               arena_{stdx::make_box<ghoti::arena>()};
+    mutable ankerl::unordered_dense::set<const module_t*> printed_diagnostics_;
+    stdx::option<parse_cache&>                            parse_cache_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

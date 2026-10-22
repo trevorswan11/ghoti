@@ -3,6 +3,7 @@
 #include <ios>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@
 #include "driver/cmd/build/object.hh"
 #include "driver/cmd/build/options.hh"
 #include "support/bin_utils.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -27,8 +29,8 @@ TEST_CASE("build_obj command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_obj      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out.o",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out.o",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
@@ -41,11 +43,11 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
 
-                pub const main := fn(): i64 {{
+                pub const main = fn(): i64 {{
                     return add(40, 2);
                 }};
             )");
@@ -61,7 +63,7 @@ TEST_CASE("build_obj command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
@@ -73,7 +75,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const square := fn(x: i64): i64 {{
+                pub const square = fn(x: i64): i64 {{
                     return x * x;
                 }};
             )");
@@ -92,7 +94,7 @@ TEST_CASE("build_obj command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
         CHECK(bin_utils::check_elf_header(obj_file));
     }
@@ -104,7 +106,7 @@ TEST_CASE("build_obj command execution") {
 
         {
             std::ofstream out{src_file.path};
-            fmt::print(out, "pub const invalid_syntax := ;;;");
+            fmt::print(out, "pub const invalid_syntax = ;;;");
         }
 
         cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
@@ -122,7 +124,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream helper_out{helper_path.path};
             fmt::print(helper_out, R"(
-                pub const multiply := fn(a: i64, b: i64): i64 {{
+                pub const multiply = fn(a: i64, b: i64): i64 {{
                     return a * b;
                 }};
             )");
@@ -131,7 +133,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(main_out, R"(
                 pub import "ghoti_test_helper.gh" as helper;
 
-                pub const calc := fn(x: i64): i64 {{
+                pub const calc = fn(x: i64): i64 {{
                     return helper.multiply(x, 2);
                 }};
             )");
@@ -139,7 +141,7 @@ TEST_CASE("build_obj command execution") {
 
         cmd::build_obj cmd{{.input_path = main_path, .output_path = obj_file}};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
@@ -153,7 +155,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(out, R"(
                 pub import std;
 
-                pub const ver := fn(): auto {{
+                pub const ver = fn(): auto {{
                     return std.version;
                 }};
             )");
@@ -161,7 +163,7 @@ TEST_CASE("build_obj command execution") {
 
         cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
@@ -174,7 +176,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{custom_lib.path};
             fmt::print(lib_out, R"(
-                pub const custom_fn := fn(x: i64): i64 {{
+                pub const custom_fn = fn(x: i64): i64 {{
                     return x + 100;
                 }};
             )");
@@ -183,7 +185,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import mylib;
 
-                pub const run_custom := fn(v: i64): i64 {{
+                pub const run_custom = fn(v: i64): i64 {{
                     return mylib.custom_fn(v);
                 }};
             )");
@@ -191,12 +193,12 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"mylib", custom_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
@@ -210,7 +212,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{broken_lib.path};
             fmt::print(lib_out, R"(
-                pub const custom_fn := fn(x: i64): i64 {{
+                pub const custom_fn = fn(x: i64): i64 {{
                     return x + 100l;
                 }};
             )");
@@ -219,7 +221,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import mylib;
 
-                pub const run_custom := fn(v: i64): i64 {{
+                pub const run_custom = fn(v: i64): i64 {{
                     return mylib.custom_fn(v);
                 }};
             )");
@@ -227,12 +229,12 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"mylib", broken_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
-        CHECK_FALSE(std::filesystem::exists(obj_file));
+        CHECK_FALSE(path_utils::exists(obj_file));
     }
 
     SECTION("Custom generic library module import via -m on disk") {
@@ -244,7 +246,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream lib_out{custom_lib.path};
             fmt::print(lib_out, R"(
-                pub const clamp := fn(val: auto, low: auto, high: auto): auto {{
+                pub const clamp = fn(val: auto, low: auto, high: auto): auto {{
                     if (val < low) {{
                         return low;
                     }}
@@ -259,7 +261,7 @@ TEST_CASE("build_obj command execution") {
             fmt::print(src_out, R"(
                 pub import math;
 
-                pub const clamp_int := fn(v: i64): i64 {{
+                pub const clamp_int = fn(v: i64): i64 {{
                     return math.clamp(v, 0, 100);
                 }};
             )");
@@ -267,12 +269,12 @@ TEST_CASE("build_obj command execution") {
 
         std::vector<cmd::build::module_binding> modules{{"math", custom_lib}};
         cmd::build_obj                          cmd{{
-                                     .input_path  = src_file,
-                                     .output_path = obj_file,
-                                     .modules     = std::move(modules),
+            .input_path  = src_file,
+            .output_path = obj_file,
+            .modules     = std::move(modules),
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(obj_file));
+        CHECK(path_utils::exists(obj_file));
         CHECK(std::filesystem::file_size(obj_file) > 0);
     }
 
@@ -287,7 +289,7 @@ TEST_CASE("build_obj command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
             )");
@@ -309,20 +311,79 @@ TEST_CASE("build_obj command execution") {
             return ss.str();
         }};
 
-        REQUIRE(std::filesystem::exists(gir_file.path));
+        REQUIRE(path_utils::exists(gir_file.path));
         const auto gir_text{slurp(gir_file.path)};
         CHECK(gir_text.contains("fn add("));
+        CHECK(gir_text.ends_with('\n'));
+        CHECK_FALSE(gir_text.ends_with("\n\n"));
 
-        REQUIRE(std::filesystem::exists(ir_file.path));
+        REQUIRE(path_utils::exists(ir_file.path));
         const auto ir{slurp(ir_file.path)};
         CHECK(ir.contains("define"));
         CHECK(ir.contains("@add"));
 
-        REQUIRE(std::filesystem::exists(asm_file));
+        REQUIRE(path_utils::exists(asm_file));
         const auto asm_text{slurp(asm_file)};
         CHECK_FALSE(asm_text.empty());
         CHECK(asm_text.contains("add"));
     }
+}
+
+TEST_CASE("build_obj follows an import written as an absolute path") {
+    codegen::llvm_scope scope;
+    tempfile            helper{"test_abs_import_helper.gh"};
+    tempfile            src_file{"test_abs_import_main.gh"};
+    tempfile            obj_file{"test_abs_import_out.o"};
+    {
+        std::ofstream helper_out{helper.path};
+        fmt::print(helper_out, "pub const seven = fn(): i64 {{ return 7; }};\n");
+        // A generic string keeps Windows separators from being read as escapes
+        std::ofstream src_out{src_file.path};
+        fmt::print(src_out,
+                   "import \"{}\" as h;\npub const get = fn(): i64 {{ return h.seven(); }};\n",
+                   std::filesystem::absolute(helper.path).generic_string());
+    }
+
+    cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_file}};
+    REQUIRE(cmd.execute());
+    CHECK(path_utils::exists(obj_file));
+}
+
+TEST_CASE("build_obj reports an assembler error in inline asm instead of exiting") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_bad_asm_src.gh"};
+    tempfile            obj_file{"test_bad_asm_out.o"};
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, R"(
+            pub const f = fn(): void {{
+                asm {{ template: "definitely_not_an_instruction", options: (volatile) }};
+            }};
+        )");
+    }
+
+    codegen::target_options target_opts{.triple_str = "x86_64-unknown-linux-gnu"};
+    cmd::build_obj          cmd{
+        {.input_path = src_file, .output_path = obj_file, .target_opts = target_opts}};
+    CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::COMPILATION_FAILED);
+}
+
+TEST_CASE("build_obj creates a missing output directory") {
+    codegen::llvm_scope scope;
+    tempfile            src_file{"test_nested_out_src.gh"};
+    {
+        std::ofstream out{src_file.path};
+        fmt::print(out, "pub const one = fn(): i32 {{ return 1; }};\n");
+    }
+
+    const auto     out_dir{std::filesystem::path{tempfile::make_temp_path("ghoti_nested_out")}};
+    const auto     obj_path{out_dir / "deeper" / "out.o"};
+    cmd::build_obj cmd{{.input_path = src_file, .output_path = obj_path}};
+    REQUIRE(cmd.execute());
+    CHECK(path_utils::exists(obj_path));
+
+    std::error_code ec;
+    std::filesystem::remove_all(out_dir, ec);
 }
 
 } // namespace ghoti::tests

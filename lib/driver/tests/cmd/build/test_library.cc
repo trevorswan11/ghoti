@@ -12,6 +12,7 @@
 #include "driver/clap/error.hh"
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
+#include "support/path_utils.hh"
 #include "support/tempfile.hh"
 #include "support/test.hh"
 
@@ -21,8 +22,8 @@ TEST_CASE("build_lib command execution") {
     SECTION("Non-existent input file returns FILE_NOT_FOUND") {
         codegen::llvm_scope scope;
         cmd::build_lib      cmd{{
-                 .input_path  = "non_existent_file_12345.gh",
-                 .output_path = "out.a",
+            .input_path  = "non_existent_file_12345.gh",
+            .output_path = "out.a",
         }};
         CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
@@ -35,7 +36,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const add := fn(a: i64, b: i64): i64 {{
+                pub const add = fn(a: i64, b: i64): i64 {{
                     return a + b;
                 }};
             )");
@@ -51,7 +52,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
@@ -63,7 +64,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const mul := fn(x: i64, y: i64): i64 {{
+                pub const mul = fn(x: i64, y: i64): i64 {{
                     return x * y;
                 }};
             )");
@@ -80,7 +81,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
     }
 
@@ -92,7 +93,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{src_file.path};
             fmt::print(out, R"(
-                pub const mul := fn(x: i64, y: i64): i64 {{
+                pub const mul = fn(x: i64, y: i64): i64 {{
                     return x * y;
                 }};
             )");
@@ -110,8 +111,40 @@ TEST_CASE("build_lib command execution") {
             .dynamic     = true,
         }};
         REQUIRE(cmd.execute());
-        CHECK(std::filesystem::exists(lib_file));
+        CHECK(path_utils::exists(lib_file));
         CHECK(std::filesystem::file_size(lib_file) > 0);
+    }
+
+    SECTION("Host-target dynamic library with a `main` symbol links with no CRT entry point") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_host_dylib_source.gh"};
+        tempfile            lib_file{"test_host_dylib_output.dll"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                pub const main = fn(): i32 {{
+                    return 3;
+                }};
+            )");
+        }
+
+        cmd::build_lib cmd{{
+            .input_path  = src_file,
+            .output_path = lib_file,
+            .dynamic     = true,
+        }};
+        REQUIRE(cmd.execute());
+        CHECK(path_utils::exists(lib_file));
+    }
+
+    SECTION("Directory input path reports FILE_NOT_FOUND instead of failing silently") {
+        codegen::llvm_scope scope;
+        cmd::build_lib      cmd{{
+            .input_path  = std::filesystem::temp_directory_path(),
+            .output_path = "out.a",
+        }};
+        CHECK(UNWRAP_ERR(cmd.execute()) == clap::error::FILE_NOT_FOUND);
     }
 
     SECTION("Building static library and linking into executable") {
@@ -124,7 +157,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{lib_src.path};
             fmt::print(out, R"(
-                pub const compute := fn(x: i64): i64 {{
+                pub const compute = fn(x: i64): i64 {{
                     return x + 100;
                 }};
             )");
@@ -133,7 +166,7 @@ TEST_CASE("build_lib command execution") {
         {
             std::ofstream out{exe_src.path};
             fmt::print(out, R"(
-                pub const main := fn(args: [][:0]u8): void {{
+                pub const main = fn(args: [][:0]u8): void {{
                     return;
                 }};
             )");
@@ -151,7 +184,7 @@ TEST_CASE("build_lib command execution") {
             .opt_opts    = opt_opts,
         }};
         REQUIRE(lib_cmd.execute());
-        REQUIRE(std::filesystem::exists(lib_file));
+        REQUIRE(path_utils::exists(lib_file));
 
         // 2. Build executable linking against the static library via extra_objects
         cmd::build_exe exe_cmd{{
@@ -162,7 +195,7 @@ TEST_CASE("build_lib command execution") {
             .extra_objects = {lib_file},
         }};
         REQUIRE(exe_cmd.execute());
-        CHECK(std::filesystem::exists(exe_file));
+        CHECK(path_utils::exists(exe_file));
         CHECK(std::filesystem::file_size(exe_file) > 0);
     }
 }

@@ -1,13 +1,16 @@
 #include "driver/cmd/lsp/text_edit.hh"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <string_view>
 
 #include <nlohmann/json.hpp>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 
 #include "support/diagnostic.hh"
+#include "support/unicode.hh"
 
 namespace ghoti::lsp {
 
@@ -25,11 +28,49 @@ auto offset_of(std::string_view text, source_location pos) -> usize {
 
 namespace {
 
-auto position_of(const nlohmann::json& pos) -> source_location {
-    return {pos.at("line").get<usize>(), pos.at("character").get<usize>()};
+// Compiler locations count bytes, like UTF-8; clients count UTF-16 units unless told otherwise.
+// Atomic since the analysis worker converts diagnostics while `initialize` may still be setting it
+std::atomic<position_encoding> negotiated_encoding{position_encoding::UTF16};
+
+[[nodiscard]] auto line_text(std::string_view text, usize line) -> std::string_view {
+    const auto start{offset_of(text, {line, 0})};
+    const auto end{text.find('\n', start)};
+    auto       result{stdx::string::substr(
+        text, start, end == std::string_view::npos ? std::string_view::npos : end - start)};
+    if (result.ends_with('\r')) { result.remove_suffix(1); }
+    return result;
 }
 
 } // namespace
+
+auto set_position_encoding(position_encoding encoding) noexcept -> void {
+    negotiated_encoding.store(encoding, std::memory_order_relaxed);
+}
+
+auto current_position_encoding() noexcept -> position_encoding {
+    return negotiated_encoding.load(std::memory_order_relaxed);
+}
+
+auto position_encoding_name(position_encoding encoding) noexcept -> std::string_view {
+    return encoding == position_encoding::UTF8 ? "utf-8" : "utf-16";
+}
+
+auto client_position(std::string_view text, source_location loc) -> nlohmann::json {
+    auto character{loc.column};
+    if (negotiated_encoding == position_encoding::UTF16) {
+        const auto line{line_text(text, loc.line)};
+        character = utf16_length(stdx::string::substr(line, 0, std::min(loc.column, line.size()))) +
+                    (loc.column > line.size() ? loc.column - line.size() : 0);
+    }
+    return {{"line", loc.line}, {"character", character}};
+}
+
+auto source_position(std::string_view text, const nlohmann::json& position) -> source_location {
+    const auto line{position.at("line").get<usize>()};
+    const auto character{position.at("character").get<usize>()};
+    if (negotiated_encoding == position_encoding::UTF8) { return {line, character}; }
+    return {line, byte_offset_of_utf16(line_text(text, line), character)};
+}
 
 auto apply_content_changes(std::string text, const nlohmann::json& changes) -> std::string {
     for (const auto& change : changes) {
@@ -39,8 +80,8 @@ auto apply_content_changes(std::string text, const nlohmann::json& changes) -> s
         }
 
         const auto& range{change.at("range")};
-        const auto  start{offset_of(text, position_of(range.at("start")))};
-        const auto  end{offset_of(text, position_of(range.at("end")))};
+        const auto  start{offset_of(text, source_position(text, range.at("start")))};
+        const auto  end{offset_of(text, source_position(text, range.at("end")))};
         text.replace(start, end - start, change.at("text").get<std::string>());
     }
     return text;

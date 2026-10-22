@@ -1,0 +1,312 @@
+import "sqrt.gh" as sqrt;
+
+@[inline(.always)] pub const is_nan = fn(val: auto): bool {
+    return val != val;
+};
+
+/// Creates floating point type T from an unbiased exponent and raw mantissa.
+@[inline(.always)] pub const reconstruct_float = fn(
+    comptime T: type,
+    comptime exponent: comptime_int,
+    comptime mantissa: comptime_int,
+): T {
+    const TBits = @Int(.{
+        .bits = @bitSizeOf(T),
+        .signedness = .unsigned,
+    });
+    let biased_exponent = @intCast(TBits, exponent + float_exponent_max(T));
+    return @bitCast(T, (biased_exponent << float_mantissa_bits(T)) | @intCast(TBits, mantissa));
+};
+
+/// Creates a raw "1.0" mantissa for floating point type T
+@[inline(.always)] pub const mantissa_one = fn(comptime T: type): comptime_int {
+    comptime @assert(@typeInfo(T) == .float);
+    return if (@typeInfo(T).float.bits == 80) 1 << float_fractional_bits(T) else 0;
+};
+
+/// Returns the number of fractional bits in the mantissa of floating point type T.
+@[inline(.always)] pub const float_fractional_bits = fn(comptime T: type): comptime_int {
+    comptime @assert(@typeInfo(T) == .float);
+
+    // standard IEEE floats have an implicit 0.m or 1.m integer part
+    return match comptime (@typeInfo(T).float.bits) {
+        16 => 10,
+        32 => 23,
+        64 => 52,
+        80 => 63, // f80 is special and has an explicitly stored bit in the MSB
+        128 => 112,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the number of bits in the mantissa of floating point type T.
+@[inline(.always)] pub const float_mantissa_bits = fn(comptime T: type): comptime_int {
+    comptime @assert(@typeInfo(T) == .float);
+
+    return match comptime (@typeInfo(T).float.bits) {
+        16 => 10,
+        32 => 23,
+        64 => 52,
+        80 => 64,
+        128 => 112,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the number of bits in the exponent of floating point type T.
+@[inline(.always)] pub const float_exponent_bits = fn(comptime T: type): comptime_int {
+    comptime @assert(@typeInfo(T) == .float);
+
+    return match comptime (@typeInfo(T).float.bits) {
+        16 => 5,
+        32 => 8,
+        64 => 11,
+        80 => 15,
+        128 => 15,
+        _ => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+};
+
+/// Returns the minimum exponent that can represent a normalized value in floating point type T.
+@[inline(.always)] pub const float_exponent_min = fn(comptime T: type): comptime_int {
+    return -float_exponent_max(T) + 1;
+};
+
+/// Returns the maximum exponent that can represent a normalized value in floating point type T.
+@[inline(.always)] pub const float_exponent_max = fn(comptime T: type): comptime_int {
+    return (1 << (float_exponent_bits(T) - 1)) - 1;
+};
+
+/// Returns the canonical quiet NaN representation for a floating point `Type`.
+@[inline(.always)] pub const nan = fn(comptime T: type): T {
+    comptime @assert(@typeInfo(T) == .float);
+
+    const RuntimeType = match comptime (T) {
+        comptime_float => f128, // any float type will do
+        _ => T,
+    };
+    return reconstruct_float(
+        RuntimeType,
+        float_exponent_max(RuntimeType) + 1,
+        mantissa_one(RuntimeType) | 1 << (float_fractional_bits(RuntimeType) - 1),
+    );
+};
+
+test "Quiet NaN canonical representation" {
+    let qnan_u16 = 0x7E00u16;
+    @expect(qnan_u16 == @bitCast(u16, nan(f16)));
+    let qnan_u32 = 0x7FC00000u32;
+    @expect(qnan_u32 == @bitCast(u32, nan(f32)));
+    let qnan_u64 = 0x7FF8000000000000u64;
+    @expect(qnan_u64 == @bitCast(u64, nan(f64)));
+    let qnan_u80 = 0x7FFFC000000000000000u80;
+    @expect(qnan_u80 == @bitCast(u80, nan(f80)));
+    let qnan_u128 = 0x7FFF8000000000000000000000000000u128;
+    @expect(qnan_u128 == @bitCast(u128, nan(f128)));
+}
+
+/// Returns a signalling NaN representation for a floating point `Type`.
+@[inline(.always)] pub const snan = fn(comptime T: type): T {
+    comptime @assert(@typeInfo(T) == .float);
+
+    const RuntimeType = match comptime (T) {
+        _ => T,
+        comptime_float => f128, // any float type will do
+    };
+    return reconstruct_float(
+        RuntimeType,
+        float_exponent_max(RuntimeType) + 1,
+        mantissa_one(RuntimeType) | 1 << (float_fractional_bits(RuntimeType) - 2),
+    );
+};
+
+test "Signalling NaN canonical representation" {
+    let snan_u16 = 0x7D00u16;
+    @expect(snan_u16 == @bitCast(u16, snan(f16)));
+    let snan_u32 = 0x7FA00000u32;
+    @expect(snan_u32 == @bitCast(u32, snan(f32)));
+    let snan_u64 = 0x7FF4000000000000u64;
+    @expect(snan_u64 == @bitCast(u64, snan(f64)));
+    let snan_u80 = 0x7FFFA000000000000000u80;
+    @expect(snan_u80 == @bitCast(u80, snan(f80)));
+    let snan_u128 = 0x7FFF4000000000000000000000000000u128;
+    @expect(snan_u128 == @bitCast(u128, snan(f128)));
+}
+
+/// Returns the inf value for a floating point `Type`.
+@[inline(.always)] pub const inf = fn(comptime T: type): T {
+    comptime @assert(@typeInfo(T) == .float);
+
+    const RuntimeType = match comptime (T) {
+        _ => T,
+        comptime_float => f128, // any float type will do
+    };
+    return reconstruct_float(
+        RuntimeType,
+        float_exponent_max(RuntimeType) + 1,
+        mantissa_one(RuntimeType),
+    );
+};
+
+test "inf" {
+    const inf_u16 = 0x7C00u16;
+    const inf_u32 = 0x7F800000u32;
+    const inf_u64 = 0x7FF0000000000000u64;
+    const inf_u80 = 0x7FFF8000000000000000u80;
+    const inf_u128 = 0x7FFF0000000000000000000000000000u128;
+    @expect(inf_u16 == @as(u16, @bitCast(inf(f16))));
+    @expect(inf_u32 == @as(u32, @bitCast(inf(f32))));
+    @expect(inf_u64 == @as(u64, @bitCast(inf(f64))));
+    @expect(inf_u80 == @as(u80, @bitCast(inf(f80))));
+    @expect(inf_u128 == @as(u128, @bitCast(inf(f128))));
+}
+
+/// Returns the smallest normal number representable in floating point type T.
+@[inline(.always)] pub const float_min = fn(comptime T: type): T {
+    return reconstruct_float(T, float_exponent_min(T), mantissa_one(T));
+};
+
+/// Returns the smallest subnormal number representable in floating point type T.
+@[inline(.always)] pub const float_true_min = fn(comptime T: type): T {
+    return reconstruct_float(T, float_exponent_min(T) - 1, 1);
+};
+
+/// Returns the largest normal number representable in floating point type T.
+@[inline(.always)] pub const float_max = fn(comptime T: type): T {
+    const all_1s_mantissa = (1 << float_mantissa_bits(T)) - 1;
+    return reconstruct_float(T, float_exponent_max(T), all_1s_mantissa);
+};
+
+/// Returns the machine epsilon of floating point type T.
+@[inline(.always)] pub const float_eps = fn(comptime T: type): T {
+    return reconstruct_float(T, -float_fractional_bits(T), mantissa_one(T));
+};
+
+/// Performs an approximate comparison of two floating point values `x` and `y`.
+/// Returns true if the absolute difference between them is less or equal than
+/// the specified tolerance.
+///
+/// The `tolerance` parameter is the absolute tolerance used when determining if
+/// the two numbers are close enough; a good value for this parameter is a small
+/// multiple of `floatEps(T)`.
+///
+/// Note that this function is recommended for comparing small numbers
+/// around zero; using `approxEqRel` is suggested otherwise.
+///
+/// NaN values are never considered equal to any value.
+pub const approx_eq_abs = fn(comptime T: type, x: T, y: T, tolerance: T): bool {
+    comptime @assert(@typeInfo(T) == .float or @typeInfo(T) == .comptime_float);
+    @assert(tolerance >= 0);
+
+    // Fast path for equal values (and signed zeros and infinites).
+    if (x == y) return true;
+    if (is_nan(x) or is_nan(y)) return false;
+    return @abs(x - y) <= tolerance;
+};
+
+test "approx_eq_abs" {
+    @skip("`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__letf2`, `__eqtf2`");
+    unroll for ([_]type{ f16, f32, f64, f128 }) |T| {
+        const eps_value = float_eps(T);
+        const min_value = float_min(T);
+
+        @expect(approx_eq_abs(T, 0.0, 0.0, eps_value));
+        @expect(approx_eq_abs(T, -0.0, -0.0, eps_value));
+        @expect(approx_eq_abs(T, 0.0, -0.0, eps_value));
+        @expect(!approx_eq_abs(T, 1.0 + 2 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(T, 1.0 + 1 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(T, min_value, 0.0, eps_value * 2));
+        @expect(approx_eq_abs(T, -min_value, 0.0, eps_value * 2));
+    }
+
+    comptime {
+        // `comptime_float` is guaranteed to have the same precision and operations of
+        // the largest other floating point type, which is f128 but it doesn't have a
+        // defined layout so we can't rely on `@bitCast` to construct the smallest
+        // possible epsilon value like we do in the tests above. In the same vein, we
+        // also can't represent a max/min, `NaN` or `Inf` values.
+        const eps_value = 1e-4;
+
+        @expect(approx_eq_abs(comptime_float, 0.0, 0.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, -0.0, -0.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, 0.0, -0.0, eps_value));
+        @expect(!approx_eq_abs(comptime_float, 1.0 + 2 * eps_value, 1.0, eps_value));
+        @expect(approx_eq_abs(comptime_float, 1.0 + 1 * eps_value, 1.0, eps_value));
+    }
+}
+
+/// Performs an approximate comparison of two floating point values `x` and `y`.
+/// Returns true if the absolute difference between them is less or equal than
+/// `max(|x|, |y|) * tolerance`, where `tolerance` is a positive number greater
+/// than zero.
+///
+/// The `tolerance` parameter is the relative tolerance used when determining if
+/// the two numbers are close enough; a good value for this parameter is usually
+/// `sqrt(floatEps(T))`, meaning that the two numbers are considered equal if at
+/// least half of the digits are equal.
+///
+/// Note that for comparisons of small numbers around zero this function won't
+/// give meaningful results, use `approxEqAbs` instead.
+///
+/// NaN values are never considered equal to any value.
+pub const approx_eq_rel = fn(comptime T: type, x: T, y: T, tolerance: T): bool {
+    comptime @assert(@typeInfo(T) == .float or @typeInfo(T) == .comptime_float);
+    @assert(tolerance >= 0);
+
+    // Fast path for equal values (and signed zeros and infinites).
+    if (x == y) return true;
+    if (is_nan(x) or is_nan(y)) return false;
+    return @abs(x - y) <= @max(@abs(x), @abs(y)) * tolerance;
+};
+
+test "approx_eq_rel" {
+    @skip(
+        "`__extendhfsf2`, `__truncsfhf2`, `__getf2`, `__unordtf2`, `__gttf2`, `__eqtf2`, `__multf3`, `__letf2`",
+    );
+    unroll for ([_]type{ f16, f32, f64, f128 }) |T| {
+        const eps_value = float_eps(T);
+        const sqrt_eps_value = sqrt.sqrt(eps_value);
+        const nan_value = nan(T);
+        const inf_value = inf(T);
+        const min_value = float_min(T);
+
+        @expect(approx_eq_rel(T, 1.0, 1.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, 1.0, 0.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, 1.0, nan_value, sqrt_eps_value));
+        @expect(!approx_eq_rel(T, nan_value, nan_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, inf_value, inf_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, min_value, min_value, sqrt_eps_value));
+        @expect(approx_eq_rel(T, -min_value, -min_value, sqrt_eps_value));
+    }
+
+    comptime {
+        // `comptime_float` is guaranteed to have the same precision and operations of
+        // the largest other floating point type, which is f128 but it doesn't have a
+        // defined layout so we can't rely on `@bitCast` to construct the smallest
+        // possible epsilon value like we do in the tests above. In the same vein, we
+        // also can't represent a max/min, `NaN` or `Inf` values.
+        const eps_value = 1e-4;
+        const sqrt_eps_value = sqrt.sqrt(eps_value);
+
+        @expect(approx_eq_rel(comptime_float, 1.0, 1.0, sqrt_eps_value));
+        @expect(!approx_eq_rel(comptime_float, 1.0, 0.0, sqrt_eps_value));
+    }
+}
+
+pub const @"f80" = struct {
+    pub fraction: u64,
+    pub exp: u16,
+
+    pub const to_float = fn(self): f80 {
+        let int = (@as(u80, self.exp) << 64) | self.fraction;
+        return @bitCast(int);
+    };
+
+    pub const from_float = fn(x: f80): @"f80" {
+        let int = @bitCast(u80, x);
+        return .{
+            .fraction = @truncate(u64, int),
+            .exp = @truncate(u16, int >> 64),
+        };
+    };
+};

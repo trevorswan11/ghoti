@@ -1,4 +1,4 @@
-R"(pub const Os := enum {
+R"(pub const Os = enum {
     linux,
     macos,
     ios,
@@ -16,7 +16,7 @@ R"(pub const Os := enum {
     _,
 };
 
-pub const Arch := enum {
+pub const Arch = enum {
     x86_64,
     x86,
     aarch64,
@@ -33,10 +33,11 @@ pub const Arch := enum {
     s390x,
     loongarch64,
     sparc64,
+    sparc,
     _,
 };
 
-pub const Abi := enum {
+pub const Abi = enum {
     gnu,
     gnueabi,
     gnueabihf,
@@ -46,6 +47,7 @@ pub const Abi := enum {
     musleabi,
     musleabihf,
     msvc,
+    android,
     eabi,
     eabihf,
     itanium,
@@ -53,31 +55,29 @@ pub const Abi := enum {
     _,
 };
 
-pub const Family := enum { unix, windows, wasm, other, _ };
-pub const Endian := enum { little, big };
+pub const Family = enum { unix, windows, wasm, other, _ };
+pub const Endian = enum { little, big };
 
-pub const MemoryOrder := enum { relaxed, acquire, release, acq_rel, seq_cst };
-pub const AtomicRmwOp := enum {
+pub const MemoryOrder = enum { relaxed, acquire, release, acq_rel, seq_cst };
+pub const AtomicRmwOp = enum {
     xchg, add, sub, band, nand, bor, bxor, max, min, umax, umin,
 };
 
-pub const SourceLocation := struct {
+pub const SourceLocation = struct {
     pub file: []u8,
     pub line: u32,
     pub column: u32,
 };
 
-pub const Test := struct {
+pub const Test = struct {
     pub name: []u8,
-    pub file: []u8,
-    pub line: u32,
-    pub column: u32,
-    pub func: fn(): bool,
+    pub loc: SourceLocation,
+    pub func: extern fn(): bool,
 };
 
 /// Control flow tagged union for single-match nominal unwrapping (`?` and `!`).
-pub const Flow := fn(C: type, R: type): type {
-    return union {
+pub const Flow = fn(comptime C: type, comptime R: type): type {
+    return union(enum) {
         @"continue": C, /// Holds the success payload
         @"break": R, /// Holds the early-return residual
     };
@@ -85,26 +85,76 @@ pub const Flow := fn(C: type, R: type): type {
 
 /// Interface implemented by types supporting postfix `?` and `!` unwrapping.
 /// Maps the instance into a `Flow(Output, Residual)` union via `branch(self)`.
-pub const Unwrappable := interface {
+pub const Unwrappable = interface {
     Output: type;
     Residual: type;
-    pub const branch := fn(self): Flow(Output, Residual);
+    pub const branch = fn(&mut? self): Flow(&mut? Output, Residual);
 };
 
 /// Interface implemented by enclosing function return types to construct an early-return
 /// value from an unwrap expression's residual payload during `?` propagation.
-pub const Rewrappable := interface {
+pub const Rewrappable = interface {
     From: type;
-    pub const fromResidual := fn(r: From): @This();
+    pub const from_residual = fn(r: From): @This();
 };
+
+/// What a value means as the process's exit code, so `main` can return it: any type implementing
+/// this, or a `Result(S, E)` whose `E` implements it and whose `S` is `void` or implements it.
+pub const ExitCode = interface {
+    pub const to_exit_code = fn(&self): i32;
+};
+
+impl ExitCode for i8 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i16 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i32 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for i64 {
+    pub const to_exit_code = fn(&self): i32 { return @truncate(i32, *self); };
+}
+
+impl ExitCode for isize {
+    pub const to_exit_code = fn(&self): i32 {
+        return if comptime (@bitSizeOf(isize) == 32) @bitCast(i32, *self) else @truncate(i32, *self);
+    };
+}
+
+impl ExitCode for u8 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for u16 {
+    pub const to_exit_code = fn(&self): i32 { return *self; };
+}
+
+impl ExitCode for u32 {
+    pub const to_exit_code = fn(&self): i32 { return @bitCast(i32, *self); };
+}
+
+impl ExitCode for u64 {
+    pub const to_exit_code = fn(&self): i32 { return @truncate(i32, *self); };
+}
+
+impl ExitCode for usize {
+    pub const to_exit_code = fn(&self): i32 {
+        return if comptime (@bitSizeOf(usize) == 32) @bitCast(i32, *self) else @truncate(i32, *self);
+    };
+}
 
 extern const __ghoti_test_take_skipped: fn(): bool;
 
-pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
-    var failures: i32 = 0;
-    var skipped: i32 = 0;
+pub weak const test_runner = fn(_: [][:0]u8, tests: []Test): i32 {
+    let mut failures: i32 = 0;
+    let mut skipped: i32 = 0;
     for (tests) |entry| {
-        const passed := entry.func();
+        let passed = entry.func();
         if (__ghoti_test_take_skipped()) {
             skipped += 1;
         } else if (!passed) {
@@ -115,55 +165,90 @@ pub weak const test_runner := fn(_: [][:0]u8, tests: []Test): i32 {
     return failures;
 };
 
-pub weak const panic_handler := fn(_: []u8, _: []u8, _: u32, _: u32): noreturn {
+pub weak const panic_handler = fn(_: []u8, _: SourceLocation): noreturn {
     @trap();
 };
 
-pub weak const assert_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {
+pub weak const assert_handler = fn(_: []u8, _: SourceLocation): void {
     @trap();
 };
 
-pub weak const expect_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+pub weak const expect_handler = fn(_: []u8, _: SourceLocation): void {};
 
-pub weak const require_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
+pub weak const require_handler = fn(_: []u8, _: SourceLocation): void {};
 
-pub weak const skip_handler := fn(_: []u8, _: []u8, _: u32, _: u32): void {};
-
-/// The kind of a type, as returned by `@typeInfo(T).kind` / `@tagName`.
-pub const TypeKind := enum {
-    int, float, @"bool", @"void", @"noreturn", @"opaque", @"type",
-    pointer, reference, slice, array,
-    @"struct", @"union", @"enum", function, internal,
-};
+pub weak const skip_handler = fn(_: []u8, _: SourceLocation): void {};
 
 /// Exact set of calling conventions ghoti supports, matching `ast::calling_convention` 1:1.
-pub const CallConv := enum { c, sysv, win64, stdcall, fastcall, aapcs };
+pub const CallConv = enum { c, sysv, win64, stdcall, fastcall, aapcs, winapi };
 
-pub const IntInfo := struct {
-    pub bits: u16,
-    pub signed: bool,
-    pub is_constexpr: bool,
+/// How likely a branch is to run, for `@branchHint`
+pub const BranchHint = enum { none, likely, unlikely, cold, unpredictable };
+
+/// The build mode `--mode` selected
+pub const OptimizeMode = enum { debug, release_safe, release_fast, release_small };
+
+/// How an `@[inline(...)]` function is inlined; `default` leaves
+/// the choice to the optimizer, as if no `inline` were written.
+pub const Inline = enum { always, never, hint, default };
+
+/// Who outside the linked image can see a symbol, for `@[visibility(...)]`;
+/// `protected` exists only in ELF.
+pub const Visibility = enum { default, hidden, protected };
+
+/// Whether another definition of an `@export`ed symbol may replace it at link time.
+pub const Linkage = enum { strong, @"weak" };
+
+/// How `@call(modifier, f, args...)` makes its call; an `always_*` that can't be honored, or a
+/// `compile_time` call that can't be folded, is a compile error
+pub const CallModifier = enum {
+    /// An ordinary call, as `f(args...)`
+    @"auto",
+    /// Never a tail call, so the return address names this call site
+    never_tail,
+    /// Never inlined
+    never_inline,
+    /// Always a tail call: the call must be returned directly, and `f`'s signature must match the
+    /// caller's
+    always_tail,
+    /// Always inlined at this call site
+    always_inline,
+    /// Evaluated at compile time
+    compile_time,
 };
 
-pub const FloatInfo := struct {
-    pub bits: u16,
-    pub is_constexpr: bool,
+/// How `@export(f, options)` defines `f` under another symbol name.
+pub const ExportOptions = struct {
+    pub name: [:0]u8,
+    pub linkage: Linkage = .strong,
+    pub visibility: Visibility = .default,
 };
 
-pub const PointerInfo := struct {
+pub const Signedness = enum : u1 { signed, unsigned };
+
+pub const IntInfo = struct {
+    pub bits: u16,
+    pub signedness: Signedness,
+};
+
+pub const FloatInfo = struct {
+    pub bits: u16,
+};
+
+pub const PointerInfo = struct {
     pub child: type,
     pub is_mut: bool,
     pub is_volatile: bool,
 };
 
-pub const SliceInfo := struct {
+pub const SliceInfo = struct {
     pub child: type,
     pub sentinel: bool,
     pub is_mut: bool,
     pub is_volatile: bool,
 };
 
-pub const ArrayInfo := struct {
+pub const ArrayInfo = struct {
     pub child: type,
     pub len: usize,
     pub sentinel: bool,
@@ -171,55 +256,80 @@ pub const ArrayInfo := struct {
     pub is_volatile: bool,
 };
 
-pub const StructFieldInfo := struct {
+pub const StructFieldInfo = struct {
     pub name: []u8,
     pub @"type": type,
     /// The field's default value, cast through `^opaque`, or `nullptr` for none.
     pub default_value: ^opaque = nullptr,
+    /// The field's `@[align(n)]`, or 0 when it keeps its type's natural alignment.
+    pub alignment: usize = 0,
+    /// Whether the field is `pub`, readable from other modules like a hand-written `pub` field.
+    pub is_pub: bool = false,
 };
 
-pub const StructInfo := struct {
+pub const StructInfo = struct {
     pub fields: []StructFieldInfo,
     pub is_extern: bool,
     pub is_packed: bool,
     pub backing_bits: u32,
 };
 
-pub const UnionFieldInfo := struct {
+pub const UnionFieldInfo = struct {
     pub name: []u8,
     pub @"type": type,
 };
 
-pub const UnionInfo := struct {
+pub const UnionInfo = struct {
     pub fields: []UnionFieldInfo,
     pub is_extern: bool,
     pub is_packed: bool,
     pub tagged: bool,
+    /// The enum a `union(MyEnum)` is tagged by; `void` for `union(enum)` and untagged unions
+    pub tag_type: type = void,
 };
 
-pub const EnumFieldInfo := struct {
+pub const EnumFieldInfo = struct {
     pub name: []u8,
-    pub value: constexpr_int,
+    pub value: comptime_int,
 };
 
-pub const EnumInfo := struct {
+pub const EnumInfo = struct {
     pub tag_type: type,
     pub fields: []EnumFieldInfo,
     pub exhaustive: bool,
 };
 
-pub const FnInfo := struct {
+pub const FnInfo = struct {
     pub params: []type,
     pub return_type: type,
     pub variadic: bool,
     pub has_self: bool,
     pub @"callconv": CallConv,
+    /// `true` for a `{ctx, code}` callable (`fn(...)`), `false` for a thin code pointer
+    /// (`extern fn(...)` or a function's own type)
+    pub erased: bool = true,
+    /// The rest reflect the `@[...]` attributes of a function *declaration* passed to
+    /// `@typeInfo`; a bare function type reports these defaults.
+    pub inline_mode: Inline = .default,
+    pub naked: bool = false,
+    /// The function's `@[no_builtins]`.
+    pub no_builtins: bool = false,
+    pub discardable: bool = false,
+    /// Opened by `@branchHint(.cold)`.
+    pub cold: bool = false,
+    /// The function's `@[align(n)]`, or 0 for the target's default.
+    pub alignment: usize = 0,
+    /// The function's `@[visibility(...)]`.
+    pub visibility: Visibility = .default,
 };
 
-/// The keystone reflection value: `@typeInfo(T)` returns one of these, tagged by `TypeKind`.
-pub const TypeInfo := union {
+/// The keystone reflection value: `@typeInfo(T)` returns one of these.
+pub const TypeInfo = union(enum) {
     int: IntInfo,
     float: FloatInfo,
+    @"comptime_int": void,
+    @"comptime_float": void,
+    enum_literal: void,
     @"bool": void,
     @"void": void,
     @"noreturn": void,

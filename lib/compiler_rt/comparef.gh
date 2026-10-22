@@ -1,0 +1,365 @@
+//! Ported from:
+//!
+//! https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/comparef.zig
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const math = std.math;
+const symbol = compiler_rt.symbol;
+
+const Unordered = match comptime (@targetArch()) {
+    .aarch64 => i32,
+    _ => if comptime (@bitSizeOf(c_long) >= @bitSizeOf(usize)) c_long else c_longlong,
+};
+const Order = enum : Unordered { lt = -1, eq = 0, gt = 1 };
+
+comptime {
+    @cfg (compiler_rt.want_aeabi) {
+        symbol(__aeabi_fcmplt, "__aeabi_fcmplt");
+        symbol(__aeabi_fcmple, "__aeabi_fcmple");
+        symbol(__aeabi_fcmpeq, "__aeabi_fcmpeq");
+        symbol(__aeabi_fcmpgt, "__aeabi_fcmpgt");
+        symbol(__aeabi_fcmpge, "__aeabi_fcmpge");
+        symbol(__aeabi_fcmpun, "__aeabi_fcmpun");
+
+        symbol(__aeabi_dcmplt, "__aeabi_dcmplt");
+        symbol(__aeabi_dcmple, "__aeabi_dcmple");
+        symbol(__aeabi_dcmpeq, "__aeabi_dcmpeq");
+        symbol(__aeabi_dcmpgt, "__aeabi_dcmpgt");
+        symbol(__aeabi_dcmpge, "__aeabi_dcmpge");
+        symbol(__aeabi_dcmpun, "__aeabi_dcmpun");
+    }
+
+    symbol(__cmpsf2, "__cmpsf2");
+    symbol(__cmpsf2, "__eqsf2");
+    symbol(__cmpsf2, "__nesf2");
+    symbol(__cmpsf2, "__ltsf2");
+    symbol(__cmpsf2, "__lesf2");
+    symbol(__gesf2, "__gtsf2");
+    symbol(__gesf2, "__gesf2");
+    symbol(__unordsf2, "__unordsf2");
+
+    symbol(__cmpdf2, "__cmpdf2");
+    symbol(__cmpdf2, "__eqdf2");
+    symbol(__cmpdf2, "__nedf2");
+    symbol(__cmpdf2, "__ltdf2");
+    symbol(__cmpdf2, "__ledf2");
+    symbol(__gedf2, "__gtdf2");
+    symbol(__gedf2, "__gedf2");
+    symbol(__unorddf2, "__unorddf2");
+
+    symbol(__cmpxf2, "__cmpxf2");
+    symbol(__cmpxf2, "__eqxf2");
+    symbol(__cmpxf2, "__nexf2");
+    symbol(__cmpxf2, "__ltxf2");
+    symbol(__cmpxf2, "__lexf2");
+    symbol(__gexf2, "__gtxf2");
+    symbol(__gexf2, "__gexf2");
+    symbol(__unordxf2, "__unordxf2");
+
+    symbol(__cmptf2, "__cmptf2");
+    symbol(__cmptf2, "__eqtf2");
+    symbol(__cmptf2, "__netf2");
+    symbol(__cmptf2, "__lttf2");
+    symbol(__cmptf2, "__letf2");
+    symbol(__getf2, "__gttf2");
+    symbol(__getf2, "__getf2");
+    symbol(__unordtf2, "__unordtf2");
+}
+
+@cfg (compiler_rt.want_aeabi) {
+    const __aeabi_fcmplt = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.lt));
+    };
+
+    const __aeabi_fcmple = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f32(a, b).eq(Order.gt));
+    };
+
+    const __aeabi_fcmpeq = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.eq));
+    };
+
+    const __aeabi_fcmpgt = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f32(a, b).eq(Order.gt));
+    };
+
+    const __aeabi_fcmpge = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f32(a, b).eq(Order.lt));
+    };
+
+    const __aeabi_fcmpun = fn(a: f32, b: f32) callconv(.aapcs): i32 {
+        return @intFromBool(unord_f32(a, b));
+    };
+
+    const __aeabi_dcmplt = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.lt));
+    };
+
+    const __aeabi_dcmple = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f64(a, b).eq(Order.gt));
+    };
+
+    const __aeabi_dcmpeq = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.eq));
+    };
+
+    const __aeabi_dcmpgt = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(cmp_f64(a, b).eq(Order.gt));
+    };
+
+    const __aeabi_dcmpge = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(!cmp_f64(a, b).eq(Order.lt));
+    };
+
+    const __aeabi_dcmpun = fn(a: f64, b: f64) callconv(.aapcs): i32 {
+        return @intFromBool(unord_f64(a, b));
+    };
+}
+
+const __cmpsf2 = fn(a: f32, b: f32) callconv(.c): Order {
+    return cmp_f32(a, b).unwrap_or(.gt);
+};
+
+const __gesf2 = fn(a: f32, b: f32) callconv(.c): Order {
+    return cmp_f32(a, b).unwrap_or(.lt);
+};
+
+const __unordsf2 = fn(a: f32, b: f32) callconv(.c): Unordered {
+    return @intFromBool(unord_f32(a, b));
+};
+
+@[inline(.always)] const cmp_f32 = fn(a: f32, b: f32): std.Option(Order) {
+    return cmpf2(f32, a, b);
+};
+
+@[inline(.always)] const unord_f32 = fn(a: f32, b: f32): bool {
+    return unord(f32, a, b);
+};
+
+// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/comparesf2_test.zig
+test "compare f32" {
+    const arguments = [_]f32{
+        std.math.nan(f32),
+        -std.math.inf(f32),
+        -0x1.fffffep127,
+        -0x1.000002p0 - 0x1.000000p0,
+        -0x1.fffffep-1,
+        -0x1.000000p-126,
+        -0x0.fffffep-126,
+        -0x0.000002p-126,
+        -0.0,
+        0.0,
+        0x0.000002p-126,
+        0x0.fffffep-126,
+        0x1.000000p-126,
+        0x1.fffffep-1,
+        0x1.000000p0,
+        0x1.000002p0,
+        0x1.fffffep127,
+        std.math.inf(f32),
+    };
+
+    for (arguments, 0..) |arg_i, i| {
+        for (arguments, 0..) |arg_j, j| {
+            let expected_unord = i == 0 or j == 0;
+            @expect(expected_unord == unord_f32(arg_i, arg_j));
+
+            let expected_order: std.Option(
+                Order
+            ) = if (expected_unord) .empty
+                else match (std.math.order(i - @intFromBool(i >= 9), j - @intFromBool(j >= 9))) {
+                    .lt => .of(.lt),
+                    .eq => .of(.eq),
+                    .gt => .of(.gt),
+                };
+            @expect(expected_order.eq(cmp_f32(arg_i, arg_j)));
+        }
+    }
+}
+
+const __cmpdf2 = fn(a: f64, b: f64) callconv(.c): Order {
+    return cmp_f64(a, b).unwrap_or(.gt);
+};
+
+const __gedf2 = fn(a: f64, b: f64) callconv(.c): Order {
+    return cmp_f64(a, b).unwrap_or(.lt);
+};
+
+const __unorddf2 = fn(a: f64, b: f64) callconv(.c): Unordered {
+    return @intFromBool(unord_f64(a, b));
+};
+
+@[inline(.always)] const cmp_f64 = fn(a: f64, b: f64): std.Option(Order) {
+    return cmpf2(f64, a, b);
+};
+
+@[inline(.always)] const unord_f64 = fn(a: f64, b: f64): bool {
+    return unord(f64, a, b);
+};
+
+// https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/compiler_rt/comparedf2_test.zig
+test "compare f64" {
+    const arguments = [_]f64{
+        std.math.nan(f64),
+        -std.math.inf(f64),
+        -0x1.fffffffffffffp1023,
+        -0x1.0000000000001p0 - 0x1.0000000000000p0,
+        -0x1.fffffffffffffp-1,
+        -0x1.0000000000000p-1022,
+        -0x0.fffffffffffffp-1022,
+        -0x0.0000000000001p-1022,
+        -0.0,
+        0.0,
+        0x0.0000000000001p-1022,
+        0x0.fffffffffffffp-1022,
+        0x1.0000000000000p-1022,
+        0x1.fffffffffffffp-1,
+        0x1.0000000000000p0,
+        0x1.0000000000001p0,
+        0x1.fffffffffffffp1023,
+        std.math.inf(f64),
+    };
+
+    for (arguments, 0..) |arg_i, i| {
+        for (arguments, 0..) |arg_j, j| {
+            let expected_unord = i == 0 or j == 0;
+            @expect(expected_unord == unord_f64(arg_i, arg_j));
+
+            let expected_order: std.Option(
+                Order
+            ) = if (expected_unord) .empty
+                else match (std.math.order(i - @intFromBool(i >= 9), j - @intFromBool(j >= 9))) {
+                    .lt => .of(.lt),
+                    .eq => .of(.eq),
+                    .gt => .of(.gt),
+                };
+            @expect(expected_order.eq(cmp_f64(arg_i, arg_j)));
+        }
+    }
+}
+
+const __cmpxf2 = fn(a: f80, b: f80) callconv(.c): Order {
+    return cmp_f80(a, b).unwrap_or(.gt);
+};
+
+const __gexf2 = fn(a: f80, b: f80) callconv(.c): Order {
+    return cmp_f80(a, b).unwrap_or(.lt);
+};
+
+const __unordxf2 = fn(a: f80, b: f80) callconv(.c): Unordered {
+    return @intFromBool(unord_f80(a, b));
+};
+
+@[inline(.always)] const cmp_f80 = fn(a: f80, b: f80): std.Option(Order) {
+    const significand_bits = math.float_mantissa_bits(f80);
+    const int_bit = 0x8000000000000000;
+    const sign_bit = 0x8000;
+    const special_exp = 0x7FFF;
+
+    let a_rep: math.f80 = .from_float(a);
+    let b_rep: math.f80 = .from_float(b);
+
+    // If either a or b is NaN, they are unordered.
+    if ((a_rep.exp & special_exp == special_exp and a_rep.fraction ^ int_bit != 0) or
+        (b_rep.exp & special_exp == special_exp and b_rep.fraction ^ int_bit != 0)) {
+        return .empty;
+    }
+
+    // If a and b are both zeros, they are equal.
+    if ((a_rep.fraction | b_rep.fraction) | ((a_rep.exp | b_rep.exp) & special_exp) == 0) {
+        return .of(.eq);
+    }
+
+    if (a_rep.exp == b_rep.exp and a_rep.fraction == b_rep.fraction) {
+        return .of(.eq);
+    } else if (a_rep.exp & sign_bit != b_rep.exp & sign_bit) {
+        // signs are different
+        if (@bitCast(i16, a_rep.exp) < @bitCast(i16, b_rep.exp)) {
+            return .of(.lt);
+        }
+        return .of(.gt);
+    } else {
+        let a_fraction = a_rep.fraction | (@as(u80, a_rep.exp) << significand_bits);
+        let b_fraction = b_rep.fraction | (@as(u80, b_rep.exp) << significand_bits);
+        if ((a_fraction < b_fraction) == (a_rep.exp & sign_bit == 0)) {
+            return .of(.lt);
+        }
+        return .of(.gt);
+    }
+};
+
+@[inline(.always)] const unord_f80 = fn(a: f80, b: f80): bool {
+    return unord(f80, a, b);
+};
+
+const __cmptf2 = fn(a: f128, b: f128) callconv(.c): Order {
+    return cmp_f128(a, b).unwrap_or(.gt);
+};
+
+const __getf2 = fn(a: f128, b: f128) callconv(.c): Order {
+    return cmp_f128(a, b).unwrap_or(.lt);
+};
+
+const __unordtf2 = fn(a: f128, b: f128) callconv(.c): Unordered {
+    return @intFromBool(unord_f128(a, b));
+};
+
+@[inline(.always)] const cmp_f128 = fn(a: f128, b: f128): std.Option(Order) {
+    return cmpf2(f128, a, b);
+};
+
+@[inline(.always)] const unord_f128 = fn(a: f128, b: f128): bool {
+    return unord(f128, a, b);
+};
+
+@[inline(.always)] const cmpf2 = fn(comptime T: type, a: T, b: T): std.Option(Order) {
+    const bits = @typeInfo(T).float.bits;
+    const SRep = @Int(.{ .signedness = .signed, .bits = bits });
+    const Rep = @Int(.{ .signedness = .unsigned, .bits = bits });
+
+    const significand_bits = std.math.float_mantissa_bits(T);
+    const exponent_bits = std.math.float_exponent_bits(T);
+    const sign_bit = @as(Rep, 1) << (significand_bits + exponent_bits);
+    const abs_mask = sign_bit - 1;
+    const inf_rep = @bitCast(Rep, std.math.inf(T));
+
+    let a_int = @bitCast(SRep, a);
+    let b_int = @bitCast(SRep, b);
+    let a_abs = @bitCast(Rep, a_int) & abs_mask;
+    let b_abs = @bitCast(Rep, b_int) & abs_mask;
+
+    // If either a or b is NaN, they are unordered
+    if (a_abs > inf_rep or b_abs > inf_rep) return .empty;
+
+    // If a and be are both zeroes, they are equal
+    if ((a_abs | b_abs) == 0) return .of(.eq);
+
+    // If at least one of a and b is positive, we get the same result comparing
+    // a and b as signed integers as we would with a floating-point compare
+    if ((a_int & b_int) >= 0) {
+        if (a_int < b_int) return .of(.lt);
+        if (a_int == b_int) return .of(.eq);
+        return .of(.gt);
+    }
+
+    // Otherwise, both are negative, so we need to flip the sense of the
+    // comparison to get the correct result.
+    if (a_int > b_int) return .of(.lt);
+    if (a_int == b_int) return .of(.eq);
+    return .of(.gt);
+};
+
+@[inline(.always)] const unord = fn(comptime T: type, a: T, b: T): bool {
+    const Rep = @Int(.{ .signedness = .unsigned, .bits = @typeInfo(T).float.bits });
+
+    const significand_bits = std.math.float_mantissa_bits(T);
+    const exponent_bits = std.math.float_exponent_bits(T);
+    const sign_bit = @as(Rep, 1) << (significand_bits + exponent_bits);
+    const abs_mask = sign_bit - 1;
+    const inf_rep = @bitCast(Rep, std.math.inf(T));
+
+    let a_abs = @bitCast(Rep, a) & abs_mask;
+    let b_abs = @bitCast(Rep, b) & abs_mask;
+    return a_abs > inf_rep or b_abs > inf_rep;
+};

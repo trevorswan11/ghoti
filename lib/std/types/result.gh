@@ -1,21 +1,234 @@
-pub constexpr Result := fn(T: type, E: type): type {
-    return union { ok: T, err: E };
+import std;
+
+pub const Result = fn(comptime T: type, comptime E: type): type {
+    return union(enum) {
+        ok: T,
+        err: E,
+
+        pub const of = fn(val: T): @This() {
+            return .{ .ok = val };
+        };
+
+        pub const fail = fn(e: E): @This() {
+            return .{ .err = e };
+        };
+
+        /// The successful result of a `Result(void, E)`
+        pub const done: @This() = .{ .ok = {} };
+
+        /// Checks that the result is equal to the passed T, E, or Result(T, E)
+        ///
+        /// If T == E, only the comparison for T will be evaluated
+        pub const eq = fn(&self, val: auto): bool {
+            const Val = @TypeOf(val);
+            if comptime (@This() == Val) {
+                return match (self) {
+                    .ok => |a| match (val) {
+                        .ok => |b| a == b,
+                        .err => false,
+                    },
+                    .err => |a| match (val) {
+                        .ok => false,
+                        .err => |b| a == b,
+                    },
+                };
+            } else if comptime (T == Val) {
+                return match (self) {
+                    .ok => |a| a == val,
+                    .err => false,
+                };
+            } else if comptime (E == Val) {
+                return match (self) {
+                    .ok => |a| false,
+                    .err => |e| e == val,
+                };
+            } else if comptime (std.math.compares_numerically(T, Val)) {
+                return match (self) {
+                    .ok => |a| std.math.numeric_eq(a, val),
+                    .err => false,
+                };
+            } else if comptime (std.math.compares_numerically(E, Val)) {
+                return match (self) {
+                    .ok => false,
+                    .err => |e| std.math.numeric_eq(e, val),
+                };
+            } else @compileError(
+                "Result.eq expects Result(T, E), T, or E, found " ++ @typeName(Val),
+            );
+        };
+
+        pub const map = fn(&self, func: impl Fn(val: T): auto): Result(
+            std.meta.return_type(@TypeOf(func)),
+            E
+        ) {
+            return match (self) {
+                .ok => |happy| .{ .ok = func(happy) },
+                .err => |sad| .{ .err = sad },
+            };
+        };
+
+        pub const map_err = fn(&self, func: impl Fn(err: E): auto): Result(
+            T,
+            std.meta.return_type(@TypeOf(func))
+        ) {
+            return match (self) {
+                .ok => |happy| .{ .ok = happy },
+                .err => |sad| .{ .err = func(sad) },
+            };
+        };
+    };
 };
 
+test "Result constructors build each variant" {
+    let a: Result(i32, bool) = .of(1);
+    @expect(match (a) {
+        .ok => |v| v == 1,
+        .err => false,
+    });
+
+    let b: Result(i32, bool) = .fail(true);
+    @expect(match (b) {
+        .ok => false,
+        .err => |e| e,
+    });
+
+    let c: Result(void, bool) = .done;
+    @expect(c == .ok);
+    let d: Result(void, bool) = .fail(false);
+    @expect(d == .err);
+}
+
+test "Result.eq on T" {
+    let mut r: Result(i32, bool) = .of(1);
+    @expect(r.eq(1));
+    @expect(!r.eq(2));
+    r = .fail(true);
+    @expect(!r.eq(1));
+}
+
+test "Result.eq on Result(T, E)" {
+    {
+        let r1: Result(i32, bool) = .of(1);
+        let r2: Result(i32, bool) = .of(1);
+        @expect(r1.eq(r2));
+    }
+
+    {
+        let r1: Result(i32, bool) = .of(1);
+        let r2: Result(i32, bool) = .of(2);
+        @expect(!r1.eq(r2));
+    }
+
+    {
+        let r1: Result(u8, i9) = .fail(-3);
+        let r2: Result(u8, i9) = .fail(-3);
+        @expect(r1.eq(r2));
+    }
+
+    {
+        let r1: Result(i32, i32) = .of(4);
+        let r2: Result(i32, i32) = .fail(4);
+        @expect(!r1.eq(r2));
+        @expect(!r2.eq(r1));
+    }
+
+    {
+        let r1: Result(void, bool) = .done;
+        let r2: Result(void, bool) = .done;
+        @expect(r1.eq(r2));
+        let r3: Result(void, bool) = .fail(false);
+        @expect(!r1.eq(r3));
+    }
+
+    {
+        let r1: Result(bool, i32) = .fail(1);
+        @expect(r1.eq(1i32));
+    }
+}
+
+test "Result.eq on an untyped literal" {
+    let r: Result(usize, bool) = .of(3);
+    @expect(r.eq(3));
+    @expect(!r.eq(-3));
+    let f: Result(f32, bool) = .of(0.5);
+    @expect(f.eq(0.5));
+
+    let failed: Result(usize, bool) = .fail(true);
+    @expect(!failed.eq(3));
+    @expect(failed.eq(true));
+}
+
+test "Result.eq prefers an exact E over a numeric T" {
+    let r: Result(usize, i32) = .fail(3);
+    @expect(r.eq(3i32)); // an `i32` compares against the error
+    let ok: Result(usize, i32) = .of(3);
+    @expect(!ok.eq(3i32));
+    @expect(ok.eq(3uz));
+    // An untyped `3` stays `comptime_int` and compares numerically against the payload
+    @expect(ok.eq(3));
+    @expect(!r.eq(3));
+}
+
+test "Result.map transforms ok variant" {
+    let a: Result(i32, bool) = .{ .ok = 1 };
+    let mapped = a.map(fn(val: i32): []u8 {
+        return "Hello, World!";
+    });
+
+    @expect(match (mapped) {
+        .ok => |o| std.mem.eql(u8, o, "Hello, World!"),
+        .err => false,
+    });
+}
+
+test "Result.map_err transforms error variant" {
+    let a: Result(void, i32) = .{ .err = 1 };
+    let mapped = a.map_err(fn(val: i32): bool {
+        return false;
+    });
+
+    @expect(match (mapped) {
+        .ok => false,
+        .err => |e| e == false,
+    });
+
+    let b: Result(void, i32) = .{ .err = 2 };
+    let mapped_u8 = b.map_err(fn(_: i32): u8 {
+        return 7;
+    });
+
+    @expect(match (mapped_u8) {
+        .ok => false,
+        .err => |e| e == 7,
+    });
+}
+
+test "Result.map takes a capturing closure" {
+    let offset: i64 = 40;
+    let a: Result(i32, bool) = .of(2);
+    let mapped = a.map(fn(val: i32): i64 {
+        return @as(i64, val) + offset;
+    });
+    @expect(match (mapped) {
+        .ok => |o| o == 42,
+        .err => false,
+    });
+}
+
 impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
-    using Output = T;
-    using Residual = E;
-    pub const branch := fn(self): builtin.Flow(T, E) {
+    const Output = T;
+    const Residual = E;
+    pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
         return match (self) {
-            .ok => |v| builtin.Flow(T, E){ .@"continue" = v },
-            .err => |e| builtin.Flow(T, E){ .@"break" = e },
+            .ok => |&mut? v| .{ .continue = v },
+            .err => |e| .{ .break = e },
         };
     };
 }
 
 impl(T: type, E: type) builtin.Rewrappable for Result(T, E) {
-    using From = E;
-    pub const fromResidual := fn(r: E): @This() {
+    const From = E;
+    pub const from_residual = fn(r: E): @This() {
         return .{ .err = r };
     };
 }

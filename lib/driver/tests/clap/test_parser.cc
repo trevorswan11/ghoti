@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -11,11 +12,13 @@
 
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/sema/context.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
+#include "driver/cmd/build/run.hh"
 #include "driver/cmd/build/test.hh"
 #include "driver/cmd/repl/shell.hh"
 #include "support/subprocess.hh"
@@ -35,7 +38,7 @@ TEST_CASE("REPL subcommand parser") {
     mock_argv    args{"ghoti", "repl"};
     clap::parser parser{args.argc(), args.argv(), std::cerr, false};
     auto         cmd{UNWRAP(parser.parse())};
-    CHECK(dynamic_cast<cmd::shell*>(cmd.get()));
+    CHECK(cmd->is<cmd::shell>());
 }
 
 TEST_CASE("build-obj subcommand parser") {
@@ -43,7 +46,7 @@ TEST_CASE("build-obj subcommand parser") {
         mock_argv    args{"ghoti", "build-obj", "src/main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/main.gh");
@@ -57,102 +60,98 @@ TEST_CASE("build-obj subcommand parser") {
         mock_argv    args{"ghoti", "build-obj", "-o", "bin/out.o", "main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "main.gh");
         CHECK(opts.output_path == "bin/out.o");
     }
 
-    SECTION("Runtime safety defaults on and --unsafe turns it off") {
-        {
-            mock_argv    args{"ghoti", "build-obj", "main.gh"};
+    SECTION("Runtime safety follows the build mode") {
+        const auto safety_for{[](std::string_view mode) {
+            mock_argv    args{"ghoti", "build-obj", "--mode", std::string{mode}, "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK(build_cmd.get_opts().runtime_safety);
-        }
-        {
-            mock_argv    args{"ghoti", "build-obj", "--unsafe", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            CHECK_FALSE(build_cmd.get_opts().runtime_safety);
-        }
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
+            return build_cmd.get_opts().runtime_safety;
+        }};
+        CHECK(safety_for("debug"));
+        CHECK(safety_for("release_safe"));
+        CHECK_FALSE(safety_for("release_fast"));
+        CHECK_FALSE(safety_for("release_small"));
     }
 
     SECTION("Target options parsing") {
         mock_argv    args{"ghoti",
-                       "build-obj",
-                       "--target",
-                       "x86_64-unknown-linux-gnu",
-                       "--cpu",
-                       "skylake",
-                       "--features",
-                       "+avx2",
-                       "main.gh"};
+                          "build-obj",
+                          "--target",
+                          "x86_64-unknown-linux-gnu",
+                          "--cpu",
+                          "skylake",
+                          "--features",
+                          "+avx2",
+                          "main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
         const auto&  target_opts{build_cmd.get_opts().target_opts};
         CHECK(UNWRAP(target_opts.triple_str) == "x86_64-unknown-linux-gnu");
         CHECK(target_opts.cpu == "skylake");
         CHECK(target_opts.features == "+avx2");
     }
 
-    SECTION("Optimization flag parsing") {
-        SECTION("Default is O0") {
+    SECTION("Build mode parsing") {
+        SECTION("Default is debug at O0") {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
+            CHECK(opts.mode == sema::optimize_mode::DEBUG);
             CHECK(opts.opt_opts.level == codegen::opt_level::O0);
         }
 
-        SECTION("Release flag sets O2 default") {
-            mock_argv    args{"ghoti", "build-obj", "--release", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::O2);
-        }
-
-        SECTION("Explicit -O flags override default") {
-            mock_argv    args{"ghoti", "build-obj", "-O3", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::O3);
-        }
-
-        SECTION("Explicit -Os and -Oz flags") {
-            mock_argv    args{"ghoti", "build-obj", "-Os", "main.gh"};
-            clap::parser parser{args.argc(), args.argv(), std::cerr, false};
-            auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
-            const auto&  opts{build_cmd.get_opts()};
-            CHECK(opts.opt_opts.level == codegen::opt_level::Os);
+        SECTION("Each release mode picks its optimization level") {
+            const auto level_for{[](std::string_view flag, std::string_view mode) {
+                mock_argv args{
+                    "ghoti", "build-obj", std::string{flag}, std::string{mode}, "main.gh"};
+                clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+                auto         cmd{UNWRAP(parser.parse())};
+                auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
+                return build_cmd.get_opts().opt_opts.level;
+            }};
+            CHECK(level_for("--mode", "release_safe") == codegen::opt_level::O2);
+            CHECK(level_for("--mode", "release_fast") == codegen::opt_level::O3);
+            CHECK(level_for("-M", "release_small") == codegen::opt_level::Oz);
         }
 
         SECTION("Pass debugging and timing flags") {
             mock_argv    args{"ghoti", "build-obj", "--debug-passes", "--time-passes", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
             CHECK(opts.opt_opts.debug_logging);
             CHECK(opts.opt_opts.time_passes);
         }
 
-        SECTION("Invalid optimization level returns error") {
-            mock_argv          args{"ghoti", "build-obj", "-Oinvalid", "main.gh"};
-            std::ostringstream error_ss;
-            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
-            CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
-            CHECK_FALSE(error_ss.view().empty());
+        SECTION("An unknown or empty build mode is an error") {
+            for (const auto* mode : {"fast", ""}) {
+                mock_argv          args{"ghoti", "build-obj", "--mode", mode, "main.gh"};
+                std::ostringstream error_ss;
+                clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+                CHECK(UNWRAP_ERR(parser.parse()) == clap::error::INVALID_OPTIMIZATION);
+                CHECK_FALSE(error_ss.view().empty());
+            }
+        }
+
+        SECTION("The removed -O, --release, and --unsafe flags are rejected") {
+            for (const auto* flag : {"-O2", "--release", "--unsafe"}) {
+                mock_argv          args{"ghoti", "build-obj", flag, "main.gh"};
+                std::ostringstream error_ss;
+                clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+                CHECK_FALSE(parser.parse());
+            }
         }
     }
 
@@ -161,24 +160,24 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             CHECK_FALSE(build_cmd.get_opts().emit_gir_path);
             CHECK_FALSE(build_cmd.get_opts().emit_llvm_ir_path);
             CHECK_FALSE(build_cmd.get_opts().emit_asm_path);
         }
         {
             mock_argv    args{"ghoti",
-                           "build-obj",
-                           "--emit-gir",
-                           "a.gir",
-                           "--emit-llvm-ir",
-                           "b.ll",
-                           "--emit-asm",
-                           "c.s",
-                           "main.gh"};
+                              "build-obj",
+                              "--emit-gir",
+                              "a.gir",
+                              "--emit-llvm-ir",
+                              "b.ll",
+                              "--emit-asm",
+                              "c.s",
+                              "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  opts{build_cmd.get_opts()};
             CHECK(UNWRAP(opts.emit_gir_path) == "a.gir");
             CHECK(UNWRAP(opts.emit_llvm_ir_path) == "b.ll");
@@ -198,7 +197,7 @@ TEST_CASE("build-obj subcommand parser") {
             mock_argv    args{"ghoti", "build-obj", "-m", "math,src/math.gh", "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 1);
             CHECK(mods[0].name == "math");
@@ -207,15 +206,15 @@ TEST_CASE("build-obj subcommand parser") {
 
         SECTION("Multiple module arguments") {
             mock_argv    args{"ghoti",
-                           "build-obj",
-                           "-m",
-                           "math,src/math.gh",
-                           "--module",
-                           "io,src/io.gh",
-                           "main.gh"};
+                              "build-obj",
+                              "-m",
+                              "math,src/math.gh",
+                              "--module",
+                              "io,src/io.gh",
+                              "main.gh"};
             clap::parser parser{args.argc(), args.argv(), std::cerr, false};
             auto         cmd{UNWRAP(parser.parse())};
-            auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_obj*>(cmd.get()))};
+            auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_obj>())};
             const auto&  mods{build_cmd.get_opts().modules};
             REQUIRE(mods.size() == 2);
             CHECK(mods[0].name == "math");
@@ -239,7 +238,7 @@ TEST_CASE("build-exe subcommand parser") {
         mock_argv    args{"ghoti", "build-exe", "-o", "bin/myprog", "src/main.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_exe*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_exe>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/main.gh");
@@ -248,12 +247,35 @@ TEST_CASE("build-exe subcommand parser") {
     }
 }
 
+TEST_CASE("--no-compiler-rt is accepted by every linking subcommand") {
+    const auto compiler_rt_of{[](std::vector<std::string> argv) -> bool {
+        mock_argv    args{std::move(argv)};
+        clap::parser parser{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(parser.parse())};
+        if (const auto exe{cmd->as_opt<cmd::build_exe>()}) { return exe->get_opts().compiler_rt; }
+        if (const auto lib{cmd->as_opt<cmd::build_lib>()}) { return lib->get_opts().compiler_rt; }
+        if (const auto run{cmd->as_opt<cmd::run_cmd>()}) { return run->get_opts().compiler_rt; }
+        return UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts().compiler_rt;
+    }};
+
+    for (const std::string sub : {"build-exe", "build-lib", "run", "test"}) {
+        CHECK(compiler_rt_of({"ghoti", sub, "main.gh"}));
+        CHECK_FALSE(compiler_rt_of({"ghoti", sub, "--no-compiler-rt", "main.gh"}));
+    }
+
+    // An object file is never linked, so the flag means nothing there
+    mock_argv          args{"ghoti", "build-obj", "--no-compiler-rt", "main.gh"};
+    std::ostringstream error_ss;
+    clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+    CHECK_FALSE(parser.parse());
+}
+
 TEST_CASE("build-lib subcommand parser") {
     SECTION("Basic positional input file with default output path") {
         mock_argv    args{"ghoti", "build-lib", "src/lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/lib.gh");
@@ -269,7 +291,7 @@ TEST_CASE("build-lib subcommand parser") {
         mock_argv    args{"ghoti", "build-lib", "-o", "lib/mylib.a", "lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "lib.gh");
@@ -280,7 +302,7 @@ TEST_CASE("build-lib subcommand parser") {
         mock_argv    args{"ghoti", "build-lib", "--dynamic", "src/lib.gh"};
         clap::parser parser{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(parser.parse())};
-        auto&        build_cmd{UNWRAP(dynamic_cast<cmd::build_lib*>(cmd.get()))};
+        auto&        build_cmd{UNWRAP(cmd->as_opt<cmd::build_lib>())};
 
         const auto& opts{build_cmd.get_opts()};
         CHECK(opts.input_path == "src/lib.gh");
@@ -299,7 +321,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.input_path == "my_test.gh");
         CHECK(opts.forwarded_args.empty());
         CHECK_FALSE(opts.output_explicit);
@@ -309,7 +331,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh", "--", "alpha", "--beta"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.input_path == "my_test.gh");
         REQUIRE(opts.forwarded_args.size() == 2);
         CHECK(opts.forwarded_args[0] == "alpha");
@@ -320,7 +342,7 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "my_test.gh", "one", "two"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(std::ranges::equal(opts.forwarded_args, std::array{"one", "two"}));
     }
 
@@ -328,10 +350,27 @@ TEST_CASE("test subcommand parser") {
         mock_argv    args{"ghoti", "test", "-o", "built_test.exe", "my_test.gh"};
         clap::parser p{args.argc(), args.argv(), std::cerr, false};
         auto         cmd{UNWRAP(p.parse())};
-        const auto&  opts{UNWRAP(dynamic_cast<cmd::test_cmd*>(cmd.get())).get_opts()};
+        const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.output_path == "built_test.exe");
         CHECK(opts.output_explicit);
     }
+}
+
+TEST_CASE("lsp rejects negative debounce and file-cap values") {
+    for (const auto* flag : {"--debounce-ms", "--workspace-file-cap"}) {
+        mock_argv          args{"ghoti", "lsp", flag, "-1"};
+        std::ostringstream error_ss;
+        clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+        CHECK_FALSE(parser.parse());
+    }
+}
+
+TEST_CASE("fmt with a missing path fails instead of falling back to stdin") {
+    mock_argv          args{"ghoti", "fmt", "definitely_missing_file_4242.gh"};
+    std::ostringstream error_ss;
+    clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+    CHECK(UNWRAP_ERR(parser.parse()) == clap::error::FILE_NOT_FOUND);
+    CHECK_FALSE(error_ss.view().empty());
 }
 
 } // namespace ghoti::tests

@@ -27,12 +27,12 @@ auto symbols::label::from(symbol& symbol) -> label& {
 namespace {
 
 template <typename Handle>
-[[nodiscard]] auto span_of(const mod::module& module, Handle handle) noexcept -> source_span {
+[[nodiscard]] auto span_of(const mod::module_t& module, Handle handle) noexcept -> source_span {
     return {module.ast.location_of(handle), module.ast.end_location_of(handle)};
 }
 
 // A decl resolves to its declared name's span, not the whole statement's
-[[nodiscard]] auto symbol_span_of(const mod::module& module, const symbol::data_t& data) noexcept
+[[nodiscard]] auto symbol_span_of(const mod::module_t& module, const symbol::data_t& data) noexcept
     -> source_span {
     PROFILE_FUNCTION();
     return data.visit(
@@ -40,9 +40,6 @@ template <typename Handle>
         [&module](const symbols::node_t& node) -> source_span {
             if (const auto decl{module.ast.get_as_opt<ast::decl_stmt>(node)}) {
                 return span_of(module, decl->name);
-            }
-            if (const auto using_stmt{module.ast.get_as_opt<ast::using_stmt>(node)}) {
-                return span_of(module, using_stmt->alias);
             }
             if (const auto import_stmt{module.ast.get_as_opt<ast::import_stmt>(node)}) {
                 if (import_stmt->alias) { return span_of(module, *import_stmt->alias); }
@@ -68,29 +65,28 @@ template <typename Handle>
         [&module](const symbols::parameter& inner) -> source_span {
             return span_of(module, inner.name);
         },
-        [&module](const symbols::for_loop_capture& inner) -> source_span {
+        [&module](const symbols::capture& inner) -> source_span {
             return span_of(module, inner.payload);
         });
 }
 
 } // namespace
 
-auto symbol::get_symbol_location(const mod::module& module) const noexcept -> source_location {
+auto symbol::get_symbol_location(const mod::module_t& module) const noexcept -> source_location {
     return symbol_span_of(module, data_).start;
 }
 
-auto symbol::get_symbol_span(const mod::module& module) const noexcept -> source_span {
+auto symbol::get_symbol_span(const mod::module_t& module) const noexcept -> source_span {
     return symbol_span_of(module, data_);
 }
 
-auto symbol::is_public(const mod::module& module) const noexcept -> bool {
+auto symbol::is_public(const mod::module_t& module) const noexcept -> bool {
     return data_.visit(
         [&module](const symbols::node_t& node) -> bool {
             switch (node->get_kind()) {
             case ast::node_kind::DECL_STATEMENT:
                 return module.ast.get_as<ast::decl_stmt>(*node).has_modifier(
                     ast::decl_modifiers::PUBLIC);
-            case ast::node_kind::USING_STATEMENT:
             case ast::node_kind::IMPORT_STATEMENT:
                 return node->get_token_type() == syntax::token_type_t::PUBLIC;
             default: return false;
@@ -101,7 +97,7 @@ auto symbol::is_public(const mod::module& module) const noexcept -> bool {
 }
 
 auto symbol_table::insert(std::string_view      name,
-                          const mod::module&    module,
+                          const mod::module_t&  module,
                           const symbol::data_t& data) -> stdx::result<void, diagnostic> {
     // Reserved identifier use is impossible due to a parser invariant
     PROFILE_FUNCTION();
@@ -127,7 +123,7 @@ auto symbol_table::insert_unchecked(std::string_view name, const symbol::data_t&
 }
 
 auto symbol_table_registry::insert_into(usize                 table_idx,
-                                        const mod::module&    module,
+                                        const mod::module_t&  module,
                                         std::string_view      name,
                                         const symbol::data_t& data)
     -> stdx::result<void, diagnostic> {
@@ -136,7 +132,7 @@ auto symbol_table_registry::insert_into(usize                 table_idx,
 }
 
 [[nodiscard]] auto symbol_table_registry::is_shadowing(const symbol_table_stack& stack,
-                                                       const mod::module&        module,
+                                                       const mod::module_t&      module,
                                                        std::string_view          name,
                                                        const symbol::data_t&     data) noexcept
     -> stdx::result<void, diagnostic> {

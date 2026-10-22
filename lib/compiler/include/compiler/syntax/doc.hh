@@ -54,6 +54,16 @@ struct align {
     u16    columns;
 };
 
+// Printed as `child`, but takes no room when deciding whether what precedes it fits on the line
+struct line_suffix {
+    doc_id child;
+};
+
+// Source lines printed exactly as written, ignoring the current indent
+struct verbatim {
+    std::string_view text;
+};
+
 } // namespace docs
 
 using doc_t = stdx::variant<docs::text,
@@ -64,7 +74,9 @@ using doc_t = stdx::variant<docs::text,
                             docs::hard_line,
                             docs::soft_line,
                             docs::if_break,
-                            docs::align>;
+                            docs::align,
+                            docs::line_suffix,
+                            docs::verbatim>;
 
 class doc_manager {
   public:
@@ -107,8 +119,18 @@ class doc_manager {
     // nothing when flat, newline when broken
     [[nodiscard]] auto soft_line() -> syntax::doc_id;
     [[nodiscard]] auto hard_line() -> syntax::doc_id;
+    [[nodiscard]] auto line_suffix(syntax::doc_id child) -> syntax::doc_id;
+    [[nodiscard]] auto verbatim(std::string_view source_lines) -> syntax::doc_id;
     [[nodiscard]] auto if_break(syntax::doc_id when_broken, syntax::doc_id when_flat)
         -> syntax::doc_id;
+
+    // True if `id` renders across multiple lines regardless of the width it's placed at
+    // Whether `id` always ends in a hard line break, like a `\` multiline string does
+    [[nodiscard]] auto ends_with_hard_line(syntax::doc_id id) const noexcept -> bool;
+    // `id` without that final hard line break, so a caller can end the line at its own indent
+    [[nodiscard]] auto without_trailing_hard_line(syntax::doc_id id) -> syntax::doc_id;
+    [[nodiscard]] auto contains_hard_break(syntax::doc_id id, bool nested = false) const noexcept
+        -> bool;
 
     // Interleaves `sep` between `items`.
     [[nodiscard]] auto join(std::vector<syntax::doc_id> items, syntax::doc_id sep)

@@ -92,4 +92,25 @@ template <usize Cap = 64>
     return prev[b.size()];
 }
 
+[[nodiscard]] auto is_alpha(char c) noexcept -> bool;
+[[nodiscard]] auto is_digit(char c) noexcept -> bool;
+[[nodiscard]] auto is_alnum(char c) noexcept -> bool;
+[[nodiscard]] auto is_space(char c) noexcept -> bool;
+[[nodiscard]] auto is_word(char c) -> bool;
+[[nodiscard]] auto is_ascii_identifier(std::string_view token) -> bool;
+[[nodiscard]] auto is_identifier_start(char c) -> bool;
+
+[[nodiscard]] constexpr auto utf8_width(char c) -> usize {
+    const auto byte{static_cast<u8>(c)};
+    if (byte >= 0xF0) { return 4; }
+    if (byte >= 0xE0) { return 3; }
+    if (byte >= 0xC0) { return 2; }
+    return 1;
+}
+
+// The suffix that makes a noun counted `count` times plural: "s" unless there is exactly one
+[[nodiscard]] constexpr auto plural_suffix(usize count) noexcept -> std::string_view {
+    return count == 1 ? "" : "s";
+}
+
 } // namespace ghoti::string_utils
