@@ -21,7 +21,7 @@ Ghoti is a compiled systems language powered by LLVM, C++, and Zig. It attempts 
 - Low-level with transparent memory layout
 - Manually manged memory
 - Immutability by default
-- Compile-time evaluation: Sophisticated `constexpr` evaluation with first-class types
+- Compile-time evaluation: Sophisticated `comptime` evaluation with first-class types
 - Clear Semantics: No overloading, variable shadowing, or macros
 - Flexible polymorphism: Choose between zero-cost static dispatch via `impl` monomorphization or explicit dynamic dispatch using fat-pointer `dyn`
 
@@ -108,6 +108,8 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
     - [x] LSP
     - [x] Formatter
     - [ ] Translate C
+    - [ ] Syntactic & Semantic Checking w/o compilation 
+- [ ] Compiler RT
 - [ ] Standard library
     - [x] Cross-platform support w/o forcing libc
     - [ ] Generic data structures
@@ -125,7 +127,11 @@ If you have a suggestion that would make this better, please fork the repo and c
 2. Create your Feature Branch (`git checkout -b feat/AmazingFeature`)
 3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feat/AmazingFeature`)
-5. Open a Pull Request against `dev`
+5. Open a Pull Request against `main`
+
+### A Note on Generative AI
+
+The **responsible** use of LLMs/Generative AI/Agentic AI (whatever you want to call them) is accepted in the development of this project. Generated code will pass through human review the same way traditionally written code would, and you as the user of the tool must take full accountability for the output it generates. When AI is used in your contributions, it must be disclosed such that a reviewer can acknowledge its usage. While pure AI-driven development (aka "vibe-coding") is pervasive throughout AI-based discourse, you are expected as a human to play a non-negligible role in the development process (i.e., you can explain every design choice made along the way). I have taken great lengths to design this language and project as a while to be comfortable for me as a human to work with, and I will not accept contributions that aim to assist agentic workflows over human ones (e.g. skills, MCP tool, AGENTS.md).
 
 ### Top contributors:
 
