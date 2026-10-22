@@ -7,14 +7,14 @@ templ SyntaxInterfacesPage() {
 			An interface is declared with the standard declaration syntax and the <code>interface</code> type-expression prefix, akin to <code>struct</code> / <code>enum</code> / <code>union</code>
 			<ul>
 				<li>The declaration must be <code>const</code></li>
-				<li>An interface is a first-class <code>type</code> value: compile-time composable, aliasable with <code>const</code>, re-exportable, and usable as a <code>T: type</code> argument</li>
+				<li>An interface is a first-class <code>type</code> value: compile-time composable, aliasable with <code>const</code>, re-exportable, and usable as a <code>comptime T: type</code> argument</li>
 			</ul>
 		</li>
 		<li>
 			An interface body holds, in order:
 			<ul>
 				<li><strong>Associated types</strong>: <code>Name: type;</code> (required) or <code>Name: type = Default;</code> (defaulted)</li>
-				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); evaluated at compile time and may not depend on <code>{ "@this()" }</code></li>
+				<li><strong>Associated constants</strong>: <code>const N: T;</code> (required) or <code>const N: T = expr;</code> (defaulted); evaluated at compile time and may not depend on <code>{ "@This()" }</code></li>
 				<li><strong>Required methods</strong>: a bodyless <code>const</code> function declaration with a mandatory <code>self</code> parameter: <code>pub const write = fn(&amp;mut self, b: []u8): usize;</code></li>
 				<li><strong>Default methods</strong>: the same, but with a body; an implementer that omits the name inherits it, one that provides the name overrides it</li>
 			</ul>
@@ -38,7 +38,7 @@ templ SyntaxInterfacesPage() {
 				<li>An interface may appear in value position only as <code>&amp;dyn I</code> / <code>^dyn I</code>, or through the <code>impl I</code> parameter sugar, which may also sit under a pattern like <code>{ "&impl I" }</code> or <code>{ "[]impl I" }</code></li>
 			</ul>
 		</li>
-		<li>Inside an interface body, <code>{ "@this()" }</code> denotes the implementing type</li>
+		<li>Inside an interface body, <code>{ "@This()" }</code> denotes the implementing type</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
@@ -85,7 +85,7 @@ const Marker = interface {};   // zero-member marker interface` }
 			<ul>
 				<li>The parenthesized list uses the generic-parameter grammar (<code>P: type</code>, <code>comptime n: usize</code>, …) and its parameters are in scope throughout the block</li>
 				<li>The block is re-instantiated per monomorphization of <code>Ctor</code>; its methods are added to every concrete instantiation</li>
-				<li>Coherence is checked against the <em>base</em> constructor and the interface (with a trait impl): an impl parameter is not "local", so a fully-foreign inherent <code>impl(T) foreign::Ctor(T)</code> is rejected</li>
+				<li>Coherence is checked against the <em>base</em> constructor and the interface (with a trait impl): an impl parameter is not "local", so a fully-foreign inherent <code>impl(T: type) foreign.Ctor(T)</code> is rejected</li>
 			</ul>
 		</li>
 	</ul>
@@ -103,10 +103,10 @@ impl Writer for File {
 }
 
 impl File {                           // inherent: unrelated helpers
-    pub const fromRaw = fn(fd: i32): @this() { return .{ .fd = fd }; };
+    pub const fromRaw = fn(fd: i32): @This() { return .{ .fd = fd }; };
 }
 
-const Box = fn(T: type): type { return struct { val: T }; };
+const Box = fn(comptime T: type): type { return struct { val: T }; };
 impl(T: type) Box(T) {               // one method per Box(...) instantiation
     pub const get = fn(&self): T { return self.val; };
 }` }
@@ -118,7 +118,7 @@ impl(T: type) Box(T) {               // one method per Box(...) instantiation
 			<strong>Orphan rule</strong>: <code>{ "impl I for T" }</code> is accepted only while compiling the module that declares <code>I</code> or the module that declares the base type constructor of <code>T</code>
 		</li>
 		<li>
-			<strong>Uniqueness</strong>: at most one <code>{ "impl I for T" }</code> across the whole program. Identity is the canonical type, never the name, so <code>a::Writer</code> and <code>b::Writer</code> are independent interfaces and one type may implement both
+			<strong>Uniqueness</strong>: at most one <code>{ "impl I for T" }</code> across the whole program. Identity is the canonical type, never the name, so <code>a.Writer</code> and <code>b.Writer</code> are independent interfaces and one type may implement both
 		</li>
 		<li>
 			<strong>Method-name clash</strong>: when a type ends up with two same-named methods from two impls visible in one scope, then a bare call is a hard error; the qualified / <code>&amp;dyn</code>-coerced forms always resolve
@@ -145,7 +145,7 @@ impl(T: type) Box(T) {               // one method per Box(...) instantiation
 
 pub const main = fn(): i32 {
     let mut f = File{ .fd = 1 };
-    return @as(i32, dump(&f, "hi"));
+    return @intCast(i32, dump(&mut f, "hi"));
 };` }
 		</code>
 	</pre>
@@ -164,7 +164,7 @@ pub const main = fn(): i32 {
 			<strong>Associated-type binding</strong>: an interface with an unbound, undefaulted associated type must have it pinned at the use site with the call-like form: <code>&amp;dyn Iterator(Item = u8)</code>, <code>&amp;dyn Map(Key = []u8, Value = i32)</code>. The binding is substituted into the method signatures, so <code>it.next()</code> through <code>&amp;dyn Iterator(Item = u8)</code> is typed <code>u8</code>. An unbound associated type is an error
 		</li>
 		<li>
-			An interface is <strong><code>dyn</code>-safe</strong> only if every method takes <code>self</code> by <code>&amp;</code> / <code>^</code> and names <code>{ "@this()" }</code> only behind <code>&amp;</code> / <code>^</code>. A by-value <code>self</code> (or a bare <code>{ "@this()" }</code> parameter / return) makes the interface not <code>dyn</code>-safe; it is still usable for static dispatch
+			An interface is <strong><code>dyn</code>-safe</strong> only if every method takes <code>self</code> by <code>&amp;</code> / <code>^</code> and names <code>{ "@This()" }</code> only behind <code>&amp;</code> / <code>^</code>. A by-value <code>self</code> (or a bare <code>{ "@This()" }</code> parameter / return) makes the interface not <code>dyn</code>-safe; it is still usable for static dispatch
 		</li>
 		<li>
 			<code>{ "@dynCast(^T | &mut T, w)" }</code> recovers a concrete pointer/reference from a <code>&amp;dyn I</code> / <code>^dyn I</code>. It is <strong>unsafe and unchecked</strong>: it reinterprets <code>w</code>'s erased <code>data</code> pointer with no RTTI. If <code>w</code> does not actually point at a <code>T</code>, behavior is undefined
@@ -195,7 +195,7 @@ pub const main = fn(): i32 {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const encode = fn(T: type, v: T): []u8 {
+			{ `const encode = fn(comptime T: type, v: T): []u8 {
     if comptime (!@implements(T, Writer)) {
         @compileError("encode requires T: Writer");
     }

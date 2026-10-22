@@ -37,7 +37,7 @@ templ SyntaxFunctionsPage() {
 				<li>A mutable pointer is created with the <code>^mut</code> operator which the function must also indicate</li>
 			</ul>
 		</li>
-		<li>There are no default parameters</li>
+		<li>Parameters may have trailing default values (<code>{ "fn(w: i32, h: i32 = w): i32" }</code>), evaluated at each call that leaves the argument off</li>
 		<li>
 			A parameter's type may depend on an earlier parameter, and the return type may depend on any parameter
 			<ul>
@@ -48,7 +48,7 @@ templ SyntaxFunctionsPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const Box = fn(T: type): type { return struct { val: T }; };
+			{ `const Box = fn(comptime T: type): type { return struct { val: T }; };
 
 const rewrap = fn(a: auto, b: Box(@TypeOf(a))): @TypeOf(b) {
     return b;

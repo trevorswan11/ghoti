@@ -35,7 +35,7 @@ pub import "node.gh" as node; // Public file import with alias` }
 	</ul>
 	<h2>File Import Declaration</h2>
 	<ul>
-		<li>A file in conch is importable through its relative path to the importing file</li>
+		<li>A file in ghoti is importable through its path (relative or absolute) to the importing file</li>
 		<li>These imports must be aliased to an identifier as the string path cannot be used implicitly as a namespace</li>
 	</ul>
 	<h3>Example</h3>
@@ -44,27 +44,28 @@ pub import "node.gh" as node; // Public file import with alias` }
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `pub import "io/io.gh" as io;
-pub import "containers/array_list.gh" as array_list;
-pub const ArrayList = array_list::ArrayList;
+			{ `import "types/option.gh" as option;
+pub import "io/io.gh" as io;
+pub const Option = option.Option;
 ...` }
 		</code>
 	</pre>
 	<ul>
-		<li><code>io/io.gh</code> declares a public function <code>println</code> which can be accessed via:</li>
+		<li><code>io/io.gh</code> declares a public function <code>println</code> which can be accessed through the member access operator (<code>.</code>):</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `std::io::println(...);` }</code></pre>
+	<pre><code class="language-ghoti">{ `_ = std.io.println(...);` }</code></pre>
 	<ul>
-		<li><code>containers/array_list.gh</code> declares a public function <code>ArrayList</code> that returns a generically-typed struct</li>
+		<li><code>types/option.gh</code> declares a public function <code>Option</code> that returns a generically-typed union</li>
 	</ul>
-	<pre><code class="language-ghoti">{ `pub const ArrayList = fn(T: type): type {...};` }</code></pre>
+	<pre><code class="language-ghoti">{ `pub const Option = fn(comptime T: type): type {...};` }</code></pre>
 	<ul>
-		<li>This can be used just like any other function through the module access operator (<code>::</code>):</li>
+		<li>This can be used just like any other function through the same <code>.</code> operator; there is no separate module access operator</li>
+		<li><code>option</code> is a private import of <code>std.gh</code>, so the type constructor is only reachable through its public alias:</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `let mut a: std::array_list::ArrayList(i32);
-let mut a: std::ArrayList(i32); // Allowed due to function declaration alias` }
+			{ `let mut a: std.Option(i32) = .{ .none = {} };     // Allowed due to the public alias
+let mut b: std.option.Option(i32) = .{ .none = {} }; // Illegal, 'option' is not a public import` }
 		</code>
 	</pre>
 }

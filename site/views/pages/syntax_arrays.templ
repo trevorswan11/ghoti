@@ -34,7 +34,7 @@ templ SyntaxArraysPage() {
 		<li>
 			An array or slice element may not be a reference: writing <code>[N]&amp;T</code> / <code>[]&amp;T</code> is an error (you must use the equivalent pointer type).
 			<ul>
-				<li>A <code>[N]&amp;T</code> / <code>[]&amp;T</code> value that still arises indirectly (for example through a <code>T: type</code> parameter) decays implicitly to <code>[N]^T</code> / <code>[]^T</code>, preserving mutability (<code>&amp;mut</code> -> <code>^mut</code>); it never silently gains mutability</li>
+				<li>A <code>[N]&amp;T</code> / <code>[]&amp;T</code> value that still arises indirectly (for example through a <code>comptime T: type</code> parameter) decays implicitly to <code>[N]^T</code> / <code>[]^T</code>, preserving mutability (<code>&amp;mut</code> -> <code>^mut</code>); it never silently gains mutability</li>
 			</ul>
 		</li>
 	</ul>

@@ -36,7 +36,7 @@ templ SyntaxUnionsPage() {
 				<li>
 					<code>packed union { "{ ... }" }</code>: A <em>bit-packed</em> union. The whole union becomes a single backing integer <code>iN</code> whose width <code>N</code> is the width of its widest field (<code>max { "@bitSizeOf" }(field)</code>); every field is laid out at bit offset 0, so writing one field overwrites the low bits the others share.
 					<ul>
-						<li>Field eligibility, the 128-bit cap, the <code>{ "@alignas" }</code> ban, and the <code>&amp;u.field</code> address error all match a bit-packed <code>packed struct</code>.</li>
+						<li>Field eligibility, the 128-bit cap, the <code>{ "@[align(N)]" }</code> ban, and the <code>&amp;u.field</code> address error all match a bit-packed <code>packed struct</code>.</li>
 						<li>A bit-packed union carries no active-field tag &mdash; it is a raw reinterpreting view, like a C union. <code>{ "@bitSizeOf" }(U)</code> is <code>N</code>; <code>{ "@sizeOf" }(U)</code> is the backing integer's ABI byte size.</li>
 						<li><code>extern packed union { "{ ... }" }</code> keeps C-ABI byte semantics and is not bit-packed.</li>
 					</ul>

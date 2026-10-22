@@ -5,27 +5,27 @@ templ SyntaxControlFlowPage() {
 	<h2>Entry Point</h2>
 	<ul>
 		<li>
-			The entry point of a program must be a public <code>main</code> function that returns an integer or void
+			The entry point of a program is a public <code>main</code> function
 			<ul>
-				<li>The function may return an integer (<code>i32</code>) when a non-zero exit code may be desired</li>
-				<li>Using <code>void</code> is equivalent to the implicit return behavior observed in C</li>
+				<li>It may return <code>void</code> (exit code <code>0</code>), <code>noreturn</code>, any integer or other type implementing <code>builtin.ExitCode</code>, or a <code>Result</code> of those</li>
+				<li>A <code>Result</code> whose error implements <code>builtin.ExitCode</code> (or is an enum) exits with that error's code, so I/O errors, for example, can simply be returned</li>
 			</ul>
 		</li>
 		<li>
-			This function must take in a single parameter of type <code>[][:0]u8</code> representing the passed command line args
+			This function takes either no parameters or a single parameter of type <code>[][:0]u8</code> representing the passed command line args
 			<ul>
 				<li>This is conventionally named <code>args</code> but can be named to your choosing</li>
 				<li>Note that these args are null terminated to respect C-interop with minimal friction</li>
 			</ul>
 		</li>
+		<li>Exporting a function under the symbol <code>main</code> with <code>{ "@export" }</code> replaces <code>pub const main</code> (see the builtins page)</li>
 	</ul>
 	<pre>
 		<code class="language-ghoti">
 			{ `import std;
 
-pub const main = fn(args: [][:0]u8): void {
-    let message = "Hello, world!";
-    std::io::println(message);
+pub const main = fn(args: [][:0]u8): std.Result(void, std.io.Error) {
+    return std.io.println("Hello, world!");
 };` }
 		</code>
 	</pre>
@@ -197,9 +197,9 @@ const k = comptime 3;                  // Illegal, a const initializer is alread
 		<code class="language-ghoti">
 			{ `import std;
 
-const main = fn(): void {
-    defer std::io::println("World!");
-    defer std::io::print("Hello, ");
+pub const main = fn(): void {
+    defer _ = std.io.println("World!");
+    defer _ = std.io.print("Hello, ");
 };` }
 		</code>
 	</pre>

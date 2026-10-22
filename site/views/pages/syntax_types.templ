@@ -75,7 +75,7 @@ templ SyntaxTypesPage() {
 	</ul>
 	<pre>
 		<code class="language-ghoti">
-			{ `const func = fn(p: type): void { ... };
+			{ `const func = fn(comptime p: type): void { ... };
 func(&mut P);` }
 		</code>
 	</pre>
@@ -86,7 +86,7 @@ func(&mut P);` }
 	<pre>
 		<code class="language-ghoti">
 			{ `const tP = &mut P;
-const func = fn(p: type): void { ... };
+const func = fn(comptime p: type): void { ... };
 func(tP);` }
 		</code>
 	</pre>

@@ -5,13 +5,13 @@ templ InternalsBuiltinsPage() {
 	<p>Ghoti has the following builtin functions that are provided by the runtime and can be called from any scope. They are typically functions that facilitate low-level control and often make use of dedicated hardware instructions when available.</p>
 	<h2>Casting</h2>
 	<h3>{ "@alignCast" }</h3>
-	<pre><code class="language-ghoti">{ `@alignCast(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@alignCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Casts the alignment of the expression's pointer value to that of the provided type. Both <code>T</code> and <code>expression</code> must be pointer types.</p>
 	<h3>{ "@ptrCast" }</h3>
-	<pre><code class="language-ghoti">{ `@ptrCast(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@ptrCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Casts the pointer result of <code>expression</code> to pointer <code>T</code>. Both <code>T</code> and <code>expression</code> must be pointer types.</p>
 	<h3>{ "@bitCast" }</h3>
-	<pre><code class="language-ghoti">{ `@bitCast(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@bitCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Converts a value of one type to another provided type.</p>
 	<h3>{ "@constCast" }</h3>
 	<pre><code class="language-ghoti">{ `@constCast(expression: auto): auto` }</code></pre>
@@ -20,38 +20,38 @@ templ InternalsBuiltinsPage() {
 	<pre><code class="language-ghoti">{ `@volatileCast(expression: auto): auto` }</code></pre>
 	<p>Casts away top-level <code>volatile</code>-ness of the expression, preserving all other aspects of the type.</p>
 	<h3>{ "@as" }</h3>
-	<pre><code class="language-ghoti">{ `@as(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@as(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Coerces the value of <code>expression</code> into a value of type <code>T</code>. Conversions that have a dedicated builtin are rejected: use <code>{ "@boolFromInt" }</code> / <code>{ "@intFromBool" }</code> { "for" } <code>bool</code>, <code>{ "@backingInt" }</code> / <code>{ "@fromBackingInt" }</code> { "for" } enums, and <code>{ "@intFromFloat" }</code> / <code>{ "@floatFromInt" }</code> { "for" } float &harr; integer conversions that could lose information, and <code>{ "@floatCast" }</code> to narrow a float. An integer whose every value the float represents exactly (e.g. <code>i32</code> to <code>f64</code>) still converts with <code>{ "@as" }</code>, or implicitly.</p>
 	<h3>{ "@intFromFloat" }</h3>
-	<pre><code class="language-ghoti">{ `@intFromFloat(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@intFromFloat(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Converts a float to the integer type <code>T</code>, truncating toward zero. <code>T</code> can be omitted when inferable from context. A compile-time-known operand that doesn't fit <code>T</code> is a compile error; at runtime, under runtime safety, an out-of-range or NaN operand panics.</p>
 	<h3>{ "@floatFromInt" }</h3>
-	<pre><code class="language-ghoti">{ `@floatFromInt(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@floatFromInt(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Converts an integer to the float type <code>T</code>, rounding to the nearest representable value when it isn't exact (e.g. <code>16777217</code> becomes <code>16777216.0</code> as an <code>f32</code>). <code>T</code> can be omitted when inferable from context.</p>
 	<h3>{ "@floatCast" }</h3>
-	<pre><code class="language-ghoti">{ `@floatCast(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@floatCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Converts a float to the float type <code>T</code>, whether that narrows, widens, or keeps the type, rounding to the nearest representable value. <code>T</code> can be omitted when inferable from context. A compile-time-known finite operand that overflows <code>T</code> is a compile error; at runtime the conversion follows IEEE 754 and an overflow rounds to infinity, with no runtime safety check. An integer operand is rejected; use <code>{ "@floatFromInt" }</code>.</p>
 	<h3>{ "@backingInt" }</h3>
 	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
 	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>
 	<h3>{ "@fromBackingInt" }</h3>
-	<pre><code class="language-ghoti">{ `@fromBackingInt(T: type, expression: BackingInt(T)): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@fromBackingInt(comptime T: type, expression: BackingInt(T)): T` }</code></pre>
 	<p>The inverse of <code>{ "@backingInt" }</code> { "for" } an enum, <code>packed struct</code>, or <code>packed union</code> <code>T</code>, which can be omitted when inferable from context (<code>{ "const c: Color = @fromBackingInt(n);" }</code>). <code>expression</code> must be implicitly convertible to <code>T</code>'s backing integer. Under runtime safety, a value that names no variant of an exhaustive enum panics; a non-exhaustive enum (<code>_</code>) accepts every value. A tagged union can't be built this way because its payload would be undefined.</p>
 	<h3>{ "@dynCast" }</h3>
-	<pre><code class="language-ghoti">{ `@dynCast(T: type, expression: auto): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@dynCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p><strong>Unsafe.</strong> Recovers a concrete pointer or reference from a <code>&amp;dyn I</code> / <code>^dyn I</code> fat pointer: <code>T</code> must be a pointer/reference type and <code>expression</code> a <code>&amp;dyn</code> / <code>^dyn</code>. It reinterprets the erased <code>data</code> pointer with <strong>no runtime type check</strong>. If <code>expression</code> does not actually point at the underlying type of <code>T</code>, behavior is undefined. The caller acknowledges the risk.</p>
 	<h2>Pointer Operations</h2>
 	<h3>{ "@intFromPtr" }</h3>
 	<pre><code class="language-ghoti">{ `@intFromPtr(expression: auto): usize` }</code></pre>
 	<p>Returns the memory address as a <code>usize</code> integer.</p>
 	<h3>{ "@ptrFromInt" }</h3>
-	<pre><code class="language-ghoti">{ `@ptrFromInt(T: type, expression: usize): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@ptrFromInt(comptime T: type, expression: usize): T` }</code></pre>
 	<p>Returns a pointer type <code>T</code> at the memory address represented by the <code>usize</code> integer. <code>T</code> must be a pointer type.</p>
 	<h3>{ "@sliceFromPtr" }</h3>
 	<pre><code class="language-ghoti">{ `@sliceFromPtr(expression: auto, len: usize): auto` }</code></pre>
 	<p>Constructs a slice from the pointer-yielding expression and length.</p>
 	<h3>{ "@fieldParentPtr" }</h3>
-	<pre><code class="language-ghoti">{ `@fieldParentPtr(Parent: type, field: [:0]u8, ptr: auto): ^Parent` }</code></pre>
+	<pre><code class="language-ghoti">{ `@fieldParentPtr(comptime Parent: type, field: [:0]u8, ptr: auto): ^Parent` }</code></pre>
 	<p>
 		Given a pointer to the <code>field</code> member of a <code>Parent</code> struct, returns a pointer to the
 		enclosing <code>Parent</code>. <code>field</code> must be a string literal naming a field of <code>Parent</code>,
@@ -80,8 +80,8 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@TypeOf" }</h3>
 	<pre><code class="language-ghoti">{ `@TypeOf(expressions: auto...): type` }</code></pre>
 	<p>Returns the type of the provided expression. Given several, returns their <a href="/doc/syntax/types">peer type</a>: the one type they would all convert to where they meet, such as <code>i64</code> { "for" } <code>{ "@TypeOf(an_i32, an_i64)" }</code>. Operands with no peer type are a compile error. The operands are never evaluated.</p>
-	<h3>{ "@this" }</h3>
-	<pre><code class="language-ghoti">{ `@this(): type` }</code></pre>
+	<h3>{ "@This" }</h3>
+	<pre><code class="language-ghoti">{ `@This(): type` }</code></pre>
 	<p>Returns the type of the current enclosing structural type (i.e. struct, enum, union). Invalid in all other contexts.</p>
 	<h3>{ "@tagName" }</h3>
 	<pre><code class="language-ghoti">{ `@tagName(expression: auto): [:0]u8` }</code></pre>
@@ -92,7 +92,7 @@ templ InternalsBuiltinsPage() {
 		Folds at compile time to a fixed-length, null-terminated byte array naming its argument.
 	</p>
 	<h3>{ "@implements" }</h3>
-	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, I: type): bool` }</code></pre>
+	<pre><code class="language-ghoti">{ `@implements(T_or_value: auto, comptime I: type): bool` }</code></pre>
 	<p>
 		A compile-time is-a predicate. The first argument may be a type or a value (a value is treated as <code>{ "@TypeOf(value)" }</code>); <code>I</code> is an interface or an intersection <code>(A + B)</code>. Folds to <code>true</code> when the type implements every interface named, <code>false</code> otherwise.
 	</p>
@@ -111,7 +111,7 @@ templ InternalsBuiltinsPage() {
 	<pre><code class="language-ghoti">{ `@cVaStart(ap: ^u8): void` }</code></pre>
 	<p>Initializes a C variadic argument list pointer <code>ap</code> { "for interop with C variadic functions." }</p>
 	<h3>{ "@cVaArg" }</h3>
-	<pre><code class="language-ghoti">{ `@cVaArg(ap: ^u8, T: type): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@cVaArg(ap: ^u8, comptime T: type): T` }</code></pre>
 	<p>Extracts the next argument of type <code>T</code> from the C variadic argument list <code>ap</code>.</p>
 	<h3>{ "@cVaCopy" }</h3>
 	<pre><code class="language-ghoti">{ `@cVaCopy(dest: ^u8, src: ^u8): void` }</code></pre>
@@ -121,17 +121,17 @@ templ InternalsBuiltinsPage() {
 	<p>Cleans up the C variadic argument list pointer <code>ap</code>.</p>
 	<h2>Memory Operations</h2>
 	<h3>{ "@memcpy" }</h3>
-	<pre><code class="language-ghoti">{ `@memcpy(src: auto, dest: auto): void` }</code></pre>
+	<pre><code class="language-ghoti">{ `@memcpy(dest: auto, src: auto): void` }</code></pre>
 	<p>Copies all bytes from src to dest. Requires the two memory regions to be unique.</p>
 	<h3>{ "@memset" }</h3>
 	<pre><code class="language-ghoti">{ `@memset(mem: auto, expression: auto): void` }</code></pre>
 	<p>Sets all values in the array or slice to the expression.</p>
 	<h3>{ "@memmove" }</h3>
-	<pre><code class="language-ghoti">{ `@memmove(src: auto, dest: auto): void` }</code></pre>
+	<pre><code class="language-ghoti">{ `@memmove(dest: auto, src: auto): void` }</code></pre>
 	<p>Moves all bytes from src to dest. Allows the two memory regions to overlap.</p>
 	<h2>Math</h2>
 	<h3>{ "@mulAdd" }</h3>
-	<pre><code class="language-ghoti">{ `@mulAdd(T: type, a: T, b: T, c: T): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@mulAdd(comptime T: type, a: T, b: T, c: T): T` }</code></pre>
 	<p>Fused multiply-add, similar to (a * b) + c, except only rounds once, and is thus more accurate. T must be a floating point type.</p>
 	<h3>{ "@clz" }</h3>
 	<pre><code class="language-ghoti">{ `@clz(expression: auto): uN` }</code></pre>
@@ -188,7 +188,7 @@ pub const AtomicRmwOp = enum {
 	<h3>{ "@atomicLoad / @atomicStore" }</h3>
 	<pre>
 		<code class="language-ghoti">
-			{ `@atomicLoad(T: type, ptr: auto, order: MemoryOrder): T
+			{ `@atomicLoad(comptime T: type, ptr: auto, order: MemoryOrder): T
 @atomicStore(ptr: auto, val: auto, order: MemoryOrder): void` }
 		</code>
 	</pre>
@@ -196,14 +196,14 @@ pub const AtomicRmwOp = enum {
 		<code>{ "@atomicLoad" }</code> accepts <code>{ "relaxed" }</code>, <code>{ "acquire" }</code>, or <code>{ "seq_cst" }</code>. <code>{ "@atomicStore" }</code> accepts <code>{ "relaxed" }</code>, <code>{ "release" }</code>, or <code>{ "seq_cst" }</code>. Any other order is a compile error.
 	</p>
 	<h3>{ "@atomicRmw" }</h3>
-	<pre><code class="language-ghoti">{ `@atomicRmw(T: type, ptr: auto, op: AtomicRmwOp, val: auto, order: MemoryOrder): T` }</code></pre>
+	<pre><code class="language-ghoti">{ `@atomicRmw(comptime T: type, ptr: auto, op: AtomicRmwOp, val: auto, order: MemoryOrder): T` }</code></pre>
 	<p>Atomically applies <code>{ "op" }</code> to <code>{ "*ptr" }</code> and <code>{ "val" }</code>, storing the result and returning <code>{ "*ptr" }</code>'s <em>previous</em> value. Any <code>{ "MemoryOrder" }</code> is accepted.</p>
 	<h3>{ "@cmpxchgWeak / @cmpxchgStrong" }</h3>
 	<pre>
 		<code class="language-ghoti">
-			{ `@cmpxchgWeak(T: type, ptr: auto, expected: auto, new: auto,
+			{ `@cmpxchgWeak(comptime T: type, ptr: auto, expected: auto, new: auto,
              succ_order: MemoryOrder, fail_order: MemoryOrder, out: auto): bool
-@cmpxchgStrong(T: type, ptr: auto, expected: auto, new: auto,
+@cmpxchgStrong(comptime T: type, ptr: auto, expected: auto, new: auto,
                succ_order: MemoryOrder, fail_order: MemoryOrder, out: auto): bool` }
 		</code>
 	</pre>
@@ -220,10 +220,8 @@ pub const AtomicRmwOp = enum {
 	<h3>{ "@fnCtx" }</h3>
 	<pre><code class="language-ghoti">{ `@fnCtx(): auto` }</code></pre>
 	<p>Returns the innermost enclosing function as a callable value, enabling self-recursion for anonymous functions or closures.</p>
-	<h2>Compiler &amp; Alignment Directives</h2>
-	<h3>{ "@alignas" }</h3>
-	<pre><code class="language-ghoti">{ `@alignas(alignment: usize)` }</code></pre>
-	<p>Explicit alignment modifier specifier applied to struct fields or types.</p>
+	<h2>Compiler Directives</h2>
+	<p>Explicit alignment is an attribute, not a builtin: write <code>{ "@[align(N)]" }</code> before a field or declaration (<code>{ "@[align(16)] data: [4]f32" }</code>). See the attributes section of the <a href="/doc/syntax/declarations">declarations</a> page.</p>
 	<h3>{ "@setEvalRecursionLimit" }</h3>
 	<pre><code class="language-ghoti">{ `@setEvalRecursionLimit(limit: usize): void` }</code></pre>
 	<p>Sets the maximum recursion depth limit for compile-time expression evaluation.</p>
@@ -255,11 +253,11 @@ symbol(addtf3, "__addtf3");` }
 	<h3>{ "@assert" }</h3>
 	<pre><code class="language-ghoti">{ `@assert(cond: bool, msg: []u8 = "assertion failed"): void` }</code></pre>
 	<p>
-		An advisory assertion. A comptime-known-false <code>cond</code> is a compile error; a comptime-known-true one emits nothing. Otherwise it emits a runtime check that, on failure, calls the weak <code>{ "builtin::assert_handler" }</code> hook with source location and the message. <code>{ "@assert" }</code> is stripped by <code>--unsafe</code> and its false path carries no semantic guarantee.
+		An advisory assertion. A comptime-known-false <code>cond</code> is a compile error; a comptime-known-true one emits nothing. Otherwise it emits a runtime check that, on failure, calls the weak <code>{ "builtin.assert_handler" }</code> hook with source location and the message. <code>{ "@assert" }</code> is stripped by <code>--unsafe</code> and its false path carries no semantic guarantee.
 	</p>
 	<h3>{ "@verify" }</h3>
 	<pre><code class="language-ghoti">{ `@verify(cond: bool, msg: []u8 = "verification failed"): void` }</code></pre>
 	<p>
-		An enforced assertion. Same front end as <code>{ "@assert" }</code> (comptime-known-false is a compile error), but the runtime check is <strong>never</strong> elided. On failure it delegates to the same weak <code>{ "builtin::panic_handler" }</code> that <code>{ "@panic" }</code> uses; a <code>{ "@verify" }</code> failure <em>is</em> a panic. Use it for invariants the program's correctness or safety depends on.
+		An enforced assertion. Same front end as <code>{ "@assert" }</code> (comptime-known-false is a compile error), but the runtime check is <strong>never</strong> elided. On failure it delegates to the same weak <code>{ "builtin.panic_handler" }</code> that <code>{ "@panic" }</code> uses; a <code>{ "@verify" }</code> failure <em>is</em> a panic. Use it for invariants the program's correctness or safety depends on.
 	</p>
 }
