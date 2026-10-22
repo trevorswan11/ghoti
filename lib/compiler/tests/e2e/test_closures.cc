@@ -424,4 +424,111 @@ TEST_CASE("a type first used inside a function doesn't make its methods closures
     )") == 42);
 }
 
+TEST_CASE("A closure reads and writes several captures at their own environment slots") {
+    CHECK(helpers::compile_and_run(R"(
+        const count_above = fn(xs: []i32, lim: i32): i32 {
+            let mut n: i32 = 0;
+            let check = fn(v: i32): void { if (v > lim) { n += 1; } };
+            for (xs) |v| { check(v); }
+            return n;
+        };
+
+        pub const main = fn(): i32 {
+            let a = [_]i32{1, 5, 9, 12};
+            return count_above(a[0..], 4);
+        };
+    )") == 3);
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let a: i32 = 1;
+            let b: i32 = 20;
+            let mut hits: i32 = 0;
+            let f = fn(n: i32): i32 { hits += 1; return n * b + a; };
+            return f(2) + f(3) + hits;
+        };
+    )") == 41 + 61 + 2);
+}
+
+TEST_CASE("A closure reads its enclosing function's type aliases and constants uncaptured") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            const T = i32;
+            const k = 4;
+            let base: T = 3;
+            let f = fn(y: T): T { return y * k + base + @as(T, @sizeOf(T)); };
+            return f(2);
+        };
+    )") == 15);
+}
+
+TEST_CASE("A closure captures parameters it never mutates, including a slice") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(xs: []i32, bias: i32): i32 {
+            let mut acc: i32 = 0;
+            let add = fn(i: usize): void { acc += xs[i] + bias; };
+            for (0..xs.len) |i| { add(i); }
+            return acc;
+        };
+
+        pub const main = fn(): i32 {
+            let a = [_]i32{1, 2, 3};
+            return sum(a[0..], 1);
+        };
+    )") == 9);
+}
+
+TEST_CASE("A closure inside a method captures `self` rather than its own environment") {
+    CHECK(helpers::compile_and_run(R"(
+        const Acc = struct {
+            v: i32,
+            const add_all = fn(&self, xs: []i32): i32 {
+                let mut acc: i32 = 0;
+                let add = fn(x: i32): void { acc += x + self.v; };
+                for (xs) |x| { add(x); }
+                return acc;
+            };
+        };
+
+        pub const main = fn(): i32 {
+            let a: Acc = .{ .v = 10 };
+            let xs = [_]i32{1, 2, 3};
+            return a.add_all(xs[0..]);
+        };
+    )") == 36);
+}
+
+TEST_CASE("A move fn keeps writes to its own copies across calls") {
+    CHECK(helpers::compile_and_run(R"(
+        const counter = fn(start: i32, step: i32): auto {
+            let mut cur: i32 = start;
+            return move fn(): i32 { cur += step; return cur; };
+        };
+
+        pub const main = fn(): i32 {
+            let c = counter(0, 2);
+            _ = c();
+            _ = c();
+            return c();
+        };
+    )") == 6);
+}
+
+TEST_CASE("Distinct closures sharing a signature each get their own generic instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const call = fn(g: impl Fn(n: i32): i32, v: i32): i32 { return g(v); };
+        const call_auto = fn(g: auto, v: i32): i32 { return g(v); };
+
+        pub const main = fn(): i32 {
+            let a: i32 = 10;
+            let b: i32 = 20;
+            let x = call(fn(n: i32): i32 { return n + a; }, 1);
+            let y = call(fn(n: i32): i32 { return n * b; }, 2);
+            let z = call_auto(fn(n: i32): i32 { return n - a; }, 15);
+            let w = call_auto(fn(n: i32): i32 { return n - b; }, 25);
+            return x + y + z + w;
+        };
+    )") == 11 + 40 + 5 + 5);
+}
+
 } // namespace ghoti::tests
