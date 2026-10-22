@@ -92,7 +92,7 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
 - [x] Lexical analysis
 - [x] Pratt parsing
     - [x] Syntax documentation
-- [x] Multi-pass Semantic Analysis (to support order independent declarations)
+- [x] Multi-pass Semantic Analysis
     - [x] Symbol registration pass
     - [x] Type resolution pass
     - [x] GIR Emission & Constant Evaluation
@@ -104,11 +104,11 @@ The language's website is written with [Go](https://go.dev/), [HTMX](https://htm
         - [x] Kaleidoscope examples
         - [ ] Test parity through the build system
     - [x] Compiler backend integration
-- [ ] Tooling (available through subcommands)
+- [ ] Tooling
     - [x] LSP
     - [x] Formatter
     - [ ] Translate C
-    - [ ] Syntactic & Semantic Checking w/o compilation 
+    - [ ] Syntactic & semantic checking w/o compilation
 - [ ] Compiler RT
 - [ ] Standard library
     - [x] Cross-platform support w/o forcing libc
@@ -131,7 +131,7 @@ If you have a suggestion that would make this better, please fork the repo and c
 
 ### A Note on Generative AI
 
-The **responsible** use of LLMs/Generative AI/Agentic AI (whatever you want to call them) is accepted in the development of this project. Generated code will pass through human review the same way traditionally written code would, and you as the user of the tool must take full accountability for the output it generates. When AI is used in your contributions, it must be disclosed such that a reviewer can acknowledge its usage. While pure AI-driven development (aka "vibe-coding") is pervasive throughout AI-based discourse, you are expected as a human to play a non-negligible role in the development process (i.e., you can explain every design choice made along the way). I have taken great lengths to design this language and project as a while to be comfortable for me as a human to work with, and I will not accept contributions that aim to assist agentic workflows over human ones (e.g. skills, MCP tool, AGENTS.md).
+The **responsible** use of LLMs/Generative AI/Agentic AI (whatever you want to call them) is accepted in the development of this project. I use generative AI, mainly Claude, as an assistive tool in some parts of this project's development. That being said, generated code will pass through human review the same way traditionally written code would, and you as the user of the tool must take full accountability for the output it generates. When AI is used in your contributions, it must be disclosed such that a reviewer can acknowledge its usage. While pure AI-driven development (aka "vibe-coding") is pervasive throughout AI-based discourse, you are expected as a human to play a non-negligible role in the development process (i.e., you can explain every design choice made along the way). I have taken great lengths to design this language and project as a while to be comfortable for me as a human to work with, and I will not accept contributions that aim to assist agentic workflows over human ones (e.g. skills, MCP tool, AGENTS.md).
 
 ### Top contributors:
 
@@ -151,6 +151,7 @@ Project Link: [https://github.com/trevorswan11/ghoti](https://github.com/trevors
 
 ## Acknowledgments
 
+- [LLVM](https://llvm.org/)'s compiler infrastructure, runtime library, and documentation
 - [Zig](https://ziglang.org/)'s community, language features, and compiler source code
 - [Rust](https://rust-lang.org/)'s language features and philosophy
 - [cppreference](https://www.cppreference.com/)'s extensive C++ language documentation
