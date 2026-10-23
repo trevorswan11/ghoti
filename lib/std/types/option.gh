@@ -52,6 +52,20 @@ test "Option.unwrap_or returns the default when disengaged" {
     @expect(o.unwrap_or(42) == 42);
 }
 
+test "`?` unwraps an Option inside a capturing generic closure" {
+    let base: i32 = 5;
+    let pick = fn(x: auto): Option(i32) {
+        if (x > 0) { return .of(@as(i32, @intCast(x)) + base); }
+        return .empty;
+    };
+    let doubled = fn(x: auto): Option(i32) {
+        let v = pick(x)?;
+        return .of(v * 2);
+    };
+    @expect(doubled(@as(i64, 1)).unwrap_or(0) == 12);
+    @expect(doubled(@as(i8, -1)).unwrap_or(7) == 7);
+}
+
 test "Option.eq on T" {
     let mut o: Option(i32) = .of(1);
     @expect(o.eq(1));
