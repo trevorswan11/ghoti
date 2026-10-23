@@ -200,6 +200,19 @@ class emitter {
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
     // The GIR function holding a closure's body, unique to its generic instantiation
     [[nodiscard]] static auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    // Binds each capture of environment `env` by name in the current scope
+    auto bind_env_captures(local_id                      env,
+                           sema::type&                   env_type,
+                           const sema::types::closure_t& cl,
+                           bool                          is_move) -> void;
+    // A capturing local generic's monomorph takes its environment first and reads captures off it
+    auto bind_generic_env(gir::function& fn, sema::type& generic_fn_type, bool is_move) -> void;
+    // Builds a capturing local generic's environment where it's written, bound under its name.
+    // False when it captures nothing
+    auto emit_generic_env(std::string_view name, sema::type& generic_fn_type) -> bool;
+    // The environment a call to a capturing local generic passes first, if it has one
+    auto generic_env_arg(const ast::call_expr& call, sema::type& generic_fn_type)
+        -> stdx::option<value>;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants
     auto emit_comptime_closure(const const_closure& cl) -> std::string;
@@ -677,6 +690,9 @@ class emitter {
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};
     codegen::type_layout                                    target_layout_;
+
+    // The local generic each monomorph being emitted instantiates, innermost last
+    std::vector<const sema::type*> generic_env_owners_;
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).

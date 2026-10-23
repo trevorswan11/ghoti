@@ -370,9 +370,14 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
     }
 
     const bool  has_self{fn_expr.self.has_value()};
-    const usize num_params{req.arg_types.size() + (has_self ? 1UZ : 0UZ)};
+    const auto  capture_env{ctx_.generic_functions.get_capture_env(*req.generic_fn_type)};
+    const usize num_params{req.arg_types.size() + (has_self ? 1UZ : 0UZ) +
+                           (capture_env ? 1UZ : 0UZ)};
     auto        full_param_types{ctx_.pool.get_many_unsafe(num_params)};
     usize       pi{0};
+    if (capture_env) {
+        full_param_types[pi++] = &ctx_.get_reference(sema::types::mut::MUTABLE, *capture_env);
+    }
     if (has_self) {
         ASSERT(self_type, "Self parameter must have a resolved sema type");
         full_param_types[pi++] = self_type.get();
@@ -444,6 +449,9 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
     }
     {
         const scope_guard g{scopes_};
+        generic_env_owners_.emplace_back(req.generic_fn_type.get());
+        const auto pop_env_owner{gsl::finally([&] { generic_env_owners_.pop_back(); })};
+        bind_generic_env(fn, *req.generic_fn_type, fn_expr.is_move);
         if (fn_expr.self) {
             const auto& self_ident{fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.self->name)};
             const auto  self_name{self_ident.name};
@@ -1966,49 +1974,106 @@ auto emitter::emit_closure_function(ast::node_id                  id,
                                         });
 
         bind_declared_params(fn, fn_expr, active_mod());
-
-        // Load every capture once, up front, from `self`. Indexed as the environment itself, since
-        // a GEP through the `&mut` reference would step over whole environments
-        auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-        for (usize field_idx{0}; const auto& capture : cl.captures) {
-            // A `move fn` owns its copies, so a write to one must still be there on the next call
-            const bool owned{fn_expr.is_move && capture.mode == sema::types::capture_mode::VALUE};
-            auto&      field_type{owned ? *ctx_.pool.with_const(*capture.storage_type, false)
-                                        : *capture.storage_type};
-            const auto field_ptr{
-                builder_.emit_get_element_ptr(value{self_slot.id, closure_type},
-                                              {value{static_cast<u64>(field_idx), usize_type}},
-                                              field_type)};
-            if (owned) {
-                scopes_.back().bindings.emplace(capture.name,
-                                                local_binding{
-                                                    .id        = field_ptr,
-                                                    .type      = field_type,
-                                                    .is_alloca = true,
-                                                    .const_val = stdx::none,
-                                                });
-                ++field_idx;
-                continue;
-            }
-            const auto loaded{
-                builder_.emit_load(value{field_ptr, *capture.storage_type}, *capture.storage_type)};
-            const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
-            auto&      local_type{by_ref ? *capture.captured_type : *capture.storage_type};
-            scopes_.back().bindings.emplace(capture.name,
-                                            local_binding{
-                                                .id        = loaded,
-                                                .type      = local_type,
-                                                .is_alloca = by_ref,
-                                                .const_val = stdx::none,
-                                            });
-            ++field_idx;
-        }
+        bind_env_captures(self_slot.id, closure_type, cl, fn_expr.is_move);
 
         emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
         emit_implicit_return(impl_sig_data->return_type);
     }
 
     if (prev_fn && prev_seg) { builder_.set_insert_point(*prev_fn, *prev_seg); }
+}
+
+auto emitter::bind_env_captures(local_id                      env,
+                                sema::type&                   env_type,
+                                const sema::types::closure_t& cl,
+                                bool                          is_move) -> void {
+    // Load every capture once, up front, from the environment. Indexed as the environment itself,
+    // since a GEP through the `&mut` reference would step over whole environments
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    for (usize field_idx{0}; const auto& capture : cl.captures) {
+        // A `move fn` owns its copies, so a write to one must still be there on the next call
+        const bool owned{is_move && capture.mode == sema::types::capture_mode::VALUE};
+        auto&      field_type{owned ? *ctx_.pool.with_const(*capture.storage_type, false)
+                                    : *capture.storage_type};
+        const auto field_ptr{builder_.emit_get_element_ptr(
+            value{env, env_type}, {value{static_cast<u64>(field_idx++), usize_type}}, field_type)};
+        if (owned) {
+            scopes_.back().bindings.emplace(capture.name,
+                                            local_binding{
+                                                .id        = field_ptr,
+                                                .type      = field_type,
+                                                .is_alloca = true,
+                                                .const_val = stdx::none,
+                                            });
+            continue;
+        }
+        const auto loaded{
+            builder_.emit_load(value{field_ptr, *capture.storage_type}, *capture.storage_type)};
+        const bool by_ref{capture.mode != sema::types::capture_mode::VALUE};
+        auto&      local_type{by_ref ? *capture.captured_type : *capture.storage_type};
+        scopes_.back().bindings.emplace(capture.name,
+                                        local_binding{
+                                            .id        = loaded,
+                                            .type      = local_type,
+                                            .is_alloca = by_ref,
+                                            .const_val = stdx::none,
+                                        });
+    }
+}
+
+auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, bool is_move)
+    -> void {
+    const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
+    if (!env) { return; }
+    auto& env_ref{ctx_.get_reference(sema::types::mut::MUTABLE, *env)};
+    auto& env_slot{fn.add_param("env", env_ref)};
+    scopes_.back().bindings.emplace(CLOSURE_ENV_BINDING,
+                                    local_binding{
+                                        .id        = env_slot.id,
+                                        .type      = env_ref,
+                                        .is_alloca = false,
+                                        .const_val = stdx::none,
+                                    });
+    bind_env_captures(env_slot.id, *env, env->get_data().as<sema::types::closure_t>(), is_move);
+}
+
+auto emitter::emit_generic_env(std::string_view name, sema::type& generic_fn_type) -> bool {
+    const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
+    if (!env) { return false; }
+    const auto built{emit_closure_env(env->get_data().as<sema::types::closure_t>(), *env)};
+    const auto slot{builder_.emit_alloca(*env, name, false)};
+    builder_.emit_store(value{slot, *env}, built).is_initializer = true;
+    scopes_.back().bindings.emplace(name,
+                                    local_binding{
+                                        .id        = slot,
+                                        .type      = *env,
+                                        .is_alloca = true,
+                                        .const_val = stdx::none,
+                                    });
+    return true;
+}
+
+auto emitter::generic_env_arg(const ast::call_expr& call, sema::type& generic_fn_type)
+    -> stdx::option<value> {
+    const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
+    if (!env) { return stdx::none; }
+    auto&      env_ref{ctx_.get_reference(sema::types::mut::MUTABLE, *env)};
+    const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)};
+    ASSERT(ident, "A capturing generic local function is only ever called by its name");
+
+    // A monomorph calling its own generic hands on the environment it was given
+    if (!generic_env_owners_.empty() && generic_env_owners_.back() == &generic_fn_type) {
+        const auto own{lookup_binding(CLOSURE_ENV_BINDING)};
+        ASSERT(own, "A capturing monomorph must have its environment bound");
+        return value{own->id, env_ref};
+    }
+    const auto binding{lookup_binding(ident->name)};
+    ASSERT(binding, "A capturing generic local function must have its environment bound");
+    if (binding->is_alloca) { return value{binding->id, env_ref}; }
+    const auto spill{builder_.emit_alloca(*env)};
+    builder_.emit_store(value{spill, *env}, value{binding->id, binding->type}).is_initializer =
+        true;
+    return value{spill, env_ref};
 }
 
 auto emitter::closure_fn_name(const sema::type& closure_type) -> std::string {
@@ -2517,8 +2582,12 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
                                ? stdx::none
                                : active_ast().get_as_opt<ast::function_expr>(*decl.value)};
         if (fn_expr) {
-            // A generic local function has no single concrete signature to emit directly
-            if (ctx_.generic_functions.get_opt(*sema_type)) { return; }
+            // A generic local function has no single concrete signature to emit directly, only
+            // whatever its monomorphs captured from here
+            if (ctx_.generic_functions.get_opt(*sema_type)) {
+                emit_generic_env(name, *sema_type);
+                return;
+            }
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
             scopes_.back().bindings.emplace(name,
                                             local_binding{
@@ -5221,6 +5290,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         } else if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
             auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
             args.emplace_back(value{undefined_val{}, type_type});
+        }
+    }
+
+    // A capturing local generic's monomorph reads its captures from the environment it's given
+    if (resolved_generic_target && fn_type_opt) {
+        if (const auto env{generic_env_arg(call, *fn_type_opt)}) {
+            args.insert(args.begin(), *env);
         }
     }
 

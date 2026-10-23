@@ -196,6 +196,8 @@ class type_resolver {
     // The table depth where the outermost function's frame begins: an instantiated generic's body
     // or else the first open function. Only meaningful while a function is open
     [[nodiscard]] auto outermost_function_boundary() const -> usize;
+    // Whether `lhs` starts later in the source than `rhs`
+    [[nodiscard]] auto is_written_after(ast::node_id lhs, ast::node_id rhs) const -> bool;
     // The scopes between the module root and the function being resolved, for a local function
     [[nodiscard]] auto enclosing_function_scopes() const -> std::vector<usize>;
     // The type a local function literal `id` is resolved into, fresh for each instantiation
@@ -700,6 +702,10 @@ class type_resolver {
 
     // Builds and attaches a `types::closure_t` for a function_expr with a non-empty capture list
     auto attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type&;
+    // How `fn_id`'s recorded captures are stored in its environment, leaving out what needs none
+    auto capture_layout(ast::node_id fn_id, bool is_move) -> gsl::span<types::closure_capture>;
+    // Records the environment a local generic's monomorphs share, once one of them captures
+    auto build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void;
 
     auto visit(ast::node_id, const ast::identifier_expr&) -> void;
     auto visit(ast::node_id, const ast::if_expr&) -> void;
@@ -1055,6 +1061,8 @@ class type_resolver {
     // For a local generic, where the scopes of the functions around it begin. Their runtime locals
     // belong to another frame, which an instantiated body can't reach
     stdx::opt_size enclosing_locals_depth_{};
+    // The literal of the local generic being instantiated, which owns the captures of its body
+    stdx::option<ast::node_id> instantiating_fn_node_{};
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

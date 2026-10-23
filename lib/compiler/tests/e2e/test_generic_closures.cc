@@ -172,25 +172,163 @@ TEST_CASE("A generic local function reads the constants and types around it") {
     )") == 11 + 12 + 30);
 }
 
-TEST_CASE("A generic local function can't capture a runtime local") {
+TEST_CASE("A generic local function captures runtime locals around it") {
     struct shape {
         const char* params;
-        const char* args;
+        const char* first;
+        const char* second;
     };
-    for (const auto& [params, args] :
-         {shape{"x: auto", "@as(i64, 1)"}, shape{"comptime T: type, x: T", "i64, 1"}}) {
+    for (const auto& [params, first, second] :
+         {shape{"x: auto", "@as(i64, 1)", "@as(u8, 2)"},
+          shape{"comptime T: type, x: T", "i64, 1", "u8, 2"}}) {
         CAPTURE(params);
-        CHECK(helpers::raised(fmt::format(R"(
+        CHECK(helpers::compile_and_run(fmt::format(R"(
             pub const main = fn(): i32 {{
                 let off: i32 = 10;
                 let f = fn({}): i32 {{ return @as(i32, @intCast(x)) + off; }};
-                return f({});
+                return f({}) + f({});
             }};
         )",
-                                          params,
-                                          args),
-                              sema::error::GENERIC_CLOSURE_CAPTURE));
+                                                   params,
+                                                   first,
+                                                   second)) == 11 + 12);
     }
+}
+
+TEST_CASE("A generic local function mutates a captured `let mut` from every monomorph") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut hits: i32 = 0;
+            let scale: i32 = 2;
+            let f = fn(comptime T: type, x: T): T {
+                hits += 1;
+                return x * @as(T, @intCast(scale));
+            };
+            let a = f(i32, 5);
+            let b = f(u8, 3);
+            return a + @as(i32, b) + hits;
+        };
+    )") == 10 + 6 + 2);
+}
+
+TEST_CASE("A generic `move fn` keeps its own copies across calls and monomorphs") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut n: i32 = 0;
+            let bump = move fn(x: auto): i32 { n += @intCast(x); return n; };
+            _ = bump(@as(i32, 1));
+            _ = bump(@as(u8, 2));
+            return bump(@as(i32, 3)) + n;
+        };
+    )") == 6);
+}
+
+TEST_CASE("A capturing generic local function recurses by name") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let off: i32 = 1;
+            let f = fn(x: auto): i32 {
+                if (x == 0) { return off; }
+                return f(x - 1) + off;
+            };
+            return f(@as(i32, 3));
+        };
+    )") == 4);
+}
+
+TEST_CASE("A capturing generic local function forwards captures to closures inside it") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let off: i32 = 5;
+            let f = fn(x: auto): i32 {
+                let g = fn(): i32 { return off + 1; };
+                return g() + @as(i32, @intCast(x));
+            };
+            return f(@as(u8, 1));
+        };
+    )") == 7);
+}
+
+TEST_CASE("A closure or another generic calls a capturing generic local function") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let off: i32 = 5;
+            let f = fn(x: auto): i32 { return off + @as(i32, @intCast(x)); };
+            let g = fn(): i32 { return f(@as(u8, 2)) + f(@as(i64, 3)); };
+            return g();
+        };
+    )") == 15);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let a: i32 = 3;
+            let f = fn(x: auto): i32 { return a * @as(i32, @intCast(x)); };
+            let g = fn(y: auto): i32 { return f(y) + 1; };
+            return g(@as(u8, 4)) + g(@as(i64, 1));
+        };
+    )") == 13 + 4);
+}
+
+TEST_CASE("A generic local function in a generic body captures that instantiation's locals") {
+    CHECK(helpers::compile_and_run(R"(
+        const outer = fn(comptime T: type, base: T): T {
+            let f = fn(x: auto): T { return base + @as(T, @intCast(x)); };
+            return f(@as(u8, 1)) + f(@as(i64, 2));
+        };
+
+        pub const main = fn(): i32 {
+            return outer(i32, 10) + @as(i32, @intCast(outer(i64, 20)));
+        };
+    )") == 23 + 43);
+}
+
+TEST_CASE(
+    "A generic local function captures parameters, nested-block locals, and `const` bindings") {
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { v: i32 };
+        const run = fn(xs: []i32, s: S): i32 {
+            let f = fn(i: auto): i32 { return xs[i] + s.v; };
+            return f(@as(usize, 1)) + f(@as(usize, 2));
+        };
+
+        pub const main = fn(): i32 {
+            let a = [_]i32{1, 2, 3};
+            return run(a[0..], .{ .v = 10 });
+        };
+    )") == 25);
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let base: i32 = 2;
+            let mut r: i32 = 0;
+            if (base > 1) {
+                let extra: i32 = 5;
+                const f = fn(x: auto): i32 { return base + extra + @as(i32, @intCast(x)); };
+                r = f(@as(u8, 1)) + f(@as(i64, 2));
+            }
+            return r;
+        };
+    )") == 17);
+}
+
+TEST_CASE("A generic local function in a test block captures the test's locals") {
+    CHECK(helpers::compile_and_run_tests(R"(
+        test "generic capture" {
+            let off: i32 = 3;
+            let f = fn(x: auto): i32 { return off + @as(i32, @intCast(x)); };
+            @expect(f(@as(u8, 1)) == 4);
+            @expect(f(@as(i64, 2)) == 5);
+        }
+    )") == 0);
+}
+
+TEST_CASE("A generic local function can't capture a binding declared after it") {
+    CHECK(helpers::raised(R"(
+        pub const main = fn(): i32 {
+            let f = fn(x: auto): i32 { return later + @as(i32, @intCast(x)); };
+            let later: i32 = 1;
+            return f(@as(u8, 2));
+        };
+    )",
+                          sema::error::GENERIC_CLOSURE_CAPTURE));
 }
 
 } // namespace ghoti::tests

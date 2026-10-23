@@ -873,6 +873,16 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - **Breaking:** unrolled loops are spelled with a leading `unroll`: `unroll for`, `unroll while`, `unroll do { ... } while (c)`, and `unroll loop` replace `for comptime`, `while comptime`, `do { ... } while comptime (c)`, and `loop comptime` (#395)
     - `unroll` is now a keyword
     - `comptime` before any loop (`comptime unroll for (...)`, `comptime for (...)`) runs it at compile time, as `comptime { ... }` around it does; it used to be rejected as not evaluable
+- A generic local function (`let f = fn(x: auto) ...`, or one with `comptime` parameters) captures the runtime locals around it like any closure: each monomorph reads and writes them through one environment built where the function is written
+    - `move fn` gives it its own copies; it may recurse by name, and closures or other generics inside the same function may call it
+    - Capturing a binding declared after the generic function is an error
+    - The constants and types around it are visible too; it used to report them as undeclared
+- Fixed: a closure with two or more captures read every capture past the first from the wrong address, crashing or returning garbage
+- Fixed: a closure inside a generic function recorded none of its captures, crashing codegen, and a local function or closure there kept the first instantiation's types for every later one
+- Fixed: distinct closures with the same signature passed to one `auto` or `impl Fn` parameter shared a single instantiation, so the second was rejected as not assignable to the first
+- Fixed: a closure that mentioned a local type alias or `const` crashed codegen or computed the wrong value; types and constants are now read directly instead of being captured
+- Fixed: a closure capturing a parameter it never writes (`&self`, a slice, a struct) crashed codegen, and inside a method `self` named the closure's own environment instead of the method's receiver
+- Fixed: a `move fn` that wrote to one of its captured copies lost the write before its next call, so a counter returned the same value every time
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

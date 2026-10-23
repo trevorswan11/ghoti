@@ -1625,6 +1625,50 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     last_type_.emplace(fn_type);
 }
 
+auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
+    -> gsl::span<types::closure_capture> {
+    std::vector<types::closure_capture> laid_out;
+    for (const auto& capture : resolving_.get_captures(fn_id)) {
+        auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
+        ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
+        auto* captured_type{&get_resolved_symbol_type(lookup->get_data())};
+        auto  mode{infer_capture_mode(capture.usage, *captured_type, is_move)};
+
+        // A local generic is a monomorph to call, so only the environment it captured is runtime
+        // state, and calling it needs that environment's address
+        if (ctx_.generic_functions.get_opt(*captured_type)) {
+            const auto env{ctx_.generic_functions.get_capture_env(*captured_type)};
+            if (!env) { continue; }
+            captured_type = &*env;
+            mode          = is_move ? types::capture_mode::VALUE : types::capture_mode::MUT_REF;
+        }
+
+        // What the environment actually stores: the value itself, or a reference to it
+        auto* storage_type{captured_type};
+        if (mode == types::capture_mode::REF) {
+            storage_type = &ctx_.get_reference(types::mut::CONSTANT, *captured_type);
+        } else if (mode == types::capture_mode::MUT_REF) {
+            storage_type = &ctx_.get_reference(types::mut::MUTABLE, *captured_type);
+        }
+        laid_out.emplace_back(capture.name, captured_type, storage_type, mode);
+    }
+
+    auto span{ctx_.arena.make_span<types::closure_capture>(laid_out.size())};
+    std::ranges::copy(laid_out, span.begin());
+    return span;
+}
+
+auto type_resolver::build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void {
+    if (resolving_.get_captures(fn_id).empty()) { return; }
+    const auto captures{capture_layout(fn_id, is_move)};
+    if (captures.empty()) { return; }
+
+    // Every monomorph takes the one environment, so each instantiation widens it to all captures
+    auto& env{ctx_.closure_slot_of(fn_type)};
+    env.resolve<types::closure_t>(captures, fn_type, fn_type);
+    ctx_.generic_functions.set_capture_env(fn_type, env);
+}
+
 auto type_resolver::instance_local_function_type(ast::node_id id) -> type& {
     auto&      current{resolving_.get_sema_type(id)};
     const bool in_instantiated_body{for_generic_instantiation_ && reresolve_floor_ &&
@@ -1663,30 +1707,11 @@ auto type_resolver::infer_capture_mode(capture_usage usage,
 }
 
 auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type& {
-    const auto captures{resolving_.get_captures(fn_id)};
-    ASSERT(!captures.empty(), "attach_closure_type called with no captures");
+    const auto capture_span{capture_layout(fn_id, is_move)};
+    // Only captured generics with nothing of their own to carry, so a plain function after all
+    if (capture_span.empty()) { return fn_type; }
 
     auto* closure_type{&ctx_.closure_slot_of(fn_type)};
-
-    auto  capture_span{ctx_.arena.make_span<types::closure_capture>(captures.size())};
-    usize i{0};
-    for (const auto& capture : captures) {
-        auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
-        ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
-        auto&      captured_type{get_resolved_symbol_type(lookup->get_data())};
-        const auto mode{infer_capture_mode(capture.usage, captured_type, is_move)};
-
-        // What the environment actually stores: the value itself, or a reference to it
-        auto* storage_type{&captured_type};
-        if (mode == types::capture_mode::REF) {
-            storage_type = &ctx_.get_reference(types::mut::CONSTANT, captured_type);
-        } else if (mode == types::capture_mode::MUT_REF) {
-            storage_type = &ctx_.get_reference(types::mut::MUTABLE, captured_type);
-        }
-
-        capture_span[i++] =
-            types::closure_capture{capture.name, &captured_type, storage_type, mode};
-    }
 
     // Inject mutable self reference into closure call arguments
     const auto& public_sig{fn_type.get_data().as<types::function>()};
@@ -1742,6 +1767,12 @@ auto type_resolver::enclosing_function_scopes() const -> std::vector<usize> {
         past_root = past_root || idx == *resolving_.root_table_idx;
     }
     return scopes;
+}
+
+auto type_resolver::is_written_after(ast::node_id lhs, ast::node_id rhs) const -> bool {
+    const auto l{resolving_.ast.location_of(lhs)};
+    const auto r{resolving_.ast.location_of(rhs)};
+    return std::pair{l.line, l.column} > std::pair{r.line, r.column};
 }
 
 auto type_resolver::outermost_function_boundary() const -> usize {

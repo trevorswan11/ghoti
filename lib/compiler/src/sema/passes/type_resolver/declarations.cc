@@ -405,44 +405,51 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
-    // A local generic's body runs in its own monomorph, apart from the frame that wrote it
-    if (enclosing_locals_depth_ && instantiation_root_depth_ &&
-        lookup->depth >= *enclosing_locals_depth_ && lookup->depth < *instantiation_root_depth_ &&
-        !is_compile_time_only(lookup->symbol)) {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("A generic local function can't capture the runtime local '{}'; pass it "
-                        "as an argument instead",
-                        name),
-            error::GENERIC_CLOSURE_CAPTURE,
-            resolving_.ast.location_of(id)));
-    }
-
+    // A local generic's monomorph runs apart from the frame that wrote it, so whatever it uses from
+    // that frame is captured into an environment built where the generic is written
+    const bool captured_by_generic{
+        enclosing_locals_depth_ && instantiation_root_depth_ && instantiating_fn_node_ &&
+        lookup->depth >= *enclosing_locals_depth_ && lookup->depth < *instantiation_root_depth_};
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
-    if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
-        lookup->depth >= outermost_function_boundary()) {
+    const bool captured_by_open_fn{!function_boundaries_.empty() &&
+                                   lookup->depth < function_boundaries_.back() &&
+                                   lookup->depth >= outermost_function_boundary()};
+    if (captured_by_generic || captured_by_open_fn) {
+        const auto self_id{open_function_nodes_.empty() ? *instantiating_fn_node_
+                                                        : open_function_nodes_.back()};
         // A function referring to its own name is recursion, not a captured free variable
-        bool is_self_reference{false};
+        bool                       is_self_reference{false};
+        stdx::option<ast::node_id> captured_decl;
         if (const auto node{lookup->symbol.get_data().as_opt<symbols::node_t>()}) {
-            if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
-                decl && decl->value) {
-                const ast::node_id value_id{*decl->value};
-                const auto&        self_id{open_function_nodes_.back()};
-                is_self_reference = value_id.get_kind() == self_id.get_kind() &&
-                                    value_id.get_index() == self_id.get_index();
+            if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                captured_decl.emplace(*node);
+                if (decl->value) {
+                    const ast::node_id value_id{*decl->value};
+                    is_self_reference = value_id.get_kind() == self_id.get_kind() &&
+                                        value_id.get_index() == self_id.get_index();
+                }
             }
         }
 
         if (is_self_reference) {
-            self_recursive_flags_.back() = true;
+            if (!self_recursive_flags_.empty()) { self_recursive_flags_.back() = true; }
+        } else if (captured_by_generic && captured_decl &&
+                   is_written_after(*captured_decl, *instantiating_fn_node_) &&
+                   !is_compile_time_only(lookup->symbol)) {
+            // Its environment is built where the generic is written, before this binding exists
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is declared after the generic local function that captures it",
+                            name),
+                error::GENERIC_CLOSURE_CAPTURE,
+                resolving_.ast.location_of(id)));
         } else if (!is_compile_time_only(lookup->symbol)) {
             auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
 
             // A closure needs a mutable binding to write through, but a `move fn` owns a copy.
             // Writing through an immutable view only reads the binding
-            const auto closure{
-                resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
+            const auto closure{resolving_.ast.get_as_opt<ast::function_expr>(self_id)};
             const bool immutable{!is_mutable_local(lookup->symbol)};
             // A binding declared later has no type yet. Using it is reported on its own
             if (usage == capture_usage::MUTATED && immutable &&
@@ -472,6 +479,10 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                     first_capturing = i + 1;
                     break;
                 }
+            }
+            if (captured_by_generic) {
+                resolving_.add_capture(*instantiating_fn_node_, name, usage);
+                first_capturing = 0;
             }
             for (usize i{first_capturing}; i < open_function_nodes_.size(); ++i) {
                 resolving_.add_capture(open_function_nodes_[i], name, usage);

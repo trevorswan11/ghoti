@@ -103,8 +103,22 @@ class generic_function_registry {
         return stdx::none;
     }
 
+    // The environment of runtime locals a local generic function captures, shared by all of its
+    // monomorphs and built at the place it's written
+    auto set_capture_env(const type& fn_type, type& env) -> void {
+        capture_envs_.insert_or_assign(&fn_type, &env);
+    }
+
+    [[nodiscard]] auto get_capture_env(const type& fn_type) const noexcept -> stdx::option<type&> {
+        if (const auto it{capture_envs_.find(&fn_type)}; it != capture_envs_.end()) {
+            return *it->second;
+        }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
+    ankerl::unordered_dense::map<const type*, type*>                 capture_envs_;
     ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
     ankerl::unordered_dense::map<u64, std::string>                   clone_discs_;
 };

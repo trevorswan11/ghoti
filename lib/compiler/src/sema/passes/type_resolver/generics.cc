@@ -434,6 +434,10 @@ namespace {
                               }),
                               "_"))};
     for (const auto& cx : comptime_args) { name += fmt::format("_cx{}", cx.mangle()); }
+    // A local generic written inside another generic is a different function per outer instance
+    if (const auto outer{fn_info.fn_type->get_instance_id()}) {
+        name += fmt::format("_i{:x}", outer);
+    }
     if (fn_info.enclosing_type) {
         name +=
             fmt::format("_in_{}", mangle_arg_type(ctx.generic_functions, *fn_info.enclosing_type));
@@ -791,6 +795,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     inst_resolver.instantiation_root_depth_.emplace(inst_resolver.table_stack_.size() - 1);
     if (!fn_info.enclosing_scopes.empty()) {
         inst_resolver.enclosing_locals_depth_.emplace(enclosing_locals_depth);
+        inst_resolver.instantiating_fn_node_.emplace(fn_mod.fn_literal_node(fn_info.node_id));
     }
 
     // This freestanding resolver has no enclosing-type context, so @This() needs it restored.
@@ -992,6 +997,12 @@ auto type_resolver::instantiate_generic(type&                             callee
             }
         }
         return stdx::none;
+    }
+
+    // The frame around a local generic hands its monomorphs what they captured from it
+    if (inst_resolver.instantiating_fn_node_ && !building_param_template_) {
+        inst_resolver.build_capture_env(
+            *inst_resolver.instantiating_fn_node_, *fn_info.fn_type, fn_expr.is_move);
     }
 
     // Diff the side tables against the snapshot (folding any `comptime`-sized `[n]T` first): all
