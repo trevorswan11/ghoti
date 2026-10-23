@@ -5366,8 +5366,8 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     // Splice every `expr...` pack expansion into place, mirroring the resolver's own
     // `expand_pack_call_args`: one effective slot per argument, or per pack element for a
     // `...`-marked one
-    std::vector<usize>          arg_source_index;
-    std::vector<stdx::opt_size> arg_pack_k;
+    std::vector<usize>            arg_source_index;
+    std::vector<stdx::opt_size>   arg_pack_k;
     std::vector<std::string_view> arg_pack_name;
     for (usize i{0}; i < call.arguments.size(); ++i) {
         const auto expanded_pack{[&] -> stdx::option<pack_context> {
