@@ -187,6 +187,12 @@ const count = fn(xs: []auto, keep: impl Fn(x: auto): bool): usize { ... };` }
 				<li>It can be returned by its own type through an <code>auto</code> return, under the same escape rule as a closure</li>
 			</ul>
 		</li>
+		<li>
+			Parameter packs work the same way: a closure may take its own <code>{ "rest..." }</code>, and a closure inside a pack function can read, iterate, and forward that function's pack (<code>{ "rest[k]" }</code>, <code>{ "unroll for (rest)" }</code>, <code>{ "rest..." }</code>)
+			<ul>
+				<li>Where a <code>fn(...)</code> or <code>impl Fn(...)</code> signature is expected, a pack closure takes one element per parameter past its fixed ones</li>
+			</ul>
+		</li>
 		<li>Inside a generic function, <code>{ "@fnCtx()" }</code> names the generic itself, so each recursive call instantiates for its own arguments</li>
 		<li>A generic method can also be called as <code>{ "Type.method(obj, args...)" }</code>, or through a value of it, with <code>obj</code> as the receiver</li>
 	</ul>
