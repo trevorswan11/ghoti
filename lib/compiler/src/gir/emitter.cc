@@ -781,6 +781,29 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         return fat;
     }
 
+    // A reference or pointer to a closure or a capturing generic already is its environment's
+    // address
+    const auto ptr_src{src_ty->get_data().as_opt<sema::types::pointer>()};
+    const auto ref_src{src_ty->get_data().as_opt<sema::types::reference>()};
+    if (auto* pointee{ptr_src ? &ptr_src->underlying : ref_src ? &ref_src->underlying : nullptr}) {
+        const auto env_of{[&] { return value{emit_expression_id_raw(*src).data, ptr_ty}; }};
+        if (pointee->get_kind() == sema::type_kind::CLOSURE) {
+            return value{builder_.emit_make_callable(env_of(), closure_fn_name(*pointee), fat_type),
+                         fat_type};
+        }
+        if (pointee->is_generic_value()) {
+            const auto fat_ptr{fat_type.get_data().as_opt<sema::types::pointer>()};
+            const auto mono{monomorph_for(*pointee, fat_ptr ? fat_ptr->underlying : fat_type)};
+            if (!mono) { return stdx::none; }
+            if (ctx_.generic_functions.get_capture_env(*pointee)) {
+                return value{builder_.emit_make_callable(env_of(), *mono, fat_type), fat_type};
+            }
+            auto& thin{ctx_.with_erasure(fat_ptr ? fat_ptr->underlying : fat_type, false)};
+            return value{builder_.emit_make_callable(value{*mono, thin}, stdx::none, fat_type),
+                         fat_type};
+        }
+    }
+
     // The monomorph the resolver instantiated for this signature, with whatever it captured
     if (src_ty->is_generic_value()) {
         const auto fat_ptr{fat_type.get_data().as_opt<sema::types::pointer>()};
@@ -809,8 +832,6 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         return fn && !fn->erased;
     }};
     // A pointer or reference to a function is its code address
-    const auto ptr_src{src_ty->get_data().as_opt<sema::types::pointer>()};
-    const auto ref_src{src_ty->get_data().as_opt<sema::types::reference>()};
     if (is_thin_fn(*src_ty) || (ptr_src && is_thin_fn(ptr_src->underlying)) ||
         (ref_src && is_thin_fn(ref_src->underlying))) {
         return value{builder_.emit_make_callable(emit_expression(src), stdx::none, fat_type),
@@ -823,11 +844,16 @@ auto emitter::monomorph_for(const sema::type& generic_fn, const sema::type& sign
     -> stdx::option<std::string> {
     const auto sig{signature.get_data().as_opt<sema::types::function>()};
     if (!sig) { return stdx::none; }
+    // A method's monomorph is keyed without its receiver, the signature's first parameter
+    const auto info{ctx_.generic_functions.get_opt(generic_fn)};
+    const bool has_self{info && info->fn_expr->self};
+    if (has_self && sig->params.empty()) { return stdx::none; }
+    const auto wanted{sig->params.subspan(has_self ? 1UZ : 0UZ)};
     const auto matches{[&](std::string_view name) {
         const auto req{ctx_.instantiation_cache.get_request(name)};
         return req && req->generic_fn_type.get() == &generic_fn &&
-               req->arg_types.size() == sig->params.size() &&
-               std::ranges::equal(req->arg_types, sig->params, [](const auto* a, const auto* b) {
+               req->arg_types.size() == wanted.size() &&
+               std::ranges::equal(req->arg_types, wanted, [](const auto* a, const auto* b) {
                    return sema::is_same_unqualified(*a, *b);
                });
     }};
@@ -3002,7 +3028,13 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](const ast::match_expr& data) -> value { return emit_match(id, data); },
         [&](const ast::initializer_expr& data) -> value { return emit_initializer(id, data); },
-        [&](const ast::dot_expr& data) -> value { return emit_dot(id, data); },
+        [&](const ast::dot_expr& data) -> value {
+            // A module's or type's generic function captures nothing, so its value holds nothing
+            if (const auto t{active_mod().get_sema_type_opt(id)}; t && t->is_generic_value()) {
+                return value{undefined_val{}, *t};
+            }
+            return emit_dot(id, data);
+        },
         [&](const ast::index_expr& data) -> value { return emit_index(id, data); },
         [&](const ast::address_of_expr& data) -> value { return emit_address_of(id, data); },
         [&](const ast::dereference_expr& data) -> value { return emit_dereference(id, data); },
@@ -5319,8 +5351,18 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     }
 
     const usize param_offset{has_implicit_self ? 1UZ : 0UZ};
+    // `Type.method(obj, ...)` passes the receiver first, ahead of the generic's own parameters
+    const usize self_shift{
+        generic_target_fn && generic_target_fn->self && !has_implicit_self ? 1UZ : 0UZ};
     for (usize i{0}; i < arg_source_index.size(); ++i) {
         const usize param_idx{i + param_offset};
+        if (i < self_shift) {
+            if (const auto self_h{call.arguments[arg_source_index[i]].as_opt<ast::expr_handle>()}) {
+                args.emplace_back(emit_expression_id_raw(*self_h));
+            }
+            continue;
+        }
+        const usize p{i - self_shift};
         if (arg_pack_k[i]) {
             // A pack-element slot aliases the hidden per-element parameter binding that
             // `emit_generic_instantiation` already materialized for the enclosing pack.
@@ -5337,13 +5379,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             }
             continue;
         }
-        if (binds_comptime_arg(i)) { continue; }
+        if (binds_comptime_arg(p)) { continue; }
         const auto& arg{call.arguments[arg_source_index[i]]};
         if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
             bool is_type_arg{false};
             // A parameter declared `: type` accepts only a type value
-            if (generic_target_fn && i < generic_target_fn->parameters.size()) {
-                if (generic_target_fn->parameters[i].spells_type()) { is_type_arg = true; }
+            if (generic_target_fn && p < generic_target_fn->parameters.size()) {
+                if (generic_target_fn->parameters[p].spells_type()) { is_type_arg = true; }
             }
             if (const auto t_opt{active_mod().get_sema_type_opt(*expr_h)}) {
                 if (t_opt->get_kind() == sema::type_kind::TYPE) { is_type_arg = true; }
@@ -5368,7 +5410,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (is_type_arg) {
                 auto& type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
                 args.emplace_back(value{undefined_val{}, type_type});
-            } else if (const auto inst_param{instantiated_param(i)}) {
+            } else if (const auto inst_param{instantiated_param(p)}) {
                 args.emplace_back(emit_coerced_expr(*expr_h, *inst_param));
             } else if (fn_data && param_idx < fn_data->params.size()) {
                 args.emplace_back(emit_coerced_expr(*expr_h, *fn_data->params[param_idx]));

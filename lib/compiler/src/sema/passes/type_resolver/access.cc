@@ -759,6 +759,41 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_dot, const ast::dot_expr&)
 auto type_resolver::visit(ast::node_id id, const ast::dot_expr& dot) -> void {
     PROFILE_FUNCTION();
     resolve_dot(id, dot);
+    if (last_type_ && last_type_->is_generic_value()) {
+        bind_member_generic_to_receiver(id, dot);
+        instantiate_for_expected_callable(id, *last_type_);
+    }
+}
+
+auto type_resolver::bind_member_generic_to_receiver(ast::node_id id, const ast::dot_expr& dot)
+    -> void {
+    auto&      generic{*last_type_};
+    const auto info{ctx_.generic_functions.get_opt(generic)};
+    if (!info || !info->enclosing_type || info->fn_expr->self) { return; }
+    const auto receiver{receiver_aggregate(dot)};
+    if (!receiver || &*receiver == &*info->enclosing_type) { return; }
+    const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*receiver)};
+    if (!prefix) { return; }
+
+    // Every instance of a type constructor shares the member's literal, so a value taken from
+    // one instance names a copy of the generic that remembers which instance it belongs to
+    auto& bound{ctx_.local_function_instance(generic, *prefix)};
+    if (!bound.is_resolved()) {
+        const auto& fn{generic.get_data().as<types::function>()};
+        bound.resolve<types::function>(
+            fn.params, fn.return_type, fn.has_self, fn.is_variadic, fn.conv);
+        ctx_.generic_functions.register_function(bound,
+                                                 *info->module,
+                                                 info->node_id,
+                                                 *info->fn_expr,
+                                                 info->name,
+                                                 *receiver,
+                                                 info->enclosing_fn_table_idx,
+                                                 info->enclosing_scopes);
+        bound.mark_generic_value();
+    }
+    resolving_.set_sema_type(id, bound);
+    last_type_.emplace(bound);
 }
 
 auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& range) -> void {

@@ -881,6 +881,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Where one signature is expected (a `fn(...)`, `^fn(...)`, or `comptime f: fn(...)` parameter, an annotated binding, a field, or an array element) it becomes the monomorph for that signature, and a mismatched result is reported at the value
     - Returning one that holds a reference into the returning frame is an error, as for closures; use `move fn`
     - `@fnCtx()` in a generic body names the generic itself, so each recursive call instantiates for its own arguments
+    - A module's or type's generic (`m.twice`, `S.helper`) is a value too, and a type constructor's generic member taken from an instance (`Box(i64).scale`) stays bound to that instance
+    - A generic method can be called as `Type.method(obj, ...)` or through a value of it, and passed where `fn(s: &S, ...)` is expected
+    - A closure may capture a capturing generic function and call it at several types
+- Closures and generic local functions evaluate at compile time, in a `comptime` block or a function folded at compile time; a write to a captured binding is kept, and a `move fn` keeps its own copies across calls
+- Fixed: passing `&closure` (or `^closure`) where a `fn(...)` or `&dyn Fn(...)` is expected crashed codegen; the reference is now the closure's environment
+- Fixed: `let g = some_generic;` renamed the generic itself to `g` in its diagnostics and monomorph names
 - Fixed: a closure with two or more captures read every capture past the first from the wrong address, crashing or returning garbage
 - Fixed: a closure inside a generic function recorded none of its captures, crashing codegen, and a local function or closure there kept the first instantiation's types for every later one
 - Fixed: distinct closures with the same signature passed to one `auto` or `impl Fn` parameter shared a single instantiation, so the second was rejected as not assignable to the first

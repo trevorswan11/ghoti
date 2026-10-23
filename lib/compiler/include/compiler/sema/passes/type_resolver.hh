@@ -203,6 +203,8 @@ class type_resolver {
                                  std::string* monomorph = nullptr) -> stdx::option<std::string>;
     // Reports a returned generic function whose environment would outlive what it captured
     auto report_generic_escape(const type& generic_fn) -> bool;
+    // A type constructor's generic member reached through one of its instances, bound to it
+    auto bind_member_generic_to_receiver(ast::node_id id, const ast::dot_expr& dot) -> void;
     // A generic function value written where one concrete signature is expected takes it
     auto instantiate_for_expected_callable(ast::node_id id, type& generic_fn) -> void;
     // Whether `lhs` starts later in the source than `rhs`
@@ -1074,6 +1076,8 @@ class type_resolver {
     stdx::option<ast::node_id> instantiating_fn_node_{};
     // The generic function whose body this instantiation resolver walks, as `@fnCtx()` names it
     type* instantiating_template_{nullptr};
+    // The receiver `Type.method(obj, ...)` passed first, for the call it resolves as next
+    type* explicit_self_receiver_{nullptr};
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

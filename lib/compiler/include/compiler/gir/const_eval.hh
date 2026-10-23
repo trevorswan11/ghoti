@@ -240,6 +240,7 @@ class const_eval {
         gsl::not_null<mod::module_t*>            module;
         gsl::not_null<const ast::function_expr*> fn_expr;
         stdx::option<const const_struct&>        captures{};
+        stdx::option<ast::node_id>               fn_node{};
     };
 
     struct memo_key {
@@ -382,11 +383,21 @@ class const_eval {
     [[nodiscard]] auto callee_params(const ast::call_expr& call) -> gsl::span<sema::type*>;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
+    // `captures_out` receives what the body left each capture holding
     auto eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                           const ast::function_expr&         fn_expr,
                           std::vector<const_value>&         args,
-                          stdx::option<const const_struct&> captures = stdx::none)
+                          stdx::option<const const_struct&> captures = stdx::none,
+                          const_struct* captures_out = nullptr) -> stdx::option<const_value>;
+    // A function literal as a compile-time value, holding what it captures right now
+    auto eval_function_literal(ast::node_id id, const ast::function_expr& fn_expr)
         -> stdx::option<const_value>;
+    // Calls the closure bound to `name`. A capture it writes is read from, and written back to,
+    // the binding it names, and a `move fn` keeps its own copies in its value
+    auto call_bound_callable(stdx::option<ast::node_id> id,
+                             const ast::call_expr&      call,
+                             std::string_view           name,
+                             const bound_callable&      bc) -> stdx::option<const_value>;
 
     auto lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable>;
 

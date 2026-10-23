@@ -1869,6 +1869,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return stdx::none;
         },
         [&](const ast::if_expr& data) { return eval_if(id, data); },
+        [&](const ast::function_expr& data) { return eval_function_literal(id, data); },
         [&](const ast::cfg_value_expr&) -> stdx::option<const_value> {
             // The cfg pass already settled this; read its verdict.
             const auto it{module_->cfg_value_results.find(id.get_index())};
@@ -4234,14 +4235,7 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
     // A `comptime` callable (closure or function) parameter invoked inside a monomorphized body.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto bc{lookup_bound_callable(ident->name)}) {
-            auto args_opt{eval_call_args(call)};
-            if (!args_opt) { return stdx::none; }
-            auto&       args{*args_opt};
-            auto* const prev{module_.get()};
-            set_module(*bc->module);
-            auto res{eval_comptime_fn(id, *bc->fn_expr, args, bc->captures)};
-            set_module(*prev);
-            return res;
+            return call_bound_callable(id, call, ident->name, *bc);
         }
     }
 
@@ -5784,6 +5778,76 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     }
 }
 
+auto const_eval::call_bound_callable(stdx::option<ast::node_id> id,
+                                     const ast::call_expr&      call,
+                                     std::string_view           name,
+                                     const bound_callable&      bc) -> stdx::option<const_value> {
+    auto args_opt{eval_call_args(call)};
+    if (!args_opt) { return stdx::none; }
+    auto& args{*args_opt};
+
+    // A capture the body writes reads the binding as it is now, not as it was captured
+    const_struct                  captures{bc.captures ? *bc.captures : const_struct{}};
+    std::vector<std::string_view> written_through;
+    if (bc.fn_node && !bc.fn_expr->is_move) {
+        for (const auto& capture : bc.module->get_captures(*bc.fn_node)) {
+            if (capture.usage != sema::capture_usage::MUTATED) { continue; }
+            if (auto current{lookup_local_binding(capture.name)}) {
+                captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
+                written_through.emplace_back(capture.name);
+            }
+        }
+    }
+
+    // A generic local folds with this call's typing, as its monomorph was resolved
+    const auto                 target{id ? module_->get_generic_call_target_opt(*id) : stdx::none};
+    const auto                 diff{target ? ctx_.instantiation_cache.get_body_type_diff(*target)
+                                           : bc.module->active_body_diff};
+    const mod::body_diff_guard diff_guard{*bc.module, diff};
+
+    auto* const  prev{module_.get()};
+    const_struct after;
+    set_module(*bc.module);
+    auto res{eval_comptime_fn(id, *bc.fn_expr, args, captures, &after)};
+    set_module(*prev);
+
+    for (const auto written : written_through) {
+        if (const auto it{after.fields.find(std::string{written})}; it != after.fields.end()) {
+            DISCARD(set_local_binding(written, it->second));
+        }
+    }
+    // A `move fn` owns its copies, so the next call sees what this one left in them
+    if (bc.fn_expr->is_move && bc.fn_node && !after.fields.empty()) {
+        if (auto self{lookup_local_binding(name)}) {
+            if (const auto cl{self->as_opt<const_closure>()}) {
+                auto updated{*cl};
+                updated.captures = std::move(after);
+                DISCARD(set_local_binding(
+                    name, const_value{const_value::data_t{std::move(updated)}, self->get_type()}));
+            }
+        }
+    }
+    return res;
+}
+
+auto const_eval::eval_function_literal(ast::node_id id, const ast::function_expr& fn_expr)
+    -> stdx::option<const_value> {
+    if (fn_expr.is_type_expr || !fn_expr.body) { return stdx::none; }
+    // Runtime code keeps its functions as code; only real compile-time evaluation calls one as
+    // a value
+    if (!in_evaluation_context()) { return stdx::none; }
+    const auto sema_type{module_->get_sema_type_opt(id)};
+    if (!sema_type) { return stdx::none; }
+    const_closure cl{.fn_node = id, .module = *module_, .captures = {}};
+    for (const auto& capture : module_->get_captures(id)) {
+        // A runtime local has no value until the program runs
+        auto current{lookup_local_binding(capture.name)};
+        if (!current) { return stdx::none; }
+        cl.captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
+    }
+    return const_value{const_value::data_t{std::move(cl)}, *sema_type};
+}
+
 auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable> {
     PROFILE_FUNCTION();
     // Find a comptime callable value bound to `name` (call frame first, then comptime frame).
@@ -5800,7 +5864,10 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
     if (const auto cl{v->as_opt<const_closure>()}) {
         auto& m{cl->module ? *cl->module : *module_};
         if (const auto fe{m.ast.get_as_opt<ast::function_expr>(cl->fn_node)}) {
-            return bound_callable{.module = &m, .fn_expr = fe.get(), .captures = cl->captures};
+            return bound_callable{.module   = &m,
+                                  .fn_expr  = fe.get(),
+                                  .captures = cl->captures,
+                                  .fn_node  = cl->fn_node};
         }
         return stdx::none;
     }
@@ -5953,8 +6020,8 @@ namespace {
 auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                                   const ast::function_expr&         fn_expr,
                                   std::vector<const_value>&         args,
-                                  stdx::option<const const_struct&> captures)
-    -> stdx::option<const_value> {
+                                  stdx::option<const const_struct&> captures,
+                                  const_struct* captures_out) -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (!fn_expr.body) { return stdx::none; }
     // A trailing `rest...` pack binds as a constant array of every remaining argument, so
@@ -6068,6 +6135,15 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                     it != call_stack_.back().bindings.end()) {
                     args[p_offset + p] = it->second;
                 }
+            }
+        }
+    }
+
+    if (captures && captures_out) {
+        for (const auto& [name, _] : captures->fields) {
+            if (const auto it{call_stack_.back().bindings.find(name)};
+                it != call_stack_.back().bindings.end()) {
+                captures_out->fields.insert_or_assign(name, it->second);
             }
         }
     }

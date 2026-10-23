@@ -1383,7 +1383,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }()};
         resolving_.storageless_decls.insert_or_assign(id.get_index(), storageless);
 
-        if (type_data.is<types::function>()) {
+        // Only the function written here takes this name. Another one bound to it keeps its own
+        if (type_data.is<types::function>() && decl.value && decl.value->is<ast::function_expr>()) {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
             ctx_.generic_functions.set_function_name(resolved_type, decl_ident.name);
         }

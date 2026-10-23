@@ -245,17 +245,29 @@ auto type_resolver::instantiate_as_callable(type&                  generic_fn,
     if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime || p.is_pack; })) {
         return std::string{"it takes compile-time parameters, which a call signature can't supply"};
     }
-    if (info->fn_expr->self || params.size() != target.params.size()) {
+    // A method takes its receiver as the signature's first parameter
+    const usize self_count{info->fn_expr->self ? 1UZ : 0UZ};
+    if (params.size() + self_count != target.params.size()) {
         return fmt::format("it takes {} parameter{}, not {}",
-                           params.size(),
-                           string_utils::plural_suffix(params.size()),
+                           params.size() + self_count,
+                           string_utils::plural_suffix(params.size() + self_count),
                            target.params.size());
     }
+    generic_function_info bound_info{*info};
+    if (self_count) {
+        type* receiver{target.params.front()};
+        if (const auto p{receiver->get_data().as_opt<types::pointer>()}) {
+            receiver = &p->underlying;
+        } else if (const auto r{receiver->get_data().as_opt<types::reference>()}) {
+            receiver = &r->underlying;
+        }
+        bound_info.enclosing_type.emplace(denoted_type(*receiver));
+    }
 
-    auto args{ctx_.pool.get_many_unsafe(target.params.size())};
-    std::ranges::copy(target.params, args.begin());
+    auto args{ctx_.pool.get_many_unsafe(params.size())};
+    std::ranges::copy(target.params.subspan(self_count), args.begin());
     const auto diags_before{ctx_.diags.size()};
-    const auto inst{instantiate_generic(generic_fn, *info, args, {})};
+    const auto inst{instantiate_generic(generic_fn, bound_info, args, {})};
     if (!inst) {
         if (ctx_.diags.size() > diags_before) { return stdx::none; }
         return std::string{"it can't be instantiated with those parameter types"};
@@ -819,6 +831,8 @@ auto type_resolver::instantiate_for_call(const ast::call_expr&             call,
 
 template <ast::IndexableID ID>
 auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
+    // Set only for the call `Type.method(obj, ...)` is resolved as, never one nested in it
+    const auto forced_receiver{std::exchange(explicit_self_receiver_, nullptr)};
     // The call can only yield a non-poison type if the function is valid
     {
         // Only a bare `@builtin(...)` callee is a call of that builtin, not `@builtin.x(...)`
@@ -880,7 +894,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     if (function_type) {
         const auto dot_call{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
         const bool is_obj_instance{dot_call && !receiver_names_type(*dot_call)};
-        const auto has_implicit_self{is_closure_call ||
+        const auto has_implicit_self{is_closure_call || forced_receiver ||
                                      (function_type->has_self && is_obj_instance)};
 
         // Check the arity of the function against params before resetting last type
@@ -958,8 +972,41 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
         }
 
-        if (fn_info_opt && (any_param_generic(params) ||
-                            any_param_comptime(*fn_info_opt->fn_expr) || has_pack_param)) {
+        const bool generic_callee{fn_info_opt &&
+                                  (any_param_generic(params) ||
+                                   any_param_comptime(*fn_info_opt->fn_expr) || has_pack_param)};
+
+        // `Type.method(obj, ...)` (or a value of the method) instantiates as `obj.method(...)`
+        // does, with `obj` as the receiver
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            if (generic_callee && explicit_self && !call.arguments.empty() && !params.empty()) {
+                const auto self_arg{call.arguments.front().template as_opt<ast::expr_handle>()};
+                if (!self_arg) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+                {
+                    const structural_guard g{implicit_type_stack_, *params.front()};
+                    resolve(*self_arg);
+                }
+                if (last_type_->is_poison()) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                type* receiver{&*last_type_};
+                if (const auto p{receiver->get_data().as_opt<types::pointer>()}) {
+                    receiver = &p->underlying;
+                } else if (const auto r{receiver->get_data().as_opt<types::reference>()}) {
+                    receiver = &r->underlying;
+                }
+                receiver = &denoted_type(*receiver);
+                ast::call_expr rest{call};
+                rest.arguments.erase(rest.arguments.begin());
+                if (!rest.pack_expansions.empty()) {
+                    rest.pack_expansions.erase(rest.pack_expansions.begin());
+                }
+                explicit_self_receiver_ = receiver;
+                return resolve_call(id, rest);
+            }
+        }
+
+        if (generic_callee) {
             auto concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
             // What `auto` bound to inside a pattern parameter (`x: &auto`), for interface bounds
             std::vector<type*> auto_leaves(effective_arity, nullptr);
@@ -1177,6 +1224,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (auto recv{receiver_aggregate(*dot_call)}) {
                     fn_info_copy.enclosing_type.emplace(*recv);
                 }
+            } else if (forced_receiver && fn_info_copy.enclosing_type) {
+                fn_info_copy.enclosing_type.emplace(*forced_receiver);
             }
 
             generic_instantiation_key key{
@@ -1733,10 +1782,8 @@ auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
         // A local generic is a monomorph to call, so only the environment it captured is runtime
         // state, and calling it needs that environment's address
         if (ctx_.generic_functions.get_opt(*captured_type)) {
-            const auto env{ctx_.generic_functions.get_capture_env(*captured_type)};
-            if (!env) { continue; }
-            captured_type = &*env;
-            mode          = is_move ? types::capture_mode::VALUE : types::capture_mode::MUT_REF;
+            if (!ctx_.generic_functions.get_capture_env(*captured_type)) { continue; }
+            mode = is_move ? types::capture_mode::VALUE : types::capture_mode::MUT_REF;
         }
 
         // What the environment actually stores: the value itself, or a reference to it
