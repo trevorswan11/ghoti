@@ -34,7 +34,9 @@ namespace ghoti::sema {
 using namespace resolver_detail;
 
 // `rest[k]`: the k-th argument's own type, `k` a compile-time constant in range.
-auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void {
+auto type_resolver::resolve_pack_index(ast::node_id           id,
+                                       const ast::index_expr& index,
+                                       const pack_binding&    pack) -> void {
     gir::const_eval evaluator{ctx_, resolving_};
     const auto      folded{evaluator.try_eval(index.index)};
     const auto      k{folded ? folded->as_int_opt() : stdx::none};
@@ -42,22 +44,22 @@ auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& i
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            fmt::format("'{}[k]' requires a compile-time constant index", current_pack_->name),
+            fmt::format("'{}[k]' requires a compile-time constant index", pack.name),
             error::PACK_INDEX_NOT_CONST,
             resolving_.ast.location_of(index.index)));
     }
-    if (*k < 0 || static_cast<usize>(*k) >= current_pack_->element_types.size()) {
+    if (*k < 0 || static_cast<usize>(*k) >= pack.element_types.size()) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("pack index {} out of range for '{}' (len {})",
                                          *k,
-                                         current_pack_->name,
-                                         current_pack_->element_types.size()),
+                                         pack.name,
+                                         pack.element_types.size()),
                              error::PACK_INDEX_OUT_OF_RANGE,
                              resolving_.ast.location_of(index.index)));
     }
-    auto& elem_type{*current_pack_->element_types[static_cast<usize>(*k)]};
+    auto& elem_type{*pack.element_types[static_cast<usize>(*k)]};
     resolving_.set_sema_type(id, elem_type);
     last_type_.emplace(elem_type);
 }
@@ -87,10 +89,10 @@ auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eva
 
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
-    if (current_pack_) {
-        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(index.array)};
-            ident && ident->name == current_pack_->name) {
-            return resolve_pack_index(id, index);
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(index.array)}) {
+        if (const auto pack{pack_named(ident->name)}) {
+            capture_pack_use(*pack);
+            return resolve_pack_index(id, index, *pack);
         }
     }
     TRY_RESOLVE(index.array);
@@ -454,11 +456,8 @@ auto type_resolver::resolve_pack_len(ID id, const ast::dot_expr& dot) -> void {
 
 template <ast::IndexableID ID>
 auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
-    if (current_pack_) {
-        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(dot.object)};
-            ident && ident->name == current_pack_->name) {
-            return resolve_pack_len(id, dot);
-        }
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(dot.object)}) {
+        if (pack_named(ident->name)) { return resolve_pack_len(id, dot); }
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }

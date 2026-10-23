@@ -232,6 +232,7 @@ namespace {
 
 struct unrolled_for_driver {
     bool                           is_pack{false};
+    const void*                    pack{nullptr}; // the `type_resolver::pack_binding` iterated
     type*                          elem_type{nullptr};
     std::vector<gir::const_value>  elem_values; // empty for a pack driver
     stdx::option<std::string_view> name;        // unset for a `_`-discarded capture
@@ -253,6 +254,7 @@ class iteration_write_log {
         append(outer_->node_idxs, log_.node_idxs);
         append(outer_->explicit_idxs, log_.explicit_idxs);
         append(outer_->attribute_idxs, log_.attribute_idxs);
+        append(outer_->call_idxs, log_.call_idxs);
     }
 
     MAKE_PINNED(iteration_write_log);
@@ -324,11 +326,14 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                 : stdx::none;
 
         const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
-        drv.is_pack = driver_ident && current_pack_ && driver_ident->name == current_pack_->name;
+        const auto pack{driver_ident ? pack_named(driver_ident->name) : nullptr};
+        drv.is_pack = pack != nullptr;
+        drv.pack    = pack;
 
         usize this_count{0};
-        if (drv.is_pack) {
-            this_count = current_pack_->element_types.size();
+        if (pack) {
+            capture_pack_use(*pack);
+            this_count = pack->element_types.size();
         } else {
             {
                 const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
@@ -485,7 +490,8 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
             const auto& drv{drivers[d]};
             const auto& cap{for_expr.captures[d]};
             if (drv.is_pack) {
-                resolving_.set_sema_type(cap.payload, *current_pack_->element_types[k]);
+                const auto& pack{*static_cast<const pack_binding*>(drv.pack)};
+                resolving_.set_sema_type(cap.payload, *pack.element_types[k]);
             } else {
                 resolving_.set_sema_type(cap.payload, *drv.elem_type);
                 if (drv.name) { frame.insert_or_assign(*drv.name, drv.elem_values[k]); }

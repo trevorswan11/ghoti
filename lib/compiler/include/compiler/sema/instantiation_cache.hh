@@ -277,6 +277,7 @@ struct body_write_log {
     std::vector<usize> node_idxs;
     std::vector<usize> explicit_idxs;
     std::vector<usize> attribute_idxs;
+    std::vector<usize> call_idxs;
 };
 
 // Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a

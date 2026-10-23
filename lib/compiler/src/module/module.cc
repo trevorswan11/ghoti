@@ -290,6 +290,10 @@ auto module_t::record_explicit_write(usize idx) noexcept -> void {
     if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
 }
 
+auto module_t::record_call_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->call_idxs.emplace_back(idx); }
+}
+
 auto module_t::attributes_of(ast::node_id id) const noexcept
     -> stdx::option<const sema::resolved_attributes&> {
     if (active_body_diff) {

@@ -319,7 +319,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
 
     // A pack is usable only as `.len`, `[K]`, `unroll for`'s iterable, or `expr...`. Those
     // forms intercept before ever reaching here, so a bare mention of the name is out of position.
-    if (current_pack_ && name == current_pack_->name) {
+    if (pack_named(name)) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -1278,10 +1278,15 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         resolve_decl_attributes(id, decl, type_data);
         if (const auto runtime{const_closure_runtime_capture(decl)}) {
+            // A pack element is captured as `rest#k`, which the source spells `rest[k]`
+            std::string spelled{*runtime};
+            if (const auto hash{spelled.find('#')}; hash != std::string::npos) {
+                spelled = fmt::format("{}[{}]", spelled.substr(0, hash), spelled.substr(hash + 1));
+            }
             ctx_.poison_symbol(sym,
                                fmt::format("A 'const' function cannot capture the runtime value "
                                            "'{}'; declare the closure with 'let'",
-                                           *runtime),
+                                           spelled),
                                error::ILLEGAL_BINDING_KIND,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());

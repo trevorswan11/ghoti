@@ -158,6 +158,7 @@ struct module_t {
 
     auto record_node_write(usize idx) noexcept -> void;
     auto record_explicit_write(usize idx) noexcept -> void;
+    auto record_call_write(usize idx) noexcept -> void;
 
     // Overlay-aware, so a monomorph's emit sees the attributes its own instantiation folded
     [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
@@ -329,6 +330,7 @@ struct module_t {
     template <ast::IndexableID ID> auto set_generic_call_target(ID id, std::string target) -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.generic_call_targets[id].emplace(std::move(target));
+            record_call_write(id.get_index());
         }
     }
 

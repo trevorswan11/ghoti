@@ -450,7 +450,11 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
     {
         const scope_guard g{scopes_};
         generic_env_owners_.emplace_back(req.generic_fn_type.get());
-        const auto pop_env_owner{gsl::finally([&] { generic_env_owners_.pop_back(); })};
+        auto       outer_captured_packs{std::exchange(captured_packs_, {})};
+        const auto pop_env_owner{gsl::finally([&] {
+            generic_env_owners_.pop_back();
+            captured_packs_ = std::move(outer_captured_packs);
+        })};
         bind_generic_env(fn, *req.generic_fn_type, fn_expr.is_move);
         if (fn_expr.self) {
             const auto& self_ident{fn_mod.ast.get_as<ast::identifier_expr>(fn_expr.self->name)};
@@ -2093,6 +2097,14 @@ auto emitter::bind_env_captures(local_id                      env,
     }
 }
 
+auto emitter::pack_named(std::string_view name) const -> stdx::option<pack_context> {
+    if (current_pack_ && current_pack_->name == name) { return current_pack_; }
+    for (const auto& pack : captured_packs_ | std::views::reverse) {
+        if (pack.name == name) { return pack; }
+    }
+    return stdx::none;
+}
+
 auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, bool is_move)
     -> void {
     const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
@@ -2106,7 +2118,25 @@ auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, b
                                         .is_alloca = false,
                                         .const_val = stdx::none,
                                     });
-    bind_env_captures(env_slot.id, *env, env->get_data().as<sema::types::closure_t>(), is_move);
+    const auto& cl{env->get_data().as<sema::types::closure_t>()};
+    bind_env_captures(env_slot.id, *env, cl, is_move);
+
+    // A captured `rest#k` is the k-th element of an enclosing function's pack
+    for (const auto& capture : cl.captures) {
+        const auto hash{capture.name.find('#')};
+        if (hash == std::string_view::npos) { continue; }
+        const auto pack_name{capture.name.substr(0, hash)};
+        usize      k{0};
+        for (const char c : capture.name.substr(hash + 1)) {
+            k = k * 10 + static_cast<usize>(c - '0');
+        }
+        const auto known{std::ranges::find(captured_packs_, pack_name, &pack_context::name)};
+        if (known == captured_packs_.end()) {
+            captured_packs_.emplace_back(pack_context{.name = pack_name, .element_count = k + 1});
+        } else {
+            known->element_count = std::max(known->element_count, k + 1);
+        }
+    }
 }
 
 auto emitter::emit_generic_value(sema::type& generic_fn_type) -> value {
@@ -4969,7 +4999,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 binding->type.get_data().as_opt<sema::types::pointer>()->underlying.get_kind() ==
                     sema::type_kind::FUNCTION};
             // Function-type parameters declared by value need to be invoked through indirection.
-            const bool is_fn_val_binding{binding->type.get_kind() == sema::type_kind::FUNCTION};
+            // A generic function's binding holds its environment, never code to call through
+            const bool is_fn_val_binding{binding->type.get_kind() == sema::type_kind::FUNCTION &&
+                                         !binding->type.is_generic_value()};
             if (binding->const_val && binding->const_val->template is<std::string>()) {
                 callee_name.emplace(binding->const_val->template as<std::string>());
             } else if (is_fn_ptr_binding || is_fn_val_binding) {
@@ -5336,17 +5368,25 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     // `...`-marked one
     std::vector<usize>          arg_source_index;
     std::vector<stdx::opt_size> arg_pack_k;
+    std::vector<std::string_view> arg_pack_name;
     for (usize i{0}; i < call.arguments.size(); ++i) {
-        const bool is_expansion{current_pack_ && i < call.pack_expansions.size() &&
-                                call.pack_expansions[i]};
-        if (!is_expansion) {
+        const auto expanded_pack{[&] -> stdx::option<pack_context> {
+            if (i >= call.pack_expansions.size() || !call.pack_expansions[i]) { return stdx::none; }
+            const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
+            const auto ident{expr_h ? active_ast().get_as_opt<ast::identifier_expr>(*expr_h)
+                                    : stdx::none};
+            return ident ? pack_named(ident->name) : stdx::none;
+        }()};
+        if (!expanded_pack) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(stdx::none);
+            arg_pack_name.emplace_back();
             continue;
         }
-        for (usize k{0}; k < current_pack_->element_count; ++k) {
+        for (usize k{0}; k < expanded_pack->element_count; ++k) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(k);
+            arg_pack_name.emplace_back(expanded_pack->name);
         }
     }
 
@@ -5366,7 +5406,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         if (arg_pack_k[i]) {
             // A pack-element slot aliases the hidden per-element parameter binding that
             // `emit_generic_instantiation` already materialized for the enclosing pack.
-            const auto elem_name{fmt::format("{}#{}", current_pack_->name, *arg_pack_k[i])};
+            const auto elem_name{fmt::format("{}#{}", arg_pack_name[i], *arg_pack_k[i])};
             if (const auto binding{lookup_binding(elem_name)}) {
                 if (binding->const_val) {
                     args.emplace_back(*binding->const_val);
@@ -6021,13 +6061,15 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
     struct driver_view {
         bool                           is_pack{false};
         stdx::option<std::string_view> name;
+        stdx::option<pack_context>     pack;
     };
     std::vector<driver_view> drivers(num_drivers);
     bool                     any_driver_is_pack{false};
     for (usize d{0}; d < num_drivers; ++d) {
         const auto& cap{for_loop.captures[d]};
         const auto  ident{active_ast().get_as_opt<ast::identifier_expr>(*for_loop.iterables[d])};
-        drivers[d].is_pack = ident && current_pack_ && ident->name == current_pack_->name;
+        drivers[d].pack    = ident ? pack_named(ident->name) : stdx::none;
+        drivers[d].is_pack = drivers[d].pack.has_value();
         drivers[d].name =
             cap.payload.is<ast::identifier_expr>()
                 ? stdx::option<std::string_view>{active_ast()
@@ -6053,7 +6095,8 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
     }};
 
     // A pack's own element count is known directly
-    const usize count{any_driver_is_pack ? current_pack_->element_count : [&] {
+    const auto  pack_driver{std::ranges::find_if(drivers, &driver_view::is_pack)};
+    const usize count{any_driver_is_pack ? pack_driver->pack->element_count : [&] {
         usize n{0};
         while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
         return n;
@@ -6076,7 +6119,7 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
             if (drv.is_pack) {
                 if (drv.name) {
                     if (const auto elem_binding{lookup_binding<local_binding&>(
-                            fmt::format("{}#{}", current_pack_->name, k))}) {
+                            fmt::format("{}#{}", drv.pack->name, k))}) {
                         scopes_.back().bindings.emplace(*drv.name, *elem_binding);
                     }
                 }
@@ -7536,13 +7579,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
         [&](const ast::index_expr& index) -> value {
             // `rest[k]`: `k`'s own hidden parameter already has a real binding under its
             // synthesized name; no array/GEP semantics apply.
-            if (current_pack_) {
-                if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(index.array)};
-                    ident && ident->name == current_pack_->name) {
+            if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(index.array)}) {
+                if (const auto pack{pack_named(ident->name)}) {
                     if (const auto k{const_eval_.try_eval(index.index)}) {
                         if (const auto ik{k->as_int_opt()}) {
-                            return lvalue_of_binding(
-                                fmt::format("{}#{}", current_pack_->name, *ik));
+                            return lvalue_of_binding(fmt::format("{}#{}", pack->name, *ik));
                         }
                     }
                 }
@@ -8585,11 +8626,10 @@ auto emitter::dot_object_is_type_namespace(const ast::dot_expr& dot) -> bool {
 auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
     PROFILE_FUNCTION();
     // `rest.len`: the element count is fixed for this instantiation; no object to read at all.
-    if (current_pack_) {
-        if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot.object)};
-            ident && ident->name == current_pack_->name) {
+    if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(dot.object)}) {
+        if (const auto pack{pack_named(ident->name)}) {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            return value{static_cast<u64>(current_pack_->element_count), sema_type};
+            return value{static_cast<u64>(pack->element_count), sema_type};
         }
     }
     const auto sema_type{active_mod().get_sema_type_opt(id)};

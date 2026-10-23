@@ -356,6 +356,7 @@ class type_resolver {
     struct expanded_call_args {
         std::vector<usize>          source_index; // names which syntactic argument a slot came from
         std::vector<stdx::opt_size> pack_k;       // element index within that expansion
+        std::vector<type*>          pack_elem;    // that element's type, for an expanded slot
     };
 
     struct pack_binding {
@@ -715,6 +716,10 @@ class type_resolver {
     auto attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type&;
     // How `fn_id`'s recorded captures are stored in its environment, leaving out what needs none
     auto capture_layout(ast::node_id fn_id, bool is_move) -> gsl::span<types::closure_capture>;
+    // The type of pack element capture `rest#k`, or null for any other capture
+    [[nodiscard]] auto pack_element_type(std::string_view capture) const -> type*;
+    // Whether `capture` names an element of a pack in scope, in range or not
+    [[nodiscard]] auto is_pack_element_capture(std::string_view capture) const -> bool;
     // Records the environment a local generic's monomorphs share, once one of them captures
     auto build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void;
 
@@ -738,10 +743,18 @@ class type_resolver {
     [[nodiscard]] auto get_rightmost_name(ast::expr_handle) const noexcept
         -> stdx::option<std::string_view>;
     template <ast::IndexableID ID> auto resolve_dot(ID, const ast::dot_expr&) -> void;
-    // `rest.len`; only reached when `dot.object` is a bare identifier naming `current_pack_`.
+    // `rest.len`; only reached when `dot.object` is a bare identifier naming a pack in scope.
     template <ast::IndexableID ID> auto resolve_pack_len(ID id, const ast::dot_expr& dot) -> void;
-    // `rest[k]`; only reached when `index.array` is a bare identifier naming `current_pack_`.
-    auto resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void;
+    // `rest[k]`; only reached when `index.array` is a bare identifier naming a pack in scope.
+    auto resolve_pack_index(ast::node_id id, const ast::index_expr& index, const pack_binding& pack)
+        -> void;
+    // The pack in scope named `name`: the function's own, or one of a function around it
+    [[nodiscard]] auto pack_named(std::string_view name) const -> const pack_binding*;
+    // Every pack a local function written here could read, outermost first
+    [[nodiscard]] auto visible_packs() const -> std::vector<generic_function_info::enclosing_pack>;
+    // A pack read by a closure or generic inside the function that owns it is captured element
+    // by element, as `rest#k`
+    auto capture_pack_use(const pack_binding& pack) -> void;
 
     auto visit(ast::node_id, const ast::dot_expr&) -> void;
     auto visit(ast::node_id, const ast::range_expr&) -> void;
@@ -1086,6 +1099,8 @@ class type_resolver {
 
     // Set by `instantiate_generic` for the duration of resolving one pack function's body
     stdx::option<pack_binding> current_pack_;
+    // The packs of the functions around a local generic being instantiated, innermost last
+    std::vector<pack_binding> enclosing_packs_;
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;

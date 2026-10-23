@@ -140,6 +140,13 @@ auto body_typing_snapshot::diff_iteration_into(context&              ctx,
             out.attributes.insert_or_assign(idx, resolved->second);
         }
     }
+    // A call pinned to the same monomorph as the iteration before still names it in this one
+    const auto& live_calls{m.sema_side_tables.generic_call_targets.values};
+    for (const auto idx : write_log.call_idxs) {
+        if (idx < live_calls.size() && live_calls[idx] && !out.call_targets.find(idx)) {
+            out.call_targets.insert_or_assign(idx, live_calls[idx]);
+        }
+    }
 }
 
 auto body_typing_snapshot::restore_to(mod::module_t& m) const -> void {

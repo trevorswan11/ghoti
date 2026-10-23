@@ -2686,20 +2686,24 @@ auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
         if (!is_expansion) {
             out.source_index.emplace_back(i);
             out.pack_k.emplace_back(stdx::none);
+            out.pack_elem.emplace_back(nullptr);
             continue;
         }
         const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
         const auto ident{expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h)
                                 : stdx::none};
-        if (!current_pack_ || !ident || ident->name != current_pack_->name) {
+        const auto pack{ident ? pack_named(ident->name) : nullptr};
+        if (!pack) {
             ctx_.diags.emplace_back("'...' may only expand the enclosing parameter pack",
                                     error::PACK_EXPANSION_MISPLACED,
                                     get_call_arg_location(call.arguments[i]));
             return stdx::none;
         }
-        for (usize k{0}; k < current_pack_->element_types.size(); ++k) {
+        capture_pack_use(*pack);
+        for (usize k{0}; k < pack->element_types.size(); ++k) {
             out.source_index.emplace_back(i);
             out.pack_k.emplace_back(k);
+            out.pack_elem.emplace_back(pack->element_types[k]);
         }
     }
     return out;

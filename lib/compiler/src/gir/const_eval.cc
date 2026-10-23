@@ -5842,6 +5842,18 @@ auto const_eval::eval_function_literal(ast::node_id id, const ast::function_expr
     for (const auto& capture : module_->get_captures(id)) {
         // A runtime local has no value until the program runs
         auto current{lookup_local_binding(capture.name)};
+        // `rest#k` is element `k` of the pack `rest`, which a folded call binds as one array
+        if (const auto hash{capture.name.find('#')}; !current && hash != std::string_view::npos) {
+            const auto pack{lookup_local_binding(capture.name.substr(0, hash))};
+            const auto elems{pack ? pack->as_opt<const_array>() : stdx::none};
+            usize      k{0};
+            for (const char c : capture.name.substr(hash + 1)) {
+                k = k * 10 + static_cast<usize>(c - '0');
+            }
+            // An element another instantiation's longer pack had is no part of this one
+            if (elems && k >= elems->elements.size()) { continue; }
+            if (elems) { current.emplace(elems->elements[k]); }
+        }
         if (!current) { return stdx::none; }
         cl.captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
     }

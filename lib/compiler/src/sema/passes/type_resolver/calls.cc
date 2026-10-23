@@ -242,15 +242,19 @@ auto type_resolver::instantiate_as_callable(type&                  generic_fn,
     const auto info{ctx_.generic_functions.get_opt(generic_fn)};
     if (!info) { return std::string{"it is not a generic function"}; }
     const auto& params{info->fn_expr->parameters};
-    if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime || p.is_pack; })) {
+    if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime; })) {
         return std::string{"it takes compile-time parameters, which a call signature can't supply"};
     }
-    // A method takes its receiver as the signature's first parameter
+    // A method takes its receiver as the signature's first parameter, and a pack takes every
+    // parameter past the fixed ones
     const usize self_count{info->fn_expr->self ? 1UZ : 0UZ};
-    if (params.size() + self_count != target.params.size()) {
-        return fmt::format("it takes {} parameter{}, not {}",
-                           params.size() + self_count,
-                           string_utils::plural_suffix(params.size() + self_count),
+    const bool  has_pack{!params.empty() && params.back().is_pack};
+    const usize fixed{params.size() - (has_pack ? 1UZ : 0UZ) + self_count};
+    if (has_pack ? target.params.size() < fixed : target.params.size() != fixed) {
+        return fmt::format("it takes {}{} parameter{}, not {}",
+                           has_pack ? "at least " : "",
+                           fixed,
+                           string_utils::plural_suffix(fixed),
                            target.params.size());
     }
     generic_function_info bound_info{*info};
@@ -264,7 +268,7 @@ auto type_resolver::instantiate_as_callable(type&                  generic_fn,
         bound_info.enclosing_type.emplace(denoted_type(*receiver));
     }
 
-    auto args{ctx_.pool.get_many_unsafe(params.size())};
+    auto args{ctx_.pool.get_many_unsafe(target.params.size() - self_count)};
     std::ranges::copy(target.params.subspan(self_count), args.begin());
     const auto diags_before{ctx_.diags.size()};
     const auto inst{instantiate_generic(generic_fn, bound_info, args, {})};
@@ -1023,7 +1027,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // A slot an `expr...` expansion produced is already concretely typed (that
                 // element's own static type, from the *enclosing* pack) - no AST node to resolve.
                 if (expanded.pack_k[i]) {
-                    concrete_arg_types[i] = current_pack_->element_types[*expanded.pack_k[i]];
+                    concrete_arg_types[i] = expanded.pack_elem[i];
                     continue;
                 }
 
@@ -1699,7 +1703,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                                                  stdx::none,
                                                  enclosing_for_generic,
                                                  enclosing_fn_table_idx,
-                                                 enclosing_function_scopes());
+                                                 enclosing_function_scopes(),
+                                                 visible_packs());
         fn_type.mark_generic_value();
         register_impl_param_bounds(fn);
         last_type_.emplace(fn_type);
@@ -1774,10 +1779,15 @@ auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
     -> gsl::span<types::closure_capture> {
     std::vector<types::closure_capture> laid_out;
     for (const auto& capture : resolving_.get_captures(fn_id)) {
-        auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
-        ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
-        auto* captured_type{&get_resolved_symbol_type(lookup->get_data())};
-        auto  mode{infer_capture_mode(capture.usage, *captured_type, is_move)};
+        auto* captured_type{pack_element_type(capture.name)};
+        // Another instantiation of the enclosing function may have had a longer pack
+        if (!captured_type && is_pack_element_capture(capture.name)) { continue; }
+        if (!captured_type) {
+            auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
+            ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
+            captured_type = &get_resolved_symbol_type(lookup->get_data());
+        }
+        auto mode{infer_capture_mode(capture.usage, *captured_type, is_move)};
 
         // A local generic is a monomorph to call, so only the environment it captured is runtime
         // state, and calling it needs that environment's address
@@ -1799,6 +1809,21 @@ auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
     auto span{ctx_.arena.make_span<types::closure_capture>(laid_out.size())};
     std::ranges::copy(laid_out, span.begin());
     return span;
+}
+
+auto type_resolver::is_pack_element_capture(std::string_view capture) const -> bool {
+    const auto hash{capture.find('#')};
+    return hash != std::string_view::npos && pack_named(capture.substr(0, hash)) != nullptr;
+}
+
+auto type_resolver::pack_element_type(std::string_view capture) const -> type* {
+    const auto hash{capture.find('#')};
+    if (hash == std::string_view::npos) { return nullptr; }
+    const auto pack{pack_named(capture.substr(0, hash))};
+    if (!pack) { return nullptr; }
+    usize k{0};
+    for (const char c : capture.substr(hash + 1)) { k = k * 10 + static_cast<usize>(c - '0'); }
+    return k < pack->element_types.size() ? pack->element_types[k] : nullptr;
 }
 
 auto type_resolver::build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void {
@@ -1920,6 +1945,37 @@ auto type_resolver::is_written_after(ast::node_id lhs, ast::node_id rhs) const -
     return std::pair{l.line, l.column} > std::pair{r.line, r.column};
 }
 
+auto type_resolver::visible_packs() const -> std::vector<generic_function_info::enclosing_pack> {
+    std::vector<generic_function_info::enclosing_pack> packs;
+    for (const auto& pack : enclosing_packs_) { packs.push_back({pack.name, pack.element_types}); }
+    if (current_pack_) { packs.push_back({current_pack_->name, current_pack_->element_types}); }
+    return packs;
+}
+
+auto type_resolver::pack_named(std::string_view name) const -> const pack_binding* {
+    if (current_pack_ && current_pack_->name == name) { return &*current_pack_; }
+    for (const auto& pack : enclosing_packs_ | std::views::reverse) {
+        if (pack.name == name) { return &pack; }
+    }
+    return nullptr;
+}
+
+auto type_resolver::capture_pack_use(const pack_binding& pack) -> void {
+    // The function that owns the pack reads its elements directly
+    const bool from_enclosing{!current_pack_ || &pack != &*current_pack_};
+    const bool by_generic{from_enclosing && instantiating_fn_node_.has_value()};
+    if (!by_generic && open_function_nodes_.empty()) { return; }
+    for (usize k{0}; k < pack.element_types.size(); ++k) {
+        const auto element{resolving_.ast.intern(fmt::format("{}#{}", pack.name, k))};
+        if (by_generic) {
+            resolving_.add_capture(*instantiating_fn_node_, element, capture_usage::READ);
+        }
+        for (const auto fn_node : open_function_nodes_) {
+            resolving_.add_capture(fn_node, element, capture_usage::READ);
+        }
+    }
+}
+
 auto type_resolver::outermost_function_boundary() const -> usize {
     if (instantiation_root_depth_) { return *instantiation_root_depth_; }
     return function_boundaries_.front();
@@ -1933,6 +1989,8 @@ auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) co
         return stdx::none;
     }
     for (const auto& capture : resolving_.get_captures(*decl.value)) {
+        // A pack's elements are the enclosing function's runtime arguments
+        if (is_pack_element_capture(capture.name)) { return capture.name; }
         const auto captured{ctx_.registry.lookup(table_stack_, capture.name)};
         if (!captured) { continue; }
         const auto node{captured->get_data().as_opt<symbols::node_t>()};

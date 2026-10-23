@@ -36,6 +36,12 @@ struct generic_function_info {
     stdx::option<usize> enclosing_fn_table_idx{stdx::none};
     // For a local generic function, the scopes of the functions around it, outermost first
     std::vector<usize> enclosing_scopes{};
+    // ...and the parameter packs those functions were instantiated with, innermost last
+    struct enclosing_pack {
+        std::string_view   name;
+        std::vector<type*> element_types;
+    };
+    std::vector<enclosing_pack> enclosing_packs{};
 };
 
 class generic_function_registry {
@@ -51,7 +57,9 @@ class generic_function_registry {
                            stdx::option<std::string_view> name                   = stdx::none,
                            stdx::option<type&>            enclosing_type         = stdx::none,
                            stdx::option<usize>            enclosing_fn_table_idx = stdx::none,
-                           std::vector<usize>             enclosing_scopes       = {}) -> void {
+                           std::vector<usize>             enclosing_scopes       = {},
+                           std::vector<generic_function_info::enclosing_pack> enclosing_packs = {})
+        -> void {
         registry_.emplace(&fn_type,
                           generic_function_info{
                               .module                 = &module,
@@ -62,6 +70,7 @@ class generic_function_registry {
                               .enclosing_type         = enclosing_type,
                               .enclosing_fn_table_idx = enclosing_fn_table_idx,
                               .enclosing_scopes       = std::move(enclosing_scopes),
+                              .enclosing_packs        = std::move(enclosing_packs),
                           });
     }
 

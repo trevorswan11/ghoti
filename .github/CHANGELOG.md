@@ -884,6 +884,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A module's or type's generic (`m.twice`, `S.helper`) is a value too, and a type constructor's generic member taken from an instance (`Box(i64).scale`) stays bound to that instance
     - A generic method can be called as `Type.method(obj, ...)` or through a value of it, and passed where `fn(s: &S, ...)` is expected
     - A closure may capture a capturing generic function and call it at several types
+- Closures work with parameter packs: a closure may take its own `rest...`, and a closure or generic local function inside a pack function reads, iterates, and forwards that function's pack (`rest[k]`, `unroll for (rest)`, `rest...`), capturing it element by element
+    - A pack closure becomes the monomorph for an expected `fn(...)` or `impl Fn(...)` signature, one element per parameter past the fixed ones
 - Closures and generic local functions evaluate at compile time, in a `comptime` block or a function folded at compile time; a write to a captured binding is kept, and a `move fn` keeps its own copies across calls
 - Fixed: passing `&closure` (or `^closure`) where a `fn(...)` or `&dyn Fn(...)` is expected crashed codegen; the reference is now the closure's environment
 - Fixed: `let g = some_generic;` renamed the generic itself to `g` in its diagnostics and monomorph names

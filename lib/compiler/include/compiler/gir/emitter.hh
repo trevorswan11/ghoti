@@ -707,6 +707,10 @@ class emitter {
     stdx::opt_size emitting_impl_body_scope_;
 
     stdx::option<pack_context> current_pack_;
+    // Packs of an enclosing function whose elements a monomorph being emitted captured
+    std::vector<pack_context> captured_packs_;
+    // The pack in scope named `name`: this function's own, or one it captured
+    [[nodiscard]] auto pack_named(std::string_view name) const -> stdx::option<pack_context>;
 
     // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
     // of body emission
