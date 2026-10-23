@@ -1,5 +1,7 @@
-#include <catch2/catch_message.hpp>
+#include <tuple>
+
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 
 #include "compiler/sema/error.hh"
@@ -173,26 +175,20 @@ TEST_CASE("A generic local function reads the constants and types around it") {
 }
 
 TEST_CASE("A generic local function captures runtime locals around it") {
-    struct shape {
-        const char* params;
-        const char* first;
-        const char* second;
-    };
-    for (const auto& [params, first, second] :
-         {shape{"x: auto", "@as(i64, 1)", "@as(u8, 2)"},
-          shape{"comptime T: type, x: T", "i64, 1", "u8, 2"}}) {
-        CAPTURE(params);
-        CHECK(helpers::compile_and_run(fmt::format(R"(
+    const auto [params, first, second]{
+        GENERATE(std::tuple{"x: auto", "@as(i64, 1)", "@as(u8, 2)"},
+                 std::tuple{"comptime T: type, x: T", "i64, 1", "u8, 2"})};
+
+    CHECK(helpers::compile_and_run(fmt::format(R"(
             pub const main = fn(): i32 {{
                 let off: i32 = 10;
                 let f = fn({}): i32 {{ return @as(i32, @intCast(x)) + off; }};
                 return f({}) + f({});
             }};
         )",
-                                                   params,
-                                                   first,
-                                                   second)) == 11 + 12);
-    }
+                                               params,
+                                               first,
+                                               second)) == 11 + 12);
 }
 
 TEST_CASE("A generic local function mutates a captured `let mut` from every monomorph") {

@@ -129,6 +129,14 @@ class emitter {
         BREAK,
     };
 
+    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
+    // and whether that is its `break` variant
+    struct flow_result {
+        value             flow_slot;
+        value             is_break;
+        sema::unwrap_info shape;
+    };
+
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
@@ -364,13 +372,6 @@ class emitter {
                             syntax::builtin_t builtin,
                             bool              check_lengths = true) -> void;
 
-    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
-    // and whether that is its `break` variant
-    struct flow_result {
-        value             flow_slot;
-        value             is_break;
-        sema::unwrap_info shape;
-    };
     auto emit_flow(ast::expr_handle operand) -> flow_result;
     // Binds an `if`/`while` payload capture to what the `continue` reference points at
     auto bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void;
@@ -666,6 +667,9 @@ class emitter {
         return std::string{bare};
     }
 
+    // The pack in scope named `name`: this function's own, or one it captured
+    [[nodiscard]] auto pack_named(std::string_view name) const -> stdx::option<pack_context>;
+
   private:
     sema::context&               ctx_;
     mod::module_t&               ast_module_;
@@ -709,8 +713,6 @@ class emitter {
     stdx::option<pack_context> current_pack_;
     // Packs of an enclosing function whose elements a monomorph being emitted captured
     std::vector<pack_context> captured_packs_;
-    // The pack in scope named `name`: this function's own, or one it captured
-    [[nodiscard]] auto pack_named(std::string_view name) const -> stdx::option<pack_context>;
 
     // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
     // of body emission

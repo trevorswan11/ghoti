@@ -14,6 +14,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
+#include "compiler/sema/instance_id.hh"
 
 #include "support/diagnostic.hh"
 
@@ -25,6 +26,12 @@ class type;
 
 // A template when it has an `auto`/`type` parameter or a `comptime` parameter
 struct generic_function_info {
+    // ...and the parameter packs those functions were instantiated with, innermost last
+    struct enclosing_pack {
+        std::string_view   name;
+        std::vector<type*> element_types;
+    };
+
     gsl::not_null<mod::module_t*>            module;
     ast::node_id                             node_id;
     gsl::not_null<const ast::function_expr*> fn_expr;
@@ -35,16 +42,19 @@ struct generic_function_info {
     // For a method declared directly in an aggregate returned by a `fn(...): type` ctor
     stdx::option<usize> enclosing_fn_table_idx{stdx::none};
     // For a local generic function, the scopes of the functions around it, outermost first
-    std::vector<usize> enclosing_scopes{};
-    // ...and the parameter packs those functions were instantiated with, innermost last
-    struct enclosing_pack {
-        std::string_view   name;
-        std::vector<type*> element_types;
-    };
+    std::vector<usize>          enclosing_scopes{};
     std::vector<enclosing_pack> enclosing_packs{};
 };
 
 class generic_function_registry {
+  public:
+    // Where a local generic function is returned from the frame its environment points into
+    struct escape {
+        source_location at;
+        bool            erased{false}; // returned as an erased `fn(...)`, not by its own type
+        bool            reported{false};
+    };
+
   public:
     generic_function_registry() noexcept = default;
     ~generic_function_registry()         = default;
@@ -101,14 +111,14 @@ class generic_function_registry {
 
     // For `mangle_arg_type` to distinguish e.g. `foo(Vec(i32))` from `foo(Vec(i64))`.
     // Keyed by instance id so a `const`/`volatile` twin of the clone mangles the same.
-    auto set_clone_disc(u64 instance_id, std::string disc) -> void {
-        clone_discs_.insert_or_assign(instance_id, std::move(disc));
+    auto set_clone_disc(instance_id instance, std::string disc) -> void {
+        clone_discs_.insert_or_assign(instance, std::move(disc));
     }
 
-    [[nodiscard]] auto get_clone_disc(u64 instance_id) const noexcept
+    [[nodiscard]] auto get_clone_disc(stdx::option<instance_id> instance) const noexcept
         -> stdx::option<std::string_view> {
-        if (instance_id == 0) { return stdx::none; }
-        if (const auto it{clone_discs_.find(instance_id)}; it != clone_discs_.end()) {
+        if (!instance) { return stdx::none; }
+        if (const auto it{clone_discs_.find(*instance)}; it != clone_discs_.end()) {
             return std::string_view{it->second};
         }
         return stdx::none;
@@ -127,13 +137,6 @@ class generic_function_registry {
         return stdx::none;
     }
 
-    // Where a local generic function is returned from the frame its environment points into
-    struct escape {
-        source_location at;
-        bool            erased{false}; // returned as an erased `fn(...)`, not by its own type
-        bool            reported{false};
-    };
-
     auto mark_escaping(const type& fn_type, escape where) -> void {
         escapes_.try_emplace(&fn_type, where);
     }
@@ -148,7 +151,7 @@ class generic_function_registry {
     ankerl::unordered_dense::map<const type*, type*>                 capture_envs_;
     ankerl::unordered_dense::map<const type*, escape>                escapes_;
     ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
-    ankerl::unordered_dense::map<u64, std::string>                   clone_discs_;
+    ankerl::unordered_dense::map<instance_id, std::string>           clone_discs_;
 };
 
 struct generic_instantiation_request {

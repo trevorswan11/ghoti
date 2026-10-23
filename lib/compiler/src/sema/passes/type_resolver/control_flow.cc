@@ -2744,8 +2744,10 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
             (constructs_closure_literal || returns_erased_early)) {
             ctx_.generic_functions.mark_escaping(
                 return_expr_type,
-                {.at     = resolving_.ast.location_of(*return_stmt.expression),
-                 .erased = returns_erased_early});
+                {
+                    .at     = resolving_.ast.location_of(*return_stmt.expression),
+                    .erased = returns_erased_early,
+                });
             if (report_generic_escape(return_expr_type)) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
             }

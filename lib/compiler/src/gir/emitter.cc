@@ -45,6 +45,7 @@
 #include "compiler/sema/error.hh"
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -482,7 +483,8 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 const auto elem_count{req.arg_types.size() - rt_i};
                 for (usize k{0}; k < elem_count; ++k) {
                     auto& elem_type{*req.arg_types[rt_i++]};
-                    pack_hidden_names.emplace_back(fmt::format("{}#{}", p_name, k));
+                    pack_hidden_names.emplace_back(
+                        sema::pack_element{.pack = p_name, .index = k}.hidden_name());
                     const std::string_view hidden_name{pack_hidden_names.back()};
                     auto&      p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
                     const bool p_spilled{elem_type.get_kind() == sema::type_kind::SLICE};
@@ -1965,8 +1967,9 @@ auto emitter::emit_named_local_function(std::string_view          name,
     // Deterministic per fn node, so a `comptime` function-ref argument can name it. Each generic
     // instantiation types the node on its own copy, which gets its own body
     const auto instance{fn_type.get_instance_id()};
-    const auto anon_name{instance ? fmt::format("localfn.{}.{:x}", id.get_index(), instance)
-                                  : fmt::format("localfn.{}", id.get_index())};
+    const auto anon_name{
+        instance ? fmt::format("localfn.{}.{:x}", id.get_index(), std::to_underlying(*instance))
+                 : fmt::format("localfn.{}", id.get_index())};
     if (gir_module_.has_function(anon_name)) { return anon_name; }
 
     auto& fn{add_gir_function(anon_name, fn_type, false, false, fn_expr.variadic)};
@@ -2123,18 +2126,14 @@ auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, b
 
     // A captured `rest#k` is the k-th element of an enclosing function's pack
     for (const auto& capture : cl.captures) {
-        const auto hash{capture.name.find('#')};
-        if (hash == std::string_view::npos) { continue; }
-        const auto pack_name{capture.name.substr(0, hash)};
-        usize      k{0};
-        for (const char c : capture.name.substr(hash + 1)) {
-            k = k * 10 + static_cast<usize>(c - '0');
-        }
-        const auto known{std::ranges::find(captured_packs_, pack_name, &pack_context::name)};
+        const auto element{sema::pack_element::parse(capture.name)};
+        if (!element) { continue; }
+        const auto known{std::ranges::find(captured_packs_, element->pack, &pack_context::name)};
         if (known == captured_packs_.end()) {
-            captured_packs_.emplace_back(pack_context{.name = pack_name, .element_count = k + 1});
+            captured_packs_.emplace_back(
+                pack_context{.name = element->pack, .element_count = element->index + 1});
         } else {
-            known->element_count = std::max(known->element_count, k + 1);
+            known->element_count = std::max(known->element_count, element->index + 1);
         }
     }
 }
@@ -2207,7 +2206,7 @@ auto emitter::generic_env_arg(const ast::call_expr& call, sema::type& generic_fn
 auto emitter::closure_fn_name(const sema::type& closure_type) -> std::string {
     const auto idx{closure_type.get_symbol_table_idx()};
     if (const auto instance{closure_type.get_instance_id()}) {
-        return fmt::format("closure{}.{:x}", idx, instance);
+        return fmt::format("closure{}.{:x}", idx, std::to_underlying(*instance));
     }
     return fmt::format("closure{}", idx);
 }
@@ -5406,7 +5405,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         if (arg_pack_k[i]) {
             // A pack-element slot aliases the hidden per-element parameter binding that
             // `emit_generic_instantiation` already materialized for the enclosing pack.
-            const auto elem_name{fmt::format("{}#{}", arg_pack_name[i], *arg_pack_k[i])};
+            const auto elem_name{
+                sema::pack_element{.pack = arg_pack_name[i], .index = *arg_pack_k[i]}
+                    .hidden_name()};
             if (const auto binding{lookup_binding(elem_name)}) {
                 if (binding->const_val) {
                     args.emplace_back(*binding->const_val);
@@ -6119,7 +6120,8 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
             if (drv.is_pack) {
                 if (drv.name) {
                     if (const auto elem_binding{lookup_binding<local_binding&>(
-                            fmt::format("{}#{}", drv.pack->name, k))}) {
+                            sema::pack_element{.pack = drv.pack->name, .index = k}
+                                .hidden_name())}) {
                         scopes_.back().bindings.emplace(*drv.name, *elem_binding);
                     }
                 }
@@ -7582,8 +7584,10 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
             if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(index.array)}) {
                 if (const auto pack{pack_named(ident->name)}) {
                     if (const auto k{const_eval_.try_eval(index.index)}) {
-                        if (const auto ik{k->as_int_opt()}) {
-                            return lvalue_of_binding(fmt::format("{}#{}", pack->name, *ik));
+                        if (const auto ik{k->as_int_opt()}; ik && *ik >= 0) {
+                            const sema::pack_element element{.pack  = pack->name,
+                                                             .index = static_cast<usize>(*ik)};
+                            return lvalue_of_binding(element.hidden_name());
                         }
                     }
                 }

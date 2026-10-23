@@ -1,8 +1,8 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
-
-#include "compiler/sema/error.hh"
+#include <catch2/generators/catch_generators.hpp>
+#include <fmt/format.h>
 
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
@@ -12,9 +12,8 @@ namespace ghoti::tests {
 using helpers::mock_file;
 
 TEST_CASE("A reference to a closure or generic function becomes an erased `fn`") {
-    for (const auto* param : {"fn(n: i32): i32", "&dyn Fn(n: i32): i32"}) {
-        CAPTURE(param);
-        CHECK(helpers::compile_and_run(fmt::format(R"(
+    const std::string_view param{GENERATE("fn(n: i32): i32", "&dyn Fn(n: i32): i32")};
+    CHECK(helpers::compile_and_run(fmt::format(R"(
             const apply = fn(g: {}, v: i32): i32 {{ return g(v); }};
             pub const main = fn(): i32 {{
                 let off: i32 = 3;
@@ -23,8 +22,7 @@ TEST_CASE("A reference to a closure or generic function becomes an erased `fn`")
                 return apply(&c, 1) + apply(&f, 2);
             }};
         )",
-                                                   param)) == 4 + 6);
-    }
+                                               param)) == 4 + 6);
 }
 
 TEST_CASE("A closure captures a capturing generic function and calls it at several types") {

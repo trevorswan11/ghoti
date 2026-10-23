@@ -24,6 +24,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -1279,10 +1280,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         resolve_decl_attributes(id, decl, type_data);
         if (const auto runtime{const_closure_runtime_capture(decl)}) {
             // A pack element is captured as `rest#k`, which the source spells `rest[k]`
-            std::string spelled{*runtime};
-            if (const auto hash{spelled.find('#')}; hash != std::string::npos) {
-                spelled = fmt::format("{}[{}]", spelled.substr(0, hash), spelled.substr(hash + 1));
-            }
+            const auto element{pack_element::parse(*runtime)};
+            const auto spelled{element ? element->spelled() : std::string{*runtime}};
             ctx_.poison_symbol(sym,
                                fmt::format("A 'const' function cannot capture the runtime value "
                                            "'{}'; declare the closure with 'let'",

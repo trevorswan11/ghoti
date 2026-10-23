@@ -387,8 +387,9 @@ class const_eval {
     auto eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                           const ast::function_expr&         fn_expr,
                           std::vector<const_value>&         args,
-                          stdx::option<const const_struct&> captures = stdx::none,
-                          const_struct* captures_out = nullptr) -> stdx::option<const_value>;
+                          stdx::option<const const_struct&> captures     = stdx::none,
+                          stdx::option<const_struct&>       captures_out = stdx::none)
+        -> stdx::option<const_value>;
     // A function literal as a compile-time value, holding what it captures right now
     auto eval_function_literal(ast::node_id id, const ast::function_expr& fn_expr)
         -> stdx::option<const_value>;

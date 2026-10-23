@@ -143,13 +143,14 @@ auto register_type_ctor_members(context&         ctx,
     types::key_t key{src.get_kind(), src.get_key().get_mut()};
     key.imprint(disc);
     auto& slot{*ctx.pool[key]};
-    if (slot.get_instance_id() != 0) { return slot; }
+    if (slot.get_instance_id()) { return slot; }
     if (src.has_symbol_table_idx()) { slot.set_symbol_table_idx(src.get_symbol_table_idx()); }
     if (abstract) { return slot; }
     stdx::hasher id_hash{0};
     id_hash.combine(disc);
-    slot.set_instance_id(id_hash.finalize() | 1); // never the "no instance" zero
-    ctx.generic_functions.set_clone_disc(slot.get_instance_id(), std::string{disc});
+    const auto instance{make_instance_id(id_hash.finalize())};
+    slot.set_instance_id(instance);
+    ctx.generic_functions.set_clone_disc(instance, std::string{disc});
     return slot;
 }
 
@@ -234,7 +235,7 @@ struct shared_literal_shape {
 other_instance_in_progress(const context& ctx, const type& literal, const type& slot) -> bool {
     return std::ranges::any_of(ctx.instantiations_in_progress, [&](const auto& entry) {
         const type* other{entry.second};
-        return other && other != &slot && other->get_instance_id() != 0 &&
+        return other && other != &slot && other->get_instance_id() &&
                other->get_symbol_table_idx_opt() == literal.get_symbol_table_idx_opt();
     });
 }
@@ -302,7 +303,7 @@ ctor_instance_display_name(const context&                                       
         const auto instance{t.get_instance_id()};
         return fmt::format("closure{}{}_{}",
                            t.get_symbol_table_idx(),
-                           instance ? fmt::format("x{:x}", instance) : "",
+                           instance ? fmt::format("x{:x}", std::to_underlying(*instance)) : "",
                            mangle_arg_type(reg, cl.signature));
     }
     case type_kind::FUNCTION: {
@@ -312,7 +313,7 @@ ctor_instance_display_name(const context&                                       
             const auto instance{t.get_instance_id()};
             return fmt::format("gfn{}{}",
                                t.get_symbol_table_idx(),
-                               instance ? fmt::format("x{:x}", instance) : "");
+                               instance ? fmt::format("x{:x}", std::to_underlying(*instance)) : "");
         }
         return fmt::format("{}_{}__{}",
                            fn.erased ? "fn" : "xfn",
@@ -443,7 +444,7 @@ namespace {
     for (const auto& cx : comptime_args) { name += fmt::format("_cx{}", cx.mangle()); }
     // A local generic written inside another generic is a different function per outer instance
     if (const auto outer{fn_info.fn_type->get_instance_id()}) {
-        name += fmt::format("_i{:x}", outer);
+        name += fmt::format("_i{:x}", std::to_underlying(*outer));
     }
     if (fn_info.enclosing_type) {
         name +=

@@ -82,6 +82,12 @@ class type_resolver {
         UNKNOWN,
     };
 
+    // Why a generic function can't stand for a call signature, unless instantiating it already
+    // reported why
+    struct callable_misfit {
+        stdx::option<std::string> reason;
+    };
+
   public:
     static auto resolve_types(mod::module_t& module, context& ctx) -> mod::module_state;
     // Resolves every queued `test` block, once no module is mid-resolution
@@ -196,11 +202,10 @@ class type_resolver {
     // The table depth where the outermost function's frame begins: an instantiated generic's body
     // or else the first open function. Only meaningful while a function is open
     [[nodiscard]] auto outermost_function_boundary() const -> usize;
-    // Instantiates generic function `generic_fn` for `target`'s parameters, returning why it
-    // doesn't fit if it can't stand for that signature
-    auto instantiate_as_callable(type&                  generic_fn,
-                                 const types::function& target,
-                                 std::string* monomorph = nullptr) -> stdx::option<std::string>;
+    // Instantiates generic function `generic_fn` for `target`'s parameters, giving the monomorph's
+    // mangled name, or why it can't stand for that signature
+    auto instantiate_as_callable(type& generic_fn, const types::function& target)
+        -> stdx::result<std::string, callable_misfit>;
     // Reports a returned generic function whose environment would outlive what it captured
     auto report_generic_escape(const type& generic_fn) -> bool;
     // A type constructor's generic member reached through one of its instances, bound to it
@@ -410,6 +415,13 @@ class type_resolver {
         stdx::option<type&>                           target;
         stdx::option<const ast::call_expr::argument&> operand;
         source_location                               target_loc;
+    };
+
+    // A range capture's first and last value, by its loop's scope then its name
+    struct range_counter {
+        std::string_view name;
+        i128             first;
+        i128             last;
     };
 
   private:
@@ -1017,13 +1029,7 @@ class type_resolver {
     // Stack of enclosing block statements and statement indices currently being resolved
     std::vector<active_block_frame> active_blocks_;
     // Member identifiers that resolved to an array's read-only `.len`/`.ptr`
-    ankerl::unordered_dense::set<usize> structural_members_;
-    // A range capture's first and last value, by its loop's scope then its name
-    struct range_counter {
-        std::string_view name;
-        i128             first;
-        i128             last;
-    };
+    ankerl::unordered_dense::set<usize>                             structural_members_;
     ankerl::unordered_dense::map<usize, std::vector<range_counter>> range_counters_;
 
     bool in_mutating_context_{false};

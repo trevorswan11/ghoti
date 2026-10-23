@@ -31,6 +31,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -198,7 +199,8 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
                                                   }) ||
                               is_auto_pattern(want.return_type)};
         if (open_bound) { return stdx::none; }
-        return instantiate_as_callable(*callee, want);
+        const auto inst{instantiate_as_callable(*callee, want)};
+        return inst ? stdx::none : inst.error().reason;
     }
     if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
 
@@ -236,14 +238,16 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
     return stdx::none;
 }
 
-auto type_resolver::instantiate_as_callable(type&                  generic_fn,
-                                            const types::function& target,
-                                            std::string* monomorph) -> stdx::option<std::string> {
+auto type_resolver::instantiate_as_callable(type& generic_fn, const types::function& target)
+    -> stdx::result<std::string, callable_misfit> {
+    const auto mismatch{[](std::string reason) {
+        return stdx::err<callable_misfit>{callable_misfit{std::move(reason)}};
+    }};
     const auto info{ctx_.generic_functions.get_opt(generic_fn)};
-    if (!info) { return std::string{"it is not a generic function"}; }
+    if (!info) { return mismatch("it is not a generic function"); }
     const auto& params{info->fn_expr->parameters};
     if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime; })) {
-        return std::string{"it takes compile-time parameters, which a call signature can't supply"};
+        return mismatch("it takes compile-time parameters, which a call signature can't supply");
     }
     // A method takes its receiver as the signature's first parameter, and a pack takes every
     // parameter past the fixed ones
@@ -251,11 +255,11 @@ auto type_resolver::instantiate_as_callable(type&                  generic_fn,
     const bool  has_pack{!params.empty() && params.back().is_pack};
     const usize fixed{params.size() - (has_pack ? 1UZ : 0UZ) + self_count};
     if (has_pack ? target.params.size() < fixed : target.params.size() != fixed) {
-        return fmt::format("it takes {}{} parameter{}, not {}",
-                           has_pack ? "at least " : "",
-                           fixed,
-                           string_utils::plural_suffix(fixed),
-                           target.params.size());
+        return mismatch(fmt::format("it takes {}{} parameter{}, not {}",
+                                    has_pack ? "at least " : "",
+                                    fixed,
+                                    string_utils::plural_suffix(fixed),
+                                    target.params.size()));
     }
     generic_function_info bound_info{*info};
     if (self_count) {
@@ -273,22 +277,23 @@ auto type_resolver::instantiate_as_callable(type&                  generic_fn,
     const auto diags_before{ctx_.diags.size()};
     const auto inst{instantiate_generic(generic_fn, bound_info, args, {})};
     if (!inst) {
-        if (ctx_.diags.size() > diags_before) { return stdx::none; }
-        return std::string{"it can't be instantiated with those parameter types"};
+        if (ctx_.diags.size() > diags_before) {
+            return stdx::err<callable_misfit>{callable_misfit{}};
+        }
+        return mismatch("it can't be instantiated with those parameter types");
     }
     if (!is_same_unqualified(*inst->return_type, target.return_type)) {
-        return fmt::format("it returns '{}', not '{}'",
-                           ctx_.type_display_name(*inst->return_type),
-                           ctx_.type_display_name(target.return_type));
+        return mismatch(fmt::format("it returns '{}', not '{}'",
+                                    ctx_.type_display_name(*inst->return_type),
+                                    ctx_.type_display_name(target.return_type)));
     }
-    if (monomorph) { *monomorph = inst->mangled_name; }
-    return stdx::none;
+    return inst->mangled_name;
 }
 
 auto type_resolver::instantiate_for_expected_callable(ast::node_id id, type& generic_fn) -> void {
     const auto expected{implicit_type_stack_.peek()};
     if (!expected) { return; }
-    const type* target{&*expected};
+    gsl::not_null<const type*> target{expected.get()};
     if (const auto p{target->get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
     const auto target_fn{target->get_data().as_opt<types::function>()};
     if (!target_fn || target->is_generic_value() || ctx_.generic_functions.get_opt(*target) ||
@@ -296,13 +301,14 @@ auto type_resolver::instantiate_for_expected_callable(ast::node_id id, type& gen
         return;
     }
     // Where a single signature is expected, the value is the monomorph for that signature
-    if (const auto why{instantiate_as_callable(generic_fn, *target_fn)}) {
+    const auto inst{instantiate_as_callable(generic_fn, *target_fn)};
+    if (!inst && inst.error().reason) {
         last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("This generic function doesn't fit '{}': {}",
                                          ctx_.type_display_name(*expected),
-                                         *why),
+                                         *inst.error().reason),
                              error::CLOSURE_SIGNATURE_MISMATCH,
                              resolving_.ast.location_of(id)));
     }
@@ -551,18 +557,17 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
     const auto param_fn{param_type ? param_type->get_data().as_opt<types::function>() : stdx::none};
     if (param_fn && arg_type && arg_type->is_generic_value() &&
         std::ranges::none_of(param_fn->params, [](const type* p) { return is_auto_pattern(*p); })) {
-        std::string monomorph;
-        if (const auto why{instantiate_as_callable(*const_cast<type*>(arg_type),
-                                                   param_type->get_data().as<types::function>(),
-                                                   &monomorph)}) {
-            ctx_.diags.emplace_back(fmt::format("This generic function doesn't fit '{}': {}",
-                                                ctx_.type_display_name(*param_type),
-                                                *why),
-                                    error::CLOSURE_SIGNATURE_MISMATCH,
-                                    get_call_arg_location(arg));
+        auto monomorph{instantiate_as_callable(*const_cast<type*>(arg_type), *param_fn)};
+        if (!monomorph) {
+            if (const auto& why{monomorph.error().reason}) {
+                ctx_.diags.emplace_back(fmt::format("This generic function doesn't fit '{}': {}",
+                                                    ctx_.type_display_name(*param_type),
+                                                    *why),
+                                        error::CLOSURE_SIGNATURE_MISMATCH,
+                                        get_call_arg_location(arg));
+            }
             return stdx::none;
         }
-        if (monomorph.empty()) { return stdx::none; }
         if (arg_type->get_generic_env()) {
             ctx_.diags.emplace_back("a compile-time function argument must capture only "
                                     "compile-time constants",
@@ -570,7 +575,7 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                                     get_call_arg_location(arg));
             return stdx::none;
         }
-        return gir::const_value{gir::const_value::data_t{std::move(monomorph)},
+        return gir::const_value{gir::const_value::data_t{std::move(*monomorph)},
                                 ctx_.with_erasure(*const_cast<type*>(param_type), false)};
     }
 
@@ -993,7 +998,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (last_type_->is_poison()) {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
                 }
-                type* receiver{&*last_type_};
+                gsl::not_null<type*> receiver{last_type_.get()};
                 if (const auto p{receiver->get_data().as_opt<types::pointer>()}) {
                     receiver = &p->underlying;
                 } else if (const auto r{receiver->get_data().as_opt<types::reference>()}) {
@@ -1812,18 +1817,16 @@ auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
 }
 
 auto type_resolver::is_pack_element_capture(std::string_view capture) const -> bool {
-    const auto hash{capture.find('#')};
-    return hash != std::string_view::npos && pack_named(capture.substr(0, hash)) != nullptr;
+    const auto element{pack_element::parse(capture)};
+    return element && pack_named(element->pack) != nullptr;
 }
 
 auto type_resolver::pack_element_type(std::string_view capture) const -> type* {
-    const auto hash{capture.find('#')};
-    if (hash == std::string_view::npos) { return nullptr; }
-    const auto pack{pack_named(capture.substr(0, hash))};
-    if (!pack) { return nullptr; }
-    usize k{0};
-    for (const char c : capture.substr(hash + 1)) { k = k * 10 + static_cast<usize>(c - '0'); }
-    return k < pack->element_types.size() ? pack->element_types[k] : nullptr;
+    const auto element{pack_element::parse(capture)};
+    if (!element) { return nullptr; }
+    const auto pack{pack_named(element->pack)};
+    if (!pack || element->index >= pack->element_types.size()) { return nullptr; }
+    return pack->element_types[element->index];
 }
 
 auto type_resolver::build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void {
@@ -1953,7 +1956,7 @@ auto type_resolver::visible_packs() const -> std::vector<generic_function_info::
 }
 
 auto type_resolver::pack_named(std::string_view name) const -> const pack_binding* {
-    if (current_pack_ && current_pack_->name == name) { return &*current_pack_; }
+    if (current_pack_ && current_pack_->name == name) { return &current_pack_.value(); }
     for (const auto& pack : enclosing_packs_ | std::views::reverse) {
         if (pack.name == name) { return &pack; }
     }
@@ -1962,11 +1965,12 @@ auto type_resolver::pack_named(std::string_view name) const -> const pack_bindin
 
 auto type_resolver::capture_pack_use(const pack_binding& pack) -> void {
     // The function that owns the pack reads its elements directly
-    const bool from_enclosing{!current_pack_ || &pack != &*current_pack_};
-    const bool by_generic{from_enclosing && instantiating_fn_node_.has_value()};
+    const bool from_enclosing{!current_pack_ || &pack != &current_pack_.value()};
+    const bool by_generic{from_enclosing && instantiating_fn_node_};
     if (!by_generic && open_function_nodes_.empty()) { return; }
     for (usize k{0}; k < pack.element_types.size(); ++k) {
-        const auto element{resolving_.ast.intern(fmt::format("{}#{}", pack.name, k))};
+        const auto element{
+            resolving_.ast.intern(pack_element{.pack = pack.name, .index = k}.hidden_name())};
         if (by_generic) {
             resolving_.add_capture(*instantiating_fn_node_, element, capture_usage::READ);
         }

@@ -18,6 +18,7 @@
 #include <gsl/span>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
+#include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/string.hh>
@@ -111,18 +112,18 @@ auto context::local_function_instance(const type& fn_template, std::string_view 
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT, idx};
     key.imprint(instance);
     auto& slot{*pool[key]};
-    if (slot.get_instance_id() != 0) { return slot; }
+    if (slot.get_instance_id()) { return slot; }
     slot.set_symbol_table_idx(idx);
     stdx::hasher id_hash{idx};
     id_hash.combine(instance);
-    slot.set_instance_id(id_hash.finalize() | 1); // never the "no instance" zero
+    slot.set_instance_id(make_instance_id(id_hash.finalize()));
     return slot;
 }
 
 auto context::closure_slot_of(const type& fn_type) -> type& {
     const auto   idx{fn_type.get_symbol_table_idx()};
     types::key_t key{type_kind::CLOSURE, types::mut::CONSTANT, idx};
-    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(instance); }
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(*instance); }
     auto& slot{*pool[key]};
     slot.set_symbol_table_idx(idx);
     slot.set_instance_id(fn_type.get_instance_id());
@@ -132,7 +133,7 @@ auto context::closure_slot_of(const type& fn_type) -> type& {
 auto context::closure_impl_signature_slot_of(const type& fn_type) -> type& {
     types::key_t key{
         type_kind::FUNCTION, types::mut::CONSTANT, fn_type.get_symbol_table_idx(), true};
-    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(instance); }
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(*instance); }
     return *pool[key];
 }
 

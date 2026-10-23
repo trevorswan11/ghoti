@@ -89,13 +89,13 @@ enum class storageless_kind : u8 {
 };
 
 struct module_t {
-    std::filesystem::path                            path;
-    std::filesystem::path                            parent_path;
-    source_file                                      source;
-    ast::AST                                         ast;
-    sema::side_tables                                sema_side_tables;
-    stdx::opt_size                                   root_table_idx;
-    module_state                                     state{module_state::PARSED};
+    std::filesystem::path path;
+    std::filesystem::path parent_path;
+    source_file           source;
+    ast::AST              ast;
+    sema::side_tables     sema_side_tables;
+    stdx::opt_size        root_table_idx;
+    module_state          state{module_state::PARSED};
     // Mangled names of the monomorphs this module requested, in emit order
     std::vector<std::string> generic_instantiations;
 

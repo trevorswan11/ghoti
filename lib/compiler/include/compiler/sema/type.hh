@@ -27,6 +27,7 @@
 #include "compiler/ast/id.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
+#include "compiler/sema/instance_id.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
@@ -627,10 +628,13 @@ class type {
     [[nodiscard]] auto get_symbol_table_idx() const noexcept { return *symbol_table_idx_; }
     [[nodiscard]] auto get_symbol_table_idx_opt() const noexcept { return symbol_table_idx_; }
 
-    // Tells apart the instances of one type constructor, which all share its body's scope. Zero
-    // for a type that is not a constructor instance (or is the ctor's own template).
-    constexpr auto     set_instance_id(u64 id) noexcept -> void { instance_id_ = id; }
-    [[nodiscard]] auto get_instance_id() const noexcept -> u64 { return instance_id_; }
+    // None for a type that is not a constructor instance (or is the ctor's own template)
+    constexpr auto set_instance_id(stdx::option<instance_id> id) noexcept -> void {
+        instance_id_ = id;
+    }
+    [[nodiscard]] auto get_instance_id() const noexcept -> stdx::option<instance_id> {
+        return instance_id_;
+    }
 
     // A generic function's own type also types it as a value: whatever it captured, or nothing
     constexpr auto     mark_generic_value() noexcept -> void { generic_value_ = true; }
@@ -641,7 +645,7 @@ class type {
     // A modifier twin (`const`/`volatile`) denotes the same nominal type as `src`
     constexpr auto copy_identity_from(const type& src) noexcept -> void {
         if (src.symbol_table_idx_) { symbol_table_idx_.emplace(*src.symbol_table_idx_); }
-        if (src.instance_id_ != 0) { instance_id_ = src.instance_id_; }
+        if (src.instance_id_) { instance_id_ = src.instance_id_; }
     }
 
     [[nodiscard]] auto is_resolved() const noexcept -> bool {
@@ -695,7 +699,7 @@ class type {
   private:
     types::key_t   key_;
     stdx::opt_size symbol_table_idx_;
-    u64            instance_id_{0};
+    stdx::option<instance_id> instance_id_;
     data_t         data_;
     type*          generic_env_{nullptr};
     bool           generic_value_{false};
@@ -709,7 +713,7 @@ static_assert(stdx::TriviallyDestructible<type>);
 // `{bits, is_signed}` of a resolved `type_kind::INT`, or none for any other kind.
 [[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
 // The instance id that tells `c_longdouble` apart from the `f64` / `f80` / `f128` it's sized as
-inline constexpr u64 C_LONGDOUBLE_INSTANCE{~u64{0}};
+inline constexpr instance_id C_LONGDOUBLE_INSTANCE{~u64{0}};
 [[nodiscard]] auto   is_c_longdouble(const type& t) noexcept -> bool;
 // `i32`, `u7`, or the C type's own name (`c_int`)
 [[nodiscard]] auto int_display_name(const types::integer& info) -> std::string;

@@ -736,7 +736,7 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         // (no instance id) still matches any of them
         const auto id_a{a.get_instance_id()};
         const auto id_b{b.get_instance_id()};
-        return id_a == 0 || id_b == 0 || id_a == id_b;
+        return !id_a || !id_b || id_a == id_b;
     }
     case type_kind::DYN: {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};

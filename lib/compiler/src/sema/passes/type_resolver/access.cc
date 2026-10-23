@@ -354,8 +354,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
 
     // A type-ctor instance still being built (named by its own member's signature) has no shape
     // yet, only its scope
-    const bool pending_instance{!target_type->is_resolved() &&
-                                target_type->get_instance_id() != 0 &&
+    const bool pending_instance{!target_type->is_resolved() && target_type->get_instance_id() &&
                                 target_type->has_symbol_table_idx()};
     if (!enum_type && !struct_type && !union_type && !pending_instance) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
@@ -770,7 +769,7 @@ auto type_resolver::bind_member_generic_to_receiver(ast::node_id id, const ast::
     const auto info{ctx_.generic_functions.get_opt(generic)};
     if (!info || !info->enclosing_type || info->fn_expr->self) { return; }
     const auto receiver{receiver_aggregate(dot)};
-    if (!receiver || &*receiver == &*info->enclosing_type) { return; }
+    if (!receiver || receiver.get() == info->enclosing_type.get()) { return; }
     const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*receiver)};
     if (!prefix) { return; }
 

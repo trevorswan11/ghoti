@@ -47,6 +47,7 @@
 #include "compiler/sema/alias_chain.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/range_steps.hh"
 #include "compiler/sema/side_tables.hh"
@@ -4814,7 +4815,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             if (!dc || &dc->enclosing != module_) { return t; }
             const auto own{
                 module_->ast.get_as_opt<ast::call_expr>(active_fns_.back()->explicit_return_type)};
-            if (!own || &*own != &dc->call) { return t; }
+            if (!own || own.get() != &dc->call) { return t; }
             auto& pinned{force_deferred_call(fn->return_type)};
             if (&pinned == &fn->return_type) { return t; }
             return ctx_.get_function_like(
@@ -5833,8 +5834,7 @@ auto const_eval::call_bound_callable(stdx::option<ast::node_id> id,
 auto const_eval::eval_function_literal(ast::node_id id, const ast::function_expr& fn_expr)
     -> stdx::option<const_value> {
     if (fn_expr.is_type_expr || !fn_expr.body) { return stdx::none; }
-    // Runtime code keeps its functions as code; only real compile-time evaluation calls one as
-    // a value
+    // Runtime code keeps its functions as code, only real compile eval calls one as a value
     if (!in_evaluation_context()) { return stdx::none; }
     const auto sema_type{module_->get_sema_type_opt(id)};
     if (!sema_type) { return stdx::none; }
@@ -5843,16 +5843,12 @@ auto const_eval::eval_function_literal(ast::node_id id, const ast::function_expr
         // A runtime local has no value until the program runs
         auto current{lookup_local_binding(capture.name)};
         // `rest#k` is element `k` of the pack `rest`, which a folded call binds as one array
-        if (const auto hash{capture.name.find('#')}; !current && hash != std::string_view::npos) {
-            const auto pack{lookup_local_binding(capture.name.substr(0, hash))};
+        if (const auto element{sema::pack_element::parse(capture.name)}; !current && element) {
+            const auto pack{lookup_local_binding(element->pack)};
             const auto elems{pack ? pack->as_opt<const_array>() : stdx::none};
-            usize      k{0};
-            for (const char c : capture.name.substr(hash + 1)) {
-                k = k * 10 + static_cast<usize>(c - '0');
-            }
             // An element another instantiation's longer pack had is no part of this one
-            if (elems && k >= elems->elements.size()) { continue; }
-            if (elems) { current.emplace(elems->elements[k]); }
+            if (elems && element->index >= elems->elements.size()) { continue; }
+            if (elems) { current.emplace(elems->elements[element->index]); }
         }
         if (!current) { return stdx::none; }
         cl.captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
@@ -6033,7 +6029,8 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                                   const ast::function_expr&         fn_expr,
                                   std::vector<const_value>&         args,
                                   stdx::option<const const_struct&> captures,
-                                  const_struct* captures_out) -> stdx::option<const_value> {
+                                  stdx::option<const_struct&>       captures_out)
+    -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (!fn_expr.body) { return stdx::none; }
     // A trailing `rest...` pack binds as a constant array of every remaining argument, so
