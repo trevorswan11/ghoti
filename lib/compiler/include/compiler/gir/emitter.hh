@@ -207,9 +207,15 @@ class emitter {
                            bool                          is_move) -> void;
     // A capturing local generic's monomorph takes its environment first and reads captures off it
     auto bind_generic_env(gir::function& fn, sema::type& generic_fn_type, bool is_move) -> void;
-    // Builds a capturing local generic's environment where it's written, bound under its name.
-    // False when it captures nothing
-    auto emit_generic_env(std::string_view name, sema::type& generic_fn_type) -> bool;
+    // The monomorph of `generic_fn` the resolver instantiated for `signature`'s parameters
+    auto monomorph_for(const sema::type& generic_fn, const sema::type& signature)
+        -> stdx::option<std::string>;
+    // A generic function as a value: the environment its monomorphs capture, built here
+    auto emit_generic_value(sema::type& generic_fn_type) -> value;
+    // Binds a local generic function's value under its name where it's written
+    auto bind_generic_value(std::string_view name, sema::type& generic_fn_type) -> void;
+    // Inside one of its own monomorphs, the address of the environment it was given
+    auto own_generic_env(const sema::type& generic_fn_type) -> stdx::option<value>;
     // The environment a call to a capturing local generic passes first, if it has one
     auto generic_env_arg(const ast::call_expr& call, sema::type& generic_fn_type)
         -> stdx::option<value>;

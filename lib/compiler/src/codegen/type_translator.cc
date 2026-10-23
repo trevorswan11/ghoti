@@ -59,6 +59,11 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return get_ptr_ty();
     }
     case sema::type_kind::FUNCTION:
+        // A generic function's value is the environment its monomorphs read captures from
+        if (type.is_generic_value()) {
+            if (const auto* env{type.get_generic_env()}) { return translate(*env); }
+            return llvm::StructType::get(context_);
+        }
         if (sema::is_erased_fn(type)) { return translate_dyn_fat_ptr(); }
         return get_ptr_ty();
     case sema::type_kind::NULLPTR: return get_ptr_ty();

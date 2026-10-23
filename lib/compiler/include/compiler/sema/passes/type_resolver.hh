@@ -196,6 +196,15 @@ class type_resolver {
     // The table depth where the outermost function's frame begins: an instantiated generic's body
     // or else the first open function. Only meaningful while a function is open
     [[nodiscard]] auto outermost_function_boundary() const -> usize;
+    // Instantiates generic function `generic_fn` for `target`'s parameters, returning why it
+    // doesn't fit if it can't stand for that signature
+    auto instantiate_as_callable(type&                  generic_fn,
+                                 const types::function& target,
+                                 std::string* monomorph = nullptr) -> stdx::option<std::string>;
+    // Reports a returned generic function whose environment would outlive what it captured
+    auto report_generic_escape(const type& generic_fn) -> bool;
+    // A generic function value written where one concrete signature is expected takes it
+    auto instantiate_for_expected_callable(ast::node_id id, type& generic_fn) -> void;
     // Whether `lhs` starts later in the source than `rhs`
     [[nodiscard]] auto is_written_after(ast::node_id lhs, ast::node_id rhs) const -> bool;
     // The scopes between the module root and the function being resolved, for a local function
@@ -1063,6 +1072,8 @@ class type_resolver {
     stdx::opt_size enclosing_locals_depth_{};
     // The literal of the local generic being instantiated, which owns the captures of its body
     stdx::option<ast::node_id> instantiating_fn_node_{};
+    // The generic function whose body this instantiation resolver walks, as `@fnCtx()` names it
+    type* instantiating_template_{nullptr};
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

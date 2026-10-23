@@ -15,6 +15,8 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/id.hh"
 
+#include "support/diagnostic.hh"
+
 namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
 namespace ghoti::sema {
@@ -116,9 +118,26 @@ class generic_function_registry {
         return stdx::none;
     }
 
+    // Where a local generic function is returned from the frame its environment points into
+    struct escape {
+        source_location at;
+        bool            erased{false}; // returned as an erased `fn(...)`, not by its own type
+        bool            reported{false};
+    };
+
+    auto mark_escaping(const type& fn_type, escape where) -> void {
+        escapes_.try_emplace(&fn_type, where);
+    }
+
+    [[nodiscard]] auto get_escape(const type& fn_type) noexcept -> stdx::option<escape&> {
+        if (const auto it{escapes_.find(&fn_type)}; it != escapes_.end()) { return it->second; }
+        return stdx::none;
+    }
+
   private:
     ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
     ankerl::unordered_dense::map<const type*, type*>                 capture_envs_;
+    ankerl::unordered_dense::map<const type*, escape>                escapes_;
     ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
     ankerl::unordered_dense::map<u64, std::string>                   clone_discs_;
 };

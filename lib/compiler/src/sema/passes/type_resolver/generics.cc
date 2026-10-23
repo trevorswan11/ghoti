@@ -307,6 +307,13 @@ ctor_instance_display_name(const context&                                       
     }
     case type_kind::FUNCTION: {
         const auto& fn{data.as<types::function>()};
+        // Each generic function is a value of its own type, whatever signature it spells
+        if (t.is_generic_value() && t.has_symbol_table_idx()) {
+            const auto instance{t.get_instance_id()};
+            return fmt::format("gfn{}{}",
+                               t.get_symbol_table_idx(),
+                               instance ? fmt::format("x{:x}", instance) : "");
+        }
         return fmt::format("{}_{}__{}",
                            fn.erased ? "fn" : "xfn",
                            fmt::join(fn.params | std::views::transform([&](const auto* p) {
@@ -792,6 +799,7 @@ auto type_resolver::instantiate_generic(type&                             callee
         deprecated_scope_depth_ + (declares_deprecated_fn(fn_mod, fn_info.node_id) ? 1U : 0U);
     inst_resolver.instantiating_testing_fn_ = declares_testing_fn(fn_mod, fn_info.node_id);
     inst_resolver.instantiating_fn_.emplace(fn_expr);
+    inst_resolver.instantiating_template_ = fn_info.fn_type.get();
     inst_resolver.instantiation_root_depth_.emplace(inst_resolver.table_stack_.size() - 1);
     if (!fn_info.enclosing_scopes.empty()) {
         inst_resolver.enclosing_locals_depth_.emplace(enclosing_locals_depth);

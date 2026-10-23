@@ -632,6 +632,12 @@ class type {
     constexpr auto     set_instance_id(u64 id) noexcept -> void { instance_id_ = id; }
     [[nodiscard]] auto get_instance_id() const noexcept -> u64 { return instance_id_; }
 
+    // A generic function's own type also types it as a value: whatever it captured, or nothing
+    constexpr auto     mark_generic_value() noexcept -> void { generic_value_ = true; }
+    constexpr auto     set_generic_env(type& env) noexcept -> void { generic_env_ = &env; }
+    [[nodiscard]] auto is_generic_value() const noexcept -> bool { return generic_value_; }
+    [[nodiscard]] auto get_generic_env() const noexcept -> const type* { return generic_env_; }
+
     // A modifier twin (`const`/`volatile`) denotes the same nominal type as `src`
     constexpr auto copy_identity_from(const type& src) noexcept -> void {
         if (src.symbol_table_idx_) { symbol_table_idx_.emplace(*src.symbol_table_idx_); }
@@ -691,6 +697,8 @@ class type {
     stdx::opt_size symbol_table_idx_;
     u64            instance_id_{0};
     data_t         data_;
+    type*          generic_env_{nullptr};
+    bool           generic_value_{false};
 
     // Initialization is restricted to the pool's arena exclusively
     friend ghoti::arena;

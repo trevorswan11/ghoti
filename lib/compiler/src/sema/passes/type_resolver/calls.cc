@@ -188,8 +188,17 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
         have = callee->get_data().as_opt<types::function>();
     }
     if (!have) { return std::string{"it is not callable"}; }
+    // A generic is checked by instantiating it for the bound, unless the bound itself leaves a
+    // slot open, which the call inside the body then settles
     if (ctx_.generic_functions.get_opt(*callee)) {
-        return std::string{"a generic function has no single signature to check"};
+        const bool open_bound{std::ranges::any_of(want.params,
+                                                  [](const type* p) {
+                                                      return is_auto_pattern(*p) ||
+                                                             is_generic_type(*p);
+                                                  }) ||
+                              is_auto_pattern(want.return_type)};
+        if (open_bound) { return stdx::none; }
+        return instantiate_as_callable(*callee, want);
     }
     if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
 
@@ -225,6 +234,62 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
                            ctx_.type_display_name(want.return_type));
     }
     return stdx::none;
+}
+
+auto type_resolver::instantiate_as_callable(type&                  generic_fn,
+                                            const types::function& target,
+                                            std::string* monomorph) -> stdx::option<std::string> {
+    const auto info{ctx_.generic_functions.get_opt(generic_fn)};
+    if (!info) { return std::string{"it is not a generic function"}; }
+    const auto& params{info->fn_expr->parameters};
+    if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime || p.is_pack; })) {
+        return std::string{"it takes compile-time parameters, which a call signature can't supply"};
+    }
+    if (info->fn_expr->self || params.size() != target.params.size()) {
+        return fmt::format("it takes {} parameter{}, not {}",
+                           params.size(),
+                           string_utils::plural_suffix(params.size()),
+                           target.params.size());
+    }
+
+    auto args{ctx_.pool.get_many_unsafe(target.params.size())};
+    std::ranges::copy(target.params, args.begin());
+    const auto diags_before{ctx_.diags.size()};
+    const auto inst{instantiate_generic(generic_fn, *info, args, {})};
+    if (!inst) {
+        if (ctx_.diags.size() > diags_before) { return stdx::none; }
+        return std::string{"it can't be instantiated with those parameter types"};
+    }
+    if (!is_same_unqualified(*inst->return_type, target.return_type)) {
+        return fmt::format("it returns '{}', not '{}'",
+                           ctx_.type_display_name(*inst->return_type),
+                           ctx_.type_display_name(target.return_type));
+    }
+    if (monomorph) { *monomorph = inst->mangled_name; }
+    return stdx::none;
+}
+
+auto type_resolver::instantiate_for_expected_callable(ast::node_id id, type& generic_fn) -> void {
+    const auto expected{implicit_type_stack_.peek()};
+    if (!expected) { return; }
+    const type* target{&*expected};
+    if (const auto p{target->get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
+    const auto target_fn{target->get_data().as_opt<types::function>()};
+    if (!target_fn || target->is_generic_value() || ctx_.generic_functions.get_opt(*target) ||
+        std::ranges::any_of(target_fn->params, [](const type* p) { return is_generic_type(*p); })) {
+        return;
+    }
+    // Where a single signature is expected, the value is the monomorph for that signature
+    if (const auto why{instantiate_as_callable(generic_fn, *target_fn)}) {
+        last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("This generic function doesn't fit '{}': {}",
+                                         ctx_.type_display_name(*expected),
+                                         *why),
+                             error::CLOSURE_SIGNATURE_MISMATCH,
+                             resolving_.ast.location_of(id)));
+    }
 }
 
 auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
@@ -463,6 +528,34 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                 get_call_arg_location(arg));
             return stdx::none;
         }
+    }
+
+    // A generic function folds to its monomorph for the parameter's signature, which must not
+    // need a runtime environment
+    const auto param_fn{param_type ? param_type->get_data().as_opt<types::function>() : stdx::none};
+    if (param_fn && arg_type && arg_type->is_generic_value() &&
+        std::ranges::none_of(param_fn->params, [](const type* p) { return is_auto_pattern(*p); })) {
+        std::string monomorph;
+        if (const auto why{instantiate_as_callable(*const_cast<type*>(arg_type),
+                                                   param_type->get_data().as<types::function>(),
+                                                   &monomorph)}) {
+            ctx_.diags.emplace_back(fmt::format("This generic function doesn't fit '{}': {}",
+                                                ctx_.type_display_name(*param_type),
+                                                *why),
+                                    error::CLOSURE_SIGNATURE_MISMATCH,
+                                    get_call_arg_location(arg));
+            return stdx::none;
+        }
+        if (monomorph.empty()) { return stdx::none; }
+        if (arg_type->get_generic_env()) {
+            ctx_.diags.emplace_back("a compile-time function argument must capture only "
+                                    "compile-time constants",
+                                    error::COMPTIME_EVALUATION_FAILED,
+                                    get_call_arg_location(arg));
+            return stdx::none;
+        }
+        return gir::const_value{gir::const_value::data_t{std::move(monomorph)},
+                                ctx_.with_erasure(*const_cast<type*>(param_type), false)};
     }
 
     stdx::option<gir::const_value> folded;
@@ -1558,8 +1651,11 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                                                  enclosing_for_generic,
                                                  enclosing_fn_table_idx,
                                                  enclosing_function_scopes());
+        fn_type.mark_generic_value();
         register_impl_param_bounds(fn);
-        return last_type_.emplace(fn_type);
+        last_type_.emplace(fn_type);
+        instantiate_for_expected_callable(id, fn_type);
+        return;
     }
 
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
@@ -1667,6 +1763,8 @@ auto type_resolver::build_capture_env(ast::node_id fn_id, type& fn_type, bool is
     auto& env{ctx_.closure_slot_of(fn_type)};
     env.resolve<types::closure_t>(captures, fn_type, fn_type);
     ctx_.generic_functions.set_capture_env(fn_type, env);
+    fn_type.set_generic_env(env);
+    DISCARD(report_generic_escape(fn_type));
 }
 
 auto type_resolver::instance_local_function_type(ast::node_id id) -> type& {

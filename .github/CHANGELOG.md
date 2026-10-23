@@ -877,6 +877,10 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `move fn` gives it its own copies; it may recurse by name, and closures or other generics inside the same function may call it
     - Capturing a binding declared after the generic function is an error
     - The constants and types around it are visible too; it used to report them as undeclared
+- Generic functions are first-class values: a local or top-level generic (or a generic literal written in place) can be passed to an `auto` or `impl Fn` parameter, returned with an `auto` return, and stored, copying whatever it captured
+    - Where one signature is expected (a `fn(...)`, `^fn(...)`, or `comptime f: fn(...)` parameter, an annotated binding, a field, or an array element) it becomes the monomorph for that signature, and a mismatched result is reported at the value
+    - Returning one that holds a reference into the returning frame is an error, as for closures; use `move fn`
+    - `@fnCtx()` in a generic body names the generic itself, so each recursive call instantiates for its own arguments
 - Fixed: a closure with two or more captures read every capture past the first from the wrong address, crashing or returning garbage
 - Fixed: a closure inside a generic function recorded none of its captures, crashing codegen, and a local function or closure there kept the first instantiation's types for every later one
 - Fixed: distinct closures with the same signature passed to one `auto` or `impl Fn` parameter shared a single instantiation, so the second was rejected as not assignable to the first

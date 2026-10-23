@@ -583,7 +583,9 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 inst.location);
             } else if (inst.operands[0].data.is<gir::undefined_val>()) {
                 const auto ret_t{get_operand_type(inst.operands[0])};
-                if (!ret_t || ret_t->get_kind() != type_kind::NORETURN) {
+                // A generic function that captures nothing has no state, so nothing to define
+                if (!ret_t ||
+                    (ret_t->get_kind() != type_kind::NORETURN && !ret_t->is_generic_value())) {
                     emit_diagnostic(fmt::format("Function expecting return type '{}' does not "
                                                 "return a value on all code paths",
                                                 ctx_.type_display_name(expected_ret_t)),

@@ -1064,6 +1064,11 @@ auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
                              resolving_.ast.location_of(id));
     // @fnCtx() returns the enclosing function's own (pre-capture) signature as a callable value
     case syntax::builtin_t::FN_CTX:
+        // A generic's body names the generic itself, which each call instantiates anew
+        if (open_function_nodes_.empty() && instantiating_template_) {
+            return_type = instantiating_template_;
+            break;
+        }
         if (open_function_nodes_.empty()) {
             return make_sema_err("@fnCtx() may only be used inside of a function",
                                  error::TYPE_MISMATCH,

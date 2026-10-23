@@ -538,8 +538,9 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
             auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
             if (!p_name.empty()) {
-                if (arg_type->get_kind() == sema::type_kind::CLOSURE) {
-                    // A closure argument arrives by value
+                if (arg_type->get_kind() == sema::type_kind::CLOSURE ||
+                    arg_type->is_generic_value()) {
+                    // A closure or generic function argument arrives by value
                     const auto spilled{spill_to_temporary(value{p_slot.id, *arg_type}, *arg_type)};
                     scopes_.back().bindings.emplace(p_name,
                                                     local_binding{
@@ -780,6 +781,22 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         return fat;
     }
 
+    // The monomorph the resolver instantiated for this signature, with whatever it captured
+    if (src_ty->is_generic_value()) {
+        const auto fat_ptr{fat_type.get_data().as_opt<sema::types::pointer>()};
+        auto&      signature{fat_ptr ? fat_ptr->underlying : fat_type};
+        const auto mono{monomorph_for(*src_ty, signature)};
+        if (!mono) { return stdx::none; }
+        if (ctx_.generic_functions.get_capture_env(*src_ty)) {
+            const auto env{builder_.emit_address_of(emit_lvalue(src), ptr_ty)};
+            return value{builder_.emit_make_callable(value{env, ptr_ty}, *mono, fat_type),
+                         fat_type};
+        }
+        auto& thin{ctx_.with_erasure(signature, false)};
+        return value{builder_.emit_make_callable(value{*mono, thin}, stdx::none, fat_type),
+                     fat_type};
+    }
+
     // A closure's own body already takes its environment first, so it is the code directly
     if (src_ty->get_kind() == sema::type_kind::CLOSURE) {
         const auto env{builder_.emit_address_of(emit_lvalue(src), ptr_ty)};
@@ -798,6 +815,30 @@ auto emitter::emit_callable_coercion(ast::expr_handle src, sema::type& declared_
         (ref_src && is_thin_fn(ref_src->underlying))) {
         return value{builder_.emit_make_callable(emit_expression(src), stdx::none, fat_type),
                      fat_type};
+    }
+    return stdx::none;
+}
+
+auto emitter::monomorph_for(const sema::type& generic_fn, const sema::type& signature)
+    -> stdx::option<std::string> {
+    const auto sig{signature.get_data().as_opt<sema::types::function>()};
+    if (!sig) { return stdx::none; }
+    const auto matches{[&](std::string_view name) {
+        const auto req{ctx_.instantiation_cache.get_request(name)};
+        return req && req->generic_fn_type.get() == &generic_fn &&
+               req->arg_types.size() == sig->params.size() &&
+               std::ranges::equal(req->arg_types, sig->params, [](const auto* a, const auto* b) {
+                   return sema::is_same_unqualified(*a, *b);
+               });
+    }};
+    for (const auto* mod : {&active_mod(),
+                            ctx_.generic_functions.get_opt(generic_fn)
+                                ? ctx_.generic_functions.get_opt(generic_fn)->module.get()
+                                : nullptr}) {
+        if (!mod) { continue; }
+        for (const auto& name : mod->generic_instantiations) {
+            if (matches(name)) { return name; }
+        }
     }
     return stdx::none;
 }
@@ -1108,6 +1149,11 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     }
     if (sema::is_fat_callable(dest_type)) {
         if (auto callable{emit_callable_coercion(expr_id, dest_type)}) { return *callable; }
+    }
+    // A generic function where a thin `fn` is expected is the monomorph for that signature
+    if (const auto src{active_mod().get_sema_type_opt(*expr_id)};
+        src && src->is_generic_value() && dest_type.get_kind() == sema::type_kind::FUNCTION) {
+        if (const auto mono{monomorph_for(*src, dest_type)}) { return value{*mono, dest_type}; }
     }
 
     // Build the fat pointer for `&T` / `^T` -> `&dyn I` / `^dyn I`
@@ -2037,42 +2083,68 @@ auto emitter::bind_generic_env(gir::function& fn, sema::type& generic_fn_type, b
     bind_env_captures(env_slot.id, *env, env->get_data().as<sema::types::closure_t>(), is_move);
 }
 
-auto emitter::emit_generic_env(std::string_view name, sema::type& generic_fn_type) -> bool {
+auto emitter::emit_generic_value(sema::type& generic_fn_type) -> value {
     const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
-    if (!env) { return false; }
+    if (!env) { return value{undefined_val{}, generic_fn_type}; }
     const auto built{emit_closure_env(env->get_data().as<sema::types::closure_t>(), *env)};
-    const auto slot{builder_.emit_alloca(*env, name, false)};
-    builder_.emit_store(value{slot, *env}, built).is_initializer = true;
+    return value{built.data, generic_fn_type};
+}
+
+auto emitter::bind_generic_value(std::string_view name, sema::type& generic_fn_type) -> void {
+    const auto built{emit_generic_value(generic_fn_type)};
+    if (!ctx_.generic_functions.get_capture_env(generic_fn_type)) {
+        scopes_.back().bindings.emplace(name,
+                                        local_binding{
+                                            .id        = {0, local_kind::TEMPORARY},
+                                            .type      = generic_fn_type,
+                                            .is_alloca = false,
+                                            .const_val = built,
+                                            .is_const  = true,
+                                        });
+        return;
+    }
+    const auto slot{builder_.emit_alloca(generic_fn_type, name, false)};
+    builder_.emit_store(value{slot, generic_fn_type}, built).is_initializer = true;
     scopes_.back().bindings.emplace(name,
                                     local_binding{
                                         .id        = slot,
-                                        .type      = *env,
+                                        .type      = generic_fn_type,
                                         .is_alloca = true,
                                         .const_val = stdx::none,
                                     });
-    return true;
+}
+
+auto emitter::own_generic_env(const sema::type& generic_fn_type) -> stdx::option<value> {
+    if (generic_env_owners_.empty() || generic_env_owners_.back() != &generic_fn_type) {
+        return stdx::none;
+    }
+    const auto own{lookup_binding(CLOSURE_ENV_BINDING)};
+    if (!own) { return stdx::none; }
+    return value{own->id, own->type};
 }
 
 auto emitter::generic_env_arg(const ast::call_expr& call, sema::type& generic_fn_type)
     -> stdx::option<value> {
     const auto env{ctx_.generic_functions.get_capture_env(generic_fn_type)};
     if (!env) { return stdx::none; }
-    auto&      env_ref{ctx_.get_reference(sema::types::mut::MUTABLE, *env)};
-    const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)};
-    ASSERT(ident, "A capturing generic local function is only ever called by its name");
+    auto& env_ref{ctx_.get_reference(sema::types::mut::MUTABLE, *env)};
 
-    // A monomorph calling its own generic hands on the environment it was given
-    if (!generic_env_owners_.empty() && generic_env_owners_.back() == &generic_fn_type) {
-        const auto own{lookup_binding(CLOSURE_ENV_BINDING)};
-        ASSERT(own, "A capturing monomorph must have its environment bound");
-        return value{own->id, env_ref};
+    // The address of the value being called: a binding's own storage, the environment a
+    // monomorph naming its own generic was given, or else a temporary holding the callee
+    if (const auto inner{active_ast().get_as_opt<ast::call_expr>(call.function)};
+        inner && inner->function->get_builtin() == syntax::builtin_t::FN_CTX) {
+        if (const auto own{own_generic_env(generic_fn_type)}) { return value{own->data, env_ref}; }
     }
-    const auto binding{lookup_binding(ident->name)};
-    ASSERT(binding, "A capturing generic local function must have its environment bound");
-    if (binding->is_alloca) { return value{binding->id, env_ref}; }
-    const auto spill{builder_.emit_alloca(*env)};
-    builder_.emit_store(value{spill, *env}, value{binding->id, binding->type}).is_initializer =
-        true;
+    if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)}) {
+        if (const auto binding{lookup_binding(ident->name)}) {
+            if (binding->is_alloca) { return value{binding->id, env_ref}; }
+        } else if (const auto own{own_generic_env(generic_fn_type)}) {
+            return value{own->data, env_ref};
+        }
+    }
+    const auto callee{emit_expression(call.function)};
+    const auto spill{builder_.emit_alloca(generic_fn_type)};
+    builder_.emit_store(value{spill, generic_fn_type}, callee).is_initializer = true;
     return value{spill, env_ref};
 }
 
@@ -2574,7 +2646,9 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
 
     // An ordinary aggregate let/const needs one stable address across every use, so only a
     // non-aggregate can skip storage below except a `comptime let mut` since it has no storage
-    const auto is_structural{sema::is_structural(sema_type->get_kind())};
+    // A generic function's value is its environment, which a call may write to like a closure's
+    const auto is_structural{sema::is_structural(sema_type->get_kind()) ||
+                             sema_type->is_generic_value()};
     const auto alignment{decl_alignment(active_mod(), id)};
     if (is_const && decl.value && (!is_structural || is_comptime_mut) && !alignment) {
         // A `fn(...)`-annotated literal is a callable value built below, not a named function
@@ -2585,7 +2659,7 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
             // A generic local function has no single concrete signature to emit directly, only
             // whatever its monomorphs captured from here
             if (ctx_.generic_functions.get_opt(*sema_type)) {
-                emit_generic_env(name, *sema_type);
+                bind_generic_value(name, *sema_type);
                 return;
             }
             const auto anon_name{emit_named_local_function(name, **decl.value, *fn_expr)};
@@ -2906,6 +2980,10 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
             if (sema_type && sema_type->get_kind() == sema::type_kind::CLOSURE) {
                 return emit_closure(id, data);
             }
+            // Only its monomorphs have bodies, so the value is just what they capture
+            if (sema_type && sema_type->is_generic_value()) {
+                return emit_generic_value(*sema_type);
+            }
             const auto anon_name{emit_anonymous_function(id, data)};
             return value{anon_name, sema_type};
         },
@@ -3002,6 +3080,16 @@ auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> 
             return value{loaded, binding->type};
         }
         return value{binding->id, binding->type};
+    }
+
+    // A generic function named outside the frame that built its environment: a top-level one
+    // captures nothing, and a monomorph naming its own generic has the environment it was given
+    if (const auto named{active_mod().get_sema_type_opt(id)}; named && named->is_generic_value()) {
+        if (const auto own{own_generic_env(*named)}) {
+            const auto loaded{builder_.emit_load(*own, *named)};
+            return value{loaded, *named};
+        }
+        return value{undefined_val{}, *named};
     }
 
     // A module-level aggregate `const` or `let mut`: load from its global.

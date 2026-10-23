@@ -538,6 +538,9 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
                              resolving_.ast.location_of(id)));
     }
     resolve_ident(id, ident);
+    if (!is_callee && last_type_ && last_type_->is_generic_value()) {
+        instantiate_for_expected_callable(id, *last_type_);
+    }
 
     // A range counter reads as any integer type that holds every value it takes
     if (const auto expected{implicit_type_stack_.peek()};

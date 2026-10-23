@@ -139,6 +139,30 @@ namespace {
 
 } // namespace
 
+auto type_resolver::report_generic_escape(const type& generic_fn) -> bool {
+    const auto escape{ctx_.generic_functions.get_escape(generic_fn)};
+    const auto env{generic_fn.get_generic_env()};
+    if (!escape || !env || escape->reported) { return false; }
+    const auto& cl{env->get_data().as<types::closure_t>()};
+    if (escape->erased && !cl.captures.empty()) {
+        ctx_.diags.emplace_back("A capturing generic function erased into `fn(...)` borrows its "
+                                "environment from this function and cannot be returned; return it "
+                                "by its own type with an `auto` return instead",
+                                error::ILLEGAL_CLOSURE_ESCAPE,
+                                escape->at);
+    } else if (has_dangling_capture(cl)) {
+        ctx_.diags.emplace_back("Generic function captures a reference into its enclosing "
+                                "function and cannot be returned directly; mark it 'move fn' to "
+                                "capture by value instead",
+                                error::ILLEGAL_CLOSURE_ESCAPE,
+                                escape->at);
+    } else {
+        return false;
+    }
+    escape->reported = true;
+    return true;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
     if (do_while.is_unrolled) { check_unrolled_loop_jumps(do_while.block); }
@@ -2705,6 +2729,21 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
             return decl && decl->value &&
                    resolving_.ast.get_as_opt<ast::function_expr>(*decl->value);
         }();
+
+        // A generic's captures are only known once it's instantiated, which may be later
+        const auto returns_erased_early{!return_trackers_.empty() &&
+                                        return_trackers_.back().expected_type &&
+                                        is_fat_callable(*return_trackers_.back().expected_type)};
+        if (return_expr_type.is_generic_value() &&
+            (constructs_closure_literal || returns_erased_early)) {
+            ctx_.generic_functions.mark_escaping(
+                return_expr_type,
+                {.at     = resolving_.ast.location_of(*return_stmt.expression),
+                 .erased = returns_erased_early});
+            if (report_generic_escape(return_expr_type)) {
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
+        }
 
         if (constructs_closure_literal) {
             if (const auto cl{return_expr_type.get_data().as_opt<types::closure_t>()};
