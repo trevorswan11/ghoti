@@ -5,8 +5,7 @@
 
 namespace ghoti::sema {
 
-// Tells apart the instances of one type constructor, which all share its body's scope, and the
-// per-instantiation copies of a local function. Never zero, which `stdx::option` keeps for none
+// Tells apart the instances of one type constructor
 enum class instance_id : u64 {};
 
 // An instance id from a hash, which is never the none value

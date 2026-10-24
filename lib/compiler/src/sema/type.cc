@@ -241,9 +241,7 @@ auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32
     case type_kind::POINTER:
     case type_kind::REFERENCE: {
         // A `&dyn I` / `^dyn I` fat pointer is two words, so like a slice it has no packed form
-        const auto  p{t.get_data().as_opt<types::pointer>()};
-        const auto  r{t.get_data().as_opt<types::reference>()};
-        const type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        const auto referent{pointee_of(t)};
         if (referent && referent->get_kind() == type_kind::DYN) { return stdx::none; }
         return ptr_bits;
     }
@@ -281,7 +279,7 @@ auto packed_field_bits(const type& t, u32 ptr_bits) noexcept -> stdx::option<u32
 
 auto packed_backing_bits(const types::struct_t& s, u32 ptr_bits) noexcept -> stdx::option<u32> {
     u64 total{0};
-    for (const auto* field : s.fields) {
+    for (const auto field : s.fields) {
         if (!field) { continue; }
         const auto bits{packed_field_bits(*field, ptr_bits)};
         if (!bits) { return stdx::none; }
@@ -294,9 +292,7 @@ auto packed_backing_bits(const types::struct_t& s, u32 ptr_bits) noexcept -> std
 auto packed_field_offset(const types::struct_t& s, usize idx, u32 ptr_bits) noexcept -> u32 {
     u64 offset{0};
     for (usize i{0}; i < idx && i < s.fields.size(); ++i) {
-        if (s.fields[i] != nullptr) {
-            offset += packed_field_bits(*s.fields[i], ptr_bits).value_or(0);
-        }
+        if (s.fields[i]) { offset += packed_field_bits(*s.fields[i], ptr_bits).value_or(0); }
     }
     return static_cast<u32>(offset);
 }
@@ -304,7 +300,7 @@ auto packed_field_offset(const types::struct_t& s, usize idx, u32 ptr_bits) noex
 auto packed_union_backing_bits(const types::union_t& u, u32 ptr_bits) noexcept
     -> stdx::option<u32> {
     u64 widest{0};
-    for (const auto* field : u.fields) {
+    for (const auto field : u.fields) {
         if (!field) { continue; }
         const auto bits{packed_field_bits(*field, ptr_bits)};
         if (!bits) { return stdx::none; }
@@ -571,11 +567,11 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
                                arr.underlying.to_string(names));
         },
         [names](types::function fn) {
-            auto params_str{
-                fmt::to_string(fmt::join(fn.params | std::views::transform([names](type* param) {
-                                             return param->to_string(names);
-                                         }),
-                                         ", "))};
+            auto params_str{fmt::to_string(
+                fmt::join(fn.params | std::views::transform([names](gsl::not_null<type*> param) {
+                              return param->to_string(names);
+                          }),
+                          ", "))};
             if (fn.is_variadic) { params_str += params_str.empty() ? "..." : ", ..."; }
             return fmt::format("fn({}): {}", params_str, fn.return_type.to_string(names));
         },
@@ -607,16 +603,28 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
 
 auto type_pool::get_or_emplace(const types::key_t& key) -> gsl::not_null<type*> {
     if (auto it{cache_.find(key)}; it != cache_.end()) { return it->second; }
-    auto* t = arena_.make<type>(key).get();
+    const gsl::not_null<type*> t{arena_.make<type>(key).get()};
     cache_.emplace(key, t);
     return t;
 }
 
-auto type_pool::get_many_unsafe(usize count) noexcept -> gsl::span<type*> {
-    return arena_.make_span<type*>(count);
+auto type_pool::get_many_unsafe(usize count) noexcept -> type_span {
+    return make_uninit_span<gsl::not_null<type*>>(arena_, count);
 }
 
-auto type_pool::get_many(usize count, type& common_type) noexcept -> gsl::span<type*> {
+auto type_pool::get_many_pending(usize count) noexcept -> gsl::span<stdx::option<type&>> {
+    return arena_.make_span<stdx::option<type&>>(count);
+}
+
+auto type_pool::settle(gsl::span<const stdx::option<type&>> slots) noexcept -> type_span {
+    auto types{get_many_unsafe(slots.size())};
+    std::ranges::transform(slots, types.begin(), [](stdx::option<type&> slot) {
+        return gsl::not_null<type*>{slot.get()};
+    });
+    return types;
+}
+
+auto type_pool::get_many(usize count, type& common_type) noexcept -> type_span {
     auto types{get_many_unsafe(count)};
     for (usize i{0}; i < count; ++i) { types[i] = &common_type; }
     return types;
@@ -647,8 +655,9 @@ auto holds_type_values(const type& t) noexcept -> bool {
     if (const auto slice{data.as_opt<types::slice>()}) {
         return holds_type_values(slice->underlying);
     }
-    const auto any_field{[](gsl::span<type*> fields) {
-        return std::ranges::any_of(fields, [](const type* f) { return holds_type_values(*f); });
+    const auto any_field{[](gsl::span<stdx::option<type&>> fields) {
+        return std::ranges::any_of(fields,
+                                   [](stdx::option<type&> f) { return holds_type_values(*f); });
     }};
     if (const auto st{data.as_opt<types::struct_t>()}) { return any_field(st->fields); }
     if (const auto ut{data.as_opt<types::union_t>()}) { return any_field(ut->fields); }
@@ -690,7 +699,7 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
         if (unmodified && !is_erased_fn(t)) { return true; }
         if (const auto fn{data.as_opt<types::function>()}) {
             if (is_generic_type(fn->return_type, false)) { return true; }
-            for (const auto* p : fn->params) {
+            for (const auto p : fn->params) {
                 if (is_generic_type(*p, false)) { return true; }
             }
         }
@@ -699,8 +708,14 @@ auto is_generic_type(const type& t, bool unmodified) noexcept -> bool {
     return false;
 }
 
+auto pointee_of(const type& t) noexcept -> stdx::option<type&> {
+    if (const auto ptr{t.get_data().as_opt<types::pointer>()}) { return ptr->underlying; }
+    if (const auto ref{t.get_data().as_opt<types::reference>()}) { return ref->underlying; }
+    return stdx::none;
+}
+
 auto signature_of(const type& fn_value_type) noexcept -> stdx::option<const types::function&> {
-    const type* target{&fn_value_type};
+    gsl::not_null<const type*> target{&fn_value_type};
     if (const auto ref{target->get_data().as_opt<types::reference>()}) {
         target = &ref->underlying;
     }
@@ -742,9 +757,11 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         const auto d_a{a.get_data().as_opt<types::dyn_t>()};
         const auto d_b{b.get_data().as_opt<types::dyn_t>()};
         if (!d_a || !d_b || &d_a->interface != &d_b->interface) { return false; }
-        return std::ranges::equal(d_a->assoc_bindings, d_b->assoc_bindings, [](type* x, type* y) {
-            return x == y || (x && y && is_same_unqualified(*x, *y));
-        });
+        return std::ranges::equal(d_a->assoc_bindings,
+                                  d_b->assoc_bindings,
+                                  [](gsl::not_null<type*> x, gsl::not_null<type*> y) {
+                                      return x == y || is_same_unqualified(*x, *y);
+                                  });
     }
     case type_kind::POINTER: {
         const auto p_a{a.get_data().as_opt<types::pointer>()};
@@ -815,7 +832,7 @@ auto is_erased_fn(const type& t) noexcept -> bool {
 }
 
 auto fat_callable_fn(const type& t) noexcept -> stdx::option<const types::function&> {
-    const type* target{&t};
+    gsl::not_null<const type*> target{&t};
     if (const auto p{t.get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
     const auto fn{target->get_data().as_opt<types::function>()};
     if (!fn || !fn->erased) { return stdx::none; }
@@ -872,7 +889,7 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
 
     if (const auto ut{dest.get_data().as_opt<types::union_t>()}) {
         if (ut->is_untagged) {
-            for (const auto* field : ut->fields) {
+            for (const auto field : ut->fields) {
                 if (is_assignable(src, *field)) { return true; }
             }
         }

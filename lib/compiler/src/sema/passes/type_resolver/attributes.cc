@@ -790,7 +790,7 @@ auto type_resolver::impl_method_discardable(const type&      target,
         return r.target_type && r.target_type->has_symbol_table_idx() &&
                r.target_type->get_symbol_table_idx() == target.get_symbol_table_idx();
     }};
-    for (const auto* record : ctx_.impls.records()) {
+    for (const auto record : ctx_.impls.records()) {
         if (!same_target(*record)) { continue; }
         const auto method{record->find_method(name)};
         if (!method) { continue; }
@@ -846,7 +846,7 @@ auto type_resolver::callee_is_discardable(ast::node_id call_id, const ast::call_
                 home.emplace(m_data->imported);
             } else {
                 const auto unwrap_ref = [](const type& t) -> const type& {
-                    const type* curr{&t};
+                    gsl::not_null<const type*> curr{&t};
                     if (const auto meta{curr->get_data().as_opt<types::meta_type>()}) {
                         curr = &meta->instance;
                     }

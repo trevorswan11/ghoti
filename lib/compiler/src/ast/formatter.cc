@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
@@ -140,13 +141,13 @@ auto formatter::init_trivia() -> void {
                 bool has_blank{false};
                 if (!first && t.line > prev_line + 1) { has_blank = true; }
                 comments_.emplace_back<comment_item>({
-                    .text             = t.slice,
-                    .line             = t.line,
-                    .col              = t.col,
-                    .is_trailing      = false,
-                    .is_leading_blank = has_blank,
+                    .text              = t.slice,
+                    .line              = t.line,
+                    .col               = t.col,
+                    .is_trailing       = false,
+                    .is_leading_blank  = has_blank,
                     .is_trailing_blank = false,
-                    .consumed         = false,
+                    .consumed          = false,
                 });
                 prev_line = t.line;
                 first     = false;
@@ -165,13 +166,13 @@ auto formatter::init_trivia() -> void {
         for (const auto& t : enriched.trailing_trivia) {
             if (t.kind == syntax::trivia_kind::LINE_COMMENT) {
                 comments_.emplace_back<comment_item>({
-                    .text             = t.slice,
-                    .line             = t.line,
-                    .col              = t.col,
-                    .is_trailing      = true,
-                    .is_leading_blank = false,
+                    .text              = t.slice,
+                    .line              = t.line,
+                    .col               = t.col,
+                    .is_trailing       = true,
+                    .is_leading_blank  = false,
                     .is_trailing_blank = false,
-                    .consumed         = false,
+                    .consumed          = false,
                 });
                 prev_line = t.line;
             }
@@ -1461,18 +1462,16 @@ auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
     }};
 
     push_arm(head_clause(node), node.consequence);
-    for (const if_expr* cur{&node}; cur->alternate;) {
+    for (gsl::not_null<const if_expr*> cur{&node}; cur->alternate;) {
         const auto alt{*cur->alternate};
         before_else.emplace_back(comments_before_else(cur->consequence, alt));
-        const auto  es{ast_.get_as_opt<expr_stmt>(alt)};
-        const auto* next{es && ast_.get_as_opt<if_expr>(es->expression)
-                             ? &ast_.get_as<if_expr>(es->expression)
-                             : nullptr};
+        const auto es{ast_.get_as_opt<expr_stmt>(alt)};
+        const auto next{es ? ast_.get_as_opt<if_expr>(es->expression) : stdx::none};
         // `else |e| if ...` keeps its capture, so it isn't flattened into an `else if` arm
         if (next && !cur->else_capture) {
             push_arm(doc_manager_.concat({doc_manager_.text("else "), head_clause(*next)}),
                      next->consequence);
-            cur = next;
+            cur = next.get();
         } else {
             push_arm(
                 doc_manager_.concat({doc_manager_.text("else "),

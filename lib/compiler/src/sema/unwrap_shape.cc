@@ -65,7 +65,7 @@ namespace {
 [[nodiscard]] auto lookup_impl(const impl_registry& registry, const type& target, const type& iface)
     -> stdx::option<const impl_record&> {
     if (const auto exact{registry.lookup(target, iface)}) { return *exact; }
-    for (const auto* r : registry.records()) {
+    for (const auto r : registry.records()) {
         if (r->target_type && is_same_unqualified(*r->target_type, target) && r->interface_type &&
             is_same_unqualified(*r->interface_type, iface)) {
             return *r;
@@ -133,7 +133,7 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             if (!changed && &new_ret == &fn.return_type) { return t; }
 
             types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
-            for (auto* p : new_params) { key.imprint(*p); }
+            for (auto p : new_params) { key.imprint(*p); }
             key.imprint(new_ret);
             key.imprint(static_cast<u64>(fn.has_self));
             key.imprint(static_cast<u64>(fn.is_variadic));

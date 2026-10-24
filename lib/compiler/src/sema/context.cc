@@ -67,13 +67,13 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
 
 constexpr u64 ERASED_FN_MARKER{0x455241534544}; // distinguishes `fn` from `extern fn` keys
 
-auto context::get_function(gsl::span<type*>        params,
+auto context::get_function(type_span               params,
                            type&                   return_type,
                            bool                    is_variadic,
                            ast::calling_convention conv,
                            bool                    erased) -> type& {
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
-    for (const auto* p : params) { key.imprint(*p); }
+    for (const auto p : params) { key.imprint(*p); }
     key.imprint(return_type);
     if (is_variadic) { key.imprint(is_variadic); }
     key.imprint(conv);
@@ -84,7 +84,7 @@ auto context::get_function(gsl::span<type*>        params,
     return fn;
 }
 
-auto context::get_function_like(gsl::span<type*>        params,
+auto context::get_function_like(type_span               params,
                                 type&                   return_type,
                                 bool                    has_self,
                                 bool                    is_variadic,
@@ -93,7 +93,7 @@ auto context::get_function_like(gsl::span<type*>        params,
     if (!has_self) { return get_function(params, return_type, is_variadic, conv, erased); }
 
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
-    for (const auto* p : params) { key.imprint(*p); }
+    for (const auto p : params) { key.imprint(*p); }
     key.imprint(return_type);
     key.imprint(conv);
     auto& fn{*pool[key]};

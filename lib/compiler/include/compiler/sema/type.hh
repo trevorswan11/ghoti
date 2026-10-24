@@ -179,21 +179,24 @@ constexpr u16 CHAR_CONSTANT_BITS{21};
 
 class type;
 
+// Types that are all known, like a function's parameters
+using type_span = gsl::span<gsl::not_null<type*>>;
+
 // Declared names of user struct/enum/union types, keyed by their type
-using type_name_map = ankerl::unordered_dense::map<const type*, std::string_view>;
+using type_name_map = ankerl::unordered_dense::map<gsl::not_null<const type*>, std::string_view>;
 
 // What an `impl I` / `impl Fn(...)` parameter's argument must satisfy
 struct param_bound {
-    u32                      param_index;
-    std::vector<const type*> interfaces;
+    u32                                     param_index;
+    std::vector<gsl::not_null<const type*>> interfaces;
     // `impl Fn(...)`'s signature, resolved per instantiation since it may name the enclosing
     // constructor's parameters
     stdx::option<ast::explicit_type_id> callable;
 };
 
 // Every generic function's parameter bounds for a caller in any module to check
-using param_bound_map =
-    ankerl::unordered_dense::map<const ast::function_expr*, std::vector<param_bound>>;
+using param_bound_map = ankerl::unordered_dense::map<gsl::not_null<const ast::function_expr*>,
+                                                     std::vector<param_bound>>;
 
 // Why an implicit `from` -> `to` conversion is rejected, naming user types through `names`
 [[nodiscard]] auto cast_rejection_reason(const type&                        from,
@@ -292,7 +295,7 @@ struct enum_t {
     gsl::span<const ast::enum_expr::enumeration> ast_enumerations;
     bool                                         non_exhaustive;
     type&                                        underlying;
-    gsl::span<type*>                             members;
+    gsl::span<stdx::option<type&>>               members;
     mod::module_t&                               enclosing;
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
@@ -307,15 +310,15 @@ struct enum_t {
         -> stdx::option<type&> {
         if (idx < ast_enumerations.size()) { return object_type; }
         const auto member{idx - ast_enumerations.size()};
-        if (member >= members.size() || !members[member]) { return stdx::none; }
-        return *members[member];
+        if (member >= members.size()) { return stdx::none; }
+        return members[member];
     }
 };
 
 struct union_t {
-    gsl::span<type*>                        fields;
+    gsl::span<stdx::option<type&>>          fields;
     gsl::span<const ast::union_expr::field> ast_fields;
-    gsl::span<type*>                        members;
+    gsl::span<stdx::option<type&>>          members;
     mod::module_t&                          enclosing;
     bool                                    is_untagged{false};
     bool                                    is_c_abi{false};
@@ -342,9 +345,9 @@ struct union_t {
 };
 
 struct struct_t {
-    gsl::span<type*>                         fields;
+    gsl::span<stdx::option<type&>>           fields;
     gsl::span<const ast::struct_expr::field> ast_fields;
-    gsl::span<type*>                         members;
+    gsl::span<stdx::option<type&>>           members;
     mod::module_t&                           enclosing;
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
@@ -374,7 +377,7 @@ struct struct_t {
 };
 
 struct function {
-    gsl::span<type*>        params;
+    type_span               params;
     type&                   return_type;
     bool                    has_self;
     bool                    is_variadic{false};
@@ -384,7 +387,7 @@ struct function {
 
 // Carries no storage and is never a value type; it only describes a contract
 struct interface_t {
-    gsl::span<type*>            method_sigs;        // resolved `types::function` per method
+    type_span                   method_sigs;        // resolved `types::function` per method
     gsl::span<usize>            method_src_indices; // index into `ast_methods`
     gsl::span<std::string_view> method_names;
     gsl::span<bool>             method_is_pub; // false => sealed to `enclosing`
@@ -404,8 +407,8 @@ struct interface_t {
 };
 
 struct dyn_t {
-    type&            interface;      // the `types::interface_t` this object is erased to
-    gsl::span<type*> assoc_bindings; // bound assoc types in interface order
+    type&     interface;      // the `types::interface_t` this object is erased to
+    type_span assoc_bindings; // bound assoc types in interface order
 };
 
 // How a closure stores one of its captured free variables in its environment
@@ -416,10 +419,10 @@ enum class capture_mode : u8 {
 };
 
 struct closure_capture {
-    std::string_view name;
-    type*            captured_type;
-    type*            storage_type;
-    capture_mode     mode;
+    std::string_view     name;
+    gsl::not_null<type*> captured_type;
+    gsl::not_null<type*> storage_type;
+    capture_mode         mode;
 };
 
 struct closure_t {
@@ -638,9 +641,11 @@ class type {
 
     // A generic function's own type also types it as a value: whatever it captured, or nothing
     constexpr auto     mark_generic_value() noexcept -> void { generic_value_ = true; }
-    constexpr auto     set_generic_env(type& env) noexcept -> void { generic_env_ = &env; }
+    constexpr auto     set_generic_env(type& env) noexcept -> void { generic_env_ = env; }
     [[nodiscard]] auto is_generic_value() const noexcept -> bool { return generic_value_; }
-    [[nodiscard]] auto get_generic_env() const noexcept -> const type* { return generic_env_; }
+    [[nodiscard]] auto get_generic_env() const noexcept -> stdx::option<const type&> {
+        return generic_env_;
+    }
 
     // A modifier twin (`const`/`volatile`) denotes the same nominal type as `src`
     constexpr auto copy_identity_from(const type& src) noexcept -> void {
@@ -697,12 +702,12 @@ class type {
     explicit type(types::key_t key) noexcept : key_{key} {}
 
   private:
-    types::key_t   key_;
-    stdx::opt_size symbol_table_idx_;
+    types::key_t              key_;
+    stdx::opt_size            symbol_table_idx_;
     stdx::option<instance_id> instance_id_;
-    data_t         data_;
-    type*          generic_env_{nullptr};
-    bool           generic_value_{false};
+    data_t                    data_;
+    stdx::option<type&>       generic_env_;
+    bool                      generic_value_{false};
 
     // Initialization is restricted to the pool's arena exclusively
     friend ghoti::arena;
@@ -714,7 +719,7 @@ static_assert(stdx::TriviallyDestructible<type>);
 [[nodiscard]] auto as_integer(const type& t) noexcept -> stdx::option<types::integer>;
 // The instance id that tells `c_longdouble` apart from the `f64` / `f80` / `f128` it's sized as
 inline constexpr instance_id C_LONGDOUBLE_INSTANCE{~u64{0}};
-[[nodiscard]] auto   is_c_longdouble(const type& t) noexcept -> bool;
+[[nodiscard]] auto           is_c_longdouble(const type& t) noexcept -> bool;
 // `i32`, `u7`, or the C type's own name (`c_int`)
 [[nodiscard]] auto int_display_name(const types::integer& info) -> std::string;
 // Whether every value of `from` is also a value of `to`
@@ -787,21 +792,26 @@ class type_pool {
 
     // Allocate a quasi-contiguous span of types with the provided keys
     template <std::same_as<types::key_t>... Keys>
-    [[nodiscard]] auto get_many(Keys&&... keys) noexcept -> gsl::span<type*> {
-        auto  types{arena_.make_span<type*>(sizeof...(Keys))};
+    [[nodiscard]] auto get_many(Keys&&... keys) noexcept -> type_span {
+        auto  types{make_uninit_span<gsl::not_null<type*>>(arena_, sizeof...(Keys))};
         usize i{0};
         (..., (types[i++] = get_or_emplace(keys)));
         return types;
     }
 
-    // Allocates the requested number of types but does not initialize any data
-    [[nodiscard]] auto get_many_unsafe(usize count) noexcept -> gsl::span<type*>;
+    // Allocates the requested number of types but does not initialize any data, so each must be
+    // filled before it is read
+    [[nodiscard]] auto get_many_unsafe(usize count) noexcept -> type_span;
+    // Allocates slots for types that are filled in as they resolve, each empty until then
+    [[nodiscard]] auto get_many_pending(usize count) noexcept -> gsl::span<stdx::option<type&>>;
+    // The types of slots that have all resolved
+    [[nodiscard]] auto settle(gsl::span<const stdx::option<type&>> slots) noexcept -> type_span;
 
     // Allocate a quasi-contiguous span of types with the same types
-    [[nodiscard]] auto get_many(usize count, type& common_type) noexcept -> gsl::span<type*>;
+    [[nodiscard]] auto get_many(usize count, type& common_type) noexcept -> type_span;
 
     // Allocate a quasi-contiguous span of types with the same key types
-    [[nodiscard]] auto get_many(usize count, types::key_t common_key) noexcept -> gsl::span<type*> {
+    [[nodiscard]] auto get_many(usize count, types::key_t common_key) noexcept -> type_span {
         return get_many(count, *get_or_emplace(common_key));
     }
 
@@ -847,9 +857,12 @@ class type_pool {
         -> gsl::not_null<type*>;
 
   private:
-    ghoti::arena&                                     arena_;
-    ankerl::unordered_dense::map<types::key_t, type*> cache_;
+    ghoti::arena&                                                    arena_;
+    ankerl::unordered_dense::map<types::key_t, gsl::not_null<type*>> cache_;
 };
+
+// What `t` points at when it is a pointer or a reference
+[[nodiscard]] auto pointee_of(const type& t) noexcept -> stdx::option<type&>;
 
 // Unwraps meta_type to obtain the denoted underlying instance type
 // The signature behind a function value typed directly, by reference, or by pointer

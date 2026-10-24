@@ -292,7 +292,8 @@ class const_eval {
     auto force_deferred_function_params(sema::type& maybe_fn) -> void;
     auto force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void;
     auto force_deferred_indirection_underlying(sema::type& maybe_indirection) -> void;
-    auto force_deferred_array_elements(gsl::span<sema::type*> elements) -> void;
+    auto force_deferred_array_elements(sema::type_span elements) -> void;
+    auto force_deferred_array_elements(gsl::span<stdx::option<sema::type&>> elements) -> void;
     // Deep-forces array placeholders reachable by value; `none` if any stays deferred
     [[nodiscard]] auto force_deferred_layout(sema::type& type) -> stdx::option<sema::type&>;
     [[nodiscard]] auto rebuild_array(sema::type& array_type, sema::type& underlying) -> sema::type&;
@@ -380,7 +381,7 @@ class const_eval {
     // shape with every leaf undefined, so elements and fields can be written one at a time
     auto undefined_value_of(sema::type& declared) -> const_value;
     // A plain call's parameter types, empty when the callee's type isn't a known function
-    [[nodiscard]] auto callee_params(const ast::call_expr& call) -> gsl::span<sema::type*>;
+    [[nodiscard]] auto callee_params(const ast::call_expr& call) -> sema::type_span;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
     // `captures_out` receives what the body left each capture holding
@@ -502,8 +503,8 @@ class const_eval {
     // The return type of each compile-time call being evaluated, innermost last
     std::vector<stdx::option<sema::type&>> return_types_;
     // The function each of those calls runs, innermost last
-    std::vector<const ast::function_expr*> active_fns_;
-    default_counter                        recursion_depth_;
+    std::vector<gsl::not_null<const ast::function_expr*>> active_fns_;
+    default_counter                                       recursion_depth_;
 
     // A label's name, handed to the loop it directly wraps so it can consume jumps aimed at it
     stdx::option<std::string_view> pending_loop_label_;

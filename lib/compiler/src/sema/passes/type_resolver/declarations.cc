@@ -215,7 +215,7 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
         }
         {
             // The declaration is typed on its own, not by the expected type at this use
-            const structural_guard shield{implicit_type_stack_, nullptr};
+            const structural_guard shield{implicit_type_stack_, stdx::none};
             resolve(*node);
         }
         // Take the symbol's real type so forward references and mutual recursion resolve.
@@ -287,7 +287,7 @@ auto type_resolver::record_symbol_owner(ast::node_id         ref_id,
 auto type_resolver::record_member_owner(ast::node_id           ref_id,
                                         type&                  object_type,
                                         ast::identifier_handle member) -> void {
-    type* target{&object_type};
+    gsl::not_null<type*> target{&object_type};
     if (const auto meta{target->get_data().as_opt<types::meta_type>()}) {
         target = &meta->instance;
     }
@@ -1122,7 +1122,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.explicit_type) {
             resolve(*decl.explicit_type);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto* explicit_type_p{&denoted_type(*last_type_.take())};
+            gsl::not_null explicit_type_p{&denoted_type(*last_type_.take())};
             // `const x: MakesAType() = ...`
             if (explicit_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
@@ -1193,7 +1193,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                                     resolving_.ast.location_of(*decl.value)));
                 return poison_out();
             }
-            auto* decl_value_type_p{last_type_.take()};
+            gsl::not_null decl_value_type_p{last_type_.take()};
             // `const X = MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};

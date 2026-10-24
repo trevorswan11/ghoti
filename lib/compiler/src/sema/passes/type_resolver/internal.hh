@@ -238,12 +238,13 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
 // Whether the parameter at `idx` is implicitly `comptime` given its argument types: one typed by
 // its argument (`auto`, `@TypeOf(x)`, `T`) that got a `comptime_int`/`comptime_float`, which only
 // exists at compile time
-[[nodiscard]] inline auto binds_implicit_comptime(const ast::AST&           tree,
-                                                  const ast::function_expr& fn,
-                                                  usize                     idx,
-                                                  gsl::span<type* const>    arg_types) -> bool {
+[[nodiscard]] inline auto binds_implicit_comptime(const ast::AST&                       tree,
+                                                  const ast::function_expr&             fn,
+                                                  usize                                 idx,
+                                                  gsl::span<const gsl::not_null<type*>> arg_types)
+    -> bool {
     const auto& param{fn.parameters[idx]};
-    if (param.is_comptime || param.is_pack || idx >= arg_types.size() || !arg_types[idx] ||
+    if (param.is_comptime || param.is_pack || idx >= arg_types.size() ||
         !is_comptime_numeric(arg_types[idx]->get_kind())) {
         return false;
     }
@@ -271,18 +272,15 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
 }
 
 // Whether the parameter at `idx` takes its argument at compile time in this instantiation
-[[nodiscard]] inline auto binds_comptime(const ast::AST&           tree,
-                                         const ast::function_expr& fn,
-                                         usize                     idx,
-                                         gsl::span<type* const>    arg_types) -> bool {
+[[nodiscard]] inline auto binds_comptime(const ast::AST&                       tree,
+                                         const ast::function_expr&             fn,
+                                         usize                                 idx,
+                                         gsl::span<const gsl::not_null<type*>> arg_types) -> bool {
     return fn.parameters[idx].is_comptime || binds_implicit_comptime(tree, fn, idx, arg_types);
 }
 
 [[nodiscard]] inline auto any_param_generic(auto&& params) noexcept -> bool {
-    for (const auto* p : params) {
-        if (is_generic_type(*p)) { return true; }
-    }
-    return false;
+    return std::ranges::any_of(params, [](const auto& p) { return is_generic_type(*p); });
 }
 
 // Forwards an incomplete aggregate type to safely break cycles if possible
@@ -311,11 +309,11 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
 
 // Whether an expression denotes a type (`^mut ^i32`, `&mut i32`, `[]u8`) rather than a
 // value, so pointer and reference syntax in a type isn't taken for an rvalue capture
-[[nodiscard]] inline auto is_type_denoting_expr(const context&            ctx,
-                                                const mod::module_t&      mod,
-                                                ast::node_id              id,
-                                                const symbol_table_stack* tables = nullptr)
-    -> bool {
+[[nodiscard]] inline auto
+is_type_denoting_expr(const context&                          ctx,
+                      const mod::module_t&                    mod,
+                      ast::node_id                            id,
+                      stdx::option<const symbol_table_stack&> tables = stdx::none) -> bool {
     // 1. Explicit sema type denoting a compile-time type
     if (const auto ty{mod.get_sema_type_opt(id)}) {
         // A not-yet-folded `[n]T` value shares the `type` kind but is not a type
@@ -404,7 +402,7 @@ scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {}) -> 
         [acc, &scan](types::array ar) { return scan(ar.underlying, acc); },
         [&acc, &scan](types::function fn) {
             if (fn.erased) { acc.has_erased_fn = true; }
-            for (const auto* param : fn.params) { acc = scan(*param, acc); }
+            for (const auto param : fn.params) { acc = scan(*param, acc); }
             return scan(fn.return_type, acc);
         },
         [acc, &scan](types::deferred_array da) { return scan(da.underlying, acc); },
@@ -430,8 +428,8 @@ scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {}) -> 
 }
 
 // Whether a ctor's arguments include a stand-in `type`, making the instance a template
-[[nodiscard]] inline auto is_abstract_instance(gsl::span<type*> args) -> bool {
-    return std::ranges::any_of(args, [](type* arg) {
+[[nodiscard]] inline auto is_abstract_instance(type_span args) -> bool {
+    return std::ranges::any_of(args, [](gsl::not_null<type*> arg) {
         const auto& t{denoted_type(*arg)};
         return t.get_kind() == type_kind::TYPE && t.get_data().is<types::builtin_type>();
     });

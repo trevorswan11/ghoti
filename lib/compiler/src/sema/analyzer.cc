@@ -68,10 +68,10 @@ namespace {
 
 [[nodiscard]] auto export_roots(const gir::module_t& mod) -> std::vector<std::string_view> {
     std::vector<std::string_view> roots;
-    for (const auto* fn : mod.get_functions()) {
+    for (const auto fn : mod.get_functions()) {
         if (fn->get_linkage() == gir::linkage::EXPORT) { roots.emplace_back(fn->get_name()); }
     }
-    for (const auto* g : mod.get_globals()) {
+    for (const auto g : mod.get_globals()) {
         if (g->linkage == gir::linkage::EXPORT) { roots.emplace_back(g->name); }
     }
     return roots;
@@ -87,7 +87,7 @@ auto internalize_library(gir::module_t& mod, bool keep_handlers) -> void {
                                   std::string_view{"expect_handler"},
                                   std::string_view{"require_handler"},
                                   std::string_view{"skip_handler"}};
-    for (auto* fn : mod.get_functions()) {
+    for (auto fn : mod.get_functions()) {
         if (fn->get_linkage() == gir::linkage::INTERNAL) { continue; }
         const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
         if (keep_handlers && std::ranges::contains(handlers, symbol)) {
@@ -96,7 +96,7 @@ auto internalize_library(gir::module_t& mod, bool keep_handlers) -> void {
             fn->set_linkage(gir::linkage::INTERNAL);
         }
     }
-    for (auto* g : mod.get_globals()) {
+    for (auto g : mod.get_globals()) {
         if (g->linkage == gir::linkage::PUBLIC) { g->linkage = gir::linkage::INTERNAL; }
     }
 }
@@ -113,7 +113,7 @@ constexpr std::array supported_archs{
 
 auto prune_to_test_reachable(gir::module_t& gir_module) -> void {
     std::vector<std::string_view> roots;
-    for (const auto* fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
+    for (const auto fn : gir_module.get_test_functions()) { roots.emplace_back(fn->get_name()); }
     // `std/start.gh`'s exports run the tests, through the `test_runner` it picks
     for (const auto root : export_roots(gir_module)) { roots.emplace_back(root); }
     roots.emplace_back("expect_handler");
@@ -125,11 +125,11 @@ auto prune_to_test_reachable(gir::module_t& gir_module) -> void {
 // The LLVM-level names of every `export` function and global, which must survive internalizing
 [[nodiscard]] auto exported_symbol_names(const gir::module_t& mod) -> std::vector<std::string> {
     std::vector<std::string> names;
-    for (const auto* fn : mod.get_functions()) {
+    for (const auto fn : mod.get_functions()) {
         if (fn->get_linkage() != gir::linkage::EXPORT) { continue; }
         names.emplace_back(fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name());
     }
-    for (const auto* g : mod.get_globals()) {
+    for (const auto g : mod.get_globals()) {
         if (g->linkage == gir::linkage::EXPORT) {
             names.emplace_back(g->link_name.empty() ? g->name : g->link_name);
         }
@@ -226,10 +226,10 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
 // cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
 // its own, so lowering it would walk untyped code.
 [[nodiscard]] auto reaches_failed_module(mod::module_t& root) -> bool {
-    ankerl::unordered_dense::set<const mod::module_t*> seen{&root};
-    std::vector<mod::module_t*>                        frontier{&root};
+    ankerl::unordered_dense::set<gsl::not_null<const mod::module_t*>> seen{&root};
+    std::vector<gsl::not_null<mod::module_t*>>                        frontier{&root};
     while (!frontier.empty()) {
-        auto* current{frontier.back()};
+        const auto current{frontier.back()};
         frontier.pop_back();
         for (const auto import_id : current->import_nodes) {
             const auto import_type{current->get_sema_type_opt(import_id)};

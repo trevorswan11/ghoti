@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include <gsl/pointers>
 #include <stdx/arena.hh>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
@@ -108,10 +109,10 @@ class function {
 
     template <typename Self>
     [[nodiscard]] auto get_segment_opt(this Self&& self, segment_id id) noexcept
-        -> stdx::option<stdx::const_dispatch_t<Self, segment>*> {
+        -> stdx::option<stdx::const_dispatch_t<Self, segment>&> {
         const auto idx{std::to_underlying(id)};
         if (idx >= self.segments_.size()) { return stdx::none; }
-        return self.segments_[idx];
+        return *self.segments_[idx];
     }
 
     auto next_local_id(local_kind kind = local_kind::TEMPORARY) noexcept -> local_id {
@@ -126,27 +127,27 @@ class function {
     [[nodiscard]] auto reachable_segments() const -> std::vector<bool>;
 
   private:
-    ghoti::arena&                arena_;
-    std::string                  name_;
-    sema::type&                  type_;
-    std::vector<parameter*>      params_;
-    std::vector<segment*>        segments_;
-    usize                        next_local_index_{0};
-    bool                         is_test_{false};
-    bool                         is_comptime_{false};
-    bool                         is_variadic_{false};
-    bool                         is_weak_{false};
-    sema::resolved_attributes    attributes_{};
-    ast::calling_convention      calling_conv_{ast::calling_convention::C};
-    gir::linkage                 linkage_{linkage::INTERNAL};
-    std::string                  abi_name_{"c"};
-    std::string                  link_name_;
-    std::vector<alias>           aliases_;
-    std::string                  test_desc_;
-    std::string                  test_file_;
-    u32                          test_line_{1};
-    u32                          test_column_{1};
-    stdx::option<mod::module_t&> source_module_;
+    ghoti::arena&                          arena_;
+    std::string                            name_;
+    sema::type&                            type_;
+    std::vector<gsl::not_null<parameter*>> params_;
+    std::vector<gsl::not_null<segment*>>   segments_;
+    usize                                  next_local_index_{0};
+    bool                                   is_test_{false};
+    bool                                   is_comptime_{false};
+    bool                                   is_variadic_{false};
+    bool                                   is_weak_{false};
+    sema::resolved_attributes              attributes_{};
+    ast::calling_convention                calling_conv_{ast::calling_convention::C};
+    gir::linkage                           linkage_{linkage::INTERNAL};
+    std::string                            abi_name_{"c"};
+    std::string                            link_name_;
+    std::vector<alias>                     aliases_;
+    std::string                            test_desc_;
+    std::string                            test_file_;
+    u32                                    test_line_{1};
+    u32                                    test_column_{1};
+    stdx::option<mod::module_t&>           source_module_;
 };
 
 } // namespace ghoti::gir

@@ -26,7 +26,7 @@ auto dump_named_fn(helpers::sema_test_context& ctx, std::string_view name) -> st
     gir::emitter emitter{ctx.analyzer.get_ctx(), ctx.root_mod};
     const auto   gir_mod{emitter.emit()};
 
-    for (const auto* fn : gir_mod.get_functions()) {
+    for (const auto fn : gir_mod.get_functions()) {
         if (fn->get_name() != name) { continue; }
         std::ostringstream ss;
         gir::dumper{ss}.dump(*fn);

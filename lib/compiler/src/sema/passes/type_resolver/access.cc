@@ -71,7 +71,7 @@ auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eva
         read_data.is<types::deferred_call>() || read_data.is<types::deferred_array>()) {
         return read_type;
     }
-    const auto* object{&object_type};
+    gsl::not_null<const type*> object{&object_type};
     if (const auto ref{object->get_data().as_opt<types::reference>()}) {
         object = &ref->underlying;
     }
@@ -96,8 +96,8 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
         }
     }
     TRY_RESOLVE(index.array);
-    auto& array_type{*last_type_.take()};
-    auto* target_type{&array_type};
+    auto&         array_type{*last_type_.take()};
+    gsl::not_null target_type{&array_type};
     if (const auto ref{target_type->get_data().as_opt<types::reference>()}) {
         target_type = &ref->underlying;
     }
@@ -260,7 +260,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
                                               ast::identifier_handle member,
                                               source_location        object_location)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    auto* target_type{&object_type};
+    gsl::not_null target_type{&object_type};
     if (const auto ptr_data{target_type->get_data().as_opt<types::pointer>()}) {
         target_type = &ptr_data->underlying;
     } else if (const auto ref_data{target_type->get_data().as_opt<types::reference>()}) {
@@ -301,8 +301,9 @@ auto type_resolver::resolve_structural_access(type&                  object_type
             auto& sig{resolve_dyn_method_signature(*dyn, iface, i)};
             // The vtable holds one entry per method, but a `mut?` method has one per mutability
             if (const auto fn{sig.get_data().as_opt<types::function>()};
-                fn &&
-                std::ranges::any_of(fn->params, [](const type* p) { return contains_poly(*p); })) {
+                fn && std::ranges::any_of(fn->params, [](gsl::not_null<const type*> p) {
+                    return contains_poly(*p);
+                })) {
                 return make_sema_err(
                     fmt::format("`{}` takes a `mut?` parameter, so it can't be called through "
                                 "`dyn {}`",
@@ -810,7 +811,7 @@ auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& 
     {
         const mutating_context_guard subscript_g{in_subscript_index_, false};
         const mutating_context_guard for_iter_g{in_for_iterable_, false};
-        const structural_guard       g{implicit_type_stack_, expected_elem.raw()};
+        const structural_guard       g{implicit_type_stack_, expected_elem};
         TRY_RESOLVE(*range.lhs);
         TRY_RESOLVE(*range.rhs);
     }
@@ -916,7 +917,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
     const bool                   unrolled{std::exchange(in_unrolled_for_iterable_, false)};
     const mutating_context_guard subscript_g{in_subscript_index_, false};
     const mutating_context_guard for_iter_g{in_for_iterable_, false};
-    type*                        lhs_type{&usize_type};
+    gsl::not_null<type*>         lhs_type{&usize_type};
     if (range.lhs) {
         TRY_RESOLVE(*range.lhs);
         lhs_type = last_type_.take();
@@ -1002,7 +1003,7 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     }
 
     // `const f: fn(): T = .init;` finds its member through the function's return type
-    auto* member_owner{implicit_type.get()};
+    gsl::not_null member_owner{implicit_type.get()};
     if (const auto fn_data{member_owner->get_data().as_opt<types::function>()}) {
         member_owner = &fn_data->return_type;
     }

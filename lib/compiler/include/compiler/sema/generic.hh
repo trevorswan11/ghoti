@@ -28,8 +28,8 @@ class type;
 struct generic_function_info {
     // ...and the parameter packs those functions were instantiated with, innermost last
     struct enclosing_pack {
-        std::string_view   name;
-        std::vector<type*> element_types;
+        std::string_view                  name;
+        std::vector<gsl::not_null<type*>> element_types;
     };
 
     gsl::not_null<mod::module_t*>            module;
@@ -147,20 +147,21 @@ class generic_function_registry {
     }
 
   private:
-    ankerl::unordered_dense::map<const type*, generic_function_info> registry_;
-    ankerl::unordered_dense::map<const type*, type*>                 capture_envs_;
-    ankerl::unordered_dense::map<const type*, escape>                escapes_;
-    ankerl::unordered_dense::map<const type*, std::string>           type_ctor_member_prefixes_;
-    ankerl::unordered_dense::map<instance_id, std::string>           clone_discs_;
+    ankerl::unordered_dense::map<gsl::not_null<const type*>, generic_function_info> registry_;
+    ankerl::unordered_dense::map<gsl::not_null<const type*>, gsl::not_null<type*>>  capture_envs_;
+    ankerl::unordered_dense::map<gsl::not_null<const type*>, escape>                escapes_;
+    ankerl::unordered_dense::map<gsl::not_null<const type*>, std::string>
+                                                           type_ctor_member_prefixes_;
+    ankerl::unordered_dense::map<instance_id, std::string> clone_discs_;
 };
 
 struct generic_instantiation_request {
-    gsl::not_null<type*>          generic_fn_type;
-    gsl::span<type*>              arg_types;
-    gsl::not_null<type*>          return_type;
-    std::string                   mangled_name;
-    ast::node_id                  fn_node_id;
-    gsl::not_null<mod::module_t*> module;
+    gsl::not_null<type*>            generic_fn_type;
+    gsl::span<gsl::not_null<type*>> arg_types;
+    gsl::not_null<type*>            return_type;
+    std::string                     mangled_name;
+    ast::node_id                    fn_node_id;
+    gsl::not_null<mod::module_t*>   module;
 };
 
 // One `const m = fn ...` member of an aggregate returned by a `fn(...): type` constructor

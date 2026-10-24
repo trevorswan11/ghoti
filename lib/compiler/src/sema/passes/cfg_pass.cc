@@ -200,7 +200,7 @@ auto cfg_pass::find_import(std::string_view name, bool public_only)
 // A predicate can't use an import its own gate guards, so a statement still being selected is
 // skipped
 auto cfg_pass::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size {
-    const std::pair key{static_cast<const mod::module_t*>(&module_), id.get_index()};
+    const std::pair key{gsl::not_null<const mod::module_t*>{&module_}, id.get_index()};
     if (const auto seen{shared_->arms.find(key)}; seen != shared_->arms.end()) {
         return seen->second.selected ? seen->second.arm : stdx::opt_size{};
     }
@@ -268,8 +268,8 @@ auto cfg_pass::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value
     const auto spelled{fmt::format("{}", fmt::join(path, "."))};
 
     // Each step reads the next module with a throwaway pass, whose errors that module reports
-    context        scratch_ctx{ctx_};
-    mod::module_t* current{&module_};
+    context                       scratch_ctx{ctx_};
+    gsl::not_null<mod::module_t*> current{&module_};
     for (usize i{0}; i + 1 < path.size(); ++i) {
         const bool is_foreign{current != &module_};
         cfg_pass   step{*current, scratch_ctx, *shared_};

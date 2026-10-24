@@ -90,8 +90,8 @@ class export_registry {
 
     // The exports of one function literal, in the order they were written
     [[nodiscard]] auto of(const mod::module_t& owner, ast::node_id fn_node) const
-        -> std::vector<const function_export*> {
-        std::vector<const function_export*> found;
+        -> std::vector<gsl::not_null<const function_export*>> {
+        std::vector<gsl::not_null<const function_export*>> found;
         for (const auto& entry : exports_) {
             if (entry.owner && entry.owner == owner &&
                 entry.fn_node.get_index() == fn_node.get_index() &&
@@ -123,8 +123,8 @@ class export_registry {
 };
 
 struct test_queue {
-    std::vector<mod::module_t*> modules;
-    usize                       resolve_depth{0};
+    std::vector<gsl::not_null<mod::module_t*>> modules;
+    usize                                      resolve_depth{0};
 };
 
 // A contextual wrapper around sematic steps
@@ -183,8 +183,9 @@ struct context {
     // Nesting of in-progress generic instantiations, bounded so runaway recursion is reported
     usize                  generic_instantiation_depth{0};
     static constexpr usize max_generic_instantiation_depth{256};
-    // Monomorphs whose body is being resolved, by mangled name, so a recursive call reuses them
-    ankerl::unordered_dense::map<std::string, type*> instantiations_in_progress;
+    // Monomorphs whose body is being resolved, by mangled name, so a recursive call reuses their
+    // declared return type. None for an inferred one, which isn't known until the body is
+    ankerl::unordered_dense::map<std::string, stdx::option<type&>> instantiations_in_progress;
     // Module constant pts whose initializers are being folded, so one reading itself is caught
     ankerl::unordered_dense::set<uptr> globals_in_evaluation;
 
@@ -278,7 +279,7 @@ struct context {
         -> type&;
 
     // A structural (selfless) function type as spelled by `fn(...): R` / `extern fn(...): R`
-    [[nodiscard]] auto get_function(gsl::span<type*>        params,
+    [[nodiscard]] auto get_function(type_span               params,
                                     type&                   return_type,
                                     bool                    is_variadic,
                                     ast::calling_convention conv,
@@ -297,7 +298,7 @@ struct context {
     [[nodiscard]] auto closure_impl_signature_slot_of(const type& fn_type) -> type&;
 
     // `@Fn`'s result: `get_function` for a plain signature, else a thin method-shaped type
-    [[nodiscard]] auto get_function_like(gsl::span<type*>        params,
+    [[nodiscard]] auto get_function_like(type_span               params,
                                          type&                   return_type,
                                          bool                    has_self,
                                          bool                    is_variadic,

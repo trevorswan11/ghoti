@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/type_traits.hh>
@@ -16,10 +17,14 @@
 
 namespace ghoti::test {
 
+template <typename T> struct is_not_null : std::false_type {};
+template <typename T> struct is_not_null<gsl::not_null<T>> : std::true_type {};
+
 template <typename T>
 concept Unwrappable =
     stdx::Option<std::remove_cvref_t<T>> || stdx::Result<std::remove_cvref_t<T>> ||
-    stdx::OptSize<std::remove_cvref_t<T>> || stdx::Pointer<std::remove_cvref_t<T>>;
+    stdx::OptSize<std::remove_cvref_t<T>> || stdx::Pointer<std::remove_cvref_t<T>> ||
+    is_not_null<std::remove_cvref_t<T>>::value;
 
 // Unpacks the value in the option or result and returns its value if present
 template <Unwrappable U>

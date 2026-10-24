@@ -17,8 +17,8 @@ namespace ghoti::tests {
 namespace {
 
 auto find_call_instruction(const gir::segment& seg) -> stdx::option<const gir::instruction&> {
-    for (const auto* inst : seg.get_instructions()) {
-        if (inst->kind == gir::instruction_kind::CALL) { return inst; }
+    for (const auto inst : seg.get_instructions()) {
+        if (inst->kind == gir::instruction_kind::CALL) { return *inst; }
     }
     return stdx::none;
 }

@@ -555,14 +555,14 @@ class module_manager {
     auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
 
   private:
-    source_loader&                                        loader_;
-    module_table                                          modules_;
-    stdx::box<module_t>                                   builtin_module_;
-    stdx::box<module_t>                                   start_module_;
-    stdx::option<stdx::option<std::filesystem::path>>     start_path_;
-    stdx::box<ghoti::arena>                               arena_{stdx::make_box<ghoti::arena>()};
-    mutable ankerl::unordered_dense::set<const module_t*> printed_diagnostics_;
-    stdx::option<parse_cache&>                            parse_cache_;
+    source_loader&                                    loader_;
+    module_table                                      modules_;
+    stdx::box<module_t>                               builtin_module_;
+    stdx::box<module_t>                               start_module_;
+    stdx::option<stdx::option<std::filesystem::path>> start_path_;
+    stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
+    mutable ankerl::unordered_dense::set<gsl::not_null<const module_t*>> printed_diagnostics_;
+    stdx::option<parse_cache&>                                           parse_cache_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

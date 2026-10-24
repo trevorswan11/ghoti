@@ -3,6 +3,7 @@
 #include <tuple>
 
 #include <ankerl/unordered_dense.h>
+#include <gsl/pointers>
 #include <stdx/types.hh>
 
 #include "compiler/ast/id.hh"
@@ -23,7 +24,7 @@ class alias_chain {
     }
 
   private:
-    using step_key = std::tuple<const mod::module_t*, ast::node_kind, usize>;
+    using step_key = std::tuple<gsl::not_null<const mod::module_t*>, ast::node_kind, usize>;
 
   private:
     ankerl::unordered_dense::set<step_key> seen_;

@@ -554,7 +554,7 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
                                  error::TYPE_MISMATCH,
                                  args_res->target_loc);
         }
-        auto* src_p{get_call_arg_value_type(*args_res->operand).get()};
+        gsl::not_null src_p{get_call_arg_value_type(*args_res->operand).get()};
         // An untyped float folds as an `f64`, so that is the bit pattern it has to give
         if (src_p->get_kind() == type_kind::COMPTIME_FLOAT) {
             src_p = &ctx_.get_builtin_resolved_type(type_kind::F64);
@@ -1066,7 +1066,7 @@ auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
     case syntax::builtin_t::FN_CTX:
         // A generic's body names the generic itself, which each call instantiates anew
         if (open_function_nodes_.empty() && instantiating_template_) {
-            return_type = instantiating_template_;
+            return_type = instantiating_template_.get();
             break;
         }
         if (open_function_nodes_.empty()) {
@@ -1282,7 +1282,7 @@ auto type_resolver::resolve_reflection_builtin(ID id, builtin_site& site)
                 break;
             }
         }
-        auto* denoted{&arg_type};
+        gsl::not_null denoted{&arg_type};
         if (const auto p{denoted->get_data().as_opt<types::pointer>()}) {
             denoted = &p->underlying;
         } else if (const auto r{denoted->get_data().as_opt<types::reference>()}) {
@@ -1342,7 +1342,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
                 get_call_arg_location(call.arguments[0]));
         }};
 
-        const auto wrap_type{[&](type& built) -> type* {
+        const auto wrap_type{[&](type& built) -> gsl::not_null<type*> {
             auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, built}]};
             meta->resolve_if<types::meta_type>(built);
             return meta;
@@ -1801,11 +1801,7 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
                 get_call_arg_location(call.arguments[0]));
         }
         // The result slot is a mutable reference (`&mut T`). A `^mut T` pointer is also accepted.
-        const auto  out_ref{out_type.get_data().as_opt<types::reference>()};
-        const auto  out_ptr{out_type.get_data().as_opt<types::pointer>()};
-        const type* out_underlying{out_ref   ? &out_ref->underlying
-                                   : out_ptr ? &out_ptr->underlying
-                                             : nullptr};
+        const auto out_underlying{pointee_of(out_type)};
         // Untyped operands take the result slot's type
         const bool untyped{is_comptime_int((*peer)->get_kind())};
         const bool slot_matches{out_underlying &&
@@ -2130,12 +2126,8 @@ auto type_resolver::resolve_atomic_builtin(ID, builtin_site& site)
             }
 
             // `out` follows the `_withOverflow` convention: `&mut T` or `^mut T`.
-            auto&       out_type{*get_resolved_call_arg_type(call.arguments[6])};
-            const auto  out_ref{out_type.get_data().as_opt<types::reference>()};
-            const auto  out_ptr{out_type.get_data().as_opt<types::pointer>()};
-            const type* out_underlying{out_ref   ? &out_ref->underlying
-                                       : out_ptr ? &out_ptr->underlying
-                                                 : nullptr};
+            auto&      out_type{*get_resolved_call_arg_type(call.arguments[6])};
+            const auto out_underlying{pointee_of(out_type)};
             if (!out_underlying || out_type.is_constant() ||
                 !is_same_unqualified(*out_underlying, t)) {
                 return make_sema_err(
@@ -2419,8 +2411,8 @@ auto type_resolver::resolve_program_builtin(ID, builtin_site& site)
         auto& result{denoted_type(*get_resolved_call_arg_type(call.arguments[1]))};
         if (result.is_poison()) { break; }
 
-        std::vector<const type*> arg_types;
-        bool                     poisoned{false};
+        std::vector<gsl::not_null<const type*>> arg_types;
+        bool                                    poisoned{false};
         for (usize i{2}; i < call.arguments.size(); ++i) {
             const auto& arg{call.arguments[i]};
             if (call_arg_denotes_type(arg)) {
@@ -2443,7 +2435,7 @@ auto type_resolver::resolve_program_builtin(ID, builtin_site& site)
                 result,
                 arg_types,
                 codegen::resolve_target_triple(ctx_.target_opts.triple_str),
-                &immediate_args)}) {
+                immediate_args)}) {
             return make_sema_err(
                 *problem, error::INVALID_LLVM_INTRINSIC, resolving_.ast.location_of(call.function));
         }
@@ -2624,16 +2616,16 @@ auto type_resolver::resolve_atomic_call_args(const ast::call_expr& call) -> reso
     bool any_poison{false};
     bool found_operand_type{false};
     for (usize i{0}; i < args.size(); ++i) {
-        type* hint{nullptr};
+        stdx::option<type&> hint;
         switch (roles[i]) {
         case atomic_arg::PLAIN: break;
         case atomic_arg::OPERAND:
             if (!found_operand_type && !any_poison) { find_operand_type(); }
             found_operand_type = true;
-            if (operand_type) { hint = operand_type.get(); }
+            hint               = operand_type;
             break;
-        case atomic_arg::ORDER: hint = &ctx_.get_builtin_type("MemoryOrder"); break;
-        case atomic_arg::OP:    hint = &ctx_.get_builtin_type("AtomicRmwOp"); break;
+        case atomic_arg::ORDER: hint = ctx_.get_builtin_type("MemoryOrder"); break;
+        case atomic_arg::OP:    hint = ctx_.get_builtin_type("AtomicRmwOp"); break;
         }
         const structural_guard g{implicit_type_stack_, hint};
         any_poison |= resolve_call_args(args.subspan(i, 1)) == resolve_result::POISONED;
@@ -2686,13 +2678,13 @@ auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
         if (!is_expansion) {
             out.source_index.emplace_back(i);
             out.pack_k.emplace_back(stdx::none);
-            out.pack_elem.emplace_back(nullptr);
+            out.pack_elem.emplace_back(stdx::none);
             continue;
         }
         const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
         const auto ident{expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h)
                                 : stdx::none};
-        const auto pack{ident ? pack_named(ident->name) : nullptr};
+        const auto pack{ident ? pack_named(ident->name) : stdx::none};
         if (!pack) {
             ctx_.diags.emplace_back("'...' may only expand the enclosing parameter pack",
                                     error::PACK_EXPANSION_MISPLACED,
@@ -2856,9 +2848,10 @@ auto type_resolver::unmodeled_c_abi_error(const type&            fn_type,
         return stdx::none;
     }
 
-    const type* offender{passes_aggregate_by_value(fn->return_type) ? &fn->return_type : nullptr};
-    for (const auto* param : fn->params) {
-        if (!offender && passes_aggregate_by_value(*param)) { offender = param; }
+    stdx::option<const type&> offender;
+    if (passes_aggregate_by_value(fn->return_type)) { offender = fn->return_type; }
+    for (const auto param : fn->params) {
+        if (!offender && passes_aggregate_by_value(*param)) { offender = *param; }
     }
     if (!offender) { return stdx::none; }
     return diagnostic{fmt::format("'{}' passes '{}' by value, but ghoti doesn't know how C passes "

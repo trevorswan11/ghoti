@@ -803,7 +803,7 @@ TEST_CASE("An error folding another module's function points into that module") 
     for (const auto& d : *diags) {
         if (!d.get_message() || !d.get_message()->contains("out of range")) { continue; }
         found = true;
-        REQUIRE(d.origin() != nullptr);
+        REQUIRE(d.origin());
         CHECK(d.origin()->path.filename() == "narrow.gh");
     }
     CHECK(found);

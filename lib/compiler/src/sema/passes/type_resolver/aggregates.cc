@@ -28,16 +28,16 @@ namespace ghoti::sema {
 
 using namespace resolver_detail;
 
-auto type_resolver::resolve_members(gsl::span<type*>                    buf,
+auto type_resolver::resolve_members(gsl::span<stdx::option<type&>>      buf,
                                     gsl::span<const ast::member_handle> members)
-    -> stdx::option<gsl::span<type*>> {
+    -> stdx::option<gsl::span<stdx::option<type&>>> {
     // Only poison the enum once all members are collected
     for (usize i{0}; const auto& member : members) {
         // The resolved statement type is in last_type_ unlike in the symbol collector
         resolve(*member);
         auto& member_type{resolving_.get_sema_type(member)};
         if (member_type.is_poison()) { return stdx::none; }
-        buf[i++] = &member_type;
+        buf[i++] = member_type;
     }
     return buf;
 }
@@ -140,7 +140,7 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
         sym->set_status(symbol_status::RESOLVED);
     }
 
-    auto member_types{ctx_.pool.get_many_unsafe(enum_expr.members.size())};
+    auto member_types{ctx_.pool.get_many_pending(enum_expr.members.size())};
     committable_resolution<types::enum_t> resolution{enum_type,
                                                      enum_expr.enumerations,
                                                      enum_expr.non_exhaustive,
@@ -248,7 +248,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
     const scope                   s{table_stack_, struct_type.get_symbol_table_idx(), table_idx_};
     const structural_guard        g{user_type_stack_, struct_type};
 
-    auto field_types{ctx_.pool.get_many_unsafe(struct_expr.fields.size())};
+    auto field_types{ctx_.pool.get_many_pending(struct_expr.fields.size())};
     for (usize i{0}; const auto& field : struct_expr.fields) {
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(field.name)};
         auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
@@ -261,7 +261,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
         // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
-        auto* field_type{&denoted_type(*last_type_.take())};
+        gsl::not_null<type*> field_type{&denoted_type(*last_type_.take())};
         if (reject_storage_slot(field.explicit_type, *field_type) ||
             reject_poly_storage(field.explicit_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -349,10 +349,10 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
         resolving_.set_sema_type(field.name, *field_type);
         sym->set_kind(symbol_kind::VALUE);
         sym->set_status(symbol_status::RESOLVED);
-        field_types[i++] = field_type;
+        field_types[i++] = *field_type;
     }
 
-    auto member_types{ctx_.pool.get_many_unsafe(struct_expr.members.size())};
+    auto member_types{ctx_.pool.get_many_pending(struct_expr.members.size())};
     auto field_alignments{ctx_.arena.make_span<u64>(struct_expr.fields.size())};
     for (usize i{0}; const auto& field : struct_expr.fields) {
         field_alignments[i++] = resolve_field_attributes(field.attributes).value_or(0);
@@ -360,7 +360,7 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
 
     if (struct_expr.is_packed && !struct_expr.is_extern) {
         u64 total_bits{0};
-        for (const auto* ft : field_types) {
+        for (const auto ft : field_types) {
             total_bits += ft ? sema::packed_field_bits(*ft, target_ptr_bits()).value_or(0) : 0;
         }
         if (total_bits < 1 || total_bits > 128) {
@@ -446,15 +446,15 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     const aggregate_resolve_guard agg_guard{resolving_aggregate_nodes_, id.get_index()};
 
     // `union(MyEnum)` / `union(void)` name their tag from where the union is written
-    type* tag_enum{nullptr};
-    bool  void_tag{false};
+    stdx::option<type&> tag_enum;
+    bool                void_tag{false};
     if (union_expr.tag_type) {
         TRY_RESOLVE(*union_expr.tag_type);
         auto& tag{denoted_type(*last_type_.take())};
         if (tag.get_kind() == type_kind::VOID_) {
             void_tag = true;
         } else if (tag.get_kind() == type_kind::ENUM && tag.is_resolved()) {
-            tag_enum = &tag;
+            tag_enum = tag;
         } else {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
@@ -469,7 +469,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
     const scope            s{table_stack_, union_type.get_symbol_table_idx(), table_idx_};
     const structural_guard g{user_type_stack_, union_type};
 
-    auto field_types{ctx_.pool.get_many_unsafe(union_expr.fields.size())};
+    auto field_types{ctx_.pool.get_many_pending(union_expr.fields.size())};
     for (usize i{0}; const auto& field : union_expr.fields) {
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(field.name)};
         auto        sym{ctx_.registry.get_from_opt(table_idx_, ident.name)};
@@ -558,13 +558,13 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         resolving_.set_sema_type(field.name, field_type);
         sym->set_kind(symbol_kind::VALUE);
         sym->set_status(symbol_status::RESOLVED);
-        field_types[i++] = &field_type;
+        field_types[i++] = field_type;
     }
 
     if (union_expr.is_packed && !union_expr.is_extern) {
         u64        widest{0};
         const auto ptr_bits{target_ptr_bits()};
-        for (const auto* ft : field_types) {
+        for (const auto ft : field_types) {
             widest =
                 std::max<u64>(widest, ft ? sema::packed_field_bits(*ft, ptr_bits).value_or(0) : 0);
         }
@@ -586,7 +586,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
         }
     }
 
-    auto member_types{ctx_.pool.get_many_unsafe(union_expr.members.size())};
+    auto member_types{ctx_.pool.get_many_pending(union_expr.members.size())};
     committable_resolution<types::union_t> resolution{union_type,
                                                       field_types,
                                                       union_expr.fields,
@@ -616,7 +616,7 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
     usize      idx{0};
 
     if (fn.self) {
-        type* self_ty{&self_placeholder};
+        gsl::not_null<type*> self_ty{&self_placeholder};
         if (const auto mut{types::mut::from_type_modifier(fn.self->modifier)}) {
             self_ty = fn.self->modifier.is_ptr() ? &ctx_.get_pointer(*mut, self_placeholder)
                                                  : &ctx_.get_reference(*mut, self_placeholder);
@@ -631,7 +631,7 @@ auto type_resolver::resolve_required_method_type(const ast::function_expr& fn,
     auto& return_type{denoted_type(*last_type_.take())};
 
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
-    for (const auto* p : params) { key.imprint(*p); }
+    for (const auto p : params) { key.imprint(*p); }
     key.imprint(return_type);
     key.imprint(fn.conv);
     auto& fn_type{*ctx_.pool[key]};
@@ -648,7 +648,7 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
     auto& iface_type{*iface_type_opt};
 
     const auto method_count{iface.methods.size()};
-    auto       method_sigs{ctx_.arena.make_span<type*>(method_count)};
+    auto       method_sigs{make_uninit_span<gsl::not_null<type*>>(ctx_.arena, method_count)};
     auto       method_src{ctx_.arena.make_span<usize>(method_count)};
     auto       method_names{ctx_.arena.make_span<std::string_view>(method_count)};
     auto       method_is_pub{ctx_.arena.make_span<bool>(method_count)};

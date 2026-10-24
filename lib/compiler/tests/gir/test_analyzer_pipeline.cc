@@ -201,7 +201,7 @@ TEST_CASE("GIR linkage and visibility attributes") {
     )")};
 
     const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
-    for (const auto* fn : gir_mod.get_functions()) {
+    for (const auto fn : gir_mod.get_functions()) {
         if (fn->get_name() == "exp_fn") {
             CHECK(fn->get_linkage() == gir::linkage::EXPORT);
         } else if (fn->get_name() == "pub_fn") {
@@ -211,7 +211,7 @@ TEST_CASE("GIR linkage and visibility attributes") {
         }
     }
 
-    for (const auto* glob : gir_mod.get_globals()) {
+    for (const auto glob : gir_mod.get_globals()) {
         if (glob->name == "exp_global") {
             CHECK(glob->linkage == gir::linkage::EXPORT);
         } else if (glob->name == "pub_global") {
@@ -255,7 +255,7 @@ TEST_CASE("GIR indirect call formatting") {
 
     const auto gir_mod{ctx->analyzer.emit_gir(ctx->root_mod)};
     const auto fn_it{std::ranges::find_if(
-        gir_mod.get_functions(), [](const auto* f) { return f->get_name() == "call_indirect"; })};
+        gir_mod.get_functions(), [](const auto f) { return f->get_name() == "call_indirect"; })};
     REQUIRE(fn_it != gir_mod.get_functions().end());
 
     const auto dump_text{helpers::dump_gir(UNWRAP(*fn_it))};

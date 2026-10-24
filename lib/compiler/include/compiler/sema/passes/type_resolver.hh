@@ -88,6 +88,12 @@ class type_resolver {
         stdx::option<std::string> reason;
     };
 
+    // A parameter pack in scope, by name, with the element types this instantiation bound
+    struct pack_binding {
+        std::string_view                  name;
+        std::vector<gsl::not_null<type*>> element_types;
+    };
+
   public:
     static auto resolve_types(mod::module_t& module, context& ctx) -> mod::module_state;
     // Resolves every queued `test` block, once no module is mid-resolution
@@ -127,7 +133,7 @@ class type_resolver {
                               const ast::impl_stmt&                                     impl,
                               usize                                                     body_scope,
                               type&                                                     concrete,
-                              gsl::span<type* const>                                    type_bounds,
+                              gsl::span<const stdx::option<type&>>                      type_bounds,
                               gsl::span<const std::pair<std::string, gir::const_value>> cx_bindings,
                               body_type_diff& out) -> void;
     auto resolve_impl_type_ref(ast::explicit_type_id ref) -> type&;
@@ -168,10 +174,10 @@ class type_resolver {
     // Expands every parameterized `impl(P) ...` whose base ctor is `base_ctor_fn` for the freshly
     // materialized concrete target `concrete`, remapping its template typing and recording one
     // `impl_record` + emit entries per method
-    auto instantiate_impls_for(type&                  concrete,
-                               const mod::module_t&   base_mod,
-                               ast::node_id           base_ctor_fn,
-                               gsl::span<type* const> ctor_args,
+    auto instantiate_impls_for(type&                                 concrete,
+                               const mod::module_t&                  base_mod,
+                               ast::node_id                          base_ctor_fn,
+                               gsl::span<const gsl::not_null<type*>> ctor_args,
                                gsl::span<const std::pair<std::string, gir::const_value>> ctor_cx,
                                const ast::function_expr&                                 base_fn,
                                std::string_view ctor_mangled) -> void;
@@ -282,7 +288,7 @@ class type_resolver {
             if (return_types.empty()) { return ctx.get_builtin_resolved_type(type_kind::VOID_); }
             // Every `return` meets at one type, so `return low` (a `comptime_int`) then
             // `return val` (an `i64`) infers `i64`
-            auto* met{return_types.front().get()};
+            gsl::not_null met{return_types.front().get()};
             if (return_types.size() > 1) {
                 std::vector<peer_operand> operands;
                 for (const auto t : return_types) { operands.emplace_back(t.get()); }
@@ -313,20 +319,20 @@ class type_resolver {
         ~structural_type_stack()         = default;
         MAKE_MOVE_CONSTRUCTABLE_ONLY(structural_type_stack);
 
-        auto push(type& type) -> void { stack_.emplace_back(&type); }
-        auto push(type* type) -> void { stack_.emplace_back(type); }
+        // None pushes a level that implies no type
+        auto push(stdx::option<type&> type) -> void { stack_.emplace_back(type); }
         auto pop() noexcept -> void {
             if (!stack_.empty()) { stack_.pop_back(); }
         }
 
-        // Only returns none when there are no types in the stack
+        // None when there are no types in the stack, or the innermost level implies none
         [[nodiscard]] auto peek() const noexcept -> stdx::option<type&> {
-            if (stack_.empty() || !stack_.back()) { return stdx::none; }
-            return *stack_.back();
+            if (stack_.empty()) { return stdx::none; }
+            return stack_.back();
         }
 
       private:
-        std::vector<type*> stack_;
+        std::vector<stdx::option<type&>> stack_;
     };
 
     using structural_guard     = structural_type_stack::guard;
@@ -361,12 +367,7 @@ class type_resolver {
     struct expanded_call_args {
         std::vector<usize>          source_index; // names which syntactic argument a slot came from
         std::vector<stdx::opt_size> pack_k;       // element index within that expansion
-        std::vector<type*>          pack_elem;    // that element's type, for an expanded slot
-    };
-
-    struct pack_binding {
-        std::string_view   name;
-        std::vector<type*> element_types;
+        std::vector<stdx::option<type&>> pack_elem; // that element's type, for an expanded slot
     };
 
     struct binding_restore_guard {
@@ -477,21 +478,22 @@ class type_resolver {
     [[nodiscard]] auto instantiate_for_call(const ast::call_expr&             call,
                                             type&                             callee_type,
                                             const generic_function_info&      fn_info,
-                                            gsl::span<type*>                  arg_types,
+                                            type_span                         arg_types,
                                             gsl::span<const gir::const_value> comptime_args)
         -> stdx::option<generic_instantiation_entry>;
     template <typename ArgID>
     [[nodiscard]] auto generic_arg_type(ArgID arg_id, type& param_type, bool keeps_comptime)
         -> stdx::option<type&>;
-    [[nodiscard]] auto check_param_bounds(const ast::call_expr&        call,
-                                          const generic_function_info& fn_info,
-                                          gsl::span<type* const>       arg_types,
-                                          gsl::span<type* const>       auto_leaves) -> bool;
+    [[nodiscard]] auto check_param_bounds(const ast::call_expr&                 call,
+                                          const generic_function_info&          fn_info,
+                                          gsl::span<const gsl::not_null<type*>> arg_types,
+                                          gsl::span<const stdx::option<type&>> auto_leaves) -> bool;
     [[nodiscard]] auto fold_comptime_arg(const ast::call_expr&        call,
                                          const generic_function_info& fn_info,
                                          usize                        idx,
-                                         const type*                  arg_type,
-                                         const type* param_type) -> stdx::option<gir::const_value>;
+                                         stdx::option<const type&>    arg_type,
+                                         stdx::option<const type&>    param_type)
+        -> stdx::option<gir::const_value>;
     [[nodiscard]] auto fold_implicit_comptime_arg(const ast::call_expr::argument& arg)
         -> stdx::option<gir::const_value>;
     [[nodiscard]] auto get_resolved_call_arg_type(const ast::call_expr::argument& arg)
@@ -593,8 +595,8 @@ class type_resolver {
 
     // What the block holding the statement being resolved is the body of, if anything hintable
     [[nodiscard]] auto hint_site_of(const ast::block_stmt& block) -> stdx::option<hint_site>;
-    ankerl::unordered_dense::map<const ast::block_stmt*, hint_site> hint_sites_;
-    bool                                                            hint_sites_built_{false};
+    ankerl::unordered_dense::map<gsl::not_null<const ast::block_stmt*>, hint_site> hint_sites_;
+    bool hint_sites_built_{false};
 
     // The safety a `@setRuntimeSafety` in this function's enclosing blocks chose, else the build's
     [[nodiscard]] auto scoped_runtime_safety() const -> bool;
@@ -666,8 +668,9 @@ class type_resolver {
     // Whether `t` is `auto` under pointer, reference, slice, and array levels (`&[]mut auto`)
     [[nodiscard]] static auto is_auto_pattern(const type& t) -> bool;
     // The parameter type `pattern` takes for an argument of type `arg`, with `leaf` set to what
-    // `auto` bound to; null when a level doesn't match
-    auto match_auto_pattern(type& pattern, type& arg, type*& leaf) -> type*;
+    // `auto` bound to; none when a level doesn't match
+    auto match_auto_pattern(type& pattern, type& arg, stdx::option<type&>& leaf)
+        -> stdx::option<type&>;
     // Why `arg` can't be called as the `impl Fn(...)` signature `pattern`, if it can't
     auto callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string>;
     // `dst[lo..hi] = src` / `*dst = src`: checks `src` is an equally sized array or slice
@@ -687,9 +690,9 @@ class type_resolver {
     auto                                visit(ast::node_id, const ast::do_while_loop_expr&) -> void;
 
     // Returns the same type buffer that it was passed when resolution was successful
-    [[nodiscard]] auto resolve_members(gsl::span<type*>                    buf,
+    [[nodiscard]] auto resolve_members(gsl::span<stdx::option<type&>>      buf,
                                        gsl::span<const ast::member_handle> members)
-        -> stdx::option<gsl::span<type*>>;
+        -> stdx::option<gsl::span<stdx::option<type&>>>;
     template <ast::IndexableID ID> auto visit(ID, const ast::enum_expr&) -> void;
 
     auto visit(ast::node_id, const ast::for_loop_expr&) -> void;
@@ -729,7 +732,7 @@ class type_resolver {
     // How `fn_id`'s recorded captures are stored in its environment, leaving out what needs none
     auto capture_layout(ast::node_id fn_id, bool is_move) -> gsl::span<types::closure_capture>;
     // The type of pack element capture `rest#k`, or null for any other capture
-    [[nodiscard]] auto pack_element_type(std::string_view capture) const -> type*;
+    [[nodiscard]] auto pack_element_type(std::string_view capture) const -> stdx::option<type&>;
     // Whether `capture` names an element of a pack in scope, in range or not
     [[nodiscard]] auto is_pack_element_capture(std::string_view capture) const -> bool;
     // Records the environment a local generic's monomorphs share, once one of them captures
@@ -761,7 +764,7 @@ class type_resolver {
     auto resolve_pack_index(ast::node_id id, const ast::index_expr& index, const pack_binding& pack)
         -> void;
     // The pack in scope named `name`: the function's own, or one of a function around it
-    [[nodiscard]] auto pack_named(std::string_view name) const -> const pack_binding*;
+    [[nodiscard]] auto pack_named(std::string_view name) const -> stdx::option<const pack_binding&>;
     // Every pack a local function written here could read, outermost first
     [[nodiscard]] auto visible_packs() const -> std::vector<generic_function_info::enclosing_pack>;
     // A pack read by a closure or generic inside the function that owns it is captured element
@@ -968,7 +971,7 @@ class type_resolver {
         -> stdx::option<type&>;
     auto instantiate_generic(type&                             callee_type,
                              const generic_function_info&      fn_info,
-                             gsl::span<type*>                  concrete_args,
+                             type_span                         concrete_args,
                              gsl::span<const gir::const_value> comptime_args = {})
         -> stdx::option<generic_instantiation_entry>;
 
@@ -1043,7 +1046,7 @@ class type_resolver {
     bool in_return_type_{false};
     // While instantiating a type ctor: its returned literal's node index and the instance's pool
     // slot, which borrows the literal's shape until the instance is cloned
-    stdx::option<std::pair<usize, type*>> pending_instance_slot_;
+    stdx::option<std::pair<usize, gsl::not_null<type*>>> pending_instance_slot_;
     // The arguments of the call being instantiated, by parameter, to place a bound's error
     std::vector<source_location> instantiating_arg_locations_;
     // Set while resolving an `unroll for` driver, whose range unrolls into constants
@@ -1094,9 +1097,9 @@ class type_resolver {
     // The literal of the local generic being instantiated, which owns the captures of its body
     stdx::option<ast::node_id> instantiating_fn_node_{};
     // The generic function whose body this instantiation resolver walks, as `@fnCtx()` names it
-    type* instantiating_template_{nullptr};
+    stdx::option<type&> instantiating_template_;
     // The receiver `Type.method(obj, ...)` passed first, for the call it resolves as next
-    type* explicit_self_receiver_{nullptr};
+    stdx::option<type&> explicit_self_receiver_;
     // The node a call names as its callee while it resolves: the identifier, or a dot's member
     stdx::opt_size direct_callee_;
 

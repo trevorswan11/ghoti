@@ -165,11 +165,9 @@ auto register_type_ctor_members(context&         ctx,
     if (fresh.is_resolved() && !provisional) { return fresh; }
 
     // Rebind so distinct instantiations of a `fn(T): type` ctor do not alias each other's shape
-    const auto rebind{[&](gsl::span<type*> types) -> gsl::span<type*> {
-        auto out{ctx.pool.get_many_unsafe(types.size())};
-        for (usize i{0}; i < types.size(); ++i) {
-            out[i] = &remap_type(ctx, *types[i], src, fresh);
-        }
+    const auto rebind{[&](gsl::span<stdx::option<type&>> types) {
+        auto out{ctx.pool.get_many_pending(types.size())};
+        for (usize i{0}; i < types.size(); ++i) { out[i] = remap_type(ctx, *types[i], src, fresh); }
         return out;
     }};
 
@@ -204,15 +202,15 @@ auto register_type_ctor_members(context&         ctx,
 // A type ctor's literal type and its member types are shared by every instance, which each
 // resolve them in place. This is one instance's shape, put back after a nested instance.
 struct shared_literal_shape {
-    type*                                       literal;
-    type::data_t                                data;
-    std::vector<std::pair<type*, type::data_t>> members;
+    gsl::not_null<type*>                                       literal;
+    type::data_t                                               data;
+    std::vector<std::pair<gsl::not_null<type*>, type::data_t>> members;
 
     [[nodiscard]] static auto save(type& literal) -> shared_literal_shape {
         shared_literal_shape shape{.literal = &literal, .data = literal.get_data(), .members = {}};
-        const auto           save_members{[&](gsl::span<type*> members) {
-            for (auto* m : members) {
-                if (m && m->is_resolved()) { shape.members.emplace_back(m, m->get_data()); }
+        const auto           save_members{[&](gsl::span<stdx::option<type&>> members) {
+            for (const auto m : members) {
+                if (m && m->is_resolved()) { shape.members.emplace_back(m.get(), m->get_data()); }
             }
         }};
         literal.get_data().visit([](const auto&) {},
@@ -234,8 +232,8 @@ struct shared_literal_shape {
 [[nodiscard]] auto
 other_instance_in_progress(const context& ctx, const type& literal, const type& slot) -> bool {
     return std::ranges::any_of(ctx.instantiations_in_progress, [&](const auto& entry) {
-        const type* other{entry.second};
-        return other && other != &slot && other->get_instance_id() &&
+        const stdx::option<const type&> other{entry.second};
+        return other && other.get() != &slot && other->get_instance_id() &&
                other->get_symbol_table_idx_opt() == literal.get_symbol_table_idx_opt();
     });
 }
@@ -317,7 +315,7 @@ ctor_instance_display_name(const context&                                       
         }
         return fmt::format("{}_{}__{}",
                            fn.erased ? "fn" : "xfn",
-                           fmt::join(fn.params | std::views::transform([&](const auto* p) {
+                           fmt::join(fn.params | std::views::transform([&](const auto p) {
                                          return mangle_arg_type(reg, *p);
                                      }),
                                      "_"),
@@ -370,7 +368,7 @@ auto type_resolver::record_type_ctor_member_call(ast::node_id call_id, const ast
     }
     if (!member_name || !obj_type) { return; }
 
-    type* t{obj_type.get()};
+    gsl::not_null<type*> t{obj_type.get()};
     if (const auto meta{t->get_data().as_opt<types::meta_type>()}) { t = &meta->instance; }
 
     if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
@@ -386,17 +384,17 @@ auto type_resolver::register_non_generic_type_ctor_members(type&                
     if (ctx_.generic_functions.get_type_ctor_member_prefix(result)) { return; }
 
     // Resolve the constructor's declaration and its owning module from `Ctor()` or `mod.Ctor()`.
-    mod::module_t*        owner_mod{nullptr};
-    stdx::option<symbol&> ctor_sym;
+    stdx::option<mod::module_t&> owner_mod;
+    stdx::option<symbol&>        ctor_sym;
     if (const auto fn_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(ctor_call.function)}) {
         if (!resolving_.root_table_idx) { return; }
-        owner_mod = &resolving_;
+        owner_mod = resolving_;
         ctor_sym  = ctx_.registry.get_from_opt(*resolving_.root_table_idx, fn_ident->name);
     } else if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(ctor_call.function)}) {
         const auto mod_type{resolving_.get_sema_type_opt(dot->object)};
         const auto m_data{mod_type ? mod_type->get_data().as_opt<types::module_t>() : stdx::none};
         if (!m_data || !m_data->imported.root_table_idx) { return; }
-        owner_mod = &m_data->imported;
+        owner_mod = m_data->imported;
         const auto& inner{resolving_.ast.get_as<ast::identifier_expr>(dot->member)};
         ctor_sym = ctx_.registry.get_from_opt(*owner_mod->root_table_idx, inner.name);
     }
@@ -430,7 +428,7 @@ namespace {
 // enclosing type (`Box(u8).apply` vs `Box(i64).apply`)
 [[nodiscard]] auto instance_mangled_name(context&                          ctx,
                                          const generic_function_info&      fn_info,
-                                         gsl::span<type*>                  concrete_args,
+                                         type_span                         concrete_args,
                                          gsl::span<const gir::const_value> comptime_args)
     -> std::string {
     auto name{
@@ -530,7 +528,7 @@ auto restore_shared_typing(mod::module_t&                fn_mod,
 // A type ctor instance's `comptime` values and plain `type` arguments, by parameter name
 [[nodiscard]] auto ctor_bindings_of(const ast::AST&                   tree,
                                     const ast::function_expr&         fn_expr,
-                                    gsl::span<type*>                  concrete_args,
+                                    type_span                         concrete_args,
                                     gsl::span<const gir::const_value> comptime_args)
     -> std::vector<std::pair<std::string, gir::const_value>> {
     std::vector<std::pair<std::string, gir::const_value>> bindings;
@@ -557,7 +555,7 @@ auto restore_shared_typing(mod::module_t&                fn_mod,
     -> stdx::option<const impl_record&> {
     if (!fn_info.enclosing_type) { return stdx::none; }
     const auto fn_idx{fn_info.node_id.get_index()};
-    for (const auto* r : ctx.impls.records()) {
+    for (const auto r : ctx.impls.records()) {
         if (r->target_type != fn_info.enclosing_type) { continue; }
         const bool is_member{std::ranges::any_of(r->methods, [&](const auto& m) {
             if (m.decl.get_index() == fn_idx) { return true; }
@@ -663,7 +661,7 @@ auto type_resolver::instance_self_type(const generic_function_info& fn_info)
 
 auto type_resolver::instantiate_generic(type&                             callee_type,
                                         const generic_function_info&      fn_info,
-                                        gsl::span<type*>                  concrete_args,
+                                        type_span                         concrete_args,
                                         gsl::span<const gir::const_value> comptime_args)
     -> stdx::option<generic_instantiation_entry> {
     mod::module_t& fn_mod{*fn_info.module};
@@ -700,7 +698,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                     fn_mod.ast.location_of(fn_info.node_id));
                 return stdx::none;
             }
-            return generic_instantiation_entry{.return_type  = it->second,
+            return generic_instantiation_entry{.return_type  = it->second.get(),
                                                .mangled_name = mangled_name};
         }
     }
@@ -827,7 +825,7 @@ auto type_resolver::instantiate_generic(type&                             callee
     usize          i{0};
     for (usize p_idx{0}; p_idx < fixed_param_count; ++p_idx) {
         const auto& param{fn_expr.parameters[p_idx]};
-        auto*       arg_type{concrete_args[p_idx]};
+        const auto  arg_type{concrete_args[p_idx]};
         // `impl Fn(...)` resolves here, where the enclosing constructor's parameters are bound
         if (const auto bounds{ctx_.param_bounds.find(&fn_expr)};
             bounds != ctx_.param_bounds.end()) {
@@ -852,8 +850,10 @@ auto type_resolver::instantiate_generic(type&                             callee
             }
         }
         inst_resolver.resolve_param_type(param.explicit_type);
-        type* decl_p_type{arg_type}; // erased type data corresponding to nominal signature type
-        type* body_p_type{arg_type}; // contextual type meaning in the function body
+        // Erased type data corresponding to the nominal signature type, and what it means in the
+        // function body
+        gsl::not_null<type*> decl_p_type{arg_type};
+        gsl::not_null<type*> body_p_type{arg_type};
         if (inst_resolver.last_type_ && !inst_resolver.last_type_->is_poison()) {
             auto& resolved_param_type{inst_resolver.thin_if_comptime(
                 param,
@@ -906,8 +906,8 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
     // A pack element has no `param.explicit_type` of its own to resolve against
     if (has_pack) {
-        const auto&        pack_param{fn_expr.parameters.back()};
-        std::vector<type*> elem_types;
+        const auto&                       pack_param{fn_expr.parameters.back()};
+        std::vector<gsl::not_null<type*>> elem_types;
         elem_types.reserve(pack_elem_count);
         for (usize p_idx{fixed_param_count}; p_idx < concrete_args.size(); ++p_idx) {
             elem_types.emplace_back(concrete_args[p_idx]);
@@ -932,11 +932,12 @@ auto type_resolver::instantiate_generic(type&                             callee
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
     // Only a declared result is known before the body is, which a recursive call needs. An
     // inferred one isn't, so a recursive call is reported rather than instantiated forever
-    const bool track_in_progress{!building_param_template_ &&
-                                 return_type.get_kind() != type_kind::TYPE &&
-                                 ctx_.instantiations_in_progress
-                                     .emplace(mangled_name, is_auto_return ? nullptr : &return_type)
-                                     .second};
+    const bool track_in_progress{
+        !building_param_template_ && return_type.get_kind() != type_kind::TYPE &&
+        ctx_.instantiations_in_progress
+            .emplace(mangled_name,
+                     is_auto_return ? stdx::option<type&>{} : stdx::option<type&>{return_type})
+            .second};
     // A type constructor's instance is its aggregate's pool slot, known before the body is. A
     // member signature naming this same instance (`Pair(i64)` inside `Pair(i64)`) resolves to it.
     const bool abstract_instance{building_param_template_ || is_abstract_instance(concrete_args)};
@@ -962,7 +963,7 @@ auto type_resolver::instantiate_generic(type&                             callee
                 outer_instance_shape.emplace(shared_literal_shape::save(*literal));
             }
             track_ctor_in_progress =
-                ctx_.instantiations_in_progress.emplace(mangled_name, &slot).second;
+                ctx_.instantiations_in_progress.emplace(mangled_name, slot).second;
             if (track_ctor_in_progress && !slot.is_resolved()) {
                 inst_resolver.pending_instance_slot_.emplace(agg_node->get_index(), &slot);
                 // Member calls on the instance target its monomorphized members, as they will
@@ -1047,8 +1048,10 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // A `fn(...): type` generic is a type constructor: every parameter is a `type` or a
     // `comptime` value (erased from `inst_param_types`), and the body returns the type it builds.
-    const bool all_params_are_types{std::ranges::all_of(
-        inst_param_types, [](const type* p) { return p->get_kind() == type_kind::TYPE; })};
+    const bool all_params_are_types{
+        std::ranges::all_of(inst_param_types, [](gsl::not_null<const type*> p) {
+            return p->get_kind() == type_kind::TYPE;
+        })};
     const bool is_type_ctor{!is_auto_return && return_type.get_kind() == type_kind::TYPE &&
                             tracker.has_returns() && all_params_are_types};
 
@@ -1058,8 +1061,8 @@ auto type_resolver::instantiate_generic(type&                             callee
         !check_ctor_params_comptime(ctx_, fn_mod, fn_expr)) {
         return stdx::none;
     }
-    type* deduced_return_type{(is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_)
-                                                               : &return_type};
+    gsl::not_null<type*> deduced_return_type{
+        (is_auto_return || is_type_ctor) ? &tracker.deduced_return_type(ctx_) : &return_type};
 
     // Copy into a per-instantiation type so `T(i32)` and `T(u8)` don't alias each other
     if (is_type_ctor) {

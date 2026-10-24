@@ -111,7 +111,7 @@ TEST_CASE("Type translate function types") {
     auto& f64_t{*pool[{sema::type_kind::F64, sema::types::mut::CONSTANT}]};
     auto& bool_t{*pool[{sema::type_kind::BOOL, sema::types::mut::CONSTANT}]};
 
-    auto params{arena.make_span<sema::type*>(2)};
+    auto params{pool.get_many_unsafe(2)};
     params[0] = &i32_t;
     params[1] = &f64_t;
 

@@ -143,7 +143,7 @@ pub const second = fn(x: auto): i32 {
     REQUIRE(diags);
     for (const auto& d : *diags) {
         if (!d.get_message() || !d.get_message()->contains("failure")) { continue; }
-        REQUIRE(d.origin() != nullptr);
+        REQUIRE(d.origin());
         CHECK(d.origin()->path.filename() == "m.gh");
     }
 }

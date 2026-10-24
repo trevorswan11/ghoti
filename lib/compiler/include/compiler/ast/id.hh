@@ -21,14 +21,7 @@ namespace ghoti::syntax { class parser; } // namespace ghoti::syntax
 
 namespace ghoti::ast {
 
-namespace detail {
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wsign-conversion"
-constexpr auto INVALID_ID{static_cast<u64>(-1)};
-#pragma clang diagnostic pop
-
-} // namespace detail
+namespace detail { constexpr auto INVALID_ID{~u64{0}}; } // namespace detail
 
 // A compact id for all AST nodes
 class node_id {

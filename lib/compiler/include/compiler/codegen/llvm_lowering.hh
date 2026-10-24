@@ -63,8 +63,8 @@ class llvm_lowering {
         segment_blocks_.clear();
     }
 
-    auto lower_value(const gir::value& val, stdx::option<const sema::type&> expected_type = nullptr)
-        -> llvm::Value*;
+    auto lower_value(const gir::value&               val,
+                     stdx::option<const sema::type&> expected_type = stdx::none) -> llvm::Value*;
     auto lower_instruction(const gir::instruction& inst) -> void;
 
   private:

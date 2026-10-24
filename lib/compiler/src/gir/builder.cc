@@ -57,7 +57,7 @@ auto builder::emit_alloca(sema::type& type,
 auto builder::emit_alloca_in_entry(sema::type& type, bool is_const) -> local_id {
     PROFILE_FUNCTION();
     ASSERT(function_, "Cannot emit alloca without an active function");
-    auto*      entry{function_->get_segment(segment_id{0})};
+    auto       entry{function_->get_segment(segment_id{0})};
     const auto slot{function_->next_local_id(local_kind::ALLOCA)};
     entry->insert_before_terminator({
         .kind     = instruction_kind::ALLOCA,

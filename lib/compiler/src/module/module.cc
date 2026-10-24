@@ -219,7 +219,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
     mod->diagnostics = std::move(diagnostics);
     mod->is_start    = is_start_path(path);
 
-    auto* ptr = mod.get();
+    const gsl::not_null<module_t*> ptr{mod.get()};
     modules_.emplace(path, std::move(mod));
     return ptr;
 }
