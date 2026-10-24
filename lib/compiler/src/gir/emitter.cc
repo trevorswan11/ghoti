@@ -402,6 +402,9 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
     auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     apply_fn_attributes(fn, fn_mod, fn_mod.fn_literal_node(req.fn_node_id));
+    if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)}; gi && gi->name) {
+        fn.set_source_name(std::string{*gi->name});
+    }
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -493,6 +496,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                         sema::pack_element{.pack = p_name, .index = k}.hidden_name());
                     const std::string_view hidden_name{pack_hidden_names.back()};
                     auto&      p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
+                    p_slot.source_position.emplace(p_idx + k + 1);
                     const bool p_spilled{elem_type.get_kind() == sema::type_kind::SLICE};
                     scopes_.back().bindings.emplace(hidden_name,
                                                     local_binding{
@@ -549,6 +553,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
 
             auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+            p_slot.source_position.emplace(p_idx + 1);
             if (!p_name.empty()) {
                 if (arg_type->get_kind() == sema::type_kind::CLOSURE ||
                     arg_type->is_generic_value()) {

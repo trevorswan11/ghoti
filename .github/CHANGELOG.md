@@ -930,6 +930,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Runtime safety checks every lane of a cast or division as it does a scalar
 - A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
 - Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
+- Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library

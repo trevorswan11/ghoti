@@ -376,7 +376,18 @@ TEST_CASE("A signature's vector length can come from a compile-time parameter") 
         const sum = fn(comptime n: usize, v: @Vector(n, i32)): i32 { return v[0]; };
         pub const f = fn(): i32 { let v: @Vector(2, i32) = .{ 1, 2 }; return sum(4, v); };
     )")};
-    CHECK(mismatch.message_contains("not assignable to parameter type '@Vector(4, i32)'"));
+    CHECK(mismatch.message_contains("Argument 2 of type '@Vector(2, i32)' is not assignable to "
+                                    "parameter type '@Vector(4, i32)' in call to 'sum'"));
+
+    // A `comptime` parameter before it still counts toward the argument's position
+    const auto array_mismatch{helpers::type_check_diags(R"(
+        const pick = fn(comptime n: usize, comptime k: usize, a: [n]i32, b: bool): i32 {
+            return if (b) a[k]; else 0;
+        };
+        pub const f = fn(): i32 { let a: [3]i32 = .{ 1, 2, 3 }; return pick(3, 1, a, 7); };
+    )")};
+    CHECK(array_mismatch.message_contains("Argument 4 of type"));
+    CHECK(array_mismatch.message_contains("in call to 'pick'"));
 }
 
 TEST_CASE("@splat, @reduce, @shuffle, and @select work on lanes") {

@@ -31,6 +31,9 @@ class function {
         std::string name;
         sema::type& type;
         local_id    id;
+        // Which argument this is as the call was written, when erased `comptime` parameters or a
+        // hidden environment move it from its slot here
+        stdx::opt_size source_position{};
     };
 
     // Another symbol for this function, from a second `@export`
@@ -78,6 +81,12 @@ class function {
         return source_module_;
     }
     auto set_source_module(mod::module_t& m) -> void { source_module_.emplace(m); }
+
+    // The name the function is written under, for a monomorph whose symbol is mangled
+    [[nodiscard]] auto get_source_name() const noexcept -> std::string_view {
+        return source_name_.empty() ? std::string_view{name_} : std::string_view{source_name_};
+    }
+    auto set_source_name(std::string name) -> void { source_name_ = std::move(name); }
 
     [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
         return aliases_;
@@ -129,6 +138,7 @@ class function {
   private:
     ghoti::arena&                          arena_;
     std::string                            name_;
+    std::string                            source_name_;
     sema::type&                            type_;
     std::vector<gsl::not_null<parameter*>> params_;
     std::vector<gsl::not_null<segment*>>   segments_;

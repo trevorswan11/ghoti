@@ -32,6 +32,11 @@ namespace ghoti::sema {
 
 namespace {
 
+// The argument a parameter takes as the call was written, 1-based, else its slot's
+[[nodiscard]] auto argument_position(const gir::function::parameter& param, usize slot) -> usize {
+    return param.source_position ? *param.source_position : slot + 1;
+}
+
 // A cast between vectors of as many lanes is checked lane by lane
 [[nodiscard]] auto cast_lanes(stdx::option<type&> src, stdx::option<type&> dest)
     -> std::pair<stdx::option<type&>, stdx::option<type&>> {
@@ -732,8 +737,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 !is_arg_value_assignable(
                                     inst.operands[i], *arg_t, params[i]->type, inst.location)) {
                                 emit_diagnostic(
-                                    format_arg_mismatch(
-                                        i + 1, *arg_t, params[i]->type, *inst.callee_name),
+                                    format_arg_mismatch(argument_position(*params[i], i),
+                                                        *arg_t,
+                                                        params[i]->type,
+                                                        callee->get_source_name()),
                                     error::TYPE_MISMATCH,
                                     inst.location);
                             }
@@ -755,8 +762,10 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                             params[i]->type.get_kind() != sema::type_kind::TYPE &&
                             !is_arg_value_assignable(
                                 inst.operands[i], *arg_t, params[i]->type, inst.location)) {
-                            emit_diagnostic(format_arg_mismatch(
-                                                i + 1, *arg_t, params[i]->type, *inst.callee_name),
+                            emit_diagnostic(format_arg_mismatch(argument_position(*params[i], i),
+                                                                *arg_t,
+                                                                params[i]->type,
+                                                                callee->get_source_name()),
                                             error::TYPE_MISMATCH,
                                             inst.location);
                         }
