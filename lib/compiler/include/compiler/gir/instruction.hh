@@ -75,6 +75,15 @@ enum class instruction_kind : u8 {
     // `{ctx, code}` for an erased `fn(...)`; `callee_name` is the code, else a thin-fn trampoline
     MAKE_CALLABLE,
 
+    // Vectors
+    SPLAT,        // every lane is operand 0
+    EXTRACT_LANE, // lane operand 1 of vector operand 0
+    INSERT_LANE,  // vector operand 0 with lane operand 1 set to operand 2
+    REPACK,       // `[N]T` <-> `@Vector(N, T)` by value
+    SHUFFLE,      // lanes of operands 0 and 1 picked by the mask in the remaining operands
+    SELECT,       // per lane, operand 0 ? operand 1 : operand 2
+    REDUCE,       // operand 0's lanes folded by `lane_op` (a `builtin.ReduceOp`)
+
     // Calls
     CALL,
     BUILTIN_CALL,
@@ -265,6 +274,7 @@ struct instruction {
     stdx::option<u8>  atomic_order{stdx::none};      // `atomic_order` is the memory order
     stdx::option<u8>  atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
     stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
+    stdx::option<u8>  lane_op{stdx::none};           // `REDUCE`'s `builtin.ReduceOp`
     stdx::option<ast::call_modifier> call_modifier{stdx::none}; // `@call(modifier, ...)`
 
     // A `@branchHint`ed `COND_GOTO`: relative weights of its true and false targets

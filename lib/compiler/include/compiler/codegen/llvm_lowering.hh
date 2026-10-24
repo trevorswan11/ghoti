@@ -4,6 +4,8 @@
 #include <string_view>
 
 #include <ankerl/unordered_dense.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -105,6 +107,16 @@ class llvm_lowering {
                              llvm::BasicBlock&  block,
                              llvm::Instruction* before) -> void;
     auto emit_make_callable(const gir::instruction& inst) -> llvm::Value*;
+    // `SPLAT`, `EXTRACT_LANE`, ... `REDUCE`
+    auto emit_vector_op(const gir::instruction& inst) -> llvm::Value*;
+    auto emit_repack(llvm::Value* from, llvm::Type* to) -> llvm::Value*;
+    auto emit_reduce(const gir::instruction& inst, llvm::Value* vec) -> llvm::Value*;
+    // `scalar_op` applied to each lane of `operands` (all vectors of one length) in turn, for an
+    // operation LLVM has no vector form of on this target
+    auto scalarize(llvm::Type*                                                    result_ty,
+                   llvm::ArrayRef<llvm::Value*>                                   operands,
+                   llvm::function_ref<llvm::Value*(llvm::ArrayRef<llvm::Value*>)> scalar_op)
+        -> llvm::Value*;
 
     // `signext`/`zeroext` for a narrow integer the target's C ABI extends, if any
     [[nodiscard]] auto integer_extension(const sema::type& type)

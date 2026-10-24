@@ -226,16 +226,18 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
 
 [[nodiscard]] auto is_float_type(const gir::instruction&    inst,
                                  stdx::option<llvm::Value&> val) noexcept -> bool {
-    // Any float (or `comptime_float`) operand makes the operation floating point.
+    // Any float (or `comptime_float`) operand or lane makes the operation floating point.
     for (const auto& op : inst.operands) {
-        if (op.type && materialized_is_float(op.type->get_kind())) { return true; }
+        if (op.type && materialized_is_float(sema::lane_type_of(*op.type).get_kind())) {
+            return true;
+        }
     }
     if (!inst.operands.empty() && inst.operands[0].type &&
-        sema::is_integer(inst.operands[0].type->get_kind())) {
+        sema::is_integer(sema::lane_type_of(*inst.operands[0].type).get_kind())) {
         return false;
     }
-    if (inst.type) { return materialized_is_float(inst.type->get_kind()); }
-    return val && val->getType()->isFloatingPointTy();
+    if (inst.type) { return materialized_is_float(sema::lane_type_of(*inst.type).get_kind()); }
+    return val && val->getType()->isFPOrFPVectorTy();
 }
 
 [[nodiscard]] auto comptime_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
@@ -257,9 +259,9 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
             inst.operands, [](const auto& op) { return comptime_operand_is_nonnegative(op); });
     }
     if (!inst.operands.empty() && inst.operands[0].type) {
-        return sema::is_signed_integer(*inst.operands[0].type);
+        return sema::is_signed_integer(sema::lane_type_of(*inst.operands[0].type));
     }
-    if (inst.type) { return sema::is_signed_integer(*inst.type); }
+    if (inst.type) { return sema::is_signed_integer(sema::lane_type_of(*inst.type)); }
     return false;
 }
 
@@ -770,6 +772,8 @@ auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
                                      std::string_view        message,
                                      const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
+    // A vector operation fails when any of its lanes does
+    if (bad->getType()->isVectorTy()) { bad = builder_.CreateOrReduce(bad); }
     auto* cur_fn{builder_.GetInsertBlock()->getParent()};
     auto* fail_bb{llvm::BasicBlock::Create(context_, "safety.fail", cur_fn)};
     auto* ok_bb{llvm::BasicBlock::Create(context_, "safety.ok", cur_fn)};
@@ -784,10 +788,10 @@ auto llvm_lowering::emit_arith_guard(llvm::Value*            bad,
 
 auto llvm_lowering::fit_shift_amount(llvm::Value* value, llvm::Value* amount, bool amount_signed)
     -> llvm::Value* {
-    auto*      value_ty{llvm::cast<llvm::IntegerType>(value->getType())};
-    auto*      amount_ty{llvm::cast<llvm::IntegerType>(amount->getType())};
-    const auto width{value_ty->getBitWidth()};
-    if (amount_ty->getBitWidth() <= width) {
+    auto*      value_ty{value->getType()};
+    auto*      amount_ty{amount->getType()};
+    const auto width{value_ty->getScalarSizeInBits()};
+    if (amount_ty->getScalarSizeInBits() <= width) {
         // A negative amount sign-extends to one no unsigned compare finds in range
         return builder_.CreateIntCast(amount, value_ty, amount_signed, "shamt");
     }
@@ -800,8 +804,8 @@ auto llvm_lowering::emit_division_guards(const gir::instruction& inst,
                                          llvm::Value*            lhs,
                                          llvm::Value*            rhs,
                                          bool                    is_signed) -> void {
-    auto*      int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
-    const auto width{int_ty->getBitWidth()};
+    auto*      int_ty{lhs->getType()};
+    const auto width{int_ty->getScalarSizeInBits()};
     auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
     emit_arith_guard(builder_.CreateICmpEQ(rhs, zero), "integer division by zero", inst);
     if (!is_signed) { return; }
@@ -817,9 +821,9 @@ auto llvm_lowering::emit_checked_arith(const gir::instruction& inst,
                                        llvm::Value*            rhs,
                                        bool                    is_signed) -> llvm::Value* {
     PROFILE_FUNCTION();
-    auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())};
-    if (!int_ty) { return nullptr; }
-    const auto width{int_ty->getBitWidth()};
+    auto* int_ty{lhs->getType()};
+    if (!int_ty->isIntOrIntVectorTy()) { return nullptr; }
+    const auto width{int_ty->getScalarSizeInBits()};
 
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
@@ -890,7 +894,7 @@ auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
                                           llvm::Value*            rhs,
                                           bool                    is_signed) -> llvm::Value* {
     PROFILE_FUNCTION();
-    auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+    auto* int_ty{lhs->getType()};
     switch (inst.kind) {
     case gir::instruction_kind::ADD:
         return builder_.CreateBinaryIntrinsic(
@@ -906,7 +910,7 @@ auto llvm_lowering::emit_saturating_arith(const gir::instruction& inst,
     }
     case gir::instruction_kind::SHL: {
         // `shl.sat` is poison once the amount reaches the width, where any non-zero lhs saturates
-        const auto width{int_ty->getBitWidth()};
+        const auto width{int_ty->getScalarSizeInBits()};
         auto*      zero{llvm::ConstantInt::get(int_ty, 0)};
         auto*      in_range{builder_.CreateICmpULT(rhs, llvm::ConstantInt::get(int_ty, width))};
         auto*      amount{builder_.CreateSelect(in_range, rhs, zero)};
@@ -1089,6 +1093,17 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         return llvm::ConstantStruct::get(llvm_st, elems);
     }
     if (const auto arr{cv.as_opt<gir::const_array>()}) {
+        if (auto* vt{llvm::dyn_cast<llvm::FixedVectorType>(ty)}) {
+            std::vector<llvm::Constant*> lanes;
+            lanes.reserve(vt->getNumElements());
+            for (const auto& lane : arr->elements) {
+                lanes.emplace_back(const_to_llvm(lane, vt->getElementType()));
+            }
+            while (lanes.size() < vt->getNumElements()) {
+                lanes.emplace_back(llvm::Constant::getNullValue(vt->getElementType()));
+            }
+            return llvm::ConstantVector::get(lanes);
+        }
         auto* at{llvm::dyn_cast<llvm::ArrayType>(ty)};
         if (!at) { return llvm::Constant::getNullValue(ty); }
         auto*                        elem_ty{at->getElementType()};
@@ -1544,6 +1559,13 @@ auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
     case gir::instruction_kind::INT_FROM_PTR:
     case gir::instruction_kind::PTR_FROM_INT:    result_val = emit_cast(inst); break;
     case gir::instruction_kind::MAKE_CALLABLE:   result_val = emit_make_callable(inst); break;
+    case gir::instruction_kind::SPLAT:
+    case gir::instruction_kind::EXTRACT_LANE:
+    case gir::instruction_kind::INSERT_LANE:
+    case gir::instruction_kind::REPACK:
+    case gir::instruction_kind::SHUFFLE:
+    case gir::instruction_kind::SELECT:
+    case gir::instruction_kind::REDUCE:          result_val = emit_vector_op(inst); break;
     case gir::instruction_kind::CALL:            {
         auto*              block{builder_.GetInsertBlock()};
         llvm::Instruction* before{block && !block->empty() ? &block->back() : nullptr};
@@ -1895,9 +1917,9 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     case gir::instruction_kind::XOR: return builder_.CreateXor(lhs, rhs, "xortmp");
     case gir::instruction_kind::SHL: {
         // Unchecked (`<<%`, or safety off): shifting every bit out leaves 0, not poison
-        auto* int_ty{llvm::cast<llvm::IntegerType>(lhs->getType())};
+        auto* int_ty{lhs->getType()};
         auto* in_range{builder_.CreateICmpULT(
-            rhs, llvm::ConstantInt::get(rhs->getType(), int_ty->getBitWidth()))};
+            rhs, llvm::ConstantInt::get(rhs->getType(), int_ty->getScalarSizeInBits()))};
         auto* amount{
             builder_.CreateSelect(in_range, rhs, llvm::ConstantInt::get(rhs->getType(), 0))};
         return builder_.CreateSelect(
@@ -1921,12 +1943,11 @@ auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
 
     const bool is_flt{is_float_type(inst, val)};
 
-    if (inst.is_checked && !is_flt && inst.kind == gir::instruction_kind::NEG) {
-        if (auto* int_ty{llvm::dyn_cast<llvm::IntegerType>(val->getType())}) {
-            auto* int_min{llvm::ConstantInt::get(
-                int_ty, llvm::APInt::getSignedMinValue(int_ty->getBitWidth()))};
-            emit_arith_guard(builder_.CreateICmpEQ(val, int_min), "signed negation overflow", inst);
-        }
+    if (inst.is_checked && !is_flt && inst.kind == gir::instruction_kind::NEG &&
+        val->getType()->isIntOrIntVectorTy()) {
+        auto* int_min{llvm::ConstantInt::get(
+            val->getType(), llvm::APInt::getSignedMinValue(val->getType()->getScalarSizeInBits()))};
+        emit_arith_guard(builder_.CreateICmpEQ(val, int_min), "signed negation overflow", inst);
     }
 
     switch (inst.kind) {
@@ -2394,6 +2415,121 @@ auto llvm_lowering::emit_make_callable(const gir::instruction& inst) -> llvm::Va
     fat = builder_.CreateInsertValue(fat, code, {1U}, "callable");
     if (inst.result) { set_local(*inst.result, fat); }
     return fat;
+}
+
+namespace {
+
+enum class reduce_op_t : u8 { // Mirrors builtin.gh.inc
+    add  = 0,
+    mul  = 1,
+    band = 2,
+    bor  = 3,
+    bxor = 4,
+    min  = 5,
+    max  = 6,
+};
+
+} // namespace
+
+auto llvm_lowering::scalarize(
+    llvm::Type*                                                    result_ty,
+    llvm::ArrayRef<llvm::Value*>                                   operands,
+    llvm::function_ref<llvm::Value*(llvm::ArrayRef<llvm::Value*>)> scalar_op) -> llvm::Value* {
+    const auto                lanes{llvm::cast<llvm::FixedVectorType>(result_ty)->getNumElements()};
+    llvm::Value*              result{llvm::PoisonValue::get(result_ty)};
+    std::vector<llvm::Value*> lane_args(operands.size());
+    for (u32 lane{0}; lane < lanes; ++lane) {
+        for (usize i{0}; i < operands.size(); ++i) {
+            lane_args[i] = builder_.CreateExtractElement(operands[i], lane);
+        }
+        result = builder_.CreateInsertElement(result, scalar_op(lane_args), lane);
+    }
+    return result;
+}
+
+auto llvm_lowering::emit_repack(llvm::Value* from, llvm::Type* to) -> llvm::Value* {
+    const bool   to_vector{to->isVectorTy()};
+    const auto   lanes{to_vector ? llvm::cast<llvm::FixedVectorType>(to)->getNumElements()
+                                 : static_cast<u32>(to->getArrayNumElements())};
+    llvm::Value* result{llvm::PoisonValue::get(to)};
+    for (u32 lane{0}; lane < lanes; ++lane) {
+        result = to_vector ? builder_.CreateInsertElement(
+                                 result, builder_.CreateExtractValue(from, {lane}), lane)
+                           : builder_.CreateInsertValue(
+                                 result, builder_.CreateExtractElement(from, lane), {lane});
+    }
+    return result;
+}
+
+auto llvm_lowering::emit_reduce(const gir::instruction& inst, llvm::Value* vec) -> llvm::Value* {
+    const auto& lane{sema::lane_type_of(*inst.operands[0].type)};
+    const bool  is_flt{sema::is_float(lane.get_kind())};
+    const bool  is_sgn{sema::is_signed_integer(lane)};
+    auto*       lane_ty{vec->getType()->getScalarType()};
+    // A float sum or product folds its lanes in any order; `std.simd.reduce_ordered` keeps it
+    const auto reassociated{[](llvm::Value* reduction) {
+        llvm::cast<llvm::Instruction>(reduction)->setHasAllowReassoc(true);
+        return reduction;
+    }};
+    switch (static_cast<reduce_op_t>(inst.lane_op.value_or(0))) {
+    case reduce_op_t::add:
+        if (!is_flt) { return builder_.CreateAddReduce(vec); }
+        return reassociated(
+            builder_.CreateFAddReduce(llvm::ConstantFP::getNegativeZero(lane_ty), vec));
+    case reduce_op_t::mul:
+        if (!is_flt) { return builder_.CreateMulReduce(vec); }
+        return reassociated(builder_.CreateFMulReduce(llvm::ConstantFP::get(lane_ty, 1.0), vec));
+    case reduce_op_t::band: return builder_.CreateAndReduce(vec);
+    case reduce_op_t::bor:  return builder_.CreateOrReduce(vec);
+    case reduce_op_t::bxor: return builder_.CreateXorReduce(vec);
+    case reduce_op_t::min:
+        if (is_flt) { return builder_.CreateFPMinReduce(vec); }
+        return builder_.CreateIntMinReduce(vec, is_sgn);
+    case reduce_op_t::max:
+        if (is_flt) { return builder_.CreateFPMaxReduce(vec); }
+        return builder_.CreateIntMaxReduce(vec, is_sgn);
+    }
+    UNREACHABLE("Unknown reduce op");
+}
+
+auto llvm_lowering::emit_vector_op(const gir::instruction& inst) -> llvm::Value* {
+    PROFILE_FUNCTION();
+    ASSERT(inst.type, "A vector instruction has a result type");
+    auto*      result_ty{types_.translate(*inst.type)};
+    const auto lane_operand{[&](usize idx) -> llvm::Value* {
+        return lower_value(inst.operands[idx], sema::lane_type_of(*inst.operands[0].type));
+    }};
+    switch (inst.kind) {
+    case gir::instruction_kind::SPLAT: {
+        auto* scalar{lower_value(inst.operands[0], sema::lane_type_of(*inst.type))};
+        return builder_.CreateVectorSplat(
+            llvm::cast<llvm::FixedVectorType>(result_ty)->getElementCount(), scalar, "splat");
+    }
+    case gir::instruction_kind::EXTRACT_LANE:
+        return builder_.CreateExtractElement(
+            lower_value(inst.operands[0]), lower_value(inst.operands[1]), "lane");
+    case gir::instruction_kind::INSERT_LANE:
+        return builder_.CreateInsertElement(
+            lower_value(inst.operands[0]), lane_operand(2), lower_value(inst.operands[1]), "lanes");
+    case gir::instruction_kind::REPACK:
+        return emit_repack(lower_value(inst.operands[0]), result_ty);
+    case gir::instruction_kind::SHUFFLE: {
+        llvm::SmallVector<i32, 16> mask;
+        for (const auto& entry : inst.operands | std::views::drop(2)) {
+            const auto idx{entry.as_opt<i64>()};
+            mask.emplace_back(idx ? static_cast<i32>(*idx) : llvm::PoisonMaskElem);
+        }
+        return builder_.CreateShuffleVector(
+            lower_value(inst.operands[0]), lower_value(inst.operands[1]), mask, "shuffle");
+    }
+    case gir::instruction_kind::SELECT:
+        return builder_.CreateSelect(lower_value(inst.operands[0]),
+                                     lower_value(inst.operands[1], inst.type),
+                                     lower_value(inst.operands[2], inst.type),
+                                     "select");
+    case gir::instruction_kind::REDUCE: return emit_reduce(inst, lower_value(inst.operands[0]));
+    default:                            UNREACHABLE("Not a vector instruction");
+    }
 }
 
 auto llvm_lowering::fixup_bit_count_result(llvm::Value* res, stdx::option<sema::type&> target)

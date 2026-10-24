@@ -900,6 +900,20 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a closure that mentioned a local type alias or `const` crashed codegen or computed the wrong value; types and constants are now read directly instead of being captured
 - Fixed: a closure capturing a parameter it never writes (`&self`, a slice, a struct) crashed codegen, and inside a method `self` named the closure's own environment instead of the method's receiver
 - Fixed: a `move fn` that wrote to one of its captured copies lost the write before its next call, so a counter returned the same value every time
+- `@Vector(len, T)` is a SIMD vector: `len` lanes of `T` operated on together, where `T` is an integer of at most 128 bits, a float other than `f80`, `bool`, or a thin pointer
+    - Operators work per lane: arithmetic, bitwise, shifts, the wrapping and saturating forms, `-`, `~`, `!`, and `and` / `or` on `bool` lanes, which always evaluate both sides
+    - A scalar operand is broadcast to every lane (`v * 2.0`, `1 + v`) when it converts to the lane type; a shift amount keeps its own integer type
+    - A comparison gives a `@Vector(len, bool)` rather than a `bool`
+    - `v[i]` reads one lane and `v[i] = x` / `v[i] += x` writes one; a lane has no address, so `&v[i]` and `^v[i]` are errors, and a vector can't be sliced
+    - A compile-time index is bounds-checked then, a runtime one under runtime safety
+    - `[N]T` and `@Vector(N, T)` convert into each other by value, and `.{ a, b, c, d }` initializes a vector
+    - Runtime safety checks every lane of `+ - *`, `/` and `%`, and shifts, as it does a scalar; a failure panics as the scalar operation does
+    - The layout is LLVM's: `@sizeOf(@Vector(3, f32))` is 16 and 16-aligned, and a `bool` lane is one bit
+    - `@typeInfo(V).vector` is a `builtin.VectorInfo` (`child`, `len`), and `@Vector(info)` builds the type from one
+    - Vector expressions fold at compile time
+    - An `extern` signature or `extern struct` / `extern union` field takes only a 16, 32, or 64-byte vector, which passes as C's `__m128` / `__m256` / `__m512` does; a `packed` aggregate takes none
+    - `@llvmIntrinsic` takes and returns vectors: `@llvmIntrinsic("llvm.ctpop", @Vector(4, u32), v)`
+    - A signature's lane count can't yet come from a `comptime` value parameter (`fn(comptime n: usize, v: @Vector(n, f32))`); take the vector type instead (`comptime V: type`, or `auto`)
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library

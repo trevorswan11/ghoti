@@ -269,6 +269,25 @@ auto builder::emit_cast(instruction_kind kind, value operand, sema::type& target
     return dest;
 }
 
+auto builder::emit_vector_op(instruction_kind   kind,
+                             std::vector<value> operands,
+                             sema::type&        result_type,
+                             stdx::option<u8>   lane_op,
+                             bool               checked) -> local_id {
+    PROFILE_FUNCTION();
+    ASSERT(function_, "Cannot emit a vector instruction without an active function");
+    const auto dest{function_->next_local_id(local_kind::TEMPORARY)};
+    emit_instruction({
+        .kind       = kind,
+        .type       = result_type,
+        .result     = dest,
+        .operands   = std::move(operands),
+        .is_checked = checked,
+        .lane_op    = lane_op,
+    });
+    return dest;
+}
+
 auto builder::emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
     -> stdx::option<local_id> {
     PROFILE_FUNCTION();

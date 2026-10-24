@@ -8,6 +8,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/type_traits.hh>
@@ -439,6 +440,24 @@ class emitter {
     auto emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_loop) -> value;
     auto emit_label(ast::node_id id, const ast::label_expr& label) -> value;
     auto emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value;
+
+    // A `@Vector` operator, applied per lane; a scalar operand is broadcast to every lane
+    auto emit_vector_binary(ast::node_id id, const ast::binary_expr& binary, sema::type& result)
+        -> value;
+    // `operand` as a vector of `len` `lane`s, splatting a scalar
+    auto emit_vector_operand(ast::expr_handle operand, sema::type& lane, u32 len) -> value;
+    auto emit_splat(value scalar, sema::type& vector_type) -> value;
+    auto emit_vector_from_lanes(gsl::span<const value> lanes, sema::type& vector_type) -> value;
+    // `v[i]` reads one lane, panicking on a runtime index out of range under safety
+    auto emit_lane_index_check(const value& idx, u32 len, ast::node_id site) -> void;
+    auto emit_vector_lane_read(ast::node_id id, const ast::index_expr& index) -> value;
+    // `v[i] = x` and `v[i] op= x`: the whole vector is read, the lane replaced, and stored back
+    auto emit_vector_lane_assign(ast::node_id                id,
+                                 const ast::assignment_expr& assign,
+                                 const ast::index_expr&      index) -> value;
+    // The vector `index` reads a lane of, through a reference, or none for any other container
+    [[nodiscard]] auto indexed_vector(const ast::index_expr& index) -> stdx::option<sema::type&>;
+
     // The type two concrete numeric operands of different types are converted to before they meet
     [[nodiscard]] auto numeric_operand_peer(ast::expr_handle lhs, ast::expr_handle rhs)
         -> stdx::option<sema::type&>;
