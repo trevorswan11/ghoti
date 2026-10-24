@@ -384,6 +384,8 @@ class const_eval {
     [[nodiscard]] auto callee_params(const ast::call_expr& call) -> sema::type_span;
     // Evaluates a call's arguments, splicing each `rest...` expansion's elements into place
     auto eval_call_args(const ast::call_expr& call) -> stdx::option<std::vector<const_value>>;
+    // The elements `rest[lo..hi]` selects from the pack a folded call bound `rest` to
+    auto eval_pack_slice(ast::node_id expr) -> stdx::option<std::vector<const_value>>;
     // `captures_out` receives what the body left each capture holding
     auto eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                           const ast::function_expr&         fn_expr,

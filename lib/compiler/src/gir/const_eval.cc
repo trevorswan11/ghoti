@@ -5989,26 +5989,30 @@ auto const_eval::eval_call_args(const ast::call_expr& call)
             continue;
         }
 
-        // `rest[lo..hi]...` folds `rest` itself, then keeps only the selected elements
-        const auto operand{sema::pack_expansion_operand_of(module_->ast, *expr_h)};
-        const auto val{operand && operand->range
-                           ? try_eval(module_->ast.get_as<ast::index_expr>(*expr_h).array)
-                           : try_eval_for(*expr_h, dest)};
+        if (auto sliced{eval_pack_slice(*expr_h)}) {
+            args.insert(args.end(), sliced->begin(), sliced->end());
+            continue;
+        }
+        const auto val{try_eval_for(*expr_h, dest)};
         const auto pack{val ? val->as_opt<const_array>() : stdx::none};
         if (!pack) { return stdx::none; }
-        sema::pack_slice selected{.lo = 0, .hi = pack->elements.size()};
-        if (operand && operand->range) {
-            const auto folded{sema::fold_pack_slice(
-                *this, module_->ast, *operand->range, operand->pack, selected.hi)};
-            if (!folded) { return stdx::none; }
-            selected = *folded;
-        }
-        const auto first{pack->elements.begin()};
-        args.insert(args.end(),
-                    first + static_cast<std::ptrdiff_t>(selected.lo),
-                    first + static_cast<std::ptrdiff_t>(selected.hi));
+        args.insert(args.end(), pack->elements.begin(), pack->elements.end());
     }
     return args;
+}
+
+auto const_eval::eval_pack_slice(ast::node_id expr) -> stdx::option<std::vector<const_value>> {
+    const auto operand{sema::pack_expansion_operand_of(module_->ast, expr)};
+    if (!operand || !operand->range) { return stdx::none; }
+    const auto pack_val{lookup_local_binding(operand->pack)};
+    const auto pack{pack_val ? pack_val->as_opt<const_array>() : stdx::none};
+    if (!pack) { return stdx::none; }
+    const auto selected{sema::fold_pack_slice(
+        *this, module_->ast, *operand->range, operand->pack, pack->elements.size())};
+    if (!selected) { return stdx::none; }
+    const auto first{pack->elements.begin()};
+    return std::vector<const_value>{first + static_cast<std::ptrdiff_t>(selected->lo),
+                                    first + static_cast<std::ptrdiff_t>(selected->hi)};
 }
 
 namespace {
@@ -6613,6 +6617,8 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
             auto values{range_sequence(iterable_id, *range)};
             if (!values) { return unknown(); }
             sequence = std::move(*values);
+        } else if (auto sliced{eval_pack_slice(iterable_id)}) {
+            sequence = std::move(*sliced);
         } else if (const auto array{module_->ast.get_as_opt<ast::array_expr>(iterable_id)}) {
             for (const auto& item_h : array->items) {
                 const auto item_val{try_eval(item_h)};
@@ -7116,6 +7122,8 @@ auto const_eval::simulate_for(const ast::for_loop_expr& loop) -> void {
                 return;
             }
             sequence = std::move(*values);
+        } else if (auto sliced{eval_pack_slice(iterable_id)}) {
+            sequence = std::move(*sliced);
         } else if (const auto array{module_->ast.get_as_opt<ast::array_expr>(iterable_id)}) {
             for (const auto& item_h : array->items) {
                 const auto item_val{try_eval(item_h)};

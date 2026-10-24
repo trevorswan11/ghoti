@@ -28,6 +28,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/range_steps.hh"
@@ -232,6 +233,7 @@ namespace {
 
 struct unrolled_for_driver {
     stdx::option<const type_resolver::pack_binding&> pack; // set for a pack driver
+    usize                                            pack_first{0}; // `rest[lo..]`'s `lo`
     stdx::option<type&>                              elem_type;
     std::vector<gir::const_value>                    elem_values; // empty for a pack driver
     stdx::option<std::string_view>                   name; // unset for a `_`-discarded capture
@@ -324,14 +326,27 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                                                      .name}
                 : stdx::none;
 
-        const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
-        const auto pack{driver_ident ? pack_named(driver_ident->name) : stdx::none};
+        const auto operand{pack_expansion_operand_of(resolving_.ast, driver_id)};
+        const auto pack{operand ? pack_named(operand->pack) : stdx::none};
         drv.pack = pack;
 
         usize this_count{0};
         if (pack) {
+            pack_slice selected{.lo = 0, .hi = pack->element_types.size()};
+            if (operand->range) {
+                // Outside a compile-time context, so a runtime bound is this error, not a fold's
+                gir::const_eval bounds_evaluator{ctx_, resolving_};
+                auto            folded{fold_pack_slice(
+                    bounds_evaluator, resolving_.ast, *operand->range, pack->name, selected.hi)};
+                if (!folded) {
+                    ctx_.diags.emplace_back(std::move(folded.error()));
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                selected = *folded;
+            }
             capture_pack_use(*pack);
-            this_count = pack->element_types.size();
+            drv.pack_first = selected.lo;
+            this_count     = selected.hi - selected.lo;
         } else {
             {
                 const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
@@ -491,7 +506,7 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
             const auto& drv{drivers[d]};
             const auto& cap{for_expr.captures[d]};
             if (drv.pack) {
-                resolving_.set_sema_type(cap.payload, *drv.pack->element_types[k]);
+                resolving_.set_sema_type(cap.payload, *drv.pack->element_types[drv.pack_first + k]);
             } else {
                 resolving_.set_sema_type(cap.payload, *drv.elem_type);
                 if (drv.name) { frame.insert_or_assign(*drv.name, drv.elem_values[k]); }

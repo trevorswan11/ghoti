@@ -16,7 +16,7 @@
 
 namespace ghoti::sema {
 
-auto pack_expansion_operand_of(const ast::AST& tree, ast::expr_handle expr)
+auto pack_expansion_operand_of(const ast::AST& tree, ast::node_id expr)
     -> stdx::option<pack_expansion_operand> {
     if (const auto ident{tree.get_as_opt<ast::identifier_expr>(expr)}) {
         return pack_expansion_operand{.pack = ident->name, .range = stdx::none};

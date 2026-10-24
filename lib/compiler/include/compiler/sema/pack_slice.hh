@@ -21,7 +21,7 @@ struct pack_expansion_operand {
 };
 
 // `expr` read as a `...` operand, if it spells a bare identifier or a range index of one
-[[nodiscard]] auto pack_expansion_operand_of(const ast::AST& tree, ast::expr_handle expr)
+[[nodiscard]] auto pack_expansion_operand_of(const ast::AST& tree, ast::node_id expr)
     -> stdx::option<pack_expansion_operand>;
 
 // The half-open element positions `[lo, hi)` a pack slice selects

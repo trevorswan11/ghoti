@@ -6061,14 +6061,27 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
         bool                           is_pack{false};
         stdx::option<std::string_view> name;
         stdx::option<pack_context>     pack;
+        sema::pack_slice               selected{.lo = 0, .hi = 0};
     };
     std::vector<driver_view> drivers(num_drivers);
     bool                     any_driver_is_pack{false};
     for (usize d{0}; d < num_drivers; ++d) {
         const auto& cap{for_loop.captures[d]};
-        const auto  ident{active_ast().get_as_opt<ast::identifier_expr>(*for_loop.iterables[d])};
-        drivers[d].pack    = ident ? pack_named(ident->name) : stdx::none;
+        const auto  operand{sema::pack_expansion_operand_of(active_ast(), *for_loop.iterables[d])};
+        drivers[d].pack    = operand ? pack_named(operand->pack) : stdx::none;
         drivers[d].is_pack = drivers[d].pack.has_value();
+        if (drivers[d].pack) {
+            drivers[d].selected = {.lo = 0, .hi = drivers[d].pack->element_count};
+            if (operand->range) {
+                const auto folded{sema::fold_pack_slice(const_eval_,
+                                                        active_ast(),
+                                                        *operand->range,
+                                                        drivers[d].pack->name,
+                                                        drivers[d].pack->element_count)};
+                ASSERT(folded, "Pack slice bounds were not checked");
+                drivers[d].selected = *folded;
+            }
+        }
         drivers[d].name =
             cap.payload.is<ast::identifier_expr>()
                 ? stdx::option<std::string_view>{active_ast()
@@ -6095,11 +6108,12 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
 
     // A pack's own element count is known directly
     const auto  pack_driver{std::ranges::find_if(drivers, &driver_view::is_pack)};
-    const usize count{any_driver_is_pack ? pack_driver->pack->element_count : [&] {
-        usize n{0};
-        while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
-        return n;
-    }()};
+    const usize count{
+        any_driver_is_pack ? pack_driver->selected.hi - pack_driver->selected.lo : [&] {
+            usize n{0};
+            while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
+            return n;
+        }()};
 
     const auto& block{active_ast().get_as<ast::block_stmt>(for_loop.block)};
     for (usize k{0}; k < count; ++k) {
@@ -6118,7 +6132,7 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
             if (drv.is_pack) {
                 if (drv.name) {
                     if (const auto elem_binding{lookup_binding<local_binding&>(
-                            sema::pack_element{.pack = drv.pack->name, .index = k}
+                            sema::pack_element{.pack = drv.pack->name, .index = drv.selected.lo + k}
                                 .hidden_name())}) {
                         scopes_.back().bindings.emplace(*drv.name, *elem_binding);
                     }
