@@ -2695,6 +2695,15 @@ auto emitter::emit_decl_stmt(ast::node_id id, const ast::decl_stmt& decl) -> voi
         }
         return;
     }
+    // `[n]T` whose `n` never folded, such as a runtime `let`: there is no size to give it storage
+    if (sema_type->get_data().is<sema::types::deferred_array>()) {
+        ctx_.diags.emplace_back(
+            "An array's length must be known at compile time; this one reads a runtime value",
+            sema::error::COMPTIME_EVALUATION_FAILED,
+            decl.explicit_type ? active_ast().location_of(*decl.explicit_type)
+                               : active_ast().location_of(decl.name));
+        return;
+    }
     if (sema_type->get_kind() == sema::type_kind::TYPE) { return; }
     if (active_mod().is_comptime_value_decl(id)) { return check_comptime_value_decl(decl); }
     if (active_mod().is_storageless_decl(id)) { return; }
@@ -9255,6 +9264,10 @@ auto emitter::emit_slice_range(ast::node_id id, const ast::index_expr& index) ->
     }
     // A local `[n]T` sized by a `comptime` parameter is typed by its unfolded placeholder
     src_type = &const_eval_.force_deferred_array(*src_type);
+    // One that never folds was reported where it was declared, and has no storage to slice
+    if (src_type->get_data().is<sema::types::deferred_array>()) {
+        return value{undefined_val{}, *result_type};
+    }
 
     value               base_ptr{};
     stdx::option<value> src_len;

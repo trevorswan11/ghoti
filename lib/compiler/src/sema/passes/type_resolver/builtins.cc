@@ -1688,6 +1688,18 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
 // Integer bit counts, float math, and the checked and wrapping arithmetic
 template <ast::IndexableID ID>
 auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    // Each operand is a value; only `@mulAdd(T, ...)` names a type, first
+    const auto& args{site.call.arguments};
+    for (usize i{site.kind == syntax::builtin_t::MUL_ADD ? 1UZ : 0UZ}; i < args.size(); ++i) {
+        if (call_arg_denotes_type(args[i])) {
+            return make_sema_err(fmt::format("'{}' expects a value, but was given the type '{}'",
+                                             syntax::builtin_name(site.kind),
+                                             ctx_.type_display_name(denoted_type(
+                                                 *get_resolved_call_arg_type(args[i])))),
+                                 error::TYPE_USED_AS_VALUE,
+                                 get_call_arg_location(args[i]));
+        }
+    }
     if (auto per_lane{resolve_vector_math_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto  builtin_id{site.kind};

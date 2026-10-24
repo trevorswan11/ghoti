@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -497,6 +498,48 @@ TEST_CASE("A global's folded initializer still has to fit its annotation element
         const Q = [_][2]u8{ [_]u8{ W, 2 } };
         pub const main = fn(): i32 { return @as(i32, Q[0][0]); };
     )") == 10);
+}
+
+TEST_CASE("A number can't take a pointer in a compound assignment") {
+    CHECK(helpers::raised(
+        "pub const f = fn(): i32 { let mut c: i32 = 0; let y: i32 = 5; c += ^y; return c; };",
+        sema::error::OPERATOR_TYPE_MISMATCH));
+    // A reference reads as its value, and a pointer still steps
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut c: i32 = 10;
+            let y: i32 = 3;
+            c -= &y;
+            let a: [3]u8 = .{ 1, 2, 3 };
+            let mut p: ^u8 = ^a[0];
+            p += 2;
+            return c + *p;
+        };
+    )") == 7 + 3);
+}
+
+TEST_CASE("An array sized by a runtime value is an error, not a local without storage") {
+    const auto runtime_length{[](std::string_view source) {
+        const auto diags{helpers::type_check_diags(source)};
+        CHECK(diags.message_contains("An array's length must be known at compile time"));
+    }};
+    runtime_length(R"(
+        pub const f = fn(): u8 {
+            let mut v: u8 = 3;
+            let mut arr: [v]mut u8 = .{ 4, 5, 6 };
+            let s = arr[0..];
+            return s[0];
+        };
+    )");
+    runtime_length(
+        "pub const f = fn(k: usize): void { let mut v = k; let arr: [v]u8 = undefined; };");
+}
+
+TEST_CASE("Math builtins take values, not types") {
+    for (const auto* body : {"return @clz(u8);", "return @min(u8, 3);", "return @abs(i32);"}) {
+        CHECK(helpers::raised(fmt::format("pub const f = fn(): i32 {{ {} }};", body),
+                              sema::error::TYPE_USED_AS_VALUE));
+    }
 }
 
 } // namespace ghoti::tests

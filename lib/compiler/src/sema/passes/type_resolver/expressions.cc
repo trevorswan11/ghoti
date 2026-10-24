@@ -271,6 +271,24 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
                 resolving_.ast.location_of(id)));
         }
         break;
+    case syntax::token_type_t::PLUS_ASSIGN:
+    case syntax::token_type_t::MINUS_ASSIGN:
+    case syntax::token_type_t::STAR_ASSIGN:
+    case syntax::token_type_t::SLASH_ASSIGN:
+    case syntax::token_type_t::PERCENT_ASSIGN:
+        // `p += 1` steps a pointer, but a number can't take one in: `n += ^x` has no meaning
+        if (rhs_type.get_kind() == type_kind::POINTER && is_numeric(lhs_type.get_kind())) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("operator '{}' can't apply a pointer '{}' to the number '{}'",
+                            *syntax::get_operator_opt(id.get_token_type()),
+                            ctx_.type_display_name(rhs_type),
+                            ctx_.type_display_name(lhs_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
+        break;
     default: break;
     }
 
