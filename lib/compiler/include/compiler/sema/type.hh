@@ -55,6 +55,7 @@ enum class type_kind : u8 {
     TYPE,
     SLICE,
     ARRAY,
+    VECTOR,
     POINTER,
     REFERENCE,
     ENUM,
@@ -281,6 +282,12 @@ struct array {
     type& underlying;
     usize len;
     bool  null_terminated;
+};
+
+// `@Vector(len, T)`: `len` lanes of `T`, operated on together
+struct vector {
+    type& underlying;
+    u32   len;
 };
 
 struct pointer {
@@ -586,6 +593,7 @@ class type {
                                  types::integer,
                                  types::slice,
                                  types::array,
+                                 types::vector,
                                  types::pointer,
                                  types::reference,
                                  types::enum_t,
@@ -863,6 +871,27 @@ class type_pool {
 
 // What `t` points at when it is a pointer or a reference
 [[nodiscard]] auto pointee_of(const type& t) noexcept -> stdx::option<type&>;
+
+// The most lanes a `@Vector` may have
+constexpr u32 MAX_VECTOR_LEN{1U << 16U};
+
+[[nodiscard]] auto vector_of(const type& t) noexcept -> stdx::option<const types::vector&>;
+[[nodiscard]] auto is_vector(const type& t) noexcept -> bool;
+
+// A vector's lane type, else `t` itself
+template <typename Type> [[nodiscard]] auto lane_type_of(Type& t) noexcept -> Type& {
+    if (const auto v{t.get_data().template as_opt<types::vector>()}) { return v->underlying; }
+    return t;
+}
+
+// A vector's width with its lanes back to back and no padding, `bool`s as single bits
+[[nodiscard]] auto vector_bits(const types::vector& vec, u32 ptr_bits) noexcept -> u64;
+
+// `[N]T` and `@Vector(N, T)` in either order, which convert into each other by value
+[[nodiscard]] auto is_array_vector_pair(const type& a, const type& b) noexcept -> bool;
+
+// Why `lane` can't be a `@Vector` lane, or none when it can
+[[nodiscard]] auto vector_lane_rejection(const type& lane) -> stdx::option<std::string>;
 
 // Unwraps meta_type to obtain the denoted underlying instance type
 // The signature behind a function value typed directly, by reference, or by pointer

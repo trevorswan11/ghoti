@@ -87,6 +87,7 @@ namespace {
     case syntax::builtin_t::REFERENCE:   return "PointerInfo";
     case syntax::builtin_t::SLICE:       return "SliceInfo";
     case syntax::builtin_t::ARRAY:       return "ArrayInfo";
+    case syntax::builtin_t::VECTOR:      return "VectorInfo";
     case syntax::builtin_t::FN:          return "FnInfo";
     case syntax::builtin_t::STRUCT:      return "StructInfo";
     case syntax::builtin_t::UNION:       return "UnionInfo";

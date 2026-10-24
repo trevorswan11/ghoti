@@ -256,6 +256,16 @@ pub const ArrayInfo = struct {
     pub is_volatile: bool,
 };
 
+/// How `@reduce(op, v)` folds a vector's lanes into one value. A float `.add` or `.mul` combines
+/// the lanes in any order, and `.min` / `.max` skip a NaN lane
+pub const ReduceOp = enum { add, mul, @"and", @"or", xor, min, max };
+
+/// `@Vector(len, child)`'s shape
+pub const VectorInfo = struct {
+    pub child: type,
+    pub len: usize,
+};
+
 pub const StructFieldInfo = struct {
     pub name: []u8,
     pub @"type": type,
@@ -340,6 +350,7 @@ pub const TypeInfo = union(enum) {
     reference: PointerInfo,
     slice: SliceInfo,
     array: ArrayInfo,
+    vector: VectorInfo,
     @"struct": StructInfo,
     @"union": UnionInfo,
     @"enum": EnumInfo,

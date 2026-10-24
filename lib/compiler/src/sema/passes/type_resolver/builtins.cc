@@ -314,6 +314,7 @@ enum class builtin_family : u8 {
     case syntax::builtin_t::REFERENCE:
     case syntax::builtin_t::SLICE:
     case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::VECTOR:
     case syntax::builtin_t::FN:
     case syntax::builtin_t::ENUM:
     case syntax::builtin_t::STRUCT:
@@ -430,6 +431,14 @@ auto type_resolver::check_builtin_arity(const ast::call_expr&          call,
         if (call.arguments.size() < 2) {
             return make_sema_err(fmt::format("'@llvmIntrinsic' expects a name and a return type, "
                                              "then the arguments; found {} argument(s)",
+                                             call.arguments.size()),
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+    } else if (builtin_id == syntax::builtin_t::VECTOR) {
+        if (call.arguments.empty() || call.arguments.size() > 2) {
+            return make_sema_err(fmt::format("'@Vector' expects a length and a lane type, or a "
+                                             "'VectorInfo'; found {} argument(s)",
                                              call.arguments.size()),
                                  error::ARITY_MISMATCH,
                                  resolving_.ast.location_of(call.function));
@@ -1314,6 +1323,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
     using syntax::builtin_t;
     using syntax::token_type_t;
     switch (site.kind) {
+    case syntax::builtin_t::VECTOR:    TRY(resolve_vector_builtin(call, return_type)); break;
     case syntax::builtin_t::INT:
     case syntax::builtin_t::FLOAT:
     case syntax::builtin_t::POINTER:
@@ -2742,6 +2752,33 @@ auto type_resolver::resolve_type_descriptor(const ast::call_expr::argument& desc
     const auto s{folded->as_opt<gir::const_struct>()};
     if (!s) { return stdx::none; }
     return *s;
+}
+
+auto type_resolver::resolve_vector_builtin(const ast::call_expr& call,
+                                           gsl::not_null<type*>& return_type)
+    -> stdx::result<void, diagnostic> {
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      vec{evaluator.eval_vector_type(call)};
+    if (vec) {
+        auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **vec}]};
+        meta->resolve_if<types::meta_type>(**vec);
+        return_type = meta;
+        return {};
+    }
+
+    const auto& err{vec.error()};
+    const bool  waits_on_instantiation{err.unknown &&
+                                       std::ranges::any_of(call.arguments, [&](const auto& arg) {
+                                          return mentions_unbound_type(arg);
+                                       })};
+    if (waits_on_instantiation) {
+        return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
+        return_type->resolve_if<types::deferred_call>(call, resolving_);
+        return {};
+    }
+    return make_sema_err(err.message,
+                         err.unknown ? error::COMPTIME_EVALUATION_FAILED : error::TYPE_MISMATCH,
+                         get_call_arg_location(call.arguments[err.arg_index]));
 }
 
 auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,

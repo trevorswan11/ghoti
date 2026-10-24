@@ -237,6 +237,12 @@ auto const_value::mangle() const -> std::string {
 }
 
 auto with_declared_type(const_value value, sema::type& declared) -> const_value {
+    // `[N]T` and `@Vector(N, T)` hold the same lanes, so only the type changes
+    if (value.is<const_array>() && value.get_type() &&
+        sema::is_array_vector_pair(*value.get_type(), declared)) {
+        value.set_type(declared);
+        return value;
+    }
     const bool is_number{value.is<i64>() || value.is<u64>() || value.is<i128>() ||
                          value.is<u128>() || value.is<f128>()};
     if (!is_number || !sema::is_numeric(declared.get_kind())) { return value; }

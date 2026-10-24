@@ -67,6 +67,10 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::NULLPTR: return get_ptr_ty();
     case sema::type_kind::SLICE:   return translate_slice(type.get_data().as<sema::types::slice>());
     case sema::type_kind::ARRAY:   return translate_array(type.get_data().as<sema::types::array>());
+    case sema::type_kind::VECTOR:  {
+        const auto& vec{type.get_data().as<sema::types::vector>()};
+        return llvm::FixedVectorType::get(translate(vec.underlying), vec.len);
+    }
     case sema::type_kind::STRUCT:
         return translate_struct(type.get_data().as<sema::types::struct_t>(), type);
     case sema::type_kind::UNION:

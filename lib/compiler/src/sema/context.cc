@@ -146,6 +146,19 @@ auto context::get_array(types::mut::mutability_modifiers mutability,
     return type;
 }
 
+auto context::get_vector(types::mut::mutability_modifiers mutability, u32 len, type& lane)
+    -> type& {
+    auto& type{*pool[{type_kind::VECTOR, mutability, len, lane}]};
+    type.resolve_if<types::vector>(lane, len);
+    return type;
+}
+
+auto context::with_lane(const type& t, type& lane) -> type& {
+    const auto vec{vector_of(t)};
+    if (!vec) { return lane; }
+    return get_vector(t.get_key().get_mut(), vec->len, lane);
+}
+
 auto context::get_slice(types::mut::mutability_modifiers mutability,
                         bool                             null_terminated,
                         type&                            underlying) -> type& {
@@ -333,6 +346,8 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     inject_function(bis::REFERENCE, params(t_auto), t_type);
     inject_function(bis::SLICE, params(t_auto), t_type);
     inject_function(bis::ARRAY, params(t_auto), t_type);
+    // `@Vector(len, T)`, or `@Vector(info)` from a `VectorInfo`
+    inject_function(bis::VECTOR, params(t_auto, t_auto), t_type);
     inject_function(bis::FN, params(t_auto), t_type);
     inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
     inject_function(bis::STRUCT, params(t_auto), t_type);

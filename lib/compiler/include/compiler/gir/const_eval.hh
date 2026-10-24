@@ -9,6 +9,7 @@
 #include <gsl/span>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -138,6 +139,20 @@ class const_eval {
 
     // Evaluates an expression as a non-negative integer dimension for array sizing
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
+
+    // Why a `@Vector(...)` call names no type; `unknown` when an argument isn't known yet
+    struct vector_type_error {
+        std::string message;
+        usize       arg_index{0};
+        bool        unknown{false};
+    };
+    // The type `@Vector(len, T)` or `@Vector(info)` names
+    [[nodiscard]] auto eval_vector_type(const ast::call_expr& call)
+        -> stdx::result<gsl::not_null<sema::type*>, vector_type_error>;
+
+    // The type a builtin's type argument names, or none when it isn't known yet
+    [[nodiscard]] auto type_argument_of(const ast::call_expr::argument& arg)
+        -> stdx::option<sema::type&>;
 
     auto resolve_all_deferred_arrays() -> void;
     auto resolve_all_deferred_calls() -> void;
@@ -337,6 +352,12 @@ class const_eval {
     auto fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
         -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
+    // A unary operator applied to an already-evaluated scalar
+    auto fold_unary_value(syntax::token_type_t op_type, const const_value& operand, ast::node_id id)
+        -> stdx::option<const_value>;
+    // A `@Vector` operator folded lane by lane, broadcasting a scalar operand
+    auto eval_vector_binary(ast::node_id id, const ast::binary_expr& binary, sema::type& result)
+        -> stdx::option<const_value>;
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;

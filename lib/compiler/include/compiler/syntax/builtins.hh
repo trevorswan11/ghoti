@@ -49,6 +49,7 @@ enum class builtin_t : u8 {
     REFERENCE,
     SLICE,
     ARRAY,
+    VECTOR,
     FN,
     FIELD_DEFAULT,
     STRUCT,
@@ -178,6 +179,7 @@ constexpr builtin_def POINTER{"@Pointer", builtin_t::POINTER};
 constexpr builtin_def REFERENCE{"@Reference", builtin_t::REFERENCE};
 constexpr builtin_def SLICE{"@Slice", builtin_t::SLICE};
 constexpr builtin_def ARRAY{"@Array", builtin_t::ARRAY};
+constexpr builtin_def VECTOR{"@Vector", builtin_t::VECTOR};
 constexpr builtin_def FN{"@Fn", builtin_t::FN};
 constexpr builtin_def FIELD_DEFAULT{"@fieldDefault", builtin_t::FIELD_DEFAULT};
 constexpr builtin_def STRUCT{"@Struct", builtin_t::STRUCT};
@@ -316,6 +318,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::REFERENCE,
     builtins::SLICE,
     builtins::ARRAY,
+    builtins::VECTOR,
     builtins::FN,
     builtins::FIELD_DEFAULT,
     builtins::STRUCT,

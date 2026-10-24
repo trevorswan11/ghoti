@@ -61,6 +61,11 @@ auto intrinsic_value_type(llvm::LLVMContext& context, const sema::type& t, u32 p
         }
         if (sema::is_fat_callable(t)) { return nullptr; }
         return llvm::PointerType::getUnqual(context);
+    case sema::type_kind::VECTOR: {
+        const auto& vec{t.get_data().as<sema::types::vector>()};
+        auto*       lane{intrinsic_value_type(context, vec.underlying, ptr_bits)};
+        return lane ? llvm::FixedVectorType::get(lane, vec.len) : nullptr;
+    }
     default: return nullptr;
     }
 }

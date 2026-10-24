@@ -849,6 +849,11 @@ namespace {
     return const_eval::type_size_of(*capture.storage_type, layout);
 }
 
+[[nodiscard]] auto vector_bits(const sema::types::vector& vec, const codegen::type_layout& layout)
+    -> u64 {
+    return sema::vector_bits(vec, static_cast<u32>(layout.ptr_bytes) * 8);
+}
+
 // A struct or union still being resolved has no fields yet, so neither does anything holding one
 // by value: its layout depends on itself (`const S = struct { d: [@alignOf(S)]u8 };`)
 [[nodiscard]] auto layout_is_known(const sema::type& type) -> bool {
@@ -915,6 +920,8 @@ auto const_eval::type_align_of(const sema::type& type, const codegen::type_layou
             return type_align_of(def->underlying, layout);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
+    case sema::type_kind::VECTOR:
+        return layout.vector_align(vector_bits(type.get_data().as<sema::types::vector>(), layout));
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
@@ -1005,6 +1012,8 @@ auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout
             return count * (elem_stride == 0 ? elem_size : elem_stride);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
+    case sema::type_kind::VECTOR:
+        return layout.vector_size(vector_bits(type.get_data().as<sema::types::vector>(), layout));
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
@@ -2332,6 +2341,16 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
             }
             return const_value{std::move(arr), sema_type};
         }
+        if (const auto vec{sema::vector_of(*sema_type)}) {
+            const_array lanes;
+            lanes.elements.reserve(init.initializers.size());
+            for (const auto& item : init.initializers) {
+                const auto lane{try_eval(item.value)};
+                if (!lane || lane->is_poison()) { return lane; }
+                lanes.elements.emplace_back(with_declared_type(*lane, vec->underlying));
+            }
+            return const_value{std::move(lanes), sema_type};
+        }
 
         const auto table_idx{sema_type->get_symbol_table_idx_opt()};
         if (const auto st{type_data.as_opt<sema::types::struct_t>()}) {
@@ -2979,6 +2998,13 @@ auto const_eval::eval_type_info(sema::type&                                    d
         s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
         s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
         return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
+    }
+    case sema::type_kind::VECTOR: {
+        const auto&  vec{denoted.get_data().as<sema::types::vector>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(vec.underlying));
+        s.fields.emplace("len", const_value{u64{vec.len}, usize_type});
+        return wrap("vector", std::move(s), ctx_.get_builtin_type("VectorInfo"));
     }
     // A closure argument's static type is `CLOSURE`, not `FUNCTION` so take its sig
     case sema::type_kind::CLOSURE:
@@ -3885,10 +3911,56 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     return stdx::none;
 }
 
+auto const_eval::eval_vector_binary(ast::node_id            id,
+                                    const ast::binary_expr& binary,
+                                    sema::type&             result) -> stdx::option<const_value> {
+    const auto lhs{try_eval(binary.lhs)};
+    const auto rhs{try_eval(binary.rhs)};
+    if (!lhs || !rhs) { return stdx::none; }
+    if (lhs->is_poison()) { return lhs; }
+    if (rhs->is_poison()) { return rhs; }
+
+    const auto len{sema::vector_of(result)->len};
+    // A vector operand's lanes, or a scalar's value in every lane
+    const auto lane_at{[](const const_value& operand, usize i) -> stdx::option<const_value> {
+        const auto lanes{operand.as_opt<const_array>()};
+        if (!lanes) { return operand; }
+        if (i >= lanes->elements.size()) { return stdx::none; }
+        return lanes->elements[i];
+    }};
+
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  op_type{id.get_token_type()};
+    const_array folded;
+    folded.elements.reserve(len);
+    for (usize i{0}; i < len; ++i) {
+        const auto l{lane_at(*lhs, i)};
+        const auto r{lane_at(*rhs, i)};
+        if (!l || !r) { return stdx::none; }
+        stdx::option<const_value> lane_result;
+        if (op_type == syntax::token_type_t::BOOLEAN_AND ||
+            op_type == syntax::token_type_t::BOOLEAN_OR) {
+            const auto lb{l->as_opt<bool>()};
+            const auto rb{r->as_opt<bool>()};
+            if (!lb || !rb) { return stdx::none; }
+            const bool both{op_type == syntax::token_type_t::BOOLEAN_AND ? *lb && *rb : *lb || *rb};
+            lane_result.emplace(both, bool_type);
+        } else {
+            lane_result = fold_binary_values(op_type, *l, *r, id);
+        }
+        if (!lane_result || lane_result->is_poison()) { return lane_result; }
+        folded.elements.emplace_back(with_declared_type(*lane_result, sema::lane_type_of(result)));
+    }
+    return const_value{std::move(folded), result};
+}
+
 auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
+    if (const auto result{module_->get_sema_type_opt(id)}; result && sema::is_vector(*result)) {
+        return eval_vector_binary(id, binary, *result);
+    }
 
     // Short-circuit logical operators
     if (op_type == syntax::token_type_t::BOOLEAN_AND) {
@@ -3967,6 +4039,24 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     if (!val) { return stdx::none; }
 
     const auto op_type{id.get_token_type()};
+    if (const auto lanes{val->as_opt<const_array>()};
+        lanes && val->get_type() && sema::is_vector(*val->get_type())) {
+        const_array folded;
+        folded.elements.reserve(lanes->elements.size());
+        for (const auto& lane : lanes->elements) {
+            const auto lane_result{fold_unary_value(op_type, lane, id)};
+            if (!lane_result || lane_result->is_poison()) { return lane_result; }
+            folded.elements.emplace_back(*lane_result);
+        }
+        return const_value{std::move(folded), val->get_type()};
+    }
+    return fold_unary_value(op_type, *val, id);
+}
+
+auto const_eval::fold_unary_value(syntax::token_type_t op_type,
+                                  const const_value&   operand,
+                                  ast::node_id         id) -> stdx::option<const_value> {
+    const stdx::option<const_value> val{operand};
     if (op_type == syntax::token_type_t::PLUS) { return val; }
 
     // `-`, `-%`, and `~` on a concrete integer type follow its generated code
@@ -4652,6 +4742,89 @@ auto const_eval::optional_string_arg(const ast::call_expr& call, usize idx)
     return stdx::none;
 }
 
+auto const_eval::type_argument_of(const ast::call_expr::argument& arg)
+    -> stdx::option<sema::type&> {
+    stdx::option<sema::type&> target_type;
+    if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+        target_type = module_->get_sema_type_opt(*type_id);
+    } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+        if (const auto val{try_eval(*expr_h)}) {
+            if (val->is<stdx::option<sema::type&>>()) {
+                target_type = val->as<stdx::option<sema::type&>>();
+            }
+        }
+        if (!target_type) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+            // A bare `type` names some type not known yet (an unbound `T: type` in a dependent
+            // parameter type), not the type `type` itself
+            if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
+                !target_type->get_data().is<sema::types::meta_type>()) {
+                return stdx::none;
+            }
+        }
+    }
+    if (!target_type) { return stdx::none; }
+    if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+        if (const auto r{try_resolve_deferred_call(*dc)}) { target_type.emplace(*r); }
+    }
+    if (target_type->get_kind() == sema::type_kind::TYPE) {
+        if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+            target_type.emplace(m->instance);
+        }
+    }
+    return target_type;
+}
+
+auto const_eval::eval_vector_type(const ast::call_expr& call)
+    -> stdx::result<gsl::not_null<sema::type*>, vector_type_error> {
+    const auto unknown{[](usize arg, std::string_view what) {
+        return stdx::err{vector_type_error{
+            .message   = fmt::format("'@Vector' needs a compile-time-known {}", what),
+            .arg_index = arg,
+            .unknown   = true,
+        }};
+    }};
+
+    stdx::option<u64>         len;
+    stdx::option<sema::type&> lane;
+    if (call.arguments.size() == 1) {
+        const auto desc_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        const auto desc_val{desc_h ? try_eval(*desc_h) : stdx::none};
+        const auto desc{desc_val ? desc_val->as_opt<const_struct>() : stdx::none};
+        if (!desc) { return unknown(0, "'VectorInfo' descriptor"); }
+        len  = desc_field<u64>(*desc, "len");
+        lane = desc_field<sema::type&>(*desc, "child");
+        if (!len) { return unknown(0, "'len' field"); }
+        if (!lane) { return unknown(0, "'child' field"); }
+    } else {
+        const auto len_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        const auto len_val{len_h ? try_eval(*len_h) : stdx::none};
+        if (!len_val || !len_val->as_int_opt()) { return unknown(0, "lane count"); }
+        const auto count{*len_val->as_int_opt()};
+        len  = static_cast<u64>(std::clamp<i128>(count, 0, i128{sema::MAX_VECTOR_LEN} + 1));
+        lane = type_argument_of(call.arguments[1]);
+        if (!lane) { return unknown(1, "lane type"); }
+    }
+
+    if (*len < 1 || *len > sema::MAX_VECTOR_LEN) {
+        return stdx::err{vector_type_error{
+            .message =
+                fmt::format("'@Vector' has {} lanes; it needs 1..{}", *len, sema::MAX_VECTOR_LEN),
+            .arg_index = 0,
+        }};
+    }
+    auto& lane_type{*ctx_.pool.with_const(force_deferred_type(*lane), true)};
+    if (const auto why{sema::vector_lane_rejection(lane_type)}) {
+        return stdx::err{vector_type_error{
+            .message = fmt::format(
+                "'{}' can't be a '@Vector' lane: {}", ctx_.type_display_name(lane_type), *why),
+            .arg_index = call.arguments.size() == 1 ? 0UZ : 1UZ,
+        }};
+    }
+    return gsl::not_null{
+        &ctx_.get_vector(sema::types::mut::CONSTANT, static_cast<u32>(*len), lane_type)};
+}
+
 auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                               const ast::call_expr&      call,
                               syntax::builtin_t builtin_type) -> stdx::option<const_value> {
@@ -4667,35 +4840,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
 
     const auto eval_type_argument =
         [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            if (const auto val{try_eval(*expr_h)}) {
-                if (val->is<stdx::option<sema::type&>>()) {
-                    target_type = val->as<stdx::option<sema::type&>>();
-                }
-            }
-            if (!target_type) {
-                target_type = module_->get_sema_type_opt(*expr_h);
-                // A bare `type` names some type not known yet (an unbound `T: type` in a
-                // dependent parameter type), not the type `type` itself
-                if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
-                    !target_type->get_data().is<sema::types::meta_type>()) {
-                    return stdx::none;
-                }
-            }
-        }
-        if (!target_type) { return stdx::none; }
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(*dc)}) { target_type.emplace(*r); }
-        }
-        if (target_type->get_kind() == sema::type_kind::TYPE) {
-            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
-                target_type.emplace(m->instance);
-            }
-        }
-        return target_type;
+        return type_argument_of(arg);
     };
 
     // A `[N]T` still deferred at resolution time (directly or as a field) has no layout yet
@@ -4857,6 +5002,11 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::ENUM_LITERAL:
         return const_value{stdx::option<sema::type&>{
             ctx_.get_builtin_resolved_type(sema::type_kind::ENUM_LITERAL)}};
+    case syntax::builtin_t::VECTOR: {
+        const auto vec{eval_vector_type(call)};
+        if (!vec) { return stdx::none; }
+        return const_value{**vec};
+    }
     case syntax::builtin_t::INT:
     case syntax::builtin_t::FLOAT:
     case syntax::builtin_t::POINTER:
