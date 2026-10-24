@@ -928,13 +928,17 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@addWithOverflow` and the other overflow builtins write a vector result and return a `@Vector(N, bool)` of the lanes that overflowed
     - `@intCast`, `@truncate`, `@intFromFloat`, `@floatFromInt`, `@floatCast`, `@intFromBool`, and `@boolFromInt` convert a vector to a vector of as many lanes
     - Runtime safety checks every lane of a cast or division as it does a scalar
-- Fixed: a `@Vector` of `^mut T` lanes lost the `mut`, so its pointers read as `^T`
-- Fixed: `@as(@Vector(N, T), .{ ... })` didn't fold at compile time
 - A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
 - Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library
+- Add `std.simd`, portable helpers for `@Vector`
+    - `suggest_lanes(T)` is how many `T` lanes fill the widest vector register the compiled-for CPU is guaranteed to have (1 when it has none); `--cpu native` and `--features` widen it, and SVE and RISC-V V report their minimum
+    - `load(V, s)` / `store(s, v)` move a vector through a slice without any alignment, checking the slice is long enough under runtime safety
+    - `reduce_ordered(op, v)` is `@reduce` with a float sum or product folded strictly in lane order
+    - `iota(V)` counts up from 0 in each lane, and `Lane(V)` / `lanes_of(V)` take a vector type apart
+    - `f32x4`, `u8x16`, `i32x8`, and the other 128- and 256-bit vector types
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`

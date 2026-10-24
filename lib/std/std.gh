@@ -15,6 +15,7 @@ pub import "fmt/fmt.gh" as fmt;
 pub import "math/math.gh" as math;
 pub import "meta/meta.gh" as meta;
 pub import "cpu/cpu.gh" as cpu;
+pub import "simd/simd.gh" as simd;
 pub import "process/process.gh" as process;
 
 test {
@@ -26,6 +27,7 @@ test {
     import "math/math.gh";
     import "meta/meta.gh";
     import "cpu/cpu.gh";
+    import "simd/simd.gh";
     import "process/process.gh";
     import "types/result.gh";
     import "types/option.gh";
