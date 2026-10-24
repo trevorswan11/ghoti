@@ -976,6 +976,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
     - `lib/compiler_rt` can `import std;` like any program
     - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
+        - They move a vector register at a time (`std.simd.suggest_lanes(u8)` bytes, four per step for copies and fills) wherever the compiled-for CPU has one, then words and bytes; `memcmp` is up to ~9x faster on SSE2 and ~20x with AVX-512, `bcmp` 1.5–4x, and `memcpy` / `memset` up to 2–2.7x on short and mid-size ranges (`lib/compiler_rt/bench/mem_bench.gh`)
     - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)

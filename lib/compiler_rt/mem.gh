@@ -1,4 +1,5 @@
 //! The C memory routines LLVM calls on its own, for targets without a libc
+import std;
 import "compiler_rt.gh" as compiler_rt;
 
 const symbol = compiler_rt.symbol;
@@ -23,24 +24,67 @@ const word_size = @sizeOf(usize);
     return (word_size - (p & (word_size - 1))) & (word_size - 1);
 };
 
-@[no_builtins] const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+/// The bytes of the widest vector register the compiled-for CPU is known to have
+const chunk_size = std.simd.suggest_lanes(u8);
+const Chunk = @Vector(chunk_size, u8);
+/// Whether moving a vector at a time beats moving a machine word
+const has_chunks = chunk_size > word_size;
+
+/// `len` bytes from `p`, which needs no alignment
+@[inline(.always)] const load_bytes = fn(comptime len: usize, p: ^u8): @Vector(len, u8) {
+    return @maskedLoad(p, @as(@Vector(len, bool), @splat(true)), undefined);
+};
+
+@[inline(.always)] const load_chunk = fn(p: ^u8): Chunk {
+    return load_bytes(chunk_size, p);
+};
+
+@[inline(.always)] const store_chunk = fn(p: ^mut u8, v: Chunk): void {
+    @maskedStore(p, v, @as(@Vector(chunk_size, bool), @splat(true)));
+};
+
+/// Four chunks at a time keep as many loads in flight as the loop vectorizer's unrolled loops
+const run_size = 4 * chunk_size;
+
+/// Copies `run_size` bytes, reading all of them before writing any so an overlap stays intact
+@[inline(.always)] const copy_run = fn(dst: ^mut u8, src: ^u8): void {
+    let c0 = load_chunk(src);
+    let c1 = load_chunk(src + chunk_size);
+    let c2 = load_chunk(src + 2 * chunk_size);
+    let c3 = load_chunk(src + 3 * chunk_size);
+    store_chunk(dst, c0);
+    store_chunk(dst + chunk_size, c1);
+    store_chunk(dst + 2 * chunk_size, c2);
+    store_chunk(dst + 3 * chunk_size, c3);
+};
+
+/// Whether the `len` bytes at `a` and `b` differ anywhere
+@[inline(.always)] const bytes_differ = fn(comptime len: usize, a: ^u8, b: ^u8): bool {
+    return @reduce(.@"or", load_bytes(len, a) != load_bytes(len, b));
+};
+
+/// A comparison past a wide chunk narrows down in 16-byte steps, which also cover short ranges
+const step_size = 16;
+const has_steps = chunk_size > step_size;
+
+@[no_builtins] pub const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     copy_forward(dst, src, n);
     return dst;
 };
 
 test "memcpy copies every byte, aligned or not" {
-    let mut src: [64]mut u8 = undefined;
-    for (0..64) |k| {
+    let mut src: [208]mut u8 = undefined;
+    for (0..208) |k| {
         src[k] = @truncate(u8, k * 7 + 3);
     }
     for (0..8) |off| {
-        for (0..40) |len| {
-            let mut dst: [64]mut u8 = undefined;
-            for (0..64) |k| {
+        for (0..200) |len| {
+            let mut dst: [208]mut u8 = undefined;
+            for (0..208) |k| {
                 dst[k] = 0;
             }
             _ = memcpy(dst.ptr + off, src.ptr + 1, len);
-            for (0..64) |k| {
+            for (0..208) |k| {
                 let expected: u8 = if (k >= off and k < off + len) src[k - off + 1] else 0;
                 @expect(dst[k] == expected);
             }
@@ -48,7 +92,7 @@ test "memcpy copies every byte, aligned or not" {
     }
 }
 
-@[no_builtins] const memmove = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] pub const memmove = fn(dst: ^mut u8, src: ^u8, n: usize) callconv(.c): ^mut u8 {
     // Copying away from the overlap keeps every source byte intact until it is read
     if (@intFromPtr(dst) <= @intFromPtr(src) or @intFromPtr(dst) >= @intFromPtr(src) + n) {
         copy_forward(dst, src, n);
@@ -59,32 +103,47 @@ test "memcpy copies every byte, aligned or not" {
 };
 
 test "memmove handles overlap in both directions" {
+    // Overlaps closer and farther apart than a vector chunk
     for (0..2) |dir| {
-        for (0..24) |len| {
-            let mut buf: [48]mut u8 = undefined;
-            let mut want: [48]mut u8 = undefined;
-            for (0..48) |k| {
-                buf[k] = @truncate(u8, k);
-                want[k] = @truncate(u8, k);
-            }
-            let from: usize = if (dir == 0) 3 else 9;
-            let to: usize = if (dir == 0) 9 else 3;
-            _ = memmove(buf.ptr + to, buf.ptr + from, len);
-            for (0..len) |k| {
-                want[to + k] = @truncate(u8, from + k);
-            }
-            for (0..48) |k| {
-                @expect(buf[k] == want[k]);
+        for (0..3) |gap| {
+            for (0..150) |len| {
+                let mut buf: [256]mut u8 = undefined;
+                let mut want: [256]mut u8 = undefined;
+                for (0..256) |k| {
+                    buf[k] = @truncate(u8, k);
+                    want[k] = @truncate(u8, k);
+                }
+                let distance: usize = if (gap == 0) 6 else if (gap == 1) 21 else 70;
+                let from: usize = if (dir == 0) 3 else 3 + distance;
+                let to: usize = if (dir == 0) 3 + distance else 3;
+                _ = memmove(buf.ptr + to, buf.ptr + from, len);
+                for (0..len) |k| {
+                    want[to + k] = @truncate(u8, from + k);
+                }
+                for (0..256) |k| {
+                    @expect(buf[k] == want[k]);
+                }
             }
         }
     }
 }
 
-@[no_builtins] const memset = fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
+@[no_builtins] pub const memset = fn(dst: ^mut u8, c: c_int, n: usize) callconv(.c): ^mut u8 {
     let byte = @truncate(u8, @bitCast(c_uint, c));
     let mut i: usize = 0;
-    let head = if (n < to_word_boundary(@intFromPtr(dst))) n
-        else to_word_boundary(@intFromPtr(dst));
+    if comptime (has_chunks) {
+        let fill: Chunk = @splat(byte);
+        while (i + run_size <= n) : (i += run_size) {
+            store_chunk(dst + i, fill);
+            store_chunk(dst + i + chunk_size, fill);
+            store_chunk(dst + i + 2 * chunk_size, fill);
+            store_chunk(dst + i + 3 * chunk_size, fill);
+        }
+        while (i + chunk_size <= n) : (i += chunk_size) {
+            store_chunk(dst + i, fill);
+        }
+    }
+    let head = i + @min(n - i, to_word_boundary(@intFromPtr(dst) + i));
     while (i < head) : (i += 1) {
         dst[i] = byte;
     }
@@ -102,13 +161,13 @@ test "memmove handles overlap in both directions" {
 
 test "memset fills with the low byte of its argument" {
     for (0..8) |off| {
-        for (0..30) |len| {
-            let mut buf: [48]mut u8 = undefined;
-            for (0..48) |k| {
+        for (0..150) |len| {
+            let mut buf: [160]mut u8 = undefined;
+            for (0..160) |k| {
                 buf[k] = 0x11;
             }
             _ = memset(buf.ptr + off, 0x1AB, len);
-            for (0..48) |k| {
+            for (0..160) |k| {
                 let expected: u8 = if (k >= off and k < off + len) 0xAB else 0x11;
                 @expect(buf[k] == expected);
             }
@@ -116,8 +175,15 @@ test "memset fills with the low byte of its argument" {
     }
 }
 
-@[no_builtins] const memcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] pub const memcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
+    // Matching chunks are skipped whole; the bytes find the first difference in the one that isn't
+    if comptime (has_chunks) {
+        while (i + chunk_size <= n and !bytes_differ(chunk_size, a + i, b + i)) : (i += chunk_size) {}
+    }
+    if comptime (has_steps) {
+        while (i + step_size <= n and !bytes_differ(step_size, a + i, b + i)) : (i += step_size) {}
+    }
     while (i < n) : (i += 1) {
         if (a[i] != b[i]) {
             return @as(c_int, a[i]) - @as(c_int, b[i]);
@@ -127,11 +193,20 @@ test "memset fills with the low byte of its argument" {
 };
 
 /// Like `memcmp`, but only says whether the ranges differ
-@[no_builtins] const bcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
+@[no_builtins] pub const bcmp = fn(a: ^u8, b: ^u8, n: usize) callconv(.c): c_int {
     let mut i: usize = 0;
+    if comptime (has_chunks) {
+        while (i + chunk_size <= n) : (i += chunk_size) {
+            if (bytes_differ(chunk_size, a + i, b + i)) return 1;
+        }
+    }
+    if comptime (has_steps) {
+        while (i + step_size <= n) : (i += step_size) {
+            if (bytes_differ(step_size, a + i, b + i)) return 1;
+        }
+    }
     if (co_aligned(@intFromPtr(a), @intFromPtr(b))) {
-        let head = if (n < to_word_boundary(@intFromPtr(a))) n
-            else to_word_boundary(@intFromPtr(a));
+        let head = i + @min(n - i, to_word_boundary(@intFromPtr(a) + i));
         while (i < head) : (i += 1) {
             if (a[i] != b[i]) return 1;
         }
@@ -165,11 +240,43 @@ test "memcmp orders by the first differing byte; bcmp only says whether they dif
     @expect(bcmp(a.ptr + 1, b.ptr + 1, 12) == 0);
 }
 
+test "memcmp and bcmp find a difference anywhere in a long range" {
+    let mut a: [160]mut u8 = undefined;
+    let mut b: [160]mut u8 = undefined;
+    for (0..160) |k| {
+        a[k] = @truncate(u8, k * 3);
+        b[k] = a[k];
+    }
+    for (0..3) |start| {
+        @expect(memcmp(a.ptr + start, b.ptr + start, 150) == 0);
+        @expect(bcmp(a.ptr + start, b.ptr + start, 150) == 0);
+    }
+    for (0..150) |at| {
+        b[at] +%= 1;
+        let a_first = a[at] < b[at];
+        @expect((memcmp(a.ptr, b.ptr, 150) < 0) == a_first);
+        @expect((memcmp(b.ptr, a.ptr, 150) > 0) == a_first);
+        @expect(bcmp(a.ptr, b.ptr, 150) != 0);
+        // A range that stops before the difference still matches
+        @expect(memcmp(a.ptr, b.ptr, at) == 0);
+        @expect(bcmp(a.ptr, b.ptr, at) == 0);
+        b[at] = a[at];
+    }
+}
+
 @[no_builtins] const copy_forward = fn(dst: ^mut u8, src: ^u8, n: usize): void {
     let mut i: usize = 0;
+    // A chunk is read whole before it is written, so an overlap behind `src` stays intact
+    if comptime (has_chunks) {
+        while (i + run_size <= n) : (i += run_size) {
+            copy_run(dst + i, src + i);
+        }
+        while (i + chunk_size <= n) : (i += chunk_size) {
+            store_chunk(dst + i, load_chunk(src + i));
+        }
+    }
     if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
-        let head = if (n < to_word_boundary(@intFromPtr(dst))) n
-            else to_word_boundary(@intFromPtr(dst));
+        let head = i + @min(n - i, to_word_boundary(@intFromPtr(dst) + i));
         while (i < head) : (i += 1) {
             dst[i] = src[i];
         }
@@ -184,10 +291,20 @@ test "memcmp orders by the first differing byte; bcmp only says whether they dif
 
 @[no_builtins] const copy_backward = fn(dst: ^mut u8, src: ^u8, n: usize): void {
     let mut i: usize = n;
+    if comptime (has_chunks) {
+        while (i >= run_size) {
+            i -= run_size;
+            copy_run(dst + i, src + i);
+        }
+        while (i >= chunk_size) {
+            i -= chunk_size;
+            store_chunk(dst + i, load_chunk(src + i));
+        }
+    }
     if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
         // The tail past the last word boundary, then whole words, then the head
-        let tail = (@intFromPtr(dst) + n) & (word_size - 1);
-        let stop = if (n < tail) 0 else n - tail;
+        let tail = (@intFromPtr(dst) + i) & (word_size - 1);
+        let stop = if (i < tail) 0 else i - tail;
         while (i > stop) {
             i -= 1;
             dst[i] = src[i];

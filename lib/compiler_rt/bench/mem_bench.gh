@@ -1,0 +1,191 @@
+//! Times compiler_rt's vectorized `mem*` against the word-at-a-time loops they replaced.
+//!
+//! ghoti run -M release_fast --cpu native lib/compiler_rt/bench/mem_bench.gh
+//!
+//! Each line is the cycles per call for one size, word loop then vector, with the speedup.
+import std;
+import "../mem.gh" as mem;
+
+const word_size = @sizeOf(usize);
+
+// The word loops as they were before vectors, kept verbatim as the baseline
+const word = struct {
+    const co_aligned = fn(a: usize, b: usize): bool {
+        return (a ^ b) & (word_size - 1) == 0;
+    };
+
+    const to_word_boundary = fn(p: usize): usize {
+        return (word_size - (p & (word_size - 1))) & (word_size - 1);
+    };
+
+    @[no_builtins] const memcpy = fn(dst: ^mut u8, src: ^u8, n: usize): ^mut u8 {
+        let mut i: usize = 0;
+        if (co_aligned(@intFromPtr(dst), @intFromPtr(src))) {
+            let head = if (n < to_word_boundary(@intFromPtr(dst))) n
+                else to_word_boundary(@intFromPtr(dst));
+            while (i < head) : (i += 1) {
+                dst[i] = src[i];
+            }
+            while (i + word_size <= n) : (i += word_size) {
+                *@ptrCast(^mut usize, dst + i) = *@ptrCast(^usize, src + i);
+            }
+        }
+        while (i < n) : (i += 1) {
+            dst[i] = src[i];
+        }
+        return dst;
+    };
+
+    @[no_builtins] const memset = fn(dst: ^mut u8, c: c_int, n: usize): ^mut u8 {
+        let byte = @truncate(u8, @bitCast(c_uint, c));
+        let mut i: usize = 0;
+        let head = if (n < to_word_boundary(@intFromPtr(dst))) n
+            else to_word_boundary(@intFromPtr(dst));
+        while (i < head) : (i += 1) {
+            dst[i] = byte;
+        }
+        let pattern = @as(usize, byte) *% (~@as(usize, 0) / 0xFF);
+        while (i + word_size <= n) : (i += word_size) {
+            *@ptrCast(^mut usize, dst + i) = pattern;
+        }
+        while (i < n) : (i += 1) {
+            dst[i] = byte;
+        }
+        return dst;
+    };
+
+    @[no_builtins] const bcmp = fn(a: ^u8, b: ^u8, n: usize): c_int {
+        let mut i: usize = 0;
+        if (co_aligned(@intFromPtr(a), @intFromPtr(b))) {
+            let head = if (n < to_word_boundary(@intFromPtr(a))) n
+                else to_word_boundary(@intFromPtr(a));
+            while (i < head) : (i += 1) {
+                if (a[i] != b[i]) return 1;
+            }
+            while (i + word_size <= n) : (i += word_size) {
+                if (*@ptrCast(^usize, a + i) != *@ptrCast(^usize, b + i)) return 1;
+            }
+        }
+        while (i < n) : (i += 1) {
+            if (a[i] != b[i]) return 1;
+        }
+        return 0;
+    };
+
+    @[no_builtins] const memcmp = fn(a: ^u8, b: ^u8, n: usize): c_int {
+        let mut i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (a[i] != b[i]) {
+                return @as(c_int, a[i]) - @as(c_int, b[i]);
+            }
+        }
+        return 0;
+    };
+};
+
+const cycles = fn(): u64 {
+    return @llvmIntrinsic("llvm.readcyclecounter", u64);
+};
+
+const print_count = fn(value: usize): void {
+    let mut digits: [20]mut u8 = undefined;
+    let mut at: usize = 20;
+    let mut rest = value;
+    while (true) {
+        at -= 1;
+        digits[at] = @truncate(u8, rest % 10) + '0';
+        rest /= 10;
+        if (rest == 0) break;
+    }
+    _ = std.io.print(digits[at..]);
+};
+
+// `text` padded on the right to `width`
+const print_padded = fn(text: []u8, width: usize): void {
+    _ = std.io.print(text);
+    for (text.len..width) |_| {
+        _ = std.io.print(" ");
+    }
+};
+
+const max_size = 1 << 16;
+// Bytes each measurement moves, spread over however many calls that takes
+const bytes_per_run = 1 << 26;
+const sizes: [5]usize = .{ 16, 64, 256, 4096, 65536 };
+
+/// Runs one operation, given as `op(dst, src, n)` returning a value folded into the checksum
+const time = fn(op: auto, dst: ^mut u8, src: ^u8, n: usize, checksum: ^mut usize): usize {
+    let calls = bytes_per_run / n;
+    let start = cycles();
+    for (0..calls) |_| {
+        *checksum +%= @call(.never_inline, op, dst, src, n);
+    }
+    let elapsed: usize = @intCast(cycles() - start);
+    return elapsed / calls;
+};
+
+const report = fn(name: []u8, n: usize, baseline: usize, vector: usize): void {
+    print_padded(name, 8);
+    print_count(n);
+    _ = std.io.print(" B: word ");
+    print_count(baseline);
+    _ = std.io.print(", vector ");
+    print_count(vector);
+    _ = std.io.print(" cycles/call (");
+    let tenths = if (vector == 0) 0 else baseline * 10 / vector;
+    print_count(tenths / 10);
+    _ = std.io.print(".");
+    print_count(tenths % 10);
+    _ = std.io.println("x)");
+};
+
+pub const main = fn(_: [][:0]u8): i32 {
+    let mut src: [max_size + 64]mut u8 = undefined;
+    let mut dst: [max_size + 64]mut u8 = undefined;
+    for (0..src.len) |k| {
+        src[k] = @truncate(u8, k * 13 + 7);
+        dst[k] = src[k];
+    }
+    let mut checksum: usize = 0;
+    _ = std.io.print("chunk: ");
+    print_count(std.simd.suggest_lanes(u8));
+    _ = std.io.println(" bytes");
+
+    // An odd destination offset leaves the word loops' co-aligned fast path to the byte loop
+    for (0..2) |misaligned| {
+        let off: usize = misaligned;
+        _ = std.io.println(if (misaligned == 0) "-- aligned" else "-- destination off by one");
+        for (sizes) |n| {
+            const copy_word = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @intFromPtr(word.memcpy(d, s, len)); };
+            const copy_vector = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @intFromPtr(mem.memcpy(d, s, len)); };
+            report("memcpy", n, time(copy_word, dst.ptr + off, src.ptr, n, ^mut checksum),
+                   time(copy_vector, dst.ptr + off, src.ptr, n, ^mut checksum));
+        }
+        for (sizes) |n| {
+            const set_word = fn(d: ^mut u8, _: ^u8, len: usize): usize { return @intFromPtr(word.memset(d, 0x5A, len)); };
+            const set_vector = fn(d: ^mut u8, _: ^u8, len: usize): usize { return @intFromPtr(mem.memset(d, 0x5A, len)); };
+            report("memset", n, time(set_word, dst.ptr + off, src.ptr, n, ^mut checksum),
+                   time(set_vector, dst.ptr + off, src.ptr, n, ^mut checksum));
+        }
+        // Equal ranges, so every byte is compared
+        for (0..src.len) |k| {
+            dst[k] = src[k];
+        }
+        for (sizes) |n| {
+            const cmp_word = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @bitCast(@as(isize, word.bcmp(d, s, len))); };
+            const cmp_vector = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @bitCast(@as(isize, mem.bcmp(d, s, len))); };
+            report("bcmp", n, time(cmp_word, dst.ptr, src.ptr, n, ^mut checksum),
+                   time(cmp_vector, dst.ptr, src.ptr, n, ^mut checksum));
+        }
+        for (sizes) |n| {
+            const ord_word = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @bitCast(@as(isize, word.memcmp(d, s, len))); };
+            const ord_vector = fn(d: ^mut u8, s: ^u8, len: usize): usize { return @bitCast(@as(isize, mem.memcmp(d, s, len))); };
+            report("memcmp", n, time(ord_word, dst.ptr, src.ptr, n, ^mut checksum),
+                   time(ord_vector, dst.ptr, src.ptr, n, ^mut checksum));
+        }
+    }
+    _ = std.io.print("checksum ");
+    print_count(checksum);
+    _ = std.io.println("");
+    return 0;
+};
