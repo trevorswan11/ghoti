@@ -142,6 +142,8 @@ enum class error : u8 {
     ILLEGAL_VOLATILE_QUALIFIER,
     TYPE_PARAM_NOT_COMPTIME,
     GENERIC_CLOSURE_CAPTURE,
+    ILLEGAL_VECTOR_LANE_ADDRESS,
+    ILLEGAL_EXTERN_VECTOR,
 };
 
 using diagnostic  = diagnostic<error>;

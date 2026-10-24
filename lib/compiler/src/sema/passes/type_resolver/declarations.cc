@@ -1267,6 +1267,16 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }
         if (decl.has_modifier(ast::decl_modifiers::EXTERN) ||
             decl.has_modifier(ast::decl_modifiers::EXPORT)) {
+            if (const auto vec{find_nonabi_vector(resolved_type, target_ptr_bits())}) {
+                const auto loc{decl.explicit_type ? resolving_.ast.location_of(*decl.explicit_type)
+                                                  : resolving_.ast.location_of(id)};
+                ctx_.poison_symbol(sym, nonabi_vector(ctx_, *vec, loc));
+                resolving_.set_sema_type(decl.name, ctx_.get_poison());
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
+        }
+        if (decl.has_modifier(ast::decl_modifiers::EXTERN) ||
+            decl.has_modifier(ast::decl_modifiers::EXPORT)) {
             const auto loc{decl.explicit_type ? resolving_.ast.location_of(*decl.explicit_type)
                                               : resolving_.ast.location_of(id)};
             if (auto problem{unmodeled_c_abi_error(resolved_type, loc)}) {

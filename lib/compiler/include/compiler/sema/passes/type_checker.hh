@@ -40,6 +40,8 @@ class type_checker {
     auto check_call_modifier(gir::function& fn, gir::segment& seg, usize index) -> void;
     // Tracks an instruction's (non-alloca) result so later operand lookups see its type
     auto record_value_result(const gir::instruction& inst) -> void;
+    auto check_vector_binary(const gir::instruction& inst, const type& lhs, const type& rhs)
+        -> void;
     auto report_operator_mismatch(const gir::instruction& inst, const type& lhs, const type& rhs)
         -> void;
     auto check_instruction(gir::function& fn, const gir::instruction& inst) -> void;

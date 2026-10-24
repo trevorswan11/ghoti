@@ -342,8 +342,99 @@ auto type_checker::report_operator_mismatch(const gir::instruction& inst,
                     inst.location);
 }
 
+namespace {
+
+// What a vector operator accepts as its lanes
+[[nodiscard]] auto vector_lanes_fit(gir::instruction_kind kind, const type& lane) -> bool {
+    switch (kind) {
+    case gir::instruction_kind::ADD:
+    case gir::instruction_kind::SUB:
+    case gir::instruction_kind::MUL:
+    case gir::instruction_kind::DIV:
+    case gir::instruction_kind::MOD:
+    case gir::instruction_kind::LT:
+    case gir::instruction_kind::LE:
+    case gir::instruction_kind::GT:
+    case gir::instruction_kind::GE:  return is_numeric(lane.get_kind());
+    case gir::instruction_kind::AND:
+    case gir::instruction_kind::OR:
+    case gir::instruction_kind::XOR:
+        return is_integer(lane.get_kind()) || lane.get_kind() == type_kind::BOOL;
+    case gir::instruction_kind::SHL:
+    case gir::instruction_kind::SHR: return is_integer(lane.get_kind());
+    default:                         return true;
+    }
+}
+
+} // namespace
+
+// Both operands are vectors of one shape (a shift's amount only of the same length)
+auto type_checker::check_vector_binary(const gir::instruction& inst,
+                                       const type&             lhs,
+                                       const type&             rhs) -> void {
+    const auto lhs_vec{vector_of(lhs)};
+    const auto rhs_vec{vector_of(rhs)};
+    const bool is_shift{inst.kind == gir::instruction_kind::SHL ||
+                        inst.kind == gir::instruction_kind::SHR};
+    const bool same_shape{
+        lhs_vec && rhs_vec &&
+        (is_shift ? lhs_vec->len == rhs_vec->len && vector_lanes_fit(inst.kind, rhs_vec->underlying)
+                  : is_same_unqualified(lhs, rhs))};
+    if (!same_shape || !vector_lanes_fit(inst.kind, lhs_vec->underlying)) {
+        report_operator_mismatch(inst, lhs, rhs);
+    }
+}
+
 auto type_checker::check_instruction(gir::function& fn, const gir::instruction& inst) -> void {
     PROFILE_FUNCTION();
+
+    switch (inst.kind) {
+    case gir::instruction_kind::ADD:
+    case gir::instruction_kind::SUB:
+    case gir::instruction_kind::MUL:
+    case gir::instruction_kind::DIV:
+    case gir::instruction_kind::MOD:
+    case gir::instruction_kind::AND:
+    case gir::instruction_kind::OR:
+    case gir::instruction_kind::XOR:
+    case gir::instruction_kind::SHL:
+    case gir::instruction_kind::SHR:
+    case gir::instruction_kind::EQ:
+    case gir::instruction_kind::NE:
+    case gir::instruction_kind::LT:
+    case gir::instruction_kind::LE:
+    case gir::instruction_kind::GT:
+    case gir::instruction_kind::GE:  {
+        if (inst.operands.size() < 2) { break; }
+        const auto lhs_t{get_operand_type(inst.operands[0])};
+        const auto rhs_t{get_operand_type(inst.operands[1])};
+        if (!lhs_t || !rhs_t || (!is_vector(*lhs_t) && !is_vector(*rhs_t))) { break; }
+        if (!lhs_t->is_poison() && !rhs_t->is_poison()) {
+            check_vector_binary(inst, *lhs_t, *rhs_t);
+        }
+        return record_value_result(inst);
+    }
+    case gir::instruction_kind::NEG:
+    case gir::instruction_kind::NOT:
+    case gir::instruction_kind::BITNOT: {
+        const auto op_t{inst.operands.empty() ? stdx::none : get_operand_type(inst.operands[0])};
+        if (!op_t || !is_vector(*op_t)) { break; }
+        const auto& lane{lane_type_of(*op_t)};
+        const bool  fits{inst.kind == gir::instruction_kind::NEG
+                             ? is_signed_integer(lane) || is_float(lane.get_kind())
+                         : inst.kind == gir::instruction_kind::NOT
+                             ? lane.get_kind() == type_kind::BOOL
+                             : is_integer(lane.get_kind())};
+        if (!fits) {
+            emit_diagnostic(fmt::format("Unary operator cannot be applied to '{}'",
+                                        ctx_.type_display_name(*op_t)),
+                            error::OPERATOR_TYPE_MISMATCH,
+                            inst.location);
+        }
+        return record_value_result(inst);
+    }
+    default: break;
+    }
 
     switch (inst.kind) {
     case gir::instruction_kind::ALLOCA: {
@@ -939,6 +1030,14 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         // Operand well-formedness is enforced during type resolution
         record_value_result(inst);
         break;
+    // The emitter builds these from operands sema already checked
+    case gir::instruction_kind::SPLAT:
+    case gir::instruction_kind::EXTRACT_LANE:
+    case gir::instruction_kind::INSERT_LANE:
+    case gir::instruction_kind::REPACK:
+    case gir::instruction_kind::SHUFFLE:
+    case gir::instruction_kind::SELECT:
+    case gir::instruction_kind::REDUCE:       record_value_result(inst); break;
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE: break;
     }

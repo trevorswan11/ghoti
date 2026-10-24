@@ -409,6 +409,39 @@ scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {}) -> 
         [acc](const auto&) { return acc; });
 }
 
+// A vector in a C signature passes like `__m128` / `__m256` / `__m512`, which no other width has
+[[nodiscard]] inline auto find_nonabi_vector(const type& t, u32 ptr_bits)
+    -> stdx::option<const type&> {
+    const auto scan{[ptr_bits](const type& inner) { return find_nonabi_vector(inner, ptr_bits); }};
+    return t.get_data().visit(
+        [&t, ptr_bits](types::vector vec) -> stdx::option<const type&> {
+            const auto bits{vector_bits(vec, ptr_bits)};
+            if (bits == 128 || bits == 256 || bits == 512) { return stdx::none; }
+            return t;
+        },
+        [&scan](types::pointer p) { return scan(p.underlying); },
+        [&scan](types::reference r) { return scan(r.underlying); },
+        [&scan](types::slice sl) { return scan(sl.underlying); },
+        [&scan](types::array ar) { return scan(ar.underlying); },
+        [&scan](types::function fn) -> stdx::option<const type&> {
+            for (const auto param : fn.params) {
+                if (const auto found{scan(*param)}) { return found; }
+            }
+            return scan(fn.return_type);
+        },
+        [](const auto&) -> stdx::option<const type&> { return stdx::none; });
+}
+
+[[nodiscard]] inline auto nonabi_vector(const sema::context&   ctx,
+                                        const type&            vec,
+                                        const source_location& location) -> diagnostic {
+    return diagnostic{fmt::format("'{}' has no C ABI; a vector crossing an `extern` boundary must "
+                                  "be 16, 32, or 64 bytes",
+                                  ctx.type_display_name(vec)),
+                      error::ILLEGAL_EXTERN_VECTOR,
+                      location};
+}
+
 // A function declared `@[testing]`, on its declaration or its literal
 [[nodiscard]] inline auto declares_testing_fn(const mod::module_t& owner, ast::node_id node)
     -> bool {

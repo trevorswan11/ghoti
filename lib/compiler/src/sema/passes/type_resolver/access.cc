@@ -116,6 +116,17 @@ auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void
         last_type_.emplace(slice->underlying);
     } else if (const auto array{array_data.as_opt<types::array>()}) {
         last_type_.emplace(array->underlying);
+    } else if (const auto vec{array_data.as_opt<types::vector>()}) {
+        if (is_range(index.index)) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("A vector can't be sliced; convert '{}' to an array first",
+                            ctx_.type_display_name(*target_type)),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(index.index)));
+        }
+        last_type_.emplace(vec->underlying);
     } else if (const auto deferred{array_data.as_opt<types::deferred_array>()}) {
         last_type_.emplace(deferred->underlying);
     } else if (const auto pointer{array_data.as_opt<types::pointer>()}) {

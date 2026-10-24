@@ -29,6 +29,16 @@ namespace ghoti::sema {
 
 using namespace resolver_detail;
 
+namespace {
+
+// A vector's lanes have no settled bit order inside a packed aggregate
+[[nodiscard]] auto packed_vector_hint(const type& field_type) -> std::string_view {
+    if (!is_vector(field_type)) { return ""; }
+    return " (store a vector's lanes as `[N]T` instead)";
+}
+
+} // namespace
+
 auto type_resolver::resolve_members(gsl::span<stdx::option<type&>>      buf,
                                     gsl::span<const ast::member_handle> members)
     -> stdx::option<gsl::span<stdx::option<type&>>> {
@@ -307,9 +317,10 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                 id,
                 fmt::format("field '{}' of type '{}' cannot appear in a 'packed struct'; only "
                             "integers, floats, 'bool', enums, pointers, packed aggregates, and "
-                            "fixed arrays of those are allowed",
+                            "fixed arrays of those are allowed{}",
                             ident.name,
-                            ctx_.type_display_name(*field_type)),
+                            ctx_.type_display_name(*field_type),
+                            packed_vector_hint(*field_type)),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }
@@ -344,6 +355,10 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                     id,
                     cabi_nonabi_scalar_field(
                         "struct", ident.name, ctx_.type_display_name(*field_type), loc)));
+            }
+            if (const auto vec{find_nonabi_vector(*field_type, target_ptr_bits())}) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, nonabi_vector(ctx_, *vec, loc)));
             }
         }
 
@@ -525,6 +540,10 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                     cabi_nonabi_scalar_field(
                         "union", ident.name, ctx_.type_display_name(field_type), loc)));
             }
+            if (const auto vec{find_nonabi_vector(field_type, target_ptr_bits())}) {
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, nonabi_vector(ctx_, *vec, loc)));
+            }
         }
 
         // A bit-packed `packed union` may only hold packed-eligible fields
@@ -535,9 +554,10 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                 id,
                 fmt::format("field '{}' of type '{}' cannot appear in a 'packed union'; only "
                             "integers, floats, 'bool', enums, pointers, packed aggregates, and "
-                            "fixed arrays of those are allowed",
+                            "fixed arrays of those are allowed{}",
                             ident.name,
-                            ctx_.type_display_name(field_type)),
+                            ctx_.type_display_name(field_type),
+                            packed_vector_hint(field_type)),
                 error::ILLEGAL_PACKED_FIELD,
                 resolving_.ast.location_of(field.explicit_type)));
         }

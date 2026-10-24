@@ -148,6 +148,11 @@ class type_resolver {
         -> void;
     auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
         -> stdx::option<usize>;
+    // An operator with a `@Vector` operand works per lane, broadcasting a scalar other operand
+    auto resolve_vector_binary(ast::node_id            id,
+                               const ast::binary_expr& binary,
+                               type&                   lhs_type,
+                               type&                   rhs_type) -> void;
     template <typename Eval>
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
@@ -517,6 +522,10 @@ class type_resolver {
     // compile-time struct. `none` when the argument isn't a foldable struct value.
     [[nodiscard]] auto resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
         -> stdx::option<gir::const_struct>;
+    // `@Vector(len, T)` / `@Vector(info)`, deferred while an argument waits on an instantiation
+    [[nodiscard]] auto resolve_vector_builtin(const ast::call_expr& call,
+                                              gsl::not_null<type*>& return_type)
+        -> stdx::result<void, diagnostic>;
     // Evaluates `arg` as a compile-time enum constant
     [[nodiscard]] auto resolve_const_enum_arg(const ast::call_expr::argument& arg,
                                               std::string_view                builtin_name,
