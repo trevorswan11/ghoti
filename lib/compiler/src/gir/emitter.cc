@@ -46,6 +46,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/pack_element.hh"
+#include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -439,6 +440,11 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
         cx_frame.insert_or_assign(p_name, const_value{*bound_ty});
     }
     const comptime_frame_guard cx_frame_guard{ctx_.comptime_binding_frames, std::move(cx_frame)};
+    auto       outer_pack_len_of{std::exchange(ctx_.pack_len_of, [this](std::string_view name) {
+        return pack_named(name).transform([](const pack_context& p) { return p.element_count; });
+    })};
+    const auto restore_pack_len_of{
+        gsl::finally([&] { ctx_.pack_len_of = std::move(outer_pack_len_of); })};
 
     // Overlay this monomorphization's body typing onto the shared AST nodes during emission
     const_eval_.clear_memo();
@@ -5355,20 +5361,26 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     std::vector<stdx::opt_size>   arg_pack_k;
     std::vector<std::string_view> arg_pack_name;
     for (usize i{0}; i < call.arguments.size(); ++i) {
-        const auto expanded_pack{[&] -> stdx::option<pack_context> {
+        const auto operand{[&] -> stdx::option<sema::pack_expansion_operand> {
             if (i >= call.pack_expansions.size() || !call.pack_expansions[i]) { return stdx::none; }
             const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
-            const auto ident{expr_h ? active_ast().get_as_opt<ast::identifier_expr>(*expr_h)
-                                    : stdx::none};
-            return ident ? pack_named(ident->name) : stdx::none;
+            return expr_h ? sema::pack_expansion_operand_of(active_ast(), *expr_h) : stdx::none;
         }()};
+        const auto expanded_pack{operand ? pack_named(operand->pack) : stdx::none};
         if (!expanded_pack) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(stdx::none);
             arg_pack_name.emplace_back();
             continue;
         }
-        for (usize k{0}; k < expanded_pack->element_count; ++k) {
+        sema::pack_slice selected{.lo = 0, .hi = expanded_pack->element_count};
+        if (operand->range) {
+            const auto folded{sema::fold_pack_slice(
+                const_eval_, active_ast(), *operand->range, expanded_pack->name, selected.hi)};
+            ASSERT(folded, "Pack slice bounds were not checked");
+            selected = *folded;
+        }
+        for (usize k{selected.lo}; k < selected.hi; ++k) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(k);
             arg_pack_name.emplace_back(expanded_pack->name);
@@ -6049,14 +6061,27 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
         bool                           is_pack{false};
         stdx::option<std::string_view> name;
         stdx::option<pack_context>     pack;
+        sema::pack_slice               selected{.lo = 0, .hi = 0};
     };
     std::vector<driver_view> drivers(num_drivers);
     bool                     any_driver_is_pack{false};
     for (usize d{0}; d < num_drivers; ++d) {
         const auto& cap{for_loop.captures[d]};
-        const auto  ident{active_ast().get_as_opt<ast::identifier_expr>(*for_loop.iterables[d])};
-        drivers[d].pack    = ident ? pack_named(ident->name) : stdx::none;
+        const auto  operand{sema::pack_expansion_operand_of(active_ast(), *for_loop.iterables[d])};
+        drivers[d].pack    = operand ? pack_named(operand->pack) : stdx::none;
         drivers[d].is_pack = drivers[d].pack.has_value();
+        if (drivers[d].pack) {
+            drivers[d].selected = {.lo = 0, .hi = drivers[d].pack->element_count};
+            if (operand->range) {
+                const auto folded{sema::fold_pack_slice(const_eval_,
+                                                        active_ast(),
+                                                        *operand->range,
+                                                        drivers[d].pack->name,
+                                                        drivers[d].pack->element_count)};
+                ASSERT(folded, "Pack slice bounds were not checked");
+                drivers[d].selected = *folded;
+            }
+        }
         drivers[d].name =
             cap.payload.is<ast::identifier_expr>()
                 ? stdx::option<std::string_view>{active_ast()
@@ -6083,11 +6108,12 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
 
     // A pack's own element count is known directly
     const auto  pack_driver{std::ranges::find_if(drivers, &driver_view::is_pack)};
-    const usize count{any_driver_is_pack ? pack_driver->pack->element_count : [&] {
-        usize n{0};
-        while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
-        return n;
-    }()};
+    const usize count{
+        any_driver_is_pack ? pack_driver->selected.hi - pack_driver->selected.lo : [&] {
+            usize n{0};
+            while (ctx_.instantiation_cache.get_body_type_diff(key_for(n))) { ++n; }
+            return n;
+        }()};
 
     const auto& block{active_ast().get_as<ast::block_stmt>(for_loop.block)};
     for (usize k{0}; k < count; ++k) {
@@ -6106,7 +6132,7 @@ auto emitter::emit_unrolled_for(ast::node_id id, const ast::for_loop_expr& for_l
             if (drv.is_pack) {
                 if (drv.name) {
                     if (const auto elem_binding{lookup_binding<local_binding&>(
-                            sema::pack_element{.pack = drv.pack->name, .index = k}
+                            sema::pack_element{.pack = drv.pack->name, .index = drv.selected.lo + k}
                                 .hidden_name())}) {
                         scopes_.back().bindings.emplace(*drv.name, *elem_binding);
                     }

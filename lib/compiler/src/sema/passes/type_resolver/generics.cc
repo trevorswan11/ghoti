@@ -921,6 +921,12 @@ auto type_resolver::instantiate_generic(type&                             callee
     }
     const comptime_frame_guard type_param_guard{ctx_.comptime_binding_frames,
                                                 std::move(type_param_frame)};
+    auto outer_pack_len_of{std::exchange(ctx_.pack_len_of, [&inst_resolver](std::string_view name) {
+        return inst_resolver.pack_named(name).transform(
+            [](const pack_binding& p) { return p.element_types.size(); });
+    })};
+    const auto restore_pack_len_of{
+        gsl::finally([&] { ctx_.pack_len_of = std::move(outer_pack_len_of); })};
     inst_resolver.resolve(fn_expr.explicit_return_type);
     if (inst_resolver.last_type_->is_poison()) { return stdx::none; }
     // `denoted_type` unwraps a `@TypeOf(param)` return annotation to the type it names, so it

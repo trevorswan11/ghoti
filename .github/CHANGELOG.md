@@ -886,6 +886,11 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A closure may capture a capturing generic function and call it at several types
 - Closures work with parameter packs: a closure may take its own `rest...`, and a closure or generic local function inside a pack function reads, iterates, and forwards that function's pack (`rest[k]`, `unroll for (rest)`, `rest...`), capturing it element by element
     - A pack closure becomes the monomorph for an expected `fn(...)` or `impl Fn(...)` signature, one element per parameter past the fixed ones
+- A slice of a parameter pack expands to just the selected elements: `f(rest[1..]...)`, `f(rest[..2]...)`, `f(rest[a..=b]...)` (#401)
+    - Works anywhere `rest...` does: call arguments of plain and generic functions, `@call`, compile-time calls, and closures reading their own or the enclosing function's pack
+    - `unroll for (rest[1..])` iterates just the selected elements, alongside other drivers and a companion `0..` index
+    - Bounds must be compile-time constants within `0..=rest.len` and in order; a pack slice used without `...` is an error
+- `rest.len` folds at compile time, so `if comptime (rest.len == 0)` can end a recursion over `rest[1..]...`
 - Closures and generic local functions evaluate at compile time, in a `comptime` block or a function folded at compile time; a write to a captured binding is kept, and a `move fn` keeps its own copies across calls
 - Fixed: passing `&closure` (or `^closure`) where a `fn(...)` or `&dyn Fn(...)` is expected crashed codegen; the reference is now the closure's environment
 - Fixed: `let g = some_generic;` renamed the generic itself to `g` in its diagnostics and monomorph names

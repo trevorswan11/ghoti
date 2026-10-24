@@ -12,6 +12,7 @@
 #include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/arena.hh>
+#include <stdx/function.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
@@ -158,6 +159,10 @@ struct context {
 
     // For the generic instantiation currently being resolved or emitted
     std::vector<comptime_frame> comptime_binding_frames;
+
+    // Answers `rest.len` for the pack function being resolved or emitted. Never copied, since it
+    // reads that resolver's or emitter's own state
+    stdx::function<stdx::option<usize>(std::string_view)> pack_len_of;
 
     // Nonzero while resolving a `comptime { ... }` body, whose folds are compile-time evaluation
     usize comptime_evaluation_depth{0};
