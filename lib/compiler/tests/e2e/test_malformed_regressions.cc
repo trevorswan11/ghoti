@@ -412,4 +412,69 @@ TEST_CASE("A generic member taking self by value is typed for its instance") {
     )") == 21);
 }
 
+TEST_CASE("An enum backed by a non-integer type is rejected") {
+    CHECK(helpers::raised("const E = enum : f32 { a, b }; pub const f = fn(e: E): void {};",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(
+        "const E = enum : @Vector(2, u8) { a }; pub const f = fn(): u8 { const e: E = .a; "
+        "return @backingInt(e)[0]; };",
+        sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("Vector builtins that reached LLVM with bad operands are diagnostics") {
+    helpers::expect_compile_error(
+        "pub const f = fn(a: @Vector(4, u8)): u16 { return @bitCast(a); };");
+    helpers::expect_compile_error("pub const f = fn(): @Vector(4, u8) { return @splat(u8); };");
+}
+
+TEST_CASE("An enum literal with no enum to name has no address") {
+    CHECK(
+        helpers::raised("pub const f = fn(): void { let p = &.a; };", sema::error::TYPE_MISMATCH));
+    CHECK(
+        helpers::raised("pub const f = fn(): void { let p = ^.a; };", sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A shift of an integer wider than 128 bits folds without overflowing its storage") {
+    CHECK(helpers::compile_and_run(R"(
+        const top = fn(t: u256): u8 { return @truncate(u8, t >> 250); };
+        const back = fn(t: i256): i256 { return t << 200 >> 199; };
+        pub const main = fn(): i32 {
+            let x: u256 = 3 << 250;
+            let y: i256 = -1;
+            return @as(i32, top(x)) + @as(i32, @truncate(i8, back(y)));
+        };
+    )") == 3 - 2);
+}
+
+TEST_CASE("A redundant `comptime` on a function literal is reported") {
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            let pick = comptime fn(a: i32, b: i32): i32 { return a; };
+            return pick(1, 2);
+        };
+    )");
+}
+
+TEST_CASE("A compile-time argument has to be its parameter's type") {
+    CHECK(helpers::raised(R"(
+        const H = fn(comptime x: f64): type { return struct { pub const b: u64 = @bitCast(x); }; };
+        pub const f = fn(): u64 { return H(0..0).b; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const H = fn(comptime x: f64): u64 { return @bitCast(x); };
+        pub const f = fn(): u64 { return H(0..0); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A reference to an untyped integer call result is diagnosed") {
+    helpers::expect_compile_error(R"(
+        pub const max_of = fn(comptime T: type): comptime_int {
+            return (1 << @typeInfo(T).int.bits) - 1;
+        };
+        pub const main = fn(): i32 { return @intCast((&max_of(u32)) - 7); };
+    )");
+}
+
 } // namespace ghoti::tests

@@ -131,6 +131,15 @@ auto type_resolver::visit(ID id, const ast::enum_expr& enum_expr) -> void {
     auto& underlying_type{enum_expr.underlying
                               ? denoted_type(resolving_.get_sema_type(*enum_expr.underlying))
                               : ctx_.get_int(32, true)};
+    if (!underlying_type.is_poison() && !is_integer(underlying_type.get_kind())) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("An enum's backing type must be an integer; found '{}'",
+                                         ctx_.type_display_name(underlying_type)),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(*enum_expr.underlying)));
+    }
 
     enum_value_tracker values{underlying_type};
     for (const auto& [name, value] : enum_expr.enumerations) {

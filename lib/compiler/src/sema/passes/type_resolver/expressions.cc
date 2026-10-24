@@ -1009,6 +1009,18 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// `&.a` / `^.a` with nothing naming the enum: the literal only exists at compile time
+[[nodiscard]] auto enum_literal_has_no_address(source_location loc) -> diagnostic {
+    return diagnostic{"an enum literal has no address; give it its enum type first, as in "
+                      "`const e: E = .a;`",
+                      error::TYPE_MISMATCH,
+                      loc};
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
     {
@@ -1018,6 +1030,10 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+    if (rhs_type.get_kind() == type_kind::ENUM_LITERAL) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, enum_literal_has_no_address(resolving_.ast.location_of(id))));
+    }
 
     if (names_comptime_mut(ref.rhs)) {
         return last_type_.emplace(
@@ -1117,6 +1133,10 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+    if (rhs_type.get_kind() == type_kind::ENUM_LITERAL) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, enum_literal_has_no_address(resolving_.ast.location_of(id))));
+    }
 
     if (names_comptime_mut(adr_of.rhs)) {
         return last_type_.emplace(
@@ -1175,6 +1195,15 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
 
 auto type_resolver::visit(ast::node_id id, const ast::comptime_expr& cx) -> void {
     PROFILE_FUNCTION();
+    // A function literal is a compile-time value already, and folding it loses the function
+    if (cx.rhs.is<ast::function_expr>()) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "Redundant 'comptime': a function literal is already known at compile time",
+            error::COMPTIME_EVALUATION_FAILED,
+            resolving_.ast.location_of(id)));
+    }
     // The operand is compile-time evaluation. The emitter folds it per instantiation
     const comptime_evaluation_scope cx_scope{ctx_, true};
     TRY_RESOLVE(*cx.rhs);

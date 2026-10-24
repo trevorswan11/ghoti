@@ -569,6 +569,28 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
         }
     }
 
+    // A value parameter's argument has its type, as a runtime parameter's does. Untyped numbers
+    // and enum literals take it on when they fold
+    if (param_type && arg_type && !arg_type->is_poison() && !param_type->is_poison()) {
+        auto& wanted{concrete_array_type(*param_type)};
+        // The argument as written, before an untyped number materialized for the call
+        const auto arg_kind{get_resolved_call_arg_type(arg)->get_kind()};
+        const bool checkable{
+            !is_generic_type(wanted) && wanted.get_kind() != type_kind::TYPE &&
+            wanted.get_kind() != type_kind::FUNCTION && !is_comptime_numeric(arg_kind) &&
+            arg_kind != type_kind::ENUM_LITERAL && arg_kind != type_kind::UNDEFINED};
+        if (checkable && !is_assignable(*arg_type, wanted)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
+                            idx + 1,
+                            ctx_.type_display_name(*arg_type),
+                            ctx_.type_display_name(wanted)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(arg));
+            return stdx::none;
+        }
+    }
+
     // A generic function folds to its monomorph for the parameter's signature, which must not
     // need a runtime environment
     const auto param_fn{param_type ? param_type->get_data().as_opt<types::function>() : stdx::none};
