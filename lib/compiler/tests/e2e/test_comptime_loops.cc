@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -421,6 +422,21 @@ TEST_CASE("`comptime` before a loop evaluates it like a `comptime` block") {
             return 0;
         };
     )");
+}
+
+TEST_CASE("`unroll for` over a range past the unroll limit is an error, not a hang") {
+    CHECK(helpers::raised(R"(
+        pub const f = fn(): void { unroll for (0..1000000) |i| { _ = i; } };
+    )",
+                          sema::error::UNROLLED_LOOP_LIMIT));
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            @setEvalUnrollLimit(1000);
+            let mut sum: i32 = 0;
+            unroll for (0..500) |i| { sum += @intCast(i % 2); }
+            return sum;
+        };
+    )") == 250);
 }
 
 } // namespace ghoti::tests

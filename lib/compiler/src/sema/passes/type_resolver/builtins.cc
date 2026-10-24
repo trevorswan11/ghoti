@@ -1664,6 +1664,14 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
+        // An `unroll for` is unrolled while it resolves, so the limit applies from here on
+        if (const auto expr{call.arguments.front().as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      limit{evaluator.try_eval(*expr)};
+            if (const auto n{limit ? limit->as_int_opt() : stdx::none}; n && *n > 0) {
+                ctx_.eval_unroll_limit = static_cast<usize>(*n);
+            }
+        }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
