@@ -6267,7 +6267,10 @@ auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
     constexpr usize max_leaves{1UZ << 16};
     usize           leaves{0};
     const auto      build{[&](this const auto& self, sema::type& t) -> stdx::option<const_value> {
-        auto& concrete{force_deferred_type(t)};
+        // A builtin-built annotation (`@Vector(4, f32)`) records the type it names as a `type`
+        auto&      forced{force_deferred_type(t)};
+        const auto meta{forced.get_data().as_opt<sema::types::meta_type>()};
+        auto&      concrete{meta ? meta->instance : forced};
         if (const auto arr{concrete.get_data().as_opt<sema::types::array>()}) {
             if (leaves + arr->len > max_leaves) { return stdx::none; }
             const_array out;
@@ -6277,6 +6280,13 @@ auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
                 if (!elem) { return stdx::none; }
                 out.elements.emplace_back(std::move(*elem));
             }
+            return const_value{std::move(out), concrete};
+        }
+        // A vector's lanes are written one at a time like an array's elements
+        if (const auto vec{sema::vector_of(concrete)}) {
+            const_array out;
+            out.elements.assign(vec->len, const_value{undefined_val{}, vec->underlying});
+            leaves += vec->len;
             return const_value{std::move(out), concrete};
         }
         if (const auto st{concrete.get_data().as_opt<sema::types::struct_t>()};
