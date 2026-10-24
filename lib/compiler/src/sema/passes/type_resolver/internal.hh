@@ -64,6 +64,13 @@ template <typename ID> [[nodiscard]] auto is_range(const ID& id) -> bool {
                       location};
 }
 
+[[nodiscard]] inline auto opaque_by_value_error(const source_location& location) -> diagnostic {
+    return diagnostic{"An 'opaque' value has no size, so it can't be passed or returned; use a "
+                      "pointer to it instead",
+                      error::ILLEGAL_OPAQUE_TYPE,
+                      location};
+}
+
 [[nodiscard]] inline auto incomplete_array_item(const source_location& location) -> diagnostic {
     return diagnostic{
         "Array elements cannot have an incomplete type", error::CYCLIC_DEPENDENCY, location};

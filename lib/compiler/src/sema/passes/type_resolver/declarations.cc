@@ -691,6 +691,15 @@ auto type_resolver::reject_non_runtime_slot(ast::explicit_type_id at, const type
     return false;
 }
 
+auto type_resolver::reject_signature_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
+    if (reject_non_runtime_slot(at, slot_type)) { return true; }
+    if (slot_type.get_kind() == type_kind::OPAQUE) {
+        ctx_.diags.emplace_back(opaque_by_value_error(resolving_.ast.location_of(at)));
+        return true;
+    }
+    return false;
+}
+
 auto type_resolver::reject_storage_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
     if (reject_non_runtime_slot(at, slot_type)) { return true; }
     // Only a return or a diverging expression has this type. Nothing can be stored as it

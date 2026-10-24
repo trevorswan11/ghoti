@@ -1562,6 +1562,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
 template <ast::IndexableID ID>
 auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
     -> stdx::result<void, diagnostic> {
+    TRY(reject_type_arguments(site, 0));
     const auto& call{site.call};
     const auto& builtin{site.builtin};
     auto&       return_type{site.return_type};
@@ -1685,12 +1686,11 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
     return {};
 }
 
-// Integer bit counts, float math, and the checked and wrapping arithmetic
-template <ast::IndexableID ID>
-auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
-    // Each operand is a value; only `@mulAdd(T, ...)` names a type, first
+// The arguments from `first` on are values, never types
+auto type_resolver::reject_type_arguments(const builtin_site& site, usize first)
+    -> stdx::result<void, diagnostic> {
     const auto& args{site.call.arguments};
-    for (usize i{site.kind == syntax::builtin_t::MUL_ADD ? 1UZ : 0UZ}; i < args.size(); ++i) {
+    for (usize i{first}; i < args.size(); ++i) {
         if (call_arg_denotes_type(args[i])) {
             return make_sema_err(fmt::format("'{}' expects a value, but was given the type '{}'",
                                              syntax::builtin_name(site.kind),
@@ -1700,6 +1700,14 @@ auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result
                                  get_call_arg_location(args[i]));
         }
     }
+    return {};
+}
+
+// Integer bit counts, float math, and the checked and wrapping arithmetic
+template <ast::IndexableID ID>
+auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    // Each operand is a value; only `@mulAdd(T, ...)` names a type, first
+    TRY(reject_type_arguments(site, site.kind == syntax::builtin_t::MUL_ADD ? 1UZ : 0UZ));
     if (auto per_lane{resolve_vector_math_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto  builtin_id{site.kind};

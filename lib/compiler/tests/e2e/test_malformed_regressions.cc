@@ -542,4 +542,30 @@ TEST_CASE("Math builtins take values, not types") {
     }
 }
 
+TEST_CASE("Target builtins take values and never types") {
+    for (const auto* stmt : {"@branchHint(impl likely);",
+                             "@branchHint(u8);",
+                             "@setRuntimeSafety(bool);",
+                             "@setEvalUnrollLimit(u32);"}) {
+        CHECK(helpers::raised(
+            fmt::format("pub const f = fn(c: bool): i32 {{ if (c) {{ {} return 1; }} return 0; }};",
+                        stmt),
+            sema::error::TYPE_USED_AS_VALUE));
+    }
+}
+
+TEST_CASE("A function type can't pass or return 'opaque' by value") {
+    CHECK(helpers::raised(R"(
+        extern const g: extern fn(n: u32): opaque;
+        pub const f = fn(a: i32): i32 { _ = g(0); return a; };
+    )",
+                          sema::error::ILLEGAL_OPAQUE_TYPE));
+    CHECK(helpers::raised("pub const F = fn(o: opaque): void;", sema::error::ILLEGAL_OPAQUE_TYPE));
+    CHECK(helpers::raised("pub const h = fn(): opaque { return undefined; };",
+                          sema::error::ILLEGAL_OPAQUE_TYPE));
+    // A pointer to it is the way to hand one around
+    CHECK_FALSE(helpers::raised("pub const F = extern fn(o: ^mut opaque): ^mut opaque;",
+                                sema::error::ILLEGAL_OPAQUE_TYPE));
+}
+
 } // namespace ghoti::tests

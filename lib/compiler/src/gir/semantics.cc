@@ -129,7 +129,6 @@ namespace {
     return base == int_op::SUB ? u128{0} : mask_of(domain.bits);
 }
 
-// The amount a plain shift may use, or the fault it raises
 // Shifts of the 128-bit storage, which a wider domain can ask past its width
 [[nodiscard]] constexpr auto storage_shl(u128 v, u16 n) noexcept -> u128 {
     return n >= 128 ? u128{0} : v << n;
@@ -143,6 +142,7 @@ namespace {
     return n >= 128 ? (v < 0 ? i128{-1} : i128{0}) : v >> n;
 }
 
+// The amount a plain shift may use, or the fault it raises
 [[nodiscard]] auto checked_amount(int_domain domain, i128 amount) noexcept -> int_result<u16> {
     if (amount < 0) { return stdx::err{int_fault::NEGATIVE_SHIFT}; }
     if (amount >= domain.bits) { return stdx::err{int_fault::SHIFT_TOO_WIDE}; }

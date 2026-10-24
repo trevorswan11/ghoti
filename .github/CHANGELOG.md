@@ -941,7 +941,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a global (or local `const`) initialized from a string or array folded into its constant unchecked, so `const P: [:0]type = "ABC";` and a wrong-length row in `[_][3]u32{ ... }` crashed codegen and `const P: [:0]u16 = "ABC";` read the string's bytes as `u16`s; an array's elements must be its slot's element type
 - Fixed: a compound assignment of a pointer into a number (`n += &x`) crashed codegen; it is reported as an operator mismatch
 - Fixed: a local array sized by a runtime value was accepted and crashed codegen when sliced; its length must be known at compile time
-- Fixed: a math builtin given a type in place of a value (`@clz(u8)`, `@min(u8, 3)`, `@abs(i32)`) crashed the compiler
+- Fixed: a math builtin given a type in place of a value (`@clz(u8)`, `@min(u8, 3)`, `@abs(i32)`) crashed the compiler, as did `@branchHint`, `@setRuntimeSafety`, and the eval limit builtins
+- Fixed: a function or function type that passed or returned `opaque` by value crashed codegen; only a pointer to it can be passed
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
