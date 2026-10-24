@@ -7,6 +7,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/sema/error.hh"
 
 namespace ghoti::ast { class AST; }        // namespace ghoti::ast

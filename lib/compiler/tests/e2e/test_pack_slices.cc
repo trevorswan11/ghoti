@@ -1,26 +1,26 @@
 #include <string_view>
-#include <tuple>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 
 #include "compiler/sema/error.hh"
-
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
 TEST_CASE("`rest[lo..hi]...` forwards only the selected pack elements") {
-    const auto [slice, expected]{GENERATE(std::tuple{"rest[1..]", 23U},
-                                          std::tuple{"rest[..2]", 12U},
-                                          std::tuple{"rest[1..2]", 2U},
-                                          std::tuple{"rest[1..=2]", 23U},
-                                          std::tuple{"rest[..]", 123U},
-                                          std::tuple{"rest[0..3]", 123U},
-                                          std::tuple{"rest[2..2]", 0U},
-                                          std::tuple{"rest[3..]", 0U})};
+    const auto [slice, expected]{GENERATE(std::pair{"rest[1..]", 23U},
+                                          std::pair{"rest[..2]", 12U},
+                                          std::pair{"rest[1..2]", 2U},
+                                          std::pair{"rest[1..=2]", 23U},
+                                          std::pair{"rest[..]", 123U},
+                                          std::pair{"rest[0..3]", 123U},
+                                          std::pair{"rest[2..2]", 0U},
+                                          std::pair{"rest[3..]", 0U})};
 
     CHECK(helpers::compile_and_run(fmt::format(R"(
             const digits = fn(rest...): i32 {{
@@ -105,12 +105,12 @@ TEST_CASE("A pack slice folds in a compile-time call") {
 }
 
 TEST_CASE("`unroll for` over a pack slice visits only the selected elements") {
-    const auto [slice, expected]{GENERATE(std::tuple{"rest[1..]", 23U},
-                                          std::tuple{"rest[..2]", 12U},
-                                          std::tuple{"rest[1..=1]", 2U},
-                                          std::tuple{"rest[..]", 123U},
-                                          std::tuple{"rest[1..rest.len]", 23U},
-                                          std::tuple{"rest[3..]", 0U})};
+    const auto [slice, expected]{GENERATE(std::pair{"rest[1..]", 23U},
+                                          std::pair{"rest[..2]", 12U},
+                                          std::pair{"rest[1..=1]", 2U},
+                                          std::pair{"rest[..]", 123U},
+                                          std::pair{"rest[1..rest.len]", 23U},
+                                          std::pair{"rest[3..]", 0U})};
 
     CHECK(helpers::compile_and_run(fmt::format(R"(
             const digits = fn(rest...): i32 {{

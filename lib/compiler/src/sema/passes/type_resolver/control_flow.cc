@@ -232,7 +232,7 @@ namespace {
 }
 
 struct unrolled_for_driver {
-    stdx::option<const type_resolver::pack_binding&> pack; // set for a pack driver
+    stdx::option<const type_resolver::pack_binding&> pack;          // set for a pack driver
     usize                                            pack_first{0}; // `rest[lo..]`'s `lo`
     stdx::option<type&>                              elem_type;
     std::vector<gir::const_value>                    elem_values; // empty for a pack driver

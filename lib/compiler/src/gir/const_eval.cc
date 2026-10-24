@@ -4,7 +4,6 @@
 #include <array>
 #include <bit>
 #include <concepts>
-#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -6011,8 +6010,8 @@ auto const_eval::eval_pack_slice(ast::node_id expr) -> stdx::option<std::vector<
         *this, module_->ast, *operand->range, operand->pack, pack->elements.size())};
     if (!selected) { return stdx::none; }
     const auto first{pack->elements.begin()};
-    return std::vector<const_value>{first + static_cast<std::ptrdiff_t>(selected->lo),
-                                    first + static_cast<std::ptrdiff_t>(selected->hi)};
+    return std::vector<const_value>{first + static_cast<idiff>(selected->lo),
+                                    first + static_cast<idiff>(selected->hi)};
 }
 
 namespace {
