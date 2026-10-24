@@ -4,6 +4,22 @@
 //! per-lane operators are the core; this module adds what is better written in ghoti itself.
 import std;
 
+@cfg (arch == .x86_64 or arch == .x86) {
+    /// `pshufb`, `movemask`, and the other x86 operations, under their C intrinsic names
+    pub import "x86.gh" as x86;
+} else @cfg (arch == .aarch64) {
+    /// `tbl` and the other NEON operations, under their ACLE names
+    pub import "aarch64.gh" as aarch64;
+}
+
+test {
+    @cfg (arch == .x86_64 or arch == .x86) {
+        import "x86.gh";
+    } else @cfg (arch == .aarch64) {
+        import "aarch64.gh";
+    }
+}
+
 pub const i8x16 = @Vector(16, i8);
 pub const u8x16 = @Vector(16, u8);
 pub const i16x8 = @Vector(8, i16);
@@ -87,6 +103,11 @@ pub const iota = fn(comptime V: type): V {
     return v;
 };
 
+/// Lane `i` of a `bool` vector as bit `i` of an integer: the portable `movemask`
+pub const bitmask = fn(v: auto): @Int(.{ .signedness = .unsigned, .bits = lanes_of(@TypeOf(v)) }) {
+    return @bitCast(v);
+};
+
 /// The first `lanes_of(V)` elements of `s`, read without any alignment. `s` must have that many
 pub const load = fn(comptime V: type, s: []Lane(V)): V {
     const len = lanes_of(V);
@@ -154,6 +175,12 @@ test "iota counts up from zero" {
     @expect(v[0] == 0 and v[3] == 3);
     const f = iota(f32x4);
     @expect(f[2] == 2.0);
+}
+
+test "bitmask packs bool lanes into bits" {
+    let v: @Vector(4, i32) = .{ 5, -1, 7, 0 };
+    @expect(bitmask(v > 0) == 0b0101);
+    @expect(@TypeOf(bitmask(v > 0)) == u4);
 }
 
 test "load and store move a vector through a slice" {

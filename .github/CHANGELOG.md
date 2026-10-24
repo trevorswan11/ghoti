@@ -939,6 +939,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `reduce_ordered(op, v)` is `@reduce` with a float sum or product folded strictly in lane order
     - `iota(V)` counts up from 0 in each lane, and `Lane(V)` / `lanes_of(V)` take a vector type apart
     - `f32x4`, `u8x16`, `i32x8`, and the other 128- and 256-bit vector types
+    - `bitmask(v)` packs a `bool` vector's lanes into the bits of an integer, a portable `movemask`
+    - `std.simd.x86` has `mm_shuffle_epi8`, `mm_movemask_epi8`, `mm_maddubs_epi16`, and their AVX2 forms, and `std.simd.aarch64` has `vqtbl1q_u8` / `vqtbx1q_u8`, each only where the compiled-for CPU has its feature
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`

@@ -1,0 +1,85 @@
+//! x86 vector operations the portable builtins don't cover, under their C intrinsic names.
+//!
+//! Each exists only where the compiled-for CPU has its feature (`--cpu native`, `--features`),
+//! so a call is a compile error rather than an illegal instruction. Code that picks a path at
+//! runtime calls these from a `@[target_features(...)]` function, after `std.cpu.detect()`.
+import std;
+
+const u8x16 = @Vector(16, u8);
+const i8x16 = @Vector(16, i8);
+const i16x8 = @Vector(8, i16);
+const u8x32 = @Vector(32, u8);
+const f32x4 = @Vector(4, f32);
+const f64x2 = @Vector(2, f64);
+
+@cfg (cpu.has(.sse)) {
+    /// `_mm_movemask_ps`: bit `i` is the sign bit of lane `i`
+    pub const mm_movemask_ps = fn(a: f32x4): u32 {
+        return @bitCast(@llvmIntrinsic("llvm.x86.sse.movmsk.ps", i32, a));
+    };
+}
+
+@cfg (cpu.has(.sse2)) {
+    /// `_mm_movemask_epi8`: bit `i` is the top bit of byte `i`
+    pub const mm_movemask_epi8 = fn(a: u8x16): u32 {
+        return @bitCast(@llvmIntrinsic("llvm.x86.sse2.pmovmskb.128", i32, a));
+    };
+
+    /// `_mm_movemask_pd`: bit `i` is the sign bit of lane `i`
+    pub const mm_movemask_pd = fn(a: f64x2): u32 {
+        return @bitCast(@llvmIntrinsic("llvm.x86.sse2.movmsk.pd", i32, a));
+    };
+}
+
+@cfg (cpu.has(.ssse3)) {
+    /// `_mm_shuffle_epi8` (`pshufb`): byte `i` is `a[b[i] & 15]`, or 0 when `b[i]`'s top bit is
+    /// set. A 16-entry table lookup
+    pub const mm_shuffle_epi8 = fn(a: u8x16, b: u8x16): u8x16 {
+        return @llvmIntrinsic("llvm.x86.ssse3.pshuf.b.128", u8x16, a, b);
+    };
+
+    /// `_mm_maddubs_epi16` (`pmaddubsw`): multiplies unsigned bytes of `a` by signed bytes of `b`,
+    /// then adds each adjacent pair of products with signed saturation
+    pub const mm_maddubs_epi16 = fn(a: u8x16, b: i8x16): i16x8 {
+        return @llvmIntrinsic("llvm.x86.ssse3.pmadd.ub.sw.128", i16x8, a, b);
+    };
+}
+
+@cfg (cpu.has(.avx2)) {
+    /// `_mm256_movemask_epi8`: bit `i` is the top bit of byte `i`
+    pub const mm256_movemask_epi8 = fn(a: u8x32): u32 {
+        return @bitCast(@llvmIntrinsic("llvm.x86.avx2.pmovmskb", i32, a));
+    };
+
+    /// `_mm256_shuffle_epi8`: `mm_shuffle_epi8` on each 16-byte half, which looks up only its own
+    pub const mm256_shuffle_epi8 = fn(a: u8x32, b: u8x32): u8x32 {
+        return @llvmIntrinsic("llvm.x86.avx2.pshuf.b", u8x32, a, b);
+    };
+}
+
+test "movemask gathers the top bits" {
+    @cfg (cpu.has(.sse2)) {
+        let mut v: u8x16 = @splat(0);
+        v[0] = 0x80;
+        v[3] = 0xff;
+        v[15] = 0x81;
+        @expect(mm_movemask_epi8(v) == (1 | 1 << 3 | 1 << 15));
+        @expect(mm_movemask_pd(.{ -1.0, 2.0 }) == 1);
+    }
+    @cfg (cpu.has(.sse)) {
+        @expect(mm_movemask_ps(.{ 1.0, -1.0, -0.0, 3.0 }) == 0b0110);
+    }
+}
+
+test "shuffle_epi8 looks bytes up in a table" {
+    @cfg (cpu.has(.ssse3)) {
+        let table: u8x16 = .{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p' };
+        let mut idx: u8x16 = @splat(0x80);
+        idx[0] = 2;
+        idx[1] = 15;
+        let looked = mm_shuffle_epi8(table, idx);
+        @expect(looked[0] == 'c' and looked[1] == 'p' and looked[2] == 0);
+        let pairs = mm_maddubs_epi16(@splat(2), @splat(-3));
+        @expect(pairs[0] == -12);
+    }
+}
