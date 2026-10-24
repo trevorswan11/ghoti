@@ -3532,6 +3532,104 @@ auto emitter::emit_vector_operand(ast::expr_handle operand, sema::type& lane, u3
     return emit_splat(emit_coerced_expr(operand, lane), shape);
 }
 
+auto emitter::emit_lane_builtin(ast::node_id          id,
+                                const ast::call_expr& call,
+                                syntax::builtin_t     kind,
+                                sema::type&           result) -> value {
+    PROFILE_FUNCTION();
+    const auto arg_expr{[&](usize i) { return *call.arguments[i].as_opt<ast::expr_handle>(); }};
+    const auto arg_type{
+        [&](usize i) -> sema::type& { return active_mod().get_sema_type(arg_expr(i)); }};
+    // A vector operand, which `undefined` stands in for with `shape`'s lanes
+    const auto vector_arg{[&](usize i, sema::type& shape) {
+        return retype_if_undefined(emit_expression(arg_expr(i)), shape);
+    }};
+    const auto memory_op{[&](std::vector<value> args) -> value {
+        const auto res{
+            builder_.emit_builtin_call(syntax::builtin_name(kind), std::move(args), result)};
+        return res ? value{*res, result} : value{void_val{}, result};
+    }};
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:  {
+        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+        break;
+    }
+    default: break;
+    }
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT:
+        return emit_splat(emit_coerced_expr(arg_expr(0), sema::lane_type_of(result)), result);
+    case syntax::builtin_t::REDUCE: {
+        const auto op{const_eval_.try_eval(arg_expr(0))};
+        const auto op_enum{op ? op->as_opt<const_enum>() : stdx::none};
+        ASSERT(op_enum, "@reduce's operation was folded during resolution");
+        return value{builder_.emit_vector_op(instruction_kind::REDUCE,
+                                             {emit_expression(arg_expr(1))},
+                                             result,
+                                             static_cast<u8>(op_enum->value)),
+                     result};
+    }
+    case syntax::builtin_t::SHUFFLE: {
+        auto&      a_type{arg_type(0)};
+        const auto a_len{static_cast<i64>(sema::vector_of(a_type)->len)};
+        const auto mask_value{const_eval_.try_eval(arg_expr(2))};
+        const auto mask{mask_value ? const_eval::shuffle_mask_of(*mask_value) : stdx::none};
+        ASSERT(mask, "@shuffle's mask was folded during resolution");
+
+        // LLVM numbers `b`'s lanes after `a`'s
+        auto&              i64_type{ctx_.get_int(64, true)};
+        std::vector<value> operands{emit_expression(arg_expr(0)), vector_arg(1, a_type)};
+        for (const auto entry : *mask) {
+            if (!entry) {
+                operands.emplace_back(undefined_val{}, i64_type);
+                continue;
+            }
+            operands.emplace_back(*entry >= 0 ? *entry : a_len + ~*entry, i64_type);
+        }
+        return value{
+            builder_.emit_vector_op(instruction_kind::SHUFFLE, std::move(operands), result),
+            result};
+    }
+    case syntax::builtin_t::SELECT: {
+        const auto len{sema::vector_of(result)->len};
+        auto&      lane{sema::lane_type_of(result)};
+        const auto branch{[&](usize i) {
+            if (is_undefined_value(arg_expr(i))) { return value{undefined_val{}, result}; }
+            return emit_vector_operand(arg_expr(i), lane, len);
+        }};
+        auto       pred{emit_expression(arg_expr(0))};
+        auto       a{branch(1)};
+        auto       b{branch(2)};
+        return value{builder_.emit_vector_op(instruction_kind::SELECT,
+                                             {std::move(pred), std::move(a), std::move(b)},
+                                             result),
+                     result};
+    }
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::GATHER:      {
+        auto ptr{emit_expression(arg_expr(0))};
+        auto mask{emit_expression(arg_expr(1))};
+        return memory_op({std::move(ptr), std::move(mask), vector_arg(2, result)});
+    }
+    case syntax::builtin_t::MASKED_STORE: {
+        auto ptr{emit_expression(arg_expr(0))};
+        auto stored{emit_expression(arg_expr(1))};
+        return memory_op({std::move(ptr), std::move(stored), emit_expression(arg_expr(2))});
+    }
+    case syntax::builtin_t::SCATTER: {
+        auto stored{emit_expression(arg_expr(0))};
+        auto ptrs{emit_expression(arg_expr(1))};
+        return memory_op({std::move(stored), std::move(ptrs), emit_expression(arg_expr(2))});
+    }
+    default: UNREACHABLE("Not a lane builtin");
+    }
+}
+
 auto emitter::emit_vector_binary(ast::node_id            id,
                                  const ast::binary_expr& binary,
                                  sema::type&             result) -> value {
@@ -5106,6 +5204,14 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             default: UNREACHABLE("Unhandled atomic builtin");
             }
         }
+        case syntax::builtin_t::SPLAT:
+        case syntax::builtin_t::REDUCE:
+        case syntax::builtin_t::SHUFFLE:
+        case syntax::builtin_t::SELECT:
+        case syntax::builtin_t::MASKED_LOAD:
+        case syntax::builtin_t::MASKED_STORE:
+        case syntax::builtin_t::GATHER:
+        case syntax::builtin_t::SCATTER: return emit_lane_builtin(id, call, fn_token, ret_type);
         case syntax::builtin_t::MEMCPY:
         case syntax::builtin_t::MEMSET:
         case syntax::builtin_t::MEMMOVE: {

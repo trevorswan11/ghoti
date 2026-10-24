@@ -538,6 +538,19 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     resolving_.set_sema_type(id, *last_type_);
 }
 
+auto type_resolver::scalar_broadcasts(ast::expr_handle scalar, type& scalar_type, type& lane)
+    -> bool {
+    if (scalar_type.is_poison()) { return true; }
+    if (scalar_type.get_kind() == type_kind::COMPTIME_FLOAT && !is_float(lane.get_kind())) {
+        return false;
+    }
+    if (is_comptime_numeric(scalar_type.get_kind())) {
+        resolving_.set_sema_type(scalar, lane);
+        return true;
+    }
+    return is_assignable(scalar_type, lane);
+}
+
 auto type_resolver::resolve_vector_binary(ast::node_id            id,
                                           const ast::binary_expr& binary,
                                           type&                   lhs_type,
@@ -561,18 +574,6 @@ auto type_resolver::resolve_vector_binary(ast::node_id            id,
     auto&      shape{is_vector(lhs_type) ? lhs_type : rhs_type};
     const auto len{vector_of(shape)->len};
 
-    // A scalar operand broadcasts to `lane`; an untyped constant takes `lane` on
-    const auto broadcasts{[&](ast::expr_handle scalar, type& scalar_type, type& lane) -> bool {
-        if (scalar_type.is_poison()) { return true; }
-        if (scalar_type.get_kind() == type_kind::COMPTIME_FLOAT && !is_float(lane.get_kind())) {
-            return false;
-        }
-        if (is_comptime_numeric(scalar_type.get_kind())) {
-            resolving_.set_sema_type(scalar, lane);
-            return true;
-        }
-        return is_assignable(scalar_type, lane);
-    }};
     // The vector a scalar side stands for: its own type's lanes for a shift, else the other side's
     const auto scalar_lanes{[&](type& scalar_type) -> type& {
         if (!is_shift || is_comptime_numeric(scalar_type.get_kind())) {
@@ -584,7 +585,7 @@ auto type_resolver::resolve_vector_binary(ast::node_id            id,
          {std::pair{binary.lhs, &lhs_type}, std::pair{binary.rhs, &rhs_type}}) {
         if (is_vector(*operand_type)) { continue; }
         auto& lane{scalar_lanes(*operand_type)};
-        if (!broadcasts(operand, *operand_type, lane)) {
+        if (!scalar_broadcasts(operand, *operand_type, lane)) {
             return fail(fmt::format("'{}' does not broadcast to the lanes of '{}'",
                                     ctx_.type_display_name(*operand_type),
                                     ctx_.type_display_name(shape)),

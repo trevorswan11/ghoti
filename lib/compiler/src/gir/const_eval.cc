@@ -3954,6 +3954,155 @@ auto const_eval::eval_vector_binary(ast::node_id            id,
     return const_value{std::move(folded), result};
 }
 
+auto const_eval::shuffle_mask_of(const const_value& mask) -> stdx::option<shuffle_mask> {
+    const auto entries{mask.as_opt<const_array>()};
+    if (!entries) { return stdx::none; }
+    shuffle_mask out;
+    out.reserve(entries->elements.size());
+    for (const auto& entry : entries->elements) {
+        if (entry.is<undefined_val>()) {
+            out.emplace_back(stdx::none);
+            continue;
+        }
+        const auto lane{entry.as_int_opt()};
+        if (!lane) { return stdx::none; }
+        out.emplace_back(static_cast<i64>(*lane));
+    }
+    return out;
+}
+
+namespace {
+
+enum class reduce_op : u8 {
+    ADD,
+    MUL,
+    AND,
+    OR,
+    XOR,
+    MIN,
+    MAX,
+}; // Mirrors `builtin.ReduceOp`
+
+// The operator folding two lanes; integer sums and products wrap, as the vector instructions do
+[[nodiscard]] auto reduce_token(reduce_op op, bool is_float) -> syntax::token_type_t {
+    switch (op) {
+    case reduce_op::ADD:
+        return is_float ? syntax::token_type_t::PLUS : syntax::token_type_t::PLUS_PERCENT;
+    case reduce_op::MUL:
+        return is_float ? syntax::token_type_t::STAR : syntax::token_type_t::STAR_PERCENT;
+    case reduce_op::AND: return syntax::token_type_t::BW_AND;
+    case reduce_op::OR:  return syntax::token_type_t::BW_OR;
+    case reduce_op::XOR: return syntax::token_type_t::CARET;
+    case reduce_op::MIN: return syntax::token_type_t::LT;
+    case reduce_op::MAX: return syntax::token_type_t::GT;
+    }
+    UNREACHABLE("Unknown reduce op");
+}
+
+} // namespace
+
+auto const_eval::eval_lane_builtin(stdx::option<ast::node_id> call_id,
+                                   const ast::call_expr&      call,
+                                   syntax::builtin_t          kind) -> stdx::option<const_value> {
+    const ast::node_id id{call_id.value_or(*call.function)};
+    const auto         result{call_result_type(call_id)};
+    if (!result) { return stdx::none; }
+    const auto arg{[&](usize i) -> stdx::option<const_value> {
+        const auto expr{call.arguments[i].as_opt<ast::expr_handle>()};
+        return expr ? try_eval(*expr) : stdx::none;
+    }};
+    // A vector operand's lane, or a scalar's value in every lane
+    const auto lane_at{[](const const_value& operand, usize i) -> stdx::option<const_value> {
+        if (operand.is<undefined_val>()) { return stdx::none; }
+        const auto lanes{operand.as_opt<const_array>()};
+        if (!lanes) { return operand; }
+        if (i >= lanes->elements.size()) { return stdx::none; }
+        return lanes->elements[i];
+    }};
+    auto&      lane_type{sema::lane_type_of(*result)};
+    const auto vector_of_lanes{
+        [&](const_array lanes) { return const_value{std::move(lanes), *result}; }};
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT: {
+        const auto scalar{arg(0)};
+        if (!scalar || scalar->is_poison() || !sema::is_vector(*result)) { return scalar; }
+        const_array lanes;
+        lanes.elements.assign(sema::vector_of(*result)->len,
+                              with_declared_type(*scalar, lane_type));
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::SELECT: {
+        const auto pred{arg(0)};
+        const auto a{arg(1)};
+        const auto b{arg(2)};
+        if (!pred || !a || !b || !sema::is_vector(*result)) { return stdx::none; }
+        const_array lanes;
+        for (usize i{0}; i < sema::vector_of(*result)->len; ++i) {
+            const auto pred_lane{lane_at(*pred, i)};
+            const auto picks_a{pred_lane ? pred_lane->as_opt<bool>() : stdx::none};
+            const auto picked{picks_a ? lane_at(*picks_a ? *a : *b, i) : stdx::none};
+            if (!picked) { return stdx::none; }
+            lanes.elements.emplace_back(with_declared_type(*picked, lane_type));
+        }
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::SHUFFLE: {
+        const auto a{arg(0)};
+        const auto b{arg(1)};
+        const auto mask_value{arg(2)};
+        const auto mask{mask_value ? shuffle_mask_of(*mask_value) : stdx::none};
+        if (!a || !b || !mask) { return stdx::none; }
+        const_array lanes;
+        for (const auto entry : *mask) {
+            if (!entry) { return stdx::none; }
+            const auto picked{*entry >= 0 ? lane_at(*a, static_cast<usize>(*entry))
+                                          : lane_at(*b, static_cast<usize>(~*entry))};
+            if (!picked) { return stdx::none; }
+            lanes.elements.emplace_back(with_declared_type(*picked, lane_type));
+        }
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::REDUCE: {
+        const auto op{arg(0)};
+        const auto vec{arg(1)};
+        const auto op_enum{op ? op->as_opt<const_enum>() : stdx::none};
+        const auto lanes{vec ? vec->as_opt<const_array>() : stdx::none};
+        if (!op_enum || !lanes || lanes->elements.empty()) { return stdx::none; }
+        const auto  reduction{static_cast<reduce_op>(op_enum->value)};
+        const auto  token{reduce_token(reduction, sema::is_float(lane_type.get_kind()))};
+        const bool  picks{reduction == reduce_op::MIN || reduction == reduce_op::MAX};
+        const_value acc{lanes->elements.front()};
+        for (const auto& lane : lanes->elements | std::views::drop(1)) {
+            const auto l{acc.as_opt<bool>()};
+            const auto r{lane.as_opt<bool>()};
+            if (l && r) {
+                const bool both{reduction == reduce_op::AND  ? *l && *r
+                                : reduction == reduce_op::OR ? *l || *r
+                                                             : *l != *r};
+                acc = const_value{both, lane_type};
+                continue;
+            }
+            if (picks) {
+                // A NaN lane loses, as `llvm.vector.reduce.fmin` / `fmax` treat it
+                const auto lane_nan{fold_binary_values(syntax::token_type_t::NEQ, lane, lane, id)};
+                const auto acc_nan{fold_binary_values(syntax::token_type_t::NEQ, acc, acc, id)};
+                const auto wins{fold_binary_values(token, lane, acc, id)};
+                if (!lane_nan || !acc_nan || !wins) { return stdx::none; }
+                if (lane_nan->as<bool>()) { continue; }
+                if (acc_nan->as<bool>() || wins->as<bool>()) { acc = lane; }
+                continue;
+            }
+            auto next{fold_binary_values(token, acc, lane, id)};
+            if (!next || next->is_poison()) { return next; }
+            acc = with_declared_type(std::move(*next), lane_type);
+        }
+        return with_declared_type(std::move(acc), *result);
+    }
+    default: UNREACHABLE("Not a foldable lane builtin");
+    }
+}
+
 auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
@@ -4813,7 +4962,7 @@ auto const_eval::eval_vector_type(const ast::call_expr& call)
             .arg_index = 0,
         }};
     }
-    auto& lane_type{*ctx_.pool.with_const(force_deferred_type(*lane), true)};
+    auto& lane_type{ctx_.as_lane(force_deferred_type(*lane))};
     if (const auto why{sema::vector_lane_rejection(lane_type)}) {
         return stdx::err{vector_type_error{
             .message = fmt::format(
@@ -5002,6 +5151,10 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::ENUM_LITERAL:
         return const_value{stdx::option<sema::type&>{
             ctx_.get_builtin_resolved_type(sema::type_kind::ENUM_LITERAL)}};
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:  return eval_lane_builtin(call_id, call, builtin_type);
     case syntax::builtin_t::VECTOR: {
         const auto vec{eval_vector_type(call)};
         if (!vec) { return stdx::none; }
@@ -5843,6 +5996,11 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         }
         auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
+        // `@as(@Vector(N, T), .{ ... })` keeps the lanes it was built with
+        if (builtin_type == syntax::builtin_t::AS && sema::is_vector(*target) &&
+            operand->is<const_array>()) {
+            return with_declared_type(*operand, *target);
+        }
         // A float `@as` rounds once into the target, like the runtime conversion
         if (const auto f{operand->as_opt<f128>()}; f && builtin_type == syntax::builtin_t::AS) {
             if (const auto format{sema::float_format_of(*target)}) {

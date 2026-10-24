@@ -914,6 +914,16 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - An `extern` signature or `extern struct` / `extern union` field takes only a 16, 32, or 64-byte vector, which passes as C's `__m128` / `__m256` / `__m512` does; a `packed` aggregate takes none
     - `@llvmIntrinsic` takes and returns vectors: `@llvmIntrinsic("llvm.ctpop", @Vector(4, u32), v)`
     - A lane count can come from a `comptime` parameter in a signature (`fn(comptime n: usize, v: @Vector(n, f32)): @Vector(n, f32)`), and a parameter read as a lane count is compile-time, as an array length's is
+- Lane builtins for `@Vector`, each folding at compile time where its operands do (the memory ones excepted)
+    - `@splat(x)` fills every lane of its result type with `x`: `let v: @Vector(4, f32) = @splat(1.0)`
+    - `@reduce(op, v)` folds the lanes into one value with a `builtin.ReduceOp` (`.add`, `.mul`, `.and`, `.or`, `.xor`, `.min`, `.max`); integer sums and products wrap, float ones add in any order, and a NaN lane loses `.min` / `.max`
+    - `@shuffle(a, b, mask)` picks lanes from `a` (0, 1, ...) and `b` (-1, -2, ...) by a compile-time mask, whose length is the result's; `b` may be `undefined`, as may a mask entry
+    - `@select(pred, a, b)` takes each lane from `a` where `pred` is true and from `b` elsewhere; a scalar `a` or `b` is broadcast
+    - `@maskedLoad(ptr, mask, passthru)` / `@maskedStore(ptr, value, mask)` read and write the lanes the mask picks at `ptr`, aligned as one lane is; the lanes it skips take `passthru` or are left untouched
+    - `@gather(ptrs, mask, passthru)` / `@scatter(value, ptrs, mask)` do the same through a vector of pointers, one per lane
+    - A `bool` lane has no memory form, so the memory operations take none
+- Fixed: a `@Vector` of `^mut T` lanes lost the `mut`, so its pointers read as `^T`
+- Fixed: `@as(@Vector(N, T), .{ ... })` didn't fold at compile time
 - A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
 - Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built

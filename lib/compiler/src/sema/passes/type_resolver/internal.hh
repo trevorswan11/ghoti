@@ -252,6 +252,22 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
            bound_type_param(tree, fn.parameters, idx);
 }
 
+// `@splat`, `@reduce`, and the other builtins that work on a vector's lanes
+[[nodiscard]] inline auto is_lane_builtin(stdx::option<syntax::builtin_t> builtin) -> bool {
+    if (!builtin) { return false; }
+    switch (*builtin) {
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::MASKED_STORE:
+    case syntax::builtin_t::GATHER:
+    case syntax::builtin_t::SCATTER:      return true;
+    default:                              return false;
+    }
+}
+
 // Why an unmarked parameter is `comptime`: its function reads it at compile time somewhere
 [[nodiscard]] inline auto inferred_comptime_reason(const mod::module_t&                 owner,
                                                    const ast::function_expr::parameter& param)

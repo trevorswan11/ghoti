@@ -270,6 +270,7 @@ enum class builtin_family : u8 {
     ATOMIC,
     C_VARIADIC,
     PROGRAM,
+    LANE,
 };
 
 [[nodiscard]] auto family_of(syntax::builtin_t builtin) -> builtin_family {
@@ -389,6 +390,14 @@ enum class builtin_family : u8 {
     case syntax::builtin_t::REQUIRE:
     case syntax::builtin_t::ASSERT:
     case syntax::builtin_t::VERIFY:                   return builtin_family::PROGRAM;
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::MASKED_STORE:
+    case syntax::builtin_t::GATHER:
+    case syntax::builtin_t::SCATTER:                  return builtin_family::LANE;
     default: UNREACHABLE("Unimplemented builtin type resolution");
     }
 }
@@ -2581,6 +2590,7 @@ auto type_resolver::resolve_builtin_call(ID                             id,
     case builtin_family::ATOMIC:            TRY(resolve_atomic_builtin(id, site)); break;
     case builtin_family::C_VARIADIC:        TRY(resolve_c_variadic_builtin(id, site)); break;
     case builtin_family::PROGRAM:           TRY(resolve_program_builtin(id, site)); break;
+    case builtin_family::LANE:              TRY(resolve_lane_builtin(site)); break;
     }
 
     resolving_.set_sema_type(id, *site.return_type);

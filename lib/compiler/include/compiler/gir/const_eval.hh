@@ -137,6 +137,11 @@ class const_eval {
     // Evaluate and assert. Emits COMPTIME_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
 
+    // `@shuffle`'s mask: a lane of `a` from 0, of `b` from -1 (`~i`), none for `undefined`
+    using shuffle_mask = std::vector<stdx::option<i64>>;
+    [[nodiscard]] static auto shuffle_mask_of(const const_value& mask)
+        -> stdx::option<shuffle_mask>;
+
     // Evaluates an expression as a non-negative integer dimension for array sizing
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
 
@@ -358,6 +363,10 @@ class const_eval {
     // A `@Vector` operator folded lane by lane, broadcasting a scalar operand
     auto eval_vector_binary(ast::node_id id, const ast::binary_expr& binary, sema::type& result)
         -> stdx::option<const_value>;
+    // `@splat`, `@reduce`, `@shuffle`, and `@select` over constant lanes
+    auto eval_lane_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          kind) -> stdx::option<const_value>;
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;

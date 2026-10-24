@@ -447,6 +447,11 @@ class emitter {
     // `operand` as a vector of `len` `lane`s, splatting a scalar
     auto emit_vector_operand(ast::expr_handle operand, sema::type& lane, u32 len) -> value;
     auto emit_splat(value scalar, sema::type& vector_type) -> value;
+    // `@splat`, `@reduce`, `@shuffle`, `@select`, and the masked and indexed memory operations
+    auto emit_lane_builtin(ast::node_id          id,
+                           const ast::call_expr& call,
+                           syntax::builtin_t     kind,
+                           sema::type&           result) -> value;
     auto emit_vector_from_lanes(gsl::span<const value> lanes, sema::type& vector_type) -> value;
     // `v[i]` reads one lane, panicking on a runtime index out of range under safety
     auto emit_lane_index_check(const value& idx, u32 len, ast::node_id site) -> void;

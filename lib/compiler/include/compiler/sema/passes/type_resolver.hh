@@ -153,6 +153,8 @@ class type_resolver {
                                const ast::binary_expr& binary,
                                type&                   lhs_type,
                                type&                   rhs_type) -> void;
+    // Whether a scalar operand broadcasts to `lane`; an untyped constant takes `lane` on
+    auto scalar_broadcasts(ast::expr_handle scalar, type& scalar_type, type& lane) -> bool;
     template <typename Eval>
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
@@ -473,10 +475,16 @@ class type_resolver {
     template <ast::IndexableID ID>
     [[nodiscard]] auto resolve_program_builtin(ID id, builtin_site& site)
         -> stdx::result<void, diagnostic>;
+    // `@splat`, `@reduce`, `@shuffle`, `@select`, and the masked and indexed memory operations
+    [[nodiscard]] auto resolve_lane_builtin(builtin_site& site) -> stdx::result<void, diagnostic>;
 
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
+    // A lane builtin's arguments, each typed by the vector shape the others give it
+    auto resolve_lane_call_args(const ast::call_expr& call) -> resolve_result;
+    auto resolve_arg_with_hint(const ast::call_expr::argument& arg, stdx::option<type&> hint)
+        -> bool;
     auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
     [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;

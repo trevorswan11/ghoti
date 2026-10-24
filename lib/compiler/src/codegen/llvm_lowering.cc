@@ -2837,6 +2837,38 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             return nullptr;
         }
 
+        // Masked and indexed memory operations, each lane aligned as its own type
+        case syntax::builtin_t::MASKED_LOAD:
+        case syntax::builtin_t::GATHER:      {
+            VERIFY(inst.operands.size() == 3 && inst.type, "Arity verified during resolution");
+            auto*      ptr{lower_value(inst.operands[0])};
+            auto*      mask{lower_value(inst.operands[1])};
+            auto*      passthru{lower_value(inst.operands[2], inst.type)};
+            auto*      vec_ty{types_.translate(*inst.type)};
+            const auto align{
+                llvm_module_->getDataLayout().getABITypeAlign(vec_ty->getScalarType())};
+            if (*builtin_tok == syntax::builtin_t::GATHER) {
+                return builder_.CreateMaskedGather(vec_ty, ptr, align, mask, passthru, "gather");
+            }
+            return builder_.CreateMaskedLoad(vec_ty, ptr, align, mask, passthru, "masked.load");
+        }
+        case syntax::builtin_t::MASKED_STORE:
+        case syntax::builtin_t::SCATTER:      {
+            VERIFY(inst.operands.size() == 3, "Arity verified during resolution");
+            const bool is_scatter{*builtin_tok == syntax::builtin_t::SCATTER};
+            auto*      stored{lower_value(inst.operands[is_scatter ? 0 : 1])};
+            auto*      ptr{lower_value(inst.operands[is_scatter ? 1 : 0])};
+            auto*      mask{lower_value(inst.operands[2])};
+            const auto align{
+                llvm_module_->getDataLayout().getABITypeAlign(stored->getType()->getScalarType())};
+            if (is_scatter) {
+                builder_.CreateMaskedScatter(stored, ptr, align, mask);
+            } else {
+                builder_.CreateMaskedStore(stored, ptr, align, mask);
+            }
+            return nullptr;
+        }
+
         case syntax::builtin_t::CLZ: {
             VERIFY(!inst.operands.empty(), "Arity mismatch not verified during resolution");
             if (auto* val{lower_value(inst.operands[0])}) {

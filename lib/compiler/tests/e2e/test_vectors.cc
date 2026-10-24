@@ -1,4 +1,7 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
@@ -367,6 +370,84 @@ TEST_CASE("A signature's vector length can come from a compile-time parameter") 
         pub const f = fn(): i32 { let v: @Vector(2, i32) = .{ 1, 2 }; return sum(4, v); };
     )")};
     CHECK(mismatch.message_contains("not assignable to parameter type '@Vector(4, i32)'"));
+}
+
+TEST_CASE("@splat, @reduce, @shuffle, and @select work on lanes") {
+    CHECK(helpers::compile_and_run(R"(
+        const V = @Vector(4, i32);
+        const sum = fn(v: V): i32 { return @reduce(.add, v); };
+        pub const main = fn(): i32 {
+            let mut x: i32 = 3;
+            x += 0;
+            let s: V = @splat(x);
+            let a: V = .{ 1, 2, 3, 4 };
+            let b: V = .{ 10, 20, 30, 40 };
+            let sh = @shuffle(a, b, .{ 3, -1, 0, -4 });
+            let rev = @shuffle(a, undefined, .{ 3, 2, 1, 0 });
+            let pick = @select(a > 2, a, b);
+            let clamp = @select(a > 2, 0, a);
+            let f: @Vector(4, f32) = .{ 1.5, -2.0, 8.0, 0.5 };
+            let ok = @reduce(.max, f) == 8.0 and @reduce(.min, f) == -2.0 and
+                @reduce(.@"or", a == 3) and !@reduce(.@"and", a == 3);
+            let total = sum(s) + sum(sh) + rev[0] + sum(pick) + sum(clamp);
+            return if (ok) total; else 0;
+        };
+    )") == 12 + 55 + 4 + 37 + 3);
+}
+
+TEST_CASE("Lane builtins fold at compile time") {
+    CHECK(helpers::compile_and_run(R"(
+        const V = @Vector(4, i32);
+        pub const main = fn(): i32 {
+            comptime {
+                const a: V = .{ 1, 2, 3, 4 };
+                @assert(@reduce(.mul, a) == 24);
+                @assert(@reduce(.xor, a) == 4);
+                @assert(@reduce(.add, @as(@Vector(2, u8), .{ 200, 100 })) == 44);
+                @assert(@shuffle(a, @as(V, .{ 5, 6, 7, 8 }), .{ 0, -2 })[1] == 6);
+                @assert(@select(a > 2, a, @as(V, @splat(9)))[0] == 9);
+                const s: @Vector(3, f32) = @splat(1.5);
+                @assert(@reduce(.add, s) == 4.5);
+            }
+            return 42;
+        };
+    )") == 42);
+}
+
+TEST_CASE("Masked loads and stores, gathers, and scatters touch only the lanes the mask picks") {
+    CHECK(helpers::compile_and_run(R"(
+        const V = @Vector(4, i32);
+        pub const main = fn(): i32 {
+            let buf: [6]mut i32 = .{ 1, 2, 3, 4, 5, 6 };
+            let mask: @Vector(4, bool) = .{ true, true, false, true };
+            let loaded = @maskedLoad(^buf[1], mask, @as(V, @splat(-1)));
+            @maskedStore(^mut buf[2], @as(V, .{ 10, 20, 30, 40 }), mask);
+            let ptrs: @Vector(2, ^mut i32) = .{ ^mut buf[0], ^mut buf[5] };
+            let g = @gather(ptrs, @as(@Vector(2, bool), @splat(true)), @as(@Vector(2, i32), @splat(0)));
+            @scatter(@as(@Vector(2, i32), .{ 7, 8 }), ptrs, .{ false, true });
+            return @reduce(.add, loaded) + buf[2] + buf[3] + buf[4] + g[1] + buf[5] + buf[0];
+        };
+    )") == 9 + 10 + 20 + 5 + 40 + 8 + 1);
+}
+
+TEST_CASE("Lane builtins reject operands that don't fit") {
+    const auto check{[](std::string_view body, std::string_view needle) {
+        const auto diags{helpers::type_check_diags(
+            fmt::format("pub const f = fn(): void {{ let a: @Vector(4, i32) = .{{ 1, 2, 3, 4 }}; "
+                        "let fl: @Vector(4, f32) = @splat(1.0); {} }};",
+                        body))};
+        CHECK(diags.message_contains(needle));
+    }};
+    check("let s = @splat(1);", "'@splat': needs a vector result type");
+    check("let r = @reduce(.@\"and\", fl);", "'.and' does not reduce 'f32' lanes");
+    check("let s = @shuffle(a, a, .{ 0, 4 });", "selects lane 4 of '@Vector(4, i32)', which has 4");
+    check("let s = @shuffle(a, fl, .{ 0, -1 });", "expects a vector of 'i32' lanes");
+    check("let m: @Vector(2, bool) = .{ true, false }; let s = @select(m, a, a);",
+          "the mask must be a '@Vector(4, bool)'");
+    check("let x: i32 = 1; let p = ^x; @maskedStore(p, a, a == 1);", "points to constant memory");
+    check("let b: [4]bool = .{ true, true, true, true }; "
+          "let v = @maskedLoad(^b[0], a == 1, a == 1);",
+          "a 'bool' lane has no memory form");
 }
 
 } // namespace ghoti::tests

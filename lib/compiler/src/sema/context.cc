@@ -153,6 +153,11 @@ auto context::get_vector(types::mut::mutability_modifiers mutability, u32 len, t
     return type;
 }
 
+auto context::as_lane(type& t) -> type& {
+    if (t.get_kind() == type_kind::POINTER) { return t; }
+    return *pool.with_const(t, true);
+}
+
 auto context::with_lane(const type& t, type& lane) -> type& {
     const auto vec{vector_of(t)};
     if (!vec) { return lane; }
@@ -349,6 +354,16 @@ auto inject_functions(symbol_table& prelude, type_pool& pool) -> void {
     // `@Vector(len, T)`, or `@Vector(info)` from a `VectorInfo`
     inject_function(bis::VECTOR, params(t_auto, t_auto), t_type);
     inject_function(bis::FN, params(t_auto), t_type);
+
+    // Lane operations on `@Vector`s
+    inject_function(bis::SPLAT, params(t_auto), t_auto);
+    inject_function(bis::REDUCE, params(t_auto, t_auto), t_auto);
+    inject_function(bis::SHUFFLE, params(t_auto, t_auto, t_auto), t_auto);
+    inject_function(bis::SELECT, params(t_auto, t_auto, t_auto), t_auto);
+    inject_function(bis::MASKED_LOAD, params(t_auto, t_auto, t_auto), t_auto);
+    inject_function(bis::MASKED_STORE, params(t_auto, t_auto, t_auto), t_void);
+    inject_function(bis::GATHER, params(t_auto, t_auto, t_auto), t_auto);
+    inject_function(bis::SCATTER, params(t_auto, t_auto, t_auto), t_void);
     inject_function(bis::FIELD_DEFAULT, params(t_auto, t_auto), t_auto);
     inject_function(bis::STRUCT, params(t_auto), t_type);
     inject_function(bis::UNION, params(t_auto), t_type);
