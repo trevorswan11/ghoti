@@ -461,6 +461,9 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     const bool is_shift_op{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR ||
                            op == syntax::token_type_t::SHL_PERCENT ||
                            op == syntax::token_type_t::SHL_PIPE};
+    if (is_vector(*lhs_type) || is_vector(rhs_type)) {
+        return resolve_vector_binary(id, binary, *lhs_type, rhs_type);
+    }
 
     // Two numbers meet at their peer type. An untyped constant takes it on
     const bool peers_operands{!is_shift_op && op != syntax::token_type_t::PLUS_PLUS &&
@@ -532,6 +535,104 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     default: last_type_.emplace(lhs_type); break;
     }
 
+    resolving_.set_sema_type(id, *last_type_);
+}
+
+auto type_resolver::scalar_broadcasts(ast::expr_handle scalar, type& scalar_type, type& lane)
+    -> bool {
+    if (scalar_type.is_poison()) { return true; }
+    if (scalar_type.get_kind() == type_kind::COMPTIME_FLOAT && !is_float(lane.get_kind())) {
+        return false;
+    }
+    if (is_comptime_numeric(scalar_type.get_kind())) {
+        resolving_.set_sema_type(scalar, lane);
+        return true;
+    }
+    return is_assignable(scalar_type, lane);
+}
+
+auto type_resolver::resolve_vector_binary(ast::node_id            id,
+                                          const ast::binary_expr& binary,
+                                          type&                   lhs_type,
+                                          type&                   rhs_type) -> void {
+    const auto op{id.get_token_type()};
+    const auto op_name{syntax::get_operator_opt(op).value_or(std::string_view{"?"})};
+    const auto fail{[&](std::string message, ast::node_id at) {
+        last_type_.emplace(ctx_.poison_node(resolving_,
+                                            id,
+                                            std::move(message),
+                                            error::OPERATOR_TYPE_MISMATCH,
+                                            resolving_.ast.location_of(at)));
+    }};
+    if (op == syntax::token_type_t::PLUS_PLUS) {
+        return fail("operator '++' does not apply to vectors", id);
+    }
+
+    const bool is_shift{op == syntax::token_type_t::SHL || op == syntax::token_type_t::SHR ||
+                        op == syntax::token_type_t::SHL_PERCENT ||
+                        op == syntax::token_type_t::SHL_PIPE};
+    auto&      shape{is_vector(lhs_type) ? lhs_type : rhs_type};
+    const auto len{vector_of(shape)->len};
+
+    // The vector a scalar side stands for: its own type's lanes for a shift, else the other side's
+    const auto scalar_lanes{[&](type& scalar_type) -> type& {
+        if (!is_shift || is_comptime_numeric(scalar_type.get_kind())) {
+            return lane_type_of(shape);
+        }
+        return *ctx_.pool.with_const(scalar_type, true);
+    }};
+    for (const auto& [operand, operand_type] :
+         {std::pair{binary.lhs, &lhs_type}, std::pair{binary.rhs, &rhs_type}}) {
+        if (is_vector(*operand_type)) { continue; }
+        auto& lane{scalar_lanes(*operand_type)};
+        if (!scalar_broadcasts(operand, *operand_type, lane)) {
+            return fail(fmt::format("'{}' does not broadcast to the lanes of '{}'",
+                                    ctx_.type_display_name(*operand_type),
+                                    ctx_.type_display_name(shape)),
+                        operand);
+        }
+    }
+
+    auto& value_lane{is_vector(lhs_type) ? lane_type_of(lhs_type) : scalar_lanes(lhs_type)};
+    auto& value_type{ctx_.get_vector(types::mut::CONSTANT, len, value_lane)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(type_kind::BOOL)};
+    switch (op) {
+    case syntax::token_type_t::LT:
+    case syntax::token_type_t::LT_EQ:
+    case syntax::token_type_t::GT:
+    case syntax::token_type_t::GT_EQ:
+    case syntax::token_type_t::EQ:
+    case syntax::token_type_t::NEQ:
+        last_type_.emplace(ctx_.with_lane(value_type, bool_type));
+        break;
+    case syntax::token_type_t::BOOLEAN_AND:
+    case syntax::token_type_t::BOOLEAN_OR:
+        if (value_lane.get_kind() != type_kind::BOOL) {
+            return fail(fmt::format("operator '{}' needs 'bool' lanes; found '{}'",
+                                    op_name,
+                                    ctx_.type_display_name(value_type)),
+                        id);
+        }
+        last_type_.emplace(value_type);
+        break;
+    case syntax::token_type_t::PLUS_PERCENT:
+    case syntax::token_type_t::MINUS_PERCENT:
+    case syntax::token_type_t::STAR_PERCENT:
+    case syntax::token_type_t::SHL_PERCENT:
+    case syntax::token_type_t::PLUS_PIPE:
+    case syntax::token_type_t::MINUS_PIPE:
+    case syntax::token_type_t::STAR_PIPE:
+    case syntax::token_type_t::SHL_PIPE:
+        if (!is_integer(value_lane.get_kind())) {
+            return fail(fmt::format("operator '{}' needs integer lanes; found '{}'",
+                                    op_name,
+                                    ctx_.type_display_name(value_type)),
+                        id);
+        }
+        last_type_.emplace(value_type);
+        break;
+    default: last_type_.emplace(value_type); break;
+    }
     resolving_.set_sema_type(id, *last_type_);
 }
 
@@ -721,31 +822,47 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
                                            deferred->underlying);
         }
     }
-    if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
+    // An array's elements, or a vector's lanes, as positional values
+    const auto positional{[&] -> stdx::option<std::pair<type&, usize>> {
+        if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
+            return std::pair<type&, usize>{arr_data->underlying, arr_data->len};
+        }
+        if (const auto vec{vector_of(*array_object)}) {
+            return std::pair<type&, usize>{vec->underlying, usize{vec->len}};
+        }
+        return stdx::none;
+    }()};
+    if (positional) {
+        auto&      element_type{positional->first};
+        const auto len{positional->second};
+        const auto kind_name{is_vector(*array_object) ? "A vector" : "An array"};
         for (const auto& entry : init.initializers) {
             if (entry.member) {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
                     id,
-                    "An array initializer takes positional values, not '.field = ...' entries",
+                    fmt::format("{} initializer takes positional values, not '.field = ...' "
+                                "entries",
+                                kind_name),
                     error::TYPE_MISMATCH,
                     resolving_.ast.location_of(*entry.member)));
             }
         }
-        if (num_initializers != arr_data->len) {
+        if (num_initializers != len) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
                                  id,
-                                 fmt::format("Array of length {} initialized with {} value(s)",
-                                             arr_data->len,
+                                 fmt::format("{} of length {} initialized with {} value(s)",
+                                             is_vector(*array_object) ? "Vector" : "Array",
+                                             len,
                                              num_initializers),
                                  error::ARITY_MISMATCH,
                                  resolving_.ast.location_of(id)));
         }
         for (const auto& entry : init.initializers) {
-            const structural_guard g{implicit_type_stack_, arr_data->underlying};
+            const structural_guard g{implicit_type_stack_, element_type};
             TRY_RESOLVE(entry.value);
-            if (reject_type_as_value(entry.value, arr_data->underlying)) {
+            if (reject_type_as_value(entry.value, element_type)) {
                 return resolving_.set_sema_type(id, *last_type_);
             }
         }
@@ -860,6 +977,17 @@ namespace {
     return false;
 }
 
+// `&v[i]` / `^v[i]`: a vector's lanes live in one register-sized value, not addressable slots
+[[nodiscard]] auto rhs_is_vector_lane(const mod::module_t& mod, auto rhs) -> bool {
+    const auto index{mod.ast.template get_as_opt<ast::index_expr>(rhs)};
+    if (!index) { return false; }
+    const auto obj_t{mod.get_sema_type_opt(index->array)};
+    if (!obj_t) { return false; }
+    // `p[i]` through a pointer steps over whole vectors, which do have addresses
+    const auto ref{obj_t->get_data().template as_opt<types::reference>()};
+    return is_vector(ref ? ref->underlying : *obj_t);
+}
+
 } // namespace
 
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
@@ -901,6 +1029,14 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
             "cannot take a reference to a field of a 'packed struct'; copy it into a local first",
             error::ILLEGAL_PACKED_FIELD_ADDRESS,
             resolving_.ast.location_of(id)));
+    }
+    if (rhs_is_vector_lane(resolving_, ref.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "cannot take a reference to a vector lane; read it into a local first",
+                             error::ILLEGAL_VECTOR_LANE_ADDRESS,
+                             resolving_.ast.location_of(id)));
     }
 
     // References already behave like values
@@ -993,6 +1129,14 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
             error::ILLEGAL_PACKED_FIELD_ADDRESS,
             resolving_.ast.location_of(id)));
     }
+    if (rhs_is_vector_lane(resolving_, adr_of.rhs)) {
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             "cannot take the address of a vector lane; read it into a local first",
+                             error::ILLEGAL_VECTOR_LANE_ADDRESS,
+                             resolving_.ast.location_of(id)));
+    }
 
     if (auto poisoned{reject_unrooted_poly(id, adr_of.rhs)}) {
         return last_type_.emplace(*poisoned);
@@ -1077,11 +1221,14 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
                              resolving_.ast.location_of(node.rhs)));
     }
     if (id.get_token_type() == syntax::token_type_t::BANG) {
-        last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+        // `!` on a `@Vector(N, bool)` negates each lane
+        if (!is_vector(*last_type_)) {
+            last_type_.emplace(ctx_.get_builtin_resolved_type(type_kind::BOOL));
+        }
     } else if (id.get_token_type() == syntax::token_type_t::PLUS) {
         // Unary '+' is an identity that no GIR instruction checks, so validate it here
         auto&      operand_type{*last_type_};
-        const auto kind{operand_type.get_kind()};
+        const auto kind{lane_type_of(operand_type).get_kind()};
         const bool ok{is_numeric(kind) || kind == type_kind::COMPTIME_INT ||
                       kind == type_kind::COMPTIME_FLOAT};
         if (!operand_type.is_poison() && !ok) {
@@ -1096,8 +1243,8 @@ auto type_resolver::visit(ast::node_id id, const ast::unary_expr& node) -> void 
     } else if (id.get_token_type() == syntax::token_type_t::MINUS_PERCENT) {
         // Unlike plain unary '-', wrapping negation is well-defined on unsigned integers too
         auto&      operand_type{*last_type_};
-        const bool ok{operand_type.get_kind() == type_kind::COMPTIME_INT ||
-                      is_integer(operand_type.get_kind())};
+        const auto kind{lane_type_of(operand_type).get_kind()};
+        const bool ok{kind == type_kind::COMPTIME_INT || is_integer(kind)};
         if (!operand_type.is_poison() && !ok) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,

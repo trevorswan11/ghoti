@@ -316,6 +316,14 @@ struct context {
                                  usize                            size,
                                  type&                            underlying) -> type&;
 
+    // `@Vector(len, lane)`; calls resolve_if on the resulting type
+    [[nodiscard]] auto get_vector(types::mut::mutability_modifiers mutability, u32 len, type& lane)
+        -> type&;
+    // `t` as a vector lane: a value lane drops its `mut`, a pointer lane keeps its pointee's
+    [[nodiscard]] auto as_lane(type& t) -> type&;
+    // `t`'s lanes as a vector of `lane`, e.g. the `@Vector(N, bool)` a comparison yields
+    [[nodiscard]] auto with_lane(const type& t, type& lane) -> type&;
+
     // Calls resolve_if on the resulting type
     [[nodiscard]] auto get_slice(types::mut::mutability_modifiers mutability,
                                  bool                             null_terminated,

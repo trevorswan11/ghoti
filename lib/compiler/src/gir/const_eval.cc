@@ -27,6 +27,7 @@
 #include <stdx/fixed/vector.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
@@ -849,6 +850,11 @@ namespace {
     return const_eval::type_size_of(*capture.storage_type, layout);
 }
 
+[[nodiscard]] auto vector_bits(const sema::types::vector& vec, const codegen::type_layout& layout)
+    -> u64 {
+    return sema::vector_bits(vec, static_cast<u32>(layout.ptr_bytes) * 8);
+}
+
 // A struct or union still being resolved has no fields yet, so neither does anything holding one
 // by value: its layout depends on itself (`const S = struct { d: [@alignOf(S)]u8 };`)
 [[nodiscard]] auto layout_is_known(const sema::type& type) -> bool {
@@ -915,6 +921,8 @@ auto const_eval::type_align_of(const sema::type& type, const codegen::type_layou
             return type_align_of(def->underlying, layout);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
+    case sema::type_kind::VECTOR:
+        return layout.vector_align(vector_bits(type.get_data().as<sema::types::vector>(), layout));
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
@@ -1005,6 +1013,8 @@ auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout
             return count * (elem_stride == 0 ? elem_size : elem_stride);
         }
         UNREACHABLE("type_kind::ARRAY associated with improper type");
+    case sema::type_kind::VECTOR:
+        return layout.vector_size(vector_bits(type.get_data().as<sema::types::vector>(), layout));
     case sema::type_kind::STRUCT:
         if (const auto st{type.get_data().as_opt<sema::types::struct_t>()}) {
             if (st->is_bit_packed()) {
@@ -2332,6 +2342,16 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
             }
             return const_value{std::move(arr), sema_type};
         }
+        if (const auto vec{sema::vector_of(*sema_type)}) {
+            const_array lanes;
+            lanes.elements.reserve(init.initializers.size());
+            for (const auto& item : init.initializers) {
+                const auto lane{try_eval(item.value)};
+                if (!lane || lane->is_poison()) { return lane; }
+                lanes.elements.emplace_back(with_declared_type(*lane, vec->underlying));
+            }
+            return const_value{std::move(lanes), sema_type};
+        }
 
         const auto table_idx{sema_type->get_symbol_table_idx_opt()};
         if (const auto st{type_data.as_opt<sema::types::struct_t>()}) {
@@ -2979,6 +2999,13 @@ auto const_eval::eval_type_info(sema::type&                                    d
         s.fields.emplace("is_mut", const_value{!denoted.is_constant(), bool_type});
         s.fields.emplace("is_volatile", const_value{denoted.is_volatile(), bool_type});
         return wrap("array", std::move(s), ctx_.get_builtin_type("ArrayInfo"));
+    }
+    case sema::type_kind::VECTOR: {
+        const auto&  vec{denoted.get_data().as<sema::types::vector>()};
+        const_struct s;
+        s.fields.emplace("child", type_value(vec.underlying));
+        s.fields.emplace("len", const_value{u64{vec.len}, usize_type});
+        return wrap("vector", std::move(s), ctx_.get_builtin_type("VectorInfo"));
     }
     // A closure argument's static type is `CLOSURE`, not `FUNCTION` so take its sig
     case sema::type_kind::CLOSURE:
@@ -3885,10 +3912,175 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     return stdx::none;
 }
 
+auto const_eval::eval_vector_binary(ast::node_id            id,
+                                    const ast::binary_expr& binary,
+                                    sema::type&             result) -> stdx::option<const_value> {
+    const auto lhs{try_eval(binary.lhs)};
+    const auto rhs{try_eval(binary.rhs)};
+    if (!lhs || !rhs) { return stdx::none; }
+    if (lhs->is_poison()) { return lhs; }
+    if (rhs->is_poison()) { return rhs; }
+
+    const auto len{sema::vector_of(result)->len};
+    // A vector operand's lanes, or a scalar's value in every lane
+    const auto lane_at{[](const const_value& operand, usize i) -> stdx::option<const_value> {
+        const auto lanes{operand.as_opt<const_array>()};
+        if (!lanes) { return operand; }
+        if (i >= lanes->elements.size()) { return stdx::none; }
+        return lanes->elements[i];
+    }};
+
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  op_type{id.get_token_type()};
+    const_array folded;
+    folded.elements.reserve(len);
+    for (usize i{0}; i < len; ++i) {
+        const auto l{lane_at(*lhs, i)};
+        const auto r{lane_at(*rhs, i)};
+        if (!l || !r) { return stdx::none; }
+        stdx::option<const_value> lane_result;
+        if (op_type == syntax::token_type_t::BOOLEAN_AND ||
+            op_type == syntax::token_type_t::BOOLEAN_OR) {
+            const auto lb{l->as_opt<bool>()};
+            const auto rb{r->as_opt<bool>()};
+            if (!lb || !rb) { return stdx::none; }
+            const bool both{op_type == syntax::token_type_t::BOOLEAN_AND ? *lb && *rb : *lb || *rb};
+            lane_result.emplace(both, bool_type);
+        } else {
+            lane_result = fold_binary_values(op_type, *l, *r, id);
+        }
+        if (!lane_result || lane_result->is_poison()) { return lane_result; }
+        folded.elements.emplace_back(with_declared_type(*lane_result, sema::lane_type_of(result)));
+    }
+    return const_value{std::move(folded), result};
+}
+
+auto const_eval::shuffle_mask_of(const const_value& mask) -> stdx::option<shuffle_mask> {
+    const auto entries{mask.as_opt<const_array>()};
+    if (!entries) { return stdx::none; }
+    shuffle_mask out;
+    out.reserve(entries->elements.size());
+    for (const auto& entry : entries->elements) {
+        if (entry.is<undefined_val>()) {
+            out.emplace_back(stdx::none);
+            continue;
+        }
+        const auto lane{entry.as_int_opt()};
+        if (!lane) { return stdx::none; }
+        out.emplace_back(static_cast<i64>(*lane));
+    }
+    return out;
+}
+
+auto const_eval::eval_lane_builtin(stdx::option<ast::node_id> call_id,
+                                   const ast::call_expr&      call,
+                                   syntax::builtin_t          kind) -> stdx::option<const_value> {
+    const ast::node_id id{call_id.value_or(*call.function)};
+    const auto         result{call_result_type(call_id)};
+    if (!result) { return stdx::none; }
+    const auto arg{[&](usize i) -> stdx::option<const_value> {
+        const auto expr{call.arguments[i].as_opt<ast::expr_handle>()};
+        return expr ? try_eval(*expr) : stdx::none;
+    }};
+    // A vector operand's lane, or a scalar's value in every lane
+    const auto lane_at{[](const const_value& operand, usize i) -> stdx::option<const_value> {
+        if (operand.is<undefined_val>()) { return stdx::none; }
+        const auto lanes{operand.as_opt<const_array>()};
+        if (!lanes) { return operand; }
+        if (i >= lanes->elements.size()) { return stdx::none; }
+        return lanes->elements[i];
+    }};
+    auto&      lane_type{sema::lane_type_of(*result)};
+    const auto vector_of_lanes{
+        [&](const_array lanes) { return const_value{std::move(lanes), *result}; }};
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT: {
+        const auto scalar{arg(0)};
+        if (!scalar || scalar->is_poison() || !sema::is_vector(*result)) { return scalar; }
+        const_array lanes;
+        lanes.elements.assign(sema::vector_of(*result)->len,
+                              with_declared_type(*scalar, lane_type));
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::SELECT: {
+        const auto pred{arg(0)};
+        const auto a{arg(1)};
+        const auto b{arg(2)};
+        if (!pred || !a || !b || !sema::is_vector(*result)) { return stdx::none; }
+        const_array lanes;
+        for (usize i{0}; i < sema::vector_of(*result)->len; ++i) {
+            const auto pred_lane{lane_at(*pred, i)};
+            const auto picks_a{pred_lane ? pred_lane->as_opt<bool>() : stdx::none};
+            const auto picked{picks_a ? lane_at(*picks_a ? *a : *b, i) : stdx::none};
+            if (!picked) { return stdx::none; }
+            lanes.elements.emplace_back(with_declared_type(*picked, lane_type));
+        }
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::SHUFFLE: {
+        const auto a{arg(0)};
+        const auto b{arg(1)};
+        const auto mask_value{arg(2)};
+        const auto mask{mask_value ? shuffle_mask_of(*mask_value) : stdx::none};
+        if (!a || !b || !mask) { return stdx::none; }
+        const_array lanes;
+        for (const auto entry : *mask) {
+            if (!entry) { return stdx::none; }
+            const auto picked{*entry >= 0 ? lane_at(*a, static_cast<usize>(*entry))
+                                          : lane_at(*b, static_cast<usize>(~*entry))};
+            if (!picked) { return stdx::none; }
+            lanes.elements.emplace_back(with_declared_type(*picked, lane_type));
+        }
+        return vector_of_lanes(std::move(lanes));
+    }
+    case syntax::builtin_t::REDUCE: {
+        const auto op{arg(0)};
+        const auto vec{arg(1)};
+        const auto op_enum{op ? op->as_opt<const_enum>() : stdx::none};
+        const auto lanes{vec ? vec->as_opt<const_array>() : stdx::none};
+        if (!op_enum || !lanes || lanes->elements.empty()) { return stdx::none; }
+        const auto  reduction{static_cast<reduce_op>(op_enum->value)};
+        const auto  token{reduce_token(reduction, sema::is_float(lane_type.get_kind()))};
+        const bool  picks{reduction == reduce_op::MIN || reduction == reduce_op::MAX};
+        const_value acc{lanes->elements.front()};
+        for (const auto& lane : lanes->elements | std::views::drop(1)) {
+            const auto l{acc.as_opt<bool>()};
+            const auto r{lane.as_opt<bool>()};
+            if (l && r) {
+                const bool both{reduction == reduce_op::AND  ? *l && *r
+                                : reduction == reduce_op::OR ? *l || *r
+                                                             : *l != *r};
+                acc = const_value{both, lane_type};
+                continue;
+            }
+            if (picks) {
+                // A NaN lane loses, as `llvm.vector.reduce.fmin` / `fmax` treat it
+                const auto lane_nan{fold_binary_values(syntax::token_type_t::NEQ, lane, lane, id)};
+                const auto acc_nan{fold_binary_values(syntax::token_type_t::NEQ, acc, acc, id)};
+                const auto wins{fold_binary_values(token, lane, acc, id)};
+                if (!lane_nan || !acc_nan || !wins) { return stdx::none; }
+                if (lane_nan->as<bool>()) { continue; }
+                if (acc_nan->as<bool>() || wins->as<bool>()) { acc = lane; }
+                continue;
+            }
+            auto next{fold_binary_values(token, acc, lane, id)};
+            if (!next || next->is_poison()) { return next; }
+            acc = with_declared_type(std::move(*next), lane_type);
+        }
+        return with_declared_type(std::move(acc), *result);
+    }
+    default: UNREACHABLE("Not a foldable lane builtin");
+    }
+}
+
 auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     const auto op_type{id.get_token_type()};
+    if (const auto result{module_->get_sema_type_opt(id)}; result && sema::is_vector(*result)) {
+        return eval_vector_binary(id, binary, *result);
+    }
 
     // Short-circuit logical operators
     if (op_type == syntax::token_type_t::BOOLEAN_AND) {
@@ -3967,6 +4159,24 @@ auto const_eval::eval_unary(ast::node_id id, const ast::unary_expr& unary)
     if (!val) { return stdx::none; }
 
     const auto op_type{id.get_token_type()};
+    if (const auto lanes{val->as_opt<const_array>()};
+        lanes && val->get_type() && sema::is_vector(*val->get_type())) {
+        const_array folded;
+        folded.elements.reserve(lanes->elements.size());
+        for (const auto& lane : lanes->elements) {
+            const auto lane_result{fold_unary_value(op_type, lane, id)};
+            if (!lane_result || lane_result->is_poison()) { return lane_result; }
+            folded.elements.emplace_back(*lane_result);
+        }
+        return const_value{std::move(folded), val->get_type()};
+    }
+    return fold_unary_value(op_type, *val, id);
+}
+
+auto const_eval::fold_unary_value(syntax::token_type_t op_type,
+                                  const const_value&   operand,
+                                  ast::node_id         id) -> stdx::option<const_value> {
+    const stdx::option<const_value> val{operand};
     if (op_type == syntax::token_type_t::PLUS) { return val; }
 
     // `-`, `-%`, and `~` on a concrete integer type follow its generated code
@@ -4652,6 +4862,564 @@ auto const_eval::optional_string_arg(const ast::call_expr& call, usize idx)
     return stdx::none;
 }
 
+auto const_eval::type_argument_of(const ast::call_expr::argument& arg)
+    -> stdx::option<sema::type&> {
+    stdx::option<sema::type&> target_type;
+    if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
+        target_type = module_->get_sema_type_opt(*type_id);
+    } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
+        if (const auto val{try_eval(*expr_h)}) {
+            if (val->is<stdx::option<sema::type&>>()) {
+                target_type = val->as<stdx::option<sema::type&>>();
+            }
+        }
+        if (!target_type) {
+            target_type = module_->get_sema_type_opt(*expr_h);
+            // A bare `type` names some type not known yet, not the type `type` itself
+            if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
+                !target_type->get_data().is<sema::types::meta_type>()) {
+                return stdx::none;
+            }
+        }
+    }
+    if (!target_type) { return stdx::none; }
+    if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
+        if (const auto r{try_resolve_deferred_call(*dc)}) { target_type.emplace(*r); }
+    }
+    if (target_type->get_kind() == sema::type_kind::TYPE) {
+        if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
+            target_type.emplace(m->instance);
+        }
+    }
+    return target_type;
+}
+
+auto const_eval::eval_vector_type(const ast::call_expr& call)
+    -> stdx::result<gsl::not_null<sema::type*>, vector_type_error> {
+    const auto unknown{[](usize arg, std::string_view what) {
+        return stdx::err{vector_type_error{
+            .message   = fmt::format("'@Vector' needs a compile-time-known {}", what),
+            .arg_index = arg,
+            .unknown   = true,
+        }};
+    }};
+
+    stdx::option<u64>         len;
+    stdx::option<sema::type&> lane;
+    if (call.arguments.size() == 1) {
+        const auto desc_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        const auto desc_val{desc_h ? try_eval(*desc_h) : stdx::none};
+        const auto desc{desc_val ? desc_val->as_opt<const_struct>() : stdx::none};
+        if (!desc) { return unknown(0, "'VectorInfo' descriptor"); }
+        len  = desc_field<u64>(*desc, "len");
+        lane = desc_field<sema::type&>(*desc, "child");
+        if (!len) { return unknown(0, "'len' field"); }
+        if (!lane) { return unknown(0, "'child' field"); }
+    } else {
+        const auto len_h{call.arguments[0].as_opt<ast::expr_handle>()};
+        const auto len_val{len_h ? try_eval(*len_h) : stdx::none};
+        if (!len_val || !len_val->as_int_opt()) { return unknown(0, "lane count"); }
+        const auto count{*len_val->as_int_opt()};
+        len  = static_cast<u64>(std::clamp<i128>(count, 0, i128{sema::MAX_VECTOR_LEN} + 1));
+        lane = type_argument_of(call.arguments[1]);
+        if (!lane) { return unknown(1, "lane type"); }
+    }
+
+    if (*len < 1 || *len > sema::MAX_VECTOR_LEN) {
+        return stdx::err{vector_type_error{
+            .message =
+                fmt::format("'@Vector' has {} lanes; it needs 1..{}", *len, sema::MAX_VECTOR_LEN),
+            .arg_index = 0,
+        }};
+    }
+    auto& lane_type{ctx_.as_lane(force_deferred_type(*lane))};
+    if (const auto why{sema::vector_lane_rejection(lane_type)}) {
+        return stdx::err{vector_type_error{
+            .message = fmt::format(
+                "'{}' can't be a '@Vector' lane: {}", ctx_.type_display_name(lane_type), *why),
+            .arg_index = call.arguments.size() == 1 ? 0UZ : 1UZ,
+        }};
+    }
+    return gsl::not_null{
+        &ctx_.get_vector(sema::types::mut::CONSTANT, static_cast<u32>(*len), lane_type)};
+}
+
+// A math builtin over operands already folded, with `result_type` the call's (or one lane's)
+auto const_eval::fold_math(syntax::builtin_t             builtin_type,
+                           gsl::span<const const_value>  operands,
+                           gsl::span<const ast::node_id> sites,
+                           stdx::option<sema::type&>     result_type,
+                           ast::node_id                  id) -> stdx::option<const_value> {
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto arg{operands.empty() ? stdx::option<const_value>{}
+                                    : stdx::option<const_value>{operands[0]}};
+    switch (builtin_type) {
+    case syntax::builtin_t::ABS: {
+        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
+        if (arg->is<i64>()) {
+            const auto v{arg->as<i64>()};
+            return const_value{v < 0 ? -v : v, arg->get_type()};
+        }
+        if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
+        return arg;
+    }
+    case syntax::builtin_t::SQRT:
+    case syntax::builtin_t::SIN:
+    case syntax::builtin_t::COS:
+    case syntax::builtin_t::TAN:
+    case syntax::builtin_t::EXP:
+    case syntax::builtin_t::EXP2:
+    case syntax::builtin_t::LOG:
+    case syntax::builtin_t::LOG2:
+    case syntax::builtin_t::LOG10:
+    case syntax::builtin_t::FLOOR:
+    case syntax::builtin_t::CEIL:  {
+        const auto         function{*semantics::math_function_of(builtin_type)};
+        stdx::option<f128> input;
+        if (const auto as_float{arg->as_opt<f128>()}) {
+            input.emplace(*as_float);
+        } else if (const auto as_int{arg->int_as_float_opt()}) {
+            input.emplace(*as_int);
+        }
+        if (!input) { return stdx::none; }
+
+        // The call's own type decides the format: an untyped operand in a typed context is
+        // computed straight into that type
+        const auto out_type{result_type ? result_type : arg->get_type()};
+        const bool concrete{out_type && sema::is_float(out_type->get_kind())};
+        const auto format{concrete ? sema::float_format_of(*out_type) : stdx::none};
+        const auto result{evaluate_traced(function, *input, format.value_or(float_format::QUAD))};
+        if (result.overflowed) {
+            ctx_.diags.emplace_back(
+                fmt::format("'{}' of {} is out of range for type '{}'",
+                            syntax::builtin_name(builtin_type),
+                            *input,
+                            out_type ? ctx_.type_display_name(*out_type) : "f128"),
+                sema::error::LITERAL_OUT_OF_RANGE,
+                module_->ast.location_of(sites[0]));
+            return const_value::make_poison();
+        }
+        const_value folded{result.value, out_type};
+        // sqrt, floor and ceil survive a second rounding; the others don't
+        const bool exact_enough{function == math_function::SQRT ||
+                                function == math_function::FLOOR ||
+                                function == math_function::CEIL};
+        if (!concrete && !exact_enough) { folded.set_origin({function, *input}); }
+        return folded;
+    }
+    case syntax::builtin_t::CLZ: {
+        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
+        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
+        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
+        const auto ptr_bits{target_pointer_bits()};
+        const auto arg_ty{arg->get_type()};
+        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
+        if (!bits_opt) { return stdx::none; }
+        const auto bits{*bits_opt};
+        auto&      res_type{result_type.value_or(usize_type)};
+        // Leading zeros within the operand's own bit width, not the 64-bit storage word
+        const auto clz{static_cast<u64>(std::countl_zero(v)) - (64 - static_cast<u64>(bits))};
+        return const_value{clz, res_type};
+    }
+    case syntax::builtin_t::CTZ: {
+        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
+        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
+        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
+        const auto ptr_bits{target_pointer_bits()};
+        const auto arg_ty{arg->get_type()};
+        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
+        if (!bits_opt) { return stdx::none; }
+        const auto bits{*bits_opt};
+        auto&      res_type{result_type.value_or(usize_type)};
+        // A zero operand has no set bits within its own width
+        const auto ctz{std::min(static_cast<u64>(std::countr_zero(v)), static_cast<u64>(bits))};
+        return const_value{ctz, res_type};
+    }
+    case syntax::builtin_t::POPCOUNT: {
+        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
+        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
+        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
+        auto&      res_type{result_type.value_or(usize_type)};
+        return const_value{static_cast<u64>(std::popcount(v)), res_type};
+    }
+    case syntax::builtin_t::MIN:
+    case syntax::builtin_t::MAX:
+    case syntax::builtin_t::DIV_TRUNC:
+    case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::DIV_EXACT:
+    case syntax::builtin_t::REM:
+    case syntax::builtin_t::MOD:       {
+        stdx::option<const_value> a{operands[0]};
+        stdx::option<const_value> b{operands[1]};
+        // Operands of different concrete number types meet at their peer type
+        if (const auto peer{numeric_operand_peer(ctx_, *a, *b)}) {
+            a = as_peer(*a, *peer);
+            b = as_peer(*b, *peer);
+        }
+        if (is_integer_arm(*a) && is_integer_arm(*b)) {
+            const auto type{result_type};
+            const auto width{type ? integer_target_width(*type, target_pointer_bits())
+                                  : stdx::none};
+            if (width && width->first <= 128) {
+                const auto op{*semantics::int_op_of(builtin_type)};
+                if (auto folded{fold_int_in_domain(op, *a, *b, id)}) { return folded; }
+            }
+        }
+
+        const auto tok{builtin_type};
+        const auto fold_int = [&](auto av, auto bv) -> stdx::option<const_value> {
+            using T = decltype(av);
+            switch (tok) {
+            case syntax::builtin_t::MIN: return const_value{av < bv ? av : bv, a->get_type()};
+            case syntax::builtin_t::MAX: return const_value{av > bv ? av : bv, a->get_type()};
+            default:                     break;
+            }
+            if (bv == T{0}) {
+                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
+                ctx_.diags.emplace_back(
+                    fmt::format("{} by zero in compile-time constant expression",
+                                is_rem ? "Modulo" : "Division"),
+                    sema::error::COMPTIME_EVALUATION_FAILED,
+                    module_->ast.location_of(id));
+                return const_value::make_poison();
+            }
+            switch (tok) {
+            case syntax::builtin_t::DIV_TRUNC: return const_value{av / bv, a->get_type()};
+            case syntax::builtin_t::REM:       return const_value{av % bv, a->get_type()};
+            case syntax::builtin_t::DIV_EXACT: {
+                if (av % bv != 0) {
+                    ctx_.diags.emplace_back(
+                        "Exact division produced a remainder in compile-time constant expression",
+                        sema::error::COMPTIME_EVALUATION_FAILED,
+                        module_->ast.location_of(id));
+                    return const_value::make_poison();
+                }
+                return const_value{av / bv, a->get_type()};
+            }
+            case syntax::builtin_t::DIV_FLOOR: {
+                auto q{av / bv};
+                if constexpr (Signed<T>) {
+                    if ((av % bv != 0) && ((av < 0) != (bv < 0))) { --q; }
+                }
+                return const_value{q, a->get_type()};
+            }
+            case syntax::builtin_t::MOD: {
+                auto r{av % bv};
+                if constexpr (Signed<T>) {
+                    if ((r != 0) && ((r < 0) != (bv < 0))) { r += bv; }
+                }
+                return const_value{r, a->get_type()};
+            }
+            default: return stdx::none;
+            }
+        };
+
+        if (a->is<i64>() && b->is<i64>()) { return fold_int(a->as<i64>(), b->as<i64>()); }
+        if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
+        // Mixed or wider-than-64-bit integers fold exactly
+        if (is_integer_arm(*a) && is_integer_arm(*b)) {
+            const auto l{*a->as_big_int_opt()};
+            const auto r{*b->as_big_int_opt()};
+            const auto fail{[&](std::string_view msg) {
+                ctx_.diags.emplace_back(std::string{msg},
+                                        sema::error::COMPTIME_EVALUATION_FAILED,
+                                        module_->ast.location_of(id));
+                return const_value::make_poison();
+            }};
+            const auto exact{
+                [&](const big_int& v) { return const_value::from_big_int(v, a->get_type()); }};
+            if (tok == syntax::builtin_t::MIN) { return exact(l < r ? l : r); }
+            if (tok == syntax::builtin_t::MAX) { return exact(l > r ? l : r); }
+            if (r.is_zero()) {
+                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
+                return fail(is_rem ? "Modulo by zero in compile-time constant expression"
+                                   : "Division by zero in compile-time constant expression");
+            }
+            const auto quotient{l / r};
+            const auto remainder{l % r};
+            const bool inexact{!remainder.is_zero()};
+            switch (tok) {
+            case syntax::builtin_t::DIV_TRUNC: return exact(quotient);
+            case syntax::builtin_t::REM:       return exact(remainder);
+            case syntax::builtin_t::DIV_EXACT:
+                if (inexact) {
+                    return fail("Exact division produced a remainder in compile-time constant "
+                                "expression");
+                }
+                return exact(quotient);
+            case syntax::builtin_t::DIV_FLOOR:
+                return exact(inexact && l.is_negative() != r.is_negative()
+                                 ? quotient - big_int{i128{1}}
+                                 : quotient);
+            case syntax::builtin_t::MOD:
+                return exact(inexact && remainder.is_negative() != r.is_negative() ? remainder + r
+                                                                                   : remainder);
+            default: return stdx::none;
+            }
+        }
+        if ((tok == syntax::builtin_t::MIN || tok == syntax::builtin_t::MAX) && a->is<f128>() &&
+            b->is<f128>()) {
+            const auto type{result_type};
+            const auto format{type ? sema::float_format_of(*type).value_or(float_format::QUAD)
+                                   : float_format::QUAD};
+            return const_value{
+                semantics::fold_float(
+                    *semantics::float_op_of(tok), format, a->as<f128>(), b->as<f128>()),
+                a->get_type()};
+        }
+        return stdx::none;
+    }
+    case syntax::builtin_t::MUL_ADD: {
+        if (!result_type || operands.size() != 3) { return stdx::none; }
+
+        // Each operand is a `T`, so it is range-checked and rounded into `T` before the fma
+        std::array<const_value, 3> typed;
+        for (usize i{0}; i < typed.size(); ++i) {
+            const auto& operand{operands[i]};
+            const auto  as_float{operand.is<f128>() ? stdx::option<f128>{operand.as<f128>()}
+                                                    : operand.int_as_float_opt()};
+            if (as_float && !sema::comptime_float_fits(*as_float, *result_type)) {
+                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                    *as_float,
+                                                    ctx_.type_display_name(*result_type)),
+                                        sema::error::LITERAL_OUT_OF_RANGE,
+                                        module_->ast.location_of(sites[i]));
+                return const_value::make_poison();
+            }
+            typed[i] = with_declared_type(operand, *result_type);
+        }
+
+        const auto& [a, b, c]{typed};
+        if (const auto format{sema::float_format_of(*result_type)}) {
+            if (!a.is<f128>() || !b.is<f128>() || !c.is<f128>()) { return stdx::none; }
+            return const_value{
+                fused_multiply_add(a.as<f128>(), b.as<f128>(), c.as<f128>(), *format), result_type};
+        }
+        if (!is_integer_arm(a) || !is_integer_arm(b) || !is_integer_arm(c)) { return stdx::none; }
+        const auto product{fold_integer_binary(syntax::token_type_t::STAR, a, b, id)};
+        if (!product || product->is_poison()) { return product; }
+        return fold_integer_binary(syntax::token_type_t::PLUS, *product, c, id);
+    }
+    default: return stdx::none;
+    }
+}
+
+auto const_eval::eval_math_builtin(stdx::option<ast::node_id> call_id,
+                                   const ast::call_expr&      call,
+                                   syntax::builtin_t builtin_type) -> stdx::option<const_value> {
+    const ast::node_id id{call_id.value_or(*call.function)};
+    // `@mulAdd(T, a, b, c)` names its type first
+    const usize               first{builtin_type == syntax::builtin_t::MUL_ADD ? 1UZ : 0UZ};
+    std::vector<const_value>  operands;
+    std::vector<ast::node_id> sites;
+    for (usize i{first}; i < call.arguments.size(); ++i) {
+        const auto expr{call.arguments[i].as_opt<ast::expr_handle>()};
+        if (!expr) { return stdx::none; }
+        auto operand{try_eval(*expr)};
+        if (!operand || operand->is_poison()) { return operand; }
+        operands.emplace_back(std::move(*operand));
+        sites.emplace_back(*expr);
+    }
+    if (operands.empty()) { return stdx::none; }
+
+    const auto result{call_result_type(call_id)};
+    if (!result || !sema::is_vector(*result)) {
+        return fold_math(builtin_type, operands, sites, result, id);
+    }
+
+    // A vector folds lane by lane, a scalar operand standing for every lane
+    auto&                    lane_type{sema::lane_type_of(*result)};
+    const_array              lanes;
+    std::vector<const_value> lane_operands(operands.size());
+    for (usize lane{0}; lane < sema::vector_of(*result)->len; ++lane) {
+        for (usize i{0}; i < operands.size(); ++i) {
+            const auto elements{operands[i].as_opt<const_array>()};
+            if (elements && lane >= elements->elements.size()) { return stdx::none; }
+            lane_operands[i] = elements ? elements->elements[lane] : operands[i];
+        }
+        auto folded{fold_math(builtin_type, lane_operands, sites, lane_type, id)};
+        if (!folded || folded->is_poison()) { return folded; }
+        lanes.elements.emplace_back(with_declared_type(std::move(*folded), lane_type));
+    }
+    return const_value{std::move(lanes), *result};
+}
+
+// A numeric cast of an operand already folded, into `target` (the call's, or one lane's)
+auto const_eval::fold_cast(syntax::builtin_t         builtin_type,
+                           const const_value&        folded_operand,
+                           stdx::option<sema::type&> target,
+                           ast::node_id              site) -> stdx::option<const_value> {
+    const stdx::option<const_value> operand{folded_operand};
+    switch (builtin_type) {
+    case syntax::builtin_t::INT_CAST: {
+        const auto src_int{operand->as_int_opt()};
+        if (!src_int) { return stdx::none; }
+        if (!target) { return stdx::none; }
+        if (target->get_kind() == sema::type_kind::COMPTIME_INT) {
+            return retyped(*operand, *target);
+        }
+        const auto ptr_bits{target_pointer_bits()};
+        const auto source_width{operand->get_type()
+                                    ? integer_target_width(*operand->get_type(), ptr_bits)
+                                    : stdx::none};
+        const auto target_width{integer_target_width(*target, ptr_bits)};
+        bool       fits{sema::comptime_int_fits(*src_int, *target, ptr_bits)};
+        if (source_width && target_width && source_width->first <= 128 &&
+            target_width->first <= 128) {
+            const semantics::int_domain from{source_width->first, source_width->second};
+            const semantics::int_domain to{target_width->first, target_width->second};
+            const auto cast{semantics::cast_int(from, to, static_cast<u128>(*src_int))};
+            if (cast) { return domain_value(*cast, to, target); }
+            fits = false;
+        }
+        if (!fits) {
+            const bool unsigned_source{source_width && !source_width->second};
+            ctx_.diags.emplace_back(
+                fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
+                            unsigned_source ? fmt::to_string(static_cast<u128>(*src_int))
+                                            : fmt::to_string(*src_int),
+                            ctx_.type_display_name(*target)),
+                sema::error::COMPTIME_EVALUATION_FAILED,
+                module_->ast.location_of(site));
+            return const_value::make_poison();
+        }
+        if (const auto w{integer_target_width(*target, ptr_bits)}) {
+            return wrap_to_width(*operand, w->first, w->second, target);
+        }
+        return stdx::none;
+    }
+    case syntax::builtin_t::TRUNCATE: {
+        const auto src_int{operand->as_int_opt()};
+        if (!src_int) { return stdx::none; }
+        if (!target) { return stdx::none; }
+        const auto ptr_bits{target_pointer_bits()};
+        if (const auto w{integer_target_width(*target, ptr_bits)}) {
+            return wrap_to_width(*operand, w->first, w->second, target);
+        }
+        return stdx::none;
+    }
+    case syntax::builtin_t::BOOL_FROM_INT: {
+        auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+        if (const auto src_int{operand->as_int_opt()}) {
+            return const_value{*src_int != 0, bool_type};
+        }
+        if (const auto ptr_val{operand->as_opt<u64>()}) {
+            return const_value{*ptr_val != 0, bool_type};
+        }
+        return stdx::none;
+    }
+    case syntax::builtin_t::INT_FROM_BOOL: {
+        const auto src_bool{operand->as_opt<bool>()};
+        if (!src_bool) { return stdx::none; }
+        if (!target) { return stdx::none; }
+        const u64 int_val{*src_bool ? 1ULL : 0ULL};
+        return const_value{int_val, target};
+    }
+    case syntax::builtin_t::FLOAT_CAST: {
+        if (!target) { return stdx::none; }
+        const auto         format{sema::float_format_of(*target)};
+        stdx::option<f128> f;
+        if (const auto as_float{operand->as_opt<f128>()}) {
+            f.emplace(*as_float);
+        } else if (const auto as_int{operand->int_as_float_opt()}) {
+            f.emplace(*as_int);
+        }
+        if (!format || !f) { return stdx::none; }
+        // Rounded once into the target; only a finite value can be out of range
+        if (!sema::comptime_float_fits(*f, *target)) {
+            ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                *f,
+                                                ctx_.type_display_name(*target)),
+                                    sema::error::LITERAL_OUT_OF_RANGE,
+                                    module_->ast.location_of(site));
+            return const_value::make_poison();
+        }
+        return const_value{f->round_to(*format), target};
+    }
+    case syntax::builtin_t::FLOAT_FROM_INT:
+    case syntax::builtin_t::INT_FROM_FLOAT: {
+        if (!target) { return stdx::none; }
+
+        const auto ptr_bits{target_pointer_bits()};
+        if (builtin_type == syntax::builtin_t::FLOAT_FROM_INT) {
+            const auto format{sema::float_format_of(*target)};
+            const auto source_width{operand->get_type()
+                                        ? integer_target_width(*operand->get_type(), ptr_bits)
+                                        : stdx::none};
+            // A typed integer rounds straight into the target format, like the instruction
+            if (const auto bits{operand->as_int_opt()};
+                bits && format && source_width && source_width->first <= 128) {
+                const semantics::int_domain from{source_width->first, source_width->second};
+                return const_value{
+                    semantics::float_from_int(from, static_cast<u128>(*bits), *format), target};
+            }
+            // Converted exactly first so an overflowing result is still reported by value
+            const auto f{operand->int_as_float_opt()};
+            if (!f) { return stdx::none; }
+            if (!sema::comptime_float_fits(*f, *target)) {
+                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
+                                                    *f,
+                                                    ctx_.type_display_name(*target)),
+                                        sema::error::LITERAL_OUT_OF_RANGE,
+                                        module_->ast.location_of(site));
+                return const_value::make_poison();
+            }
+            return const_value{*f, target};
+        }
+
+        const auto f{operand->as_opt<f128>()};
+        if (!f) { return stdx::none; }
+        // An untyped target takes the comptime domain: signed, 128 bits
+        const auto width{target->get_kind() == sema::type_kind::COMPTIME_INT
+                             ? stdx::option<std::pair<u16, bool>>{std::pair{u16{128}, true}}
+                             : integer_target_width(*target, ptr_bits)};
+        if (width && width->first <= 128) {
+            const semantics::int_domain to{width->first, width->second};
+            if (const auto folded{semantics::int_from_float(*f, to)}) {
+                return domain_value(*folded, to, target);
+            }
+        }
+        // Past 128 bits a finite value is left to the (range-checked) runtime conversion
+        if (!width || (width->first > 128 && f->is_finite())) { return stdx::none; }
+        ctx_.diags.emplace_back(
+            fmt::format("Float value {} is out of range for target type '{}' in @intFromFloat",
+                        *f,
+                        ctx_.type_display_name(*target)),
+            sema::error::COMPTIME_EVALUATION_FAILED,
+            module_->ast.location_of(site));
+        return const_value::make_poison();
+    }
+    default: return stdx::none;
+    }
+}
+
+auto const_eval::eval_cast_builtin(stdx::option<ast::node_id> call_id,
+                                   const ast::call_expr&      call,
+                                   syntax::builtin_t builtin_type) -> stdx::option<const_value> {
+    const auto op_h{cast_operand(call)};
+    if (!op_h) { return stdx::none; }
+    const auto operand{try_eval(*op_h)};
+    if (!operand || operand->is_poison()) { return operand; }
+    // `@floatFromInt` / `@intFromFloat` only fold into the type the call was given
+    const bool own_result{builtin_type == syntax::builtin_t::FLOAT_FROM_INT ||
+                          builtin_type == syntax::builtin_t::INT_FROM_FLOAT};
+    const auto target{own_result ? call_result_type(call_id) : builtin_result_type(call_id, call)};
+    const auto lanes{operand->as_opt<const_array>()};
+    if (!target || !sema::is_vector(*target) || !lanes) {
+        return fold_cast(builtin_type, *operand, target, *op_h);
+    }
+
+    // A vector converts lane by lane
+    auto&       lane_type{sema::lane_type_of(*target)};
+    const_array converted;
+    for (const auto& lane : lanes->elements) {
+        auto folded{fold_cast(builtin_type, lane, lane_type, *op_h)};
+        if (!folded || folded->is_poison()) { return folded; }
+        converted.elements.emplace_back(with_declared_type(std::move(*folded), lane_type));
+    }
+    return const_value{std::move(converted), *target};
+}
+
 auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                               const ast::call_expr&      call,
                               syntax::builtin_t builtin_type) -> stdx::option<const_value> {
@@ -4667,35 +5435,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
 
     const auto eval_type_argument =
         [&](const ast::call_expr::argument& arg) -> stdx::option<sema::type&> {
-        stdx::option<sema::type&> target_type;
-        if (const auto type_id{arg.as_opt<ast::explicit_type_id>()}) {
-            target_type = module_->get_sema_type_opt(*type_id);
-        } else if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-            if (const auto val{try_eval(*expr_h)}) {
-                if (val->is<stdx::option<sema::type&>>()) {
-                    target_type = val->as<stdx::option<sema::type&>>();
-                }
-            }
-            if (!target_type) {
-                target_type = module_->get_sema_type_opt(*expr_h);
-                // A bare `type` names some type not known yet (an unbound `T: type` in a
-                // dependent parameter type), not the type `type` itself
-                if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
-                    !target_type->get_data().is<sema::types::meta_type>()) {
-                    return stdx::none;
-                }
-            }
-        }
-        if (!target_type) { return stdx::none; }
-        if (const auto dc{target_type->get_data().as_opt<sema::types::deferred_call>()}) {
-            if (const auto r{try_resolve_deferred_call(*dc)}) { target_type.emplace(*r); }
-        }
-        if (target_type->get_kind() == sema::type_kind::TYPE) {
-            if (const auto m{target_type->get_data().as_opt<sema::types::meta_type>()}) {
-                target_type.emplace(m->instance);
-            }
-        }
-        return target_type;
+        return type_argument_of(arg);
     };
 
     // A `[N]T` still deferred at resolution time (directly or as a field) has no layout yet
@@ -4857,6 +5597,15 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::ENUM_LITERAL:
         return const_value{stdx::option<sema::type&>{
             ctx_.get_builtin_resolved_type(sema::type_kind::ENUM_LITERAL)}};
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:  return eval_lane_builtin(call_id, call, builtin_type);
+    case syntax::builtin_t::VECTOR:  {
+        const auto vec{eval_vector_type(call)};
+        if (!vec) { return stdx::none; }
+        return const_value{**vec};
+    }
     case syntax::builtin_t::INT:
     case syntax::builtin_t::FLOAT:
     case syntax::builtin_t::POINTER:
@@ -4961,20 +5710,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         default: return stdx::none;
         }
     }
-    case syntax::builtin_t::ABS: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg) { return stdx::none; }
-        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (arg->is<i64>()) {
-            const auto v{arg->as<i64>()};
-            return const_value{v < 0 ? -v : v, arg->get_type()};
-        }
-        if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
-        return arg;
-    }
+    case syntax::builtin_t::ABS:
     case syntax::builtin_t::SQRT:
     case syntax::builtin_t::SIN:
     case syntax::builtin_t::COS:
@@ -4985,264 +5721,19 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::LOG2:
     case syntax::builtin_t::LOG10:
     case syntax::builtin_t::FLOOR:
-    case syntax::builtin_t::CEIL:  {
-        const auto function{*semantics::math_function_of(builtin_type)};
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg) { return stdx::none; }
-        stdx::option<f128> input;
-        if (const auto as_float{arg->as_opt<f128>()}) {
-            input.emplace(*as_float);
-        } else if (const auto as_int{arg->int_as_float_opt()}) {
-            input.emplace(*as_int);
-        }
-        if (!input) { return stdx::none; }
-
-        // The call's own type decides the format: an untyped operand in a typed context is
-        // computed straight into that type
-        auto       result_type{call_id ? module_->get_sema_type_opt(*call_id) : arg->get_type()};
-        const bool concrete{result_type && sema::is_float(result_type->get_kind())};
-        const auto format{concrete ? sema::float_format_of(*result_type) : stdx::none};
-        const auto result{evaluate_traced(function, *input, format.value_or(float_format::QUAD))};
-        if (result.overflowed) {
-            ctx_.diags.emplace_back(
-                fmt::format("'{}' of {} is out of range for type '{}'",
-                            syntax::builtin_name(builtin_type),
-                            *input,
-                            result_type ? ctx_.type_display_name(*result_type) : "f128"),
-                sema::error::LITERAL_OUT_OF_RANGE,
-                module_->ast.location_of(*expr_h));
-            return const_value::make_poison();
-        }
-        const_value folded{result.value, result_type};
-        // sqrt, floor and ceil survive a second rounding; the others don't
-        const bool exact_enough{function == math_function::SQRT ||
-                                function == math_function::FLOOR ||
-                                function == math_function::CEIL};
-        if (!concrete && !exact_enough) { folded.set_origin({function, *input}); }
-        return folded;
-    }
-    case syntax::builtin_t::CLZ: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg) { return stdx::none; }
-        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
-        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{target_pointer_bits()};
-        const auto arg_ty{arg->get_type()};
-        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
-        if (!bits_opt) { return stdx::none; }
-        const auto bits{*bits_opt};
-        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
-        // Leading zeros within the operand's own bit width, not the 64-bit storage word
-        const auto clz{static_cast<u64>(std::countl_zero(v)) - (64 - static_cast<u64>(bits))};
-        return const_value{clz, res_type};
-    }
-    case syntax::builtin_t::CTZ: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg) { return stdx::none; }
-        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
-        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        const auto ptr_bits{target_pointer_bits()};
-        const auto arg_ty{arg->get_type()};
-        const auto bits_opt{arg_ty ? integer_or_comptime_width(*arg_ty, ptr_bits) : stdx::none};
-        if (!bits_opt) { return stdx::none; }
-        const auto bits{*bits_opt};
-        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
-        // A zero operand has no set bits within its own width
-        const auto ctz{std::min(static_cast<u64>(std::countr_zero(v)), static_cast<u64>(bits))};
-        return const_value{ctz, res_type};
-    }
-    case syntax::builtin_t::POPCOUNT: {
-        VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
-        const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()};
-        if (!expr_h) { return stdx::none; }
-        const auto arg{try_eval(*expr_h)};
-        if (!arg) { return stdx::none; }
-        if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (!arg->is<u64>() && !arg->is<i64>()) { return stdx::none; }
-        const auto v{arg->is<u64>() ? arg->as<u64>() : static_cast<u64>(arg->as<i64>())};
-        auto&      res_type{call_result_type(call_id).value_or(usize_type)};
-        return const_value{static_cast<u64>(std::popcount(v)), res_type};
-    }
+    case syntax::builtin_t::CEIL:
+    case syntax::builtin_t::CLZ:
+    case syntax::builtin_t::CTZ:
+    case syntax::builtin_t::POPCOUNT:
     case syntax::builtin_t::MIN:
     case syntax::builtin_t::MAX:
     case syntax::builtin_t::DIV_TRUNC:
     case syntax::builtin_t::DIV_FLOOR:
     case syntax::builtin_t::DIV_EXACT:
     case syntax::builtin_t::REM:
-    case syntax::builtin_t::MOD:       {
-        VERIFY(call.arguments.size() >= 2, "Arity mismatch not verified during resolution");
-        const auto a_h{call.arguments[0].as_opt<ast::expr_handle>()};
-        const auto b_h{call.arguments[1].as_opt<ast::expr_handle>()};
-        if (!a_h || !b_h) { return stdx::none; }
-        auto a{try_eval(*a_h)};
-        auto b{try_eval(*b_h)};
-        if (!a || !b) { return stdx::none; }
-        // Operands of different concrete number types meet at their peer type
-        if (const auto peer{numeric_operand_peer(ctx_, *a, *b)}) {
-            a = as_peer(*a, *peer);
-            b = as_peer(*b, *peer);
-        }
-        if (is_integer_arm(*a) && is_integer_arm(*b)) {
-            const auto type{call_result_type(call_id)};
-            const auto width{type ? integer_target_width(*type, target_pointer_bits())
-                                  : stdx::none};
-            if (width && width->first <= 128) {
-                const auto op{*semantics::int_op_of(builtin_type)};
-                if (auto folded{fold_int_in_domain(op, *a, *b, id)}) { return folded; }
-            }
-        }
-
-        const auto tok{builtin_type};
-        const auto fold_int = [&](auto av, auto bv) -> stdx::option<const_value> {
-            using T = decltype(av);
-            switch (tok) {
-            case syntax::builtin_t::MIN: return const_value{av < bv ? av : bv, a->get_type()};
-            case syntax::builtin_t::MAX: return const_value{av > bv ? av : bv, a->get_type()};
-            default:                     break;
-            }
-            if (bv == T{0}) {
-                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
-                ctx_.diags.emplace_back(
-                    fmt::format("{} by zero in compile-time constant expression",
-                                is_rem ? "Modulo" : "Division"),
-                    sema::error::COMPTIME_EVALUATION_FAILED,
-                    module_->ast.location_of(id));
-                return const_value::make_poison();
-            }
-            switch (tok) {
-            case syntax::builtin_t::DIV_TRUNC: return const_value{av / bv, a->get_type()};
-            case syntax::builtin_t::REM:       return const_value{av % bv, a->get_type()};
-            case syntax::builtin_t::DIV_EXACT: {
-                if (av % bv != 0) {
-                    ctx_.diags.emplace_back(
-                        "Exact division produced a remainder in compile-time constant expression",
-                        sema::error::COMPTIME_EVALUATION_FAILED,
-                        module_->ast.location_of(id));
-                    return const_value::make_poison();
-                }
-                return const_value{av / bv, a->get_type()};
-            }
-            case syntax::builtin_t::DIV_FLOOR: {
-                auto q{av / bv};
-                if constexpr (Signed<T>) {
-                    if ((av % bv != 0) && ((av < 0) != (bv < 0))) { --q; }
-                }
-                return const_value{q, a->get_type()};
-            }
-            case syntax::builtin_t::MOD: {
-                auto r{av % bv};
-                if constexpr (Signed<T>) {
-                    if ((r != 0) && ((r < 0) != (bv < 0))) { r += bv; }
-                }
-                return const_value{r, a->get_type()};
-            }
-            default: return stdx::none;
-            }
-        };
-
-        if (a->is<i64>() && b->is<i64>()) { return fold_int(a->as<i64>(), b->as<i64>()); }
-        if (a->is<u64>() && b->is<u64>()) { return fold_int(a->as<u64>(), b->as<u64>()); }
-        // Mixed or wider-than-64-bit integers fold exactly
-        if (is_integer_arm(*a) && is_integer_arm(*b)) {
-            const auto l{*a->as_big_int_opt()};
-            const auto r{*b->as_big_int_opt()};
-            const auto fail{[&](std::string_view msg) {
-                ctx_.diags.emplace_back(std::string{msg},
-                                        sema::error::COMPTIME_EVALUATION_FAILED,
-                                        module_->ast.location_of(id));
-                return const_value::make_poison();
-            }};
-            const auto exact{
-                [&](const big_int& v) { return const_value::from_big_int(v, a->get_type()); }};
-            if (tok == syntax::builtin_t::MIN) { return exact(l < r ? l : r); }
-            if (tok == syntax::builtin_t::MAX) { return exact(l > r ? l : r); }
-            if (r.is_zero()) {
-                const bool is_rem{tok == syntax::builtin_t::REM || tok == syntax::builtin_t::MOD};
-                return fail(is_rem ? "Modulo by zero in compile-time constant expression"
-                                   : "Division by zero in compile-time constant expression");
-            }
-            const auto quotient{l / r};
-            const auto remainder{l % r};
-            const bool inexact{!remainder.is_zero()};
-            switch (tok) {
-            case syntax::builtin_t::DIV_TRUNC: return exact(quotient);
-            case syntax::builtin_t::REM:       return exact(remainder);
-            case syntax::builtin_t::DIV_EXACT:
-                if (inexact) {
-                    return fail("Exact division produced a remainder in compile-time constant "
-                                "expression");
-                }
-                return exact(quotient);
-            case syntax::builtin_t::DIV_FLOOR:
-                return exact(inexact && l.is_negative() != r.is_negative()
-                                 ? quotient - big_int{i128{1}}
-                                 : quotient);
-            case syntax::builtin_t::MOD:
-                return exact(inexact && remainder.is_negative() != r.is_negative() ? remainder + r
-                                                                                   : remainder);
-            default: return stdx::none;
-            }
-        }
-        if ((tok == syntax::builtin_t::MIN || tok == syntax::builtin_t::MAX) && a->is<f128>() &&
-            b->is<f128>()) {
-            const auto type{call_result_type(call_id)};
-            const auto format{type ? sema::float_format_of(*type).value_or(float_format::QUAD)
-                                   : float_format::QUAD};
-            return const_value{
-                semantics::fold_float(
-                    *semantics::float_op_of(tok), format, a->as<f128>(), b->as<f128>()),
-                a->get_type()};
-        }
-        return stdx::none;
-    }
-    case syntax::builtin_t::MUL_ADD: {
-        VERIFY(call.arguments.size() >= 4, "Arity mismatch not verified during resolution");
-        const auto a_h{call.arguments[1].as_opt<ast::expr_handle>()};
-        const auto b_h{call.arguments[2].as_opt<ast::expr_handle>()};
-        const auto c_h{call.arguments[3].as_opt<ast::expr_handle>()};
-        const auto result_type{call_result_type(call_id)};
-        if (!a_h || !b_h || !c_h || !result_type) { return stdx::none; }
-
-        // Each operand is a `T`, so it is range-checked and rounded into `T` before the fma
-        std::array<const_value, 3> operands;
-        for (usize i{0}; const auto handle : {*a_h, *b_h, *c_h}) {
-            auto operand{try_eval(handle)};
-            if (!operand || operand->is_poison()) { return operand; }
-            const auto as_float{operand->is<f128>() ? stdx::option<f128>{operand->as<f128>()}
-                                                    : operand->int_as_float_opt()};
-            if (as_float && !sema::comptime_float_fits(*as_float, *result_type)) {
-                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
-                                                    *as_float,
-                                                    ctx_.type_display_name(*result_type)),
-                                        sema::error::LITERAL_OUT_OF_RANGE,
-                                        module_->ast.location_of(handle));
-                return const_value::make_poison();
-            }
-            operands[i++] = with_declared_type(std::move(*operand), *result_type);
-        }
-
-        const auto& [a, b, c]{operands};
-        if (const auto format{sema::float_format_of(*result_type)}) {
-            if (!a.is<f128>() || !b.is<f128>() || !c.is<f128>()) { return stdx::none; }
-            return const_value{
-                fused_multiply_add(a.as<f128>(), b.as<f128>(), c.as<f128>(), *format), result_type};
-        }
-        if (!is_integer_arm(a) || !is_integer_arm(b) || !is_integer_arm(c)) { return stdx::none; }
-        const auto product{fold_integer_binary(syntax::token_type_t::STAR, a, b, id)};
-        if (!product || product->is_poison()) { return product; }
-        return fold_integer_binary(syntax::token_type_t::PLUS, *product, c, id);
-    }
-    case syntax::builtin_t::TAG_NAME: {
+    case syntax::builtin_t::MOD:
+    case syntax::builtin_t::MUL_ADD:   return eval_math_builtin(call_id, call, builtin_type);
+    case syntax::builtin_t::TAG_NAME:  {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
             if (const auto val{try_eval(*expr_h)}) {
@@ -5501,173 +5992,14 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         if (target) { operand->set_type(*target); }
         return operand;
     }
-    case syntax::builtin_t::INT_CAST: {
-        const auto op_h{cast_operand(call)};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        if (!operand) { return stdx::none; }
-        const auto src_int{operand->as_int_opt()};
-        if (!src_int) { return stdx::none; }
-        auto target{builtin_result_type(call_id, call)};
-        if (!target) { return stdx::none; }
-        if (target->get_kind() == sema::type_kind::COMPTIME_INT) {
-            return retyped(*operand, *target);
-        }
-        const auto ptr_bits{target_pointer_bits()};
-        const auto source_width{operand->get_type()
-                                    ? integer_target_width(*operand->get_type(), ptr_bits)
-                                    : stdx::none};
-        const auto target_width{integer_target_width(*target, ptr_bits)};
-        bool       fits{sema::comptime_int_fits(*src_int, *target, ptr_bits)};
-        if (source_width && target_width && source_width->first <= 128 &&
-            target_width->first <= 128) {
-            const semantics::int_domain from{source_width->first, source_width->second};
-            const semantics::int_domain to{target_width->first, target_width->second};
-            const auto cast{semantics::cast_int(from, to, static_cast<u128>(*src_int))};
-            if (cast) { return domain_value(*cast, to, target); }
-            fits = false;
-        }
-        if (!fits) {
-            const bool unsigned_source{source_width && !source_width->second};
-            ctx_.diags.emplace_back(
-                fmt::format("Integer value {} is out of range for target type '{}' in @intCast",
-                            unsigned_source ? fmt::to_string(static_cast<u128>(*src_int))
-                                            : fmt::to_string(*src_int),
-                            ctx_.type_display_name(*target)),
-                sema::error::COMPTIME_EVALUATION_FAILED,
-                module_->ast.location_of(*op_h));
-            return const_value::make_poison();
-        }
-        if (const auto w{integer_target_width(*target, ptr_bits)}) {
-            return wrap_to_width(*operand, w->first, w->second, target);
-        }
-        return stdx::none;
-    }
-    case syntax::builtin_t::TRUNCATE: {
-        const auto op_h{cast_operand(call)};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        if (!operand) { return stdx::none; }
-        const auto src_int{operand->as_int_opt()};
-        if (!src_int) { return stdx::none; }
-        auto target{builtin_result_type(call_id, call)};
-        if (!target) { return stdx::none; }
-        const auto ptr_bits{target_pointer_bits()};
-        if (const auto w{integer_target_width(*target, ptr_bits)}) {
-            return wrap_to_width(*operand, w->first, w->second, target);
-        }
-        return stdx::none;
-    }
-    case syntax::builtin_t::BOOL_FROM_INT: {
-        if (call.arguments.empty()) { return stdx::none; }
-        const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        if (!operand) { return stdx::none; }
-        auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-        if (const auto src_int{operand->as_int_opt()}) {
-            return const_value{*src_int != 0, bool_type};
-        }
-        if (const auto ptr_val{operand->as_opt<u64>()}) {
-            return const_value{*ptr_val != 0, bool_type};
-        }
-        return stdx::none;
-    }
-    case syntax::builtin_t::INT_FROM_BOOL: {
-        const auto op_h{cast_operand(call)};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        if (!operand) { return stdx::none; }
-        const auto src_bool{operand->as_opt<bool>()};
-        if (!src_bool) { return stdx::none; }
-        auto target{builtin_result_type(call_id, call)};
-        if (!target) { return stdx::none; }
-        const u64 int_val{*src_bool ? 1ULL : 0ULL};
-        return const_value{int_val, target};
-    }
-    case syntax::builtin_t::FLOAT_CAST: {
-        const auto op_h{cast_operand(call)};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        auto       target{builtin_result_type(call_id, call)};
-        if (!operand || !target) { return stdx::none; }
-        const auto         format{sema::float_format_of(*target)};
-        stdx::option<f128> f;
-        if (const auto as_float{operand->as_opt<f128>()}) {
-            f.emplace(*as_float);
-        } else if (const auto as_int{operand->int_as_float_opt()}) {
-            f.emplace(*as_int);
-        }
-        if (!format || !f) { return stdx::none; }
-        // Rounded once into the target; only a finite value can be out of range
-        if (!sema::comptime_float_fits(*f, *target)) {
-            ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
-                                                *f,
-                                                ctx_.type_display_name(*target)),
-                                    sema::error::LITERAL_OUT_OF_RANGE,
-                                    module_->ast.location_of(*op_h));
-            return const_value::make_poison();
-        }
-        return const_value{f->round_to(*format), target};
-    }
+    case syntax::builtin_t::INT_CAST:
+    case syntax::builtin_t::TRUNCATE:
+    case syntax::builtin_t::BOOL_FROM_INT:
+    case syntax::builtin_t::INT_FROM_BOOL:
+    case syntax::builtin_t::FLOAT_CAST:
     case syntax::builtin_t::FLOAT_FROM_INT:
-    case syntax::builtin_t::INT_FROM_FLOAT: {
-        const auto op_h{call.arguments.back().as_opt<ast::expr_handle>()};
-        if (!op_h) { return stdx::none; }
-        const auto operand{try_eval(*op_h)};
-        auto       target{call_result_type(call_id)};
-        if (!operand || !target) { return stdx::none; }
-
-        const auto ptr_bits{target_pointer_bits()};
-        if (builtin_type == syntax::builtin_t::FLOAT_FROM_INT) {
-            const auto format{sema::float_format_of(*target)};
-            const auto source_width{operand->get_type()
-                                        ? integer_target_width(*operand->get_type(), ptr_bits)
-                                        : stdx::none};
-            // A typed integer rounds straight into the target format, like the instruction
-            if (const auto bits{operand->as_int_opt()};
-                bits && format && source_width && source_width->first <= 128) {
-                const semantics::int_domain from{source_width->first, source_width->second};
-                return const_value{
-                    semantics::float_from_int(from, static_cast<u128>(*bits), *format), target};
-            }
-            // Converted exactly first so an overflowing result is still reported by value
-            const auto f{operand->int_as_float_opt()};
-            if (!f) { return stdx::none; }
-            if (!sema::comptime_float_fits(*f, *target)) {
-                ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
-                                                    *f,
-                                                    ctx_.type_display_name(*target)),
-                                        sema::error::LITERAL_OUT_OF_RANGE,
-                                        module_->ast.location_of(*op_h));
-                return const_value::make_poison();
-            }
-            return const_value{*f, target};
-        }
-
-        const auto f{operand->as_opt<f128>()};
-        if (!f) { return stdx::none; }
-        // An untyped target takes the comptime domain: signed, 128 bits
-        const auto width{target->get_kind() == sema::type_kind::COMPTIME_INT
-                             ? stdx::option<std::pair<u16, bool>>{std::pair{u16{128}, true}}
-                             : integer_target_width(*target, ptr_bits)};
-        if (width && width->first <= 128) {
-            const semantics::int_domain to{width->first, width->second};
-            if (const auto folded{semantics::int_from_float(*f, to)}) {
-                return domain_value(*folded, to, target);
-            }
-        }
-        // Past 128 bits a finite value is left to the (range-checked) runtime conversion
-        if (!width || (width->first > 128 && f->is_finite())) { return stdx::none; }
-        ctx_.diags.emplace_back(
-            fmt::format("Float value {} is out of range for target type '{}' in @intFromFloat",
-                        *f,
-                        ctx_.type_display_name(*target)),
-            sema::error::COMPTIME_EVALUATION_FAILED,
-            module_->ast.location_of(*op_h));
-        return const_value::make_poison();
-    }
-    case syntax::builtin_t::BACKING_INT: {
+    case syntax::builtin_t::INT_FROM_FLOAT: return eval_cast_builtin(call_id, call, builtin_type);
+    case syntax::builtin_t::BACKING_INT:    {
         // Only an enum folds; packed aggregates and tagged unions are read by the emitter
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
@@ -5693,6 +6025,11 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
         }
         auto target{builtin_result_type(call_id, call)};
         if (!target) { return stdx::none; }
+        // `@as(@Vector(N, T), .{ ... })` keeps the lanes it was built with
+        if (builtin_type == syntax::builtin_t::AS && sema::is_vector(*target) &&
+            operand->is<const_array>()) {
+            return with_declared_type(*operand, *target);
+        }
         // A float `@as` rounds once into the target, like the runtime conversion
         if (const auto f{operand->as_opt<f128>()}; f && builtin_type == syntax::builtin_t::AS) {
             if (const auto format{sema::float_format_of(*target)}) {
@@ -5744,11 +6081,8 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                     break;
                 }
             }
-            // A value with no listed variant is only meaningful for a non-exhaustive enum
-            // (mirrors the runtime `_` fallback in `emitter::emit_runtime_tag_name`); an
-            // exhaustive enum has no valid fallback, so decline to fold and let the emitter's
-            // runtime cast guard trap on the invalid value instead.
             if (name.empty()) {
+                // A value with no listed variant is only meaningful for a non-exhaustive enum
                 if (!en->non_exhaustive) { return stdx::none; }
                 name = "_";
             }
@@ -5900,7 +6234,10 @@ auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
     constexpr usize max_leaves{1UZ << 16};
     usize           leaves{0};
     const auto      build{[&](this const auto& self, sema::type& t) -> stdx::option<const_value> {
-        auto& concrete{force_deferred_type(t)};
+        // A builtin-built annotation (`@Vector(4, f32)`) records the type it names as a `type`
+        auto&      forced{force_deferred_type(t)};
+        const auto meta{forced.get_data().as_opt<sema::types::meta_type>()};
+        auto&      concrete{meta ? meta->instance : forced};
         if (const auto arr{concrete.get_data().as_opt<sema::types::array>()}) {
             if (leaves + arr->len > max_leaves) { return stdx::none; }
             const_array out;
@@ -5910,6 +6247,13 @@ auto const_eval::undefined_value_of(sema::type& declared) -> const_value {
                 if (!elem) { return stdx::none; }
                 out.elements.emplace_back(std::move(*elem));
             }
+            return const_value{std::move(out), concrete};
+        }
+        // A vector's lanes are written one at a time like an array's elements
+        if (const auto vec{sema::vector_of(concrete)}) {
+            const_array out;
+            out.elements.assign(vec->len, const_value{undefined_val{}, vec->underlying});
+            leaves += vec->len;
             return const_value{std::move(out), concrete};
         }
         if (const auto st{concrete.get_data().as_opt<sema::types::struct_t>()};

@@ -547,6 +547,9 @@ auto type::to_string(stdx::option<const type_name_map&> names) const -> std::str
                                container_qualifier(*this),
                                arr.underlying.to_string(names));
         },
+        [names](types::vector vec) {
+            return fmt::format("@Vector({}, {})", vec.len, vec.underlying.to_string(names));
+        },
         [this, names](const types::deferred_array& arr) {
             std::string dim;
             if (arr.array.dimension) {
@@ -714,6 +717,63 @@ auto pointee_of(const type& t) noexcept -> stdx::option<type&> {
     return stdx::none;
 }
 
+auto vector_of(const type& t) noexcept -> stdx::option<const types::vector&> {
+    return t.get_data().as_opt<types::vector>();
+}
+
+auto is_vector(const type& t) noexcept -> bool { return t.get_kind() == type_kind::VECTOR; }
+
+auto vector_bits(const types::vector& vec, u32 ptr_bits) noexcept -> u64 {
+    const auto& lane{vec.underlying};
+    u64         lane_bits{0};
+    switch (lane.get_kind()) {
+    case type_kind::INT:     lane_bits = int_width(lane); break;
+    case type_kind::BOOL:    lane_bits = 1; break;
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::POINTER: lane_bits = ptr_bits; break;
+    default:                 lane_bits = float_bits(lane.get_kind()); break;
+    }
+    return lane_bits * vec.len;
+}
+
+auto is_array_vector_pair(const type& a, const type& b) noexcept -> bool {
+    const auto pair{[](const type& arr_side, const type& vec_side) {
+        const auto arr{arr_side.get_data().as_opt<types::array>()};
+        const auto vec{vector_of(vec_side)};
+        return arr && vec && !arr->null_terminated && arr->len == vec->len &&
+               is_same_unqualified(arr->underlying, vec->underlying);
+    }};
+    return pair(a, b) || pair(b, a);
+}
+
+auto vector_lane_rejection(const type& lane) -> stdx::option<std::string> {
+    switch (lane.get_kind()) {
+    case type_kind::INT: {
+        const auto bits{int_width(lane)};
+        if (bits == 0) { return "a lane needs at least one bit"; }
+        if (bits > 128) { return "integer lanes are at most 128 bits wide"; }
+        return stdx::none;
+    }
+    case type_kind::ISIZE:
+    case type_kind::USIZE:
+    case type_kind::BOOL:
+    case type_kind::F16:
+    case type_kind::F32:
+    case type_kind::F64:
+    case type_kind::F128:    return stdx::none;
+    case type_kind::F80:     return "no hardware has 'f80' vectors";
+    case type_kind::POINTER: {
+        const auto referent{pointee_of(lane)};
+        if (is_fat_callable(lane) || (referent && referent->get_kind() == type_kind::DYN)) {
+            return "a fat pointer is two words, not one lane";
+        }
+        return stdx::none;
+    }
+    default: return "lanes are integers, floats, 'bool', or pointers";
+    }
+}
+
 auto signature_of(const type& fn_value_type) noexcept -> stdx::option<const types::function&> {
     gsl::not_null<const type*> target{&fn_value_type};
     if (const auto ref{target->get_data().as_opt<types::reference>()}) {
@@ -788,6 +848,13 @@ auto is_same_unqualified(const type& a, const type& b) noexcept -> bool {
         if (!arr_a || !arr_b) { return false; }
         return arr_a->len == arr_b->len && arr_a->null_terminated == arr_b->null_terminated &&
                is_same_unqualified(arr_a->underlying, arr_b->underlying);
+    }
+    case type_kind::VECTOR: {
+        const auto vec_a{vector_of(a)};
+        const auto vec_b{vector_of(b)};
+        if (!vec_a || !vec_b) { return false; }
+        return vec_a->len == vec_b->len &&
+               is_same_unqualified(vec_a->underlying, vec_b->underlying);
     }
     case type_kind::FUNCTION: {
         const auto f_a{a.get_data().as_opt<types::function>()};
@@ -965,8 +1032,15 @@ auto is_assignable(const type& src, const type& dest) noexcept -> bool {
             // Arrays are values: assignment copies, so element constness never blocks the copy
             return is_elem_value_copyable(a_src->underlying, a_dest->underlying);
         }
-        default: break;
+        case type_kind::VECTOR: return is_same_unqualified(src, dest);
+        default:                break;
         }
+    }
+
+    // `[N]T` and `@Vector(N, T)` convert to each other by value
+    if ((src_kind == type_kind::ARRAY && dest_kind == type_kind::VECTOR) ||
+        (src_kind == type_kind::VECTOR && dest_kind == type_kind::ARRAY)) {
+        return is_array_vector_pair(src, dest);
     }
 
     // Array to Slice coercion: [N]S / [N:0]S -> []T / [:0]T

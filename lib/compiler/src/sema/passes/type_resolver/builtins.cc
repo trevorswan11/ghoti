@@ -247,15 +247,6 @@ namespace {
     return std::ranges::contains(names, name);
 }
 
-[[nodiscard]] auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
-    switch (t.get_kind()) {
-    case type_kind::INT:   return u32{int_width(t)};
-    case type_kind::ISIZE:
-    case type_kind::USIZE: return ptr_bits;
-    default:               return 0;
-    }
-}
-
 } // namespace
 
 namespace {
@@ -270,6 +261,7 @@ enum class builtin_family : u8 {
     ATOMIC,
     C_VARIADIC,
     PROGRAM,
+    LANE,
 };
 
 [[nodiscard]] auto family_of(syntax::builtin_t builtin) -> builtin_family {
@@ -314,6 +306,7 @@ enum class builtin_family : u8 {
     case syntax::builtin_t::REFERENCE:
     case syntax::builtin_t::SLICE:
     case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::VECTOR:
     case syntax::builtin_t::FN:
     case syntax::builtin_t::ENUM:
     case syntax::builtin_t::STRUCT:
@@ -388,6 +381,14 @@ enum class builtin_family : u8 {
     case syntax::builtin_t::REQUIRE:
     case syntax::builtin_t::ASSERT:
     case syntax::builtin_t::VERIFY:                   return builtin_family::PROGRAM;
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::MASKED_STORE:
+    case syntax::builtin_t::GATHER:
+    case syntax::builtin_t::SCATTER:                  return builtin_family::LANE;
     default: UNREACHABLE("Unimplemented builtin type resolution");
     }
 }
@@ -430,6 +431,14 @@ auto type_resolver::check_builtin_arity(const ast::call_expr&          call,
         if (call.arguments.size() < 2) {
             return make_sema_err(fmt::format("'@llvmIntrinsic' expects a name and a return type, "
                                              "then the arguments; found {} argument(s)",
+                                             call.arguments.size()),
+                                 error::ARITY_MISMATCH,
+                                 resolving_.ast.location_of(call.function));
+        }
+    } else if (builtin_id == syntax::builtin_t::VECTOR) {
+        if (call.arguments.empty() || call.arguments.size() > 2) {
+            return make_sema_err(fmt::format("'@Vector' expects a length and a lane type, or a "
+                                             "'VectorInfo'; found {} argument(s)",
                                              call.arguments.size()),
                                  error::ARITY_MISMATCH,
                                  resolving_.ast.location_of(call.function));
@@ -504,6 +513,7 @@ auto type_resolver::cast_args_of(const ast::call_expr& call, std::string_view na
 // Casts and conversions: `@as`, `@intCast`, `@ptrCast`, and the like
 template <ast::IndexableID ID>
 auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    if (auto per_lane{resolve_vector_cast_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto& builtin{site.builtin};
     const auto  builtin_id{site.kind};
@@ -1314,6 +1324,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
     using syntax::builtin_t;
     using syntax::token_type_t;
     switch (site.kind) {
+    case syntax::builtin_t::VECTOR:    TRY(resolve_vector_builtin(call, return_type)); break;
     case syntax::builtin_t::INT:
     case syntax::builtin_t::FLOAT:
     case syntax::builtin_t::POINTER:
@@ -1322,10 +1333,17 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
     case syntax::builtin_t::ARRAY:
     case syntax::builtin_t::FN:        {
         const auto builtin_name{syntax::builtin_name(builtin_id)};
+        const auto diags_before{ctx_.diags.size()};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc && mentions_unbound_type(call.arguments[0])) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
             return_type->resolve_if<types::deferred_call>(call, resolving_);
+            break;
+        }
+        // What the descriptor reads may be unbound until instantiation, which reports it then
+        if (!desc && awaits_instantiation()) {
+            DISCARD(ctx_.diags.split_off(diags_before));
+            return_type = &instantiation_placeholder();
             break;
         }
         if (!desc) {
@@ -1634,6 +1652,7 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
 // Integer bit counts, float math, and the checked and wrapping arithmetic
 template <ast::IndexableID ID>
 auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    if (auto per_lane{resolve_vector_math_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto  builtin_id{site.kind};
     auto&       return_type{site.return_type};
@@ -2567,6 +2586,7 @@ auto type_resolver::resolve_builtin_call(ID                             id,
     case builtin_family::ATOMIC:            TRY(resolve_atomic_builtin(id, site)); break;
     case builtin_family::C_VARIADIC:        TRY(resolve_c_variadic_builtin(id, site)); break;
     case builtin_family::PROGRAM:           TRY(resolve_program_builtin(id, site)); break;
+    case builtin_family::LANE:              TRY(resolve_lane_builtin(site)); break;
     }
 
     resolving_.set_sema_type(id, *site.return_type);
@@ -2742,6 +2762,39 @@ auto type_resolver::resolve_type_descriptor(const ast::call_expr::argument& desc
     const auto s{folded->as_opt<gir::const_struct>()};
     if (!s) { return stdx::none; }
     return *s;
+}
+
+auto type_resolver::resolve_vector_builtin(const ast::call_expr& call,
+                                           gsl::not_null<type*>& return_type)
+    -> stdx::result<void, diagnostic> {
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      diags_before{ctx_.diags.size()};
+    const auto      vec{evaluator.eval_vector_type(call)};
+    if (vec) {
+        auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **vec}]};
+        meta->resolve_if<types::meta_type>(**vec);
+        return_type = meta;
+        return {};
+    }
+
+    const auto& err{vec.error()};
+    if (err.unknown && awaits_instantiation()) {
+        DISCARD(ctx_.diags.split_off(diags_before));
+        return_type = &instantiation_placeholder();
+        return {};
+    }
+    const bool waits_on_instantiation{err.unknown &&
+                                      std::ranges::any_of(call.arguments, [&](const auto& arg) {
+                                          return mentions_unbound_type(arg);
+                                      })};
+    if (waits_on_instantiation) {
+        return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
+        return_type->resolve_if<types::deferred_call>(call, resolving_);
+        return {};
+    }
+    return make_sema_err(err.message,
+                         err.unknown ? error::COMPTIME_EVALUATION_FAILED : error::TYPE_MISMATCH,
+                         get_call_arg_location(call.arguments[err.arg_index]));
 }
 
 auto type_resolver::resolve_const_enum_arg(const ast::call_expr::argument& arg,

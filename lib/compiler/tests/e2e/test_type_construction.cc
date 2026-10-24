@@ -86,6 +86,19 @@ TEST_CASE("`@Array` constructs an array type from an `ArrayInfo` descriptor") {
     )") == 9);
 }
 
+TEST_CASE("a type-building call in a function type names the type it builds") {
+    CHECK(helpers::compile_and_run(R"(
+        const g = fn(x: i32): i32 { return x + 1; };
+        pub const main = fn(): i32 {
+            const f: extern fn(x: @Int(.{ .bits = 32, .signedness = .signed })): @Int(.{
+                .bits = 32,
+                .signedness = .signed,
+            }) = g;
+            return f(41);
+        };
+    )") == 42);
+}
+
 TEST_CASE("a struct literal with a `type`-kind field constructs without crashing") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
@@ -31,6 +32,9 @@ class function {
         std::string name;
         sema::type& type;
         local_id    id;
+        // Which argument this is as the call was written, when erased `comptime` parameters or a
+        // hidden environment move it from its slot here
+        stdx::opt_size source_position{};
     };
 
     // Another symbol for this function, from a second `@export`
@@ -79,10 +83,14 @@ class function {
     }
     auto set_source_module(mod::module_t& m) -> void { source_module_.emplace(m); }
 
-    [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
-        return aliases_;
+    // The name the function is written under, for a monomorph whose symbol is mangled
+    [[nodiscard]] auto get_source_name() const noexcept -> std::string_view {
+        return source_name_.empty() ? std::string_view{name_} : std::string_view{source_name_};
     }
-    auto add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
+    auto set_source_name(std::string name) -> void { source_name_ = std::move(name); }
+
+    [[nodiscard]] auto get_aliases() const noexcept -> gsl::span<const alias> { return aliases_; }
+    auto               add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }
@@ -129,6 +137,7 @@ class function {
   private:
     ghoti::arena&                          arena_;
     std::string                            name_;
+    std::string                            source_name_;
     sema::type&                            type_;
     std::vector<gsl::not_null<parameter*>> params_;
     std::vector<gsl::not_null<segment*>>   segments_;

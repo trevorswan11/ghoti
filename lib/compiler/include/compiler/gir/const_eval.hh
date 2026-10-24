@@ -9,6 +9,7 @@
 #include <gsl/span>
 #include <stdx/hash.hh>
 #include <stdx/option.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -45,6 +46,16 @@ class const_eval {
       private:
         const_eval& ce_;
         bool        prev_;
+    };
+
+    // A lane of `a` from 0, of `b` from -1 (`~i`), none for `undefined`
+    using shuffle_mask = std::vector<stdx::option<i64>>;
+
+    // Why a `@Vector(...)` call names no type; `unknown` when an argument isn't known yet
+    struct vector_type_error {
+        std::string message;
+        usize       arg_index{0};
+        bool        unknown{false};
     };
 
   public:
@@ -136,8 +147,19 @@ class const_eval {
     // Evaluate and assert. Emits COMPTIME_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
 
+    [[nodiscard]] static auto shuffle_mask_of(const const_value& mask)
+        -> stdx::option<shuffle_mask>;
+
     // Evaluates an expression as a non-negative integer dimension for array sizing
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
+
+    // The type `@Vector(len, T)` or `@Vector(info)` names
+    [[nodiscard]] auto eval_vector_type(const ast::call_expr& call)
+        -> stdx::result<gsl::not_null<sema::type*>, vector_type_error>;
+
+    // The type a builtin's type argument names, or none when it isn't known yet
+    [[nodiscard]] auto type_argument_of(const ast::call_expr::argument& arg)
+        -> stdx::option<sema::type&>;
 
     auto resolve_all_deferred_arrays() -> void;
     auto resolve_all_deferred_calls() -> void;
@@ -337,6 +359,33 @@ class const_eval {
     auto fold_concat(const const_value& lhs, const const_value& rhs, ast::node_id id)
         -> stdx::option<const_value>;
     auto eval_unary(ast::node_id id, const ast::unary_expr& unary) -> stdx::option<const_value>;
+    // A unary operator applied to an already-evaluated scalar
+    auto fold_unary_value(syntax::token_type_t op_type, const const_value& operand, ast::node_id id)
+        -> stdx::option<const_value>;
+    // A `@Vector` operator folded lane by lane, broadcasting a scalar operand
+    auto eval_vector_binary(ast::node_id id, const ast::binary_expr& binary, sema::type& result)
+        -> stdx::option<const_value>;
+    // `@intCast`, `@floatFromInt`, and the other numeric casts, lane by lane on a vector
+    auto eval_cast_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    auto fold_cast(syntax::builtin_t         builtin_type,
+                   const const_value&        folded_operand,
+                   stdx::option<sema::type&> target,
+                   ast::node_id              site) -> stdx::option<const_value>;
+    // `@sqrt`, `@min`, `@popCount`, and the other math builtins, lane by lane on a vector
+    auto eval_math_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    auto fold_math(syntax::builtin_t             builtin_type,
+                   gsl::span<const const_value>  operands,
+                   gsl::span<const ast::node_id> sites,
+                   stdx::option<sema::type&>     result_type,
+                   ast::node_id                  id) -> stdx::option<const_value>;
+    // `@splat`, `@reduce`, `@shuffle`, and `@select` over constant lanes
+    auto eval_lane_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          kind) -> stdx::option<const_value>;
     auto eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::option<const_value>;
     auto eval_ident(ast::node_id id, const ast::identifier_expr& ident)
         -> stdx::option<const_value>;

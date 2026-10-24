@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -91,6 +92,13 @@ struct type_layout {
     usize f64_align;
     usize f80_size;
     usize f80_align;
+    // The ABI alignment of a vector exactly `8 << k` bits wide, which a target may set apart from
+    // its natural (size rounded up to a power of two) alignment
+    std::array<usize, 11> vector_aligns;
+
+    // A `bits`-wide vector's ABI alignment and allocated size, as LLVM lays it out
+    [[nodiscard]] auto vector_align(u64 bits) const noexcept -> usize;
+    [[nodiscard]] auto vector_size(u64 bits) const noexcept -> usize;
 
     [[nodiscard]] static auto resolve(const llvm::DataLayout& dl) -> type_layout;
     [[nodiscard]] static auto resolve(const llvm::Triple& triple) -> type_layout;

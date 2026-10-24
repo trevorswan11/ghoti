@@ -49,6 +49,7 @@ enum class builtin_t : u8 {
     REFERENCE,
     SLICE,
     ARRAY,
+    VECTOR,
     FN,
     FIELD_DEFAULT,
     STRUCT,
@@ -124,6 +125,14 @@ enum class builtin_t : u8 {
     CALL,
     ENUM_LITERAL,
     LLVM_INTRINSIC,
+    SPLAT,
+    REDUCE,
+    SHUFFLE,
+    SELECT,
+    MASKED_LOAD,
+    MASKED_STORE,
+    GATHER,
+    SCATTER,
     ENTRY_MAIN,
     ENTRY_TEST_RUNNER,
     TEST_FUNCTIONS,
@@ -178,6 +187,7 @@ constexpr builtin_def POINTER{"@Pointer", builtin_t::POINTER};
 constexpr builtin_def REFERENCE{"@Reference", builtin_t::REFERENCE};
 constexpr builtin_def SLICE{"@Slice", builtin_t::SLICE};
 constexpr builtin_def ARRAY{"@Array", builtin_t::ARRAY};
+constexpr builtin_def VECTOR{"@Vector", builtin_t::VECTOR};
 constexpr builtin_def FN{"@Fn", builtin_t::FN};
 constexpr builtin_def FIELD_DEFAULT{"@fieldDefault", builtin_t::FIELD_DEFAULT};
 constexpr builtin_def STRUCT{"@Struct", builtin_t::STRUCT};
@@ -267,6 +277,14 @@ constexpr builtin_def      EMBED{"@embed", builtin_t::EMBED};
 constexpr builtin_def      CALL{"@call", builtin_t::CALL};
 constexpr builtin_def      ENUM_LITERAL{"@EnumLiteral", builtin_t::ENUM_LITERAL};
 constexpr builtin_def      LLVM_INTRINSIC{"@llvmIntrinsic", builtin_t::LLVM_INTRINSIC};
+constexpr builtin_def      SPLAT{"@splat", builtin_t::SPLAT};
+constexpr builtin_def      REDUCE{"@reduce", builtin_t::REDUCE};
+constexpr builtin_def      SHUFFLE{"@shuffle", builtin_t::SHUFFLE};
+constexpr builtin_def      SELECT{"@select", builtin_t::SELECT};
+constexpr builtin_def      MASKED_LOAD{"@maskedLoad", builtin_t::MASKED_LOAD};
+constexpr builtin_def      MASKED_STORE{"@maskedStore", builtin_t::MASKED_STORE};
+constexpr builtin_def      GATHER{"@gather", builtin_t::GATHER};
+constexpr builtin_def      SCATTER{"@scatter", builtin_t::SCATTER};
 constexpr builtin_def      ENTRY_MAIN{"@entryMain", builtin_t::ENTRY_MAIN};
 constexpr builtin_def      ENTRY_TEST_RUNNER{"@entryTestRunner", builtin_t::ENTRY_TEST_RUNNER};
 constexpr builtin_def      TEST_FUNCTIONS{"@testFunctions", builtin_t::TEST_FUNCTIONS};
@@ -316,6 +334,7 @@ constexpr std::array ALL_BUILTINS{
     builtins::REFERENCE,
     builtins::SLICE,
     builtins::ARRAY,
+    builtins::VECTOR,
     builtins::FN,
     builtins::FIELD_DEFAULT,
     builtins::STRUCT,
@@ -391,6 +410,14 @@ constexpr std::array ALL_BUILTINS{
     builtins::CALL,
     builtins::ENUM_LITERAL,
     builtins::LLVM_INTRINSIC,
+    builtins::SPLAT,
+    builtins::REDUCE,
+    builtins::SHUFFLE,
+    builtins::SELECT,
+    builtins::MASKED_LOAD,
+    builtins::MASKED_STORE,
+    builtins::GATHER,
+    builtins::SCATTER,
     builtins::ENTRY_MAIN,
     builtins::ENTRY_TEST_RUNNER,
     builtins::TEST_FUNCTIONS,

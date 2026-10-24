@@ -82,6 +82,12 @@ class builder {
         -> local_id;
     auto emit_call(std::string_view callee, std::vector<value> args, sema::type& return_type)
         -> stdx::option<local_id>;
+    // A `SPLAT` ... `REDUCE` vector instruction; `lane_op` is `REDUCE`'s operation
+    auto emit_vector_op(instruction_kind   kind,
+                        std::vector<value> operands,
+                        sema::type&        result_type,
+                        stdx::option<u8>   lane_op = stdx::none,
+                        bool               checked = false) -> local_id;
 
     // `atomic_op`/`atomic_order`/`atomic_fail_order` carry an atomic builtin's compile-time
     // `AtomicRmwOp`/`MemoryOrder` enum ordinals; unused by every other builtin.

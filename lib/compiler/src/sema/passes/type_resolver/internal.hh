@@ -252,6 +252,32 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
            bound_type_param(tree, fn.parameters, idx);
 }
 
+// An integer type's width in bits, `usize`/`isize` being the target's pointer width; 0 otherwise
+[[nodiscard]] inline auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
+    switch (t.get_kind()) {
+    case type_kind::INT:   return u32{int_width(t)};
+    case type_kind::ISIZE:
+    case type_kind::USIZE: return ptr_bits;
+    default:               return 0;
+    }
+}
+
+// `@splat`, `@reduce`, and the other builtins that work on a vector's lanes
+[[nodiscard]] inline auto is_lane_builtin(stdx::option<syntax::builtin_t> builtin) -> bool {
+    if (!builtin) { return false; }
+    switch (*builtin) {
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::MASKED_STORE:
+    case syntax::builtin_t::GATHER:
+    case syntax::builtin_t::SCATTER:      return true;
+    default:                              return false;
+    }
+}
+
 // Why an unmarked parameter is `comptime`: its function reads it at compile time somewhere
 [[nodiscard]] inline auto inferred_comptime_reason(const mod::module_t&                 owner,
                                                    const ast::function_expr::parameter& param)
@@ -407,6 +433,39 @@ scan_cabi_offenders(const type& t, bool native_f80, cabi_offenders acc = {}) -> 
         },
         [acc, &scan](types::deferred_array da) { return scan(da.underlying, acc); },
         [acc](const auto&) { return acc; });
+}
+
+// A vector in a C signature passes like `__m128` / `__m256` / `__m512`, which no other width has
+[[nodiscard]] inline auto find_nonabi_vector(const type& t, u32 ptr_bits)
+    -> stdx::option<const type&> {
+    const auto scan{[ptr_bits](const type& inner) { return find_nonabi_vector(inner, ptr_bits); }};
+    return t.get_data().visit(
+        [&t, ptr_bits](types::vector vec) -> stdx::option<const type&> {
+            const auto bits{vector_bits(vec, ptr_bits)};
+            if (bits == 128 || bits == 256 || bits == 512) { return stdx::none; }
+            return t;
+        },
+        [&scan](types::pointer p) { return scan(p.underlying); },
+        [&scan](types::reference r) { return scan(r.underlying); },
+        [&scan](types::slice sl) { return scan(sl.underlying); },
+        [&scan](types::array ar) { return scan(ar.underlying); },
+        [&scan](types::function fn) -> stdx::option<const type&> {
+            for (const auto param : fn.params) {
+                if (const auto found{scan(*param)}) { return found; }
+            }
+            return scan(fn.return_type);
+        },
+        [](const auto&) -> stdx::option<const type&> { return stdx::none; });
+}
+
+[[nodiscard]] inline auto nonabi_vector(const sema::context&   ctx,
+                                        const type&            vec,
+                                        const source_location& location) -> diagnostic {
+    return diagnostic{fmt::format("'{}' has no C ABI; a vector crossing an `extern` boundary must "
+                                  "be 16, 32, or 64 bytes",
+                                  ctx.type_display_name(vec)),
+                      error::ILLEGAL_EXTERN_VECTOR,
+                      location};
 }
 
 // A function declared `@[testing]`, on its declaration or its literal

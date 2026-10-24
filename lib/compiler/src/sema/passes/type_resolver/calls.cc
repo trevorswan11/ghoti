@@ -87,6 +87,7 @@ namespace {
     case syntax::builtin_t::REFERENCE:   return "PointerInfo";
     case syntax::builtin_t::SLICE:       return "SliceInfo";
     case syntax::builtin_t::ARRAY:       return "ArrayInfo";
+    case syntax::builtin_t::VECTOR:      return "VectorInfo";
     case syntax::builtin_t::FN:          return "FnInfo";
     case syntax::builtin_t::STRUCT:      return "StructInfo";
     case syntax::builtin_t::UNION:       return "UnionInfo";
@@ -733,6 +734,11 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
         // The inferred target is the cast's result, not its operand's type
         const structural_guard shield{implicit_type_stack_, stdx::none};
         args_result = resolve_call_args(call.arguments);
+    } else if (call.function->get_builtin() == syntax::builtin_t::MUL_ADD &&
+               call.arguments.size() == 4) {
+        args_result = resolve_mul_add_args(call);
+    } else if (is_lane_builtin(call.function->get_builtin())) {
+        args_result = resolve_lane_call_args(call);
     } else if (!atomic_arg_roles(call.function->get_builtin()).empty()) {
         args_result = resolve_atomic_call_args(call);
     } else {
@@ -1066,8 +1072,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     i < fn_params.size() &&
                     (keeps_comptime_numeric(fn_params[i]) || follows_comptime)};
                 stdx::option<structural_guard> g;
+                const auto                     arg_init{[&]() -> bool {
+                    const auto arg_h{arg.template as_opt<ast::expr_handle>()};
+                    const auto init{arg_h ? resolving_.ast.get_as_opt<ast::initializer_expr>(*arg_h)
+                                          : stdx::none};
+                    return init && !init->object_type;
+                }};
                 if (!is_generic_type(*param_type)) {
                     g.emplace(implicit_type_stack_, *param_type);
+                } else if (const auto vector_type{
+                               param_type->get_kind() == type_kind::AUTO && arg_init()
+                                   ? dependent_vector_param(*fn_info_opt, i, call, expanded)
+                                   : stdx::none}) {
+                    g.emplace(implicit_type_stack_, *vector_type);
                 } else if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
                            param_type->get_kind() == type_kind::AUTO && arg_h &&
                            resolving_.ast.get_as_opt<ast::implicit_access_expr>(*arg_h)) {
@@ -1230,8 +1247,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (!cx_params[i].is_comptime) { continue; }
                 stdx::option<type&> param_t;
                 if (i + param_offset < params.size()) { param_t = *params[i + param_offset]; }
-                auto folded{
+                const auto diags_before_fold{ctx_.diags.size()};
+                auto       folded{
                     fold_comptime_arg(call, *fn_info_opt, i, *concrete_arg_types[i], param_t)};
+                // `Box(n)` in a signature reads a `comptime` parameter each instantiation binds
+                if (!folded && awaits_instantiation()) {
+                    DISCARD(ctx_.diags.split_off(diags_before_fold));
+                    auto& placeholder{instantiation_placeholder()};
+                    resolving_.set_sema_type(id, placeholder);
+                    return last_type_.emplace(placeholder);
+                }
                 if (!folded) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
                 folded_args.emplace_back(std::move(*folded));
             }

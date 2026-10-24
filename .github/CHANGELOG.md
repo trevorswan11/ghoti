@@ -900,8 +900,48 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a closure that mentioned a local type alias or `const` crashed codegen or computed the wrong value; types and constants are now read directly instead of being captured
 - Fixed: a closure capturing a parameter it never writes (`&self`, a slice, a struct) crashed codegen, and inside a method `self` named the closure's own environment instead of the method's receiver
 - Fixed: a `move fn` that wrote to one of its captured copies lost the write before its next call, so a counter returned the same value every time
+- `@Vector(len, T)` is a SIMD vector: `len` lanes of `T` operated on together, where `T` is an integer of at most 128 bits, a float other than `f80`, `bool`, or a thin pointer
+    - Operators work per lane: arithmetic, bitwise, shifts, the wrapping and saturating forms, `-`, `~`, `!`, and `and` / `or` on `bool` lanes, which always evaluate both sides
+    - A scalar operand is broadcast to every lane (`v * 2.0`, `1 + v`) when it converts to the lane type; a shift amount keeps its own integer type
+    - A comparison gives a `@Vector(len, bool)` rather than a `bool`
+    - `v[i]` reads one lane and `v[i] = x` / `v[i] += x` writes one; a lane has no address, so `&v[i]` and `^v[i]` are errors, and a vector can't be sliced
+    - A compile-time index is bounds-checked then, a runtime one under runtime safety
+    - `[N]T` and `@Vector(N, T)` convert into each other by value, and `.{ a, b, c, d }` initializes a vector
+    - Runtime safety checks every lane of `+ - *`, `/` and `%`, and shifts, as it does a scalar; a failure panics as the scalar operation does
+    - The layout is LLVM's: `@sizeOf(@Vector(3, f32))` is 16 and 16-aligned, and a `bool` lane is one bit
+    - `@typeInfo(V).vector` is a `builtin.VectorInfo` (`child`, `len`), and `@Vector(info)` builds the type from one
+    - Vector expressions fold at compile time
+    - An `extern` signature or `extern struct` / `extern union` field takes only a 16, 32, or 64-byte vector, which passes as C's `__m128` / `__m256` / `__m512` does; a `packed` aggregate takes none
+    - `@llvmIntrinsic` takes and returns vectors: `@llvmIntrinsic("llvm.ctpop", @Vector(4, u32), v)`
+    - A lane count can come from a `comptime` parameter in a signature (`fn(comptime n: usize, v: @Vector(n, f32)): @Vector(n, f32)`), a `.{ ... }` argument builds the vector it sizes, and a parameter read as a lane count is compile-time, as an array length's is
+- Lane builtins for `@Vector`, each folding at compile time where its operands do (the memory ones excepted)
+    - `@splat(x)` fills every lane of its result type with `x`: `let v: @Vector(4, f32) = @splat(1.0)`
+    - `@reduce(op, v)` folds the lanes into one value with a `builtin.ReduceOp` (`.add`, `.mul`, `.and`, `.or`, `.xor`, `.min`, `.max`); integer sums and products wrap, float ones add in any order, and a NaN lane loses `.min` / `.max`
+    - `@shuffle(a, b, mask)` picks lanes from `a` (0, 1, ...) and `b` (-1, -2, ...) by a compile-time mask, whose length is the result's; `b` may be `undefined`, as may a mask entry
+    - `@select(pred, a, b)` takes each lane from `a` where `pred` is true and from `b` elsewhere; a scalar `a` or `b` is broadcast
+    - `@maskedLoad(ptr, mask, passthru)` / `@maskedStore(ptr, value, mask)` read and write the lanes the mask picks at `ptr`, aligned as one lane is; the lanes it skips take `passthru` or are left untouched
+    - `@gather(ptrs, mask, passthru)` / `@scatter(value, ptrs, mask)` do the same through a vector of pointers, one per lane
+    - A `bool` lane has no memory form, so the memory operations take none
+- The math builtins and numeric casts work on vectors, lane by lane, and fold at compile time
+    - `@sqrt`, `@sin` and the other float functions, `@abs`, `@min` / `@max`, `@divTrunc` / `@divFloor` / `@divExact` / `@rem` / `@mod`, `@mulAdd`, and `@clz` / `@ctz` / `@popCount`, which give a vector of counts
+    - A scalar operand is broadcast, as it is for the operators: `@min(v, 0)`, `@mulAdd(V, v, 2.0, 1.0)`
+    - `@addWithOverflow` and the other overflow builtins write a vector result and return a `@Vector(N, bool)` of the lanes that overflowed
+    - `@intCast`, `@truncate`, `@intFromFloat`, `@floatFromInt`, `@floatCast`, `@intFromBool`, and `@boolFromInt` convert a vector to a vector of as many lanes
+    - Runtime safety checks every lane of a cast or division as it does a scalar
+- A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
+- Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
+- Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
+- Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library
+- Add `std.simd`, portable helpers for `@Vector`
+    - `suggest_lanes(T)` is how many `T` lanes fill the widest vector register the compiled-for CPU is guaranteed to have (1 when it has none); `--cpu native` and `--features` widen it, and SVE and RISC-V V report their minimum
+    - `load(V, s)` / `store(s, v)` move a vector through a slice without any alignment, checking the slice is long enough under runtime safety
+    - `reduce_ordered(op, v)` is `@reduce` with a float sum or product folded strictly in lane order
+    - `iota(V)` counts up from 0 in each lane, and `Lane(V)` / `lanes_of(V)` take a vector type apart
+    - `f32x4`, `u8x16`, `i32x8`, and the other 128- and 256-bit vector types
+    - `bitmask(v)` packs a `bool` vector's lanes into the bits of an integer, a portable `movemask`
+    - `std.simd.x86` has `mm_shuffle_epi8`, `mm_movemask_epi8`, `mm_maddubs_epi16`, and their AVX2 forms, and `std.simd.aarch64` has `vqtbl1q_u8` / `vqtbx1q_u8`, each only where the compiled-for CPU has its feature
 - Add `std.math.min` / `std.math.max` over two or more values
     - Both can be evaluated at compile time: `comptime { @assert(std.math.max(1, 2) == 2); }`
 - `std.io.Reader`, `std.io.Writer`, and `std.io.Seeker` default their `Error` to `std.io.Error`, so `&mut dyn std.io.Writer` no longer needs `(Error = std.io.Error)`
@@ -937,6 +977,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - A link that fails on a missing builtin says which ones and that `lib/compiler_rt` doesn't provide them yet
     - `lib/compiler_rt` can `import std;` like any program
     - compiler_rt provides `memcpy`, `memmove`, `memset`, `memcmp`, and `bcmp`, and the Windows x64 stack probe (`__chkstk` / `___chkstk_ms`), written in ghoti; the compiler no longer builds them into every object
+        - They move a vector register at a time (`std.simd.suggest_lanes(u8)` bytes, four per step for copies and fills) wherever the compiled-for CPU has one, then words and bytes; `memcmp` is up to ~9x faster on SSE2 and ~20x with AVX-512, `bcmp` 1.5–4x, and `memcpy` / `memset` up to 2–2.7x on short and mid-size ranges (`lib/compiler_rt/bench/mem_bench.gh`)
     - The optimizer may now form `memcmp` / `bcmp` calls, since compiler_rt provides them
     - `f128` `@floor`/`@ceil`/`@sqrt`/`%` call `floorf128`/`ceilf128`/`sqrtf128`/`fmodf128` on every target, and `f80`'s call `floorf64x`/`ceilf64x`/`fmodf64x` on MSVC, so a `*l` routine always means the platform's `long double`
 - LSP hover shows the `builtin` module's doc comments (`builtin.cpu`, `builtin.CallModifier.never_inline`, ...)

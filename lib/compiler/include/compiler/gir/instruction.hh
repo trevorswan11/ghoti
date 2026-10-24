@@ -20,6 +20,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
@@ -75,6 +76,15 @@ enum class instruction_kind : u8 {
     // `{ctx, code}` for an erased `fn(...)`; `callee_name` is the code, else a thin-fn trampoline
     MAKE_CALLABLE,
 
+    // Vectors
+    SPLAT,        // every lane is operand 0
+    EXTRACT_LANE, // lane operand 1 of vector operand 0
+    INSERT_LANE,  // vector operand 0 with lane operand 1 set to operand 2
+    REPACK,       // `[N]T` <-> `@Vector(N, T)` by value
+    SHUFFLE,      // lanes of operands 0 and 1 picked by the mask in the remaining operands
+    SELECT,       // per lane, operand 0 ? operand 1 : operand 2
+    REDUCE,       // operand 0's lanes folded by `lane_op` (a `builtin.ReduceOp`)
+
     // Calls
     CALL,
     BUILTIN_CALL,
@@ -115,6 +125,32 @@ enum class local_kind : u8 {
     ALLOCA,
     GLOBAL,
 };
+
+enum class reduce_op : u8 { // Mirrors `builtin.ReduceOp`
+    ADD,
+    MUL,
+    AND,
+    OR,
+    XOR,
+    MIN,
+    MAX,
+};
+
+// The operator folding two lanes; integer sums and products wrap, as the vector instructions do
+[[nodiscard]] constexpr auto reduce_token(reduce_op op, bool is_float) -> syntax::token_type_t {
+    switch (op) {
+    case reduce_op::ADD:
+        return is_float ? syntax::token_type_t::PLUS : syntax::token_type_t::PLUS_PERCENT;
+    case reduce_op::MUL:
+        return is_float ? syntax::token_type_t::STAR : syntax::token_type_t::STAR_PERCENT;
+    case reduce_op::AND: return syntax::token_type_t::BW_AND;
+    case reduce_op::OR:  return syntax::token_type_t::BW_OR;
+    case reduce_op::XOR: return syntax::token_type_t::CARET;
+    case reduce_op::MIN: return syntax::token_type_t::LT;
+    case reduce_op::MAX: return syntax::token_type_t::GT;
+    default:             UNREACHABLE("Unknown reduce op");
+    }
+}
 
 class local_id {
   public:
@@ -265,6 +301,7 @@ struct instruction {
     stdx::option<u8>  atomic_order{stdx::none};      // `atomic_order` is the memory order
     stdx::option<u8>  atomic_fail_order{stdx::none}; // `@cmpxchgWeak`/`Strong`'s failure order
     stdx::option<u64> alignment{stdx::none};         // an `@[align(n)]` stack slot
+    stdx::option<u8>  lane_op{stdx::none};           // `REDUCE`'s `builtin.ReduceOp`
     stdx::option<ast::call_modifier> call_modifier{stdx::none}; // `@call(modifier, ...)`
 
     // A `@branchHint`ed `COND_GOTO`: relative weights of its true and false targets

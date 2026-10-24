@@ -402,6 +402,9 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
     auto& fn{add_gir_function(
         req.mangled_name, fn_type, false, false, fn_expr.variadic, gir::linkage::INTERNAL)};
     apply_fn_attributes(fn, fn_mod, fn_mod.fn_literal_node(req.fn_node_id));
+    if (const auto gi{ctx_.generic_functions.get_opt(*req.generic_fn_type)}; gi && gi->name) {
+        fn.set_source_name(std::string{*gi->name});
+    }
     auto& entry{fn.add_segment()};
     builder_.set_insert_point(fn, entry);
 
@@ -492,7 +495,8 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                     pack_hidden_names.emplace_back(
                         sema::pack_element{.pack = p_name, .index = k}.hidden_name());
                     const std::string_view hidden_name{pack_hidden_names.back()};
-                    auto&      p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
+                    auto& p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
+                    p_slot.source_position.emplace(p_idx + k + 1);
                     const bool p_spilled{elem_type.get_kind() == sema::type_kind::SLICE};
                     scopes_.back().bindings.emplace(hidden_name,
                                                     local_binding{
@@ -549,6 +553,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
 
             auto& arg_type{req.arg_types[rt_i++]};
             auto& p_slot{fn.add_param(std::string{p_name}, *arg_type)};
+            p_slot.source_position.emplace(p_idx + 1);
             if (!p_name.empty()) {
                 if (arg_type->get_kind() == sema::type_kind::CLOSURE ||
                     arg_type->is_generic_value()) {
@@ -1287,6 +1292,12 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
     if (is_undefined_value(*expr_id)) { return value{undefined_val{}, dest_type}; }
 
     const auto val{emit_expression(expr_id)};
+
+    // `[N]T` and `@Vector(N, T)` convert into each other by value
+    if (val.type && sema::is_array_vector_pair(*val.type, dest_type)) {
+        return value{builder_.emit_vector_op(instruction_kind::REPACK, {val}, dest_type),
+                     dest_type};
+    }
 
     // A `comptime_int` / `comptime_float` value already carries its exact numeric payload;
     // coercing it to a concrete peer is a pure retype
@@ -3310,6 +3321,9 @@ auto emitter::numeric_operand_peer(ast::expr_handle lhs, ast::expr_handle rhs)
 
 auto emitter::emit_binary(ast::node_id id, const ast::binary_expr& binary) -> value {
     PROFILE_FUNCTION();
+    if (const auto result{active_mod().get_sema_type_opt(id)}; result && sema::is_vector(*result)) {
+        return emit_vector_binary(id, binary, *result);
+    }
     const auto op_type{id.get_token_type()};
     if (op_type == syntax::token_type_t::BOOLEAN_AND) { return emit_logical_and(id, binary); }
     if (op_type == syntax::token_type_t::BOOLEAN_OR) { return emit_logical_or(id, binary); }
@@ -3463,6 +3477,7 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
                 return materialize_const(const_value{*f, *sema_type});
             }
         }
+        if (cv->is<const_array>()) { return materialize_const(*cv); }
         return cv->to_gir_value();
     }
     const auto operand{emit_expression(unary.rhs)};
@@ -3471,15 +3486,292 @@ auto emitter::emit_unary(ast::node_id id, const ast::unary_expr& unary) -> value
         return pointer_to_bool(operand, true);
     }
     // `NEG` is signed-only, so an unsigned `-%x` is the wrapping `0 -% x` it means
-    if (op_type == syntax::token_type_t::MINUS_PERCENT && sema::is_integer(sema_type->get_kind()) &&
-        !sema::is_signed_integer(*sema_type)) {
-        const auto dest{emit_checked_binary(
-            instruction_kind::SUB, value{u64{0}, *sema_type}, operand, *sema_type, id, true)};
+    const auto& lane{sema::lane_type_of(*sema_type)};
+    if (op_type == syntax::token_type_t::MINUS_PERCENT && sema::is_integer(lane.get_kind()) &&
+        !sema::is_signed_integer(lane)) {
+        const value zero{sema::is_vector(*sema_type) ? value{zero_val{}, *sema_type}
+                                                     : value{u64{0}, *sema_type}};
+        const auto  dest{
+            emit_checked_binary(instruction_kind::SUB, zero, operand, *sema_type, id, true)};
         return value{dest, sema_type};
     }
     const auto dest{emit_checked_unary(
         *kind_opt, operand, *sema_type, id, syntax::token_type::is_wrapping_op(op_type))};
     return value{dest, sema_type};
+}
+
+auto emitter::emit_splat(value scalar, sema::type& vector_type) -> value {
+    return value{builder_.emit_vector_op(instruction_kind::SPLAT, {std::move(scalar)}, vector_type),
+                 vector_type};
+}
+
+auto emitter::emit_vector_from_lanes(gsl::span<const value> lanes, sema::type& vector_type)
+    -> value {
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    value vec{undefined_val{}, vector_type};
+    for (usize i{0}; i < lanes.size(); ++i) {
+        vec = value{builder_.emit_vector_op(instruction_kind::INSERT_LANE,
+                                            {vec, value{u64{i}, usize_type}, lanes[i]},
+                                            vector_type),
+                    vector_type};
+    }
+    return vec;
+}
+
+namespace {
+
+// The vector a value of `t` reads as, directly or through a reference
+[[nodiscard]] auto vector_read_through(stdx::option<sema::type&> t) -> stdx::option<sema::type&> {
+    if (!t) { return stdx::none; }
+    auto& read{t->get_kind() == sema::type_kind::REFERENCE ? *sema::pointee_of(*t) : *t};
+    return sema::is_vector(read) ? stdx::option<sema::type&>{read} : stdx::none;
+}
+
+} // namespace
+
+auto emitter::emit_vector_operand(ast::expr_handle operand, sema::type& lane, u32 len) -> value {
+    auto& shape{ctx_.get_vector(sema::types::mut::CONSTANT, len, lane)};
+    if (vector_read_through(active_mod().get_sema_type_opt(operand))) {
+        return emit_coerced_expr(operand, shape);
+    }
+    return emit_splat(emit_coerced_expr(operand, lane), shape);
+}
+
+auto emitter::emit_lane_builtin(ast::node_id          id,
+                                const ast::call_expr& call,
+                                syntax::builtin_t     kind,
+                                sema::type&           result) -> value {
+    PROFILE_FUNCTION();
+    const auto arg_expr{[&](usize i) { return *call.arguments[i].as_opt<ast::expr_handle>(); }};
+    const auto arg_type{
+        [&](usize i) -> sema::type& { return active_mod().get_sema_type(arg_expr(i)); }};
+    // A vector operand, which `undefined` stands in for with `shape`'s lanes
+    const auto vector_arg{[&](usize i, sema::type& shape) {
+        return retype_if_undefined(emit_expression(arg_expr(i)), shape);
+    }};
+    const auto memory_op{[&](std::vector<value> args) -> value {
+        const auto res{
+            builder_.emit_builtin_call(syntax::builtin_name(kind), std::move(args), result)};
+        return res ? value{*res, result} : value{void_val{}, result};
+    }};
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT:
+    case syntax::builtin_t::REDUCE:
+    case syntax::builtin_t::SHUFFLE:
+    case syntax::builtin_t::SELECT:  {
+        if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+        break;
+    }
+    default: break;
+    }
+
+    switch (kind) {
+    case syntax::builtin_t::SPLAT:
+        return emit_splat(emit_coerced_expr(arg_expr(0), sema::lane_type_of(result)), result);
+    case syntax::builtin_t::REDUCE: {
+        const auto op{const_eval_.try_eval(arg_expr(0))};
+        const auto op_enum{op ? op->as_opt<const_enum>() : stdx::none};
+        ASSERT(op_enum, "@reduce's operation was folded during resolution");
+        return value{builder_.emit_vector_op(instruction_kind::REDUCE,
+                                             {emit_expression(arg_expr(1))},
+                                             result,
+                                             static_cast<u8>(op_enum->value)),
+                     result};
+    }
+    case syntax::builtin_t::SHUFFLE: {
+        auto&      a_type{arg_type(0)};
+        const auto a_len{static_cast<i64>(sema::vector_of(a_type)->len)};
+        const auto mask_value{const_eval_.try_eval(arg_expr(2))};
+        const auto mask{mask_value ? const_eval::shuffle_mask_of(*mask_value) : stdx::none};
+        ASSERT(mask, "@shuffle's mask was folded during resolution");
+
+        // LLVM numbers `b`'s lanes after `a`'s
+        auto&              i64_type{ctx_.get_int(64, true)};
+        std::vector<value> operands{emit_expression(arg_expr(0)), vector_arg(1, a_type)};
+        for (const auto entry : *mask) {
+            if (!entry) {
+                operands.emplace_back(undefined_val{}, i64_type);
+                continue;
+            }
+            operands.emplace_back(*entry >= 0 ? *entry : a_len + ~*entry, i64_type);
+        }
+        return value{
+            builder_.emit_vector_op(instruction_kind::SHUFFLE, std::move(operands), result),
+            result};
+    }
+    case syntax::builtin_t::SELECT: {
+        const auto len{sema::vector_of(result)->len};
+        auto&      lane{sema::lane_type_of(result)};
+        const auto branch{[&](usize i) {
+            if (is_undefined_value(arg_expr(i))) { return value{undefined_val{}, result}; }
+            return emit_vector_operand(arg_expr(i), lane, len);
+        }};
+        auto       pred{emit_expression(arg_expr(0))};
+        auto       a{branch(1)};
+        auto       b{branch(2)};
+        return value{builder_.emit_vector_op(instruction_kind::SELECT,
+                                             {std::move(pred), std::move(a), std::move(b)},
+                                             result),
+                     result};
+    }
+    case syntax::builtin_t::MASKED_LOAD:
+    case syntax::builtin_t::GATHER:      {
+        auto ptr{emit_expression(arg_expr(0))};
+        auto mask{emit_expression(arg_expr(1))};
+        return memory_op({std::move(ptr), std::move(mask), vector_arg(2, result)});
+    }
+    case syntax::builtin_t::MASKED_STORE: {
+        auto ptr{emit_expression(arg_expr(0))};
+        auto stored{emit_expression(arg_expr(1))};
+        return memory_op({std::move(ptr), std::move(stored), emit_expression(arg_expr(2))});
+    }
+    case syntax::builtin_t::SCATTER: {
+        auto stored{emit_expression(arg_expr(0))};
+        auto ptrs{emit_expression(arg_expr(1))};
+        return memory_op({std::move(stored), std::move(ptrs), emit_expression(arg_expr(2))});
+    }
+    default: UNREACHABLE("Not a lane builtin");
+    }
+}
+
+auto emitter::emit_operand_as(ast::expr_handle operand, sema::type& type) -> value {
+    if (const auto vec{sema::vector_of(type)}) {
+        return emit_vector_operand(operand, vec->underlying, vec->len);
+    }
+    return emit_coerced_expr(operand, type);
+}
+
+auto emitter::emit_vector_binary(ast::node_id            id,
+                                 const ast::binary_expr& binary,
+                                 sema::type&             result) -> value {
+    PROFILE_FUNCTION();
+    if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
+    const auto op{id.get_token_type()};
+    // `and` / `or` on bool vectors work per lane, so both sides are always evaluated
+    const auto kind{op == syntax::token_type_t::BOOLEAN_AND  ? instruction_kind::AND
+                    : op == syntax::token_type_t::BOOLEAN_OR ? instruction_kind::OR
+                                                             : *map_binary_op(op)};
+    const bool is_shift{kind == instruction_kind::SHL || kind == instruction_kind::SHR};
+
+    const auto vector_side{[&](ast::expr_handle expr) -> stdx::option<const sema::types::vector&> {
+        const auto vec{vector_read_through(active_mod().get_sema_type_opt(expr))};
+        return vec ? sema::vector_of(*vec) : stdx::none;
+    }};
+    const auto lhs_vec{vector_side(binary.lhs)};
+    const auto rhs_vec{vector_side(binary.rhs)};
+    const auto len{lhs_vec ? lhs_vec->len : rhs_vec->len};
+    // A scalar takes the other side's lanes, except a shift amount, which keeps its own type
+    const auto lane_of{[&](ast::expr_handle                         expr,
+                           stdx::option<const sema::types::vector&> own,
+                           stdx::option<const sema::types::vector&> other) -> sema::type& {
+        if (own) { return own->underlying; }
+        auto& scalar{*active_mod().get_sema_type_opt(expr)};
+        if (is_shift || !other) {
+            return *ctx_.pool.with_const(ctx_.default_concrete(scalar), true);
+        }
+        return other->underlying;
+    }};
+    auto&      lhs_lane{lane_of(binary.lhs, lhs_vec, rhs_vec)};
+    auto&      rhs_lane{lane_of(binary.rhs, rhs_vec, lhs_vec)};
+
+    const auto lhs{emit_vector_operand(binary.lhs, lhs_lane, len)};
+    const auto scalar_amount{[&]() -> stdx::option<value> {
+        if (!is_shift || rhs_vec) { return stdx::none; }
+        // A constant amount too wide for the lanes is rejected here, as for a scalar shift
+        const bool checked{!syntax::token_type::is_wrapping_op(op) &&
+                           !syntax::token_type::is_saturating_op(op)};
+        return prepare_shift_amount(emit_coerced_expr(binary.rhs, rhs_lane), lhs_lane, checked, id);
+    }()};
+    const auto rhs{
+        scalar_amount
+            ? emit_splat(*scalar_amount, ctx_.get_vector(sema::types::mut::CONSTANT, len, rhs_lane))
+            : emit_vector_operand(binary.rhs, rhs_lane, len)};
+    return value{emit_checked_binary(kind,
+                                     lhs,
+                                     rhs,
+                                     result,
+                                     id,
+                                     syntax::token_type::is_wrapping_op(op),
+                                     syntax::token_type::is_saturating_op(op)),
+                 result};
+}
+
+auto emitter::indexed_vector(const ast::index_expr& index) -> stdx::option<sema::type&> {
+    return vector_read_through(active_mod().get_sema_type_opt(index.array));
+}
+
+auto emitter::emit_lane_index_check(const value& idx, u32 len, ast::node_id site) -> void {
+    if (!safety_enabled() || folded_int(idx)) { return; }
+    auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    // A negative signed index reads as a huge unsigned one, which no lane count covers
+    const auto as_usize{
+        idx.type && sema::is_same_unqualified(*idx.type, usize_type)
+            ? idx
+            : value{builder_.emit_cast(instruction_kind::INT_CAST, idx, usize_type), usize_type}};
+    const auto in_bounds{builder_.emit_binary(
+        instruction_kind::LT, as_usize, value{u64{len}, usize_type}, bool_type)};
+
+    auto& fn{*builder_.get_function()};
+    auto& valid_seg{fn.add_segment()};
+    auto& oob_seg{fn.add_segment()};
+    builder_.emit_cond_goto(value{in_bounds, bool_type}, valid_seg.get_id(), oob_seg.get_id());
+    builder_.set_segment(oob_seg);
+    emit_panic_call("index out of bounds", site);
+    builder_.set_segment(valid_seg);
+}
+
+auto emitter::emit_vector_lane_read(ast::node_id id, const ast::index_expr& index) -> value {
+    auto&      vec_type{*indexed_vector(index)};
+    auto&      lane{*active_mod().get_sema_type_opt(id)};
+    const auto vec{emit_coerced_expr(index.array, vec_type)};
+    const auto idx{emit_expression(index.index)};
+    emit_lane_index_check(idx, sema::vector_of(vec_type)->len, id);
+    return value{builder_.emit_vector_op(instruction_kind::EXTRACT_LANE, {vec, idx}, lane), lane};
+}
+
+auto emitter::emit_vector_lane_assign(ast::node_id                id,
+                                      const ast::assignment_expr& assign,
+                                      const ast::index_expr&      index) -> value {
+    auto place{emit_lvalue(index.array)};
+    if (const auto ref{place.type->get_data().as_opt<sema::types::reference>()}) {
+        auto& referent{ref->underlying};
+        place = value{builder_.emit_load(place, *place.type), referent};
+    }
+    auto&      vec_type{*place.type};
+    auto&      lane{sema::lane_type_of(vec_type)};
+    const auto idx{emit_expression(index.index)};
+    emit_lane_index_check(idx, sema::vector_of(vec_type)->len, id);
+    const value old{builder_.emit_load(place, vec_type), vec_type};
+
+    const auto op_type{id.get_token_type()};
+    value      lane_value;
+    if (op_type == syntax::token_type_t::ASSIGN) {
+        lane_value = emit_coerced_expr(assign.rhs, lane);
+    } else {
+        const auto  base_tok{syntax::token_type::get_compound_base_op(op_type).value_or(op_type)};
+        const auto  base_kind{map_binary_op(base_tok).value_or(instruction_kind::ADD)};
+        const bool  is_shift{base_kind == instruction_kind::SHL ||
+                             base_kind == instruction_kind::SHR};
+        const value current{
+            builder_.emit_vector_op(instruction_kind::EXTRACT_LANE, {old, idx}, lane), lane};
+        const auto rhs{is_shift ? emit_expression(assign.rhs)
+                                : emit_coerced_expr(assign.rhs, lane)};
+        lane_value = value{emit_checked_binary(base_kind,
+                                               current,
+                                               rhs,
+                                               lane,
+                                               id,
+                                               syntax::token_type::is_wrapping_op(base_tok),
+                                               syntax::token_type::is_saturating_op(base_tok)),
+                           lane};
+    }
+    const value updated{
+        builder_.emit_vector_op(instruction_kind::INSERT_LANE, {old, idx, lane_value}, vec_type),
+        vec_type};
+    builder_.emit_store(place, updated);
+    return lane_value;
 }
 
 // A direct `union.field = ...` write bypasses the initializer's tag, so it's re-synced here.
@@ -3947,6 +4239,11 @@ auto emitter::emit_assignment(ast::node_id id, const ast::assignment_expr& assig
     // A `comptime let mut` never has storage; assignment rebinds its folded value instead.
     if (const auto cv{try_emit_comptime_mut_assignment(id, assign)}) { return *cv; }
 
+    if (const auto index{active_ast().get_as_opt<ast::index_expr>(assign.lhs)};
+        index && indexed_vector(*index)) {
+        return emit_vector_lane_assign(id, assign, *index);
+    }
+
     // A field write on a bit-packed struct is a read-modify-write of the backing integer.
     if (const auto dot{active_ast().get_as_opt<ast::dot_expr>(assign.lhs)}) {
         if (const auto ot{active_mod().get_sema_type_opt(dot->object)}) {
@@ -4349,12 +4646,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     if (operand.type && operand.type->get_kind() == sema::type_kind::POINTER) {
                         return pointer_to_bool(operand, false);
                     }
-                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
-                    auto& op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    auto&      op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    const auto zero{sema::is_vector(op_type) ? value{zero_val{}, op_type}
+                                                             : value{u64{0}, op_type}};
                     return value{
-                        builder_.emit_binary(
-                            instruction_kind::NE, operand, value{u64{0}, op_type}, bool_type),
-                        bool_type};
+                        builder_.emit_binary(instruction_kind::NE, operand, zero, ret_type),
+                        ret_type};
                 }
             }
             break;
@@ -4740,25 +5037,27 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::DIV_EXACT:
         case syntax::builtin_t::REM:
         case syntax::builtin_t::MOD:       {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
-            // Two operands meet at their peer type, which is the result's
+            // Two operands meet at their peer type, which is the result's, a scalar broadcasting
+            // to a vector's lanes
+            auto&      ret_lane{sema::lane_type_of(ret_type)};
             const bool peers_operands{
                 call.arguments.size() == 2 &&
-                (sema::is_integer(ret_type.get_kind()) || sema::is_float(ret_type.get_kind()))};
+                (sema::is_integer(ret_lane.get_kind()) || sema::is_float(ret_lane.get_kind()))};
             std::vector<value> args;
             args.reserve(call.arguments.size());
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(peers_operands ? emit_coerced_expr(*expr_h, ret_type)
+                    args.emplace_back(peers_operands ? emit_operand_as(*expr_h, ret_type)
                                                      : emit_expression(*expr_h));
                 }
             }
             // Division by zero, `MIN / -1`, and `@abs(MIN)` panic like the operators they mirror
             const auto                  int_op{semantics::int_op_of(fn_token)};
-            const bool                  is_int{sema::is_integer(ret_type.get_kind())};
+            const bool                  is_int{sema::is_integer(ret_lane.get_kind())};
             const semantics::int_domain domain{.bits      = 1,
-                                               .is_signed = sema::is_signed_integer(ret_type)};
+                                               .is_signed = sema::is_signed_integer(ret_lane)};
             const bool                  checked{
                 safety_enabled() && is_int &&
                 ((int_op && semantics::any(semantics::runtime_checks(*int_op, domain))) ||
@@ -4788,7 +5087,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::LOG10:
         case syntax::builtin_t::FLOOR:
         case syntax::builtin_t::CEIL:  {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
             const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()};
             if (!expr_h) { break; }
             const auto name{syntax::builtin_name(fn_token)};
@@ -4799,13 +5098,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             return value{void_val{}, ret_type};
         }
         case syntax::builtin_t::MUL_ADD: {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
             // `@mulAdd(T, a, b, c)`: each operand is a `T`
             std::vector<value> args;
             for (usize i{1}; i < call.arguments.size(); ++i) {
                 if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(emit_coerced_expr(*expr_h, ret_type));
+                    args.emplace_back(emit_operand_as(*expr_h, ret_type));
                 }
             }
             const auto name{syntax::builtin_name(fn_token)};
@@ -4837,7 +5136,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const bool is_shift{fn_token == syntax::builtin_t::SHL_WITH_OVERFLOW};
             const auto operand{[&](usize index, bool to_slot_type) {
                 const auto expr_h{*call.arguments[index].as_opt<ast::expr_handle>()};
-                return to_slot_type && operand_type ? emit_coerced_expr(expr_h, *operand_type)
+                return to_slot_type && operand_type ? emit_operand_as(expr_h, *operand_type)
                                                     : emit_expression(expr_h);
             }};
             // An untyped shift count takes the shifted value's type rather than `i32`'s
@@ -4919,6 +5218,14 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             default: UNREACHABLE("Unhandled atomic builtin");
             }
         }
+        case syntax::builtin_t::SPLAT:
+        case syntax::builtin_t::REDUCE:
+        case syntax::builtin_t::SHUFFLE:
+        case syntax::builtin_t::SELECT:
+        case syntax::builtin_t::MASKED_LOAD:
+        case syntax::builtin_t::MASKED_STORE:
+        case syntax::builtin_t::GATHER:
+        case syntax::builtin_t::SCATTER: return emit_lane_builtin(id, call, fn_token, ret_type);
         case syntax::builtin_t::MEMCPY:
         case syntax::builtin_t::MEMSET:
         case syntax::builtin_t::MEMMOVE: {
@@ -6682,6 +6989,12 @@ auto emitter::materialize_const(const const_value& cv) -> value {
         const auto type_opt{cv.get_type()};
         ASSERT(type_opt, "const_array must carry a resolved sema type");
         auto& type{*type_opt};
+        if (sema::is_vector(type)) {
+            std::vector<value> lanes;
+            lanes.reserve(arr->elements.size());
+            for (const auto& lane : arr->elements) { lanes.emplace_back(materialize_const(lane)); }
+            return emit_vector_from_lanes(lanes, type);
+        }
         if (const auto slice_data{type.get_data().as_opt<sema::types::slice>()}) {
             auto& elem_type{slice_data->underlying};
             auto& backing_type{ctx_.get_array(elem_type.is_constant() ? sema::types::mut::CONSTANT
@@ -7056,26 +7369,33 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         }
     }};
 
-    const auto from_info{get_info(*operand.type)};
-    const auto to_info{get_info(dest_type)};
+    // A vector's lanes are each compared against the bounds, and must all be in range
+    auto&      from_lane{sema::lane_type_of(*operand.type)};
+    const auto from_info{get_info(from_lane)};
+    const auto to_info{get_info(sema::lane_type_of(dest_type))};
     if (!from_info || !to_info) { return; }
+    const bool is_vector{sema::is_vector(*operand.type)};
+    const auto bound{[&](value scalar) {
+        return is_vector ? emit_splat(std::move(scalar), *operand.type) : scalar;
+    }};
 
     const auto from_bits{from_info->first};
     const auto from_signed{from_info->second};
     const auto to_bits{to_info->first};
     const auto to_signed{to_info->second};
 
-    auto&               bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& scalar_bool{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{is_vector ? ctx_.with_lane(*operand.type, scalar_bool) : scalar_bool};
     stdx::option<value> is_valid;
 
     if (from_signed && to_signed) {
         if (from_bits > to_bits) {
             const i128  min_to{-(i128{1} << (to_bits - 1))};
             const i128  max_to{(i128{1} << (to_bits - 1)) - 1};
-            const value min_val{from_bits > 64 ? value{min_to, *operand.type}
-                                               : value{static_cast<i64>(min_to), *operand.type}};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const value min_val{bound(from_bits > 64 ? value{min_to, from_lane}
+                                                     : value{static_cast<i64>(min_to), from_lane})};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<i64>(max_to), from_lane})};
             const auto  ge{builder_.emit_binary(instruction_kind::GE, operand, min_val, bool_type)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(
@@ -7086,20 +7406,20 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     } else if (!from_signed && !to_signed) {
         if (from_bits > to_bits) {
             const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<u64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
     } else if (from_signed && !to_signed) {
-        const value zero_val{from_bits > 64 ? value{i128{0}, *operand.type}
-                                            : value{i64{0}, *operand.type}};
-        const auto  ge_zero{
+        const value zero_val{
+            bound(from_bits > 64 ? value{i128{0}, from_lane} : value{i64{0}, from_lane})};
+        const auto ge_zero{
             builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
         if (from_bits > to_bits) {
             const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{from_bits > 64 ? value{static_cast<i128>(max_to), *operand.type}
-                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{static_cast<i128>(max_to), from_lane}
+                                                     : value{static_cast<i64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(builder_.emit_binary(instruction_kind::AND,
                                                   value{ge_zero, bool_type},
@@ -7112,14 +7432,20 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     } else { // !from_signed && to_signed
         if (from_bits >= to_bits) {
             const u128  max_to{(u128{1} << (to_bits - 1)) - 1};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<u64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
     }
 
     if (!is_valid) { return; }
+    if (is_vector) {
+        constexpr u8 every_lane{2}; // `builtin.ReduceOp.and`
+        is_valid.emplace(
+            builder_.emit_vector_op(instruction_kind::REDUCE, {*is_valid}, scalar_bool, every_lane),
+            scalar_bool);
+    }
 
     auto& fn{*fn_opt};
     auto& ok_seg{fn.add_segment()};
@@ -7253,11 +7579,13 @@ auto emitter::emit_checked_binary(instruction_kind kind,
         sema::is_integer(result_type.get_kind())) {
         rhs = prepare_shift_amount(std::move(rhs), result_type, !wrapping && !saturating, site);
     }
-    // What must be checked is the shared contract's call; floats never trap
-    const auto op{semantics::int_op_of(kind, wrapping, saturating)};
-    const bool checkable{op && safety_enabled() && sema::is_integer(result_type.get_kind()) &&
-                         semantics::any(semantics::runtime_checks(
-                             *op, {.bits = 1, .is_signed = sema::is_signed_integer(result_type)}))};
+    // What must be checked is the shared contract's call; floats never trap, and a vector checks
+    // every lane
+    const auto  op{semantics::int_op_of(kind, wrapping, saturating)};
+    const auto& lane{sema::lane_type_of(result_type)};
+    const bool  checkable{op && safety_enabled() && sema::is_integer(lane.get_kind()) &&
+                          semantics::any(semantics::runtime_checks(
+                              *op, {.bits = 1, .is_signed = sema::is_signed_integer(lane)}))};
     return builder_.emit_binary(
         kind, std::move(lhs), std::move(rhs), result_type, checkable, saturating);
 }
@@ -7267,10 +7595,11 @@ auto emitter::emit_checked_unary(instruction_kind kind,
                                  sema::type&      result_type,
                                  ast::node_id,
                                  bool wrapping) -> local_id {
-    const bool checkable{!wrapping && safety_enabled() && kind == instruction_kind::NEG &&
-                         semantics::any(semantics::runtime_checks(
-                             semantics::int_unary_op::NEG,
-                             {.bits = 1, .is_signed = sema::is_signed_integer(result_type)}))};
+    const bool checkable{
+        !wrapping && safety_enabled() && kind == instruction_kind::NEG &&
+        semantics::any(semantics::runtime_checks(
+            semantics::int_unary_op::NEG,
+            {.bits = 1, .is_signed = sema::is_signed_integer(sema::lane_type_of(result_type))}))};
     return builder_.emit_unary(kind, std::move(operand), result_type, checkable);
 }
 
@@ -7603,6 +7932,11 @@ auto emitter::emit_lvalue(ast::node_id id) -> value {
                         }
                     }
                 }
+            }
+            // A vector lane has no address of its own, so a read of it is spilled
+            if (indexed_vector(index)) {
+                auto& lane{*active_mod().get_sema_type_opt(id)};
+                return spill_to_temporary(emit_vector_lane_read(id, index), lane);
             }
             // `expr[lo..hi]` yields a fresh subslice value; spill it so callers get an address.
             if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
@@ -8444,6 +8778,15 @@ auto emitter::emit_initializer(ast::node_id id, const ast::initializer_expr& ini
         if (const auto f{cv->as_opt<f128>()}) { return value{*f, sema_type}; }
     }
 
+    if (const auto vec{sema::vector_of(*sema_type)}) {
+        std::vector<value> lanes;
+        lanes.reserve(init.initializers.size());
+        for (const auto& entry : init.initializers) {
+            lanes.emplace_back(emit_coerced_expr(entry.value, vec->underlying));
+        }
+        return emit_vector_from_lanes(lanes, *sema_type);
+    }
+
     const auto struct_slot{builder_.emit_alloca(*sema_type)};
     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
@@ -8849,6 +9192,7 @@ auto emitter::emit_index(ast::node_id id, const ast::index_expr& index) -> value
     if (active_ast().get_as_opt<ast::range_expr>(index.index)) {
         return emit_slice_range(id, index);
     }
+    if (indexed_vector(index)) { return emit_vector_lane_read(id, index); }
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Index expression must have a resolved sema type");
     const auto elem_lval{emit_lvalue(id)};

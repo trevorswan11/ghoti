@@ -540,6 +540,7 @@ auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
         }
         target = &concrete_array_type(*target);
         if (const auto arr{target->get_data().as_opt<types::array>()}) { return arr->len; }
+        if (const auto vec{vector_of(*target)}) { return vec->len; }
     }
 
     if (const auto str{resolving_.ast.get_as_opt<ast::string_expr>(expr)}) {

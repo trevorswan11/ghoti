@@ -148,6 +148,13 @@ class type_resolver {
         -> void;
     auto fold_concat_operand_len(ast::expr_handle operand, type& operand_type)
         -> stdx::option<usize>;
+    // An operator with a `@Vector` operand works per lane, broadcasting a scalar other operand
+    auto resolve_vector_binary(ast::node_id            id,
+                               const ast::binary_expr& binary,
+                               type&                   lhs_type,
+                               type&                   rhs_type) -> void;
+    // Whether a scalar operand broadcasts to `lane`; an untyped constant takes `lane` on
+    auto scalar_broadcasts(ast::expr_handle scalar, type& scalar_type, type& lane) -> bool;
     template <typename Eval>
     auto fold_type_read(const type& object_type, type& read_type, Eval&& eval) -> type&;
     // True when `expr` is a bare identifier declared `comptime let mut` (no storage, no address).
@@ -468,11 +475,33 @@ class type_resolver {
     template <ast::IndexableID ID>
     [[nodiscard]] auto resolve_program_builtin(ID id, builtin_site& site)
         -> stdx::result<void, diagnostic>;
+    // `@splat`, `@reduce`, `@shuffle`, `@select`, and the masked and indexed memory operations
+    [[nodiscard]] auto resolve_lane_builtin(builtin_site& site) -> stdx::result<void, diagnostic>;
+    // A math builtin with a vector operand works per lane, broadcasting its scalar operands;
+    // none when no operand is a vector
+    [[nodiscard]] auto resolve_vector_math_builtin(builtin_site& site)
+        -> stdx::option<stdx::result<void, diagnostic>>;
+    // `@intCast` and the other numeric casts between vectors of as many lanes; none for scalars
+    [[nodiscard]] auto resolve_vector_cast_builtin(builtin_site& site)
+        -> stdx::option<stdx::result<void, diagnostic>>;
 
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
     auto resolve_atomic_call_args(const ast::call_expr& call) -> resolve_result;
-    auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
+    // A lane builtin's arguments, each typed by the vector shape the others give it
+    auto resolve_lane_call_args(const ast::call_expr& call) -> resolve_result;
+    auto resolve_arg_with_hint(const ast::call_expr::argument& arg, stdx::option<type&> hint)
+        -> bool;
+    // The vector a `v: @Vector(n, T)` parameter takes in this call, from the earlier `comptime`
+    // arguments, so a `.{ ... }` argument has a type to build
+    [[nodiscard]] auto dependent_vector_param(const generic_function_info& fn_info,
+                                              usize                        idx,
+                                              const ast::call_expr&        call,
+                                              const expanded_call_args&    expanded)
+        -> stdx::option<type&>;
+    // `@mulAdd(T, a, b, c)`'s operands, each typed by `T`
+    auto               resolve_mul_add_args(const ast::call_expr& call) -> resolve_result;
+    auto               resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
     [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;
     [[nodiscard]] auto instantiate_for_call(const ast::call_expr&             call,
@@ -517,6 +546,10 @@ class type_resolver {
     // compile-time struct. `none` when the argument isn't a foldable struct value.
     [[nodiscard]] auto resolve_type_descriptor(const ast::call_expr::argument& desc_arg)
         -> stdx::option<gir::const_struct>;
+    // `@Vector(len, T)` / `@Vector(info)`, deferred while an argument waits on an instantiation
+    [[nodiscard]] auto resolve_vector_builtin(const ast::call_expr& call,
+                                              gsl::not_null<type*>& return_type)
+        -> stdx::result<void, diagnostic>;
     // Evaluates `arg` as a compile-time enum constant
     [[nodiscard]] auto resolve_const_enum_arg(const ast::call_expr::argument& arg,
                                               std::string_view                builtin_name,
@@ -583,6 +616,13 @@ class type_resolver {
     // Whether `arg` names a type parameter not bound yet, so a generic's later parameter type
     // (`x: @Int(.{ .bits = @typeInfo(T).float.bits })`) waits for its instantiation
     [[nodiscard]] auto mentions_unbound_type(const ast::call_expr::argument& arg) const -> bool;
+    // Whether a type in a generic's own signature may read a `comptime` parameter that only an
+    // instantiation binds (`v: @Vector(n, f32)`), so a type that doesn't fold yet waits for it
+    [[nodiscard]] auto awaits_instantiation() const -> bool;
+    // The stand-in for such a type: `auto` until each instantiation resolves the real one
+    [[nodiscard]] auto instantiation_placeholder() const -> type&;
+    // A field's `[n]T` sized by a constructor's `comptime` parameter, once an instance binds it
+    auto               instance_field_type(type& field_type) -> type&;
     [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
                                          const ast::function_expr& fn) const -> bool;
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)
