@@ -545,6 +545,25 @@ auto type_resolver::scalar_broadcasts(ast::expr_handle scalar, type& scalar_type
         return false;
     }
     if (is_comptime_numeric(scalar_type.get_kind())) {
+        // The constant is typed as the lane from here on, so it has to fit one
+        gir::const_eval evaluator{ctx_, resolving_};
+        if (const auto folded{evaluator.try_eval(scalar)}; folded && !folded->is_poison()) {
+            const auto as_int{folded->as_int_opt()};
+            const auto as_big{folded->as_opt<big_int>()};
+            const auto as_float{folded->as_opt<f128>()};
+            const bool fits{as_int   ? comptime_int_fits(*as_int, lane, target_ptr_bits())
+                            : as_big ? comptime_int_fits(*as_big, lane, target_ptr_bits())
+                            : as_float && is_float(lane.get_kind())
+                                ? comptime_float_fits(*as_float, lane)
+                                : true};
+            if (!fits) {
+                ctx_.diags.emplace_back(fmt::format("{} literal is out of range for type '{}'",
+                                                    as_float ? "float" : "integer",
+                                                    ctx_.type_display_name(lane)),
+                                        error::LITERAL_OUT_OF_RANGE,
+                                        resolving_.ast.location_of(scalar));
+            }
+        }
         resolving_.set_sema_type(scalar, lane);
         return true;
     }

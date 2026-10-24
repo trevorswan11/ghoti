@@ -3581,7 +3581,10 @@ auto emitter::emit_lane_builtin(ast::node_id          id,
     }
     case syntax::builtin_t::SHUFFLE: {
         auto&      a_type{arg_type(0)};
-        const auto a_len{static_cast<i64>(sema::vector_of(a_type)->len)};
+        const auto b_vec{sema::vector_of(arg_type(1))};
+        // LLVM numbers `b`'s lanes after the longer operand's, which the shorter one is padded to
+        const auto a_len{static_cast<i64>(std::max(
+            sema::vector_of(a_type)->len, b_vec ? b_vec->len : sema::vector_of(a_type)->len))};
         const auto mask_value{const_eval_.try_eval(arg_expr(2))};
         const auto mask{mask_value ? const_eval::shuffle_mask_of(*mask_value) : stdx::none};
         ASSERT(mask, "@shuffle's mask was folded during resolution");
@@ -7332,6 +7335,24 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
 
     // If the expression const-evaluates, check at compile time
     if (const auto cv{const_eval_.try_eval(site)}) {
+        // A vector's lanes are each checked against the target's lane type
+        if (const auto lanes{cv->as_opt<const_array>()}; lanes && sema::is_vector(dest_type)) {
+            const auto& dest_lane{sema::lane_type_of(dest_type)};
+            for (const auto& lane : lanes->elements) {
+                const auto known{lane.as_int_opt()};
+                if (known && !sema::comptime_int_fits(*known, dest_lane, target_ptr_bits_)) {
+                    ctx_.diags.emplace_back(
+                        fmt::format("Integer value {} is out of range for target type '{}' in "
+                                    "@intCast",
+                                    *known,
+                                    ctx_.type_display_name(dest_lane)),
+                        sema::error::COMPTIME_EVALUATION_FAILED,
+                        active_ast().location_of(site));
+                    return;
+                }
+            }
+            return;
+        }
         if (const auto known{cv->as_int_opt()}) {
             if (!sema::comptime_int_fits(*known, dest_type, target_ptr_bits_)) {
                 ctx_.diags.emplace_back(

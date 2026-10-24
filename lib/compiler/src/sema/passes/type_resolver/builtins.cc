@@ -575,7 +575,35 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         const auto is_aggregate{[](const type& t) {
             return t.get_data().is<types::struct_t>() || t.get_data().is<types::union_t>();
         }};
-        if (is_aggregate(src) || is_aggregate(target)) {
+        // A vector reinterprets bit for bit, `bool` lanes being single bits; an array goes through
+        // memory, so it compares in bytes
+        if (is_vector(src) || is_vector(target)) {
+            auto&      src_sized{concrete_array_type(src)};
+            auto&      target_sized{concrete_array_type(target)};
+            const auto through_memory{src_sized.get_kind() == type_kind::ARRAY ||
+                                      target_sized.get_kind() == type_kind::ARRAY};
+            const auto width{[&](const type& t) -> stdx::option<u64> {
+                if (through_memory) {
+                    return u64{gir::const_eval::type_size_of(t, target_layout()) * 8};
+                }
+                if (const auto vec{vector_of(t)}) { return vector_bits(*vec, target_ptr_bits()); }
+                if (t.get_kind() == type_kind::BOOL) { return u64{1}; }
+                return bit_cast_width(t);
+            }};
+            const auto src_bits{width(src_sized)};
+            const auto target_bits{width(target_sized)};
+            if (!src_bits || !target_bits || *src_bits != *target_bits) {
+                return make_sema_err(
+                    fmt::format(
+                        "`@bitCast` requires equally sized types; '{}' is {} but '{}' is {}",
+                        ctx_.type_display_name(src),
+                        src_bits ? fmt::format("{} bit(s)", *src_bits) : "unsized",
+                        ctx_.type_display_name(target),
+                        target_bits ? fmt::format("{} bit(s)", *target_bits) : "unsized"),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(call.function));
+            }
+        } else if (is_aggregate(src) || is_aggregate(target)) {
             const auto src_bits{bit_cast_width(src)};
             const auto target_bits{bit_cast_width(target)};
             if (!src_bits || !target_bits) {

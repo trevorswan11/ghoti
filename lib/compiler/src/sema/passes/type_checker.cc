@@ -1047,10 +1047,23 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         // Operand well-formedness is enforced during type resolution
         record_value_result(inst);
         break;
+    // A `.{ ... }` initializer writes each lane, whose value has to be one
+    case gir::instruction_kind::INSERT_LANE: {
+        if (inst.operands.size() == 3 && inst.type) {
+            const auto lane_t{get_operand_type(inst.operands[2])};
+            auto&      lane{lane_type_of(*inst.type)};
+            if (lane_t && !lane_t->is_poison() &&
+                !is_value_assignable(inst.operands[2], *lane_t, lane, inst.location)) {
+                emit_diagnostic(
+                    format_store_mismatch(*lane_t, lane), error::TYPE_MISMATCH, inst.location);
+            }
+        }
+        record_value_result(inst);
+        break;
+    }
     // The emitter builds these from operands sema already checked
     case gir::instruction_kind::SPLAT:
     case gir::instruction_kind::EXTRACT_LANE:
-    case gir::instruction_kind::INSERT_LANE:
     case gir::instruction_kind::REPACK:
     case gir::instruction_kind::SHUFFLE:
     case gir::instruction_kind::SELECT:
