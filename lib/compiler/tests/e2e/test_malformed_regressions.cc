@@ -477,4 +477,26 @@ TEST_CASE("A reference to an untyped integer call result is diagnosed") {
     )");
 }
 
+TEST_CASE("A global's folded initializer still has to fit its annotation element by element") {
+    CHECK(helpers::raised(R"(
+        const P: [:0]type = "ABC";
+        pub const main = fn(): i32 { let mut n: i32 = 0; for (P) |c| { n += @as(i32, c); } return n; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("pub const cases = [_][3]u32{ [_]u32{ 10, 20, 60, 30 } };",
+                          sema::error::TYPE_MISMATCH));
+    // A string is `u8`s, which a folded constant would reinterpret rather than widen
+    CHECK(helpers::raised(R"(
+        const P: [:0]u16 = "ABC";
+        pub const main = fn(): i32 { const L: [:0]u16 = "hi"; return @as(i32, P[1] + L[1]); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    // Known numbers narrow into the elements, range-checked as they fold
+    CHECK(helpers::compile_and_run(R"(
+        const W: usize = 10;
+        const Q = [_][2]u8{ [_]u8{ W, 2 } };
+        pub const main = fn(): i32 { return @as(i32, Q[0][0]); };
+    )") == 10);
+}
+
 } // namespace ghoti::tests

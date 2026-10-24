@@ -938,6 +938,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `comptime` parameter took an argument of any type (`f(0..0)` for a `comptime x: f64`), crashing a type constructor that used it
 - Fixed: `comptime` before a function literal crashed codegen; it is reported as redundant
 - Fixed: a shift of an integer wider than 128 bits by a constant of 128 or more crashed the compiler
+- Fixed: a global (or local `const`) initialized from a string or array folded into its constant unchecked, so `const P: [:0]type = "ABC";` and a wrong-length row in `[_][3]u32{ ... }` crashed codegen and `const P: [:0]u16 = "ABC";` read the string's bytes as `u16`s; an array's elements must be its slot's element type
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 

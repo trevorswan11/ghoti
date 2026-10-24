@@ -879,8 +879,9 @@ class type_resolver {
 
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
-    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
-        -> bool;
+    auto reject_unassignable_global_initializer(ast::expr_handle value,
+                                                const type&      declared,
+                                                bool             arrays_only) -> bool;
     // The local a returned `&x` / `^x.field` points into, when it dies with this frame
     [[nodiscard]] auto frame_local_root(ast::expr_handle returned)
         -> stdx::option<std::string_view>;

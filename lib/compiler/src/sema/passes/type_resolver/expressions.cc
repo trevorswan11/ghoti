@@ -100,6 +100,16 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
             if (reject_type_as_value(item, item_type)) {
                 return resolving_.set_sema_type(id, *last_type_);
             }
+            // A global's items fold straight into its constant, so nothing checks their lengths
+            auto& found{concrete_array_type(*last_type_.take())};
+            if (!same_array_shape(found, item_type)) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    ctx_.store_mismatch_message(found, item_type, target_ptr_bits()),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(item)));
+            }
         }
     } else {
         for (const auto& item : array.items) { resolve(item); }

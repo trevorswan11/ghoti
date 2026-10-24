@@ -252,6 +252,43 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
            bound_type_param(tree, fn.parameters, idx);
 }
 
+// Whether a `value` fills a `target` slot by value, as an initializer folds it: arrays of the same
+// length whose elements do, an array's elements into a slice's, or anything assignable. Untyped
+// numbers and enum literals settle against the slot later
+[[nodiscard]] inline auto fills_by_value(const type& value, const type& target) -> bool {
+    const auto kind{value.get_kind()};
+    if (is_comptime_numeric(kind) || kind == type_kind::ENUM_LITERAL ||
+        kind == type_kind::UNDEFINED || value.is_poison() || target.is_poison()) {
+        return true;
+    }
+    // An array's elements are reinterpreted, never converted, so they have to be the same type
+    const auto elements_fit{[](const type& from, const type& to) {
+        return to.get_data().is<types::array>() ? fills_by_value(from, to)
+                                                : is_same_unqualified(from, to);
+    }};
+    const auto from{value.get_data().as_opt<types::array>()};
+    if (const auto to{target.get_data().as_opt<types::array>()}; from && to) {
+        return from->len == to->len && elements_fit(from->underlying, to->underlying);
+    }
+    if (const auto to{target.get_data().as_opt<types::slice>()}; from && to) {
+        return elements_fit(from->underlying, to->underlying);
+    }
+    // A known number is range-checked when it folds into the slot
+    if (is_numeric(kind) && is_numeric(target.get_kind())) { return true; }
+    // `type` reads as generic, but a slot of types holds only types
+    const auto unbound{
+        [](const type& t) { return t.get_kind() != type_kind::TYPE && is_generic_type(t, false); }};
+    return unbound(value) || unbound(target) || is_assignable(value, target);
+}
+
+// Whether two array types nest the same lengths, which a folded constant can't paper over
+[[nodiscard]] inline auto same_array_shape(const type& value, const type& target) -> bool {
+    const auto from{value.get_data().as_opt<types::array>()};
+    const auto to{target.get_data().as_opt<types::array>()};
+    if (!from || !to) { return true; }
+    return from->len == to->len && same_array_shape(from->underlying, to->underlying);
+}
+
 // An integer type's width in bits, `usize`/`isize` being the target's pointer width; 0 otherwise
 [[nodiscard]] inline auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
     switch (t.get_kind()) {
