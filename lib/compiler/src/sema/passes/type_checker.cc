@@ -1073,6 +1073,26 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     }
 }
 
+auto type_checker::check_runtime_untyped_store(const gir::value&             val,
+                                               type&                         slot_t,
+                                               stdx::option<source_location> loc) -> void {
+    if (slot_t.get_kind() != type_kind::COMPTIME_INT) { return; }
+    const auto& runtime_t{ctx_.default_concrete(slot_t)};
+    const auto  folded{folded_int(val)};
+    const auto  big{val.as_opt<big_int>()};
+    const bool  fits{folded ? comptime_int_fits(*folded, runtime_t, target_ptr_bits_)
+                     : big  ? comptime_int_fits(*big, runtime_t, target_ptr_bits_)
+                            : true};
+    if (fits) { return; }
+    emit_diagnostic(fmt::format("integer value {} is out of range for '{}', the type an untyped "
+                                "integer chosen at runtime is stored as; give it a type, as in "
+                                "`let y: i64 = ...`",
+                                folded ? fmt::to_string(*folded) : big->to_string(),
+                                ctx_.type_display_name(runtime_t)),
+                    error::LITERAL_OUT_OF_RANGE,
+                    loc);
+}
+
 auto type_checker::check_store(const gir::instruction& inst) -> void {
     // A bit-packed struct slot is really a backing integer
     const auto packed_backing_store{
@@ -1107,6 +1127,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
+                check_runtime_untyped_store(inst.operands[0], *it->second.type, inst.location);
                 return;
             }
 
