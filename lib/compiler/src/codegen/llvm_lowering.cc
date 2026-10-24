@@ -247,6 +247,12 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return val.is<u64>() || val.is<u128>();
 }
 
+// A mask known to pick every lane
+[[nodiscard]] auto is_all_lanes(const llvm::Value* mask) -> bool {
+    const auto* constant{llvm::dyn_cast<llvm::Constant>(mask)};
+    return constant && constant->isAllOnesValue();
+}
+
 [[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
     if (!inst.operands.empty() && inst.operands[0].type &&
         inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
@@ -2905,6 +2911,10 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (*builtin_tok == syntax::builtin_t::GATHER) {
                 return builder_.CreateMaskedGather(vec_ty, ptr, align, mask, passthru, "gather");
             }
+            // Every lane picked is a plain load, even where nothing folds the mask away (`-O0`)
+            if (is_all_lanes(mask)) {
+                return builder_.CreateAlignedLoad(vec_ty, ptr, align, "load");
+            }
             return builder_.CreateMaskedLoad(vec_ty, ptr, align, mask, passthru, "masked.load");
         }
         case syntax::builtin_t::MASKED_STORE:
@@ -2918,6 +2928,8 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
                 llvm_module_->getDataLayout().getABITypeAlign(stored->getType()->getScalarType())};
             if (is_scatter) {
                 builder_.CreateMaskedScatter(stored, ptr, align, mask);
+            } else if (is_all_lanes(mask)) {
+                builder_.CreateAlignedStore(stored, ptr, align);
             } else {
                 builder_.CreateMaskedStore(stored, ptr, align, mask);
             }
