@@ -135,10 +135,16 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<ty
         }};
 
     // `[n]auto`'s length folds before its elements can match
-    if (pattern.get_data().is<types::deferred_array>()) {
+    if (const auto deferred{pattern.get_data().as_opt<types::deferred_array>()}) {
         auto& folded{concrete_array_type(pattern)};
-        if (&folded == &pattern) { return stdx::none; }
-        return match_auto_pattern(folded, arg, leaf);
+        if (&folded != &pattern) { return match_auto_pattern(folded, arg, leaf); }
+        // A length read from a `comptime` parameter is checked once the instantiation binds it
+        const auto a{arg.get_data().as_opt<types::array>()};
+        if (!a || (deferred->array.null_terminated && !a->null_terminated)) { return stdx::none; }
+        const auto inner{match_auto_pattern(deferred->underlying, a->underlying, leaf)};
+        if (!inner) { return stdx::none; }
+        return ctx_.get_array(
+            arg.get_key().get_mut(), deferred->array.null_terminated, a->len, *inner);
     }
 
     const auto& pdata{pattern.get_data()};
@@ -557,6 +563,28 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                             idx + 1,
                             ctx_.type_display_name(*arg_type),
                             ctx_.type_display_name(*param_type)),
+                error::TYPE_MISMATCH,
+                get_call_arg_location(arg));
+            return stdx::none;
+        }
+    }
+
+    // A value parameter's argument has its type, as a runtime parameter's does. Untyped numbers
+    // and enum literals take it on when they fold
+    if (param_type && arg_type && !arg_type->is_poison() && !param_type->is_poison()) {
+        auto& wanted{concrete_array_type(*param_type)};
+        // The argument as written, before an untyped number materialized for the call
+        const auto arg_kind{get_resolved_call_arg_type(arg)->get_kind()};
+        const bool checkable{
+            !is_generic_type(wanted) && wanted.get_kind() != type_kind::TYPE &&
+            wanted.get_kind() != type_kind::FUNCTION && !is_comptime_numeric(arg_kind) &&
+            arg_kind != type_kind::ENUM_LITERAL && arg_kind != type_kind::UNDEFINED};
+        if (checkable && !is_assignable(*arg_type, wanted)) {
+            ctx_.diags.emplace_back(
+                fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",
+                            idx + 1,
+                            ctx_.type_display_name(*arg_type),
+                            ctx_.type_display_name(wanted)),
                 error::TYPE_MISMATCH,
                 get_call_arg_location(arg));
             return stdx::none;
@@ -1534,7 +1562,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             resolve_param_type(param.explicit_type);
             if (!last_type_) { return; }
             auto& param_type{denoted_type(*last_type_.take())};
-            if (reject_non_runtime_slot(param.explicit_type, param_type)) {
+            if (reject_signature_slot(param.explicit_type, param_type)) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
             }
             fn_param_types[p_idx++] = &param_type;
@@ -1544,7 +1572,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
             TRY_RESOLVE(fn.explicit_return_type);
         }
         auto& return_type{denoted_type(*last_type_.take())};
-        if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
+        if (reject_signature_slot(fn.explicit_return_type, return_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
 
@@ -1657,7 +1685,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         }
 
         auto& param_type{thin_if_comptime(param, denoted_type(*last_type_.take()))};
-        if (reject_non_runtime_slot(param.explicit_type, param_type)) {
+        if (reject_signature_slot(param.explicit_type, param_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
         // A `type` is only ever known at compile time, and saying so keeps every compile-time
@@ -1688,7 +1716,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
         TRY_RESOLVE(fn.explicit_return_type);
     }
     auto& return_type{denoted_type(*last_type_.take())};
-    if (reject_non_runtime_slot(fn.explicit_return_type, return_type)) {
+    if (reject_signature_slot(fn.explicit_return_type, return_type)) {
         return last_type_.emplace(ctx_.poison_node(resolving_, id));
     }
     // A `mut?` result is the call's mutability, which only `mut?` parameters can supply

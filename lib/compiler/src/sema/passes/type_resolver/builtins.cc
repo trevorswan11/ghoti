@@ -575,7 +575,35 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         const auto is_aggregate{[](const type& t) {
             return t.get_data().is<types::struct_t>() || t.get_data().is<types::union_t>();
         }};
-        if (is_aggregate(src) || is_aggregate(target)) {
+        // A vector reinterprets bit for bit, `bool` lanes being single bits; an array goes through
+        // memory, so it compares in bytes
+        if (is_vector(src) || is_vector(target)) {
+            auto&      src_sized{concrete_array_type(src)};
+            auto&      target_sized{concrete_array_type(target)};
+            const auto through_memory{src_sized.get_kind() == type_kind::ARRAY ||
+                                      target_sized.get_kind() == type_kind::ARRAY};
+            const auto width{[&](const type& t) -> stdx::option<u64> {
+                if (through_memory) {
+                    return u64{gir::const_eval::type_size_of(t, target_layout()) * 8};
+                }
+                if (const auto vec{vector_of(t)}) { return vector_bits(*vec, target_ptr_bits()); }
+                if (t.get_kind() == type_kind::BOOL) { return u64{1}; }
+                return bit_cast_width(t);
+            }};
+            const auto src_bits{width(src_sized)};
+            const auto target_bits{width(target_sized)};
+            if (!src_bits || !target_bits || *src_bits != *target_bits) {
+                return make_sema_err(
+                    fmt::format(
+                        "`@bitCast` requires equally sized types; '{}' is {} but '{}' is {}",
+                        ctx_.type_display_name(src),
+                        src_bits ? fmt::format("{} bit(s)", *src_bits) : "unsized",
+                        ctx_.type_display_name(target),
+                        target_bits ? fmt::format("{} bit(s)", *target_bits) : "unsized"),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(call.function));
+            }
+        } else if (is_aggregate(src) || is_aggregate(target)) {
             const auto src_bits{bit_cast_width(src)};
             const auto target_bits{bit_cast_width(target)};
             if (!src_bits || !target_bits) {
@@ -1534,6 +1562,7 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
 template <ast::IndexableID ID>
 auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
     -> stdx::result<void, diagnostic> {
+    TRY(reject_type_arguments(site, 0));
     const auto& call{site.call};
     const auto& builtin{site.builtin};
     auto&       return_type{site.return_type};
@@ -1636,6 +1665,14 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
                                  error::TYPE_MISMATCH,
                                  resolving_.ast.location_of(call.function));
         }
+        // An `unroll for` is unrolled while it resolves, so the limit applies from here on
+        if (const auto expr{call.arguments.front().as_opt<ast::expr_handle>()}) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            const auto      limit{evaluator.try_eval(*expr)};
+            if (const auto n{limit ? limit->as_int_opt() : stdx::none}; n && *n > 0) {
+                ctx_.eval_unroll_limit = static_cast<usize>(*n);
+            }
+        }
         return_type = &ctx_.get_builtin_resolved_type(type_kind::VOID_);
         break;
     }
@@ -1649,9 +1686,28 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
     return {};
 }
 
+// The arguments from `first` on are values, never types
+auto type_resolver::reject_type_arguments(const builtin_site& site, usize first)
+    -> stdx::result<void, diagnostic> {
+    const auto& args{site.call.arguments};
+    for (usize i{first}; i < args.size(); ++i) {
+        if (call_arg_denotes_type(args[i])) {
+            return make_sema_err(fmt::format("'{}' expects a value, but was given the type '{}'",
+                                             syntax::builtin_name(site.kind),
+                                             ctx_.type_display_name(denoted_type(
+                                                 *get_resolved_call_arg_type(args[i])))),
+                                 error::TYPE_USED_AS_VALUE,
+                                 get_call_arg_location(args[i]));
+        }
+    }
+    return {};
+}
+
 // Integer bit counts, float math, and the checked and wrapping arithmetic
 template <ast::IndexableID ID>
 auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    // Each operand is a value; only `@mulAdd(T, ...)` names a type, first
+    TRY(reject_type_arguments(site, site.kind == syntax::builtin_t::MUL_ADD ? 1UZ : 0UZ));
     if (auto per_lane{resolve_vector_math_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto  builtin_id{site.kind};

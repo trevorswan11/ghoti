@@ -868,6 +868,19 @@ auto type_resolver::instantiate_generic(type&                             callee
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;
                 }
+            } else if (stdx::option<type&> leaf;
+                       !inst_resolver.match_auto_pattern(resolved_param_type, *arg_type, leaf)) {
+                // `[n]auto` matched any length at the call; the bound `n` checks it now
+                ctx_.diags.emplace_back(
+                    fmt::format("Argument {} of type '{}' does not match parameter type '{}'",
+                                p_idx + 1,
+                                ctx_.type_display_name(*arg_type),
+                                ctx_.type_display_name(resolved_param_type)),
+                    error::TYPE_MISMATCH,
+                    p_idx < instantiating_arg_locations_.size()
+                        ? instantiating_arg_locations_[p_idx]
+                        : fn_mod.ast.location_of(fn_info.node_id));
+                return stdx::none;
             }
 
             // An erased `fn(...)` holds the closure as-is. A thin `comptime` slot binds its type

@@ -29,6 +29,7 @@
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
 #include "internal.hh"
+#include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/string_utils.hh"
@@ -99,6 +100,16 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
             resolve(item);
             if (reject_type_as_value(item, item_type)) {
                 return resolving_.set_sema_type(id, *last_type_);
+            }
+            // A global's items fold straight into its constant, so nothing checks their lengths
+            auto& found{concrete_array_type(*last_type_.take())};
+            if (!same_array_shape(found, item_type)) {
+                return last_type_.emplace(ctx_.poison_node(
+                    resolving_,
+                    id,
+                    ctx_.store_mismatch_message(found, item_type, target_ptr_bits()),
+                    error::TYPE_MISMATCH,
+                    resolving_.ast.location_of(item)));
             }
         }
     } else {
@@ -257,6 +268,24 @@ auto type_resolver::visit(ast::node_id id, const ast::assignment_expr& assign) -
                             *syntax::get_operator_opt(id.get_token_type()),
                             ctx_.type_display_name(lhs_type),
                             ctx_.type_display_name(rhs_type)),
+                error::OPERATOR_TYPE_MISMATCH,
+                resolving_.ast.location_of(id)));
+        }
+        break;
+    case syntax::token_type_t::PLUS_ASSIGN:
+    case syntax::token_type_t::MINUS_ASSIGN:
+    case syntax::token_type_t::STAR_ASSIGN:
+    case syntax::token_type_t::SLASH_ASSIGN:
+    case syntax::token_type_t::PERCENT_ASSIGN:
+        // `p += 1` steps a pointer, but a number can't take one in: `n += ^x` has no meaning
+        if (rhs_type.get_kind() == type_kind::POINTER && is_numeric(lhs_type.get_kind())) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("operator '{}' can't apply a pointer '{}' to the number '{}'",
+                            *syntax::get_operator_opt(id.get_token_type()),
+                            ctx_.type_display_name(rhs_type),
+                            ctx_.type_display_name(lhs_type)),
                 error::OPERATOR_TYPE_MISMATCH,
                 resolving_.ast.location_of(id)));
         }
@@ -545,6 +574,25 @@ auto type_resolver::scalar_broadcasts(ast::expr_handle scalar, type& scalar_type
         return false;
     }
     if (is_comptime_numeric(scalar_type.get_kind())) {
+        // The constant is typed as the lane from here on, so it has to fit one
+        gir::const_eval evaluator{ctx_, resolving_};
+        if (const auto folded{evaluator.try_eval(scalar)}; folded && !folded->is_poison()) {
+            const auto as_int{folded->as_int_opt()};
+            const auto as_big{folded->as_opt<big_int>()};
+            const auto as_float{folded->as_opt<f128>()};
+            const bool fits{as_int   ? comptime_int_fits(*as_int, lane, target_ptr_bits())
+                            : as_big ? comptime_int_fits(*as_big, lane, target_ptr_bits())
+                            : as_float && is_float(lane.get_kind())
+                                ? comptime_float_fits(*as_float, lane)
+                                : true};
+            if (!fits) {
+                ctx_.diags.emplace_back(fmt::format("{} literal is out of range for type '{}'",
+                                                    as_float ? "float" : "integer",
+                                                    ctx_.type_display_name(lane)),
+                                        error::LITERAL_OUT_OF_RANGE,
+                                        resolving_.ast.location_of(scalar));
+            }
+        }
         resolving_.set_sema_type(scalar, lane);
         return true;
     }
@@ -990,6 +1038,18 @@ namespace {
 
 } // namespace
 
+namespace {
+
+// `&.a` / `^.a` with nothing naming the enum: the literal only exists at compile time
+[[nodiscard]] auto enum_literal_has_no_address(source_location loc) -> diagnostic {
+    return diagnostic{"an enum literal has no address; give it its enum type first, as in "
+                      "`const e: E = .a;`",
+                      error::TYPE_MISMATCH,
+                      loc};
+}
+
+} // namespace
+
 auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> void {
     PROFILE_FUNCTION();
     {
@@ -999,6 +1059,10 @@ auto type_resolver::visit(ast::node_id id, const ast::reference_expr& ref) -> vo
         TRY_RESOLVE(ref.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+    if (rhs_type.get_kind() == type_kind::ENUM_LITERAL) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, enum_literal_has_no_address(resolving_.ast.location_of(id))));
+    }
 
     if (names_comptime_mut(ref.rhs)) {
         return last_type_.emplace(
@@ -1098,6 +1162,10 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
         TRY_RESOLVE(adr_of.rhs);
     }
     auto& rhs_type{*last_type_.take()};
+    if (rhs_type.get_kind() == type_kind::ENUM_LITERAL) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_, id, enum_literal_has_no_address(resolving_.ast.location_of(id))));
+    }
 
     if (names_comptime_mut(adr_of.rhs)) {
         return last_type_.emplace(
@@ -1156,6 +1224,15 @@ auto type_resolver::visit(ast::node_id id, const ast::address_of_expr& adr_of) -
 
 auto type_resolver::visit(ast::node_id id, const ast::comptime_expr& cx) -> void {
     PROFILE_FUNCTION();
+    // A function literal is a compile-time value already, and folding it loses the function
+    if (cx.rhs.is<ast::function_expr>()) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "Redundant 'comptime': a function literal is already known at compile time",
+            error::COMPTIME_EVALUATION_FAILED,
+            resolving_.ast.location_of(id)));
+    }
     // The operand is compile-time evaluation. The emitter folds it per instantiation
     const comptime_evaluation_scope cx_scope{ctx_, true};
     TRY_RESOLVE(*cx.rhs);

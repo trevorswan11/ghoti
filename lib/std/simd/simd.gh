@@ -83,6 +83,9 @@ const register_bits = fn(): comptime_int {
 /// The number of `T` lanes that fill the widest vector register the compiled-for CPU is
 /// guaranteed to have, or 1 when it has none.
 pub const suggest_lanes = fn(comptime T: type): comptime_int {
+    if comptime (@sizeOf(T) == 0) {
+        @compileError("std.simd.suggest_lanes: a zero-sized type has no lanes");
+    }
     const lane_bits = @sizeOf(T) * 8;
     const bits = register_bits();
     return if (bits < lane_bits * 2) 1 else bits / lane_bits;
@@ -102,6 +105,9 @@ pub const iota = fn(comptime V: type): V {
 
 /// Lane `i` of a `bool` vector as bit `i` of an integer
 pub const bitmask = fn(v: auto): @Int(.{ .signedness = .unsigned, .bits = lanes_of(@TypeOf(v)) }) {
+    if comptime (Lane(@TypeOf(v)) != bool) {
+        @compileError("std.simd.bitmask: the lanes must be `bool`; compare the vector first");
+    }
     return @bitCast(v);
 };
 

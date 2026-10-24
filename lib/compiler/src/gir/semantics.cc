@@ -129,6 +129,19 @@ namespace {
     return base == int_op::SUB ? u128{0} : mask_of(domain.bits);
 }
 
+// Shifts of the 128-bit storage, which a wider domain can ask past its width
+[[nodiscard]] constexpr auto storage_shl(u128 v, u16 n) noexcept -> u128 {
+    return n >= 128 ? u128{0} : v << n;
+}
+
+[[nodiscard]] constexpr auto storage_shr(u128 v, u16 n) noexcept -> u128 {
+    return n >= 128 ? u128{0} : v >> n;
+}
+
+[[nodiscard]] constexpr auto storage_sar(i128 v, u16 n) noexcept -> i128 {
+    return n >= 128 ? (v < 0 ? i128{-1} : i128{0}) : v >> n;
+}
+
 // The amount a plain shift may use, or the fault it raises
 [[nodiscard]] auto checked_amount(int_domain domain, i128 amount) noexcept -> int_result<u16> {
     if (amount < 0) { return stdx::err{int_fault::NEGATIVE_SHIFT}; }
@@ -144,12 +157,14 @@ namespace {
         const auto limit{
             bits_of(value < 0 ? signed_min(domain.bits) : signed_max(domain.bits), domain)};
         if (!in_range) { return limit; }
-        const auto fits{value < 0 ? value >= (signed_min(domain.bits) >> *in_range)
-                                  : value <= (signed_max(domain.bits) >> *in_range)};
-        return fits ? to_domain(l << *in_range, domain) : limit;
+        const auto fits{value < 0 ? value >= storage_sar(signed_min(domain.bits), *in_range)
+                                  : value <= storage_sar(signed_max(domain.bits), *in_range)};
+        return fits ? to_domain(storage_shl(l, *in_range), domain) : limit;
     }
-    if (!in_range || l > (mask_of(domain.bits) >> *in_range)) { return mask_of(domain.bits); }
-    return to_domain(l << *in_range, domain);
+    if (!in_range || l > storage_shr(mask_of(domain.bits), *in_range)) {
+        return mask_of(domain.bits);
+    }
+    return to_domain(storage_shl(l, *in_range), domain);
 }
 
 // Truncating, flooring, and exact division; the caller has ruled out zero and `MIN / -1`
@@ -370,18 +385,20 @@ auto fold_int_shift(int_op op, int_domain domain, u128 lhs, i128 amount) -> int_
     case int_op::WRAP_SHL:
         // Shifting every bit out leaves nothing, whatever the amount
         if (amount < 0 || amount >= domain.bits) { return u128{0}; }
-        return to_domain(l << static_cast<u16>(amount), domain);
+        return to_domain(storage_shl(l, static_cast<u16>(amount)), domain);
     case int_op::SAT_SHL: return saturated_shl(domain, l, amount);
     case int_op::SHL:     {
         const auto checked{checked_amount(domain, amount)};
         if (!checked) { return stdx::err{checked.error()}; }
-        return to_domain(l << *checked, domain);
+        return to_domain(storage_shl(l, *checked), domain);
     }
     default: {
         const auto checked{checked_amount(domain, amount)};
         if (!checked) { return stdx::err{checked.error()}; }
-        if (domain.is_signed) { return bits_of(signed_value(l, domain) >> *checked, domain); }
-        return l >> *checked;
+        if (domain.is_signed) {
+            return bits_of(storage_sar(signed_value(l, domain), *checked), domain);
+        }
+        return storage_shr(l, *checked);
     }
     }
 }

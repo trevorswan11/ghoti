@@ -203,6 +203,16 @@ auto type_resolver::resolve_lane_builtin(builtin_site& site) -> stdx::result<voi
                     "a 'bool' lane has no memory form; load 'u8' lanes and compare them instead");
     }};
 
+    // Every lane builtin works on values
+    for (usize i{0}; i < args.size(); ++i) {
+        if (call_arg_denotes_type(args[i])) {
+            return fail(i,
+                        fmt::format("expects a value, but was given the type '{}'",
+                                    ctx_.type_display_name(
+                                        denoted_type(*get_resolved_call_arg_type(args[i])))));
+        }
+    }
+
     switch (site.kind) {
     case syntax::builtin_t::SPLAT: {
         const auto outer{implicit_type_stack_.peek()};

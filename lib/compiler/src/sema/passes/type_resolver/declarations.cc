@@ -691,6 +691,15 @@ auto type_resolver::reject_non_runtime_slot(ast::explicit_type_id at, const type
     return false;
 }
 
+auto type_resolver::reject_signature_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
+    if (reject_non_runtime_slot(at, slot_type)) { return true; }
+    if (slot_type.get_kind() == type_kind::OPAQUE) {
+        ctx_.diags.emplace_back(opaque_by_value_error(resolving_.ast.location_of(at)));
+        return true;
+    }
+    return false;
+}
+
 auto type_resolver::reject_storage_slot(ast::explicit_type_id at, const type& slot_type) -> bool {
     if (reject_non_runtime_slot(at, slot_type)) { return true; }
     // Only a return or a diverging expression has this type. Nothing can be stored as it
@@ -725,7 +734,8 @@ auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& sl
 }
 
 auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle value,
-                                                           const type&      declared) -> bool {
+                                                           const type&      declared,
+                                                           bool             arrays_only) -> bool {
     const auto value_type{resolving_.get_sema_type_opt(value)};
     if (!value_type || value_type->is_poison() || !declared.is_resolved() || declared.is_poison()) {
         return false;
@@ -739,10 +749,27 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
     const bool array_target{is_array_like(declared) || declared_kind == type_kind::SLICE ||
                             declared_kind == type_kind::POINTER ||
                             declared_kind == type_kind::REFERENCE};
-    if ((is_array_like(*value_type) && array_target) ||
-        (is_array_like(declared) && value_type->get_kind() == type_kind::UNDEFINED)) {
-        return false;
+    if (is_array_like(declared) && value_type->get_kind() == type_kind::UNDEFINED) { return false; }
+    // Arrays fold element by element, so their elements are what has to fit
+    if (is_array_like(*value_type) && array_target) {
+        auto&      sized_value{concrete_array_type(*value_type)};
+        auto&      sized_declared{concrete_array_type(const_cast<type&>(declared))};
+        const bool fits{sized_value.get_data().is<types::deferred_array>() ||
+                        sized_declared.get_data().is<types::deferred_array>() ||
+                        declared_kind == type_kind::POINTER ||
+                        declared_kind == type_kind::REFERENCE ||
+                        fills_by_value(sized_value, sized_declared)};
+        if (fits) { return false; }
+        last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            value,
+            ctx_.store_mismatch_message(sized_value, sized_declared, target_ptr_bits()),
+            error::TYPE_MISMATCH,
+            resolving_.ast.location_of(value)));
+        return true;
     }
+    // A local `const`'s scalar initializer is checked where it is stored
+    if (arrays_only) { return false; }
     if (const auto slice{value_type->get_data().as_opt<types::slice>()};
         slice && is_comptime_numeric(slice->underlying.get_kind())) {
         return false;
@@ -1178,9 +1205,11 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 reject_type_as_value(*decl.value, resolving_.get_sema_type(id))) {
                 return poison_out();
             }
-            // Outside a function body nothing stores the initializer, so nothing else checks it
-            if (annotation_typed_decl && return_trackers_.empty() &&
-                reject_unassignable_global_initializer(*decl.value, resolving_.get_sema_type(id))) {
+            // A global, or a `const` that folds, is never stored, so nothing else checks it
+            if (annotation_typed_decl &&
+                (return_trackers_.empty() || !decl.has_modifier(ast::decl_modifiers::LET)) &&
+                reject_unassignable_global_initializer(
+                    *decl.value, resolving_.get_sema_type(id), !return_trackers_.empty())) {
                 return poison_out();
             }
             if (decl.value->is<ast::identifier_expr>() &&

@@ -1047,10 +1047,23 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
         // Operand well-formedness is enforced during type resolution
         record_value_result(inst);
         break;
+    // A `.{ ... }` initializer writes each lane, whose value has to be one
+    case gir::instruction_kind::INSERT_LANE: {
+        if (inst.operands.size() == 3 && inst.type) {
+            const auto lane_t{get_operand_type(inst.operands[2])};
+            auto&      lane{lane_type_of(*inst.type)};
+            if (lane_t && !lane_t->is_poison() &&
+                !is_value_assignable(inst.operands[2], *lane_t, lane, inst.location)) {
+                emit_diagnostic(
+                    format_store_mismatch(*lane_t, lane), error::TYPE_MISMATCH, inst.location);
+            }
+        }
+        record_value_result(inst);
+        break;
+    }
     // The emitter builds these from operands sema already checked
     case gir::instruction_kind::SPLAT:
     case gir::instruction_kind::EXTRACT_LANE:
-    case gir::instruction_kind::INSERT_LANE:
     case gir::instruction_kind::REPACK:
     case gir::instruction_kind::SHUFFLE:
     case gir::instruction_kind::SELECT:
@@ -1058,6 +1071,26 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     case gir::instruction_kind::GOTO:
     case gir::instruction_kind::UNREACHABLE:  break;
     }
+}
+
+auto type_checker::check_runtime_untyped_store(const gir::value&             val,
+                                               type&                         slot_t,
+                                               stdx::option<source_location> loc) -> void {
+    if (slot_t.get_kind() != type_kind::COMPTIME_INT) { return; }
+    const auto& runtime_t{ctx_.default_concrete(slot_t)};
+    const auto  folded{folded_int(val)};
+    const auto  big{val.as_opt<big_int>()};
+    const bool  fits{folded ? comptime_int_fits(*folded, runtime_t, target_ptr_bits_)
+                     : big  ? comptime_int_fits(*big, runtime_t, target_ptr_bits_)
+                            : true};
+    if (fits) { return; }
+    emit_diagnostic(fmt::format("integer value {} is out of range for '{}', the type an untyped "
+                                "integer chosen at runtime is stored as; give it a type, as in "
+                                "`let y: i64 = ...`",
+                                folded ? fmt::to_string(*folded) : big->to_string(),
+                                ctx_.type_display_name(runtime_t)),
+                    error::LITERAL_OUT_OF_RANGE,
+                    loc);
 }
 
 auto type_checker::check_store(const gir::instruction& inst) -> void {
@@ -1094,6 +1127,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                                     error::TYPE_MISMATCH,
                                     inst.location);
                 }
+                check_runtime_untyped_store(inst.operands[0], *it->second.type, inst.location);
                 return;
             }
 

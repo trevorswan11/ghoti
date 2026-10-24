@@ -2515,8 +2515,23 @@ auto llvm_lowering::emit_vector_op(const gir::instruction& inst) -> llvm::Value*
             const auto idx{entry.as_opt<i64>()};
             mask.emplace_back(idx ? static_cast<i32>(*idx) : llvm::PoisonMaskElem);
         }
-        return builder_.CreateShuffleVector(
-            lower_value(inst.operands[0]), lower_value(inst.operands[1]), mask, "shuffle");
+        // Operands of different lengths are padded to the longer one's
+        auto*      a{lower_value(inst.operands[0])};
+        auto*      b{lower_value(inst.operands[1], inst.operands[0].type)};
+        const auto lanes_of{[](llvm::Value* v) {
+            return llvm::cast<llvm::FixedVectorType>(v->getType())->getNumElements();
+        }};
+        const auto widest{std::max(lanes_of(a), lanes_of(b))};
+        const auto widen{[&](llvm::Value* v) -> llvm::Value* {
+            const auto have{lanes_of(v)};
+            if (have == widest) { return v; }
+            llvm::SmallVector<i32, 16> identity;
+            for (u32 i{0}; i < widest; ++i) {
+                identity.emplace_back(i < have ? static_cast<i32>(i) : llvm::PoisonMaskElem);
+            }
+            return builder_.CreateShuffleVector(v, identity, "widen");
+        }};
+        return builder_.CreateShuffleVector(widen(a), widen(b), mask, "shuffle");
     }
     case gir::instruction_kind::SELECT:
         return builder_.CreateSelect(lower_value(inst.operands[0]),

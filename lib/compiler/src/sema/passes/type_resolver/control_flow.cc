@@ -391,6 +391,17 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                 const bool inclusive{driver_id.get_token_type() ==
                                      syntax::token_type_t::DOT_DOT_EQ};
                 const auto steps{range_steps_of(*lo_i, *hi_i, inclusive)};
+                if (steps.count > static_cast<i128>(ctx_.eval_unroll_limit)) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        fmt::format("`unroll for` would run {} times, past its unroll limit of "
+                                    "{}; raise it with `@setEvalUnrollLimit`",
+                                    steps.count,
+                                    ctx_.eval_unroll_limit),
+                        error::UNROLLED_LOOP_LIMIT,
+                        resolving_.ast.location_of(driver_id)));
+                }
                 this_count = static_cast<usize>(steps.count);
                 drv.elem_values.reserve(this_count);
                 for (usize k{0}; k < this_count; ++k) {

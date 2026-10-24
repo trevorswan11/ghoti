@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -204,6 +205,24 @@ TEST_CASE("a comptime_int call result out of range for a bound generic parameter
         pub const main = fn(): i32 { _ = take(u16, big()); return 0; };
     )")};
     CHECK(res.message_contains("out of range for type 'u16'"));
+}
+
+TEST_CASE("An untyped integer chosen at runtime has to fit the `i32` it is stored as") {
+    const auto diags{helpers::type_check_diags(R"(
+        pub const f = fn(x: bool): i64 { let y = if (x) 1 else 3000000000; return y; };
+    )")};
+    CHECK(diags.message_contains("integer value 3000000000 is out of range for 'i32', the type "
+                                 "an untyped integer chosen at runtime is stored as"));
+    // A typed binding or a direct return gives the choice its type
+    CHECK(helpers::compile_and_run(R"(
+        const pick = fn(x: bool): i64 { let y: i64 = if (x) 1 else 3000000000; return y; };
+        const direct = fn(x: bool): i64 { return if (x) 1 else 3000000000; };
+        pub const main = fn(): i32 {
+            let mut x = true;
+            x = !x;
+            return @intCast(pick(x) + direct(x) - 5999999990);
+        };
+    )") == 10);
 }
 
 } // namespace ghoti::tests

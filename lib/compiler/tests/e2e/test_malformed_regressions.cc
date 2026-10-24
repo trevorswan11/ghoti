@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -410,6 +411,161 @@ TEST_CASE("A generic member taking self by value is typed for its instance") {
             return @intCast(i32, c2.val) + @intFromBool(c3.val);
         };
     )") == 21);
+}
+
+TEST_CASE("An enum backed by a non-integer type is rejected") {
+    CHECK(helpers::raised("const E = enum : f32 { a, b }; pub const f = fn(e: E): void {};",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(
+        "const E = enum : @Vector(2, u8) { a }; pub const f = fn(): u8 { const e: E = .a; "
+        "return @backingInt(e)[0]; };",
+        sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("Vector builtins that reached LLVM with bad operands are diagnostics") {
+    helpers::expect_compile_error(
+        "pub const f = fn(a: @Vector(4, u8)): u16 { return @bitCast(a); };");
+    helpers::expect_compile_error("pub const f = fn(): @Vector(4, u8) { return @splat(u8); };");
+}
+
+TEST_CASE("An enum literal with no enum to name has no address") {
+    CHECK(
+        helpers::raised("pub const f = fn(): void { let p = &.a; };", sema::error::TYPE_MISMATCH));
+    CHECK(
+        helpers::raised("pub const f = fn(): void { let p = ^.a; };", sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A shift of an integer wider than 128 bits folds without overflowing its storage") {
+    CHECK(helpers::compile_and_run(R"(
+        const top = fn(t: u256): u8 { return @truncate(u8, t >> 250); };
+        const back = fn(t: i256): i256 { return t << 200 >> 199; };
+        pub const main = fn(): i32 {
+            let x: u256 = 3 << 250;
+            let y: i256 = -1;
+            return @as(i32, top(x)) + @as(i32, @truncate(i8, back(y)));
+        };
+    )") == 3 - 2);
+}
+
+TEST_CASE("A redundant `comptime` on a function literal is reported") {
+    helpers::expect_compile_error(R"(
+        pub const main = fn(): i32 {
+            let pick = comptime fn(a: i32, b: i32): i32 { return a; };
+            return pick(1, 2);
+        };
+    )");
+}
+
+TEST_CASE("A compile-time argument has to be its parameter's type") {
+    CHECK(helpers::raised(R"(
+        const H = fn(comptime x: f64): type { return struct { pub const b: u64 = @bitCast(x); }; };
+        pub const f = fn(): u64 { return H(0..0).b; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised(R"(
+        const H = fn(comptime x: f64): u64 { return @bitCast(x); };
+        pub const f = fn(): u64 { return H(0..0); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A reference to an untyped integer call result is diagnosed") {
+    helpers::expect_compile_error(R"(
+        pub const max_of = fn(comptime T: type): comptime_int {
+            return (1 << @typeInfo(T).int.bits) - 1;
+        };
+        pub const main = fn(): i32 { return @intCast((&max_of(u32)) - 7); };
+    )");
+}
+
+TEST_CASE("A global's folded initializer still has to fit its annotation element by element") {
+    CHECK(helpers::raised(R"(
+        const P: [:0]type = "ABC";
+        pub const main = fn(): i32 { let mut n: i32 = 0; for (P) |c| { n += @as(i32, c); } return n; };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    CHECK(helpers::raised("pub const cases = [_][3]u32{ [_]u32{ 10, 20, 60, 30 } };",
+                          sema::error::TYPE_MISMATCH));
+    // A string is `u8`s, which a folded constant would reinterpret rather than widen
+    CHECK(helpers::raised(R"(
+        const P: [:0]u16 = "ABC";
+        pub const main = fn(): i32 { const L: [:0]u16 = "hi"; return @as(i32, P[1] + L[1]); };
+    )",
+                          sema::error::TYPE_MISMATCH));
+    // Known numbers narrow into the elements, range-checked as they fold
+    CHECK(helpers::compile_and_run(R"(
+        const W: usize = 10;
+        const Q = [_][2]u8{ [_]u8{ W, 2 } };
+        pub const main = fn(): i32 { return @as(i32, Q[0][0]); };
+    )") == 10);
+}
+
+TEST_CASE("A number can't take a pointer in a compound assignment") {
+    CHECK(helpers::raised(
+        "pub const f = fn(): i32 { let mut c: i32 = 0; let y: i32 = 5; c += ^y; return c; };",
+        sema::error::OPERATOR_TYPE_MISMATCH));
+    // A reference reads as its value, and a pointer still steps
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut c: i32 = 10;
+            let y: i32 = 3;
+            c -= &y;
+            let a: [3]u8 = .{ 1, 2, 3 };
+            let mut p: ^u8 = ^a[0];
+            p += 2;
+            return c + *p;
+        };
+    )") == 7 + 3);
+}
+
+TEST_CASE("An array sized by a runtime value is an error, not a local without storage") {
+    const auto runtime_length{[](std::string_view source) {
+        const auto diags{helpers::type_check_diags(source)};
+        CHECK(diags.message_contains("An array's length must be known at compile time"));
+    }};
+    runtime_length(R"(
+        pub const f = fn(): u8 {
+            let mut v: u8 = 3;
+            let mut arr: [v]mut u8 = .{ 4, 5, 6 };
+            let s = arr[0..];
+            return s[0];
+        };
+    )");
+    runtime_length(
+        "pub const f = fn(k: usize): void { let mut v = k; let arr: [v]u8 = undefined; };");
+}
+
+TEST_CASE("Math builtins take values, not types") {
+    for (const auto* body : {"return @clz(u8);", "return @min(u8, 3);", "return @abs(i32);"}) {
+        CHECK(helpers::raised(fmt::format("pub const f = fn(): i32 {{ {} }};", body),
+                              sema::error::TYPE_USED_AS_VALUE));
+    }
+}
+
+TEST_CASE("Target builtins take values and never types") {
+    for (const auto* stmt : {"@branchHint(impl likely);",
+                             "@branchHint(u8);",
+                             "@setRuntimeSafety(bool);",
+                             "@setEvalUnrollLimit(u32);"}) {
+        CHECK(helpers::raised(
+            fmt::format("pub const f = fn(c: bool): i32 {{ if (c) {{ {} return 1; }} return 0; }};",
+                        stmt),
+            sema::error::TYPE_USED_AS_VALUE));
+    }
+}
+
+TEST_CASE("A function type can't pass or return 'opaque' by value") {
+    CHECK(helpers::raised(R"(
+        extern const g: extern fn(n: u32): opaque;
+        pub const f = fn(a: i32): i32 { _ = g(0); return a; };
+    )",
+                          sema::error::ILLEGAL_OPAQUE_TYPE));
+    CHECK(helpers::raised("pub const F = fn(o: opaque): void;", sema::error::ILLEGAL_OPAQUE_TYPE));
+    CHECK(helpers::raised("pub const h = fn(): opaque { return undefined; };",
+                          sema::error::ILLEGAL_OPAQUE_TYPE));
+    // A pointer to it is the way to hand one around
+    CHECK_FALSE(helpers::raised("pub const F = extern fn(o: ^mut opaque): ^mut opaque;",
+                                sema::error::ILLEGAL_OPAQUE_TYPE));
 }
 
 } // namespace ghoti::tests

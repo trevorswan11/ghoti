@@ -872,8 +872,9 @@ class type_pool {
 // What `t` points at when it is a pointer or a reference
 [[nodiscard]] auto pointee_of(const type& t) noexcept -> stdx::option<type&>;
 
-// The most lanes a `@Vector` may have
-constexpr u32 MAX_VECTOR_LEN{1U << 16U};
+// The most lanes a `@Vector` may have: past this LLVM's code generation time grows quadratically,
+// and at 65536 lanes it fails outright
+constexpr u32 MAX_VECTOR_LEN{1U << 12U};
 
 [[nodiscard]] auto vector_of(const type& t) noexcept -> stdx::option<const types::vector&>;
 [[nodiscard]] auto is_vector(const type& t) noexcept -> bool;

@@ -46,6 +46,11 @@ class type_checker {
         -> void;
     auto check_instruction(gir::function& fn, const gir::instruction& inst) -> void;
     auto check_store(const gir::instruction& inst) -> void;
+    // An untyped integer chosen at runtime (`if (x) 1 else 3000000000`) lives in the `i32` its
+    // slot lowers to, so each constant stored there has to fit one
+    auto check_runtime_untyped_store(const gir::value&             val,
+                                     type&                         slot_t,
+                                     stdx::option<source_location> loc) -> void;
 
     auto emit_diagnostic(std::string_view message, error err, stdx::option<source_location> loc)
         -> void;

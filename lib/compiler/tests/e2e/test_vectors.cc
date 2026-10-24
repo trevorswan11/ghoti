@@ -603,4 +603,89 @@ TEST_CASE("A signature type built from an `auto` parameter's type waits for the 
     )") == 0b0101);
 }
 
+TEST_CASE("A constant broadcast to vector lanes has to fit one") {
+    const auto check{[](std::string_view body) {
+        const auto diags{helpers::type_check_diags(fmt::format(
+            "pub const f = fn(a: @Vector(2, u8), p: @Vector(2, bool)): @Vector(2, u8) {{ {} }};",
+            body))};
+        CHECK(diags.message_contains("integer literal is out of range for type 'u8'"));
+    }};
+    check("return a + 300;");
+    check("return @min(a, 300);");
+    check("return @select(p, 300, a);");
+    check("return @splat(256);");
+    check("return a * (1 << 200);");
+}
+
+TEST_CASE("A compile-time vector's lanes are range-checked by @intCast") {
+    const auto diags{helpers::type_check_diags(
+        "pub const f = fn(): @Vector(2, u8) { return @intCast(@as(@Vector(2, i32), .{ 1, 300 "
+        "})); };")};
+    CHECK(diags.message_contains("Integer value 300 is out of range for target type 'u8'"));
+}
+
+TEST_CASE("@bitCast between a vector and another type needs as many bits") {
+    const auto mismatch{helpers::type_check_diags(
+        "pub const f = fn(a: @Vector(4, u8)): u16 { return @bitCast(a); };")};
+    CHECK(mismatch.message_contains("'@Vector(4, u8)' is 32 bit(s) but 'u16' is 16 bit(s)"));
+    const auto bools{helpers::type_check_diags(
+        "pub const f = fn(a: @Vector(4, i8)): u4 { return @bitCast(a > @as(@Vector(4, i8), "
+        "@splat(0))); };")};
+    CHECK(bools.messages.empty());
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let v: @Vector(4, u8) = .{ 1, 2, 3, 4 };
+            let a: [4]u8 = @bitCast(v);
+            let w: @Vector(2, u16) = @bitCast(v);
+            return a[3] + @as(i32, @intCast(w[0] & 0xFF));
+        };
+    )") == 4 + 1);
+}
+
+TEST_CASE("@shuffle takes operands of different lengths") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let a: @Vector(2, i32) = .{ 1, 2 };
+            let b: @Vector(4, i32) = .{ 10, 20, 30, 40 };
+            let s = @shuffle(a, b, .{ 1, -4, -1, 0 });
+            let t = @shuffle(b, a, .{ 3, -2 });
+            return s[0] + s[1] + s[2] + s[3] + t[0] + t[1];
+        };
+    )") == 2 + 40 + 10 + 1 + 40 + 2);
+}
+
+TEST_CASE("Lane builtins take values, not types") {
+    const auto diags{
+        helpers::type_check_diags("pub const f = fn(): @Vector(4, u8) { return @splat(u8); };")};
+    CHECK(diags.message_contains("'@splat': expects a value, but was given the type 'u8'"));
+}
+
+TEST_CASE("A @Vector has at most 4096 lanes") {
+    const auto diags{helpers::type_check_diags(
+        "pub const f = fn(): void { let v: @Vector(4097, u8) = undefined; };")};
+    CHECK(diags.message_contains("'@Vector' has 4097 lanes; it needs 1..4096"));
+}
+
+TEST_CASE("An array parameter sized by a comptime parameter takes vector elements") {
+    CHECK(helpers::compile_and_run(R"(
+        const last = fn(comptime n: usize, a: [n]@Vector(n, u8)): u8 { return a[n - 1][n - 1]; };
+        pub const main = fn(): i32 {
+            let a: [2]@Vector(2, u8) = .{ .{ 1, 2 }, .{ 3, 4 } };
+            return last(2, a);
+        };
+    )") == 4);
+}
+
+TEST_CASE("A vector initializer's values have to be the lane type") {
+    const auto check{[](std::string_view init, std::string_view needle) {
+        const auto diags{helpers::type_check_diags(fmt::format(
+            "pub const f = fn(): void {{ let b: @Vector(2, i32) = .{{ {}, 20 }}; }};", init))};
+        CHECK(diags.message_contains(needle));
+    }};
+    check("\"s\"", "cannot assign '[1:0]u8' to 'i32'");
+    check("1.5", "cannot assign 'comptime_float' to 'i32'");
+    check("true", "cannot assign 'bool' to 'i32'");
+}
+
 } // namespace ghoti::tests

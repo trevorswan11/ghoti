@@ -260,6 +260,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
                                  error::ILLEGAL_AUTO_USAGE,
                                  resolving_.ast.location_of(param)));
         }
+        if (param_type.get_kind() == type_kind::OPAQUE) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_, id, opaque_by_value_error(resolving_.ast.location_of(param))));
+        }
         param_types[i++] = &param_type;
     }
 
@@ -272,6 +276,12 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
                              "Function types cannot have 'auto' return type",
                              error::ILLEGAL_AUTO_USAGE,
                              resolving_.ast.location_of(fn.explicit_return_type)));
+    }
+    if (return_type.get_kind() == type_kind::OPAQUE) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            opaque_by_value_error(resolving_.ast.location_of(fn.explicit_return_type))));
     }
     auto& resolved_fn{
         ctx_.get_function(param_types, return_type, fn.variadic, fn.conv, !fn.is_extern)};

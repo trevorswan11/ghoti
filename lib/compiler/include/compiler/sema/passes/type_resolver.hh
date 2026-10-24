@@ -463,6 +463,8 @@ class type_resolver {
     template <ast::IndexableID ID>
     [[nodiscard]] auto resolve_math_builtin(ID id, builtin_site& site)
         -> stdx::result<void, diagnostic>;
+    [[nodiscard]] auto reject_type_arguments(const builtin_site& site, usize first)
+        -> stdx::result<void, diagnostic>;
     template <ast::IndexableID ID>
     [[nodiscard]] auto resolve_memory_builtin(ID id, builtin_site& site)
         -> stdx::result<void, diagnostic>;
@@ -879,8 +881,9 @@ class type_resolver {
 
     // Poisons `value` when it names a type where `expected` wants a value (`const w: S = S;`);
     // returns whether it did
-    auto reject_unassignable_global_initializer(ast::expr_handle value, const type& declared)
-        -> bool;
+    auto reject_unassignable_global_initializer(ast::expr_handle value,
+                                                const type&      declared,
+                                                bool             arrays_only) -> bool;
     // The local a returned `&x` / `^x.field` points into, when it dies with this frame
     [[nodiscard]] auto frame_local_root(ast::expr_handle returned)
         -> stdx::option<std::string_view>;
@@ -927,6 +930,12 @@ class type_resolver {
     auto reject_non_runtime_slot(stdx::option<ast::explicit_type_id> at, const type& slot_type)
         -> bool {
         return at && reject_non_runtime_slot(*at, slot_type);
+    }
+    // A parameter or return, which also can't be a sizeless `opaque`
+    auto reject_signature_slot(ast::explicit_type_id at, const type& slot_type) -> bool;
+    auto reject_signature_slot(stdx::option<ast::explicit_type_id> at, const type& slot_type)
+        -> bool {
+        return at && reject_signature_slot(*at, slot_type);
     }
     // `@TypeOf(undefined)` itself, or an array of it at any depth
     [[nodiscard]] static auto holds_undefined_by_value(const type& t) -> bool;

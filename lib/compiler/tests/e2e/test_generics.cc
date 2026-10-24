@@ -836,4 +836,20 @@ TEST_CASE("comptime float arguments `-0.0` and `0.0` get separate instances") {
     )") == 42);
 }
 
+TEST_CASE("A `[n]auto` parameter sized by a comptime parameter matches any element type") {
+    CHECK(helpers::compile_and_run(R"(
+        const count = fn(comptime n: usize, a: [n]auto): usize { return a.len; };
+        pub const main = fn(): i32 {
+            let a: [2]u8 = .{ 1, 2 };
+            let b: [3]bool = .{ true, false, true };
+            return @intCast(count(2, a) + count(3, b));
+        };
+    )") == 5);
+    // The length still has to match once the instantiation binds `n`
+    helpers::expect_compile_error(R"(
+        const count = fn(comptime n: usize, a: [n]auto): usize { return a.len; };
+        pub const main = fn(): i32 { let a: [2]u8 = .{ 1, 2 }; return @intCast(count(3, a)); };
+    )");
+}
+
 } // namespace ghoti::tests
