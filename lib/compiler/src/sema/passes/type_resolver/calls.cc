@@ -1072,8 +1072,19 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     i < fn_params.size() &&
                     (keeps_comptime_numeric(fn_params[i]) || follows_comptime)};
                 stdx::option<structural_guard> g;
+                const auto                     arg_init{[&]() -> bool {
+                    const auto arg_h{arg.template as_opt<ast::expr_handle>()};
+                    const auto init{arg_h ? resolving_.ast.get_as_opt<ast::initializer_expr>(*arg_h)
+                                          : stdx::none};
+                    return init && !init->object_type;
+                }};
                 if (!is_generic_type(*param_type)) {
                     g.emplace(implicit_type_stack_, *param_type);
+                } else if (const auto vector_type{
+                               param_type->get_kind() == type_kind::AUTO && arg_init()
+                                   ? dependent_vector_param(*fn_info_opt, i, call, expanded)
+                                   : stdx::none}) {
+                    g.emplace(implicit_type_stack_, *vector_type);
                 } else if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
                            param_type->get_kind() == type_kind::AUTO && arg_h &&
                            resolving_.ast.get_as_opt<ast::implicit_access_expr>(*arg_h)) {

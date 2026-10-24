@@ -365,6 +365,13 @@ TEST_CASE("A signature's vector length can come from a compile-time parameter") 
         };
     )") == 7);
 
+    // An initializer builds the vector the earlier `comptime` argument sizes
+    CHECK(helpers::compile_and_run(R"(
+        const last = fn(comptime n: usize, v: @Vector(n, i32)): i32 { return v[n - 1]; };
+        const twice = fn(comptime n: usize, v: @Vector(n, i32)): @Vector(n, i32) { return v * 2; };
+        pub const main = fn(): i32 { return last(3, .{ 1, 2, 3 }) + twice(2, .{ 5, 6 })[1]; };
+    )") == 3 + 12);
+
     const auto mismatch{helpers::type_check_diags(R"(
         const sum = fn(comptime n: usize, v: @Vector(n, i32)): i32 { return v[0]; };
         pub const f = fn(): i32 { let v: @Vector(2, i32) = .{ 1, 2 }; return sum(4, v); };

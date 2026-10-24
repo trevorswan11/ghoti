@@ -598,4 +598,35 @@ auto type_resolver::resolve_vector_cast_builtin(builtin_site& site)
     return result(target);
 }
 
+auto type_resolver::dependent_vector_param(const generic_function_info& fn_info,
+                                           usize                        idx,
+                                           const ast::call_expr&        call,
+                                           const expanded_call_args&    expanded)
+    -> stdx::option<type&> {
+    const auto& params{fn_info.fn_expr->parameters};
+    const auto& tree{fn_info.module->ast};
+    if (idx >= params.size() || !params[idx].explicit_type) { return stdx::none; }
+    const auto vector_call{tree.get_as_opt<ast::call_expr>(*params[idx].explicit_type)};
+    if (!vector_call || vector_call->function->get_builtin() != syntax::builtin_t::VECTOR) {
+        return stdx::none;
+    }
+
+    // The earlier `comptime` parameters, as this call's arguments bind them
+    comptime_frame frame;
+    for (usize j{0}; j < idx && j < expanded.source_index.size(); ++j) {
+        if (!params[j].is_comptime || !params[j].name.is<ast::identifier_expr>()) { continue; }
+        auto folded{fold_implicit_comptime_arg(call.arguments[expanded.source_index[j]])};
+        if (!folded) { return stdx::none; }
+        frame.insert_or_assign(tree.get_as<ast::identifier_expr>(params[j].name).name,
+                               std::move(*folded));
+    }
+    const comptime_frame_guard bound{ctx_.comptime_binding_frames, std::move(frame)};
+    gir::const_eval            evaluator{ctx_, *fn_info.module};
+    const auto                 diags_before{ctx_.diags.size()};
+    const auto                 vec{evaluator.eval_vector_type(*vector_call)};
+    DISCARD(ctx_.diags.split_off(diags_before));
+    if (!vec) { return stdx::none; }
+    return **vec;
+}
+
 } // namespace ghoti::sema

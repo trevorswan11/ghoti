@@ -492,6 +492,13 @@ class type_resolver {
     auto resolve_lane_call_args(const ast::call_expr& call) -> resolve_result;
     auto resolve_arg_with_hint(const ast::call_expr::argument& arg, stdx::option<type&> hint)
         -> bool;
+    // The vector a `v: @Vector(n, T)` parameter takes in this call, from the earlier `comptime`
+    // arguments, so a `.{ ... }` argument has a type to build
+    [[nodiscard]] auto dependent_vector_param(const generic_function_info& fn_info,
+                                              usize                        idx,
+                                              const ast::call_expr&        call,
+                                              const expanded_call_args&    expanded)
+        -> stdx::option<type&>;
     // `@mulAdd(T, a, b, c)`'s operands, each typed by `T`
     auto               resolve_mul_add_args(const ast::call_expr& call) -> resolve_result;
     auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
