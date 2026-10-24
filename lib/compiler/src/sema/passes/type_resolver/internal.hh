@@ -252,6 +252,16 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
            bound_type_param(tree, fn.parameters, idx);
 }
 
+// An integer type's width in bits, `usize`/`isize` being the target's pointer width; 0 otherwise
+[[nodiscard]] inline auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
+    switch (t.get_kind()) {
+    case type_kind::INT:   return u32{int_width(t)};
+    case type_kind::ISIZE:
+    case type_kind::USIZE: return ptr_bits;
+    default:               return 0;
+    }
+}
+
 // `@splat`, `@reduce`, and the other builtins that work on a vector's lanes
 [[nodiscard]] inline auto is_lane_builtin(stdx::option<syntax::builtin_t> builtin) -> bool {
     if (!builtin) { return false; }

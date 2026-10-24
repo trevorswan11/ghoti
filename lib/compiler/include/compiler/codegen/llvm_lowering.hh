@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <ankerl/unordered_dense.h>
 #include <llvm/ADT/ArrayRef.h>
@@ -27,6 +28,7 @@
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "support/float_math.hh"
 
 namespace ghoti::codegen {
@@ -113,6 +115,8 @@ class llvm_lowering {
     auto emit_reduce(const gir::instruction& inst, llvm::Value* vec) -> llvm::Value*;
     // `scalar_op` applied to each lane of `operands` (all vectors of one length) in turn, for an
     // operation LLVM has no vector form of on this target
+    auto emit_vector_overflow(syntax::builtin_t op, llvm::Value* a, llvm::Value* b, bool is_signed)
+        -> std::pair<llvm::Value*, llvm::Value*>;
     auto scalarize(llvm::Type*                                                    result_ty,
                    llvm::ArrayRef<llvm::Value*>                                   operands,
                    llvm::function_ref<llvm::Value*(llvm::ArrayRef<llvm::Value*>)> scalar_op)

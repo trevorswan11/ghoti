@@ -247,15 +247,6 @@ namespace {
     return std::ranges::contains(names, name);
 }
 
-[[nodiscard]] auto integer_effective_bits(const type& t, u32 ptr_bits) noexcept -> u32 {
-    switch (t.get_kind()) {
-    case type_kind::INT:   return u32{int_width(t)};
-    case type_kind::ISIZE:
-    case type_kind::USIZE: return ptr_bits;
-    default:               return 0;
-    }
-}
-
 } // namespace
 
 namespace {
@@ -522,6 +513,7 @@ auto type_resolver::cast_args_of(const ast::call_expr& call, std::string_view na
 // Casts and conversions: `@as`, `@intCast`, `@ptrCast`, and the like
 template <ast::IndexableID ID>
 auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    if (auto per_lane{resolve_vector_cast_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto& builtin{site.builtin};
     const auto  builtin_id{site.kind};
@@ -1657,6 +1649,7 @@ auto type_resolver::resolve_target_builtin(ID id, builtin_site& site)
 // Integer bit counts, float math, and the checked and wrapping arithmetic
 template <ast::IndexableID ID>
 auto type_resolver::resolve_math_builtin(ID, builtin_site& site) -> stdx::result<void, diagnostic> {
+    if (auto per_lane{resolve_vector_math_builtin(site)}) { return std::move(*per_lane); }
     const auto& call{site.call};
     const auto  builtin_id{site.kind};
     auto&       return_type{site.return_type};

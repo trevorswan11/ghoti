@@ -450,4 +450,96 @@ TEST_CASE("Lane builtins reject operands that don't fit") {
           "a 'bool' lane has no memory form");
 }
 
+TEST_CASE("Math builtins work per lane and broadcast a scalar operand") {
+    CHECK(helpers::compile_and_run(R"(
+        const V = @Vector(4, i32);
+        const F = @Vector(4, f32);
+        pub const main = fn(): i32 {
+            let mut k: i32 = 0;
+            k += 1;
+            let a: V = .{ -3, 8, 15, -1 } + k - 1;
+            let f: F = .{ 4.0, 9.0, 2.25, 0.5 };
+            let r = @sqrt(f);
+            let s = @sin(@as(F, @splat(0.0)));
+            let fl = @floor(@as(F, .{ 1.5, -1.5, 2.0, 0.1 }));
+            let mn = @min(a, 0);
+            let mx = @max(a, @as(V, @splat(5)));
+            let ab = @abs(a);
+            let pc = @popCount(@as(@Vector(4, u8), .{ 1, 3, 7, 255 }));
+            let md = @mod(a, 4);
+            let fm = @mulAdd(F, f, 2.0, 1.0);
+            let mut out: V = undefined;
+            let ov = @addWithOverflow(a, @as(V, @splat(2147483647)), &mut out);
+            let ok = r[1] == 3.0 and s[0] == 0.0 and fl[1] == -2.0 and ov[1] and !ov[0] and
+                fm[2] == 5.5;
+            let total = @reduce(.add, mn) + @reduce(.add, mx) + @reduce(.add, ab) +
+                @as(i32, @intCast(@reduce(.add, pc))) + @reduce(.add, md);
+            return if (ok) total; else 0;
+        };
+    )") == -4 + 33 + 27 + 14 + 7);
+}
+
+TEST_CASE("Numeric casts convert every lane") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut k: i32 = 0;
+            k += 1;
+            let a: @Vector(4, i32) = .{ 257, 2, -3, 4 } * k;
+            let wide: @Vector(4, i64) = @intCast(a);
+            let narrow: @Vector(4, u8) = @truncate(a);
+            let f: @Vector(4, f32) = @floatFromInt(a);
+            let d: @Vector(4, f64) = @floatCast(f);
+            let back: @Vector(4, i16) = @intFromFloat(d);
+            let nz = @boolFromInt(a - 2);
+            let bits: @Vector(4, u8) = @intFromBool(nz);
+            let ok = wide[0] == 257 and narrow[0] == 1 and f[2] == -3.0 and back[3] == 4 and
+                bits[1] == 0 and bits[0] == 1;
+            return if (ok) 42; else 0;
+        };
+    )") == 42);
+
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            comptime {
+                const v: @Vector(2, i32) = .{ 1, 300 };
+                const w: @Vector(2, i64) = @intCast(v);
+                const f: @Vector(2, f32) = @floatFromInt(v);
+                @assert(w[1] == 300 and f[0] == 1.0);
+                @assert(@reduce(.add, @min(v, 100)) == 101);
+                @assert(@mulAdd(@Vector(2, f32), .{ 1.0, 2.0 }, 2.0, 1.0)[1] == 5.0);
+            }
+            return 42;
+        };
+    )") == 42);
+}
+
+TEST_CASE("Vector math and casts reject lanes that don't fit", "[.panic]") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let mut k: i32 = 300;
+            k += 0;
+            let v: @Vector(2, i32) = .{ 1, k };
+            let n: @Vector(2, u8) = @intCast(v);
+            return n[0];
+        };
+    )") != 1);
+}
+
+TEST_CASE("Vector math builtins check their lane types") {
+    const auto check{[](std::string_view body, std::string_view needle) {
+        const auto diags{helpers::type_check_diags(
+            fmt::format("pub const f = fn(): void {{ let a: @Vector(4, i32) = .{{ 1, 2, 3, 4 }}; "
+                        "let fl: @Vector(4, f32) = @splat(1.0); {} }};",
+                        body))};
+        CHECK(diags.message_contains(needle));
+    }};
+    check("let s = @sqrt(a);", "'@sqrt': expects float lanes");
+    check("let m = @mod(fl, 2.0);", "'@mod': expects integer lanes");
+    check("let m = @min(a, fl);", "expects a '@Vector(4, i32)'; found '@Vector(4, f32)'");
+    check("let w: @Vector(2, i64) = @intCast(a);",
+          "converts a vector to a vector of as many lanes");
+    check("let w: @Vector(4, i32) = @floatFromInt(fl);",
+          "can't convert 'f32' lanes to 'i32' lanes");
+}
+
 } // namespace ghoti::tests

@@ -734,6 +734,9 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
         // The inferred target is the cast's result, not its operand's type
         const structural_guard shield{implicit_type_stack_, stdx::none};
         args_result = resolve_call_args(call.arguments);
+    } else if (call.function->get_builtin() == syntax::builtin_t::MUL_ADD &&
+               call.arguments.size() == 4) {
+        args_result = resolve_mul_add_args(call);
     } else if (is_lane_builtin(call.function->get_builtin())) {
         args_result = resolve_lane_call_args(call);
     } else if (!atomic_arg_roles(call.function->get_builtin()).empty()) {

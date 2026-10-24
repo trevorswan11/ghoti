@@ -32,6 +32,17 @@ namespace ghoti::sema {
 
 namespace {
 
+// A cast between vectors of as many lanes is checked lane by lane
+[[nodiscard]] auto cast_lanes(stdx::option<type&> src, stdx::option<type&> dest)
+    -> std::pair<stdx::option<type&>, stdx::option<type&>> {
+    const auto src_vec{src ? vector_of(*src) : stdx::none};
+    const auto dest_vec{dest ? vector_of(*dest) : stdx::none};
+    if (src_vec && dest_vec && src_vec->len == dest_vec->len) {
+        return {src_vec->underlying, dest_vec->underlying};
+    }
+    return {src, dest};
+}
+
 // The source spelling of a binary GIR operator, for diagnostics
 [[nodiscard]] auto binary_operator_symbol(gir::instruction_kind kind) noexcept -> std::string_view {
     switch (kind) {
@@ -858,8 +869,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     }
     case gir::instruction_kind::INT_CAST: {
         if (!inst.operands.empty() && inst.type) {
-            const auto src_t{get_operand_type(inst.operands[0])};
-            const auto dest_t{inst.type};
+            const auto [src_t, dest_t]{cast_lanes(get_operand_type(inst.operands[0]), inst.type)};
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
@@ -880,8 +890,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     }
     case gir::instruction_kind::TRUNC_CAST: {
         if (!inst.operands.empty() && inst.type) {
-            const auto src_t{get_operand_type(inst.operands[0])};
-            const auto dest_t{inst.type};
+            const auto [src_t, dest_t]{cast_lanes(get_operand_type(inst.operands[0]), inst.type)};
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};
@@ -899,8 +908,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     }
     case gir::instruction_kind::WIDEN_CAST: {
         if (!inst.operands.empty() && inst.type) {
-            const auto src_t{get_operand_type(inst.operands[0])};
-            const auto dest_t{inst.type};
+            const auto [src_t, dest_t]{cast_lanes(get_operand_type(inst.operands[0]), inst.type)};
             if (src_t && dest_t && !src_t->is_poison() && !dest_t->is_poison()) {
                 const auto src_k{src_t->get_kind()};
                 const auto dest_k{dest_t->get_kind()};

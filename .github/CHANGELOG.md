@@ -922,6 +922,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `@maskedLoad(ptr, mask, passthru)` / `@maskedStore(ptr, value, mask)` read and write the lanes the mask picks at `ptr`, aligned as one lane is; the lanes it skips take `passthru` or are left untouched
     - `@gather(ptrs, mask, passthru)` / `@scatter(value, ptrs, mask)` do the same through a vector of pointers, one per lane
     - A `bool` lane has no memory form, so the memory operations take none
+- The math builtins and numeric casts work on vectors, lane by lane, and fold at compile time
+    - `@sqrt`, `@sin` and the other float functions, `@abs`, `@min` / `@max`, `@divTrunc` / `@divFloor` / `@divExact` / `@rem` / `@mod`, `@mulAdd`, and `@clz` / `@ctz` / `@popCount`, which give a vector of counts
+    - A scalar operand is broadcast, as it is for the operators: `@min(v, 0)`, `@mulAdd(V, v, 2.0, 1.0)`
+    - `@addWithOverflow` and the other overflow builtins write a vector result and return a `@Vector(N, bool)` of the lanes that overflowed
+    - `@intCast`, `@truncate`, `@intFromFloat`, `@floatFromInt`, `@floatCast`, `@intFromBool`, and `@boolFromInt` convert a vector to a vector of as many lanes
+    - Runtime safety checks every lane of a cast or division as it does a scalar
 - Fixed: a `@Vector` of `^mut T` lanes lost the `mut`, so its pointers read as `^T`
 - Fixed: `@as(@Vector(N, T), .{ ... })` didn't fold at compile time
 - A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound

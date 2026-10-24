@@ -477,6 +477,13 @@ class type_resolver {
         -> stdx::result<void, diagnostic>;
     // `@splat`, `@reduce`, `@shuffle`, `@select`, and the masked and indexed memory operations
     [[nodiscard]] auto resolve_lane_builtin(builtin_site& site) -> stdx::result<void, diagnostic>;
+    // A math builtin with a vector operand works per lane, broadcasting its scalar operands;
+    // none when no operand is a vector
+    [[nodiscard]] auto resolve_vector_math_builtin(builtin_site& site)
+        -> stdx::option<stdx::result<void, diagnostic>>;
+    // `@intCast` and the other numeric casts between vectors of as many lanes; none for scalars
+    [[nodiscard]] auto resolve_vector_cast_builtin(builtin_site& site)
+        -> stdx::option<stdx::result<void, diagnostic>>;
 
     auto resolve_call_modifier(ast::node_id id, ast::expr_handle modifier) -> bool;
     auto resolve_call_args(gsl::span<const ast::call_expr::argument> args) -> resolve_result;
@@ -485,6 +492,8 @@ class type_resolver {
     auto resolve_lane_call_args(const ast::call_expr& call) -> resolve_result;
     auto resolve_arg_with_hint(const ast::call_expr::argument& arg, stdx::option<type&> hint)
         -> bool;
+    // `@mulAdd(T, a, b, c)`'s operands, each typed by `T`
+    auto               resolve_mul_add_args(const ast::call_expr& call) -> resolve_result;
     auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
     [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;

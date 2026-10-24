@@ -446,6 +446,8 @@ class emitter {
         -> value;
     // `operand` as a vector of `len` `lane`s, splatting a scalar
     auto emit_vector_operand(ast::expr_handle operand, sema::type& lane, u32 len) -> value;
+    // `operand` as a `type`, broadcast to its lanes when `type` is a vector
+    auto emit_operand_as(ast::expr_handle operand, sema::type& type) -> value;
     auto emit_splat(value scalar, sema::type& vector_type) -> value;
     // `@splat`, `@reduce`, `@shuffle`, `@select`, and the masked and indexed memory operations
     auto emit_lane_builtin(ast::node_id          id,

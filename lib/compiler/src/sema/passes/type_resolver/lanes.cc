@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <bit>
 #include <string>
 #include <string_view>
 
@@ -149,6 +151,25 @@ auto type_resolver::resolve_lane_call_args(const ast::call_expr& call) -> resolv
     }
     default: UNREACHABLE("Not a lane builtin");
     }
+}
+
+auto type_resolver::resolve_mul_add_args(const ast::call_expr& call) -> resolve_result {
+    const auto& args{call.arguments};
+    if (!resolve_arg_with_hint(args[0], stdx::none)) { return resolve_result::POISONED; }
+    // Each operand is a `T`, which a `.{ ... }` initializer builds
+    stdx::option<type&> operand_type;
+    if (call_arg_denotes_type(args[0])) {
+        operand_type.emplace(denoted_type(*get_resolved_call_arg_type(args[0])));
+    }
+    const auto outer{implicit_type_stack_.peek()};
+    for (usize i{1}; i < args.size(); ++i) {
+        const auto expr{args[i].as_opt<ast::expr_handle>()};
+        const bool builds_value{expr && resolving_.ast.get_as_opt<ast::initializer_expr>(*expr)};
+        if (!resolve_arg_with_hint(args[i], builds_value ? operand_type : outer)) {
+            return resolve_result::POISONED;
+        }
+    }
+    return resolve_result::OK;
 }
 
 auto type_resolver::resolve_lane_builtin(builtin_site& site) -> stdx::result<void, diagnostic> {
@@ -380,6 +401,201 @@ auto type_resolver::resolve_lane_builtin(builtin_site& site) -> stdx::result<voi
     }
     default: UNREACHABLE("Not a lane builtin");
     }
+}
+
+auto type_resolver::resolve_vector_math_builtin(builtin_site& site)
+    -> stdx::option<stdx::result<void, diagnostic>> {
+    const auto& call{site.call};
+    const auto& args{call.arguments};
+    const auto  kind{site.kind};
+    const bool  is_mul_add{kind == syntax::builtin_t::MUL_ADD};
+    const bool  is_overflow{kind == syntax::builtin_t::ADD_WITH_OVERFLOW ||
+                            kind == syntax::builtin_t::SUB_WITH_OVERFLOW ||
+                            kind == syntax::builtin_t::MUL_WITH_OVERFLOW ||
+                            kind == syntax::builtin_t::SHL_WITH_OVERFLOW};
+    // `@mulAdd(T, a, b, c)` names its type first, and an overflow builtin's last is its result slot
+    const usize first{is_mul_add ? 1UZ : 0UZ};
+    const usize last{is_overflow ? std::min(args.size(), 2UZ) : args.size()};
+
+    stdx::option<type&> shape;
+    if (is_mul_add && !args.empty() && call_arg_denotes_type(args[0])) {
+        if (auto& t{denoted_type(*get_resolved_call_arg_type(args[0]))}; is_vector(t)) {
+            shape.emplace(t);
+        }
+    }
+    for (usize i{first}; !shape && i < last; ++i) {
+        if (auto& t{*get_call_arg_value_type(args[i])}; is_vector(t)) { shape.emplace(t); }
+    }
+    if (!shape) { return stdx::none; }
+
+    const auto name{syntax::builtin_name(kind)};
+    const auto fail{[&](usize arg, std::string message) -> stdx::result<void, diagnostic> {
+        return make_sema_err(fmt::format("'{}': {}", name, std::move(message)),
+                             error::TYPE_MISMATCH,
+                             get_call_arg_location(args[arg]));
+    }};
+    const auto len{vector_of(*shape)->len};
+    auto&      lane{lane_type_of(*shape)};
+
+    // Every other operand is the same vector, or a scalar broadcast to its lanes
+    for (usize i{first}; i < last; ++i) {
+        auto& t{*get_call_arg_value_type(args[i])};
+        if (t.is_poison()) { return stdx::result<void, diagnostic>{}; }
+        if (is_vector(t)) {
+            if (vector_of(t)->len != len || !is_same_unqualified(lane_type_of(t), lane)) {
+                return fail(i,
+                            fmt::format("expects a '{}'; found '{}'",
+                                        ctx_.type_display_name(*shape),
+                                        ctx_.type_display_name(t)));
+            }
+            continue;
+        }
+        const auto expr{args[i].as_opt<ast::expr_handle>()};
+        if (!expr || !scalar_broadcasts(*expr, t, lane)) {
+            return fail(i,
+                        fmt::format("'{}' does not broadcast to the lanes of '{}'",
+                                    ctx_.type_display_name(t),
+                                    ctx_.type_display_name(*shape)));
+        }
+    }
+
+    const bool is_int{is_integer(lane.get_kind())};
+    const bool is_flt{is_float(lane.get_kind())};
+    const auto lanes_must_be{
+        [&](bool fits, std::string_view what) -> stdx::option<stdx::result<void, diagnostic>> {
+            if (fits) { return stdx::none; }
+            return fail(
+                first,
+                fmt::format("expects {} lanes; found '{}'", what, ctx_.type_display_name(*shape)));
+        }};
+    auto& same_shape{ctx_.get_vector(types::mut::CONSTANT, len, ctx_.as_lane(lane))};
+    switch (kind) {
+    case syntax::builtin_t::CLZ:
+    case syntax::builtin_t::CTZ:
+    case syntax::builtin_t::POPCOUNT: {
+        if (auto err{lanes_must_be(is_int, "integer")}) { return err; }
+        const auto bits{
+            std::bit_width(static_cast<u64>(integer_effective_bits(lane, target_ptr_bits())))};
+        site.return_type = &ctx_.get_vector(
+            types::mut::CONSTANT, len, ctx_.get_int(static_cast<u16>(bits), false));
+        return stdx::result<void, diagnostic>{};
+    }
+    case syntax::builtin_t::ABS:
+    case syntax::builtin_t::MIN:
+    case syntax::builtin_t::MAX:
+    case syntax::builtin_t::MUL_ADD:
+        if (auto err{lanes_must_be(is_int || is_flt, "integer or float")}) { return err; }
+        break;
+    case syntax::builtin_t::DIV_TRUNC:
+    case syntax::builtin_t::DIV_FLOOR:
+    case syntax::builtin_t::DIV_EXACT:
+    case syntax::builtin_t::REM:
+    case syntax::builtin_t::MOD:
+        if (auto err{lanes_must_be(is_int, "integer")}) { return err; }
+        break;
+    case syntax::builtin_t::ADD_WITH_OVERFLOW:
+    case syntax::builtin_t::SUB_WITH_OVERFLOW:
+    case syntax::builtin_t::MUL_WITH_OVERFLOW:
+    case syntax::builtin_t::SHL_WITH_OVERFLOW: {
+        if (auto err{lanes_must_be(is_int, "integer")}) { return err; }
+        auto&      slot{*get_resolved_call_arg_type(args[2])};
+        const auto out{pointee_of(slot)};
+        if (!out || slot.is_constant() || !is_same_unqualified(*out, same_shape)) {
+            return fail(2,
+                        fmt::format("expects its third argument to be a '&mut {}' result "
+                                    "reference; found '{}'",
+                                    ctx_.type_display_name(same_shape),
+                                    ctx_.type_display_name(slot)));
+        }
+        site.return_type = &ctx_.get_vector(
+            types::mut::CONSTANT, len, ctx_.get_builtin_resolved_type(type_kind::BOOL));
+        return stdx::result<void, diagnostic>{};
+    }
+    default:
+        // `@sqrt` and the other float functions
+        if (auto err{lanes_must_be(is_flt, "float")}) { return err; }
+        break;
+    }
+    site.return_type = &same_shape;
+    return stdx::result<void, diagnostic>{};
+}
+
+auto type_resolver::resolve_vector_cast_builtin(builtin_site& site)
+    -> stdx::option<stdx::result<void, diagnostic>> {
+    const auto& call{site.call};
+    const auto  kind{site.kind};
+    const auto  name{syntax::builtin_name(kind)};
+    const auto  result{[&](type& t) {
+        site.return_type = &t;
+        return stdx::result<void, diagnostic>{};
+    }};
+
+    // `@boolFromInt(v)` takes no target: each lane is whether that one is non-zero
+    if (kind == syntax::builtin_t::BOOL_FROM_INT) {
+        auto& src{*get_call_arg_value_type(call.arguments[0])};
+        if (!is_vector(src)) { return stdx::none; }
+        if (!is_integer(lane_type_of(src).get_kind())) {
+            return make_sema_err(fmt::format("'{}' expects integer lanes; found '{}'",
+                                             name,
+                                             ctx_.type_display_name(src)),
+                                 error::TYPE_MISMATCH,
+                                 get_call_arg_location(call.arguments[0]));
+        }
+        return result(ctx_.with_lane(src, ctx_.get_builtin_resolved_type(type_kind::BOOL)));
+    }
+
+    const bool lane_cast{
+        kind == syntax::builtin_t::INT_CAST || kind == syntax::builtin_t::TRUNCATE ||
+        kind == syntax::builtin_t::INT_FROM_BOOL || kind == syntax::builtin_t::INT_FROM_FLOAT ||
+        kind == syntax::builtin_t::FLOAT_FROM_INT || kind == syntax::builtin_t::FLOAT_CAST};
+    if (!lane_cast) { return stdx::none; }
+    // The scalar path reports a missing or ill-formed target
+    const auto args{cast_args_of(call, name)};
+    if (!args || !args->target || args->target->is_poison()) { return stdx::none; }
+    auto& target{*args->target};
+    auto& src{*get_call_arg_value_type(*args->operand)};
+    if (src.is_poison() || (!is_vector(target) && !is_vector(src))) { return stdx::none; }
+
+    const auto target_vec{vector_of(target)};
+    const auto src_vec{vector_of(src)};
+    if (!target_vec || !src_vec || target_vec->len != src_vec->len) {
+        return make_sema_err(fmt::format("'{}' converts a vector to a vector of as many lanes; "
+                                         "found '{}' to '{}'",
+                                         name,
+                                         ctx_.type_display_name(src),
+                                         ctx_.type_display_name(target)),
+                             error::TYPE_MISMATCH,
+                             get_call_arg_location(*args->operand));
+    }
+
+    const auto& to{target_vec->underlying};
+    const auto& from{src_vec->underlying};
+    const bool  to_int{is_integer(to.get_kind())};
+    const bool  to_flt{is_float(to.get_kind())};
+    const bool  from_int{is_integer(from.get_kind())};
+    const bool  from_flt{is_float(from.get_kind())};
+    const auto  ptr_bits{target_ptr_bits()};
+    const bool  fits{[&] {
+        switch (kind) {
+        case syntax::builtin_t::INT_CAST: return to_int && from_int;
+        case syntax::builtin_t::TRUNCATE:
+            return to_int && from_int &&
+                   integer_effective_bits(to, ptr_bits) <= integer_effective_bits(from, ptr_bits);
+        case syntax::builtin_t::INT_FROM_BOOL:  return to_int && from.get_kind() == type_kind::BOOL;
+        case syntax::builtin_t::INT_FROM_FLOAT: return to_int && from_flt;
+        case syntax::builtin_t::FLOAT_FROM_INT: return to_flt && from_int;
+        default:                                return to_flt && from_flt; // `@floatCast`
+        }
+    }()};
+    if (!fits) {
+        return make_sema_err(fmt::format("'{}' can't convert '{}' lanes to '{}' lanes",
+                                         name,
+                                         ctx_.type_display_name(from),
+                                         ctx_.type_display_name(to)),
+                             error::TYPE_MISMATCH,
+                             get_call_arg_location(*args->operand));
+    }
+    return result(target);
 }
 
 } // namespace ghoti::sema

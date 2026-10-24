@@ -3630,6 +3630,13 @@ auto emitter::emit_lane_builtin(ast::node_id          id,
     }
 }
 
+auto emitter::emit_operand_as(ast::expr_handle operand, sema::type& type) -> value {
+    if (const auto vec{sema::vector_of(type)}) {
+        return emit_vector_operand(operand, vec->underlying, vec->len);
+    }
+    return emit_coerced_expr(operand, type);
+}
+
 auto emitter::emit_vector_binary(ast::node_id            id,
                                  const ast::binary_expr& binary,
                                  sema::type&             result) -> value {
@@ -4634,12 +4641,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     if (operand.type && operand.type->get_kind() == sema::type_kind::POINTER) {
                         return pointer_to_bool(operand, false);
                     }
-                    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
                     auto& op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    const auto zero{sema::is_vector(op_type) ? value{zero_val{}, op_type}
+                                                             : value{u64{0}, op_type}};
                     return value{
-                        builder_.emit_binary(
-                            instruction_kind::NE, operand, value{u64{0}, op_type}, bool_type),
-                        bool_type};
+                        builder_.emit_binary(instruction_kind::NE, operand, zero, ret_type),
+                        ret_type};
                 }
             }
             break;
@@ -5025,25 +5032,27 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::DIV_EXACT:
         case syntax::builtin_t::REM:
         case syntax::builtin_t::MOD:       {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
-            // Two operands meet at their peer type, which is the result's
+            // Two operands meet at their peer type, which is the result's, a scalar broadcasting
+            // to a vector's lanes
+            auto&      ret_lane{sema::lane_type_of(ret_type)};
             const bool peers_operands{
                 call.arguments.size() == 2 &&
-                (sema::is_integer(ret_type.get_kind()) || sema::is_float(ret_type.get_kind()))};
+                (sema::is_integer(ret_lane.get_kind()) || sema::is_float(ret_lane.get_kind()))};
             std::vector<value> args;
             args.reserve(call.arguments.size());
             for (const auto& arg : call.arguments) {
                 if (const auto expr_h{arg.as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(peers_operands ? emit_coerced_expr(*expr_h, ret_type)
+                    args.emplace_back(peers_operands ? emit_operand_as(*expr_h, ret_type)
                                                      : emit_expression(*expr_h));
                 }
             }
             // Division by zero, `MIN / -1`, and `@abs(MIN)` panic like the operators they mirror
             const auto                  int_op{semantics::int_op_of(fn_token)};
-            const bool                  is_int{sema::is_integer(ret_type.get_kind())};
+            const bool                  is_int{sema::is_integer(ret_lane.get_kind())};
             const semantics::int_domain domain{.bits      = 1,
-                                               .is_signed = sema::is_signed_integer(ret_type)};
+                                               .is_signed = sema::is_signed_integer(ret_lane)};
             const bool                  checked{
                 safety_enabled() && is_int &&
                 ((int_op && semantics::any(semantics::runtime_checks(*int_op, domain))) ||
@@ -5073,7 +5082,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         case syntax::builtin_t::LOG10:
         case syntax::builtin_t::FLOOR:
         case syntax::builtin_t::CEIL:  {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
             const auto expr_h{call.arguments[0].as_opt<ast::expr_handle>()};
             if (!expr_h) { break; }
             const auto name{syntax::builtin_name(fn_token)};
@@ -5084,13 +5093,13 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             return value{void_val{}, ret_type};
         }
         case syntax::builtin_t::MUL_ADD: {
-            if (const auto cv{const_eval_.try_eval(id)}) { return cv->to_gir_value(); }
+            if (const auto cv{const_eval_.try_eval(id)}) { return materialize_const(*cv); }
 
             // `@mulAdd(T, a, b, c)`: each operand is a `T`
             std::vector<value> args;
             for (usize i{1}; i < call.arguments.size(); ++i) {
                 if (const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()}) {
-                    args.emplace_back(emit_coerced_expr(*expr_h, ret_type));
+                    args.emplace_back(emit_operand_as(*expr_h, ret_type));
                 }
             }
             const auto name{syntax::builtin_name(fn_token)};
@@ -5122,7 +5131,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const bool is_shift{fn_token == syntax::builtin_t::SHL_WITH_OVERFLOW};
             const auto operand{[&](usize index, bool to_slot_type) {
                 const auto expr_h{*call.arguments[index].as_opt<ast::expr_handle>()};
-                return to_slot_type && operand_type ? emit_coerced_expr(expr_h, *operand_type)
+                return to_slot_type && operand_type ? emit_operand_as(expr_h, *operand_type)
                                                     : emit_expression(expr_h);
             }};
             // An untyped shift count takes the shifted value's type rather than `i32`'s
@@ -7355,26 +7364,33 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         }
     }};
 
-    const auto from_info{get_info(*operand.type)};
-    const auto to_info{get_info(dest_type)};
+    // A vector's lanes are each compared against the bounds, and must all be in range
+    auto&      from_lane{sema::lane_type_of(*operand.type)};
+    const auto from_info{get_info(from_lane)};
+    const auto to_info{get_info(sema::lane_type_of(dest_type))};
     if (!from_info || !to_info) { return; }
+    const bool is_vector{sema::is_vector(*operand.type)};
+    const auto bound{[&](value scalar) {
+        return is_vector ? emit_splat(std::move(scalar), *operand.type) : scalar;
+    }};
 
     const auto from_bits{from_info->first};
     const auto from_signed{from_info->second};
     const auto to_bits{to_info->first};
     const auto to_signed{to_info->second};
 
-    auto&               bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& scalar_bool{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& bool_type{is_vector ? ctx_.with_lane(*operand.type, scalar_bool) : scalar_bool};
     stdx::option<value> is_valid;
 
     if (from_signed && to_signed) {
         if (from_bits > to_bits) {
             const i128  min_to{-(i128{1} << (to_bits - 1))};
             const i128  max_to{(i128{1} << (to_bits - 1)) - 1};
-            const value min_val{from_bits > 64 ? value{min_to, *operand.type}
-                                               : value{static_cast<i64>(min_to), *operand.type}};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const value min_val{bound(from_bits > 64 ? value{min_to, from_lane}
+                                                     : value{static_cast<i64>(min_to), from_lane})};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<i64>(max_to), from_lane})};
             const auto  ge{builder_.emit_binary(instruction_kind::GE, operand, min_val, bool_type)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(
@@ -7385,20 +7401,20 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     } else if (!from_signed && !to_signed) {
         if (from_bits > to_bits) {
             const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<u64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
     } else if (from_signed && !to_signed) {
-        const value zero_val{from_bits > 64 ? value{i128{0}, *operand.type}
-                                            : value{i64{0}, *operand.type}};
+        const value zero_val{
+            bound(from_bits > 64 ? value{i128{0}, from_lane} : value{i64{0}, from_lane})};
         const auto  ge_zero{
             builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
         if (from_bits > to_bits) {
             const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{from_bits > 64 ? value{static_cast<i128>(max_to), *operand.type}
-                                               : value{static_cast<i64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{static_cast<i128>(max_to), from_lane}
+                                                     : value{static_cast<i64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(builder_.emit_binary(instruction_kind::AND,
                                                   value{ge_zero, bool_type},
@@ -7411,14 +7427,20 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     } else { // !from_signed && to_signed
         if (from_bits >= to_bits) {
             const u128  max_to{(u128{1} << (to_bits - 1)) - 1};
-            const value max_val{from_bits > 64 ? value{max_to, *operand.type}
-                                               : value{static_cast<u64>(max_to), *operand.type}};
+            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
+                                                     : value{static_cast<u64>(max_to), from_lane})};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
     }
 
     if (!is_valid) { return; }
+    if (is_vector) {
+        constexpr u8 every_lane{2}; // `builtin.ReduceOp.and`
+        is_valid.emplace(
+            builder_.emit_vector_op(instruction_kind::REDUCE, {*is_valid}, scalar_bool, every_lane),
+            scalar_bool);
+    }
 
     auto& fn{*fn_opt};
     auto& ok_seg{fn.add_segment()};
