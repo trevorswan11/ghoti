@@ -32,6 +32,7 @@
 #include "compiler/gir/const_value.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/symbol.hh"
@@ -2682,17 +2683,28 @@ auto type_resolver::expand_pack_call_args(const ast::call_expr& call)
             continue;
         }
         const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
-        const auto ident{expr_h ? resolving_.ast.get_as_opt<ast::identifier_expr>(*expr_h)
-                                : stdx::none};
-        const auto pack{ident ? pack_named(ident->name) : stdx::none};
+        const auto operand{expr_h ? pack_expansion_operand_of(resolving_.ast, *expr_h)
+                                  : stdx::none};
+        const auto pack{operand ? pack_named(operand->pack) : stdx::none};
         if (!pack) {
             ctx_.diags.emplace_back("'...' may only expand the enclosing parameter pack",
                                     error::PACK_EXPANSION_MISPLACED,
                                     get_call_arg_location(call.arguments[i]));
             return stdx::none;
         }
+        pack_slice selected{.lo = 0, .hi = pack->element_types.size()};
+        if (operand->range) {
+            gir::const_eval evaluator{ctx_, resolving_};
+            auto            folded{fold_pack_slice(
+                evaluator, resolving_.ast, *operand->range, pack->name, selected.hi)};
+            if (!folded) {
+                ctx_.diags.emplace_back(std::move(folded.error()));
+                return stdx::none;
+            }
+            selected = *folded;
+        }
         capture_pack_use(*pack);
-        for (usize k{0}; k < pack->element_types.size(); ++k) {
+        for (usize k{selected.lo}; k < selected.hi; ++k) {
             out.source_index.emplace_back(i);
             out.pack_k.emplace_back(k);
             out.pack_elem.emplace_back(pack->element_types[k]);

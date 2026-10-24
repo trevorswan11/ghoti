@@ -37,6 +37,15 @@ using namespace resolver_detail;
 auto type_resolver::resolve_pack_index(ast::node_id           id,
                                        const ast::index_expr& index,
                                        const pack_binding&    pack) -> void {
+    if (resolving_.ast.get_as_opt<ast::range_expr>(index.index)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            fmt::format("A pack slice has no value of its own; expand it as '{}[lo..hi]...'",
+                        pack.name),
+            error::MALFORMED_PACK_USE,
+            resolving_.ast.location_of(index.index)));
+    }
     gir::const_eval evaluator{ctx_, resolving_};
     const auto      folded{evaluator.try_eval(index.index)};
     const auto      k{folded ? folded->as_int_opt() : stdx::none};

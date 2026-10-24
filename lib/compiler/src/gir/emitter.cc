@@ -46,6 +46,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/pack_element.hh"
+#include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
@@ -439,6 +440,11 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
         cx_frame.insert_or_assign(p_name, const_value{*bound_ty});
     }
     const comptime_frame_guard cx_frame_guard{ctx_.comptime_binding_frames, std::move(cx_frame)};
+    auto       outer_pack_len_of{std::exchange(ctx_.pack_len_of, [this](std::string_view name) {
+        return pack_named(name).transform([](const pack_context& p) { return p.element_count; });
+    })};
+    const auto restore_pack_len_of{
+        gsl::finally([&] { ctx_.pack_len_of = std::move(outer_pack_len_of); })};
 
     // Overlay this monomorphization's body typing onto the shared AST nodes during emission
     const_eval_.clear_memo();
@@ -5355,20 +5361,26 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     std::vector<stdx::opt_size>   arg_pack_k;
     std::vector<std::string_view> arg_pack_name;
     for (usize i{0}; i < call.arguments.size(); ++i) {
-        const auto expanded_pack{[&] -> stdx::option<pack_context> {
+        const auto operand{[&] -> stdx::option<sema::pack_expansion_operand> {
             if (i >= call.pack_expansions.size() || !call.pack_expansions[i]) { return stdx::none; }
             const auto expr_h{call.arguments[i].as_opt<ast::expr_handle>()};
-            const auto ident{expr_h ? active_ast().get_as_opt<ast::identifier_expr>(*expr_h)
-                                    : stdx::none};
-            return ident ? pack_named(ident->name) : stdx::none;
+            return expr_h ? sema::pack_expansion_operand_of(active_ast(), *expr_h) : stdx::none;
         }()};
+        const auto expanded_pack{operand ? pack_named(operand->pack) : stdx::none};
         if (!expanded_pack) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(stdx::none);
             arg_pack_name.emplace_back();
             continue;
         }
-        for (usize k{0}; k < expanded_pack->element_count; ++k) {
+        sema::pack_slice selected{.lo = 0, .hi = expanded_pack->element_count};
+        if (operand->range) {
+            const auto folded{sema::fold_pack_slice(
+                const_eval_, active_ast(), *operand->range, expanded_pack->name, selected.hi)};
+            ASSERT(folded, "Pack slice bounds were not checked");
+            selected = *folded;
+        }
+        for (usize k{selected.lo}; k < selected.hi; ++k) {
             arg_source_index.emplace_back(i);
             arg_pack_k.emplace_back(k);
             arg_pack_name.emplace_back(expanded_pack->name);

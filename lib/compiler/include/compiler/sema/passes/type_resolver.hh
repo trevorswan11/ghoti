@@ -366,7 +366,7 @@ class type_resolver {
     // A call's arguments after splicing in every `expr...` pack expansion in place
     struct expanded_call_args {
         std::vector<usize>          source_index; // names which syntactic argument a slot came from
-        std::vector<stdx::opt_size> pack_k;       // element index within that expansion
+        std::vector<stdx::opt_size> pack_k;       // the pack element an expanded slot reads
         std::vector<stdx::option<type&>> pack_elem; // that element's type, for an expanded slot
     };
 

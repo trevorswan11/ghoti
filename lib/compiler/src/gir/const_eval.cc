@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <concepts>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -49,6 +50,7 @@
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/pack_element.hh"
+#include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/range_steps.hh"
 #include "compiler/sema/side_tables.hh"
@@ -2474,6 +2476,15 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
                 place->path.emplace_back(ref_step::kind::INDEX, std::string{}, first);
                 return const_value{std::move(*place), module_->get_sema_type_opt(id)};
             }
+        }
+    }
+
+    // `rest.len` of the pack in scope where this folds, unless a folded call bound its own `rest`
+    if (const auto obj_ident{module_->ast.get_as_opt<ast::identifier_expr>(dot.object)};
+        obj_ident && member_name == "len" && active_fns_.empty() && ctx_.pack_len_of &&
+        !lookup_local_binding(obj_ident->name)) {
+        if (const auto len{ctx_.pack_len_of(obj_ident->name)}) {
+            return const_value{u64{*len}, ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
         }
     }
 
@@ -5971,16 +5982,31 @@ auto const_eval::eval_call_args(const ast::call_expr& call)
         params_aligned = params_aligned && !is_expansion;
         const auto dest{params_aligned && i < params.size() ? stdx::option<sema::type&>{*params[i]}
                                                             : stdx::none};
-        const auto val{try_eval_for(*expr_h, dest)};
-        if (!val) { return stdx::none; }
-
         if (!is_expansion) {
+            const auto val{try_eval_for(*expr_h, dest)};
+            if (!val) { return stdx::none; }
             args.emplace_back(*val);
             continue;
         }
-        const auto pack{val->as_opt<const_array>()};
+
+        // `rest[lo..hi]...` folds `rest` itself, then keeps only the selected elements
+        const auto operand{sema::pack_expansion_operand_of(module_->ast, *expr_h)};
+        const auto val{operand && operand->range
+                           ? try_eval(module_->ast.get_as<ast::index_expr>(*expr_h).array)
+                           : try_eval_for(*expr_h, dest)};
+        const auto pack{val ? val->as_opt<const_array>() : stdx::none};
         if (!pack) { return stdx::none; }
-        args.insert(args.end(), pack->elements.begin(), pack->elements.end());
+        sema::pack_slice selected{.lo = 0, .hi = pack->elements.size()};
+        if (operand && operand->range) {
+            const auto folded{sema::fold_pack_slice(
+                *this, module_->ast, *operand->range, operand->pack, selected.hi)};
+            if (!folded) { return stdx::none; }
+            selected = *folded;
+        }
+        const auto first{pack->elements.begin()};
+        args.insert(args.end(),
+                    first + static_cast<std::ptrdiff_t>(selected.lo),
+                    first + static_cast<std::ptrdiff_t>(selected.hi));
     }
     return args;
 }
