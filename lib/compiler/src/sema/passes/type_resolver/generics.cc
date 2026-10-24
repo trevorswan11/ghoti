@@ -329,6 +329,10 @@ ctor_instance_display_name(const context&                                       
                            arr.underlying.is_constant() ? "" : "mut_",
                            mangle_arg_type(reg, arr.underlying));
     }
+    case type_kind::VECTOR: {
+        const auto& vec{data.as<types::vector>()};
+        return fmt::format("vector{}_{}", vec.len, mangle_arg_type(reg, vec.underlying));
+    }
     case type_kind::SLICE: {
         const auto& sl{data.as<types::slice>()};
         return fmt::format("slice{}_{}{}",
