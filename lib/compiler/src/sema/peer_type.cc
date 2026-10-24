@@ -35,18 +35,13 @@ using peer_result = stdx::result<gsl::not_null<type*>, peer_error>;
     return is_assignable(from, to);
 }
 
-[[nodiscard]] auto pointee_of(const type& t) noexcept -> stdx::option<type&> {
-    if (const auto ptr{t.get_data().as_opt<types::pointer>()}) { return ptr->underlying; }
-    if (const auto ref{t.get_data().as_opt<types::reference>()}) { return ref->underlying; }
-    return stdx::none;
-}
-
 // A pointer or reference peer stays `volatile` when any operand points at volatile storage
-[[nodiscard]] auto keep_volatile(context& ctx, type& peer, gsl::span<const type* const> operands)
-    -> type& {
+[[nodiscard]] auto keep_volatile(context&                                    ctx,
+                                 type&                                       peer,
+                                 gsl::span<const gsl::not_null<const type*>> operands) -> type& {
     const auto pointee{pointee_of(peer)};
     if (!pointee || pointee->is_volatile()) { return peer; }
-    const bool any_volatile{std::ranges::any_of(operands, [](const type* operand) {
+    const bool any_volatile{std::ranges::any_of(operands, [](gsl::not_null<const type*> operand) {
         const auto target{pointee_of(*operand)};
         return target && target->is_volatile();
     })};
@@ -153,9 +148,9 @@ auto peer_type(context& ctx, gsl::span<const peer_operand> operands) -> peer_res
         return peer_type(ctx, values);
     }
 
-    std::vector<usize>       live;
-    std::vector<const type*> live_types;
-    stdx::option<type&>      placeholder;
+    std::vector<usize>                      live;
+    std::vector<gsl::not_null<const type*>> live_types;
+    stdx::option<type&>                     placeholder;
     for (usize i{0}; i < operands.size(); ++i) {
         auto& t{*operands[i].type};
         if (t.is_poison()) { return gsl::not_null<type*>{&ctx.get_poison()}; }
@@ -172,8 +167,9 @@ auto peer_type(context& ctx, gsl::span<const peer_operand> operands) -> peer_res
         return gsl::not_null<type*>{placeholder ? placeholder.get() : operands.front().type.get()};
     }
 
-    const bool only_nullptr{std::ranges::all_of(
-        live_types, [](const type* t) { return t->get_kind() == type_kind::NULLPTR; })};
+    const bool only_nullptr{std::ranges::all_of(live_types, [](gsl::not_null<const type*> t) {
+        return t->get_kind() == type_kind::NULLPTR;
+    })};
     for (const auto candidate : live) {
         auto& target{*operands[candidate].type};
         if (target.get_kind() == type_kind::NULLPTR && !only_nullptr) { continue; }

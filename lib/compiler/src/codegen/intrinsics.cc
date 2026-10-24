@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Attributes.h>
@@ -64,11 +65,12 @@ auto intrinsic_value_type(llvm::LLVMContext& context, const sema::type& t, u32 p
     }
 }
 
-auto check_llvm_intrinsic(std::string_view                   name,
-                          const sema::type&                  return_type,
-                          gsl::span<const sema::type* const> arg_types,
-                          const llvm::Triple&                triple,
-                          std::vector<usize>* immediate_args) -> stdx::option<std::string> {
+auto check_llvm_intrinsic(std::string_view                                  name,
+                          const sema::type&                                 return_type,
+                          gsl::span<const gsl::not_null<const sema::type*>> arg_types,
+                          const llvm::Triple&                               triple,
+                          stdx::option<std::vector<usize>&>                 immediate_args)
+    -> stdx::option<std::string> {
     if (!name.starts_with("llvm.")) {
         return fmt::format("'{}' isn't an LLVM intrinsic name; they start with 'llvm.'", name);
     }

@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -26,11 +27,12 @@ namespace ghoti::codegen {
 intrinsic_value_type(llvm::LLVMContext& context, const sema::type& t, u32 ptr_bits) -> llvm::Type*;
 
 // Why `@llvmIntrinsic(name, ret, args...)` can't call the intrinsic on `triple` (`none` if it can)
-[[nodiscard]] auto check_llvm_intrinsic(std::string_view                   name,
-                                        const sema::type&                  return_type,
-                                        gsl::span<const sema::type* const> arg_types,
-                                        const llvm::Triple&                triple,
-                                        std::vector<usize>*                immediate_args = nullptr)
+[[nodiscard]] auto
+check_llvm_intrinsic(std::string_view                                  name,
+                     const sema::type&                                 return_type,
+                     gsl::span<const gsl::not_null<const sema::type*>> arg_types,
+                     const llvm::Triple&                               triple,
+                     stdx::option<std::vector<usize>&>                 immediate_args = stdx::none)
     -> stdx::option<std::string>;
 
 } // namespace ghoti::codegen

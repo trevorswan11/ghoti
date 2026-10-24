@@ -315,7 +315,7 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
 
     auto& enum_type{*ctx_.pool[{type_kind::ENUM, types::mut::CONSTANT, scope_idx}]};
     enum_type.resolve_if<types::enum_t>(
-        enumerations, !*exhaustive_v, *tag_v, gsl::span<type*>{}, resolving_);
+        enumerations, !*exhaustive_v, *tag_v, gsl::span<stdx::option<type&>>{}, resolving_);
     enum_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&enum_type};
 }
@@ -337,7 +337,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
 
     const auto n{fields_arr->elements.size()};
     auto       ast_fields{make_uninit_span<ast::struct_expr::field>(ctx_.arena, n)};
-    auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    auto       field_types{ctx_.pool.get_many_pending(n)};
     auto       field_alignments{ctx_.arena.make_span<u64>(n)};
     const auto scope_idx{ctx_.registry.create()};
     for (usize i{0}; i < n; ++i) {
@@ -347,7 +347,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
         if (!name_v || !type_v) {
             return field_err("every element of 'fields' needs a compile-time 'name', 'type'");
         }
-        field_types[i] = type_v.get();
+        field_types[i] = type_v;
 
         stdx::option<ast::expr_handle> default_value;
         const auto                     dv_field{fs->get_field_opt("default_value")};
@@ -422,7 +422,7 @@ auto type_resolver::synthesize_struct(source_location loc, const gir::const_stru
     auto& struct_type{*ctx_.pool[{type_kind::STRUCT, types::mut::CONSTANT, scope_idx}]};
     struct_type.resolve_if<types::struct_t>(field_types,
                                             ast_fields,
-                                            gsl::span<type*>{},
+                                            gsl::span<stdx::option<type&>>{},
                                             resolving_,
                                             *is_extern_v,
                                             *is_packed_v,
@@ -448,7 +448,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     if (!is_packed_v) { return field_err("descriptor is missing 'is_packed'"); }
     if (!tagged_v) { return field_err("descriptor is missing 'tagged'"); }
     // `tag_type` defaults to `void`, so a descriptor without it is a `union(enum)`
-    type* tag_enum{nullptr};
+    stdx::option<type&> tag_enum;
     if (const auto tag_v{read_desc_field<sema::type&>(desc, "tag_type")};
         tag_v && tag_v->get_kind() != type_kind::VOID_) {
         if (tag_v->get_kind() != type_kind::ENUM) {
@@ -458,12 +458,12 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
         if (!*tagged_v || *is_extern_v || *is_packed_v) {
             return field_err("only a tagged Ghoti union can name a 'tag_type'");
         }
-        tag_enum = tag_v.get();
+        tag_enum = tag_v;
     }
 
     const auto n{fields_arr->elements.size()};
     auto       ast_fields{make_uninit_span<ast::union_expr::field>(ctx_.arena, n)};
-    auto       field_types{ctx_.pool.get_many_unsafe(n)};
+    auto       field_types{ctx_.pool.get_many_pending(n)};
     const auto scope_idx{ctx_.registry.create()};
 
     for (usize i{0}; i < n; ++i) {
@@ -473,7 +473,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
         if (!name_v || !type_v) {
             return field_err("every element of 'fields' needs a compile-time 'name' and 'type'");
         }
-        field_types[i] = type_v.get();
+        field_types[i] = type_v;
 
         const auto name_ident{synthesize_ident(*name_v, true)};
         const auto ty_ident{synthesize_ident(ctx_.type_display_name(*type_v), false)};
@@ -521,7 +521,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
     auto& union_type{*ctx_.pool[{type_kind::UNION, types::mut::CONSTANT, scope_idx}]};
     union_type.resolve_if<types::union_t>(field_types,
                                           ast_fields,
-                                          gsl::span<type*>{},
+                                          gsl::span<stdx::option<type&>>{},
                                           resolving_,
                                           !*tagged_v,
                                           *is_extern_v,
@@ -534,7 +534,7 @@ auto type_resolver::synthesize_union(source_location loc, const gir::const_struc
 auto type_resolver::known_length(ast::node_id expr) -> stdx::option<u64> {
     // An array carries its length in its type
     if (const auto expr_type{resolving_.get_sema_type_opt(expr)}) {
-        auto* target{expr_type.get()};
+        gsl::not_null<type*> target{expr_type.get()};
         if (const auto ref{target->get_data().as_opt<types::reference>()}) {
             target = &ref->underlying;
         }

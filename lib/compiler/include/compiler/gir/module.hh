@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/memory.hh>
@@ -64,8 +65,8 @@ class module_t {
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
 
     // Resolves the raw `tests` indices into their owning functions, in declaration order.
-    [[nodiscard]] auto get_test_functions() const -> std::vector<const function*> {
-        std::vector<const function*> result;
+    [[nodiscard]] auto get_test_functions() const -> std::vector<gsl::not_null<const function*>> {
+        std::vector<gsl::not_null<const function*>> result;
         result.reserve(tests_.size());
         for (const auto idx : tests_) { result.emplace_back(functions_[idx]); }
         return result;
@@ -73,11 +74,11 @@ class module_t {
 
     [[nodiscard]] auto has_function(std::string_view name) const noexcept -> bool {
         return std::ranges::any_of(functions_,
-                                   [&](const auto* fn) { return fn->get_name() == name; });
+                                   [&](const auto fn) { return fn->get_name() == name; });
     }
 
     [[nodiscard]] auto has_global(std::string_view name) const noexcept -> bool {
-        return std::ranges::any_of(globals_, [&](const auto* g) { return g->name == name; });
+        return std::ranges::any_of(globals_, [&](const auto g) { return g->name == name; });
     }
 
     auto add_type(std::string name, sema::type& type) -> type_decl&;
@@ -113,15 +114,15 @@ class module_t {
     [[nodiscard]] auto to_string() const -> std::string;
 
   private:
-    const mod::module_t&      ast_module_;
-    ghoti::arena&             arena_;
-    std::vector<type_decl*>   types_;
-    std::vector<global_decl*> globals_;
-    std::vector<function*>    functions_;
-    std::vector<usize>        tests_;
-    usize                     import_boundary_fn_{0};
-    usize                     import_boundary_global_{0};
-    bool                      import_boundary_marked_{false};
+    const mod::module_t&                     ast_module_;
+    ghoti::arena&                            arena_;
+    std::vector<gsl::not_null<type_decl*>>   types_;
+    std::vector<gsl::not_null<global_decl*>> globals_;
+    std::vector<gsl::not_null<function*>>    functions_;
+    std::vector<usize>                       tests_;
+    usize                                    import_boundary_fn_{0};
+    usize                                    import_boundary_global_{0};
+    bool                                     import_boundary_marked_{false};
 };
 
 } // namespace ghoti::gir

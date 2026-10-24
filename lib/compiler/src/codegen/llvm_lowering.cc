@@ -387,7 +387,7 @@ auto llvm_lowering::to_ir_string(const llvm::Module& mod) -> std::string {
 // Every function is declared up front so bodies and vtables can reference any of them
 auto llvm_lowering::declare_functions(const gir::module_t& gir_mod) -> void {
     PROFILE_SCOPE("llvm_lowering: declare functions");
-    for (const auto* fn : gir_mod.get_functions()) {
+    for (const auto fn : gir_mod.get_functions()) {
         if (!is_comptime_only(*fn)) { declare_function(*fn); }
     }
 }
@@ -399,11 +399,11 @@ auto llvm_lowering::lower_definitions(const gir::module_t& gir_mod) -> void {
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower globals");
-        for (const auto* global : gir_mod.get_globals()) { lower_global(*global); }
+        for (const auto global : gir_mod.get_globals()) { lower_global(*global); }
     }
     {
         PROFILE_SCOPE("llvm_lowering: lower functions");
-        for (const auto* fn : gir_mod.get_functions()) {
+        for (const auto fn : gir_mod.get_functions()) {
             if (!is_comptime_only(*fn)) { lower_function(*fn); }
         }
     }
@@ -535,8 +535,8 @@ auto llvm_lowering::emit_test_table() -> llvm::Value* {
     std::vector<llvm::Constant*> descriptors;
     descriptors.reserve(test_count);
     for (usize i{0}; i < test_count; ++i) {
-        const auto* fn{test_fns[i]};
-        auto*       test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
+        const auto fn{test_fns[i]};
+        auto*      test_llvm_fn{llvm_module_->getFunction(fn->get_name())};
         ASSERT(test_llvm_fn, "Test function must already be declared before the test table");
 
         const auto& desc{fn->get_test_desc().empty() ? fn->get_name() : fn->get_test_desc()};
@@ -1167,7 +1167,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         if (const auto fn_symbol{g.init_value->as_opt<std::string>()}) {
             init = const_callable(*fn_symbol, g.init_value->type, g_type);
         }
-        auto* init_v{init ? nullptr : lower_value(*g.init_value, &g.type)};
+        auto* init_v{init ? nullptr : lower_value(*g.init_value, g.type)};
         if (init_v && llvm::isa<llvm::Constant>(init_v)) {
             init = llvm::cast<llvm::Constant>(init_v);
         }
@@ -1186,10 +1186,10 @@ auto llvm_lowering::ensure_reserved_symbols() -> void {
     // The synthesized C entry point owns `main` in any linked executable
     if (is_executable_) { reserved_symbols_.emplace("main"); }
     if (!gir_module_) { return; }
-    for (const auto* f : gir_module_->get_functions()) {
+    for (const auto f : gir_module_->get_functions()) {
         if (!f->get_link_name().empty()) { reserved_symbols_.emplace(f->get_link_name()); }
     }
-    for (const auto* g : gir_module_->get_globals()) {
+    for (const auto g : gir_module_->get_globals()) {
         if (!g->link_name.empty()) { reserved_symbols_.emplace(g->link_name); }
     }
 }
@@ -1294,7 +1294,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
     lowering_fn_.emplace(fn);
 
     // Pre-allocate basic blocks for all segments
-    for (const auto* seg : fn.get_segments()) {
+    for (const auto seg : fn.get_segments()) {
         auto* bb{llvm::BasicBlock::Create(
             context_, fmt::format("seg_{}", std::to_underlying(seg->get_id())), llvm_fn)};
         segment_blocks_[seg->get_id()] = bb;
@@ -1329,7 +1329,7 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
 
     // Lower each segment; dead code after a diverging expression was never type checked
     const auto reachable{fn.reachable_segments()};
-    for (const auto* seg : fn.get_segments()) {
+    for (const auto seg : fn.get_segments()) {
         auto* bb{segment_blocks_[seg->get_id()]};
         builder_.SetInsertPoint(bb);
         if (const auto idx{std::to_underlying(seg->get_id())};
@@ -1338,9 +1338,9 @@ auto llvm_lowering::lower_function(const gir::function& fn) -> llvm::Function* {
             continue;
         }
 
-        for (const auto* inst : seg->get_instructions()) { lower_instruction(*inst); }
+        for (const auto inst : seg->get_instructions()) { lower_instruction(*inst); }
         if (!bb->getTerminator()) {
-            const sema::type* target_ret{&fn.get_type()};
+            gsl::not_null<const sema::type*> target_ret{&fn.get_type()};
             if (const auto ref{target_ret->get_data().as_opt<sema::types::reference>()}) {
                 target_ret = &ref->underlying;
             }
@@ -1620,7 +1620,7 @@ auto llvm_lowering::emit_store(const gir::instruction& inst) -> void {
 
     auto* dest_ptr{has_explicit_dest ? lower_value(inst.operands[0])
                                      : lower_value(gir::value{*inst.result})};
-    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0], inst.type.raw())};
+    auto* val{lower_value(inst.operands[has_explicit_dest ? 1 : 0], inst.type)};
     if (!dest_ptr || !dest_ptr->getType()->isPointerTy() || !val || val->getType()->isVoidTy()) {
         return;
     }
@@ -1785,7 +1785,7 @@ auto llvm_lowering::emit_global_addr(const gir::instruction& inst) -> llvm::Valu
     }
     if (!gv) { gv = llvm_module_->getNamedGlobal(*inst.callee_name); }
     if (!gv) {
-        for (const auto* g : gir_module_->get_globals()) {
+        for (const auto g : gir_module_->get_globals()) {
             if (g->name == *inst.callee_name) {
                 gv = lower_global(*g);
                 break;
@@ -1815,12 +1815,13 @@ auto llvm_lowering::emit_pointer_offset(const gir::instruction& inst) -> llvm::V
 namespace {
 
 // Whether `t` is `u0`, whose every value is 0 and whose LLVM form holds no bits
-[[nodiscard]] auto is_zero_bit_int(const sema::type* t) -> bool {
+[[nodiscard]] auto is_zero_bit_int(stdx::option<const sema::type&> t) -> bool {
     return t && t->get_kind() == sema::type_kind::INT && sema::int_width(*t) == 0;
 }
 
 // A `u0` operand read as an integer: the constant 0
-[[nodiscard]] auto as_int_operand(llvm::Value* v, const sema::type* t) -> llvm::Value* {
+[[nodiscard]] auto as_int_operand(llvm::Value* v, stdx::option<const sema::type&> t)
+    -> llvm::Value* {
     if (!is_zero_bit_int(t)) { return v; }
     return llvm::ConstantInt::get(llvm::Type::getInt1Ty(v->getContext()), 0);
 }
@@ -1830,7 +1831,7 @@ namespace {
 auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(inst.operands.size() >= 2, "Binary instruction requires at least 2 operands");
-    if (is_zero_bit_int(inst.type.raw())) {
+    if (is_zero_bit_int(inst.type)) {
         return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
     }
     const auto op0_ty{inst.operands[0].type};
@@ -1843,9 +1844,8 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     const bool is_shift{inst.kind == gir::instruction_kind::SHL ||
                         inst.kind == gir::instruction_kind::SHR};
     const auto peer_ty{is_shift ? op0_ty : concrete_peer_type(op0_ty, op1_ty)};
-    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), op0_ty.raw())};
-    auto*      rhs{
-        as_int_operand(lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty), op1_ty.raw())};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), op0_ty)};
+    auto* rhs{as_int_operand(lower_value(inst.operands[1], is_shift ? op1_ty : peer_ty), op1_ty)};
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
@@ -1913,7 +1913,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_unary(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Unary instruction requires an operand");
-    if (is_zero_bit_int(inst.type.raw())) {
+    if (is_zero_bit_int(inst.type)) {
         return llvm::ConstantAggregateZero::get(types_.translate(*inst.type));
     }
     auto* val{lower_value(inst.operands[0])};
@@ -1944,8 +1944,8 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     const auto op0_ty{inst.operands[0].type};
     const auto op1_ty{inst.operands[1].type};
     const auto peer_ty{concrete_peer_type(op0_ty, op1_ty)};
-    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), peer_ty.raw())};
-    auto*      rhs{as_int_operand(lower_value(inst.operands[1], peer_ty), peer_ty.raw())};
+    auto*      lhs{as_int_operand(lower_value(inst.operands[0], peer_ty), peer_ty)};
+    auto*      rhs{as_int_operand(lower_value(inst.operands[1], peer_ty), peer_ty)};
     ASSERT(lhs && rhs, "Comparison operands must lower to non-null LLVM values");
 
     // A `^fn(...)` is null exactly when its code half is
@@ -2026,11 +2026,11 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(!inst.operands.empty(), "Cast instruction requires an operand");
     ASSERT(inst.type, "Cast instruction requires a target type");
     // The operand must lower as its own type, not the cast's target type
-    auto* val{as_int_operand(lower_value(inst.operands[0]), inst.operands[0].type.raw())};
+    auto* val{as_int_operand(lower_value(inst.operands[0]), inst.operands[0].type)};
     auto* target_ty{types_.translate(*inst.type)};
     ASSERT(val && target_ty, "Cast operand and target type must be valid");
     // Every value cast to `u0` is 0; whether it fit was checked before the cast
-    if (is_zero_bit_int(inst.type.raw())) { return llvm::ConstantAggregateZero::get(target_ty); }
+    if (is_zero_bit_int(inst.type)) { return llvm::ConstantAggregateZero::get(target_ty); }
 
     auto* src_ty{val->getType()};
     switch (inst.kind) {
@@ -2091,7 +2091,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 auto llvm_lowering::emit_const(const gir::instruction& inst) -> llvm::Value* {
     PROFILE_FUNCTION();
     ASSERT(!inst.operands.empty(), "Const instruction requires an operand");
-    auto* val{lower_value(inst.operands[0], inst.type.raw())};
+    auto* val{lower_value(inst.operands[0], inst.type)};
     if (inst.result) { set_local(*inst.result, val); }
     return val;
 }
@@ -2115,12 +2115,12 @@ auto llvm_lowering::resolve_named_constant(std::string_view name) -> llvm::Const
         if (auto* c{llvm::dyn_cast<llvm::Constant>(val)}) { return c; }
     }
     if (gir_module_) {
-        for (const auto* g : gir_module_->get_globals()) {
+        for (const auto g : gir_module_->get_globals()) {
             if (g->name == name || (!g->link_name.empty() && g->link_name == name)) {
                 return lower_global(*g);
             }
         }
-        for (const auto* f : gir_module_->get_functions()) {
+        for (const auto f : gir_module_->get_functions()) {
             if (f->get_name() == name ||
                 (!f->get_link_name().empty() && f->get_link_name() == name)) {
                 return declare_function(*f);
@@ -2332,7 +2332,7 @@ auto llvm_lowering::with_integer_extensions(llvm::AttributeList          attrs,
         attrs = attrs.addRetAttribute(context, *ext);
     }
     u32 idx{first_param};
-    for (const auto* param : fn.params) {
+    for (const auto param : fn.params) {
         if (types_.translate(*param)->isVoidTy()) { continue; }
         if (const auto ext{integer_extension(*param)}) {
             attrs = attrs.addParamAttribute(context, idx, *ext);

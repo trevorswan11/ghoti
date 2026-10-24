@@ -49,9 +49,7 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:      {
         // `&dyn I` / `^dyn I` is a fat pointer: `{ data: ptr, vtable: ptr }`.
-        const auto        p{type.get_data().as_opt<sema::types::pointer>()};
-        const auto        r{type.get_data().as_opt<sema::types::reference>()};
-        const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
+        const auto referent{sema::pointee_of(type)};
         if (referent && referent->get_kind() == sema::type_kind::DYN) {
             return translate_dyn_fat_ptr();
         }
@@ -59,6 +57,11 @@ auto type_translator::translate(const sema::type& type) -> llvm::Type* {
         return get_ptr_ty();
     }
     case sema::type_kind::FUNCTION:
+        // A generic function's value is the environment its monomorphs read captures from
+        if (type.is_generic_value()) {
+            if (const auto env{type.get_generic_env()}) { return translate(*env); }
+            return llvm::StructType::get(context_);
+        }
         if (sema::is_erased_fn(type)) { return translate_dyn_fat_ptr(); }
         return get_ptr_ty();
     case sema::type_kind::NULLPTR: return get_ptr_ty();
@@ -93,7 +96,7 @@ auto type_translator::translate_function_type(const sema::types::function& fn)
     auto*                    ret_ty{translate(fn.return_type)};
     std::vector<llvm::Type*> param_types;
     param_types.reserve(fn.params.size());
-    for (const auto* param : fn.params) {
+    for (const auto param : fn.params) {
         auto* p_ty{translate(*param)};
         if (!p_ty->isVoidTy()) { param_types.emplace_back(p_ty); }
     }
@@ -202,7 +205,7 @@ auto type_translator::translate_struct(const sema::types::struct_t& s, const sem
 
     std::vector<llvm::Type*> element_types;
     element_types.reserve(s.fields.size());
-    for (const auto* field : s.fields) { element_types.emplace_back(translate_slot(*field)); }
+    for (const auto field : s.fields) { element_types.emplace_back(translate_slot(*field)); }
     set_struct_body(struct_ty, s, element_types);
     return struct_ty;
 }
@@ -319,7 +322,7 @@ auto type_translator::translate_union(const sema::types::union_t& u, const sema:
     }
     u64 max_size{0};
 
-    for (const auto* field : u.fields) {
+    for (const auto field : u.fields) {
         if (field->get_kind() == sema::type_kind::VOID_) { continue; }
         auto* field_ty{translate(*field)};
         if (field_ty && !field_ty->isVoidTy()) {
@@ -345,7 +348,7 @@ auto type_translator::set_untagged_union_body(llvm::StructType*           union_
     u64                      storage_size{0};
     u64                      align{1};
     u64                      size{0};
-    for (const auto* field : u.fields) {
+    for (const auto field : u.fields) {
         if (field->get_kind() == sema::type_kind::VOID_) { continue; }
         auto* field_ty{translate(*field)};
         if (!field_ty || field_ty->isVoidTy()) { continue; }

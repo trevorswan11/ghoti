@@ -58,8 +58,8 @@ auto to_lsp_diagnostics(const mod::module_t& module) -> nlohmann::json {
     for (const auto& d : module.parse_diagnostics) { push_diagnostic(out, d, text); }
     if (const auto sema_diags{module.diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& d : *sema_diags) {
-            const auto* origin{d.origin()};
-            if (!origin || origin == &module) {
+            const auto origin{d.origin()};
+            if (!origin || origin.get() == &module) {
                 push_diagnostic(out, d, text);
                 continue;
             }

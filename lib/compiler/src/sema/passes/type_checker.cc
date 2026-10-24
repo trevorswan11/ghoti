@@ -201,7 +201,7 @@ auto type_checker::get_operand_type(const gir::value& val) -> stdx::option<type&
 }
 
 auto type_checker::find_function(std::string_view name) const -> stdx::option<gir::function&> {
-    for (auto* f : gir_mod_.get_functions()) {
+    for (auto f : gir_mod_.get_functions()) {
         if (f->get_name() == name) { return *f; }
     }
     return stdx::none;
@@ -283,7 +283,9 @@ auto type_checker::check_call_modifier(gir::function& fn, gir::segment& seg, usi
         break;
     case ast::call_modifier::ALWAYS_TAIL: {
         const auto& instructions{seg.get_instructions()};
-        const auto* next{index + 1 < instructions.size() ? instructions[index + 1] : nullptr};
+        const auto  next{index + 1 < instructions.size()
+                             ? stdx::option<const gir::instruction&>{*instructions[index + 1]}
+                             : stdx::none};
         const bool  returned{[&] {
             if (!next || next->kind != gir::instruction_kind::RET) { return false; }
             if (next->operands.empty()) { return !inst.result || !inst.type; }
@@ -583,7 +585,9 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
                                 inst.location);
             } else if (inst.operands[0].data.is<gir::undefined_val>()) {
                 const auto ret_t{get_operand_type(inst.operands[0])};
-                if (!ret_t || ret_t->get_kind() != type_kind::NORETURN) {
+                // A generic function that captures nothing has no state, so nothing to define
+                if (!ret_t ||
+                    (ret_t->get_kind() != type_kind::NORETURN && !ret_t->is_generic_value())) {
                     emit_diagnostic(fmt::format("Function expecting return type '{}' does not "
                                                 "return a value on all code paths",
                                                 ctx_.type_display_name(expected_ret_t)),
@@ -942,16 +946,17 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
 
 auto type_checker::check_store(const gir::instruction& inst) -> void {
     // A bit-packed struct slot is really a backing integer
-    const auto packed_backing_store{[](const type* dest, const type* val) -> bool {
-        if (!dest || !val || !is_integer(val->get_kind())) { return false; }
-        if (const auto st{dest->get_data().as_opt<types::struct_t>()}) {
-            return st->is_bit_packed();
-        }
-        if (const auto ut{dest->get_data().as_opt<types::union_t>()}) {
-            return ut->is_bit_packed();
-        }
-        return false;
-    }};
+    const auto packed_backing_store{
+        [](stdx::option<const type&> dest, stdx::option<const type&> val) -> bool {
+            if (!dest || !val || !is_integer(val->get_kind())) { return false; }
+            if (const auto st{dest->get_data().as_opt<types::struct_t>()}) {
+                return st->is_bit_packed();
+            }
+            if (const auto ut{dest->get_data().as_opt<types::union_t>()}) {
+                return ut->is_bit_packed();
+            }
+            return false;
+        }};
 
     if (inst.result && !inst.operands.empty()) {
         // Case A: Storing to a local_id alloca slot or param
@@ -968,7 +973,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
                 if (val_t &&
                     !is_value_assignable(
                         inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                    !packed_backing_store(it->second.type, val_t.get())) {
+                    !packed_backing_store(*it->second.type, val_t)) {
                     emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                     error::TYPE_MISMATCH,
                                     inst.location);
@@ -1064,7 +1069,7 @@ auto type_checker::check_store(const gir::instruction& inst) -> void {
 
             if (val_t &&
                 !is_value_assignable(inst.operands[0], *val_t, *it->second.type, inst.location) &&
-                !packed_backing_store(it->second.type, val_t.get())) {
+                !packed_backing_store(*it->second.type, val_t)) {
                 emit_diagnostic(format_store_mismatch(*val_t, *it->second.type),
                                 error::TYPE_MISMATCH,
                                 inst.location);

@@ -34,7 +34,9 @@ namespace ghoti::sema {
 using namespace resolver_detail;
 
 // `rest[k]`: the k-th argument's own type, `k` a compile-time constant in range.
-auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& index) -> void {
+auto type_resolver::resolve_pack_index(ast::node_id           id,
+                                       const ast::index_expr& index,
+                                       const pack_binding&    pack) -> void {
     gir::const_eval evaluator{ctx_, resolving_};
     const auto      folded{evaluator.try_eval(index.index)};
     const auto      k{folded ? folded->as_int_opt() : stdx::none};
@@ -42,22 +44,22 @@ auto type_resolver::resolve_pack_index(ast::node_id id, const ast::index_expr& i
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
             id,
-            fmt::format("'{}[k]' requires a compile-time constant index", current_pack_->name),
+            fmt::format("'{}[k]' requires a compile-time constant index", pack.name),
             error::PACK_INDEX_NOT_CONST,
             resolving_.ast.location_of(index.index)));
     }
-    if (*k < 0 || static_cast<usize>(*k) >= current_pack_->element_types.size()) {
+    if (*k < 0 || static_cast<usize>(*k) >= pack.element_types.size()) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
                              fmt::format("pack index {} out of range for '{}' (len {})",
                                          *k,
-                                         current_pack_->name,
-                                         current_pack_->element_types.size()),
+                                         pack.name,
+                                         pack.element_types.size()),
                              error::PACK_INDEX_OUT_OF_RANGE,
                              resolving_.ast.location_of(index.index)));
     }
-    auto& elem_type{*current_pack_->element_types[static_cast<usize>(*k)]};
+    auto& elem_type{*pack.element_types[static_cast<usize>(*k)]};
     resolving_.set_sema_type(id, elem_type);
     last_type_.emplace(elem_type);
 }
@@ -69,7 +71,7 @@ auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eva
         read_data.is<types::deferred_call>() || read_data.is<types::deferred_array>()) {
         return read_type;
     }
-    const auto* object{&object_type};
+    gsl::not_null<const type*> object{&object_type};
     if (const auto ref{object->get_data().as_opt<types::reference>()}) {
         object = &ref->underlying;
     }
@@ -87,15 +89,15 @@ auto type_resolver::fold_type_read(const type& object_type, type& read_type, Eva
 
 auto type_resolver::visit(ast::node_id id, const ast::index_expr& index) -> void {
     PROFILE_FUNCTION();
-    if (current_pack_) {
-        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(index.array)};
-            ident && ident->name == current_pack_->name) {
-            return resolve_pack_index(id, index);
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(index.array)}) {
+        if (const auto pack{pack_named(ident->name)}) {
+            capture_pack_use(*pack);
+            return resolve_pack_index(id, index, *pack);
         }
     }
     TRY_RESOLVE(index.array);
-    auto& array_type{*last_type_.take()};
-    auto* target_type{&array_type};
+    auto&         array_type{*last_type_.take()};
+    gsl::not_null target_type{&array_type};
     if (const auto ref{target_type->get_data().as_opt<types::reference>()}) {
         target_type = &ref->underlying;
     }
@@ -258,7 +260,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
                                               ast::identifier_handle member,
                                               source_location        object_location)
     -> stdx::result<gsl::not_null<type*>, diagnostic> {
-    auto* target_type{&object_type};
+    gsl::not_null target_type{&object_type};
     if (const auto ptr_data{target_type->get_data().as_opt<types::pointer>()}) {
         target_type = &ptr_data->underlying;
     } else if (const auto ref_data{target_type->get_data().as_opt<types::reference>()}) {
@@ -299,8 +301,9 @@ auto type_resolver::resolve_structural_access(type&                  object_type
             auto& sig{resolve_dyn_method_signature(*dyn, iface, i)};
             // The vtable holds one entry per method, but a `mut?` method has one per mutability
             if (const auto fn{sig.get_data().as_opt<types::function>()};
-                fn &&
-                std::ranges::any_of(fn->params, [](const type* p) { return contains_poly(*p); })) {
+                fn && std::ranges::any_of(fn->params, [](gsl::not_null<const type*> p) {
+                    return contains_poly(*p);
+                })) {
                 return make_sema_err(
                     fmt::format("`{}` takes a `mut?` parameter, so it can't be called through "
                                 "`dyn {}`",
@@ -352,8 +355,7 @@ auto type_resolver::resolve_structural_access(type&                  object_type
 
     // A type-ctor instance still being built (named by its own member's signature) has no shape
     // yet, only its scope
-    const bool pending_instance{!target_type->is_resolved() &&
-                                target_type->get_instance_id() != 0 &&
+    const bool pending_instance{!target_type->is_resolved() && target_type->get_instance_id() &&
                                 target_type->has_symbol_table_idx()};
     if (!enum_type && !struct_type && !union_type && !pending_instance) {
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(member)};
@@ -454,11 +456,8 @@ auto type_resolver::resolve_pack_len(ID id, const ast::dot_expr& dot) -> void {
 
 template <ast::IndexableID ID>
 auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
-    if (current_pack_) {
-        if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(dot.object)};
-            ident && ident->name == current_pack_->name) {
-            return resolve_pack_len(id, dot);
-        }
+    if (const auto ident{resolving_.ast.get_as_opt<ast::identifier_expr>(dot.object)}) {
+        if (pack_named(ident->name)) { return resolve_pack_len(id, dot); }
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
@@ -676,10 +675,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(member_type);
     }
 
-    const auto check_access = [&](const mod::module_t& enclosing,
-                                  std::string_view     type_name,
-                                  usize                field_count,
-                                  auto&&               is_field_pub) -> bool {
+    const auto check_access = [&](mod::module_t&   enclosing,
+                                  std::string_view type_name,
+                                  usize            field_count,
+                                  auto&&           is_field_pub) -> bool {
         const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
         const auto  proxy{table.get_proxy_opt(member_ident.name)};
@@ -759,6 +758,41 @@ VISITOR_TEMPLATE_INIT(type_resolver, resolve_dot, const ast::dot_expr&)
 auto type_resolver::visit(ast::node_id id, const ast::dot_expr& dot) -> void {
     PROFILE_FUNCTION();
     resolve_dot(id, dot);
+    if (last_type_ && last_type_->is_generic_value()) {
+        bind_member_generic_to_receiver(id, dot);
+        instantiate_for_expected_callable(id, *last_type_);
+    }
+}
+
+auto type_resolver::bind_member_generic_to_receiver(ast::node_id id, const ast::dot_expr& dot)
+    -> void {
+    auto&      generic{*last_type_};
+    const auto info{ctx_.generic_functions.get_opt(generic)};
+    if (!info || !info->enclosing_type || info->fn_expr->self) { return; }
+    const auto receiver{receiver_aggregate(dot)};
+    if (!receiver || receiver.get() == info->enclosing_type.get()) { return; }
+    const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*receiver)};
+    if (!prefix) { return; }
+
+    // Every instance of a type constructor shares the member's literal, so a value taken from
+    // one instance names a copy of the generic that remembers which instance it belongs to
+    auto& bound{ctx_.local_function_instance(generic, *prefix)};
+    if (!bound.is_resolved()) {
+        const auto& fn{generic.get_data().as<types::function>()};
+        bound.resolve<types::function>(
+            fn.params, fn.return_type, fn.has_self, fn.is_variadic, fn.conv);
+        ctx_.generic_functions.register_function(bound,
+                                                 *info->module,
+                                                 info->node_id,
+                                                 *info->fn_expr,
+                                                 info->name,
+                                                 *receiver,
+                                                 info->enclosing_fn_table_idx,
+                                                 info->enclosing_scopes);
+        bound.mark_generic_value();
+    }
+    resolving_.set_sema_type(id, bound);
+    last_type_.emplace(bound);
 }
 
 auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& range) -> void {
@@ -777,7 +811,7 @@ auto type_resolver::resolve_range_value(ast::node_id id, const ast::range_expr& 
     {
         const mutating_context_guard subscript_g{in_subscript_index_, false};
         const mutating_context_guard for_iter_g{in_for_iterable_, false};
-        const structural_guard       g{implicit_type_stack_, expected_elem.raw()};
+        const structural_guard       g{implicit_type_stack_, expected_elem};
         TRY_RESOLVE(*range.lhs);
         TRY_RESOLVE(*range.rhs);
     }
@@ -883,7 +917,7 @@ auto type_resolver::visit(ast::node_id id, const ast::range_expr& range) -> void
     const bool                   unrolled{std::exchange(in_unrolled_for_iterable_, false)};
     const mutating_context_guard subscript_g{in_subscript_index_, false};
     const mutating_context_guard for_iter_g{in_for_iterable_, false};
-    type*                        lhs_type{&usize_type};
+    gsl::not_null<type*>         lhs_type{&usize_type};
     if (range.lhs) {
         TRY_RESOLVE(*range.lhs);
         lhs_type = last_type_.take();
@@ -969,7 +1003,7 @@ auto type_resolver::visit(ast::node_id id, const ast::implicit_access_expr& impl
     }
 
     // `const f: fn(): T = .init;` finds its member through the function's return type
-    auto* member_owner{implicit_type.get()};
+    gsl::not_null member_owner{implicit_type.get()};
     if (const auto fn_data{member_owner->get_data().as_opt<types::function>()}) {
         member_owner = &fn_data->return_type;
     }

@@ -23,8 +23,9 @@ namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 namespace ghoti::sema {
 
 template <typename T>
-[[nodiscard]] constexpr auto opt_ref_matches(stdx::option<T&> opt, const T* ptr) noexcept -> bool {
-    return opt.has_value() && opt.get() == ptr;
+[[nodiscard]] constexpr auto opt_ref_matches(stdx::option<T&> opt, const T& other) noexcept
+    -> bool {
+    return opt.has_value() && opt.get() == &other;
 }
 
 // One resolved `impl [I for] T { ... }` block. `interface_type` is null for an inherent impl.
@@ -48,10 +49,10 @@ struct impl_record {
     std::vector<method>          methods{};
 
     // Set for a record produced by expanding an `impl(P) ...` for one concrete target
-    bool               from_parameterized{false};
-    std::string        gir_prefix{}; // The per-instantiation symbol prefix
-    std::vector<type*> sentinels{};
-    std::vector<type*> type_arguments{};
+    bool                              from_parameterized{false};
+    std::string                       gir_prefix{}; // The per-instantiation symbol prefix
+    std::vector<gsl::not_null<type*>> sentinels{};
+    std::vector<gsl::not_null<type*>> type_arguments{};
 
     template <typename Self>
     [[nodiscard]] auto find_method(this Self&& self, std::string_view name) noexcept
@@ -85,18 +86,17 @@ struct parameterized_impl {
 // Lives on the shared registry so a monomorphization triggered from any consuming module can remap
 // the impl's method signatures. Method bodies are re-resolved per instantiation, not remapped.
 struct param_impl_template {
-    stdx::option<type&> abstract_target{};
-    std::vector<type*>  sentinels{}; // per impl param; null for a comptime one
+    stdx::option<type&>              abstract_target{};
+    std::vector<stdx::option<type&>> sentinels{}; // per impl param; none for a comptime one
 };
 
 class impl_registry {
   public:
     using template_param_map =
-        ankerl::unordered_dense::map<const parameterized_impl*, param_impl_template>;
-    using param_worklist = ankerl::unordered_dense::set<const parameterized_impl*>;
+        ankerl::unordered_dense::map<gsl::not_null<const parameterized_impl*>, param_impl_template>;
+    using param_worklist = ankerl::unordered_dense::set<gsl::not_null<const parameterized_impl*>>;
     using expanded_param_map =
-        ankerl::unordered_dense::map<const type*,
-                                     ankerl::unordered_dense::set<const parameterized_impl*>>;
+        ankerl::unordered_dense::map<gsl::not_null<const type*>, param_worklist>;
 
   public:
     explicit impl_registry(ghoti::arena& arena) noexcept : arena_{arena} {}
@@ -110,9 +110,9 @@ class impl_registry {
     template <typename Self>
     [[nodiscard]] auto lookup(this Self&& self, const type& target, const type& iface) noexcept
         -> stdx::option<stdx::const_dispatch_t<Self, impl_record>&> {
-        for (auto* r : self.records_) {
-            if (opt_ref_matches(r->target_type, &target) &&
-                opt_ref_matches(r->interface_type, &iface)) {
+        for (const auto r : self.records_) {
+            if (opt_ref_matches(r->target_type, target) &&
+                opt_ref_matches(r->interface_type, iface)) {
                 return *r;
             }
         }
@@ -138,9 +138,10 @@ class impl_registry {
         templates_.insert_or_assign(&pimpl, std::move(tmpl));
     }
     [[nodiscard]] auto get_template(const parameterized_impl& pimpl) const
-        -> const param_impl_template* {
+        -> stdx::option<const param_impl_template&> {
         const auto it{templates_.find(&pimpl)};
-        return it == templates_.end() ? nullptr : &it->second;
+        if (it == templates_.end()) { return stdx::none; }
+        return it->second;
     }
     // Records that `pimpl` has been expanded onto `target`; returns false if it already was.
     [[nodiscard]] auto mark_expanded(const type& target, const parameterized_impl& pimpl) -> bool {
@@ -159,12 +160,12 @@ class impl_registry {
     [[nodiscard]] auto records(this auto&& self) noexcept -> auto& { return self.records_; }
 
   private:
-    ghoti::arena&                    arena_;
-    std::vector<impl_record*>        records_;
-    std::vector<parameterized_impl*> param_records_;
-    template_param_map               templates_;
-    expanded_param_map               expanded_;
-    param_worklist                   building_;
+    ghoti::arena&                                   arena_;
+    std::vector<gsl::not_null<impl_record*>>        records_;
+    std::vector<gsl::not_null<parameterized_impl*>> param_records_;
+    template_param_map                              templates_;
+    expanded_param_map                              expanded_;
+    param_worklist                                  building_;
 };
 
 } // namespace ghoti::sema

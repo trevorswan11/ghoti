@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
@@ -18,8 +19,8 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
                                      mod::module_t&                      m,
                                      body_type_diff&                     out,
                                      stdx::option<const body_write_log&> write_log) const -> void {
-    std::vector<std::pair<stdx::option<type&>*, type*>> folded;
-    std::vector<usize>                                  folded_node_idxs, folded_explicit_idxs;
+    std::vector<std::pair<gsl::not_null<stdx::option<type&>*>, gsl::not_null<type*>>> folded;
+    std::vector<usize> folded_node_idxs, folded_explicit_idxs;
     {
         gir::const_eval folder{ctx, m};
         const auto      fold{[&](auto& slots, std::vector<usize>& folded_idxs) {
@@ -28,7 +29,7 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
                 if (!slot || !slot->get_data().template as_opt<types::deferred_array>()) {
                     continue;
                 }
-                auto* const original{slot.get()};
+                const gsl::not_null<type*> original{slot.get()};
                 if (auto& forced{folder.force_deferred_array(*slot)}; &forced != original) {
                     folded.emplace_back(&slot, original);
                     folded_idxs.emplace_back(i);
@@ -138,6 +139,13 @@ auto body_typing_snapshot::diff_iteration_into(context&              ctx,
         const auto resolved{m.node_attributes.find(idx)};
         if (resolved != m.node_attributes.end() && !out.attributes.find(idx)) {
             out.attributes.insert_or_assign(idx, resolved->second);
+        }
+    }
+    // A call pinned to the same monomorph as the iteration before still names it in this one
+    const auto& live_calls{m.sema_side_tables.generic_call_targets.values};
+    for (const auto idx : write_log.call_idxs) {
+        if (idx < live_calls.size() && live_calls[idx] && !out.call_targets.find(idx)) {
+            out.call_targets.insert_or_assign(idx, live_calls[idx]);
         }
     }
 }

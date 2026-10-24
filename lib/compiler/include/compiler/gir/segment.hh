@@ -3,6 +3,7 @@
 #include <iterator>
 #include <vector>
 
+#include <gsl/pointers>
 #include <stdx/arena.hh>
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
@@ -31,8 +32,8 @@ class segment {
 
     // Splices `inst` in just before this segment's terminator (or at the end if it has none).
     auto insert_before_terminator(instruction&& inst) -> instruction& {
-        instruction* node{arena_.make<instruction>(std::move(inst)).get()};
-        const auto   pos{has_terminator() ? std::prev(instructions_.end()) : instructions_.end()};
+        const auto node{arena_.make<instruction>(std::move(inst))};
+        const auto pos{has_terminator() ? std::prev(instructions_.end()) : instructions_.end()};
         return **instructions_.insert(pos, node);
     }
 
@@ -51,9 +52,9 @@ class segment {
     [[nodiscard]] auto size() const noexcept -> usize { return instructions_.size(); }
 
   private:
-    ghoti::arena&             arena_;
-    segment_id                id_{0};
-    std::vector<instruction*> instructions_;
+    ghoti::arena&                            arena_;
+    segment_id                               id_{0};
+    std::vector<gsl::not_null<instruction*>> instructions_;
 };
 
 } // namespace ghoti::gir

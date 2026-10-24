@@ -201,19 +201,21 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     // The module whose source `location` points into, when it isn't the one whose list holds
     // this diagnostic (a compile-time call that evaluated another module's function)
-    [[nodiscard]] auto origin() const noexcept -> const mod::module_t* { return origin_; }
-    auto               set_origin(const mod::module_t& owner) noexcept -> void { origin_ = &owner; }
+    [[nodiscard]] auto origin() const noexcept -> stdx::option<const mod::module_t&> {
+        return origin_;
+    }
+    auto set_origin(const mod::module_t& owner) noexcept -> void { origin_ = owner; }
 
     // Diagnostics are always ERROR by default, see `unset_level`
     auto set_level(diagnostic_level level) noexcept -> void { level_.emplace(level); }
     auto unset_level() noexcept -> void { level_.reset(); }
 
   private:
-    stdx::option<std::string>      message_;
-    stdx::option<source_location>  loc_;
-    E                              error_;
-    stdx::option<diagnostic_level> level_{diagnostic_level::ERROR};
-    const mod::module_t*           origin_{nullptr};
+    stdx::option<std::string>          message_;
+    stdx::option<source_location>      loc_;
+    E                                  error_;
+    stdx::option<diagnostic_level>     level_{diagnostic_level::ERROR};
+    stdx::option<const mod::module_t&> origin_;
 };
 
 template <typename T> struct is_diagnostic : std::false_type {};

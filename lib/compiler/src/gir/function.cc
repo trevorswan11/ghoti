@@ -33,7 +33,7 @@ auto function::reachable_segments() const -> std::vector<bool> {
         const auto current{get_segment_opt(worklist.back())};
         worklist.pop_back();
         if (!current) { continue; }
-        for (const auto* inst : (*current)->get_instructions()) {
+        for (const auto inst : current->get_instructions()) {
             for (const auto successor :
                  {inst->target_segment, inst->true_segment, inst->false_segment}) {
                 if (!successor) { continue; }

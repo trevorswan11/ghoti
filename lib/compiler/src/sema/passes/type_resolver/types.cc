@@ -448,8 +448,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
     const auto& iface{iface_type.get_data().as<types::interface_t>()};
 
     // Resolve the `(Assoc = T, ...)` list into per-associated-type slots in interface order.
-    auto bindings{ctx_.arena.make_span<type*>(iface.assoc_type_names.size())};
-    std::ranges::fill(bindings, nullptr);
+    auto bindings{ctx_.pool.get_many_pending(iface.assoc_type_names.size())};
     for (const auto& ab : dyn.assoc_bindings) {
         const auto& bname{resolving_.ast.get_as<ast::identifier_expr>(ab.name).name};
         const auto  slot{std::ranges::find(iface.assoc_type_names, bname)};
@@ -463,7 +462,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
         }
         TRY_RESOLVE(ab.type);
         bindings[static_cast<usize>(slot - iface.assoc_type_names.begin())] =
-            &denoted_type(*last_type_.take());
+            denoted_type(*last_type_.take());
     }
 
     // `dyn`-safety: every associated type must be pinned here or defaulted. Fill defaulted slots
@@ -488,7 +487,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
         if (!default_type || default_type->is_poison()) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
-        bindings[i] = &denoted_type(*default_type);
+        bindings[i] = denoted_type(*default_type);
     }
 
     // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@This()` directly
@@ -517,15 +516,15 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
         }
     }
 
+    // Every slot is bound or defaulted by now
+    const auto   bound{ctx_.pool.settle(bindings)};
     types::key_t key{type_kind::DYN, types::mut::CONSTANT, &iface_type};
-    for (usize i{0}; i < bindings.size(); ++i) {
-        if (bindings[i]) {
-            key.imprint(static_cast<u64>(i + 1));
-            key.imprint(*bindings[i]);
-        }
+    for (usize i{0}; i < bound.size(); ++i) {
+        key.imprint(static_cast<u64>(i + 1));
+        key.imprint(*bound[i]);
     }
     auto& dyn_type{*ctx_.pool[key]};
-    dyn_type.resolve_if<types::dyn_t>(iface_type, bindings);
+    dyn_type.resolve_if<types::dyn_t>(iface_type, bound);
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};

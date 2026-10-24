@@ -1,10 +1,10 @@
 #include "compiler/ast/dumper.hh"
 
 #include <iterator>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <ranges>
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>

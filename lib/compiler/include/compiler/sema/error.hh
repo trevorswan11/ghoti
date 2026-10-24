@@ -141,6 +141,7 @@ enum class error : u8 {
     TESTING_FN_OUTSIDE_TEST,
     ILLEGAL_VOLATILE_QUALIFIER,
     TYPE_PARAM_NOT_COMPTIME,
+    GENERIC_CLOSURE_CAPTURE,
 };
 
 using diagnostic  = diagnostic<error>;

@@ -84,7 +84,7 @@ auto type_resolver::visit(ast::node_id id, const ast::array_expr& array) -> void
 
     // Resolve the element type first so each item can be typed against it
     resolve(array.item_explicit_type);
-    auto* item_slot{last_type_.take()};
+    gsl::not_null item_slot{last_type_.take()};
     // Fold sized element types so the items and the array's element slot see the concrete `[M]T`
     // rather than `type`
     item_slot = &concrete_array_type(*item_slot);
@@ -322,7 +322,7 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
     }
     auto& rhs_type{*last_type_.take()};
 
-    auto* src_type{&rhs_type};
+    gsl::not_null src_type{&rhs_type};
     if (const auto ref{src_type->get_data().as_opt<types::reference>()}) {
         src_type = &ref->underlying;
     }
@@ -376,8 +376,8 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     };
 
     // `.a == x`: the right side names what `.a` is a member of, so it resolves first
-    type* lhs_type{nullptr};
-    type* rhs_first{nullptr};
+    stdx::option<type&> lhs_first;
+    stdx::option<type&> rhs_first;
     if (resolving_.ast.get_as_opt<ast::implicit_access_expr>(binary.lhs)) {
         {
             // Whatever context surrounds the comparison doesn't describe its right side
@@ -385,15 +385,15 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
                                      ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL)};
             TRY_RESOLVE(binary.rhs);
         }
-        rhs_first = &referent_view(*last_type_.take());
+        rhs_first = referent_view(*last_type_.take());
         {
             const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*rhs_first)};
             TRY_RESOLVE(binary.lhs);
         }
-        lhs_type = &referent_view(*last_type_.take());
+        lhs_first = referent_view(*last_type_.take());
     } else {
         TRY_RESOLVE(binary.lhs);
-        lhs_type = &referent_view(*last_type_.take());
+        lhs_first = referent_view(*last_type_.take());
         // `false and x` / `true or x` never evaluates `x`, so nothing it would report applies
         if (lhs_decides_logical_op(id.get_token_type(), binary.lhs)) {
             const auto diags_before{ctx_.diags.size()};
@@ -404,12 +404,13 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
             return last_type_.emplace(bool_type);
         }
         {
-            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_type)};
+            const structural_guard g{implicit_type_stack_, *ctx_.pool.strip_volatile(*lhs_first)};
             TRY_RESOLVE(binary.rhs);
         }
-        rhs_first = &referent_view(*last_type_.take());
+        rhs_first = referent_view(*last_type_.take());
     }
-    auto& rhs_type{*rhs_first};
+    gsl::not_null<type*> lhs_type{lhs_first.get()};
+    auto&                rhs_type{*rhs_first};
 
     // A range counter on the left takes the right side's type when it holds every value
     const auto shift_token{id.get_token_type()};
@@ -424,7 +425,8 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
     const auto op{id.get_token_type()};
 
     for (const auto& [operand, operand_type] :
-         {std::pair{binary.lhs, lhs_type}, std::pair{binary.rhs, &rhs_type}}) {
+         {std::pair{binary.lhs, lhs_type},
+          std::pair{binary.rhs, gsl::not_null<type*>{&rhs_type}}}) {
         if (operand_type->get_kind() != type_kind::UNDEFINED) { continue; }
         return last_type_.emplace(ctx_.poison_node(
             resolving_,
@@ -707,7 +709,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
     const auto& object_data{object_type.get_data()};
 
     // `RowAlias{ a, b, c }` / `.{ a, b }` in an array-typed context
-    type* array_object{&object_type};
+    gsl::not_null<type*> array_object{&object_type};
     if (const auto deferred{object_data.as_opt<types::deferred_array>()}) {
         array_object = &concrete_array_type(object_type);
         // `[n]T` sized by a parameter of the call being resolved: the values give the length,
@@ -847,7 +849,7 @@ namespace {
     if (!dot) { return false; }
     const auto obj_t{mod.get_sema_type_opt(dot->object)};
     if (!obj_t) { return false; }
-    const type* ot{obj_t.get()};
+    gsl::not_null<const type*> ot{obj_t.get()};
     if (const auto p{ot->get_data().as_opt<types::pointer>()}) {
         ot = &p->underlying;
     } else if (const auto r{ot->get_data().as_opt<types::reference>()}) {
@@ -1140,7 +1142,7 @@ auto type_resolver::visit(ast::node_id id, const ast::unwrap_expr& unwrap) -> vo
             loc));
     }
 
-    type* payload_type{nominal_shape->output_type};
+    gsl::not_null<type*> payload_type{nominal_shape->output_type};
 
     // `expr!` just projects the success payload with lowering handling the discriminant check
     if (!is_question) {
@@ -1250,12 +1252,12 @@ auto type_resolver::visit(ast::node_id id, const ast::string_expr& string) -> vo
 
 auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) -> void {
     PROFILE_FUNCTION();
-    type* resolved{nullptr};
+    stdx::option<type&> resolved;
     if (expr.is_size) {
         resolved =
-            &ctx_.get_builtin_resolved_type(expr.is_signed ? type_kind::ISIZE : type_kind::USIZE);
+            ctx_.get_builtin_resolved_type(expr.is_signed ? type_kind::ISIZE : type_kind::USIZE);
     } else if (expr.width != 0) {
-        resolved = &ctx_.get_int(expr.width, expr.is_signed);
+        resolved = ctx_.get_int(expr.width, expr.is_signed);
     }
     // A suffix names the literal's type, which must hold it
     if (resolved) {
@@ -1273,12 +1275,12 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
         }
     } else {
         // An unsuffixed integer literal is `comptime_int` and coerces freely
-        resolved = expr.is_char ? &ctx_.get_char_constant()
-                                : &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_INT);
+        resolved = expr.is_char ? ctx_.get_char_constant()
+                                : ctx_.get_builtin_resolved_type(type_kind::COMPTIME_INT);
         const auto implicit_type{implicit_type_stack_.peek()};
         if (implicit_type && implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
             // Folding must see a float value, not an integer that merely coerces
-            resolved = &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
+            resolved = ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT);
         } else if (implicit_type &&
                    (is_integer(implicit_type->get_kind()) || is_float(implicit_type->get_kind()))) {
             // Adopt the concrete context only when the literal's magnitude fits it
@@ -1289,7 +1291,7 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
                     ? comptime_int_fits(expr.exact_value(), *implicit_type, ptr_bits)
                     : comptime_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)};
             if ((is_float(implicit_type->get_kind()) && !expr.is_big) || fits) {
-                resolved = ctx_.pool.strip_volatile(*implicit_type).get();
+                resolved = *ctx_.pool.strip_volatile(*implicit_type);
             }
         }
     }
@@ -1315,12 +1317,13 @@ auto type_resolver::visit(ast::node_id id, const ast::float_literal_expr& expr) 
     }
 
     // An unsuffixed real literal is `comptime_float` and coerces freely
-    type* resolved{expr.width == 0 ? &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT)
-                                   : &ctx_.get_builtin_resolved_type(kind)};
+    gsl::not_null<type*> resolved{expr.width == 0
+                                      ? &ctx_.get_builtin_resolved_type(type_kind::COMPTIME_FLOAT)
+                                      : &ctx_.get_builtin_resolved_type(kind)};
     if (expr.width == 0) {
         if (const auto implicit_type{implicit_type_stack_.peek()};
             implicit_type && is_float(implicit_type->get_kind())) {
-            resolved = ctx_.pool.strip_volatile(*implicit_type).get();
+            resolved = ctx_.pool.strip_volatile(*implicit_type);
         }
     }
     if (const auto format{float_format_of(*resolved)}) {

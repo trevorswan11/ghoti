@@ -15,6 +15,7 @@
 #include <fmt/format.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <nlohmann/json.hpp>
 #include <stdx/function.hh>
 #include <stdx/memory.hh>
@@ -186,8 +187,8 @@ auto callable_params_for(const mod::module_t& entry, ast::node_id id)
 auto render_hover_type(const sema::type&                                      type,
                        const stdx::option<std::vector<sema::callable_param>>& names)
     -> std::string {
-    const sema::type* target{&type};
-    std::string_view  prefix;
+    gsl::not_null<const sema::type*> target{&type};
+    std::string_view                 prefix;
     if (const auto p{type.get_data().as_opt<sema::types::pointer>()}) {
         prefix = "^";
         target = &p->underlying;

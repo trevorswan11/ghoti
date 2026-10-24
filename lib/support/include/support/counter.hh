@@ -1,7 +1,9 @@
 #pragma once
 
 #include <concepts>
+#include <utility>
 
+#include <stdx/option.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
 
@@ -12,7 +14,7 @@ template <stdx::NumericIntegral Underlying> class counter {
   public:
     class guard {
       public:
-        constexpr explicit guard(counter& c) : c_{&c} { c_->operator++(); }
+        constexpr explicit guard(counter& c) : c_{c} { c_->operator++(); }
         ~guard() {
             if (c_) { c_->operator--(); }
         }
@@ -20,11 +22,11 @@ template <stdx::NumericIntegral Underlying> class counter {
         guard(const guard&)                    = delete;
         auto operator=(const guard&) -> guard& = delete;
 
-        guard(guard&& other) noexcept : c_{std::exchange(other.c_, nullptr)} {}
+        guard(guard&& other) noexcept : c_{std::exchange(other.c_, stdx::none)} {}
         auto operator=(const guard&&) -> guard& = delete;
 
       private:
-        counter* c_;
+        stdx::option<counter&> c_;
     };
 
   public:

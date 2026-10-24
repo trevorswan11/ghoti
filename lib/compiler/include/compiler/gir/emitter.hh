@@ -119,7 +119,7 @@ class emitter {
     using open_fn_name_guard    = ghoti::scope_guard<std::vector<std::string>>;
     using open_fn_closure_guard = ghoti::scope_guard<std::vector<bool>>;
     using comptime_frame_guard  = ghoti::scope_guard<std::vector<sema::comptime_frame>>;
-    using type_guard            = ghoti::scope_guard<std::vector<sema::type*>>;
+    using type_guard            = ghoti::scope_guard<std::vector<gsl::not_null<sema::type*>>>;
 
     // Repeatedly folds the condition and replays the body via `emit_block` for as long as it
     // holds `true`; no runtime loop, no `body_type_diff`
@@ -127,6 +127,14 @@ class emitter {
         NEXT,
         CONTINUE,
         BREAK,
+    };
+
+    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
+    // and whether that is its `break` variant
+    struct flow_result {
+        value             flow_slot;
+        value             is_break;
+        sema::unwrap_info shape;
     };
 
   private:
@@ -198,6 +206,27 @@ class emitter {
     }
 
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
+    // The GIR function holding a closure's body, unique to its generic instantiation
+    [[nodiscard]] static auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    // Binds each capture of environment `env` by name in the current scope
+    auto bind_env_captures(local_id                      env,
+                           sema::type&                   env_type,
+                           const sema::types::closure_t& cl,
+                           bool                          is_move) -> void;
+    // A capturing local generic's monomorph takes its environment first and reads captures off it
+    auto bind_generic_env(gir::function& fn, sema::type& generic_fn_type, bool is_move) -> void;
+    // The monomorph of `generic_fn` the resolver instantiated for `signature`'s parameters
+    auto monomorph_for(const sema::type& generic_fn, const sema::type& signature)
+        -> stdx::option<std::string>;
+    // A generic function as a value: the environment its monomorphs capture, built here
+    auto emit_generic_value(sema::type& generic_fn_type) -> value;
+    // Binds a local generic function's value under its name where it's written
+    auto bind_generic_value(std::string_view name, sema::type& generic_fn_type) -> void;
+    // Inside one of its own monomorphs, the address of the environment it was given
+    auto own_generic_env(const sema::type& generic_fn_type) -> stdx::option<value>;
+    // The environment a call to a capturing local generic passes first, if it has one
+    auto generic_env_arg(const ast::call_expr& call, sema::type& generic_fn_type)
+        -> stdx::option<value>;
 
     // Emits as a plain non-capturing fn with its captures baked in as constants
     auto emit_comptime_closure(const const_closure& cl) -> std::string;
@@ -343,13 +372,6 @@ class emitter {
                             syntax::builtin_t builtin,
                             bool              check_lengths = true) -> void;
 
-    // `branch(&operand)` of an `Unwrappable` operand: the `Flow` it returns, in a stack slot,
-    // and whether that is its `break` variant
-    struct flow_result {
-        value             flow_slot;
-        value             is_break;
-        sema::unwrap_info shape;
-    };
     auto emit_flow(ast::expr_handle operand) -> flow_result;
     // Binds an `if`/`while` payload capture to what the `continue` reference points at
     auto bind_unwrap_payload(const ast::capture_t& capture, const flow_result& flow) -> void;
@@ -479,11 +501,11 @@ class emitter {
 
     // The bit layout of one field within its bit-packed enclosing aggregate.
     struct packed_field_layout {
-        u32         n{1};      // backing-integer width of the enclosing aggregate
-        u32         offset{0}; // LSB-first bit offset of the field (always 0 for a union)
-        u32         fbits{1};  // width of the field
-        usize       field_idx{0};
-        sema::type* field_type{nullptr};
+        u32   n{1};      // backing-integer width of the enclosing aggregate
+        u32   offset{0}; // LSB-first bit offset of the field (always 0 for a union)
+        u32   fbits{1};  // width of the field
+        usize field_idx{0};
+        stdx::option<sema::type&> field_type;
     };
     [[nodiscard]] auto packed_layout_of(const ast::dot_expr& dot) -> packed_field_layout;
 
@@ -645,6 +667,9 @@ class emitter {
         return std::string{bare};
     }
 
+    // The pack in scope named `name`: this function's own, or one it captured
+    [[nodiscard]] auto pack_named(std::string_view name) const -> stdx::option<pack_context>;
+
   private:
     sema::context&               ctx_;
     mod::module_t&               ast_module_;
@@ -668,13 +693,16 @@ class emitter {
     // member function being emitted
     std::vector<std::pair<std::string_view, const_closure>> ctor_closure_bindings_;
     std::vector<bool>                                       open_fn_is_closure_;
-    std::vector<sema::type*>                                user_type_stack_;
+    std::vector<gsl::not_null<sema::type*>>                 user_type_stack_;
     std::vector<std::string_view>                           pending_builtin_runtime_;
     std::vector<ast::node_id>                               pending_builtin_impls_;
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};
     codegen::type_layout                                    target_layout_;
+
+    // The local generic each monomorph being emitted instantiates, innermost last
+    std::vector<gsl::not_null<const sema::type*>> generic_env_owners_;
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).
@@ -683,6 +711,8 @@ class emitter {
     stdx::opt_size emitting_impl_body_scope_;
 
     stdx::option<pack_context> current_pack_;
+    // Packs of an enclosing function whose elements a monomorph being emitted captured
+    std::vector<pack_context> captured_packs_;
 
     // Set by `emit_generic_instantiation` to that instantiation's mangled name for the duration
     // of body emission

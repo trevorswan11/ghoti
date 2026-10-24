@@ -79,8 +79,9 @@ class cfg_pass {
     // Shared by a pass and the passes it starts to read other modules' constants
     struct shared_state {
         // `@cfgValue` constants mid-evaluation, by module and node index
-        ankerl::unordered_dense::set<std::pair<const mod::module_t*, usize>> in_progress;
-        bool                                                                 hit_cycle{false};
+        ankerl::unordered_dense::set<std::pair<gsl::not_null<const mod::module_t*>, usize>>
+             in_progress;
+        bool hit_cycle{false};
 
         // `@cfg` statements searched for imports and the arm each takes; `selected` is false
         // while one is still being selected
@@ -88,7 +89,9 @@ class cfg_pass {
             bool           selected{false};
             stdx::opt_size arm;
         };
-        ankerl::unordered_dense::map<std::pair<const mod::module_t*, usize>, arm_choice> arms;
+        ankerl::unordered_dense::map<std::pair<gsl::not_null<const mod::module_t*>, usize>,
+                                     arm_choice>
+            arms;
     };
 
   private:

@@ -89,13 +89,13 @@ enum class storageless_kind : u8 {
 };
 
 struct module_t {
-    std::filesystem::path                            path;
-    std::filesystem::path                            parent_path;
-    source_file                                      source;
-    ast::AST                                         ast;
-    sema::side_tables                                sema_side_tables;
-    stdx::opt_size                                   root_table_idx;
-    module_state                                     state{module_state::PARSED};
+    std::filesystem::path path;
+    std::filesystem::path parent_path;
+    source_file           source;
+    ast::AST              ast;
+    sema::side_tables     sema_side_tables;
+    stdx::opt_size        root_table_idx;
+    module_state          state{module_state::PARSED};
     // Mangled names of the monomorphs this module requested, in emit order
     std::vector<std::string> generic_instantiations;
 
@@ -158,6 +158,7 @@ struct module_t {
 
     auto record_node_write(usize idx) noexcept -> void;
     auto record_explicit_write(usize idx) noexcept -> void;
+    auto record_call_write(usize idx) noexcept -> void;
 
     // Overlay-aware, so a monomorph's emit sees the attributes its own instantiation folded
     [[nodiscard]] auto attributes_of(ast::node_id id) const noexcept
@@ -329,6 +330,7 @@ struct module_t {
     template <ast::IndexableID ID> auto set_generic_call_target(ID id, std::string target) -> void {
         if constexpr (ast::IndexableNodeID<ID>) {
             sema_side_tables.generic_call_targets[id].emplace(std::move(target));
+            record_call_write(id.get_index());
         }
     }
 
@@ -553,14 +555,14 @@ class module_manager {
     auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
 
   private:
-    source_loader&                                        loader_;
-    module_table                                          modules_;
-    stdx::box<module_t>                                   builtin_module_;
-    stdx::box<module_t>                                   start_module_;
-    stdx::option<stdx::option<std::filesystem::path>>     start_path_;
-    stdx::box<ghoti::arena>                               arena_{stdx::make_box<ghoti::arena>()};
-    mutable ankerl::unordered_dense::set<const module_t*> printed_diagnostics_;
-    stdx::option<parse_cache&>                            parse_cache_;
+    source_loader&                                    loader_;
+    module_table                                      modules_;
+    stdx::box<module_t>                               builtin_module_;
+    stdx::box<module_t>                               start_module_;
+    stdx::option<stdx::option<std::filesystem::path>> start_path_;
+    stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
+    mutable ankerl::unordered_dense::set<gsl::not_null<const module_t*>> printed_diagnostics_;
+    stdx::option<parse_cache&>                                           parse_cache_;
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

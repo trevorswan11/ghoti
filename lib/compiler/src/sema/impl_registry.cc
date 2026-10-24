@@ -16,7 +16,7 @@ auto impl_registry::record(impl_record rec)
     -> stdx::result<gsl::not_null<impl_record*>, ast::node_id> {
     // Only trait impls are one-per-`(I, T)`; several inherent `impl T` blocks may coexist.
     if (rec.interface_type) {
-        for (const auto* existing : records_) {
+        for (const auto existing : records_) {
             if (existing->interface_type == rec.interface_type &&
                 existing->target_type == rec.target_type) {
                 return stdx::err{existing->site};
@@ -24,23 +24,23 @@ auto impl_registry::record(impl_record rec)
         }
     }
 
-    auto* stored{arena_.make<impl_record>(std::move(rec)).get()};
+    const auto stored{arena_.make<impl_record>(std::move(rec))};
     records_.emplace_back(stored);
-    return gsl::not_null{stored};
+    return stored;
 }
 
 auto impl_registry::record_parameterized(parameterized_impl pimpl)
     -> gsl::not_null<parameterized_impl*> {
-    auto* stored{arena_.make<parameterized_impl>(std::move(pimpl)).get()};
+    const auto stored{arena_.make<parameterized_impl>(std::move(pimpl))};
     param_records_.emplace_back(stored);
-    return gsl::not_null{stored};
+    return stored;
 }
 
 auto impl_registry::param_record_by_site(ast::node_id site, const mod::module_t& enclosing) noexcept
     -> stdx::option<parameterized_impl&> {
-    for (auto* p : param_records_) {
+    for (const auto p : param_records_) {
         if (p->site.get_index() == site.get_index() && p->site.get_kind() == site.get_kind() &&
-            opt_ref_matches(p->enclosing, &enclosing)) {
+            opt_ref_matches(p->enclosing, enclosing)) {
             return *p;
         }
     }
@@ -51,9 +51,9 @@ auto impl_registry::find_by_site(ast::node_id site, const mod::module_t& enclosi
     -> stdx::option<impl_record&> {
     // `site` is only an index into one module's AST node pool, so two modules can hold an `impl`
     // block at the same index; match the owning module too
-    for (auto* r : records_) {
+    for (const auto r : records_) {
         if (r->site.get_index() == site.get_index() && r->site.get_kind() == site.get_kind() &&
-            opt_ref_matches(r->enclosing, &enclosing)) {
+            opt_ref_matches(r->enclosing, enclosing)) {
             return *r;
         }
     }
@@ -66,13 +66,10 @@ auto impl_registry::implements(const type& target, const type& iface) const noex
 
 auto impl_registry::methods_of(const type& target) const -> std::vector<extension_method> {
     std::vector<extension_method> out;
-    for (const auto* r : records_) {
-        if (!opt_ref_matches(r->target_type, &target)) { continue; }
+    for (const auto r : records_) {
+        if (!opt_ref_matches(r->target_type, target)) { continue; }
         for (const auto& m : r->methods) {
-            out.emplace_back<extension_method>({
-                .record = gsl::not_null<const impl_record*>{r},
-                .method = gsl::not_null<const impl_record::method*>{&m},
-            });
+            out.emplace_back<extension_method>({.record = r, .method = &m});
         }
     }
     return out;

@@ -55,7 +55,8 @@ class type_translator {
     }
 
   private:
-    using type_cache_t = ankerl::unordered_dense::map<const sema::type*, llvm::Type*>;
+    using type_cache_t =
+        ankerl::unordered_dense::map<gsl::not_null<const sema::type*>, llvm::Type*>;
     using aggregate_identity_cache_t =
         ankerl::unordered_dense::map<sema::types::key_t, llvm::Type*>;
 

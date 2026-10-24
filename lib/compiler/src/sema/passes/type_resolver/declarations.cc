@@ -24,6 +24,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -214,7 +215,7 @@ template <ast::IndexableID ID> auto type_resolver::resolve_symbol(ID id, symbol&
         }
         {
             // The declaration is typed on its own, not by the expected type at this use
-            const structural_guard shield{implicit_type_stack_, nullptr};
+            const structural_guard shield{implicit_type_stack_, stdx::none};
             resolve(*node);
         }
         // Take the symbol's real type so forward references and mutual recursion resolve.
@@ -286,7 +287,7 @@ auto type_resolver::record_symbol_owner(ast::node_id         ref_id,
 auto type_resolver::record_member_owner(ast::node_id           ref_id,
                                         type&                  object_type,
                                         ast::identifier_handle member) -> void {
-    type* target{&object_type};
+    gsl::not_null<type*> target{&object_type};
     if (const auto meta{target->get_data().as_opt<types::meta_type>()}) {
         target = &meta->instance;
     }
@@ -319,7 +320,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
 
     // A pack is usable only as `.len`, `[K]`, `unroll for`'s iterable, or `expr...`. Those
     // forms intercept before ever reaching here, so a bare mention of the name is out of position.
-    if (current_pack_ && name == current_pack_->name) {
+    if (pack_named(name)) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -405,30 +406,51 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
     if constexpr (std::same_as<ID, ast::node_id>) { resolving_.add_identifier_position(id); }
 
+    // A local generic's monomorph runs apart from the frame that wrote it, so whatever it uses from
+    // that frame is captured into an environment built where the generic is written
+    const bool captured_by_generic{
+        enclosing_locals_depth_ && instantiation_root_depth_ && instantiating_fn_node_ &&
+        lookup->depth >= *enclosing_locals_depth_ && lookup->depth < *instantiation_root_depth_};
     // Belongs to an enclosing function's stack frame rather than the module/prelude scope
-    if (!function_boundaries_.empty() && lookup->depth < function_boundaries_.back() &&
-        lookup->depth >= function_boundaries_.front()) {
+    const bool captured_by_open_fn{!function_boundaries_.empty() &&
+                                   lookup->depth < function_boundaries_.back() &&
+                                   lookup->depth >= outermost_function_boundary()};
+    if (captured_by_generic || captured_by_open_fn) {
+        const auto self_id{open_function_nodes_.empty() ? *instantiating_fn_node_
+                                                        : open_function_nodes_.back()};
         // A function referring to its own name is recursion, not a captured free variable
-        bool is_self_reference{false};
+        bool                       is_self_reference{false};
+        stdx::option<ast::node_id> captured_decl;
         if (const auto node{lookup->symbol.get_data().as_opt<symbols::node_t>()}) {
-            if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
-                decl && decl->value) {
-                const ast::node_id value_id{*decl->value};
-                const auto&        self_id{open_function_nodes_.back()};
-                is_self_reference = value_id.get_kind() == self_id.get_kind() &&
-                                    value_id.get_index() == self_id.get_index();
+            if (const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)}) {
+                captured_decl.emplace(*node);
+                if (decl->value) {
+                    const ast::node_id value_id{*decl->value};
+                    is_self_reference = value_id.get_kind() == self_id.get_kind() &&
+                                        value_id.get_index() == self_id.get_index();
+                }
             }
         }
 
         if (is_self_reference) {
-            self_recursive_flags_.back() = true;
-        } else {
+            if (!self_recursive_flags_.empty()) { self_recursive_flags_.back() = true; }
+        } else if (captured_by_generic && captured_decl &&
+                   is_written_after(*captured_decl, *instantiating_fn_node_) &&
+                   !is_compile_time_only(lookup->symbol)) {
+            // Its environment is built where the generic is written, before this binding exists
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is declared after the generic local function that captures it",
+                            name),
+                error::GENERIC_CLOSURE_CAPTURE,
+                resolving_.ast.location_of(id)));
+        } else if (!is_compile_time_only(lookup->symbol)) {
             auto usage{in_mutating_context_ ? capture_usage::MUTATED : capture_usage::READ};
 
             // A closure needs a mutable binding to write through, but a `move fn` owns a copy.
             // Writing through an immutable view only reads the binding
-            const auto closure{
-                resolving_.ast.get_as_opt<ast::function_expr>(open_function_nodes_.back())};
+            const auto closure{resolving_.ast.get_as_opt<ast::function_expr>(self_id)};
             const bool immutable{!is_mutable_local(lookup->symbol)};
             // A binding declared later has no type yet. Using it is reported on its own
             if (usage == capture_usage::MUTATED && immutable &&
@@ -450,15 +472,20 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
                     resolving_.ast.location_of(id)));
             }
 
-            // Find the innermost open function whose own scope actually contains the declaration
-            usize owner_idx{0};
+            // Find the innermost open function whose own scope actually contains the declaration.
+            // A generic body being instantiated owns it when no open function does
+            usize first_capturing{0};
             for (usize i{function_boundaries_.size()}; i-- > 0;) {
                 if (lookup->depth >= function_boundaries_[i]) {
-                    owner_idx = i;
+                    first_capturing = i + 1;
                     break;
                 }
             }
-            for (usize i{owner_idx + 1}; i < open_function_nodes_.size(); ++i) {
+            if (captured_by_generic) {
+                resolving_.add_capture(*instantiating_fn_node_, name, usage);
+                first_capturing = 0;
+            }
+            for (usize i{first_capturing}; i < open_function_nodes_.size(); ++i) {
                 resolving_.add_capture(open_function_nodes_[i], name, usage);
             }
         }
@@ -474,7 +501,7 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     // A declaration outside every open function resolves on first use as if from its own scope.
     // otherwise its functions would see the open ones' frames and capture from them
     if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
-        lookup->depth < function_boundaries_.front()) {
+        lookup->depth < outermost_function_boundary()) {
         const std::vector<usize> outer_tables(table_stack_.begin(), table_stack_.end());
         for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) { table_stack_.pop(); }
         const auto outer_table_idx{std::exchange(table_idx_, outer_tables[lookup->depth])};
@@ -512,6 +539,9 @@ auto type_resolver::visit(ast::node_id id, const ast::identifier_expr& ident) ->
                              resolving_.ast.location_of(id)));
     }
     resolve_ident(id, ident);
+    if (!is_callee && last_type_ && last_type_->is_generic_value()) {
+        instantiate_for_expected_callable(id, *last_type_);
+    }
 
     // A range counter reads as any integer type that holds every value it takes
     if (const auto expected{implicit_type_stack_.peek()};
@@ -584,8 +614,7 @@ template auto type_resolver::record_scoped_declaration<ast::explicit_type_id>(as
     -> void;
 
 template <ast::IndexableID ID>
-auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const symbol& sym)
-    -> void {
+auto type_resolver::record_declaration(ID id, mod::module_t& owner, const symbol& sym) -> void {
     const auto ref{sym.get_data().visit(
         [&](const symbols::node_t& node) -> stdx::option<declaration_ref> {
             if (!owner.ast.get_as_opt<ast::decl_stmt>(node)) { return stdx::none; }
@@ -624,10 +653,10 @@ auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const 
 }
 
 template auto type_resolver::record_declaration<ast::node_id>(ast::node_id,
-                                                              const mod::module_t&,
+                                                              mod::module_t&,
                                                               const symbol&) -> void;
 template auto type_resolver::record_declaration<ast::explicit_type_id>(ast::explicit_type_id,
-                                                                       const mod::module_t&,
+                                                                       mod::module_t&,
                                                                        const symbol&) -> void;
 
 auto type_resolver::thin_if_comptime(const ast::function_expr::parameter& param, type& param_type)
@@ -1092,7 +1121,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         if (decl.explicit_type) {
             resolve(*decl.explicit_type);
             if (last_type_->is_poison()) { return poison_out(); }
-            auto* explicit_type_p{&denoted_type(*last_type_.take())};
+            gsl::not_null explicit_type_p{&denoted_type(*last_type_.take())};
             // `const x: MakesAType() = ...`
             if (explicit_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{explicit_type_p->get_data().as<types::deferred_call>().call};
@@ -1163,7 +1192,7 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                                                     resolving_.ast.location_of(*decl.value)));
                 return poison_out();
             }
-            auto* decl_value_type_p{last_type_.take()};
+            gsl::not_null decl_value_type_p{last_type_.take()};
             // `const X = MakesAType()`: fold the constructor now, exactly like an annotation
             if (decl_value_type_p->get_data().is<types::deferred_call>()) {
                 const auto& dc_call{decl_value_type_p->get_data().as<types::deferred_call>().call};
@@ -1249,10 +1278,13 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
 
         resolve_decl_attributes(id, decl, type_data);
         if (const auto runtime{const_closure_runtime_capture(decl)}) {
+            // A pack element is captured as `rest#k`, which the source spells `rest[k]`
+            const auto element{pack_element::parse(*runtime)};
+            const auto spelled{element ? element->spelled() : std::string{*runtime}};
             ctx_.poison_symbol(sym,
                                fmt::format("A 'const' function cannot capture the runtime value "
                                            "'{}'; declare the closure with 'let'",
-                                           *runtime),
+                                           spelled),
                                error::ILLEGAL_BINDING_KIND,
                                resolving_.ast.location_of(id));
             resolving_.set_sema_type(decl.name, ctx_.get_poison());
@@ -1354,7 +1386,8 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
         }()};
         resolving_.storageless_decls.insert_or_assign(id.get_index(), storageless);
 
-        if (type_data.is<types::function>()) {
+        // Only the function written here takes this name. Another one bound to it keeps its own
+        if (type_data.is<types::function>() && decl.value && decl.value->is<ast::function_expr>()) {
             const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
             ctx_.generic_functions.set_function_name(resolved_type, decl_ident.name);
         }

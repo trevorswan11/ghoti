@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/iterator.hh>
@@ -25,9 +26,9 @@ namespace ghoti::ast {
 
 // `pool`/`locations`/`end_locations` are arena allocated for stable references
 template <IndexableID ID, typename Data> struct data_pool_base {
-    std::vector<Data*>            pool;
-    std::vector<source_location*> locations;
-    std::vector<source_location*> end_locations;
+    std::vector<gsl::not_null<Data*>>            pool;
+    std::vector<gsl::not_null<source_location*>> locations;
+    std::vector<gsl::not_null<source_location*>> end_locations;
 
     constexpr auto clear() noexcept -> void {
         pool.clear();

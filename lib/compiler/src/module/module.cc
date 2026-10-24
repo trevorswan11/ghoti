@@ -219,7 +219,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
     mod->diagnostics = std::move(diagnostics);
     mod->is_start    = is_start_path(path);
 
-    auto* ptr = mod.get();
+    const gsl::not_null<module_t*> ptr{mod.get()};
     modules_.emplace(path, std::move(mod));
     return ptr;
 }
@@ -288,6 +288,10 @@ auto module_t::record_node_write(usize idx) noexcept -> void {
 
 auto module_t::record_explicit_write(usize idx) noexcept -> void {
     if (active_write_log) { active_write_log->explicit_idxs.emplace_back(idx); }
+}
+
+auto module_t::record_call_write(usize idx) noexcept -> void {
+    if (active_write_log) { active_write_log->call_idxs.emplace_back(idx); }
 }
 
 auto module_t::attributes_of(ast::node_id id) const noexcept

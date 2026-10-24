@@ -16,6 +16,7 @@
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/TargetParser/Triple.h>
@@ -530,8 +531,8 @@ auto classify_all(const std::vector<expr_template>&              templates,
 
 // One program checks every template of a batch: none when all agree, the index of the first that
 // disagrees, or the batch size when something panicked. Missing builtins come back separately.
-[[nodiscard]] auto run_batch(const std::vector<const expr_template*>&             templates,
-                             const std::vector<gsl::span<const classified_case>>& foldable,
+[[nodiscard]] auto run_batch(const std::vector<gsl::not_null<const expr_template*>>& templates,
+                             const std::vector<gsl::span<const classified_case>>&    foldable,
                              std::vector<std::string>& missing) -> stdx::option<usize> {
     std::string source{panic_prelude()};
     std::string main_body;
@@ -876,8 +877,8 @@ auto check_all(const std::vector<expr_template>& templates, const options& opts)
             pending.erase(pending.begin());
         }
         while (!batch.empty()) {
-            std::vector<const expr_template*>             tmpls;
-            std::vector<gsl::span<const classified_case>> spans;
+            std::vector<gsl::not_null<const expr_template*>> tmpls;
+            std::vector<gsl::span<const classified_case>>    spans;
             for (const auto t : batch) {
                 tmpls.emplace_back(&templates[t]);
                 spans.emplace_back(foldable[t]);

@@ -18,6 +18,7 @@
 #include <gsl/span>
 #include <llvm/TargetParser/Triple.h>
 #include <stdx/assert.hh>
+#include <stdx/hash.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/string.hh>
@@ -66,13 +67,13 @@ auto context::get_reference(types::mut::mutability_modifiers mutability, type& u
 
 constexpr u64 ERASED_FN_MARKER{0x455241534544}; // distinguishes `fn` from `extern fn` keys
 
-auto context::get_function(gsl::span<type*>        params,
+auto context::get_function(type_span               params,
                            type&                   return_type,
                            bool                    is_variadic,
                            ast::calling_convention conv,
                            bool                    erased) -> type& {
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
-    for (const auto* p : params) { key.imprint(*p); }
+    for (const auto p : params) { key.imprint(*p); }
     key.imprint(return_type);
     if (is_variadic) { key.imprint(is_variadic); }
     key.imprint(conv);
@@ -83,7 +84,7 @@ auto context::get_function(gsl::span<type*>        params,
     return fn;
 }
 
-auto context::get_function_like(gsl::span<type*>        params,
+auto context::get_function_like(type_span               params,
                                 type&                   return_type,
                                 bool                    has_self,
                                 bool                    is_variadic,
@@ -92,7 +93,7 @@ auto context::get_function_like(gsl::span<type*>        params,
     if (!has_self) { return get_function(params, return_type, is_variadic, conv, erased); }
 
     types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT};
-    for (const auto* p : params) { key.imprint(*p); }
+    for (const auto p : params) { key.imprint(*p); }
     key.imprint(return_type);
     key.imprint(conv);
     auto& fn{*pool[key]};
@@ -104,6 +105,36 @@ auto context::with_erasure(type& fn, bool erased) -> type& {
     const auto data{fn.get_data().as_opt<types::function>()};
     if (!data || data->erased == erased || data->has_self) { return fn; }
     return get_function(data->params, data->return_type, data->is_variadic, data->conv, erased);
+}
+
+auto context::local_function_instance(const type& fn_template, std::string_view instance) -> type& {
+    const auto   idx{fn_template.get_symbol_table_idx()};
+    types::key_t key{type_kind::FUNCTION, types::mut::CONSTANT, idx};
+    key.imprint(instance);
+    auto& slot{*pool[key]};
+    if (slot.get_instance_id()) { return slot; }
+    slot.set_symbol_table_idx(idx);
+    stdx::hasher id_hash{idx};
+    id_hash.combine(instance);
+    slot.set_instance_id(make_instance_id(id_hash.finalize()));
+    return slot;
+}
+
+auto context::closure_slot_of(const type& fn_type) -> type& {
+    const auto   idx{fn_type.get_symbol_table_idx()};
+    types::key_t key{type_kind::CLOSURE, types::mut::CONSTANT, idx};
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(*instance); }
+    auto& slot{*pool[key]};
+    slot.set_symbol_table_idx(idx);
+    slot.set_instance_id(fn_type.get_instance_id());
+    return slot;
+}
+
+auto context::closure_impl_signature_slot_of(const type& fn_type) -> type& {
+    types::key_t key{
+        type_kind::FUNCTION, types::mut::CONSTANT, fn_type.get_symbol_table_idx(), true};
+    if (const auto instance{fn_type.get_instance_id()}) { key.imprint(*instance); }
+    return *pool[key];
 }
 
 auto context::get_array(types::mut::mutability_modifiers mutability,

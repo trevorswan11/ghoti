@@ -12,6 +12,7 @@
 #include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -31,6 +32,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -114,10 +116,11 @@ auto type_resolver::is_auto_pattern(const type& t) -> bool {
     return false;
 }
 
-auto type_resolver::match_auto_pattern(type& pattern, type& arg, type*& leaf) -> type* {
+auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<type&>& leaf)
+    -> stdx::option<type&> {
     if (pattern.get_kind() == type_kind::AUTO) {
-        leaf = &arg;
-        return &arg;
+        leaf = arg;
+        return arg;
     }
 
     // `mut` needs a mutable argument, a plain level accepts either, and `mut?` takes the argument's
@@ -133,7 +136,8 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, type*& leaf) ->
     // `[n]auto`'s length folds before its elements can match
     if (pattern.get_data().is<types::deferred_array>()) {
         auto& folded{concrete_array_type(pattern)};
-        return &folded != &pattern ? match_auto_pattern(folded, arg, leaf) : nullptr;
+        if (&folded == &pattern) { return stdx::none; }
+        return match_auto_pattern(folded, arg, leaf);
     }
 
     const auto& pdata{pattern.get_data()};
@@ -141,41 +145,45 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, type*& leaf) ->
     if (const auto p{pdata.as_opt<types::pointer>()}) {
         const auto a{adata.as_opt<types::pointer>()};
         const auto m{a ? mutability(arg) : stdx::none};
-        if (!m) { return nullptr; }
-        auto* inner{match_auto_pattern(p->underlying, a->underlying, leaf)};
-        return inner ? &ctx_.get_pointer(*m, *inner) : nullptr;
+        if (!m) { return stdx::none; }
+        const auto inner{match_auto_pattern(p->underlying, a->underlying, leaf)};
+        if (!inner) { return stdx::none; }
+        return ctx_.get_pointer(*m, *inner);
     }
     if (const auto r{pdata.as_opt<types::reference>()}) {
         const auto a{adata.as_opt<types::reference>()};
         const auto m{a ? mutability(arg) : stdx::none};
-        if (!m) { return nullptr; }
-        auto* inner{match_auto_pattern(r->underlying, a->underlying, leaf)};
-        return inner ? &ctx_.get_reference(*m, *inner) : nullptr;
+        if (!m) { return stdx::none; }
+        const auto inner{match_auto_pattern(r->underlying, a->underlying, leaf)};
+        if (!inner) { return stdx::none; }
+        return ctx_.get_reference(*m, *inner);
     }
     if (const auto sl{pdata.as_opt<types::slice>()}) {
         const auto a{adata.as_opt<types::slice>()};
         const auto m{a ? mutability(arg) : stdx::none};
-        if (!m || (sl->null_terminated && !a->null_terminated)) { return nullptr; }
-        auto* inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
-        return inner ? &ctx_.get_slice(*m, sl->null_terminated, *inner) : nullptr;
+        if (!m || (sl->null_terminated && !a->null_terminated)) { return stdx::none; }
+        const auto inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
+        if (!inner) { return stdx::none; }
+        return ctx_.get_slice(*m, sl->null_terminated, *inner);
     }
     if (const auto arr{pdata.as_opt<types::array>()}) {
         const auto a{adata.as_opt<types::array>()};
         const auto m{a ? mutability(arg) : stdx::none};
         if (!m || a->len != arr->len || (arr->null_terminated && !a->null_terminated)) {
-            return nullptr;
+            return stdx::none;
         }
-        auto* inner{match_auto_pattern(arr->underlying, a->underlying, leaf)};
-        return inner ? &ctx_.get_array(*m, arr->null_terminated, arr->len, *inner) : nullptr;
+        const auto inner{match_auto_pattern(arr->underlying, a->underlying, leaf)};
+        if (!inner) { return stdx::none; }
+        return ctx_.get_array(*m, arr->null_terminated, arr->len, *inner);
     }
-    return nullptr;
+    return stdx::none;
 }
 
 auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string> {
     const auto& want{pattern.get_data().as<types::function>()};
 
     // A function, closure, or erased `fn` value, directly or through `^` / `&`
-    type* callee{&denoted_type(arg)};
+    gsl::not_null<type*> callee{&denoted_type(arg)};
     if (const auto p{callee->get_data().as_opt<types::pointer>()}) {
         callee = &p->underlying;
     } else if (const auto r{callee->get_data().as_opt<types::reference>()}) {
@@ -188,8 +196,18 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
         have = callee->get_data().as_opt<types::function>();
     }
     if (!have) { return std::string{"it is not callable"}; }
+    // A generic is checked by instantiating it for the bound, unless the bound itself leaves a
+    // slot open, which the call inside the body then settles
     if (ctx_.generic_functions.get_opt(*callee)) {
-        return std::string{"a generic function has no single signature to check"};
+        const bool open_bound{std::ranges::any_of(want.params,
+                                                  [](gsl::not_null<const type*> p) {
+                                                      return is_auto_pattern(*p) ||
+                                                             is_generic_type(*p);
+                                                  }) ||
+                              is_auto_pattern(want.return_type)};
+        if (open_bound) { return stdx::none; }
+        const auto inst{instantiate_as_callable(*callee, want)};
+        return inst ? stdx::none : inst.error().reason;
     }
     if (have->is_variadic) { return std::string{"it takes C-style variadic arguments"}; }
 
@@ -203,10 +221,10 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
     }
 
     // An `auto` slot deduces from the argument. Anything else must be exactly the same type
-    const auto matches{[&](const type& want_t, type& have_t) {
+    const auto matches{[&](type& want_t, type& have_t) {
         if (is_auto_pattern(want_t)) {
-            type* leaf{nullptr};
-            return match_auto_pattern(const_cast<type&>(want_t), have_t, leaf) != nullptr;
+            stdx::option<type&> leaf;
+            return match_auto_pattern(want_t, have_t, leaf).has_value();
         }
         return is_same_unqualified(want_t, have_t);
     }};
@@ -227,12 +245,89 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
     return stdx::none;
 }
 
+auto type_resolver::instantiate_as_callable(type& generic_fn, const types::function& target)
+    -> stdx::result<std::string, callable_misfit> {
+    const auto mismatch{[](std::string reason) {
+        return stdx::err<callable_misfit>{callable_misfit{std::move(reason)}};
+    }};
+    const auto info{ctx_.generic_functions.get_opt(generic_fn)};
+    if (!info) { return mismatch("it is not a generic function"); }
+    const auto& params{info->fn_expr->parameters};
+    if (std::ranges::any_of(params, [](const auto& p) { return p.is_comptime; })) {
+        return mismatch("it takes compile-time parameters, which a call signature can't supply");
+    }
+    // A method takes its receiver as the signature's first parameter, and a pack takes every
+    // parameter past the fixed ones
+    const usize self_count{info->fn_expr->self ? 1UZ : 0UZ};
+    const bool  has_pack{!params.empty() && params.back().is_pack};
+    const usize fixed{params.size() - (has_pack ? 1UZ : 0UZ) + self_count};
+    if (has_pack ? target.params.size() < fixed : target.params.size() != fixed) {
+        return mismatch(fmt::format("it takes {}{} parameter{}, not {}",
+                                    has_pack ? "at least " : "",
+                                    fixed,
+                                    string_utils::plural_suffix(fixed),
+                                    target.params.size()));
+    }
+    generic_function_info bound_info{*info};
+    if (self_count) {
+        gsl::not_null<type*> receiver{target.params.front()};
+        if (const auto p{receiver->get_data().as_opt<types::pointer>()}) {
+            receiver = &p->underlying;
+        } else if (const auto r{receiver->get_data().as_opt<types::reference>()}) {
+            receiver = &r->underlying;
+        }
+        bound_info.enclosing_type.emplace(denoted_type(*receiver));
+    }
+
+    auto args{ctx_.pool.get_many_unsafe(target.params.size() - self_count)};
+    std::ranges::copy(target.params.subspan(self_count), args.begin());
+    const auto diags_before{ctx_.diags.size()};
+    const auto inst{instantiate_generic(generic_fn, bound_info, args, {})};
+    if (!inst) {
+        if (ctx_.diags.size() > diags_before) {
+            return stdx::err<callable_misfit>{callable_misfit{}};
+        }
+        return mismatch("it can't be instantiated with those parameter types");
+    }
+    if (!is_same_unqualified(*inst->return_type, target.return_type)) {
+        return mismatch(fmt::format("it returns '{}', not '{}'",
+                                    ctx_.type_display_name(*inst->return_type),
+                                    ctx_.type_display_name(target.return_type)));
+    }
+    return inst->mangled_name;
+}
+
+auto type_resolver::instantiate_for_expected_callable(ast::node_id id, type& generic_fn) -> void {
+    const auto expected{implicit_type_stack_.peek()};
+    if (!expected) { return; }
+    gsl::not_null<const type*> target{expected.get()};
+    if (const auto p{target->get_data().as_opt<types::pointer>()}) { target = &p->underlying; }
+    const auto target_fn{target->get_data().as_opt<types::function>()};
+    if (!target_fn || target->is_generic_value() || ctx_.generic_functions.get_opt(*target) ||
+        std::ranges::any_of(target_fn->params,
+                            [](gsl::not_null<const type*> p) { return is_generic_type(*p); })) {
+        return;
+    }
+    // Where a single signature is expected, the value is the monomorph for that signature
+    const auto inst{instantiate_as_callable(generic_fn, *target_fn)};
+    if (!inst && inst.error().reason) {
+        last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("This generic function doesn't fit '{}': {}",
+                                         ctx_.type_display_name(*expected),
+                                         *inst.error().reason),
+                             error::CLOSURE_SIGNATURE_MISMATCH,
+                             resolving_.ast.location_of(id)));
+    }
+}
+
 auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::const_value> {
     ast::node_id named{expr};
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
     const auto declared{resolving_.get_identifier_declaration(named)};
     if (!declared || !declared->owner || !declared->decl) { return stdx::none; }
-    auto&      owner{const_cast<mod::module_t&>(*declared->owner)};
+    auto&      owner{*declared->owner};
     const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
     if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::MUT) ||
         !owner.ast.get_as_opt<ast::function_expr>(*decl->value)) {
@@ -398,35 +493,36 @@ auto type_resolver::receiver_names_type(const ast::dot_expr& dot) const -> bool 
 }
 
 // Enforces `impl I` parameter bounds on concrete argument types, reporting the first violation
-auto type_resolver::check_param_bounds(const ast::call_expr&        call,
-                                       const generic_function_info& fn_info,
-                                       gsl::span<type* const>       arg_types,
-                                       gsl::span<type* const>       auto_leaves) -> bool {
+auto type_resolver::check_param_bounds(const ast::call_expr&                 call,
+                                       const generic_function_info&          fn_info,
+                                       gsl::span<const gsl::not_null<type*>> arg_types,
+                                       gsl::span<const stdx::option<type&>>  auto_leaves) -> bool {
     const auto it{ctx_.param_bounds.find(fn_info.fn_expr.get())};
     if (it == ctx_.param_bounds.end()) { return true; }
-    const auto satisfies{
-        [&](usize arg_idx, gsl::span<const type* const> ifaces, std::string_view pname) {
-            gsl::not_null bound_t{&denoted_type(*arg_types[arg_idx])};
-            if (auto_leaves[arg_idx]) {
-                bound_t = auto_leaves[arg_idx];
-            } else if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
-                bound_t = &p->underlying;
-            } else if (const auto r{bound_t->get_data().as_opt<types::reference>()}) {
-                bound_t = &r->underlying;
-            }
-            for (const auto* iface : ifaces) {
-                if (ctx_.impls.implements(*bound_t, *iface)) { continue; }
-                ctx_.diags.emplace_back(
-                    fmt::format("`{}` does not implement `{}` required by parameter `{}`",
-                                ctx_.type_display_name(*bound_t),
-                                ctx_.type_display_name(*iface),
-                                pname),
-                    error::UNSATISFIED_BOUND,
-                    get_call_arg_location(call.arguments[arg_idx]));
-                return false;
-            }
-            return true;
-        }};
+    const auto satisfies{[&](usize                                       arg_idx,
+                             gsl::span<const gsl::not_null<const type*>> ifaces,
+                             std::string_view                            pname) {
+        gsl::not_null<type*> bound_t{&denoted_type(*arg_types[arg_idx])};
+        if (auto_leaves[arg_idx]) {
+            bound_t = auto_leaves[arg_idx].get();
+        } else if (const auto p{bound_t->get_data().as_opt<types::pointer>()}) {
+            bound_t = &p->underlying;
+        } else if (const auto r{bound_t->get_data().as_opt<types::reference>()}) {
+            bound_t = &r->underlying;
+        }
+        for (const auto iface : ifaces) {
+            if (ctx_.impls.implements(*bound_t, *iface)) { continue; }
+            ctx_.diags.emplace_back(
+                fmt::format("`{}` does not implement `{}` required by parameter `{}`",
+                            ctx_.type_display_name(*bound_t),
+                            ctx_.type_display_name(*iface),
+                            pname),
+                error::UNSATISFIED_BOUND,
+                get_call_arg_location(call.arguments[arg_idx]));
+            return false;
+        }
+        return true;
+    }};
     for (const auto& bound : it->second) {
         const auto pidx{static_cast<usize>(bound.param_index)};
         if (bound.callable || pidx >= arg_types.size()) { continue; }
@@ -445,8 +541,9 @@ auto type_resolver::check_param_bounds(const ast::call_expr&        call,
 auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                                       const generic_function_info& fn_info,
                                       usize                        idx,
-                                      const type*                  arg_type,
-                                      const type* param_type) -> stdx::option<gir::const_value> {
+                                      stdx::option<type&>          arg_type,
+                                      stdx::option<type&>          param_type)
+    -> stdx::option<gir::const_value> {
     const auto& arg{call.arguments[idx]};
     // A `comptime f: fn(...)` is called, so its argument has to be callable
     if (param_type && arg_type && param_type->get_kind() == type_kind::FUNCTION &&
@@ -463,6 +560,34 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                 get_call_arg_location(arg));
             return stdx::none;
         }
+    }
+
+    // A generic function folds to its monomorph for the parameter's signature, which must not
+    // need a runtime environment
+    const auto param_fn{param_type ? param_type->get_data().as_opt<types::function>() : stdx::none};
+    if (param_fn && arg_type && arg_type->is_generic_value() &&
+        std::ranges::none_of(param_fn->params,
+                             [](gsl::not_null<const type*> p) { return is_auto_pattern(*p); })) {
+        auto monomorph{instantiate_as_callable(*arg_type, *param_fn)};
+        if (!monomorph) {
+            if (const auto& why{monomorph.error().reason}) {
+                ctx_.diags.emplace_back(fmt::format("This generic function doesn't fit '{}': {}",
+                                                    ctx_.type_display_name(*param_type),
+                                                    *why),
+                                        error::CLOSURE_SIGNATURE_MISMATCH,
+                                        get_call_arg_location(arg));
+            }
+            return stdx::none;
+        }
+        if (arg_type->get_generic_env()) {
+            ctx_.diags.emplace_back("a compile-time function argument must capture only "
+                                    "compile-time constants",
+                                    error::COMPTIME_EVALUATION_FAILED,
+                                    get_call_arg_location(arg));
+            return stdx::none;
+        }
+        return gir::const_value{gir::const_value::data_t{std::move(*monomorph)},
+                                ctx_.with_erasure(*param_type, false)};
     }
 
     stdx::option<gir::const_value> folded;
@@ -524,7 +649,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
     if (call.function->get_builtin() == syntax::builtin_t::EXPORT && call.arguments.size() == 2) {
         // The function stands alone. The options are a `builtin.ExportOptions` literal
         {
-            const structural_guard shield{implicit_type_stack_, nullptr};
+            const structural_guard shield{implicit_type_stack_, stdx::none};
             args_result = resolve_call_args(
                 gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
         }
@@ -550,7 +675,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
                (call.function->get_builtin() &&
                 gir::semantics::math_function_of(*call.function->get_builtin()))) {
         // The result type must not flow into a literal operand of the other numeric kind
-        const structural_guard shield{implicit_type_stack_, nullptr};
+        const structural_guard shield{implicit_type_stack_, stdx::none};
         args_result = resolve_call_args(call.arguments);
     } else if (const auto tok{call.function->get_builtin()};
                (tok == syntax::builtin_t::AS || tok == syntax::builtin_t::BIT_CAST ||
@@ -568,7 +693,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
                    resolving_.ast[node].is<ast::float_literal_expr>();
         };
         {
-            const structural_guard shield{implicit_type_stack_, nullptr};
+            const structural_guard shield{implicit_type_stack_, stdx::none};
             args_result = resolve_call_args(
                 gsl::span<const ast::call_expr::argument>{call.arguments}.first(1));
         }
@@ -589,7 +714,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
             }
             const auto             outer_hint{implicit_type_stack_.peek()};
             const structural_guard g{implicit_type_stack_,
-                                     literal_hint ? literal_hint.get() : outer_hint.raw()};
+                                     literal_hint ? literal_hint : outer_hint};
             args_result = resolve_call_args(
                 gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
         } else if (args_result == resolve_result::OK) {
@@ -597,7 +722,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
             if (tok == syntax::builtin_t::AS && call_arg_denotes_type(call.arguments[0])) {
                 operand_hint.emplace(denoted_type(*get_resolved_call_arg_type(call.arguments[0])));
             }
-            const structural_guard g{implicit_type_stack_, operand_hint.raw()};
+            const structural_guard g{implicit_type_stack_, operand_hint};
             args_result = resolve_call_args(
                 gsl::span<const ast::call_expr::argument>{call.arguments}.subspan(1));
         }
@@ -606,7 +731,7 @@ auto type_resolver::resolve_builtin_call_args(const ast::call_expr& call) -> res
                 tok == syntax::builtin_t::FROM_BACKING_INT) &&
                call.arguments.size() == 1) {
         // The inferred target is the cast's result, not its operand's type
-        const structural_guard shield{implicit_type_stack_, nullptr};
+        const structural_guard shield{implicit_type_stack_, stdx::none};
         args_result = resolve_call_args(call.arguments);
     } else if (!atomic_arg_roles(call.function->get_builtin()).empty()) {
         args_result = resolve_atomic_call_args(call);
@@ -650,7 +775,7 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_
     }
     resolve(arg_id);
     if (!last_type_) { return stdx::none; }
-    auto* arg_type{last_type_.take()};
+    gsl::not_null<type*> arg_type{last_type_.take()};
     if (arg_type->is_poison()) { return stdx::none; }
     // `@TypeOf(x)` in a `type` argument position denotes the type it wraps.
     if (is_type_parameter_slot(param_type)) {
@@ -678,7 +803,7 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_
 auto type_resolver::receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&> {
     const auto recv_t{resolving_.get_sema_type_opt(dot.object)};
     if (!recv_t) { return stdx::none; }
-    auto* target{recv_t.get()};
+    gsl::not_null<type*> target{recv_t.get()};
     if (const auto p{target->get_data().as_opt<types::pointer>()}) {
         target = &p->underlying;
     } else if (const auto r{target->get_data().as_opt<types::reference>()}) {
@@ -697,7 +822,7 @@ auto type_resolver::receiver_aggregate(const ast::dot_expr& dot) -> stdx::option
 auto type_resolver::instantiate_for_call(const ast::call_expr&             call,
                                          type&                             callee_type,
                                          const generic_function_info&      fn_info,
-                                         gsl::span<type*>                  arg_types,
+                                         type_span                         arg_types,
                                          gsl::span<const gir::const_value> comptime_args)
     -> stdx::option<generic_instantiation_entry> {
     const auto                   diags_before{ctx_.diags.size()};
@@ -726,6 +851,8 @@ auto type_resolver::instantiate_for_call(const ast::call_expr&             call,
 
 template <ast::IndexableID ID>
 auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
+    // Set only for the call `Type.method(obj, ...)` is resolved as, never one nested in it
+    const auto forced_receiver{std::exchange(explicit_self_receiver_, stdx::none)};
     // The call can only yield a non-poison type if the function is valid
     {
         // Only a bare `@builtin(...)` callee is a call of that builtin, not `@builtin.x(...)`
@@ -787,7 +914,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
     if (function_type) {
         const auto dot_call{resolving_.ast.get_as_opt<ast::dot_expr>(call.function)};
         const bool is_obj_instance{dot_call && !receiver_names_type(*dot_call)};
-        const auto has_implicit_self{is_closure_call ||
+        const auto has_implicit_self{is_closure_call || forced_receiver ||
                                      (function_type->has_self && is_obj_instance)};
 
         // Check the arity of the function against params before resetting last type
@@ -865,31 +992,66 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             }
         }
 
-        if (fn_info_opt && (any_param_generic(params) ||
-                            any_param_comptime(*fn_info_opt->fn_expr) || has_pack_param)) {
-            auto concrete_arg_types{ctx_.pool.get_many_unsafe(effective_arity)};
+        const bool generic_callee{fn_info_opt &&
+                                  (any_param_generic(params) ||
+                                   any_param_comptime(*fn_info_opt->fn_expr) || has_pack_param)};
+
+        // `Type.method(obj, ...)` (or a value of the method) instantiates as `obj.method(...)`
+        // does, with `obj` as the receiver
+        if constexpr (std::same_as<ID, ast::node_id>) {
+            if (generic_callee && explicit_self && !call.arguments.empty() && !params.empty()) {
+                const auto self_arg{call.arguments.front().template as_opt<ast::expr_handle>()};
+                if (!self_arg) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+                {
+                    const structural_guard g{implicit_type_stack_, *params.front()};
+                    resolve(*self_arg);
+                }
+                if (last_type_->is_poison()) {
+                    return last_type_.emplace(ctx_.poison_node(resolving_, id));
+                }
+                gsl::not_null<type*> receiver{last_type_.get()};
+                if (const auto p{receiver->get_data().as_opt<types::pointer>()}) {
+                    receiver = &p->underlying;
+                } else if (const auto r{receiver->get_data().as_opt<types::reference>()}) {
+                    receiver = &r->underlying;
+                }
+                receiver = &denoted_type(*receiver);
+                ast::call_expr rest{call};
+                rest.arguments.erase(rest.arguments.begin());
+                if (!rest.pack_expansions.empty()) {
+                    rest.pack_expansions.erase(rest.pack_expansions.begin());
+                }
+                explicit_self_receiver_ = *receiver;
+                return resolve_call(id, rest);
+            }
+        }
+
+        if (generic_callee) {
+            // Each argument's type, empty until it resolves
+            auto arg_slots{ctx_.pool.get_many_pending(effective_arity)};
             // What `auto` bound to inside a pattern parameter (`x: &auto`), for interface bounds
-            std::vector<type*> auto_leaves(effective_arity, nullptr);
-            bool               any_arg_poison{false};
-            const auto         fixed_params{params.subspan(param_offset)};
-            const auto&        fn_params{fn_info_opt->fn_expr->parameters};
-            const auto&        fn_ast{fn_info_opt->module->ast};
+            std::vector<stdx::option<type&>> auto_leaves(effective_arity);
+            bool                             any_arg_poison{false};
+            const auto                       fixed_params{params.subspan(param_offset)};
+            const auto&                      fn_params{fn_info_opt->fn_expr->parameters};
+            const auto&                      fn_ast{fn_info_opt->module->ast};
 
             for (usize i{0}; i < effective_arity; ++i) {
                 // Beyond the fixed parameters, every trailing argument is a pack element and
                 // types against the pack's own (generic) declared type.
-                auto* param_type{i < fixed_params.size() ? fixed_params[i] : fixed_params.back()};
+                gsl::not_null<type*> param_type{i < fixed_params.size() ? fixed_params[i]
+                                                                        : fixed_params.back()};
 
                 // A slot an `expr...` expansion produced is already concretely typed (that
                 // element's own static type, from the *enclosing* pack) - no AST node to resolve.
                 if (expanded.pack_k[i]) {
-                    concrete_arg_types[i] = current_pack_->element_types[*expanded.pack_k[i]];
+                    arg_slots[i] = expanded.pack_elem[i];
                     continue;
                 }
 
                 const auto bound_idx{bound_type_param(fn_ast, fn_params, i)};
-                if (bound_idx && concrete_arg_types[*bound_idx]) {
-                    param_type = concrete_arg_types[*bound_idx];
+                if (bound_idx && arg_slots[*bound_idx]) {
+                    param_type = arg_slots[*bound_idx].get();
                 }
 
                 const auto& arg{call.arguments[expanded.source_index[i]]};
@@ -898,8 +1060,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // So does `y: @TypeOf(x)` once `x` holds one, taking `x`'s type
                 const auto typeof_idx{typeof_bound_param(fn_ast, fn_params, i)};
                 const bool follows_comptime{
-                    typeof_idx && concrete_arg_types[*typeof_idx] &&
-                    is_comptime_numeric(concrete_arg_types[*typeof_idx]->get_kind())};
+                    typeof_idx && arg_slots[*typeof_idx] &&
+                    is_comptime_numeric(arg_slots[*typeof_idx]->get_kind())};
                 const bool keeps_comptime{
                     i < fn_params.size() &&
                     (keeps_comptime_numeric(fn_params[i]) || follows_comptime)};
@@ -915,22 +1077,21 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                               ctx_.get_builtin_resolved_type(type_kind::ENUM_LITERAL));
                 } else if (keeps_comptime) {
                     // The call's own context says nothing about what the argument is
-                    g.emplace(implicit_type_stack_, nullptr);
+                    g.emplace(implicit_type_stack_, stdx::none);
                 }
 
                 // A slot already bound to a concrete type (`x: T` with `T = u16`) checks a
                 // compile-time number against that type instead of its `i32` default
-                const bool bound_concrete{bound_idx && concrete_arg_types[*bound_idx]};
+                const bool bound_concrete{bound_idx && arg_slots[*bound_idx]};
                 auto       result_arg_type{arg.visit([&](auto arg_id) {
                     return generic_arg_type(arg_id, *param_type, keeps_comptime || bound_concrete);
                 })};
                 // A poisoned argument yields `none`. Record it and move on
                 if (!result_arg_type) {
-                    concrete_arg_types[i] = nullptr;
-                    any_arg_poison        = true;
+                    any_arg_poison = true;
                     continue;
                 }
-                auto* resolved_type{result_arg_type.take()};
+                gsl::not_null<type*> resolved_type{result_arg_type.get()};
                 // A value slot erases at runtime, so it cannot carry a compile-time-only type
                 const auto arg_expr{
                     call.arguments[expanded.source_index[i]].template as_opt<ast::expr_handle>()};
@@ -994,7 +1155,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 // `&auto`, `[]mut auto`, ...: each declared level must match the argument's
                 if (!bound_idx && param_type->get_kind() != type_kind::AUTO &&
                     is_auto_pattern(*param_type)) {
-                    type*      leaf{nullptr};
+                    stdx::option<type&> leaf;
                     const auto matched{match_auto_pattern(*param_type, *resolved_type, leaf)};
                     if (!matched) {
                         return last_type_.emplace(ctx_.poison_node(
@@ -1008,14 +1169,13 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                             error::TYPE_MISMATCH,
                             get_call_arg_location(call.arguments[expanded.source_index[i]])));
                     }
-                    concrete_arg_types[i] = matched;
-                    auto_leaves[i]        = leaf;
+                    arg_slots[i]   = matched;
+                    auto_leaves[i] = leaf;
                     continue;
                 }
-                concrete_arg_types[i] =
-                    bound_idx && concrete_arg_types[*bound_idx] ? param_type : resolved_type;
+                arg_slots[i] = *(bound_idx && arg_slots[*bound_idx] ? param_type : resolved_type);
                 if (follows_comptime) {
-                    auto& followed{*concrete_arg_types[*typeof_idx]};
+                    auto& followed{*arg_slots[*typeof_idx]};
                     if (!sema::is_assignable(*resolved_type, followed)) {
                         return last_type_.emplace(ctx_.poison_node(
                             resolving_,
@@ -1028,15 +1188,17 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                             error::TYPE_MISMATCH,
                             get_call_arg_location(call.arguments[expanded.source_index[i]])));
                     }
-                    concrete_arg_types[i] = &followed;
+                    arg_slots[i] = followed;
                 }
             }
             if (any_arg_poison) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
+            const auto concrete_arg_types{ctx_.pool.settle(arg_slots)};
 
             // An argument that still contains `auto` (`@TypeOf(a)` where `a: auto`) can only be
             // resolved once the enclosing generic is instantiated
-            if (std::ranges::any_of(concrete_arg_types,
-                                    [](const type* t) { return contains_auto(*t); })) {
+            if (std::ranges::any_of(concrete_arg_types, [](gsl::not_null<const type*> t) {
+                    return contains_auto(*t);
+                })) {
                 auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
                 resolving_.set_sema_type(id, placeholder);
                 return last_type_.emplace(placeholder);
@@ -1066,10 +1228,10 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     continue;
                 }
                 if (!cx_params[i].is_comptime) { continue; }
-                const type* param_t{i + param_offset < params.size() ? params[i + param_offset]
-                                                                     : nullptr};
-                auto        folded{
-                    fold_comptime_arg(call, *fn_info_opt, i, concrete_arg_types[i], param_t)};
+                stdx::option<type&> param_t;
+                if (i + param_offset < params.size()) { param_t = *params[i + param_offset]; }
+                auto folded{
+                    fold_comptime_arg(call, *fn_info_opt, i, *concrete_arg_types[i], param_t)};
                 if (!folded) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
                 folded_args.emplace_back(std::move(*folded));
             }
@@ -1084,13 +1246,15 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (auto recv{receiver_aggregate(*dot_call)}) {
                     fn_info_copy.enclosing_type.emplace(*recv);
                 }
+            } else if (forced_receiver && fn_info_copy.enclosing_type) {
+                fn_info_copy.enclosing_type.emplace(*forced_receiver);
             }
 
             generic_instantiation_key key{
                 .generic_fn_type = &callee_type,
                 .arg_types       = concrete_arg_types,
                 .comptime_args   = comptime_args,
-                .enclosing_type  = fn_info_copy.enclosing_type.raw(),
+                .enclosing_type  = fn_info_copy.enclosing_type,
             };
 
             if (const auto cached{ctx_.instantiation_cache.find(key)}) {
@@ -1189,7 +1353,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             return last_type_.emplace(deferred_type);
         }
 
-        auto* return_type{&function_type->return_type};
+        gsl::not_null<type*> return_type{&function_type->return_type};
         if (returns_deferred_array) { return_type = &concrete_array_type(*return_type); }
         // A `mut?` result takes the call's own mutability, worked out from its arguments
         if (contains_poly(*return_type)) {
@@ -1365,7 +1529,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                     fn_param_types, return_type, fn.variadic, fn.conv, !fn.is_extern);
             }
             types::key_t fn_key{type_kind::FUNCTION, types::mut::CONSTANT};
-            for (const auto* p : fn_param_types) { fn_key.imprint(*p); }
+            for (const auto p : fn_param_types) { fn_key.imprint(*p); }
             fn_key.imprint(return_type);
             fn_key.imprint(fn.conv);
             auto& self_fn{*ctx_.pool[fn_key]};
@@ -1381,12 +1545,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
 
     // The entire function lives inside of its preallocated scope
-    auto& fn_type{resolving_.get_sema_type(id)};
-
-    if (for_generic_instantiation_ && reresolve_floor_ && fn_type.has_symbol_table_idx() &&
-        fn_type.get_symbol_table_idx() >= *reresolve_floor_) {
-        fn_type.unresolve();
-    }
+    auto& fn_type{instance_local_function_type(id)};
 
     // `pre_register_impls` force-drives an impl target aggregate's decl. The
     // signature is already committed, so a re-entry is a no-op rather than an assertion failure.
@@ -1509,7 +1668,8 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     }
     // A `mut?` result is the call's mutability, which only `mut?` parameters can supply
     if (spells_poly(resolving_.ast, fn.explicit_return_type) &&
-        std::ranges::none_of(param_types, [](const type* p) { return contains_poly(*p); })) {
+        std::ranges::none_of(param_types,
+                             [](gsl::not_null<const type*> p) { return contains_poly(*p); })) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
                              id,
@@ -1555,10 +1715,20 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
                 preceding.emplace(idx);
             }
         }
-        ctx_.generic_functions.register_function(
-            fn_type, resolving_, id, fn, stdx::none, enclosing_for_generic, enclosing_fn_table_idx);
+        ctx_.generic_functions.register_function(fn_type,
+                                                 resolving_,
+                                                 id,
+                                                 fn,
+                                                 stdx::none,
+                                                 enclosing_for_generic,
+                                                 enclosing_fn_table_idx,
+                                                 enclosing_function_scopes(),
+                                                 visible_packs());
+        fn_type.mark_generic_value();
         register_impl_param_bounds(fn);
-        return last_type_.emplace(fn_type);
+        last_type_.emplace(fn_type);
+        instantiate_for_expected_callable(id, fn_type);
+        return;
     }
 
     const auto is_auto_return{return_type.get_kind() == type_kind::AUTO};
@@ -1578,7 +1748,7 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     const auto& block{resolving_.ast.get_as<ast::block_stmt>(*fn.body)};
     bool        body_failed{false};
     {
-        const structural_guard shield{implicit_type_stack_, nullptr};
+        const structural_guard shield{implicit_type_stack_, stdx::none};
         body_failed = resolve_block_statements(block);
     }
     auto tracker{std::move(return_trackers_.back())};
@@ -1624,6 +1794,91 @@ auto type_resolver::visit(ast::node_id id, const ast::function_expr& fn) -> void
     last_type_.emplace(fn_type);
 }
 
+auto type_resolver::capture_layout(ast::node_id fn_id, bool is_move)
+    -> gsl::span<types::closure_capture> {
+    std::vector<types::closure_capture> laid_out;
+    for (const auto& capture : resolving_.get_captures(fn_id)) {
+        auto captured_type{pack_element_type(capture.name)};
+        // Another instantiation of the enclosing function may have had a longer pack
+        if (!captured_type && is_pack_element_capture(capture.name)) { continue; }
+        if (!captured_type) {
+            auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
+            ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
+            captured_type = get_resolved_symbol_type(lookup->get_data());
+        }
+        auto mode{infer_capture_mode(capture.usage, *captured_type, is_move)};
+
+        // A local generic is a monomorph to call, so only the environment it captured is runtime
+        // state, and calling it needs that environment's address
+        if (ctx_.generic_functions.get_opt(*captured_type)) {
+            if (!ctx_.generic_functions.get_capture_env(*captured_type)) { continue; }
+            mode = is_move ? types::capture_mode::VALUE : types::capture_mode::MUT_REF;
+        }
+
+        // What the environment actually stores: the value itself, or a reference to it
+        gsl::not_null<type*> storage_type{captured_type.get()};
+        if (mode == types::capture_mode::REF) {
+            storage_type = &ctx_.get_reference(types::mut::CONSTANT, *captured_type);
+        } else if (mode == types::capture_mode::MUT_REF) {
+            storage_type = &ctx_.get_reference(types::mut::MUTABLE, *captured_type);
+        }
+        laid_out.emplace_back(capture.name, captured_type.get(), storage_type, mode);
+    }
+
+    auto span{make_uninit_span<types::closure_capture>(ctx_.arena, laid_out.size())};
+    std::ranges::copy(laid_out, span.begin());
+    return span;
+}
+
+auto type_resolver::is_pack_element_capture(std::string_view capture) const -> bool {
+    const auto element{pack_element::parse(capture)};
+    return element && pack_named(element->pack);
+}
+
+auto type_resolver::pack_element_type(std::string_view capture) const -> stdx::option<type&> {
+    const auto element{pack_element::parse(capture)};
+    if (!element) { return stdx::none; }
+    const auto pack{pack_named(element->pack)};
+    if (!pack || element->index >= pack->element_types.size()) { return stdx::none; }
+    return *pack->element_types[element->index];
+}
+
+auto type_resolver::build_capture_env(ast::node_id fn_id, type& fn_type, bool is_move) -> void {
+    if (resolving_.get_captures(fn_id).empty()) { return; }
+    const auto captures{capture_layout(fn_id, is_move)};
+    if (captures.empty()) { return; }
+
+    // Every monomorph takes the one environment, so each instantiation widens it to all captures
+    auto& env{ctx_.closure_slot_of(fn_type)};
+    env.resolve<types::closure_t>(captures, fn_type, fn_type);
+    ctx_.generic_functions.set_capture_env(fn_type, env);
+    fn_type.set_generic_env(env);
+    DISCARD(report_generic_escape(fn_type));
+}
+
+auto type_resolver::instance_local_function_type(ast::node_id id) -> type& {
+    auto&      current{resolving_.get_sema_type(id)};
+    const bool in_instantiated_body{for_generic_instantiation_ && reresolve_floor_ &&
+                                    current.has_symbol_table_idx() &&
+                                    current.get_symbol_table_idx() >= *reresolve_floor_};
+    if (!in_instantiated_body) { return current; }
+    // A type ctor's members are monomorphized from the literal's shared shape instead
+    const bool is_aggregate_member{function_boundaries_.empty() &&
+                                   !resolving_aggregate_nodes_.empty()};
+    if (typing_scope_prefix_.empty() || is_aggregate_member) {
+        current.unresolve();
+        return current;
+    }
+
+    // Each instantiation types the literal on its own copy, else the last one would win for all.
+    // A revisit within this one finds that copy (or the closure built from it) already in place
+    auto& instance{ctx_.local_function_instance(current, typing_scope_prefix_)};
+    if (current.get_instance_id() == instance.get_instance_id()) { return current; }
+    instance.unresolve();
+    resolving_.set_sema_type(id, instance);
+    return instance;
+}
+
 auto type_resolver::infer_capture_mode(capture_usage usage,
                                        const type&   captured_type,
                                        bool          force_move) noexcept -> types::capture_mode {
@@ -1639,32 +1894,11 @@ auto type_resolver::infer_capture_mode(capture_usage usage,
 }
 
 auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool is_move) -> type& {
-    const auto captures{resolving_.get_captures(fn_id)};
-    ASSERT(!captures.empty(), "attach_closure_type called with no captures");
+    const auto capture_span{capture_layout(fn_id, is_move)};
+    // Only captured generics with nothing of their own to carry, so a plain function after all
+    if (capture_span.empty()) { return fn_type; }
 
-    const auto idx{fn_type.get_symbol_table_idx()};
-    auto*      closure_type{ctx_.pool[{type_kind::CLOSURE, types::mut::CONSTANT, idx}].get()};
-    closure_type->set_symbol_table_idx(idx);
-
-    auto  capture_span{ctx_.arena.make_span<types::closure_capture>(captures.size())};
-    usize i{0};
-    for (const auto& capture : captures) {
-        auto lookup{ctx_.registry.lookup(table_stack_, capture.name)};
-        ASSERT(lookup, "Recorded capture name failed to re-resolve in its enclosing scope");
-        auto&      captured_type{get_resolved_symbol_type(lookup->get_data())};
-        const auto mode{infer_capture_mode(capture.usage, captured_type, is_move)};
-
-        // What the environment actually stores: the value itself, or a reference to it
-        auto* storage_type{&captured_type};
-        if (mode == types::capture_mode::REF) {
-            storage_type = &ctx_.get_reference(types::mut::CONSTANT, captured_type);
-        } else if (mode == types::capture_mode::MUT_REF) {
-            storage_type = &ctx_.get_reference(types::mut::MUTABLE, captured_type);
-        }
-
-        capture_span[i++] =
-            types::closure_capture{capture.name, &captured_type, storage_type, mode};
-    }
+    gsl::not_null<type*> closure_type{&ctx_.closure_slot_of(fn_type)};
 
     // Inject mutable self reference into closure call arguments
     const auto& public_sig{fn_type.get_data().as<types::function>()};
@@ -1674,7 +1908,7 @@ auto type_resolver::attach_closure_type(ast::node_id fn_id, type& fn_type, bool 
         impl_params[p + 1] = public_sig.params[p];
     }
 
-    auto* impl_sig{ctx_.pool[{type_kind::FUNCTION, types::mut::CONSTANT, idx, true}].get()};
+    gsl::not_null<type*> impl_sig{&ctx_.closure_impl_signature_slot_of(fn_type)};
     impl_sig->resolve<types::function>(
         impl_params, public_sig.return_type, true, public_sig.is_variadic, public_sig.conv);
 
@@ -1689,6 +1923,82 @@ auto type_resolver::is_mutable_local(const symbol& sym) const -> bool {
     return decl && decl->has_modifier(ast::decl_modifiers::MUT);
 }
 
+auto type_resolver::is_compile_time_only(symbol& sym) -> bool {
+    if (sym.has_kind() && sym.get_kind() == symbol_kind::TYPE) { return true; }
+    // A `const` folds wherever it's read. A `comptime let mut` may still change after the capture
+    if (const auto node{sym.get_data().as_opt<symbols::node_t>()}) {
+        const auto decl{resolving_.ast.get_as_opt<ast::decl_stmt>(*node)};
+        if (decl && decl->has_modifier(ast::decl_modifiers::COMPTIME) &&
+            !decl->has_modifier(ast::decl_modifiers::MUT)) {
+            return true;
+        }
+    }
+    // An instantiated `comptime T: type` parameter is typed as the type it was bound to
+    if (const auto param{sym.get_data().as_opt<symbols::parameter>()}) {
+        return param->is_comptime || param->spells_type();
+    }
+    return false;
+}
+
+auto type_resolver::enclosing_function_scopes() const -> std::vector<usize> {
+    // Only a function opened inside another one (or inside a generic's body) has any
+    const bool is_local{function_boundaries_.size() > 1 || instantiation_root_depth_.has_value()};
+    if (!is_local || !resolving_.root_table_idx) { return {}; }
+
+    std::vector<usize> scopes;
+    bool               past_root{false};
+    for (usize depth{0}; const auto idx : table_stack_) {
+        // The function's own scope is the innermost, which instantiation pushes by itself
+        if (++depth == table_stack_.size()) { break; }
+        if (past_root) { scopes.emplace_back(idx); }
+        past_root = past_root || idx == *resolving_.root_table_idx;
+    }
+    return scopes;
+}
+
+auto type_resolver::is_written_after(ast::node_id lhs, ast::node_id rhs) const -> bool {
+    const auto l{resolving_.ast.location_of(lhs)};
+    const auto r{resolving_.ast.location_of(rhs)};
+    return std::pair{l.line, l.column} > std::pair{r.line, r.column};
+}
+
+auto type_resolver::visible_packs() const -> std::vector<generic_function_info::enclosing_pack> {
+    std::vector<generic_function_info::enclosing_pack> packs;
+    for (const auto& pack : enclosing_packs_) { packs.push_back({pack.name, pack.element_types}); }
+    if (current_pack_) { packs.push_back({current_pack_->name, current_pack_->element_types}); }
+    return packs;
+}
+
+auto type_resolver::pack_named(std::string_view name) const -> stdx::option<const pack_binding&> {
+    if (current_pack_ && current_pack_->name == name) { return *current_pack_; }
+    for (const auto& pack : enclosing_packs_ | std::views::reverse) {
+        if (pack.name == name) { return pack; }
+    }
+    return stdx::none;
+}
+
+auto type_resolver::capture_pack_use(const pack_binding& pack) -> void {
+    // The function that owns the pack reads its elements directly
+    const bool from_enclosing{!current_pack_ || &pack != &current_pack_.value()};
+    const bool by_generic{from_enclosing && instantiating_fn_node_};
+    if (!by_generic && open_function_nodes_.empty()) { return; }
+    for (usize k{0}; k < pack.element_types.size(); ++k) {
+        const auto element{
+            resolving_.ast.intern(pack_element{.pack = pack.name, .index = k}.hidden_name())};
+        if (by_generic) {
+            resolving_.add_capture(*instantiating_fn_node_, element, capture_usage::READ);
+        }
+        for (const auto fn_node : open_function_nodes_) {
+            resolving_.add_capture(fn_node, element, capture_usage::READ);
+        }
+    }
+}
+
+auto type_resolver::outermost_function_boundary() const -> usize {
+    if (instantiation_root_depth_) { return *instantiation_root_depth_; }
+    return function_boundaries_.front();
+}
+
 auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) const
     -> stdx::option<std::string_view> {
     if (!decl.has_modifier(ast::decl_modifiers::COMPTIME) ||
@@ -1697,6 +2007,8 @@ auto type_resolver::const_closure_runtime_capture(const ast::decl_stmt& decl) co
         return stdx::none;
     }
     for (const auto& capture : resolving_.get_captures(*decl.value)) {
+        // A pack's elements are the enclosing function's runtime arguments
+        if (is_pack_element_capture(capture.name)) { return capture.name; }
         const auto captured{ctx_.registry.lookup(table_stack_, capture.name)};
         if (!captured) { continue; }
         const auto node{captured->get_data().as_opt<symbols::node_t>()};

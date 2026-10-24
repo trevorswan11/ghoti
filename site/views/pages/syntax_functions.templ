@@ -115,7 +115,12 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 		</li>
 		<li>
 			The <code>move</code> modifier can be placed before <code>fn</code> (e.g. <code>move fn(...)</code>) to force an anonymous closure to capture outer variables by value rather than reference.
+			<ul>
+				<li>A <code>move fn</code> owns its copies, so a write to one is still there on its next call</li>
+			</ul>
 		</li>
+		<li>Types and <code>const</code> values of the enclosing function are read directly rather than captured, since they are known at compile time</li>
+		<li>A closure that holds a reference into its enclosing function cannot be returned from it; mark it <code>move fn</code> to return it by its own type (an <code>auto</code> return)</li>
 		<li>The type of a closure is not known to the programmer</li>
 	</ul>
 	<pre>
@@ -161,6 +166,47 @@ const closure = move fn(): i32 { return val; };` }
 const fill = fn(xs: []mut auto, v: auto): void { ... };
 const map = fn(&self, f: impl Fn(v: T): auto): auto { ... }; // f(v) gives the new type
 const count = fn(xs: []auto, keep: impl Fn(x: auto): bool): usize { ... };` }
+		</code>
+	</pre>
+	<h2>Generic Closures</h2>
+	<ul>
+		<li>
+			A local function with <code>auto</code> or <code>comptime</code> parameters is a closure like any other: each monomorph reads and writes the locals around it through one environment built where the function is written
+			<ul>
+				<li><code>move fn</code> gives it its own copies, and the same capture rules as a closure apply</li>
+				<li>It may call itself by name, and closures or other generics in the same function may call it</li>
+				<li>Capturing a binding declared after the generic function is an error</li>
+			</ul>
+		</li>
+		<li>
+			Every generic function is a value of its own type, which holds whatever it captured
+			<ul>
+				<li>It can be passed to an <code>auto</code> or <code>impl Fn(...)</code> parameter, which may call it at several types</li>
+				<li>Where one signature is expected (a <code>fn(...)</code>, <code>{ "^fn(...)" }</code>, or <code>comptime f: fn(...)</code> parameter, an annotated binding, a field, or an array element) it becomes the monomorph for that signature; a mismatched result is an error at the value</li>
+				<li>A <code>comptime</code> function parameter only takes one that captures nothing</li>
+				<li>It can be returned by its own type through an <code>auto</code> return, under the same escape rule as a closure</li>
+			</ul>
+		</li>
+		<li>
+			Parameter packs work the same way: a closure may take its own <code>{ "rest..." }</code>, and a closure inside a pack function can read, iterate, and forward that function's pack (<code>{ "rest[k]" }</code>, <code>{ "unroll for (rest)" }</code>, <code>{ "rest..." }</code>)
+			<ul>
+				<li>Where a <code>fn(...)</code> or <code>impl Fn(...)</code> signature is expected, a pack closure takes one element per parameter past its fixed ones</li>
+			</ul>
+		</li>
+		<li>Inside a generic function, <code>{ "@fnCtx()" }</code> names the generic itself, so each recursive call instantiates for its own arguments</li>
+		<li>A generic method can also be called as <code>{ "Type.method(obj, args...)" }</code>, or through a value of it, with <code>obj</code> as the receiver</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `const apply = fn(g: auto, v: i32): i32 { return g(v); };
+const make_adder = fn(off: i32): auto {
+    return move fn(x: auto): i32 { return @as(i32, @intCast(x)) + off; };
+};
+
+let mut calls: i32 = 0;
+let scale = fn(x: auto): i32 { calls += 1; return @as(i32, @intCast(x)) * 2; };
+let as_fn: fn(n: i32): i32 = scale;     // the monomorph for i32
+let total = apply(scale, 4) + scale(@as(u8, 1)) + as_fn(5) + make_adder(10)(@as(i64, 1));` }
 		</code>
 	</pre>
 	<h2>Builtin Functions &amp; Self Recursion</h2>
@@ -219,5 +265,6 @@ const count = fn(xs: []auto, keep: impl Fn(x: auto): bool): usize { ... };` }
 			</ul>
 		</li>
 		<li>A local function can be declared <code>const</code> only if it captures no runtime values; a capturing closure is declared with <code>let</code></li>
+		<li>Closures and generic local functions also run at compile time, in a <code>comptime</code> block or a function folded at compile time; a write to a captured binding is kept, as it is at runtime</li>
 	</ul>
 }

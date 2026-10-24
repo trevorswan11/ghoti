@@ -139,6 +139,30 @@ namespace {
 
 } // namespace
 
+auto type_resolver::report_generic_escape(const type& generic_fn) -> bool {
+    const auto escape{ctx_.generic_functions.get_escape(generic_fn)};
+    const auto env{generic_fn.get_generic_env()};
+    if (!escape || !env || escape->reported) { return false; }
+    const auto& cl{env->get_data().as<types::closure_t>()};
+    if (escape->erased && !cl.captures.empty()) {
+        ctx_.diags.emplace_back("A capturing generic function erased into `fn(...)` borrows its "
+                                "environment from this function and cannot be returned; return it "
+                                "by its own type with an `auto` return instead",
+                                error::ILLEGAL_CLOSURE_ESCAPE,
+                                escape->at);
+    } else if (has_dangling_capture(cl)) {
+        ctx_.diags.emplace_back("Generic function captures a reference into its enclosing "
+                                "function and cannot be returned directly; mark it 'move fn' to "
+                                "capture by value instead",
+                                error::ILLEGAL_CLOSURE_ESCAPE,
+                                escape->at);
+    } else {
+        return false;
+    }
+    escape->reported = true;
+    return true;
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::do_while_loop_expr& do_while) -> void {
     PROFILE_FUNCTION();
     if (do_while.is_unrolled) { check_unrolled_loop_jumps(do_while.block); }
@@ -207,10 +231,10 @@ namespace {
 }
 
 struct unrolled_for_driver {
-    bool                           is_pack{false};
-    type*                          elem_type{nullptr};
-    std::vector<gir::const_value>  elem_values; // empty for a pack driver
-    stdx::option<std::string_view> name;        // unset for a `_`-discarded capture
+    stdx::option<const type_resolver::pack_binding&> pack; // set for a pack driver
+    stdx::option<type&>                              elem_type;
+    std::vector<gir::const_value>                    elem_values; // empty for a pack driver
+    stdx::option<std::string_view>                   name; // unset for a `_`-discarded capture
 };
 
 // Logs one unrolled iteration's side-table writes, then hands them on to the enclosing log so an
@@ -229,6 +253,7 @@ class iteration_write_log {
         append(outer_->node_idxs, log_.node_idxs);
         append(outer_->explicit_idxs, log_.explicit_idxs);
         append(outer_->attribute_idxs, log_.attribute_idxs);
+        append(outer_->call_idxs, log_.call_idxs);
     }
 
     MAKE_PINNED(iteration_write_log);
@@ -300,11 +325,13 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                 : stdx::none;
 
         const auto driver_ident{resolving_.ast.get_as_opt<ast::identifier_expr>(driver_id)};
-        drv.is_pack = driver_ident && current_pack_ && driver_ident->name == current_pack_->name;
+        const auto pack{driver_ident ? pack_named(driver_ident->name) : stdx::none};
+        drv.pack = pack;
 
         usize this_count{0};
-        if (drv.is_pack) {
-            this_count = current_pack_->element_types.size();
+        if (pack) {
+            capture_pack_use(*pack);
+            this_count = pack->element_types.size();
         } else {
             {
                 const mutating_context_guard for_iter_g{in_for_iterable_, is_range(driver_id)};
@@ -327,7 +354,7 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                         error::UNROLLED_LOOP_COUNT_NOT_STATIC,
                         resolving_.ast.location_of(driver_id)));
                 }
-                drv.elem_type = &slice_data->underlying;
+                drv.elem_type = slice_data->underlying;
                 const auto diags_before{ctx_.diags.size()};
                 const auto lo{range->lhs ? evaluator.try_eval(*range->lhs)
                                          : stdx::option<gir::const_value>{
@@ -381,8 +408,11 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                     drv.elem_values = arr->elements;
                     const auto arr_data{iterable_type.get_data().as_opt<types::array>()};
                     const auto sl_data{iterable_type.get_data().as_opt<types::slice>()};
-                    drv.elem_type = arr_data ? &arr_data->underlying
-                                             : (sl_data ? &sl_data->underlying : nullptr);
+                    if (arr_data) {
+                        drv.elem_type = arr_data->underlying;
+                    } else if (sl_data) {
+                        drv.elem_type = sl_data->underlying;
+                    }
                 } else {
                     // String literals and compile-time string/u8 slices fold to std::string.
                     // Unpack individual character bytes as u8 compile-time constants.
@@ -392,7 +422,7 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
                     for (const char c : *str) {
                         drv.elem_values.emplace_back(static_cast<u64>(static_cast<u8>(c)), u8_type);
                     }
-                    drv.elem_type = &u8_type;
+                    drv.elem_type = u8_type;
                 }
                 if (!drv.elem_type) {
                     return last_type_.emplace(ctx_.poison_node(
@@ -460,8 +490,8 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
         for (usize d{0}; d < num_drivers; ++d) {
             const auto& drv{drivers[d]};
             const auto& cap{for_expr.captures[d]};
-            if (drv.is_pack) {
-                resolving_.set_sema_type(cap.payload, *current_pack_->element_types[k]);
+            if (drv.pack) {
+                resolving_.set_sema_type(cap.payload, *drv.pack->element_types[k]);
             } else {
                 resolving_.set_sema_type(cap.payload, *drv.elem_type);
                 if (drv.name) { frame.insert_or_assign(*drv.name, drv.elem_values[k]); }
@@ -504,7 +534,7 @@ auto type_resolver::resolve_unrolled_for(ast::node_id id, const ast::for_loop_ex
 
         std::vector<gir::const_value> cx_args;
         for (const auto& drv : drivers) {
-            if (!drv.is_pack && drv.name) { cx_args.emplace_back(drv.elem_values[k]); }
+            if (!drv.pack && drv.name) { cx_args.emplace_back(drv.elem_values[k]); }
         }
         if (companion_name) { cx_args.emplace_back(gir::const_value{u64{k}, usize_type}); }
         if (!cx_args.empty()) {
@@ -561,14 +591,14 @@ auto type_resolver::visit(ast::node_id id, const ast::for_loop_expr& for_expr) -
             resolving_.set_sema_type(iterable, iterable_type);
 
             // Assign types unconditionally since ignoring discards saves no space
-            auto& iterable_data{iterable_type.get_data()};
-            type* elem_type{nullptr};
+            auto&               iterable_data{iterable_type.get_data()};
+            stdx::option<type&> elem_type;
             if (const auto array{iterable_data.as_opt<types::array>()}) {
-                elem_type = &array->underlying;
+                elem_type = array->underlying;
             } else if (const auto deferred{iterable_data.as_opt<types::deferred_array>()}) {
-                elem_type = &deferred->underlying;
+                elem_type = deferred->underlying;
             } else if (const auto slice{iterable_data.as_opt<types::slice>()}) {
-                elem_type = &slice->underlying;
+                elem_type = slice->underlying;
             } else {
                 return last_type_.emplace(ctx_.poison_node(
                     resolving_,
@@ -877,8 +907,8 @@ auto type_resolver::resolve_if_arms(ast::node_id id, const ast::if_expr& if_expr
         return stdx::none;
     }};
 
-    auto*      branch_type{last_type_.take()};
-    const auto cons_value{arm_value(if_expr.consequence, *branch_type)};
+    gsl::not_null branch_type{last_type_.take()};
+    const auto    cons_value{arm_value(if_expr.consequence, *branch_type)};
     if (if_expr.alternate) {
         stdx::option<scope_guard<std::vector<enclosing_arm>>> arm_g;
         if (track_arms) {
@@ -1266,7 +1296,7 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
         TRY_RESOLVE(live.dispatch);
     }
 
-    type* result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+    gsl::not_null<type*> result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
     if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(live.dispatch)}) {
         if (const auto inner{resolving_.get_sema_type_opt(es->expression)}) {
             if (!inner->is_poison() && inner->get_kind() != type_kind::VOID_) {
@@ -1343,8 +1373,8 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
                     resolving_.ast.location_of(*live.capture->payload)));
             }
 
-            auto& effective_matcher{denoted_type(matcher_type)};
-            type* cap_type{&effective_matcher};
+            auto&                effective_matcher{denoted_type(matcher_type)};
+            gsl::not_null<type*> cap_type{&effective_matcher};
             if (const auto ud{effective_matcher.get_data().as_opt<types::union_t>()}) {
                 if (const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(
                         *live.primary_pattern())}) {
@@ -1374,7 +1404,7 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         TRY_RESOLVE(live.dispatch);
     }
 
-    type* result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
+    gsl::not_null<type*> result_type{&ctx_.get_builtin_resolved_type(type_kind::VOID_)};
     if (const auto es{resolving_.ast.get_as_opt<ast::expr_stmt>(live.dispatch)}) {
         if (const auto inner{resolving_.get_sema_type_opt(es->expression)}) {
             if (!inner->is_poison() && inner->get_kind() != type_kind::VOID_) {
@@ -1600,7 +1630,7 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
     PROFILE_FUNCTION();
     {
         // The value being matched has its own type, not the one the `match` result flows into
-        const structural_guard shield{implicit_type_stack_, nullptr};
+        const structural_guard shield{implicit_type_stack_, stdx::none};
         TRY_RESOLVE(match.matcher);
     }
     auto& matcher_type{*last_type_.take()};
@@ -2639,7 +2669,7 @@ auto type_resolver::visit(ast::node_id id, const ast::errdefer_stmt& errdef) -> 
 
     if (errdef.capture && errdef.capture->is<ast::identifier_expr>() &&
         resolving_.has_sema_type(id)) {
-        type* cap_type{nominal_rewrap->from_type.get()};
+        gsl::not_null<type*> cap_type{nominal_rewrap->from_type.get()};
         if (errdef.modifier.is_ref()) {
             cap_type = &ctx_.get_reference(types::mut::CONSTANT, *cap_type);
         } else if (errdef.modifier.is_ptr()) {
@@ -2705,6 +2735,23 @@ auto type_resolver::visit(ast::node_id id, const ast::return_stmt& return_stmt) 
             return decl && decl->value &&
                    resolving_.ast.get_as_opt<ast::function_expr>(*decl->value);
         }();
+
+        // A generic's captures are only known once it's instantiated, which may be later
+        const auto returns_erased_early{!return_trackers_.empty() &&
+                                        return_trackers_.back().expected_type &&
+                                        is_fat_callable(*return_trackers_.back().expected_type)};
+        if (return_expr_type.is_generic_value() &&
+            (constructs_closure_literal || returns_erased_early)) {
+            ctx_.generic_functions.mark_escaping(
+                return_expr_type,
+                {
+                    .at     = resolving_.ast.location_of(*return_stmt.expression),
+                    .erased = returns_erased_early,
+                });
+            if (report_generic_escape(return_expr_type)) {
+                return last_type_.emplace(ctx_.poison_node(resolving_, id));
+            }
+        }
 
         if (constructs_closure_literal) {
             if (const auto cl{return_expr_type.get_data().as_opt<types::closure_t>()};

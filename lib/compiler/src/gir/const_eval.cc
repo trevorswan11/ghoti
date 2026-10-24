@@ -6,6 +6,7 @@
 #include <concepts>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <ranges>
@@ -47,6 +48,7 @@
 #include "compiler/sema/alias_chain.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/pack_element.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/range_steps.hh"
 #include "compiler/sema/side_tables.hh"
@@ -220,8 +222,8 @@ template <typename T>
 // A concrete float operand decides the result format over a `comptime_float` one
 [[nodiscard]] auto float_result_type(const const_value& lhs, const const_value& rhs)
     -> stdx::option<sema::type&> {
-    for (const auto* operand : {&lhs, &rhs}) {
-        const auto t{operand->get_type()};
+    for (const auto& operand : {std::cref(lhs), std::cref(rhs)}) {
+        const auto t{operand.get().get_type()};
         if (t && sema::is_float(t->get_kind())) { return t; }
     }
     return lhs.get_type() ? lhs.get_type() : rhs.get_type();
@@ -553,8 +555,8 @@ struct int_width_target {
 // A concrete integer operand decides the result type over a `comptime_int` one
 [[nodiscard]] auto integer_result_type(const const_value& lhs, const const_value& rhs)
     -> stdx::option<sema::type&> {
-    for (const auto* operand : {&lhs, &rhs}) {
-        const auto t{operand->get_type()};
+    for (const auto& operand : {std::cref(lhs), std::cref(rhs)}) {
+        const auto t{operand.get().get_type()};
         if (t && sema::is_integer(t->get_kind())) { return t; }
     }
     return lhs.get_type() ? lhs.get_type() : rhs.get_type();
@@ -849,9 +851,9 @@ namespace {
 // A struct or union still being resolved has no fields yet, so neither does anything holding one
 // by value: its layout depends on itself (`const S = struct { d: [@alignOf(S)]u8 };`)
 [[nodiscard]] auto layout_is_known(const sema::type& type) -> bool {
-    const auto fields_known = [](gsl::span<sema::type* const> fields) {
-        return std::ranges::all_of(fields,
-                                   [](const sema::type* f) { return !f || layout_is_known(*f); });
+    const auto fields_known = [](gsl::span<const stdx::option<sema::type&>> fields) {
+        return std::ranges::all_of(
+            fields, [](stdx::option<const sema::type&> f) { return !f || layout_is_known(*f); });
     };
     switch (type.get_kind()) {
     case sema::type_kind::STRUCT:
@@ -936,9 +938,9 @@ auto const_eval::type_align_of(const sema::type& type, const codegen::type_layou
                     return int_abi_align(static_cast<u16>(*bits), layout);
                 }
             }
-            return std::ranges::fold_left(un->fields | std::views::filter([](const auto* f) {
-                                              return f != nullptr;
-                                          }) | std::views::transform([&layout](const auto* f) {
+            return std::ranges::fold_left(un->fields | std::views::filter([](const auto f) {
+                                              return f.has_value();
+                                          }) | std::views::transform([&layout](const auto f) {
                                               return type_align_of(*f, layout);
                                           }),
                                           1UZ,
@@ -980,11 +982,9 @@ auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout
     case sema::type_kind::POINTER:
     case sema::type_kind::REFERENCE:      {
         // `&dyn I` / `^dyn I` is a fat `{ data, vtable }` pair, matching its LLVM lowering
-        const auto        p{type.get_data().as_opt<sema::types::pointer>()};
-        const auto        r{type.get_data().as_opt<sema::types::reference>()};
-        const sema::type* referent{p ? &p->underlying : r ? &r->underlying : nullptr};
-        const bool        is_fat{(referent && referent->get_kind() == sema::type_kind::DYN) ||
-                                 sema::is_fat_callable(type)};
+        const auto referent{sema::pointee_of(type)};
+        const bool is_fat{(referent && referent->get_kind() == sema::type_kind::DYN) ||
+                          sema::is_fat_callable(type)};
         return is_fat ? 2 * layout.ptr_bytes : layout.ptr_bytes;
     }
     case sema::type_kind::FUNCTION:
@@ -1015,7 +1015,7 @@ auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout
             usize current_offset{0};
             usize max_align{1};
             for (usize i{0}; i < st->fields.size(); ++i) {
-                const auto* field{st->fields[i]};
+                const auto field{st->fields[i]};
                 if (!field) { continue; }
                 const auto f_align{struct_field_align(*st, i, layout)};
                 max_align = std::max(max_align, f_align);
@@ -1039,7 +1039,7 @@ auto const_eval::type_size_of(const sema::type& type, const codegen::type_layout
             }
             usize max_size{0};
             usize max_align{1};
-            for (const auto* field : un->fields) {
+            for (const auto field : un->fields) {
                 if (!field) { continue; }
                 max_align = std::max(max_align, type_align_of(*field, layout));
                 max_size  = std::max(max_size, type_size_of(*field, layout));
@@ -1124,24 +1124,30 @@ auto const_eval::force_deferred_layout(sema::type& type) -> stdx::option<sema::t
     }
 
     // Fields are forced in place; each placeholder folds its dimension in its declaring module
-    gsl::span<sema::type*> fields;
+    gsl::span<stdx::option<sema::type&>> fields;
     if (const auto st{data.as_opt<sema::types::struct_t>()}) {
         fields = st->fields;
     } else if (const auto ut{data.as_opt<sema::types::union_t>()}) {
         fields = ut->fields;
     }
     for (auto& field : fields) {
-        if (field == nullptr) { continue; }
+        if (!field) { continue; }
         const auto concrete{force_deferred_layout(*field)};
         if (!concrete) { return stdx::none; }
-        field = concrete.get();
+        field = concrete;
     }
     return forced;
 }
 
-auto const_eval::force_deferred_array_elements(gsl::span<sema::type*> elements) -> void {
+auto const_eval::force_deferred_array_elements(sema::type_span elements) -> void {
     PROFILE_FUNCTION();
     for (auto& element : elements) { element = &force_deferred_array(*element); }
+}
+
+auto const_eval::force_deferred_array_elements(gsl::span<stdx::option<sema::type&>> elements)
+    -> void {
+    PROFILE_FUNCTION();
+    for (auto& element : elements) { element = force_deferred_array(*element); }
 }
 
 auto const_eval::force_deferred_aggregate_fields(sema::type& maybe_aggregate) -> void {
@@ -1869,6 +1875,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             return stdx::none;
         },
         [&](const ast::if_expr& data) { return eval_if(id, data); },
+        [&](const ast::function_expr& data) { return eval_function_literal(id, data); },
         [&](const ast::cfg_value_expr&) -> stdx::option<const_value> {
             // The cfg pass already settled this; read its verdict.
             const auto it{module_->cfg_value_results.find(id.get_index())};
@@ -2097,9 +2104,7 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
 auto const_eval::coerce_dyn(const const_value& val, sema::type& dest_type)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
-    const auto        p{dest_type.get_data().as_opt<sema::types::pointer>()};
-    const auto        r{dest_type.get_data().as_opt<sema::types::reference>()};
-    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+    const auto dyn_ptr{sema::pointee_of(dest_type)};
     if (!dyn_ptr || dyn_ptr->get_kind() != sema::type_kind::DYN) { return stdx::none; }
     const auto& dyn{dyn_ptr->get_data().as<sema::types::dyn_t>()};
     const auto& iface{dyn.interface.get_data().as<sema::types::interface_t>()};
@@ -2348,11 +2353,7 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                 if (table) {
                     if (const auto proxy{table->get_proxy_opt(member_name)}) {
                         auto&      field_type{st->type_at(proxy->index)};
-                        const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
-                        const auto r{field_type.get_data().as_opt<sema::types::reference>()};
-                        const auto dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
-                                           : r ? stdx::option<const sema::type&>{r->underlying}
-                                               : stdx::none};
+                        const auto dyn_ptr{sema::pointee_of(field_type)};
                         if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                             !field_val->is<const_dyn_fat_ptr>()) {
                             field_val = coerce_dyn(*field_val, field_type);
@@ -2384,18 +2385,14 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                 const auto& fname{st->enclosing.ast.get_as<ast::identifier_expr>(f.name).name};
                 if (struct_val.fields.contains(std::string{fname})) { continue; }
                 if (!f.default_value) { continue; }
-                auto* const prev{module_.get()};
+                const auto prev{module_};
                 if (&st->enclosing != prev) { set_module(st->enclosing); }
                 auto def_val{try_eval(*f.default_value)};
                 if (&st->enclosing != prev) { set_module(*prev); }
                 if (!def_val) { return stdx::none; }
 
                 auto&      field_type{st->type_at(idx)};
-                const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
-                const auto r{field_type.get_data().as_opt<sema::types::reference>()};
-                const auto dyn_ptr{p   ? stdx::option<const sema::type&>{p->underlying}
-                                   : r ? stdx::option<const sema::type&>{r->underlying}
-                                       : stdx::none};
+                const auto dyn_ptr{sema::pointee_of(field_type)};
                 if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                     !def_val->is<const_dyn_fat_ptr>()) {
                     def_val = coerce_dyn(*def_val, field_type);
@@ -2424,10 +2421,8 @@ auto const_eval::eval_initializer(ast::node_id id, const ast::initializer_expr& 
                     proxy ? stdx::option<sema::type&>{ut->type_at(proxy->index)} : stdx::none)};
                 if (!field_val) { return stdx::none; }
                 if (proxy) {
-                    auto&             field_type{ut->type_at(proxy->index)};
-                    const auto        p{field_type.get_data().as_opt<sema::types::pointer>()};
-                    const auto        r{field_type.get_data().as_opt<sema::types::reference>()};
-                    const sema::type* dyn_ptr{p ? &p->underlying : r ? &r->underlying : nullptr};
+                    auto&      field_type{ut->type_at(proxy->index)};
+                    const auto dyn_ptr{sema::pointee_of(field_type)};
                     if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                         !field_val->is<const_dyn_fat_ptr>()) {
                         field_val = coerce_dyn(*field_val, field_type);
@@ -2549,17 +2544,13 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
                                                            std::move(ctor_frame));
                             }
                         }
-                        auto* const prev{module_.get()};
+                        const auto prev{module_};
                         if (&st_data->enclosing != prev) { set_module(st_data->enclosing); }
                         auto def_val{try_eval(*f.default_value)};
                         if (&st_data->enclosing != prev) { set_module(*prev); }
                         if (def_val) {
                             auto&      field_type{st_data->type_at(idx)};
-                            const auto p{field_type.get_data().as_opt<sema::types::pointer>()};
-                            const auto r{field_type.get_data().as_opt<sema::types::reference>()};
-                            const auto dyn_ptr{p   ? stdx::option<sema::type&>{p->underlying}
-                                               : r ? stdx::option<sema::type&>{r->underlying}
-                                                   : stdx::none};
+                            const auto dyn_ptr{sema::pointee_of(field_type)};
                             if (dyn_ptr && dyn_ptr->get_kind() == sema::type_kind::DYN &&
                                 !def_val->is<const_dyn_fat_ptr>()) {
                                 def_val = coerce_dyn(*def_val, field_type);
@@ -2576,7 +2567,7 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
         if (un->active_field == member_name && !un->payload.empty()) { return un->payload.front(); }
         // Another field of an untagged union reinterprets its bytes, which only runtime holds
         if (const auto obj_t{module_->get_sema_type_opt(dot.object)}) {
-            auto* obj{obj_t.get()};
+            gsl::not_null obj{obj_t.get()};
             if (const auto r{obj->get_data().as_opt<sema::types::reference>()}) {
                 obj = &r->underlying;
             }
@@ -2643,7 +2634,7 @@ auto const_eval::eval_type_member(sema::type& denoted_in, std::string_view membe
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
 
-    sema::type* denoted{&denoted_in};
+    gsl::not_null<sema::type*> denoted{&denoted_in};
     if (denoted->get_kind() == sema::type_kind::TYPE) {
         if (const auto meta{denoted->get_data().as_opt<sema::types::meta_type>()}) {
             denoted = &meta->instance;
@@ -2986,7 +2977,7 @@ auto const_eval::eval_type_info(sema::type&                                    d
         const auto& fn{denoted.get_data().as<sema::types::function>()};
         auto&       type_type{ctx_.get_builtin_resolved_type(sema::type_kind::TYPE)};
         const_array params;
-        for (auto* p : fn.params) { params.elements.emplace_back(type_value(*p)); }
+        for (auto p : fn.params) { params.elements.emplace_back(type_value(*p)); }
         auto& params_slice_type{ctx_.get_slice(sema::types::mut::CONSTANT, false, type_type)};
         const_struct s;
         s.fields.emplace("params", const_value{std::move(params), params_slice_type});
@@ -3055,7 +3046,7 @@ auto const_eval::eval_type_info(sema::type&                                    d
                                  ctx_.get_builtin_resolved_type(sema::type_kind::OPAQUE))};
             stdx::option<const_value> default_val;
             if (f.default_value) {
-                auto* const prev_mod{module_.get()};
+                const auto prev_mod{module_};
                 set_module(st.enclosing);
                 default_val = try_eval(*f.default_value);
                 set_module(*prev_mod);
@@ -3351,7 +3342,7 @@ auto const_eval::eval_flow(ast::expr_handle operand_expr, ast::node_id at)
     auto self{eval_place(operand_expr)};
     if (!self && !call_stack_.empty()) { self = ref_to_temporary(*operand); }
     if (!self) { return stdx::none; }
-    auto* const prev{module_.get()};
+    const auto prev{module_};
     if (&decl_mod != prev) { set_module(decl_mod); }
     std::vector<const_value> args{
         const_value{*self, ctx_.get_reference(sema::types::mut::POLY, *shape->operand_type)}};
@@ -3755,8 +3746,8 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     if ((wrapping_base_op(op_type) || saturating_base_op(op_type)) && is_integer_arm(lhs) &&
         is_integer_arm(rhs)) {
         const auto ptr_bits{target_pointer_bits()};
-        for (const auto* v : {&lhs, &rhs}) {
-            const auto t{v->get_type()};
+        for (const auto& v : {std::cref(lhs), std::cref(rhs)}) {
+            const auto t{v.get().get_type()};
             if (const auto w{t ? integer_target_width(*t, ptr_bits) : stdx::none};
                 w && w->first <= 128) {
                 return fold_integer_binary(op_type, lhs, rhs, id);
@@ -3795,10 +3786,9 @@ auto const_eval::fold_binary_values(syntax::token_type_t op_type,
     if (const auto plain_op{saturating_base_op(op_type)}) {
         const auto                ptr_bits{target_pointer_bits()};
         stdx::option<sema::type&> res_type;
-        for (const auto* v : {&lhs, &rhs}) {
-            if (!res_type && v->get_type() && integer_target_width(*v->get_type(), ptr_bits)) {
-                res_type = v->get_type();
-            }
+        for (const auto& v : {std::cref(lhs), std::cref(rhs)}) {
+            const auto t{v.get().get_type()};
+            if (!res_type && t && integer_target_width(*t, ptr_bits)) { res_type = t; }
         }
         if (!res_type) { return fold_binary_values(*plain_op, lhs, rhs, id); }
 
@@ -4234,14 +4224,7 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
     // A `comptime` callable (closure or function) parameter invoked inside a monomorphized body.
     if (const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(call.function)}) {
         if (const auto bc{lookup_bound_callable(ident->name)}) {
-            auto args_opt{eval_call_args(call)};
-            if (!args_opt) { return stdx::none; }
-            auto&       args{*args_opt};
-            auto* const prev{module_.get()};
-            set_module(*bc->module);
-            auto res{eval_comptime_fn(id, *bc->fn_expr, args, bc->captures)};
-            set_module(*prev);
-            return res;
+            return call_bound_callable(id, call, ident->name, *bc);
         }
     }
 
@@ -4322,11 +4305,11 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
                                        : callee_mod->active_body_diff};
                 const mod::body_diff_guard diff_guard{*callee_mod, diff};
 
-                auto* const prev{module_.get()};
-                const auto  diags_before{ctx_.diags.size()};
-                if (callee_mod != prev) { set_module(*callee_mod); }
+                const auto prev{module_};
+                const auto diags_before{ctx_.diags.size()};
+                if (callee_mod.get() != prev) { set_module(*callee_mod); }
                 auto res{eval_comptime_fn(id, *fn_expr, args)};
-                if (callee_mod != prev) {
+                if (callee_mod.get() != prev) {
                     set_module(*prev);
                     // An error inside the callee points into the callee's source
                     ctx_.diags.set_origin_from(diags_before, *callee_mod);
@@ -4354,7 +4337,7 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
             stdx::option<const ast::function_expr&> method_fn;
 
             if (const auto owner{module_->get_resolved_symbol_owner_opt(call.function)}) {
-                for (const auto* r : ctx_.impls.records()) {
+                for (const auto r : ctx_.impls.records()) {
                     if (r->body_scope_idx == *owner) {
                         if (const auto m{r->find_method(member_ident.name)}) {
                             if (m->defining_mod) {
@@ -4522,11 +4505,11 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
                         args.emplace_back(*arg_val);
                     }
                 }
-                auto* const prev{module_.get()};
+                const auto prev{module_};
                 // A generic method (e.g. an `auto` parameter) is typed per instantiation, so fold
                 // with this call's instance rather than the enclosing type's shared member typing
                 const auto generic_target{id ? prev->get_generic_call_target_opt(*id) : stdx::none};
-                if (method_mod != prev) { set_module(*method_mod); }
+                if (method_mod.get() != prev) { set_module(*method_mod); }
 
                 const auto prefix{
                     target_ty ? ctx_.generic_functions.get_type_ctor_member_prefix(*target_ty)
@@ -4557,7 +4540,7 @@ auto const_eval::eval_call(stdx::option<ast::node_id> id, const ast::call_expr& 
 
                 const auto diags_before{ctx_.diags.size()};
                 auto       res{eval_comptime_fn(id, *method_fn, args)};
-                if (method_mod != prev) {
+                if (method_mod.get() != prev) {
                     set_module(*prev);
                     ctx_.diags.set_origin_from(diags_before, *method_mod);
                 }
@@ -4820,7 +4803,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
             if (!dc || &dc->enclosing != module_) { return t; }
             const auto own{
                 module_->ast.get_as_opt<ast::call_expr>(active_fns_.back()->explicit_return_type)};
-            if (!own || &*own != &dc->call) { return t; }
+            if (!own || own.get() != &dc->call) { return t; }
             auto& pinned{force_deferred_call(fn->return_type)};
             if (&pinned == &fn->return_type) { return t; }
             return ctx_.get_function_like(
@@ -5784,6 +5767,83 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     }
 }
 
+auto const_eval::call_bound_callable(stdx::option<ast::node_id> id,
+                                     const ast::call_expr&      call,
+                                     std::string_view           name,
+                                     const bound_callable&      bc) -> stdx::option<const_value> {
+    auto args_opt{eval_call_args(call)};
+    if (!args_opt) { return stdx::none; }
+    auto& args{*args_opt};
+
+    // A capture the body writes reads the binding as it is now, not as it was captured
+    const_struct                  captures{bc.captures ? *bc.captures : const_struct{}};
+    std::vector<std::string_view> written_through;
+    if (bc.fn_node && !bc.fn_expr->is_move) {
+        for (const auto& capture : bc.module->get_captures(*bc.fn_node)) {
+            if (capture.usage != sema::capture_usage::MUTATED) { continue; }
+            if (auto current{lookup_local_binding(capture.name)}) {
+                captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
+                written_through.emplace_back(capture.name);
+            }
+        }
+    }
+
+    // A generic local folds with this call's typing, as its monomorph was resolved
+    const auto                 target{id ? module_->get_generic_call_target_opt(*id) : stdx::none};
+    const auto                 diff{target ? ctx_.instantiation_cache.get_body_type_diff(*target)
+                                           : bc.module->active_body_diff};
+    const mod::body_diff_guard diff_guard{*bc.module, diff};
+
+    const auto   prev{module_};
+    const_struct after;
+    set_module(*bc.module);
+    auto res{eval_comptime_fn(id, *bc.fn_expr, args, captures, &after)};
+    set_module(*prev);
+
+    for (const auto written : written_through) {
+        if (const auto it{after.fields.find(std::string{written})}; it != after.fields.end()) {
+            DISCARD(set_local_binding(written, it->second));
+        }
+    }
+    // A `move fn` owns its copies, so the next call sees what this one left in them
+    if (bc.fn_expr->is_move && bc.fn_node && !after.fields.empty()) {
+        if (auto self{lookup_local_binding(name)}) {
+            if (const auto cl{self->as_opt<const_closure>()}) {
+                auto updated{*cl};
+                updated.captures = std::move(after);
+                DISCARD(set_local_binding(
+                    name, const_value{const_value::data_t{std::move(updated)}, self->get_type()}));
+            }
+        }
+    }
+    return res;
+}
+
+auto const_eval::eval_function_literal(ast::node_id id, const ast::function_expr& fn_expr)
+    -> stdx::option<const_value> {
+    if (fn_expr.is_type_expr || !fn_expr.body) { return stdx::none; }
+    // Runtime code keeps its functions as code, only real compile eval calls one as a value
+    if (!in_evaluation_context()) { return stdx::none; }
+    const auto sema_type{module_->get_sema_type_opt(id)};
+    if (!sema_type) { return stdx::none; }
+    const_closure cl{.fn_node = id, .module = *module_, .captures = {}};
+    for (const auto& capture : module_->get_captures(id)) {
+        // A runtime local has no value until the program runs
+        auto current{lookup_local_binding(capture.name)};
+        // `rest#k` is element `k` of the pack `rest`, which a folded call binds as one array
+        if (const auto element{sema::pack_element::parse(capture.name)}; !current && element) {
+            const auto pack{lookup_local_binding(element->pack)};
+            const auto elems{pack ? pack->as_opt<const_array>() : stdx::none};
+            // An element another instantiation's longer pack had is no part of this one
+            if (elems && element->index >= elems->elements.size()) { continue; }
+            if (elems) { current.emplace(elems->elements[element->index]); }
+        }
+        if (!current) { return stdx::none; }
+        cl.captures.fields.insert_or_assign(std::string{capture.name}, std::move(*current));
+    }
+    return const_value{const_value::data_t{std::move(cl)}, *sema_type};
+}
+
 auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bound_callable> {
     PROFILE_FUNCTION();
     // Find a comptime callable value bound to `name` (call frame first, then comptime frame).
@@ -5800,7 +5860,10 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
     if (const auto cl{v->as_opt<const_closure>()}) {
         auto& m{cl->module ? *cl->module : *module_};
         if (const auto fe{m.ast.get_as_opt<ast::function_expr>(cl->fn_node)}) {
-            return bound_callable{.module = &m, .fn_expr = fe.get(), .captures = cl->captures};
+            return bound_callable{.module   = &m,
+                                  .fn_expr  = fe.get(),
+                                  .captures = cl->captures,
+                                  .fn_node  = cl->fn_node};
         }
         return stdx::none;
     }
@@ -5888,7 +5951,7 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
     return value;
 }
 
-auto const_eval::callee_params(const ast::call_expr& call) -> gsl::span<sema::type*> {
+auto const_eval::callee_params(const ast::call_expr& call) -> sema::type_span {
     const auto callee{module_->get_sema_type_opt(call.function)};
     const auto fn{callee ? callee->get_data().as_opt<sema::types::function>() : stdx::none};
     if (!fn || fn->has_self) { return {}; }
@@ -5953,7 +6016,8 @@ namespace {
 auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                                   const ast::function_expr&         fn_expr,
                                   std::vector<const_value>&         args,
-                                  stdx::option<const const_struct&> captures)
+                                  stdx::option<const const_struct&> captures,
+                                  stdx::option<const_struct&>       captures_out)
     -> stdx::option<const_value> {
     PROFILE_FUNCTION();
     if (!fn_expr.body) { return stdx::none; }
@@ -6068,6 +6132,15 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                     it != call_stack_.back().bindings.end()) {
                     args[p_offset + p] = it->second;
                 }
+            }
+        }
+    }
+
+    if (captures && captures_out) {
+        for (const auto& [name, _] : captures->fields) {
+            if (const auto it{call_stack_.back().bindings.find(name)};
+                it != call_stack_.back().bindings.end()) {
+                captures_out->fields.insert_or_assign(name, it->second);
             }
         }
     }

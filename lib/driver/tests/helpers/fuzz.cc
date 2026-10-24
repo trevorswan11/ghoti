@@ -23,6 +23,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
+#include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/string.hh>
 #include <stdx/types.hh>
@@ -571,13 +572,13 @@ auto group_into(failure_groups& groups, std::vector<outcome> failures) -> void {
 }
 
 auto report(const harness& h, const failure_groups& groups) -> std::string {
-    std::vector<const failure_groups::value_type*> ordered;
+    std::vector<gsl::not_null<const failure_groups::value_type*>> ordered;
     for (const auto& group : groups) { ordered.emplace_back(&group); }
     std::ranges::stable_sort(
-        ordered, std::greater{}, [](const auto* g) { return g->second.size(); });
+        ordered, std::greater{}, [](const auto g) { return g->second.size(); });
 
     std::string out;
-    for (const auto* group : ordered) {
+    for (const auto group : ordered) {
         const auto& [sig, items]{*group};
         fmt::format_to(std::back_inserter(out), "#### {} x {}\n", items.size(), sig);
         for (const auto& item : items | std::views::take(REPORTED_PER_GROUP)) {

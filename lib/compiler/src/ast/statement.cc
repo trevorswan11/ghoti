@@ -492,7 +492,7 @@ auto expr_stmt::parse(syntax::parser& parser, syntax::semicolon_behavior behavio
     using tt = syntax::token_type_t;
     constexpr std::array BLOCK_LIKE{
         tt::IF, tt::MATCH, tt::LOOP, tt::FOR, tt::WHILE, tt::DO, tt::UNROLL};
-    const auto           block_like{std::ranges::contains(BLOCK_LIKE, start_token.type)};
+    const auto block_like{std::ranges::contains(BLOCK_LIKE, start_token.type)};
     const auto expr{TRY(parser.parse_expression(block_like ? syntax::bind_precedence::LABEL
                                                            : syntax::bind_precedence::LOWEST))};
 

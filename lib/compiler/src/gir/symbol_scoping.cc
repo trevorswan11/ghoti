@@ -144,7 +144,7 @@ auto symbol_scoping::build(const sema::context&                    ctx,
 
     // Every `impl [I for] T` method is emitted under a name scoped to the impl's body table;
     // register them so a name shared by two impls scopes.
-    for (const auto* rec : ctx.impls.records()) {
+    for (const auto rec : ctx.impls.records()) {
         const auto note{[&](std::string_view name) {
             name_counts[std::string{name}] += 1;
             policy.scopable_defs_.emplace(key_of(rec->body_scope_idx, name));

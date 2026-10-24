@@ -70,19 +70,19 @@ auto module_t::get_required_libraries() const -> std::vector<std::string> {
         if (!std::ranges::contains(libraries, abi_name)) { libraries.emplace_back(abi_name); }
     }};
 
-    for (const auto* fn : functions_) { add_if_required(fn->get_linkage(), fn->get_abi_name()); }
-    for (const auto* global : globals_) { add_if_required(global->linkage, global->abi_name); }
+    for (const auto fn : functions_) { add_if_required(fn->get_linkage(), fn->get_abi_name()); }
+    for (const auto global : globals_) { add_if_required(global->linkage, global->abi_name); }
     return libraries;
 }
 
 auto module_t::get_library_imports() const -> std::vector<extern_import> {
     std::vector<extern_import> imports;
-    for (const auto* fn : functions_) {
+    for (const auto fn : functions_) {
         if (fn->get_linkage() != gir::linkage::EXTERN || fn->get_abi_name() == "c") { continue; }
         const auto symbol{fn->get_link_name().empty() ? fn->get_name() : fn->get_link_name()};
         imports.emplace_back<extern_import>({std::string{fn->get_abi_name()}, std::string{symbol}});
     }
-    for (const auto* global : globals_) {
+    for (const auto global : globals_) {
         if (global->linkage != gir::linkage::EXTERN || global->abi_name == "c") { continue; }
         const auto symbol{global->link_name.empty() ? global->name : global->link_name};
         imports.emplace_back<extern_import>(
@@ -97,13 +97,13 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
 
     const auto is_extern{[](gir::linkage l) { return l == gir::linkage::EXTERN; }};
 
-    ankerl::unordered_dense::map<std::string_view, const function*> fn_by_name;
-    for (const auto* fn : functions_) { fn_by_name.try_emplace(fn->get_name(), fn); }
+    ankerl::unordered_dense::map<std::string_view, gsl::not_null<const function*>> fn_by_name;
+    for (const auto fn : functions_) { fn_by_name.try_emplace(fn->get_name(), fn); }
     ankerl::unordered_dense::set<std::string_view> global_names;
-    for (const auto* g : globals_) { global_names.insert(g->name); }
+    for (const auto g : globals_) { global_names.insert(g->name); }
 
     ankerl::unordered_dense::set<std::string_view> reachable_fns, referenced_globals;
-    std::vector<const function*>                   worklist;
+    std::vector<gsl::not_null<const function*>>    worklist;
 
     const auto enqueue_fn{[&](std::string_view name) {
         if (const auto it{fn_by_name.find(name)}; it != fn_by_name.end()) {
@@ -136,10 +136,10 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     // Roots: caller entry points + every non-extern root-module function, and everything exported
     // from any module, since the linker reaches it by name
     for (const auto root : roots) { enqueue_fn(root); }
-    for (const auto* fn : functions_) {
+    for (const auto fn : functions_) {
         if (fn->get_linkage() == gir::linkage::EXPORT) { enqueue_fn(fn->get_name()); }
     }
-    for (const auto* g : globals_) {
+    for (const auto g : globals_) {
         if (g->linkage == gir::linkage::EXPORT) { referenced_globals.insert(g->name); }
     }
     for (usize i{0}; i < import_boundary_fn_ && i < functions_.size(); ++i) {
@@ -151,16 +151,16 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     }
 
     // Over-approximate: keep anything any global initializer names.
-    for (const auto* g : globals_) {
+    for (const auto g : globals_) {
         if (g->init_value) { scan_value(*g->init_value); }
         if (g->const_init) { scan_const_value(*g->const_init); }
     }
 
     while (!worklist.empty()) {
-        const auto* fn{worklist.back()};
+        const auto fn{worklist.back()};
         worklist.pop_back();
-        for (const auto* seg : fn->get_segments()) {
-            for (const auto* inst : seg->get_instructions()) {
+        for (const auto seg : fn->get_segments()) {
+            for (const auto inst : seg->get_instructions()) {
                 if (inst->callee_name) { note_symbol(*inst->callee_name); }
                 for (const auto& op : inst->operands) { scan_value(op); }
                 if (inst->asm_info) {
@@ -173,7 +173,7 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     // Candidates for removal: any `extern` decl, plus any imported (non-root) decl.
     // Everything else -- the root module's own definitions -- is always retained;
     // trimming unused non-extern `pub` code is left to P4.2 (InternalizePass/GlobalDCE).
-    std::vector<function*> kept_fns;
+    std::vector<gsl::not_null<function*>> kept_fns;
     kept_fns.reserve(functions_.size());
     for (usize i{0}; i < functions_.size(); ++i) {
         const bool candidate{is_extern(functions_[i]->get_linkage()) || i >= import_boundary_fn_};
@@ -183,7 +183,7 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     }
     functions_ = std::move(kept_fns);
 
-    std::vector<global_decl*> kept_globals;
+    std::vector<gsl::not_null<global_decl*>> kept_globals;
     kept_globals.reserve(globals_.size());
     for (usize i{0}; i < globals_.size(); ++i) {
         const bool candidate{is_extern(globals_[i]->linkage) || i >= import_boundary_global_};

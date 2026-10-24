@@ -442,7 +442,6 @@ auto do_while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     const block_handle block{TRY(block_stmt::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::WHILE));
 
-
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
 
     if (parser.peek_token_is(syntax::token_type_t::RPAREN)) {
@@ -780,7 +779,6 @@ auto for_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-
 
     // Iterables have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
@@ -2283,7 +2281,6 @@ auto while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
-
 
     // Conditions have to be surrounded by parentheses
     TRY(parser.expect_peek(syntax::token_type_t::LPAREN));
