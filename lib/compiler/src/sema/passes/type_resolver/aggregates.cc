@@ -2,6 +2,7 @@
 #include <string_view>
 #include <utility>
 
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>

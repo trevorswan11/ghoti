@@ -221,10 +221,10 @@ auto type_resolver::callable_mismatch(const type& pattern, type& arg) -> stdx::o
     }
 
     // An `auto` slot deduces from the argument. Anything else must be exactly the same type
-    const auto matches{[&](const type& want_t, type& have_t) {
+    const auto matches{[&](type& want_t, type& have_t) {
         if (is_auto_pattern(want_t)) {
             stdx::option<type&> leaf;
-            return match_auto_pattern(const_cast<type&>(want_t), have_t, leaf).has_value();
+            return match_auto_pattern(want_t, have_t, leaf).has_value();
         }
         return is_same_unqualified(want_t, have_t);
     }};
@@ -327,7 +327,7 @@ auto type_resolver::declared_fn_ref(ast::expr_handle expr) -> stdx::option<gir::
     if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(named)}) { named = dot->member; }
     const auto declared{resolving_.get_identifier_declaration(named)};
     if (!declared || !declared->owner || !declared->decl) { return stdx::none; }
-    auto&      owner{const_cast<mod::module_t&>(*declared->owner)};
+    auto&      owner{*declared->owner};
     const auto decl{owner.ast.get_as_opt<ast::decl_stmt>(*declared->decl)};
     if (!decl || !decl->value || decl->has_modifier(ast::decl_modifiers::MUT) ||
         !owner.ast.get_as_opt<ast::function_expr>(*decl->value)) {
@@ -541,8 +541,8 @@ auto type_resolver::check_param_bounds(const ast::call_expr&                 cal
 auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
                                       const generic_function_info& fn_info,
                                       usize                        idx,
-                                      stdx::option<const type&>    arg_type,
-                                      stdx::option<const type&>    param_type)
+                                      stdx::option<type&>          arg_type,
+                                      stdx::option<type&>          param_type)
     -> stdx::option<gir::const_value> {
     const auto& arg{call.arguments[idx]};
     // A `comptime f: fn(...)` is called, so its argument has to be callable
@@ -568,7 +568,7 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
     if (param_fn && arg_type && arg_type->is_generic_value() &&
         std::ranges::none_of(param_fn->params,
                              [](gsl::not_null<const type*> p) { return is_auto_pattern(*p); })) {
-        auto monomorph{instantiate_as_callable(const_cast<type&>(*arg_type), *param_fn)};
+        auto monomorph{instantiate_as_callable(*arg_type, *param_fn)};
         if (!monomorph) {
             if (const auto& why{monomorph.error().reason}) {
                 ctx_.diags.emplace_back(fmt::format("This generic function doesn't fit '{}': {}",
@@ -587,7 +587,7 @@ auto type_resolver::fold_comptime_arg(const ast::call_expr&        call,
             return stdx::none;
         }
         return gir::const_value{gir::const_value::data_t{std::move(*monomorph)},
-                                ctx_.with_erasure(const_cast<type&>(*param_type), false)};
+                                ctx_.with_erasure(*param_type, false)};
     }
 
     stdx::option<gir::const_value> folded;
@@ -1228,7 +1228,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                     continue;
                 }
                 if (!cx_params[i].is_comptime) { continue; }
-                stdx::option<const type&> param_t;
+                stdx::option<type&> param_t;
                 if (i + param_offset < params.size()) { param_t = *params[i + param_offset]; }
                 auto folded{
                     fold_comptime_arg(call, *fn_info_opt, i, *concrete_arg_types[i], param_t)};

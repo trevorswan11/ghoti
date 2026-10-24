@@ -614,8 +614,7 @@ template auto type_resolver::record_scoped_declaration<ast::explicit_type_id>(as
     -> void;
 
 template <ast::IndexableID ID>
-auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const symbol& sym)
-    -> void {
+auto type_resolver::record_declaration(ID id, mod::module_t& owner, const symbol& sym) -> void {
     const auto ref{sym.get_data().visit(
         [&](const symbols::node_t& node) -> stdx::option<declaration_ref> {
             if (!owner.ast.get_as_opt<ast::decl_stmt>(node)) { return stdx::none; }
@@ -654,10 +653,10 @@ auto type_resolver::record_declaration(ID id, const mod::module_t& owner, const 
 }
 
 template auto type_resolver::record_declaration<ast::node_id>(ast::node_id,
-                                                              const mod::module_t&,
+                                                              mod::module_t&,
                                                               const symbol&) -> void;
 template auto type_resolver::record_declaration<ast::explicit_type_id>(ast::explicit_type_id,
-                                                                       const mod::module_t&,
+                                                                       mod::module_t&,
                                                                        const symbol&) -> void;
 
 auto type_resolver::thin_if_comptime(const ast::function_expr::parameter& param, type& param_type)

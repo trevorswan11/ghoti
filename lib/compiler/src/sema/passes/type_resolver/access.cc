@@ -675,10 +675,10 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         return last_type_.emplace(member_type);
     }
 
-    const auto check_access = [&](const mod::module_t& enclosing,
-                                  std::string_view     type_name,
-                                  usize                field_count,
-                                  auto&&               is_field_pub) -> bool {
+    const auto check_access = [&](mod::module_t&   enclosing,
+                                  std::string_view type_name,
+                                  usize            field_count,
+                                  auto&&           is_field_pub) -> bool {
         const auto& table{ctx_.registry.get(object_type.get_symbol_table_idx())};
         const auto& member_ident{resolving_.ast.get_as<ast::identifier_expr>(dot.member)};
         const auto  proxy{table.get_proxy_opt(member_ident.name)};

@@ -491,8 +491,8 @@ class type_resolver {
     [[nodiscard]] auto fold_comptime_arg(const ast::call_expr&        call,
                                          const generic_function_info& fn_info,
                                          usize                        idx,
-                                         stdx::option<const type&>    arg_type,
-                                         stdx::option<const type&>    param_type)
+                                         stdx::option<type&>          arg_type,
+                                         stdx::option<type&>          param_type)
         -> stdx::option<gir::const_value>;
     [[nodiscard]] auto fold_implicit_comptime_arg(const ast::call_expr::argument& arg)
         -> stdx::option<gir::const_value>;
@@ -852,7 +852,7 @@ class type_resolver {
 
     // Records which declaration `id` names, for LSP features like hover
     template <ast::IndexableID ID>
-    auto record_declaration(ID id, const mod::module_t& owner, const symbol& sym) -> void;
+    auto record_declaration(ID id, mod::module_t& owner, const symbol& sym) -> void;
     // Same, for a bare name found in `table_idx` of the current scope chain
     template <ast::IndexableID ID>
     auto record_scoped_declaration(ID id, usize table_idx, const symbol& sym) -> void;
