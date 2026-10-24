@@ -1333,13 +1333,16 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
     case syntax::builtin_t::ARRAY:
     case syntax::builtin_t::FN:        {
         const auto builtin_name{syntax::builtin_name(builtin_id)};
+        const auto diags_before{ctx_.diags.size()};
         const auto desc{resolve_type_descriptor(call.arguments[0])};
         if (!desc && mentions_unbound_type(call.arguments[0])) {
             return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
             return_type->resolve_if<types::deferred_call>(call, resolving_);
             break;
         }
+        // What the descriptor reads may be unbound until instantiation, which reports it then
         if (!desc && awaits_instantiation()) {
+            DISCARD(ctx_.diags.split_off(diags_before));
             return_type = &instantiation_placeholder();
             break;
         }
@@ -2765,6 +2768,7 @@ auto type_resolver::resolve_vector_builtin(const ast::call_expr& call,
                                            gsl::not_null<type*>& return_type)
     -> stdx::result<void, diagnostic> {
     gir::const_eval evaluator{ctx_, resolving_};
+    const auto      diags_before{ctx_.diags.size()};
     const auto      vec{evaluator.eval_vector_type(call)};
     if (vec) {
         auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **vec}]};
@@ -2775,6 +2779,7 @@ auto type_resolver::resolve_vector_builtin(const ast::call_expr& call,
 
     const auto& err{vec.error()};
     if (err.unknown && awaits_instantiation()) {
+        DISCARD(ctx_.diags.split_off(diags_before));
         return_type = &instantiation_placeholder();
         return {};
     }
