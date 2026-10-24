@@ -900,6 +900,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a closure that mentioned a local type alias or `const` crashed codegen or computed the wrong value; types and constants are now read directly instead of being captured
 - Fixed: a closure capturing a parameter it never writes (`&self`, a slice, a struct) crashed codegen, and inside a method `self` named the closure's own environment instead of the method's receiver
 - Fixed: a `move fn` that wrote to one of its captured copies lost the write before its next call, so a counter returned the same value every time
+- Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library
 - Add `std.math.min` / `std.math.max` over two or more values

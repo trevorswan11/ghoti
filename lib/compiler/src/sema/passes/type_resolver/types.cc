@@ -249,9 +249,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
             resolving_, id, callconv_requires_extern(resolving_.ast.location_of(id))));
     }
 
+    // A type-building call (`@Vector(4, f32)`) names the type it builds, not a `type` value
     for (usize i{0}; const auto& param : fn.parameter_types) {
         TRY_RESOLVE(param);
-        auto& param_type{*last_type_.take()};
+        auto& param_type{denoted_type(*last_type_.take())};
         if (param_type.get_kind() == type_kind::AUTO && !fn.is_impl_fn) {
             return last_type_.emplace(
                 ctx_.poison_node(resolving_,
@@ -264,7 +265,7 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_function
     }
 
     TRY_RESOLVE(fn.explicit_return_type);
-    auto& return_type{*last_type_.take()};
+    auto& return_type{denoted_type(*last_type_.take())};
     if (return_type.get_kind() == type_kind::AUTO && !fn.is_impl_fn) {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,
