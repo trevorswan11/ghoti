@@ -20,6 +20,7 @@
 
 #include "compiler/ast/expression.hh"
 #include "compiler/sema/type.hh"
+#include "compiler/syntax/token_type.hh"
 #include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
@@ -124,6 +125,32 @@ enum class local_kind : u8 {
     ALLOCA,
     GLOBAL,
 };
+
+enum class reduce_op : u8 { // Mirrors `builtin.ReduceOp`
+    ADD,
+    MUL,
+    AND,
+    OR,
+    XOR,
+    MIN,
+    MAX,
+};
+
+// The operator folding two lanes; integer sums and products wrap, as the vector instructions do
+[[nodiscard]] constexpr auto reduce_token(reduce_op op, bool is_float) -> syntax::token_type_t {
+    switch (op) {
+    case reduce_op::ADD:
+        return is_float ? syntax::token_type_t::PLUS : syntax::token_type_t::PLUS_PERCENT;
+    case reduce_op::MUL:
+        return is_float ? syntax::token_type_t::STAR : syntax::token_type_t::STAR_PERCENT;
+    case reduce_op::AND: return syntax::token_type_t::BW_AND;
+    case reduce_op::OR:  return syntax::token_type_t::BW_OR;
+    case reduce_op::XOR: return syntax::token_type_t::CARET;
+    case reduce_op::MIN: return syntax::token_type_t::LT;
+    case reduce_op::MAX: return syntax::token_type_t::GT;
+    default:             UNREACHABLE("Unknown reduce op");
+    }
+}
 
 class local_id {
   public:

@@ -2,6 +2,7 @@
 #include <bit>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <fmt/format.h>
 #include <gsl/span>
@@ -13,11 +14,16 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/gir/const_eval.hh"
 #include "compiler/gir/const_value.hh"
+#include "compiler/gir/instruction.hh"
+#include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/sema/generic.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/builtins.hh"
+#include "gsl/pointers"
 #include "internal.hh"
+#include "stdx/utility.hh"
 #include "support/diagnostic.hh"
 
 namespace ghoti::sema {
@@ -25,16 +31,6 @@ namespace ghoti::sema {
 using namespace resolver_detail;
 
 namespace {
-
-enum class reduce_op : u8 {
-    ADD,
-    MUL,
-    AND,
-    OR,
-    XOR,
-    MIN,
-    MAX,
-}; // Mirrors `builtin.ReduceOp`
 
 [[nodiscard]] auto is_bool_vector(const type& t, u32 len) -> bool {
     const auto vec{vector_of(t)};
@@ -235,14 +231,14 @@ auto type_resolver::resolve_lane_builtin(builtin_site& site) -> stdx::result<voi
         const bool  is_flt{is_float(lane.get_kind())};
         const bool  is_bool{lane.get_kind() == type_kind::BOOL};
         bool        fits{false};
-        switch (static_cast<reduce_op>(op.value)) {
-        case reduce_op::ADD:
-        case reduce_op::MUL:
-        case reduce_op::MIN:
-        case reduce_op::MAX: fits = is_int || is_flt; break;
-        case reduce_op::AND:
-        case reduce_op::OR:
-        case reduce_op::XOR: fits = is_int || is_bool; break;
+        switch (static_cast<gir::reduce_op>(op.value)) {
+        case gir::reduce_op::XOR: fits = is_int || is_bool; break;
+        case gir::reduce_op::ADD:
+        case gir::reduce_op::MUL:
+        case gir::reduce_op::MIN:
+        case gir::reduce_op::MAX: fits = is_int || is_flt; break;
+        case gir::reduce_op::AND:
+        case gir::reduce_op::OR:
         }
         if (!fits) {
             return fail(1,

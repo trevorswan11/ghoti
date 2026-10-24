@@ -1,7 +1,4 @@
 //! AArch64 NEON operations the portable builtins don't cover, under their ACLE names.
-//!
-//! Each exists only where the compiled-for CPU has its feature, so a call is a compile error
-//! rather than an illegal instruction.
 import std;
 
 const u8x16 = @Vector(16, u8);

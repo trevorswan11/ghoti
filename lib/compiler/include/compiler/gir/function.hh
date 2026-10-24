@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/arena.hh>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
@@ -88,10 +89,8 @@ class function {
     }
     auto set_source_name(std::string name) -> void { source_name_ = std::move(name); }
 
-    [[nodiscard]] auto get_aliases() const noexcept -> const std::vector<alias>& {
-        return aliases_;
-    }
-    auto add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
+    [[nodiscard]] auto get_aliases() const noexcept -> gsl::span<const alias> { return aliases_; }
+    auto               add_alias(alias entry) -> void { aliases_.emplace_back(std::move(entry)); }
 
     auto set_link_name(std::string name) -> void { link_name_ = std::move(name); }
     auto set_weak(bool weak) -> void { is_weak_ = weak; }

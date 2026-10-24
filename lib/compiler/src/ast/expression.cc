@@ -21,6 +21,7 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "compiler/syntax/precedence.hh"

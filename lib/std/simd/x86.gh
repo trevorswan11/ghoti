@@ -1,8 +1,4 @@
 //! x86 vector operations the portable builtins don't cover, under their C intrinsic names.
-//!
-//! Each exists only where the compiled-for CPU has its feature (`--cpu native`, `--features`),
-//! so a call is a compile error rather than an illegal instruction. Code that picks a path at
-//! runtime calls these from a `@[target_features(...)]` function, after `std.cpu.detect()`.
 import std;
 
 const u8x16 = @Vector(16, u8);

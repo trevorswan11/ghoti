@@ -501,7 +501,7 @@ class type_resolver {
         -> stdx::option<type&>;
     // `@mulAdd(T, a, b, c)`'s operands, each typed by `T`
     auto               resolve_mul_add_args(const ast::call_expr& call) -> resolve_result;
-    auto resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
+    auto               resolve_builtin_call_args(const ast::call_expr& call) -> resolve_result;
     [[nodiscard]] auto receiver_names_type(const ast::dot_expr& dot) const -> bool;
     [[nodiscard]] auto receiver_aggregate(const ast::dot_expr& dot) -> stdx::option<type&>;
     [[nodiscard]] auto instantiate_for_call(const ast::call_expr&             call,

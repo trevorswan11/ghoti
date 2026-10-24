@@ -8,7 +8,6 @@
 #include <stdx/profiler.hh>
 #include <stdx/types.hh>
 
-#include "compiler/arena.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/type.hh"

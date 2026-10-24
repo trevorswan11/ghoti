@@ -1056,7 +1056,7 @@ auto type_checker::check_instruction(gir::function& fn, const gir::instruction& 
     case gir::instruction_kind::SELECT:
     case gir::instruction_kind::REDUCE:       record_value_result(inst); break;
     case gir::instruction_kind::GOTO:
-    case gir::instruction_kind::UNREACHABLE: break;
+    case gir::instruction_kind::UNREACHABLE:  break;
     }
 }
 

@@ -495,7 +495,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                     pack_hidden_names.emplace_back(
                         sema::pack_element{.pack = p_name, .index = k}.hidden_name());
                     const std::string_view hidden_name{pack_hidden_names.back()};
-                    auto&      p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
+                    auto& p_slot{fn.add_param(std::string{hidden_name}, elem_type)};
                     p_slot.source_position.emplace(p_idx + k + 1);
                     const bool p_spilled{elem_type.get_kind() == sema::type_kind::SLICE};
                     scopes_.back().bindings.emplace(hidden_name,
@@ -3683,10 +3683,10 @@ auto emitter::emit_vector_binary(ast::node_id            id,
                            !syntax::token_type::is_saturating_op(op)};
         return prepare_shift_amount(emit_coerced_expr(binary.rhs, rhs_lane), lhs_lane, checked, id);
     }()};
-    const auto rhs{scalar_amount
-                       ? emit_splat(*scalar_amount,
-                                    ctx_.get_vector(sema::types::mut::CONSTANT, len, rhs_lane))
-                       : emit_vector_operand(binary.rhs, rhs_lane, len)};
+    const auto rhs{
+        scalar_amount
+            ? emit_splat(*scalar_amount, ctx_.get_vector(sema::types::mut::CONSTANT, len, rhs_lane))
+            : emit_vector_operand(binary.rhs, rhs_lane, len)};
     return value{emit_checked_binary(kind,
                                      lhs,
                                      rhs,
@@ -4646,7 +4646,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     if (operand.type && operand.type->get_kind() == sema::type_kind::POINTER) {
                         return pointer_to_bool(operand, false);
                     }
-                    auto& op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
+                    auto&      op_type{operand.type ? *operand.type : ctx_.get_int(64, false)};
                     const auto zero{sema::is_vector(op_type) ? value{zero_val{}, op_type}
                                                              : value{u64{0}, op_type}};
                     return value{
@@ -7414,7 +7414,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     } else if (from_signed && !to_signed) {
         const value zero_val{
             bound(from_bits > 64 ? value{i128{0}, from_lane} : value{i64{0}, from_lane})};
-        const auto  ge_zero{
+        const auto ge_zero{
             builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
         if (from_bits > to_bits) {
             const u128  max_to{(u128{1} << to_bits) - 1};

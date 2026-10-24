@@ -5,6 +5,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -2497,8 +2498,8 @@ auto llvm_lowering::emit_reduce(const gir::instruction& inst, llvm::Value* vec) 
     case reduce_op_t::max:
         if (is_flt) { return builder_.CreateFPMaxReduce(vec); }
         return builder_.CreateIntMaxReduce(vec, is_sgn);
+    default: UNREACHABLE("Unknown reduce op");
     }
-    UNREACHABLE("Unknown reduce op");
 }
 
 auto llvm_lowering::emit_vector_op(const gir::instruction& inst) -> llvm::Value* {

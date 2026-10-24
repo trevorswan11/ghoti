@@ -27,6 +27,7 @@
 #include <stdx/fixed/vector.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/string.hh>
 #include <stdx/type_traits.hh>
 #include <stdx/types.hh>
@@ -3971,36 +3972,6 @@ auto const_eval::shuffle_mask_of(const const_value& mask) -> stdx::option<shuffl
     return out;
 }
 
-namespace {
-
-enum class reduce_op : u8 {
-    ADD,
-    MUL,
-    AND,
-    OR,
-    XOR,
-    MIN,
-    MAX,
-}; // Mirrors `builtin.ReduceOp`
-
-// The operator folding two lanes; integer sums and products wrap, as the vector instructions do
-[[nodiscard]] auto reduce_token(reduce_op op, bool is_float) -> syntax::token_type_t {
-    switch (op) {
-    case reduce_op::ADD:
-        return is_float ? syntax::token_type_t::PLUS : syntax::token_type_t::PLUS_PERCENT;
-    case reduce_op::MUL:
-        return is_float ? syntax::token_type_t::STAR : syntax::token_type_t::STAR_PERCENT;
-    case reduce_op::AND: return syntax::token_type_t::BW_AND;
-    case reduce_op::OR:  return syntax::token_type_t::BW_OR;
-    case reduce_op::XOR: return syntax::token_type_t::CARET;
-    case reduce_op::MIN: return syntax::token_type_t::LT;
-    case reduce_op::MAX: return syntax::token_type_t::GT;
-    }
-    UNREACHABLE("Unknown reduce op");
-}
-
-} // namespace
-
 auto const_eval::eval_lane_builtin(stdx::option<ast::node_id> call_id,
                                    const ast::call_expr&      call,
                                    syntax::builtin_t          kind) -> stdx::option<const_value> {
@@ -4904,8 +4875,7 @@ auto const_eval::type_argument_of(const ast::call_expr::argument& arg)
         }
         if (!target_type) {
             target_type = module_->get_sema_type_opt(*expr_h);
-            // A bare `type` names some type not known yet (an unbound `T: type` in a dependent
-            // parameter type), not the type `type` itself
+            // A bare `type` names some type not known yet, not the type `type` itself
             if (target_type && target_type->get_kind() == sema::type_kind::TYPE &&
                 !target_type->get_data().is<sema::types::meta_type>()) {
                 return stdx::none;
@@ -5763,7 +5733,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::REM:
     case syntax::builtin_t::MOD:
     case syntax::builtin_t::MUL_ADD:   return eval_math_builtin(call_id, call, builtin_type);
-    case syntax::builtin_t::TAG_NAME: {
+    case syntax::builtin_t::TAG_NAME:  {
         VERIFY(!call.arguments.empty(), "Arity mismatch not verified during resolution");
         if (const auto expr_h{call.arguments.front().as_opt<ast::expr_handle>()}) {
             if (const auto val{try_eval(*expr_h)}) {
@@ -6029,7 +5999,7 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
     case syntax::builtin_t::FLOAT_CAST:
     case syntax::builtin_t::FLOAT_FROM_INT:
     case syntax::builtin_t::INT_FROM_FLOAT: return eval_cast_builtin(call_id, call, builtin_type);
-    case syntax::builtin_t::BACKING_INT: {
+    case syntax::builtin_t::BACKING_INT:    {
         // Only an enum folds; packed aggregates and tagged unions are read by the emitter
         const auto op_h{call.arguments[0].as_opt<ast::expr_handle>()};
         if (!op_h) { return stdx::none; }
@@ -6111,11 +6081,8 @@ auto const_eval::eval_builtin(stdx::option<ast::node_id> call_id,
                     break;
                 }
             }
-            // A value with no listed variant is only meaningful for a non-exhaustive enum
-            // (mirrors the runtime `_` fallback in `emitter::emit_runtime_tag_name`); an
-            // exhaustive enum has no valid fallback, so decline to fold and let the emitter's
-            // runtime cast guard trap on the invalid value instead.
             if (name.empty()) {
+                // A value with no listed variant is only meaningful for a non-exhaustive enum
                 if (!en->non_exhaustive) { return stdx::none; }
                 name = "_";
             }

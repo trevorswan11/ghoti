@@ -823,7 +823,7 @@ auto type_resolver::visit(ast::node_id id, const ast::initializer_expr& init) ->
         }
     }
     // An array's elements, or a vector's lanes, as positional values
-    const auto positional{[&]() -> stdx::option<std::pair<type&, usize>> {
+    const auto positional{[&] -> stdx::option<std::pair<type&, usize>> {
         if (const auto arr_data{array_object->get_data().as_opt<types::array>()}) {
             return std::pair<type&, usize>{arr_data->underlying, arr_data->len};
         }

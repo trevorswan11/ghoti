@@ -48,6 +48,16 @@ class const_eval {
         bool        prev_;
     };
 
+    // A lane of `a` from 0, of `b` from -1 (`~i`), none for `undefined`
+    using shuffle_mask = std::vector<stdx::option<i64>>;
+
+    // Why a `@Vector(...)` call names no type; `unknown` when an argument isn't known yet
+    struct vector_type_error {
+        std::string message;
+        usize       arg_index{0};
+        bool        unknown{false};
+    };
+
   public:
     explicit const_eval(sema::context& ctx, mod::module_t& module) noexcept
         : ctx_{ctx}, module_{&module} {}
@@ -137,20 +147,12 @@ class const_eval {
     // Evaluate and assert. Emits COMPTIME_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
 
-    // `@shuffle`'s mask: a lane of `a` from 0, of `b` from -1 (`~i`), none for `undefined`
-    using shuffle_mask = std::vector<stdx::option<i64>>;
     [[nodiscard]] static auto shuffle_mask_of(const const_value& mask)
         -> stdx::option<shuffle_mask>;
 
     // Evaluates an expression as a non-negative integer dimension for array sizing
     [[nodiscard]] auto eval_type_dim(ast::node_id id) -> stdx::option<usize>;
 
-    // Why a `@Vector(...)` call names no type; `unknown` when an argument isn't known yet
-    struct vector_type_error {
-        std::string message;
-        usize       arg_index{0};
-        bool        unknown{false};
-    };
     // The type `@Vector(len, T)` or `@Vector(info)` names
     [[nodiscard]] auto eval_vector_type(const ast::call_expr& call)
         -> stdx::result<gsl::not_null<sema::type*>, vector_type_error>;

@@ -1,7 +1,7 @@
 //! Portable helpers for `@Vector`: how wide to make one, and moving one in and out of slices.
 //!
 //! The lane builtins (`@splat`, `@reduce`, `@shuffle`, `@select`, `@maskedLoad`, ...) and the
-//! per-lane operators are the core; this module adds what is better written in ghoti itself.
+//! per-lane operators are the core.
 import std;
 
 @cfg (arch == .x86_64 or arch == .x86) {
@@ -69,26 +69,23 @@ const register_bits = fn(): comptime_int {
         // Every AArch64 CPU has NEON, and SVE's registers are at least as wide
         return 128;
     } else @cfg (arch == .arm) {
-        return if comptime (builtin.cpu.has(.neon)) 128; else 0;
+        return if comptime (builtin.cpu.has(.neon)) 128 else 0;
     } else @cfg (arch == .riscv64 or arch == .riscv32) {
         // The `v` extension's registers are at least 128 bits wide
-        return if comptime (builtin.cpu.has(.v)) 128; else 0;
+        return if comptime (builtin.cpu.has(.v)) 128 else 0;
     } else @cfg (arch == .wasm32 or arch == .wasm64) {
-        return if comptime (builtin.cpu.has(.simd128)) 128; else 0;
+        return if comptime (builtin.cpu.has(.simd128)) 128 else 0;
     } else {
         return 0;
     }
 };
 
 /// The number of `T` lanes that fill the widest vector register the compiled-for CPU is
-/// guaranteed to have, or 1 when it has none. `--cpu native` and `--features` widen it.
-///
-/// A scalable target (SVE, RISC-V V) reports its minimum width, so code sized by this still
-/// runs on every implementation.
+/// guaranteed to have, or 1 when it has none.
 pub const suggest_lanes = fn(comptime T: type): comptime_int {
     const lane_bits = @sizeOf(T) * 8;
     const bits = register_bits();
-    return if (bits < lane_bits * 2) 1; else bits / lane_bits;
+    return if (bits < lane_bits * 2) 1 else bits / lane_bits;
 };
 
 /// A vector whose lanes count up from 0: `iota(@Vector(4, u8))` is `.{ 0, 1, 2, 3 }`
@@ -103,18 +100,18 @@ pub const iota = fn(comptime V: type): V {
     return v;
 };
 
-/// Lane `i` of a `bool` vector as bit `i` of an integer: the portable `movemask`
+/// Lane `i` of a `bool` vector as bit `i` of an integer
 pub const bitmask = fn(v: auto): @Int(.{ .signedness = .unsigned, .bits = lanes_of(@TypeOf(v)) }) {
     return @bitCast(v);
 };
 
-/// The first `lanes_of(V)` elements of `s`, read without any alignment. `s` must have that many
+/// The first `lanes_of(V)` elements of `s`, read without any alignment.
 pub const load = fn(comptime V: type, s: []Lane(V)): V {
     const len = lanes_of(V);
     if (@runtimeSafety() and s.len < len) {
         @panic("std.simd.load: the slice is shorter than the vector");
     }
-    // Memory holds a `bool` as a byte, which a `bool` lane isn't
+
     if comptime (Lane(V) == bool) {
         let mut v: V = undefined;
         for (0..len) |i| {
@@ -125,13 +122,13 @@ pub const load = fn(comptime V: type, s: []Lane(V)): V {
     return @maskedLoad(s.ptr, @as(@Vector(len, bool), @splat(true)), undefined);
 };
 
-/// Writes `v` to the first `lanes_of(V)` elements of `s`, without any alignment. `s` must have
-/// that many
+/// Writes `v` to the first `lanes_of(V)` elements of `s`, without any alignment
 pub const store = fn(s: []mut auto, v: auto): void {
     const len = lanes_of(@TypeOf(v));
     if (@runtimeSafety() and s.len < len) {
         @panic("std.simd.store: the slice is shorter than the vector");
     }
+
     if comptime (Lane(@TypeOf(v)) == bool) {
         for (0..len) |i| {
             s[i] = v[i];
