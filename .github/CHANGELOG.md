@@ -900,7 +900,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a closure that mentioned a local type alias or `const` crashed codegen or computed the wrong value; types and constants are now read directly instead of being captured
 - Fixed: a closure capturing a parameter it never writes (`&self`, a slice, a struct) crashed codegen, and inside a method `self` named the closure's own environment instead of the method's receiver
 - Fixed: a `move fn` that wrote to one of its captured copies lost the write before its next call, so a counter returned the same value every time
-- `@Vector(len, T)` is a SIMD vector: `len` lanes of `T` operated on together, where `T` is an integer of at most 128 bits, a float other than `f80`, `bool`, or a thin pointer
+- `@Vector(len, T)` is a SIMD vector: `len` lanes of `T` operated on together (at most 4096 of them), where `T` is an integer of at most 128 bits, a float other than `f80`, `bool`, or a thin pointer
     - Operators work per lane: arithmetic, bitwise, shifts, the wrapping and saturating forms, `-`, `~`, `!`, and `and` / `or` on `bool` lanes, which always evaluate both sides
     - A scalar operand is broadcast to every lane (`v * 2.0`, `1 + v`) when it converts to the lane type; a shift amount keeps its own integer type
     - A comparison gives a `@Vector(len, bool)` rather than a `bool`
@@ -930,6 +930,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Runtime safety checks every lane of a cast or division as it does a scalar
 - A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
 - Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
+- Fixed: a `[n]auto` parameter sized by a `comptime` parameter matched no argument, and once it matches, an argument of the wrong length is reported when the call binds `n`
+- Fixed: an `unroll for` over a range longer than the unroll limit tried to unroll all of it and hung; it is an error naming the limit, and `@setEvalUnrollLimit` raises it
+- Fixed: an untyped integer chosen at runtime (`let y = if (x) 1 else 3000000000;`) was stored as an `i32` and silently truncated; a value that doesn't fit is an error asking for a type
+- Fixed: an enum's backing type wasn't checked, so `enum : f32` compiled and `enum : @Vector(2, u8)` crashed LLVM; it must be an integer
+- Fixed: `&.a` / `^.a` with no enum to name crashed codegen; an enum literal has no address
+- Fixed: a `comptime` parameter took an argument of any type (`f(0..0)` for a `comptime x: f64`), crashing a type constructor that used it
+- Fixed: `comptime` before a function literal crashed codegen; it is reported as redundant
+- Fixed: a shift of an integer wider than 128 bits by a constant of 128 or more crashed the compiler
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
