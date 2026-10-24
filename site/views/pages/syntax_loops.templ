@@ -102,6 +102,7 @@ while (reader.read(buf)) |n| { consume(buf[0..n]); } else |err| { log(err); }` }
 		<li><code>unroll</code> before any loop (<code>{ "unroll for" }</code>, <code>{ "unroll while" }</code>, <code>{ "unroll do" }</code>, <code>{ "unroll loop" }</code>) expands it while compiling: the body is emitted once per iteration, and the program runs those copies in order</li>
 		<li>The loop's header is compile-time: a <code>{ "for" }</code>'s iterables must have a compile-time-known length, and a <code>{ "while" }</code>/<code>{ "do" }</code> condition must fold to a compile-time <code>bool</code></li>
 		<li>Each iteration's captures are compile-time constants, so they can pick types, index parameter packs, or drive <code>{ "if comptime" }</code></li>
+		<li>A parameter pack, or a slice of one like <code>{ "rest[1..]" }</code>, drives an <code>{ "unroll for" }</code> with one iteration per selected element, each capture taking that element's own type</li>
 		<li>The body itself still runs at runtime and can read and write runtime values</li>
 		<li>
 			Unrolled loops cannot have an <code>else</code> clause or a label

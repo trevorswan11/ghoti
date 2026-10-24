@@ -93,6 +93,7 @@ _ = baz(&mut b);    // Illegal, cannot mutate const` }
 			<ul>
 				<li>Read it with <code>{ "rest.len" }</code>, <code>{ "rest[k]" }</code>, and <code>{ "unroll for (rest)" }</code>, and forward it with <code>{ "f(rest...)" }</code></li>
 				<li>A slice of the pack forwards only those elements: <code>{ "f(rest[1..]...)" }</code>, <code>{ "f(rest[..2]...)" }</code>, <code>{ "f(rest[a..=b]...)" }</code>, with compile-time bounds within <code>{ "0..=rest.len" }</code></li>
+				<li><code>{ "unroll for (rest[1..])" }</code> iterates a slice of the pack the same way</li>
 				<li>With <code>{ "if comptime (rest.len == 0)" }</code>, a function can recurse over <code>{ "rest[1..]..." }</code> one element at a time</li>
 			</ul>
 		</li>
@@ -199,7 +200,7 @@ const count = fn(xs: []auto, keep: impl Fn(x: auto): bool): usize { ... };` }
 			Parameter packs work the same way: a closure may take its own <code>{ "rest..." }</code>, and a closure inside a pack function can read, iterate, and forward that function's pack (<code>{ "rest[k]" }</code>, <code>{ "unroll for (rest)" }</code>, <code>{ "rest..." }</code>)
 			<ul>
 				<li>Where a <code>fn(...)</code> or <code>impl Fn(...)</code> signature is expected, a pack closure takes one element per parameter past its fixed ones</li>
-				<li>A closure can expand a slice of either pack, like <code>{ "rest[1..]..." }</code></li>
+				<li>A closure can expand or iterate a slice of either pack, like <code>{ "rest[1..]..." }</code> or <code>{ "unroll for (rest[1..])" }</code></li>
 			</ul>
 		</li>
 		<li>Inside a generic function, <code>{ "@fnCtx()" }</code> names the generic itself, so each recursive call instantiates for its own arguments</li>
