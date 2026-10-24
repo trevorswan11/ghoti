@@ -2427,20 +2427,6 @@ auto llvm_lowering::emit_make_callable(const gir::instruction& inst) -> llvm::Va
     return fat;
 }
 
-namespace {
-
-enum class reduce_op_t : u8 { // Mirrors builtin.gh.inc
-    add  = 0,
-    mul  = 1,
-    band = 2,
-    bor  = 3,
-    bxor = 4,
-    min  = 5,
-    max  = 6,
-};
-
-} // namespace
-
 auto llvm_lowering::scalarize(
     llvm::Type*                                                    result_ty,
     llvm::ArrayRef<llvm::Value*>                                   operands,
@@ -2481,21 +2467,21 @@ auto llvm_lowering::emit_reduce(const gir::instruction& inst, llvm::Value* vec) 
         llvm::cast<llvm::Instruction>(reduction)->setHasAllowReassoc(true);
         return reduction;
     }};
-    switch (static_cast<reduce_op_t>(inst.lane_op.value_or(0))) {
-    case reduce_op_t::add:
+    switch (static_cast<gir::reduce_op>(inst.lane_op.value_or(0))) {
+    case gir::reduce_op::ADD:
         if (!is_flt) { return builder_.CreateAddReduce(vec); }
         return reassociated(
             builder_.CreateFAddReduce(llvm::ConstantFP::getNegativeZero(lane_ty), vec));
-    case reduce_op_t::mul:
+    case gir::reduce_op::MUL:
         if (!is_flt) { return builder_.CreateMulReduce(vec); }
         return reassociated(builder_.CreateFMulReduce(llvm::ConstantFP::get(lane_ty, 1.0), vec));
-    case reduce_op_t::band: return builder_.CreateAndReduce(vec);
-    case reduce_op_t::bor:  return builder_.CreateOrReduce(vec);
-    case reduce_op_t::bxor: return builder_.CreateXorReduce(vec);
-    case reduce_op_t::min:
+    case gir::reduce_op::AND: return builder_.CreateAndReduce(vec);
+    case gir::reduce_op::OR:  return builder_.CreateOrReduce(vec);
+    case gir::reduce_op::XOR: return builder_.CreateXorReduce(vec);
+    case gir::reduce_op::MIN:
         if (is_flt) { return builder_.CreateFPMinReduce(vec); }
         return builder_.CreateIntMinReduce(vec, is_sgn);
-    case reduce_op_t::max:
+    case gir::reduce_op::MAX:
         if (is_flt) { return builder_.CreateFPMaxReduce(vec); }
         return builder_.CreateIntMaxReduce(vec, is_sgn);
     default: UNREACHABLE("Unknown reduce op");

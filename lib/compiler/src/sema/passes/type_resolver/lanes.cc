@@ -232,13 +232,13 @@ auto type_resolver::resolve_lane_builtin(builtin_site& site) -> stdx::result<voi
         const bool  is_bool{lane.get_kind() == type_kind::BOOL};
         bool        fits{false};
         switch (static_cast<gir::reduce_op>(op.value)) {
-        case gir::reduce_op::XOR: fits = is_int || is_bool; break;
         case gir::reduce_op::ADD:
         case gir::reduce_op::MUL:
         case gir::reduce_op::MIN:
         case gir::reduce_op::MAX: fits = is_int || is_flt; break;
         case gir::reduce_op::AND:
         case gir::reduce_op::OR:
+        case gir::reduce_op::XOR: fits = is_int || is_bool; break;
         }
         if (!fits) {
             return fail(1,

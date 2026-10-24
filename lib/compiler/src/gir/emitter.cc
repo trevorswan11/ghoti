@@ -7441,10 +7441,11 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
 
     if (!is_valid) { return; }
     if (is_vector) {
-        constexpr u8 every_lane{2}; // `builtin.ReduceOp.and`
-        is_valid.emplace(
-            builder_.emit_vector_op(instruction_kind::REDUCE, {*is_valid}, scalar_bool, every_lane),
-            scalar_bool);
+        is_valid.emplace(builder_.emit_vector_op(instruction_kind::REDUCE,
+                                                 {*is_valid},
+                                                 scalar_bool,
+                                                 std::to_underlying(reduce_op::AND)),
+                         scalar_bool);
     }
 
     auto& fn{*fn_opt};
