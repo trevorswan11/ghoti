@@ -118,7 +118,8 @@ class parser {
         parser& parser_;
     };
 
-    // Marks an array length, whose parameter reads make those parameters `comptime`
+    // Marks an array length or a type constructor's arguments, whose parameter reads make those
+    // parameters `comptime`
     class array_length_scope {
       public:
         explicit array_length_scope(parser& p) noexcept : parser_{p} {

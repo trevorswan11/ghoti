@@ -592,6 +592,13 @@ class type_resolver {
     // Whether `arg` names a type parameter not bound yet, so a generic's later parameter type
     // (`x: @Int(.{ .bits = @typeInfo(T).float.bits })`) waits for its instantiation
     [[nodiscard]] auto mentions_unbound_type(const ast::call_expr::argument& arg) const -> bool;
+    // Whether a type in a generic's own signature may read a `comptime` parameter that only an
+    // instantiation binds (`v: @Vector(n, f32)`), so a type that doesn't fold yet waits for it
+    [[nodiscard]] auto awaits_instantiation() const -> bool;
+    // The stand-in for such a type: `auto` until each instantiation resolves the real one
+    [[nodiscard]] auto instantiation_placeholder() const -> type&;
+    // A field's `[n]T` sized by a constructor's `comptime` parameter, once an instance binds it
+    auto               instance_field_type(type& field_type) -> type&;
     [[nodiscard]] auto mentions_fn_param(const ast::attribute&     item,
                                          const ast::function_expr& fn) const -> bool;
     auto check_attribute_conflicts(const attribute_refs& items, const resolved_attributes& resolved)

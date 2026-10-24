@@ -671,6 +671,18 @@ auto type_resolver::mentions_unbound_type(const ast::call_expr::argument& arg) c
     return false;
 }
 
+auto type_resolver::awaits_instantiation() const -> bool {
+    return in_generic_signature_ && (in_param_type_ || in_return_type_);
+}
+
+auto type_resolver::instantiation_placeholder() const -> type& {
+    return *ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}];
+}
+
+auto type_resolver::instance_field_type(type& field_type) -> type& {
+    return for_generic_instantiation_ ? concrete_array_type(field_type) : field_type;
+}
+
 auto type_resolver::mentions_fn_param(const ast::attribute&     item,
                                       const ast::function_expr& fn) const -> bool {
     const auto&                   tree{resolving_.ast};

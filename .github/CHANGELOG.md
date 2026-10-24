@@ -913,7 +913,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - Vector expressions fold at compile time
     - An `extern` signature or `extern struct` / `extern union` field takes only a 16, 32, or 64-byte vector, which passes as C's `__m128` / `__m256` / `__m512` does; a `packed` aggregate takes none
     - `@llvmIntrinsic` takes and returns vectors: `@llvmIntrinsic("llvm.ctpop", @Vector(4, u32), v)`
-    - A signature's lane count can't yet come from a `comptime` value parameter (`fn(comptime n: usize, v: @Vector(n, f32))`); take the vector type instead (`comptime V: type`, or `auto`)
+    - A lane count can come from a `comptime` parameter in a signature (`fn(comptime n: usize, v: @Vector(n, f32)): @Vector(n, f32)`), and a parameter read as a lane count is compile-time, as an array length's is
+- A signature's parameter and return types can be built from a `comptime` value parameter: `@Int(.{ .signedness = .unsigned, .bits = w })`, or a type constructor call `Box(n)`; each call builds them once the parameter is bound
+- Fixed: a `[n]T` field of a type constructor sized by a `comptime` value parameter kept its unsized type, so the instance was laid out wrong
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 
 ## Standard Library

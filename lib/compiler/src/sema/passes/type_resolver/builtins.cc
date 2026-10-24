@@ -1338,6 +1338,10 @@ auto type_resolver::resolve_type_construction_builtin(ID id, builtin_site& site)
             return_type->resolve_if<types::deferred_call>(call, resolving_);
             break;
         }
+        if (!desc && awaits_instantiation()) {
+            return_type = &instantiation_placeholder();
+            break;
+        }
         if (!desc) {
             return make_sema_err(
                 fmt::format("'{}' expects a compile-time-known descriptor argument", builtin_name),
@@ -2767,10 +2771,14 @@ auto type_resolver::resolve_vector_builtin(const ast::call_expr& call,
     }
 
     const auto& err{vec.error()};
-    const bool  waits_on_instantiation{err.unknown &&
-                                       std::ranges::any_of(call.arguments, [&](const auto& arg) {
+    if (err.unknown && awaits_instantiation()) {
+        return_type = &instantiation_placeholder();
+        return {};
+    }
+    const bool waits_on_instantiation{err.unknown &&
+                                      std::ranges::any_of(call.arguments, [&](const auto& arg) {
                                           return mentions_unbound_type(arg);
-                                       })};
+                                      })};
     if (waits_on_instantiation) {
         return_type = ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, &call}];
         return_type->resolve_if<types::deferred_call>(call, resolving_);

@@ -1231,8 +1231,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 if (!cx_params[i].is_comptime) { continue; }
                 stdx::option<type&> param_t;
                 if (i + param_offset < params.size()) { param_t = *params[i + param_offset]; }
-                auto folded{
+                const auto diags_before_fold{ctx_.diags.size()};
+                auto       folded{
                     fold_comptime_arg(call, *fn_info_opt, i, *concrete_arg_types[i], param_t)};
+                // `Box(n)` in a signature reads a `comptime` parameter each instantiation binds
+                if (!folded && awaits_instantiation()) {
+                    DISCARD(ctx_.diags.split_off(diags_before_fold));
+                    auto& placeholder{instantiation_placeholder()};
+                    resolving_.set_sema_type(id, placeholder);
+                    return last_type_.emplace(placeholder);
+                }
                 if (!folded) { return last_type_.emplace(ctx_.poison_node(resolving_, id)); }
                 folded_args.emplace_back(std::move(*folded));
             }

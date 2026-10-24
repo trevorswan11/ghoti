@@ -329,6 +329,24 @@ auto call_modifier_name(call_modifier modifier) noexcept -> std::string_view {
     }
 }
 
+namespace {
+
+[[nodiscard]] auto builds_type(syntax::builtin_t builtin) -> bool {
+    switch (builtin) {
+    case syntax::builtin_t::INT:
+    case syntax::builtin_t::FLOAT:
+    case syntax::builtin_t::POINTER:
+    case syntax::builtin_t::REFERENCE:
+    case syntax::builtin_t::SLICE:
+    case syntax::builtin_t::ARRAY:
+    case syntax::builtin_t::VECTOR:
+    case syntax::builtin_t::FN:        return true;
+    default:                           return false;
+    }
+}
+
+} // namespace
+
 auto call_expr::parse(syntax::parser& parser, expr_handle function)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
@@ -346,6 +364,9 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         default:                             return stdx::none;
         }
     }()};
+    // `@Vector(n, T)` builds its type at compile time, as `[n]T` does
+    stdx::option<syntax::parser::array_length_scope> type_construction_scope;
+    if (builtin && builds_type(*builtin)) { type_construction_scope.emplace(parser); }
 
     // Guaranteed to roll back if there is an error, which it hands back for reporting
     const auto try_parse_expr_argument = [&] -> stdx::option<syntax::diagnostic> {

@@ -271,8 +271,9 @@ auto type_resolver::visit(ID id, const ast::struct_expr& struct_expr) -> void {
                                               declaration_ref{.owner      = &resolving_,
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
-        // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value
-        gsl::not_null<type*> field_type{&denoted_type(*last_type_.take())};
+        // `f: @TypeOf(g)` / `f: FnAlias` stores the denoted type, not a `type` value. An `[n]T`
+        // sized by a constructor's `comptime` parameter is sized once an instance binds it
+        gsl::not_null<type*> field_type{&instance_field_type(denoted_type(*last_type_.take()))};
         if (reject_storage_slot(field.explicit_type, *field_type) ||
             reject_poly_storage(field.explicit_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
@@ -497,7 +498,7 @@ auto type_resolver::visit(ID id, const ast::union_expr& union_expr) -> void {
                                               declaration_ref{.owner      = &resolving_,
                                                               .decl       = stdx::none,
                                                               .annotation = field.explicit_type});
-        auto& field_type{denoted_type(*last_type_.take())};
+        auto& field_type{instance_field_type(denoted_type(*last_type_.take()))};
         if (reject_storage_slot(field.explicit_type, field_type) ||
             reject_poly_storage(field.explicit_type)) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));

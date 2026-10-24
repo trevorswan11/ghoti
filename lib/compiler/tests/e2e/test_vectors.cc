@@ -245,9 +245,12 @@ TEST_CASE("@Vector rejects lanes and lengths it can't hold") {
         "pub const f = fn(): void { let a: @Vector(0, f32) = undefined; };")};
     CHECK(empty.message_contains("'@Vector' has 0 lanes"));
 
-    const auto unknown{helpers::type_check_diags(
-        "pub const f = fn(n: usize): void { let a: @Vector(n, f32) = undefined; };")};
-    CHECK(unknown.message_contains("'@Vector' needs a compile-time-known lane count"));
+    // A lane count makes the parameter it reads compile-time, as an array length does
+    const auto unknown{helpers::type_check_diags(R"(
+        const f = fn(n: usize): i32 { let a: @Vector(n, i32) = undefined; return a[0]; };
+        pub const g = fn(): i32 { let mut k: usize = 4; k += 1; return f(k); };
+    )")};
+    CHECK(unknown.message_contains("'n' is compile-time because the function reads it"));
 }
 
 TEST_CASE("Vector operators reject mismatched shapes and lanes") {
@@ -334,6 +337,36 @@ TEST_CASE("An extern signature takes only vectors with a C ABI") {
 
     CHECK(helpers::type_check_diags("extern const g: fn(v: @Vector(4, f32)): @Vector(8, f32);")
               .codes.empty());
+}
+
+TEST_CASE("A signature's vector length can come from a compile-time parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(comptime n: usize, v: @Vector(n, i32)): i32 { return v[0] + v[n - 1]; };
+        const twice = fn(n: usize, v: @Vector(n, i32)): @Vector(n, i32) { return v * 2; };
+        const widen = fn(comptime w: u16, x: u8): @Int(.{ .signedness = .unsigned, .bits = w }) {
+            return x;
+        };
+        pub const main = fn(): i32 {
+            let v: @Vector(4, i32) = .{ 1, 2, 3, 4 };
+            let w: u32 = widen(32, 7);
+            return sum(4, v) + twice(4, v)[3] + @as(i32, @intCast(w));
+        };
+    )") == 5 + 8 + 7);
+
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(comptime n: usize): type { return struct { items: [n]i32 }; };
+        const last = fn(comptime n: usize, b: Box(n)): i32 { return b.items[n - 1]; };
+        pub const main = fn(): i32 {
+            let b: Box(3) = .{ .items = .{ 5, 6, 7 } };
+            return last(3, b);
+        };
+    )") == 7);
+
+    const auto mismatch{helpers::type_check_diags(R"(
+        const sum = fn(comptime n: usize, v: @Vector(n, i32)): i32 { return v[0]; };
+        pub const f = fn(): i32 { let v: @Vector(2, i32) = .{ 1, 2 }; return sum(4, v); };
+    )")};
+    CHECK(mismatch.message_contains("not assignable to parameter type '@Vector(4, i32)'"));
 }
 
 } // namespace ghoti::tests
