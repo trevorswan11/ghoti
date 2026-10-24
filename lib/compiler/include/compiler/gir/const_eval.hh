@@ -363,6 +363,23 @@ class const_eval {
     // A `@Vector` operator folded lane by lane, broadcasting a scalar operand
     auto eval_vector_binary(ast::node_id id, const ast::binary_expr& binary, sema::type& result)
         -> stdx::option<const_value>;
+    // `@intCast`, `@floatFromInt`, and the other numeric casts, lane by lane on a vector
+    auto eval_cast_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    auto fold_cast(syntax::builtin_t         builtin_type,
+                   const const_value&        folded_operand,
+                   stdx::option<sema::type&> target,
+                   ast::node_id              site) -> stdx::option<const_value>;
+    // `@sqrt`, `@min`, `@popCount`, and the other math builtins, lane by lane on a vector
+    auto eval_math_builtin(stdx::option<ast::node_id> call_id,
+                           const ast::call_expr&      call,
+                           syntax::builtin_t          builtin_type) -> stdx::option<const_value>;
+    auto fold_math(syntax::builtin_t             builtin_type,
+                   gsl::span<const const_value>  operands,
+                   gsl::span<const ast::node_id> sites,
+                   stdx::option<sema::type&>     result_type,
+                   ast::node_id                  id) -> stdx::option<const_value>;
     // `@splat`, `@reduce`, `@shuffle`, and `@select` over constant lanes
     auto eval_lane_builtin(stdx::option<ast::node_id> call_id,
                            const ast::call_expr&      call,
