@@ -542,4 +542,47 @@ TEST_CASE("Vector math builtins check their lane types") {
           "can't convert 'f32' lanes to 'i32' lanes");
 }
 
+TEST_CASE("A generic instantiated with two vector types keeps one instance per type") {
+    CHECK(helpers::compile_and_run(R"(
+        const first = fn(comptime V: type, v: V): @typeInfo(V).vector.child { return v[0]; };
+        pub const main = fn(): i32 {
+            let a: @Vector(4, u8) = .{ 7, 0, 0, 0 };
+            let b: @Vector(2, f32) = .{ 1.5, 0.0 };
+            return if (first(@Vector(2, f32), b) == 1.5) @intCast(first(@Vector(4, u8), a)); else 0;
+        };
+    )") == 7);
+}
+
+TEST_CASE("Compile-time code writes the lanes of an undefined vector") {
+    CHECK(helpers::compile_and_run(R"(
+        const iota = fn(comptime V: type): V {
+            let mut v: V = undefined;
+            for (0..@typeInfo(V).vector.len) |i| { v[i] = @intCast(i); }
+            return v;
+        };
+        pub const main = fn(): i32 {
+            comptime {
+                const v = iota(@Vector(4, u8));
+                @assert(v[3] == 3);
+            }
+            return 42;
+        };
+    )") == 42);
+}
+
+TEST_CASE("A signature type built from an `auto` parameter's type waits for the instantiation") {
+    CHECK(helpers::compile_and_run(R"(
+        const Lanes = fn(comptime V: type): comptime_int { return @typeInfo(V).vector.len; };
+        const bitmask = fn(v: auto): @Int(.{ .signedness = .unsigned, .bits = Lanes(@TypeOf(v)) }) {
+            return @bitCast(v);
+        };
+        pub const main = fn(): i32 {
+            let v: @Vector(4, i32) = .{ 5, -1, 7, 0 };
+            let m = bitmask(v > 0);
+            comptime { @assert(@TypeOf(m) == u4); }
+            return @intCast(m);
+        };
+    )") == 0b0101);
+}
+
 } // namespace ghoti::tests
