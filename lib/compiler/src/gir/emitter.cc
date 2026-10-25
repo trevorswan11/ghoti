@@ -5406,8 +5406,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
         } else if (fn_d && !fn_d->has_self) {
             // Dispatch `Type.method(...)` directly to the method's scoped symbol
             stdx::option<const sema::type&> rt{recv_ty};
-            const bool recv_is_type{rt && (rt->get_kind() == sema::type_kind::TYPE ||
-                                           rt->get_data().is<sema::types::meta_type>())};
+            const auto this_call{active_ast().get_as_opt<ast::call_expr>(dot_call->object)};
+            const bool recv_is_this{this_call &&
+                                    this_call->function->get_builtin() == syntax::builtin_t::THIS};
+            const bool recv_is_type{rt &&
+                                    (recv_is_this || rt->get_kind() == sema::type_kind::TYPE ||
+                                     rt->get_data().is<sema::types::meta_type>())};
             if (rt) {
                 if (const auto m{rt->get_data().as_opt<sema::types::meta_type>()}) {
                     rt.emplace(m->instance);
@@ -5498,6 +5502,15 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                        active_ast().get_as_opt<ast::implicit_access_expr>(call.function)}) {
             if (!user_type_stack_.empty()) { recv_type.emplace(*user_type_stack_.back()); }
             member_nm = active_ast().get_as<ast::identifier_expr>(imp->member).name;
+        } else if (const auto ident{active_ast().get_as_opt<ast::identifier_expr>(call.function)};
+                   ident && !user_type_stack_.empty()) {
+            // A sibling member named bare from inside another member
+            auto&      enclosing{*user_type_stack_.back()};
+            const auto owner{active_mod().get_resolved_symbol_owner_opt(call.function)};
+            if (owner && enclosing.get_symbol_table_idx_opt() == owner) {
+                recv_type.emplace(enclosing);
+                member_nm = ident->name;
+            }
         }
         if (recv_type && member_nm) {
             gsl::not_null t{recv_type.get()};
@@ -5505,6 +5518,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             if (const auto p{t->get_data().as_opt<sema::types::pointer>()}) { t = &p->underlying; }
             if (const auto r{t->get_data().as_opt<sema::types::reference>()}) {
                 t = &r->underlying;
+            }
+            // `@This()` in a member may still name the ctor's shared literal, which stands for
+            // the instance being emitted
+            if (!user_type_stack_.empty() && !t->get_instance_id() && t->has_symbol_table_idx() &&
+                user_type_stack_.back()->get_symbol_table_idx_opt() == t->get_symbol_table_idx()) {
+                t = user_type_stack_.back();
             }
             if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
                 callee_name.emplace(fmt::format("{}.{}", *prefix, *member_nm));

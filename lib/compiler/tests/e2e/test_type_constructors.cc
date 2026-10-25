@@ -251,6 +251,80 @@ TEST_CASE("Two instantiations of a generic type constructor do not alias their m
     )") == 20);
 }
 
+TEST_CASE("Static members of distinct type constructor instances keep their own signatures") {
+    SECTION("At module scope") {
+        CHECK(helpers::compile_and_run(R"(
+        const Wrap = fn(comptime T: type): type {
+            return struct { pub const id = fn(a: T): T { return a; }; };
+        };
+        const A = Wrap(i64);
+        const B = Wrap(u8);
+
+        pub const main = fn(): i32 {
+            let a: i64 = A.id(-5);
+            let b: u8 = B.id(250);
+            return @intCast(a + @as(i64, b));
+        };
+    )") == 245);
+    }
+
+    SECTION("Through a local alias in a generic function") {
+        CHECK(helpers::compile_and_run(R"(
+        const Wrap = fn(comptime T: type): type {
+            return struct { pub const id = fn(a: T): T { return a; }; };
+        };
+        const check = fn(comptime T: type, x: T): bool {
+            const W = Wrap(T);
+            return W.id(x) == x;
+        };
+
+        pub const main = fn(): i32 {
+            if (!check(u64, 5)) { return 1; }
+            if (!check(i64, -5)) { return 2; }
+            return 0;
+        };
+    )") == 0);
+    }
+}
+
+TEST_CASE("Type constructor members call static siblings by bare name and through `@This()`") {
+    CHECK(helpers::compile_and_run(R"(
+        const Wrap = fn(comptime T: type): type {
+            return struct {
+                v: T,
+                pub const id   = fn(a: T): T { return a; };
+                pub const make = fn(a: T): @This() { return .{ .v = a }; };
+                pub const bare = fn(a: T): T { return id(a) + 1; };
+                pub const via  = fn(a: T): T { return @This().make(a).v + @This().id(a); };
+                pub const get  = fn(^self): T { return id(self.v); };
+            };
+        };
+
+        pub const main = fn(): i32 {
+            if (Wrap(u64).bare(5) != 6) { return 1; }
+            if (Wrap(i64).bare(-5) != -4) { return 2; }
+            if (Wrap(u8).via(3) != 6) { return 3; }
+            const w: Wrap(i32) = .{ .v = 7 };
+            if (w.get() != 7) { return 4; }
+            return 0;
+        };
+    )") == 0);
+
+    // A non-generic constructor called inline, with no alias to register its members
+    CHECK(helpers::compile_and_run(R"(
+        const Make = fn(): type {
+            return struct {
+                pub const id  = fn(a: i32): i32 { return a; };
+                pub const id2 = fn(a: i32): i32 { return id(a) + 1; };
+            };
+        };
+
+        pub const main = fn(): i32 {
+            return Make().id2(41);
+        };
+    )") == 42);
+}
+
 TEST_CASE("A non-generic `fn(): type` result with member functions") {
     CHECK(helpers::compile_and_run(R"(
         const Make = fn(): type {

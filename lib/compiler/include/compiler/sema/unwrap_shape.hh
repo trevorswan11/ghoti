@@ -34,6 +34,9 @@ inline constexpr std::string_view FLOW_BREAK{"break"};
 // within `t` (function signatures, pointers, references, slices, arrays).
 [[nodiscard]] auto remap_type(context& ctx, type& t, const type& from, type& to) -> type&;
 
+// The pool's structurally keyed copy of the function type `t` with `params` and `ret` swapped in
+[[nodiscard]] auto keyed_function_type(context& ctx, type& t, type_span params, type& ret) -> type&;
+
 // Looks up an associated type alias (`const Output = ...`) in an impl's body scope,
 // substituting sentinels with concrete type arguments for parameterized impls.
 [[nodiscard]] auto find_assoc_type_alias(context&           ctx,

@@ -949,6 +949,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: `@intCast` to or from an integer wider than 128 bits crashed the compiler when runtime safety was on
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
+- Fixed: a static member function of a type constructor's result (`pub const id = fn(a: T): T`) kept one instance's return type for every instance, so `Wrap(i64).id(x)` after `Wrap(u64)` was rejected or returned the wrong type
+- Fixed: a type constructor's member calling a static sibling by bare name (`id(a)`) or through `@This()` (`@This().make(a)`) crashed codegen or failed to link, as did a member call on a non-generic constructor called inline (`Make().id(5)`)
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`
