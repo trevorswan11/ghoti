@@ -273,21 +273,25 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return false;
 }
 
-// Build an integer constant of `ty`'s width from a full 128-bit value.
-[[nodiscard]] auto wide_int_constant(u128 v, llvm::Type* ty) -> llvm::Constant* {
+// Build an integer constant of `ty`'s width from a full 128-bit value. A signed value keeps its
+// sign in a type wider than 128 bits
+[[nodiscard]] auto wide_int_constant(u128 v, llvm::Type* ty, bool is_signed) -> llvm::Constant* {
     const std::array<u64, 2> words{static_cast<u64>(v), static_cast<u64>(v >> 64)};
     const llvm::APInt        value{128, words};
-    return llvm::ConstantInt::get(ty->getContext(), value.zextOrTrunc(ty->getIntegerBitWidth()));
+    const auto               width{ty->getIntegerBitWidth()};
+    return llvm::ConstantInt::get(ty->getContext(),
+                                  is_signed ? value.sextOrTrunc(width) : value.zextOrTrunc(width));
 }
 
 // An integer-valued constant whose GIR type is a pointer must materialize as an `inttoptr` constant
-[[nodiscard]] auto int_or_ptr_constant(u128 bits, llvm::Type* ty) -> llvm::Constant* {
+[[nodiscard]] auto int_or_ptr_constant(u128 bits, llvm::Type* ty, bool is_signed = false)
+    -> llvm::Constant* {
     // `u0`'s only value
     if (ty->isStructTy()) { return llvm::ConstantAggregateZero::get(ty); }
-    if (!ty->isPointerTy()) { return wide_int_constant(bits, ty); }
+    if (!ty->isPointerTy()) { return wide_int_constant(bits, ty, is_signed); }
     if (bits == 0) { return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ty)); }
     auto* int_ty{llvm::Type::getInt64Ty(ty->getContext())};
-    return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty), ty);
+    return llvm::ConstantExpr::getIntToPtr(wide_int_constant(bits, int_ty, is_signed), ty);
 }
 
 // The float constant of `ty` (or its elements) nearest to `value`
@@ -957,9 +961,13 @@ auto llvm_lowering::const_callable(std::string_view          fn_symbol,
 auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant* {
     PROFILE_FUNCTION();
     if (!ty) { return nullptr; }
-    if (const auto i{cv.as_opt<i64>()}) { return int_or_ptr_constant(static_cast<u128>(*i), ty); }
+    if (const auto i{cv.as_opt<i64>()}) {
+        return int_or_ptr_constant(static_cast<u128>(*i), ty, true);
+    }
     if (const auto u{cv.as_opt<u64>()}) { return int_or_ptr_constant(*u, ty); }
-    if (const auto w{cv.as_opt<i128>()}) { return int_or_ptr_constant(static_cast<u128>(*w), ty); }
+    if (const auto w{cv.as_opt<i128>()}) {
+        return int_or_ptr_constant(static_cast<u128>(*w), ty, true);
+    }
     if (const auto w{cv.as_opt<u128>()}) { return int_or_ptr_constant(*w, ty); }
     if (const auto f{cv.as_opt<f128>()}) { return float_constant(*f, ty); }
     if (const auto b{cv.as_opt<bool>()}) { return llvm::ConstantInt::getBool(context_, *b); }
@@ -1420,7 +1428,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
                                           ? types_.get_int64_ty()
                                           : types_.translate(*val.type))
                                    : types_.get_int64_ty()};
-            return int_or_ptr_constant(static_cast<u128>(i), ty);
+            return int_or_ptr_constant(static_cast<u128>(i), ty, true);
         },
         [this, &val, expected_type](u64 u) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
@@ -1443,7 +1451,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
                                        : types_.get_int64_ty())
                                 : types_.translate(*val.type))
                          : types_.get_int64_ty()};
-            return int_or_ptr_constant(static_cast<u128>(w), ty);
+            return int_or_ptr_constant(static_cast<u128>(w), ty, true);
         },
         [this, &val, expected_type](u128 w) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)

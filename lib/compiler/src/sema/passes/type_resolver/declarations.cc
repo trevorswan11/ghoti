@@ -499,8 +499,9 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
     }
 
     // A declaration outside every open function resolves on first use as if from its own scope.
-    // otherwise its functions would see the open ones' frames and capture from them
-    if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && !function_boundaries_.empty() &&
+    const bool inside_function{!function_boundaries_.empty() ||
+                               instantiation_root_depth_.has_value()};
+    if (lookup->symbol.get_status() == symbol_status::UNRESOLVED && inside_function &&
         lookup->depth < outermost_function_boundary()) {
         const std::vector<usize> outer_tables(table_stack_.begin(), table_stack_.end());
         for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) { table_stack_.pop(); }
@@ -508,14 +509,22 @@ auto type_resolver::resolve_ident(ID id, const ast::identifier_expr& ident) -> v
         auto       outer_boundaries{std::exchange(function_boundaries_, {})};
         auto       outer_fn_nodes{std::exchange(open_function_nodes_, {})};
         auto       outer_recursive{std::exchange(self_recursive_flags_, {})};
+        const auto outer_root_depth{std::exchange(instantiation_root_depth_, stdx::none)};
+        const auto outer_locals_depth{std::exchange(enclosing_locals_depth_, stdx::none)};
+        const auto outer_inst_fn_node{std::exchange(instantiating_fn_node_, stdx::none)};
+        auto       outer_packs{std::exchange(enclosing_packs_, {})};
         const auto restore{gsl::finally([&] {
             for (usize i{lookup->depth + 1}; i < outer_tables.size(); ++i) {
                 table_stack_.push(outer_tables[i]);
             }
-            table_idx_            = outer_table_idx;
-            function_boundaries_  = std::move(outer_boundaries);
-            open_function_nodes_  = std::move(outer_fn_nodes);
-            self_recursive_flags_ = std::move(outer_recursive);
+            table_idx_                = outer_table_idx;
+            function_boundaries_      = std::move(outer_boundaries);
+            open_function_nodes_      = std::move(outer_fn_nodes);
+            self_recursive_flags_     = std::move(outer_recursive);
+            instantiation_root_depth_ = outer_root_depth;
+            enclosing_locals_depth_   = outer_locals_depth;
+            instantiating_fn_node_    = outer_inst_fn_node;
+            enclosing_packs_          = std::move(outer_packs);
         })};
         resolve_symbol(id, lookup->symbol);
         return;

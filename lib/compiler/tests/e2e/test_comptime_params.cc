@@ -263,4 +263,30 @@ TEST_CASE("a compile-time `false and` / `true or` never evaluates its right side
     )") == 7);
 }
 
+TEST_CASE("a template first reached from another template's body stays a top-level function") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let data = [_]u32{ 1, 2, 3 };
+            return @intCast(i32, work(^data[0], 3, true));
+        };
+        const work = fn(p: ^u32, n: usize, comptime flag: bool): u32 {
+            let mut total: u32 = helper(p, n, flag);
+            for (0..n) |k| {
+                let i = k;
+                total += p[i];
+            }
+            return total;
+        };
+        const helper = fn(p: ^u32, n: usize, comptime flag: bool): u32 {
+            return if (flag and mid(p, n)) 10 else 0;
+        };
+        const mid = fn(p: ^u32, n: usize): bool {
+            return p[leaf(n, n - 1)] != 0;
+        };
+        const leaf = fn(len: usize, i: usize): usize {
+            return len - 1 - i;
+        };
+    )") == 16);
+}
+
 } // namespace ghoti::tests

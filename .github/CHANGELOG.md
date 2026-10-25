@@ -943,6 +943,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a local array sized by a runtime value was accepted and crashed codegen when sliced; its length must be known at compile time
 - Fixed: a math builtin given a type in place of a value (`@clz(u8)`, `@min(u8, 3)`, `@abs(i32)`) crashed the compiler, as did `@branchHint`, `@setRuntimeSafety`, and the eval limit builtins
 - Fixed: a function or function type that passed or returned `opaque` by value crashed codegen; only a pointer to it can be passed
+- Fixed: multiplying or dividing integers wider than 1024 bits left LLVM to expand the operation inline, which took minutes for a `u65535`; `*`, `/`, `%`, the division builtins, `@mulWithOverflow`, and the checked and saturating multiplies now call compiler_rt's `__ghoti_*ei` routines past that width
+- Fixed: a negative constant stored in an integer wider than 128 bits (`let x: i256 = -1;`) kept only its low 128 bits, so the bits above read as zero
+- Fixed: `@intCast` to or from an integer wider than 128 bits crashed the compiler when runtime safety was on
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 

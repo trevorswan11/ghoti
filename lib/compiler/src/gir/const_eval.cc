@@ -347,7 +347,14 @@ saturate_exact(syntax::token_type_t plain_op, i128 l, i128 r, u16 bits, bool is_
     if (bits == 0 && res_type && res_type->get_kind() == sema::type_kind::INT) {
         return make_scalar_const(u128{0}, res_type);
     }
-    // No bit-masking is needed at or past 128 bits: the fold already happened in comptime
+    // From 128 bits up the value wraps as a big integer, so a negative one reinterpreted as a wider
+    // unsigned type sets every bit up to the width rather than only the low 128
+    if (bits >= 128 && res_type) {
+        if (const auto exact{folded.as_big_int_opt()}) {
+            return const_value::from_big_int(
+                big_int::from_words(exact->to_words(bits), bits, is_signed), res_type);
+        }
+    }
     if (bits == 0 || bits >= 128) {
         if (!res_type) { return folded; }
         if (is_signed) {
@@ -4273,8 +4280,24 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
     } else if (op_type == syntax::token_type_t::BANG) {
         if (val->is<bool>()) { return const_value{!val->as<bool>(), val->get_type()}; }
     } else if (op_type == syntax::token_type_t::NOT) {
-        if (is_integer_arm(*val) && is_comptime_int_result(val->get_type())) {
-            return const_value::from_big_int(~*val->as_big_int_opt(), val->get_type());
+        if (is_integer_arm(*val)) {
+            // Inverted in infinite two's complement, then wrapped to a concrete type's width
+            const auto res_type{val->get_type()};
+            const auto inverted{const_value::from_big_int(~*val->as_big_int_opt(), res_type)};
+            if (res_type && res_type->get_kind() == sema::type_kind::INT) {
+                return wrap_to_width(inverted,
+                                     sema::int_width(*res_type),
+                                     sema::is_signed_integer(*res_type),
+                                     res_type);
+            }
+            if (res_type && (res_type->get_kind() == sema::type_kind::ISIZE ||
+                             res_type->get_kind() == sema::type_kind::USIZE)) {
+                return wrap_to_width(inverted,
+                                     static_cast<u16>(target_pointer_bits()),
+                                     res_type->get_kind() == sema::type_kind::ISIZE,
+                                     res_type);
+            }
+            if (is_comptime_int_result(res_type)) { return inverted; }
         }
         if (val->is<i64>()) { return const_value{~val->as<i64>(), val->get_type()}; }
         if (val->is<u64>()) { return const_value{~val->as<u64>(), val->get_type()}; }

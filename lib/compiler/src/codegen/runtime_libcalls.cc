@@ -17,6 +17,7 @@
 #include <stdx/types.hh>
 
 #include "compiler/codegen/soft_f80.hh"
+#include "compiler/codegen/wide_int_arith.hh"
 #include "support/float128.hh"
 #include "support/float_math.hh"
 
@@ -77,6 +78,7 @@ auto is_compiler_rt_symbol(const llvm::Triple& triple, std::string_view symbol) 
     static constexpr std::array<std::string_view, 5> memory_routines{
         "memcpy", "memmove", "memset", "memcmp", "bcmp"};
     if (std::ranges::contains(memory_routines, symbol)) { return true; }
+    if (is_wide_int_routine(symbol)) { return true; }
     // LLVM lists the allocator among some targets' libcalls, but it is libc's, never compiler_rt's
     static constexpr std::array<std::string_view, 4> allocation_routines{
         "malloc", "calloc", "realloc", "free"};

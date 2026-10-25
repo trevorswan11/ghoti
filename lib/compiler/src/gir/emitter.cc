@@ -7418,14 +7418,25 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
     auto& bool_type{is_vector ? ctx_.with_lane(*operand.type, scalar_bool) : scalar_bool};
     stdx::option<value> is_valid;
 
+    // The target's smallest or largest value, as a constant of the operand's type. Either side may
+    // be wider than 128 bits
+    const auto limit{[&](bool upper) -> value {
+        const big_int one{u128{1}};
+        const auto    span{one.shl(to_signed ? to_bits - 1U : to_bits)};
+        const auto    exact{upper ? span - one : to_signed ? -span : big_int{u128{0}}};
+        if (from_bits > 128) { return bound(value{exact, from_lane}); }
+        if (from_bits > 64) {
+            return bound(from_signed ? value{*exact.to_i128(), from_lane}
+                                     : value{*exact.to_u128(), from_lane});
+        }
+        return bound(from_signed ? value{static_cast<i64>(*exact.to_i128()), from_lane}
+                                 : value{static_cast<u64>(*exact.to_u128()), from_lane});
+    }};
+
     if (from_signed && to_signed) {
         if (from_bits > to_bits) {
-            const i128  min_to{-(i128{1} << (to_bits - 1))};
-            const i128  max_to{(i128{1} << (to_bits - 1)) - 1};
-            const value min_val{bound(from_bits > 64 ? value{min_to, from_lane}
-                                                     : value{static_cast<i64>(min_to), from_lane})};
-            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
-                                                     : value{static_cast<i64>(max_to), from_lane})};
+            const value min_val{limit(false)};
+            const value max_val{limit(true)};
             const auto  ge{builder_.emit_binary(instruction_kind::GE, operand, min_val, bool_type)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(
@@ -7435,9 +7446,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         }
     } else if (!from_signed && !to_signed) {
         if (from_bits > to_bits) {
-            const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
-                                                     : value{static_cast<u64>(max_to), from_lane})};
+            const value max_val{limit(true)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
@@ -7447,9 +7456,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         const auto ge_zero{
             builder_.emit_binary(instruction_kind::GE, operand, zero_val, bool_type)};
         if (from_bits > to_bits) {
-            const u128  max_to{(u128{1} << to_bits) - 1};
-            const value max_val{bound(from_bits > 64 ? value{static_cast<i128>(max_to), from_lane}
-                                                     : value{static_cast<i64>(max_to), from_lane})};
+            const value max_val{limit(true)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(builder_.emit_binary(instruction_kind::AND,
                                                   value{ge_zero, bool_type},
@@ -7461,9 +7468,7 @@ auto emitter::emit_int_cast_guard(value operand, const sema::type& dest_type, as
         }
     } else { // !from_signed && to_signed
         if (from_bits >= to_bits) {
-            const u128  max_to{(u128{1} << (to_bits - 1)) - 1};
-            const value max_val{bound(from_bits > 64 ? value{max_to, from_lane}
-                                                     : value{static_cast<u64>(max_to), from_lane})};
+            const value max_val{limit(true)};
             const auto  le{builder_.emit_binary(instruction_kind::LE, operand, max_val, bool_type)};
             is_valid.emplace(le, bool_type);
         }
