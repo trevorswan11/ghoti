@@ -648,6 +648,59 @@ TEST_CASE("`@This()` behind a reference stays `dyn`-safe") {
 )");
 }
 
+TEST_CASE("an interface method may take and return a `dyn` view of its own interface") {
+    helpers::resolve_and_check(R"(
+        const Shape = interface {
+            pub const area = fn(&self): i32;
+            pub const bigger = fn(&self, other: &dyn Shape): bool;
+            pub const pick = fn(&self, other: ^mut dyn Shape): ^mut dyn Shape;
+        };
+        const use = fn(a: &dyn Shape, b: &dyn Shape): bool { return a.bigger(b); };
+)");
+}
+
+TEST_CASE("a `dyn` view of its own interface binds an associated type") {
+    helpers::resolve_and_check(R"(
+        const Src = interface {
+            Item: type;
+            pub const get = fn(&self): Item;
+            pub const zip = fn(&self, other: &dyn Src(Item = Item)): Item;
+        };
+        const use = fn(a: &dyn Src(Item = i32), b: &dyn Src(Item = i32)): i32 {
+            return a.zip(b);
+        };
+)");
+}
+
+TEST_CASE("two interfaces may name each other through `dyn` views") {
+    helpers::resolve_and_check(R"(
+        const Node = interface { pub const visit = fn(&self, v: &mut dyn Visitor): void; };
+        const Visitor = interface { pub const enter = fn(&mut self, n: &dyn Node): void; };
+        const use = fn(n: &dyn Node, v: &mut dyn Visitor): void { n.visit(v); };
+)");
+}
+
+TEST_CASE("an interface still cannot hold itself by value") {
+    CHECK(helpers::raised(R"(
+        const I = interface { pub const eq = fn(&self, other: dyn I): bool; };
+)",
+                          sema::error::ILLEGAL_UNSIZED_TYPE));
+    CHECK(helpers::raised(R"(
+        const I = interface { pub const eq = fn(&self, other: I): bool; };
+)",
+                          sema::error::CYCLIC_DEPENDENCY));
+}
+
+TEST_CASE("a `dyn` view of its own interface is still checked for `dyn`-safety") {
+    CHECK(helpers::raised(R"(
+        const I = interface {
+            pub const eq = fn(&self, other: &dyn I): bool;
+            pub const take = fn(self): i32;
+        };
+)",
+                          sema::error::DYN_BY_VALUE_SELF));
+}
+
 TEST_CASE("a `dyn` fat pointer cannot appear in an extern aggregate field") {
     CHECK(helpers::raised(R"(
         const W = interface { pub const wr = fn(&self): i32; };

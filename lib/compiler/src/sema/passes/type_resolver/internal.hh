@@ -353,10 +353,12 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
     return std::ranges::any_of(params, [](const auto& p) { return is_generic_type(*p); });
 }
 
-// Forwards an incomplete aggregate type to safely break cycles if possible
+// Forwards an incomplete aggregate type to safely break cycles if possible. A resolving interface
+// forwards only when named by a `&dyn I` / `^dyn I`, which never needs its layout.
 [[nodiscard]] inline auto forward_type(const mod::module_t&             target_mod,
                                        stdx::option<ast::type_modifier> mod,
-                                       symbol& sym) noexcept -> stdx::option<type&> {
+                                       symbol&                          sym,
+                                       bool dyn_referent = false) noexcept -> stdx::option<type&> {
     const auto node{sym.get_data().as_opt<symbols::node_t>()};
     if (!node) { return stdx::none; }
 
@@ -370,7 +372,9 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
         }
 
         const auto is_agg{decl->value->is<ast::struct_expr>() ||
-                          decl->value->is<ast::union_expr>() || decl->value->is<ast::enum_expr>()};
+                          decl->value->is<ast::union_expr>() || decl->value->is<ast::enum_expr>() ||
+                          (dyn_referent && sym.get_status() == symbol_status::RESOLVING &&
+                           decl->value->is<ast::interface_expr>())};
         if ((!mod || (!mod->is_ptr() && !mod->is_ref())) && !is_agg) { return stdx::none; }
         return target_mod.get_sema_type_opt(*decl->value);
     }

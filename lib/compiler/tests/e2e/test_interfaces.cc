@@ -348,6 +348,120 @@ TEST_CASE("a `^dyn I` fat pointer carries a default method through its vtable") 
     )") == 36);
 }
 
+TEST_CASE("an impl method takes a `&dyn` of its own interface and calls through it") {
+    CHECK(helpers::compile_and_run(R"(
+        const Shape = interface {
+            pub const area = fn(&self): i32;
+            pub const bigger = fn(&self, other: &dyn Shape): bool;
+        };
+        const Box = struct { w: i32, h: i32 };
+        impl Shape for Box {
+            pub const area = fn(&self): i32 { return self.w * self.h; };
+            pub const bigger = fn(&self, other: &dyn Shape): bool {
+                return self.area() > other.area();
+            };
+        }
+        const Sq = struct { s: i32 };
+        impl Shape for Sq {
+            pub const area = fn(&self): i32 { return self.s * self.s; };
+            pub const bigger = fn(&self, other: &dyn Shape): bool {
+                return self.area() > other.area();
+            };
+        }
+        const cmp = fn(a: &dyn Shape, b: &dyn Shape): bool { return a.bigger(b); };
+        pub const main = fn(): i32 {
+            let mut b = Box{ .w = 3, .h = 4 };
+            let mut s = Sq{ .s = 5 };
+            let mut r: i32 = 0;
+            if (cmp(&s, &b)) { r = r + 10; }
+            if (!cmp(&b, &s)) { r = r + 20; }
+            if (!b.bigger(&s)) { r = r + 12; }
+            return r;
+        };
+    )") == 42);
+}
+
+TEST_CASE("an interface method returns a `^dyn` of its own interface") {
+    CHECK(helpers::compile_and_run(R"(
+        const Link = interface {
+            pub const val = fn(&self): i32;
+            pub const next = fn(&self): ^dyn Link;
+            pub const sum = fn(&self, n: i32): i32 {
+                if (n == 0) { return self.val(); }
+                return self.val() + self.next().sum(n - 1);
+            };
+        };
+        const Node = struct { v: i32, nxt: ^dyn Link };
+        impl Link for Node {
+            pub const val = fn(&self): i32 { return self.v; };
+            pub const next = fn(&self): ^dyn Link { return self.nxt; };
+        }
+        const Leaf = struct { v: i32 };
+        impl Link for Leaf {
+            pub const val = fn(&self): i32 { return self.v; };
+            pub const next = fn(&self): ^dyn Link { return ^self; };
+        }
+        pub const main = fn(): i32 {
+            let mut leaf = Leaf{ .v = 2 };
+            let mut mid = Node{ .v = 10, .nxt = ^leaf };
+            let mut head = Node{ .v = 30, .nxt = ^mid };
+            return head.sum(2);
+        };
+    )") == 42);
+}
+
+TEST_CASE("two interfaces dispatch through `dyn` views of each other") {
+    CHECK(helpers::compile_and_run(R"(
+        const Node = interface { pub const accept = fn(&self, v: &mut dyn Visitor): void; };
+        const Visitor = interface { pub const visit = fn(&mut self, n: &dyn Node, w: i32): void; };
+        const Leaf = struct { w: i32 };
+        impl Node for Leaf {
+            pub const accept = fn(&self, v: &mut dyn Visitor): void { v.visit(self, self.w); };
+        }
+        const Summer = struct { total: i32 };
+        impl Visitor for Summer {
+            pub const visit = fn(&mut self, n: &dyn Node, w: i32): void {
+                _ = n;
+                self.total = self.total + w;
+            };
+        }
+        pub const main = fn(): i32 {
+            let a = Leaf{ .w = 40 };
+            let b = Leaf{ .w = 2 };
+            let mut s = Summer{ .total = 0 };
+            a.accept(&mut s);
+            b.accept(&mut s);
+            return s.total;
+        };
+    )") == 42);
+}
+
+TEST_CASE("a `dyn` of its own interface substitutes a bound associated type") {
+    CHECK(helpers::compile_and_run(R"(
+        const Src = interface {
+            Item: type;
+            pub const get = fn(&self): Item;
+            pub const add = fn(&self, other: &dyn Src(Item = Item)): Item;
+        };
+        const Num = struct { n: i32 };
+        impl Src for Num {
+            const Item = i32;
+            pub const get = fn(&self): i32 { return self.n; };
+            pub const add = fn(&self, other: &dyn Src(Item = i32)): i32 {
+                return self.n + other.get();
+            };
+        }
+        const total = fn(a: &dyn Src(Item = i32), b: &dyn Src(Item = i32)): i32 {
+            return a.add(b);
+        };
+        pub const main = fn(): i32 {
+            let x = Num{ .n = 40 };
+            let y = Num{ .n = 2 };
+            return total(&x, &y);
+        };
+    )") == 42);
+}
+
 TEST_CASE("`&dyn I` dispatches across a module boundary") {
     CHECK(
         helpers::compile_and_run(

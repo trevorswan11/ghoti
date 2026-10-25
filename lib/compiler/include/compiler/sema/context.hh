@@ -329,6 +329,9 @@ struct context {
                                  bool                             null_terminated,
                                  type&                            underlying) -> type&;
 
+    // The unsized `dyn I` view with `assoc_bindings` in interface order; calls resolve_if
+    [[nodiscard]] auto get_dyn(type& interface, type_span assoc_bindings) -> type&;
+
     // Poisons the symbol and constructs an associated diagnostic to insert into the list
     template <typename... Args> auto poison_symbol(symbol& symbol, Args&&... args) -> void {
         if constexpr (sizeof...(args) != 0) { diags.emplace_back(std::forward<Args>(args)...); }

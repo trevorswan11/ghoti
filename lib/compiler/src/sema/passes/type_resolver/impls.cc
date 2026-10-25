@@ -1184,6 +1184,22 @@ auto type_resolver::types_match_with_assoc(const impl_record&        rec,
         return false;
     }
 
+    // A `dyn` of the interface names its associated types through its bindings
+    if (const auto dw{want.get_data().as_opt<types::dyn_t>()}) {
+        const auto dh{have.get_data().as_opt<types::dyn_t>()};
+        if (!dh || &dw->interface != &dh->interface ||
+            dw->assoc_bindings.size() != dh->assoc_bindings.size()) {
+            return false;
+        }
+        for (usize i{0}; i < dw->assoc_bindings.size(); ++i) {
+            if (!types_match_with_assoc(
+                    rec, iface, *dw->assoc_bindings[i], *dh->assoc_bindings[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     if (const auto uw{want.get_data().as_opt<types::union_t>()}) {
         if (const auto uh{have.get_data().as_opt<types::union_t>()}) {
             if (uw->fields.size() != uh->fields.size()) { return false; }

@@ -172,6 +172,17 @@ auto context::get_slice(types::mut::mutability_modifiers mutability,
     return type;
 }
 
+auto context::get_dyn(type& interface, type_span assoc_bindings) -> type& {
+    types::key_t key{type_kind::DYN, types::mut::CONSTANT, &interface};
+    for (usize i{0}; i < assoc_bindings.size(); ++i) {
+        key.imprint(static_cast<u64>(i + 1));
+        key.imprint(*assoc_bindings[i]);
+    }
+    auto& type{*pool[key]};
+    type.resolve_if<types::dyn_t>(interface, assoc_bindings);
+    return type;
+}
+
 namespace {
 
 auto inject_types(symbol_table& prelude, type_pool& pool) -> void {

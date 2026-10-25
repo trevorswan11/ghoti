@@ -89,7 +89,7 @@ auto rewrap_info::gir_method_name(std::string_view           method_name,
 }
 
 // Deep structural substitution: replaces all occurrences of `from` with `to` across
-// pointer/reference/slice/array wrappers and function parameter/return types.
+// pointer/reference/slice/array wrappers, function parameter/return types and `dyn` bindings.
 // Preserves type pool identity when no sub-type changes.
 auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
     if (&t == &from) { return to; }
@@ -163,6 +163,16 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             }
 
             return nt;
+        },
+        [&](types::dyn_t d) -> type& {
+            bool changed{false};
+            auto new_bindings{ctx.pool.get_many_unsafe(d.assoc_bindings.size())};
+            for (usize i{0}; i < d.assoc_bindings.size(); ++i) {
+                auto& nb{remap_type(ctx, *d.assoc_bindings[i], from, to)};
+                new_bindings[i] = &nb;
+                changed |= &nb != d.assoc_bindings[i];
+            }
+            return changed ? ctx.get_dyn(d.interface, new_bindings) : t;
         },
         [&t](const auto&) -> type& { return t; });
 }

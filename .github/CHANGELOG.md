@@ -945,6 +945,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a function or function type that passed or returned `opaque` by value crashed codegen; only a pointer to it can be passed
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
+- An interface method can take or return a `&dyn` / `^dyn` of its own interface (`pub const eq = fn(&self, other: &dyn I): bool;`), and two interfaces can name each other through `dyn` views; holding the interface by value is still rejected
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`

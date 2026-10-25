@@ -432,6 +432,18 @@ class type_resolver {
         i128             last;
     };
 
+    // An interface before it commits: what a `&dyn I` of it needs to bind its associated types
+    struct open_interface {
+        gsl::not_null<type*>                             iface;
+        gsl::span<std::string_view>                      assoc_type_names;
+        gsl::span<const ast::interface_expr::assoc_type> ast_assoc_types;
+    };
+
+    struct deferred_dyn_check {
+        gsl::not_null<type*> iface;
+        source_location      location;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -1000,6 +1012,11 @@ class type_resolver {
     auto visit(ast::explicit_type_id, const ast::explicit_array_type&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_dyn_type&) -> void;
     auto visit(ast::explicit_type_id, const ast::explicit_expr_type&) -> void;
+    // Why a committed interface can't be used through `dyn`, if it can't
+    [[nodiscard]] auto dyn_safety_problem(const type& iface_type) const
+        -> stdx::option<std::string>;
+    // Reports the deferred `dyn`-safety checks of `iface_type` now that it has committed
+    auto check_deferred_dyn_safety(const type& iface_type) -> void;
 
     // Looks up the symbol by name in the current index ONLY. Changes no state on failure
     auto resolve_symbol_info(ast::identifier_handle handle, stdx::option<symbol_kind> kind)
@@ -1087,6 +1104,12 @@ class type_resolver {
     bool in_mutating_context_{false};
     // Set while resolving a `dyn I` that may stay unsized: a `&`/`^` operand or an alias value
     bool dyn_unsized_ok_{false};
+    // Set while resolving the interface named by a `&dyn I` / `^dyn I`
+    bool resolving_dyn_referent_{false};
+    // Interfaces whose signatures are resolving, so a `&dyn I` in one can name it
+    std::vector<open_interface> open_interfaces_;
+    // `&dyn I` uses of an open interface, checked for `dyn`-safety once it commits
+    std::vector<deferred_dyn_check> deferred_dyn_checks_;
     bool for_generic_instantiation_{false};
     bool in_subscript_index_{false};
     bool in_for_iterable_{false};

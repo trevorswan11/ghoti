@@ -198,7 +198,8 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
     if (overrode_shadow) {
         resolve_symbol(id, sym);
     } else {
-        const auto forwarded_type{forward_type(resolving_, id.get_modifier(), sym)};
+        const auto forwarded_type{
+            forward_type(resolving_, id.get_modifier(), sym, resolving_dyn_referent_)};
         const auto mods{id.get_modifier()};
         // A by-value reference to an aggregate whose own resolution has not started yet
         if (forwarded_type && !forwarded_type->is_resolved() &&
@@ -444,7 +445,12 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_expr_typ
 auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type& dyn) -> void {
     PROFILE_FUNCTION();
     const bool unsized_ok{std::exchange(dyn_unsized_ok_, false)};
-    TRY_RESOLVE(dyn.interface_type);
+    {
+        // A `dyn` view never needs its interface's layout, so it may name one still resolving.
+        // By value it is rejected as unsized below.
+        const mutating_context_guard referent{resolving_dyn_referent_, true};
+        TRY_RESOLVE(dyn.interface_type);
+    }
     auto& iface_type{denoted_type(*last_type_.take())};
     if (iface_type.get_kind() != type_kind::INTERFACE) {
         return last_type_.emplace(
@@ -455,14 +461,38 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
                              error::TYPE_MISMATCH,
                              resolving_.ast.location_of(dyn.interface_type)));
     }
-    const auto& iface{iface_type.get_data().as<types::interface_t>()};
+
+    // An interface still resolving its own signatures binds against what it has resolved so far
+    gsl::span<std::string_view>                      assoc_type_names;
+    gsl::span<const ast::interface_expr::assoc_type> ast_assoc_types;
+    gsl::not_null<const mod::module_t*>              enclosing{&resolving_};
+    if (iface_type.is_resolved()) {
+        const auto& iface{iface_type.get_data().as<types::interface_t>()};
+        assoc_type_names = iface.assoc_type_names;
+        ast_assoc_types  = iface.ast_assoc_types;
+        enclosing        = &iface.enclosing;
+    } else {
+        const auto open{std::ranges::find(
+            open_interfaces_, &iface_type, [](const auto& o) { return o.iface.get(); })};
+        if (open == open_interfaces_.end()) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 fmt::format("'{}' is used during its own resolution",
+                                             ctx_.type_display_name(iface_type)),
+                                 error::CYCLIC_DEPENDENCY,
+                                 resolving_.ast.location_of(dyn.interface_type)));
+        }
+        assoc_type_names = open->assoc_type_names;
+        ast_assoc_types  = open->ast_assoc_types;
+    }
 
     // Resolve the `(Assoc = T, ...)` list into per-associated-type slots in interface order.
-    auto bindings{ctx_.pool.get_many_pending(iface.assoc_type_names.size())};
+    auto bindings{ctx_.pool.get_many_pending(assoc_type_names.size())};
     for (const auto& ab : dyn.assoc_bindings) {
         const auto& bname{resolving_.ast.get_as<ast::identifier_expr>(ab.name).name};
-        const auto  slot{std::ranges::find(iface.assoc_type_names, bname)};
-        if (slot == iface.assoc_type_names.end()) {
+        const auto  slot{std::ranges::find(assoc_type_names, bname)};
+        if (slot == assoc_type_names.end()) {
             ctx_.diags.emplace_back(fmt::format("`{}` has no associated type `{}`",
                                                 ctx_.type_display_name(iface_type),
                                                 bname),
@@ -471,70 +501,47 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
             continue;
         }
         TRY_RESOLVE(ab.type);
-        bindings[static_cast<usize>(slot - iface.assoc_type_names.begin())] =
+        bindings[static_cast<usize>(slot - assoc_type_names.begin())] =
             denoted_type(*last_type_.take());
     }
 
     // `dyn`-safety: every associated type must be pinned here or defaulted. Fill defaulted slots
     // so `dyn_t.assoc_bindings` is complete for method-signature substitution.
-    for (usize i{0}; i < iface.assoc_type_names.size(); ++i) {
+    for (usize i{0}; i < assoc_type_names.size(); ++i) {
         if (bindings[i]) { continue; }
-        if (!iface.ast_assoc_types[i].default_type) {
+        if (!ast_assoc_types[i].default_type) {
             return last_type_.emplace(ctx_.poison_node(
                 resolving_,
                 id,
                 fmt::format("`&dyn {}` needs associated type `{}` bound: write `dyn {}({} = ...)`",
                             ctx_.type_display_name(iface_type),
-                            iface.assoc_type_names[i],
+                            assoc_type_names[i],
                             ctx_.type_display_name(iface_type),
-                            iface.assoc_type_names[i]),
+                            assoc_type_names[i]),
                 error::DYN_UNBOUND_ASSOC,
                 resolving_.ast.location_of(id)));
         }
         // The default's node lives in the interface's module, which already resolved it
-        const auto default_type{
-            iface.enclosing.get_sema_type_opt(*iface.ast_assoc_types[i].default_type)};
+        const auto default_type{enclosing->get_sema_type_opt(*ast_assoc_types[i].default_type)};
         if (!default_type || default_type->is_poison()) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id));
         }
         bindings[i] = denoted_type(*default_type);
     }
 
-    // `dyn`-safety: a method must take `self` by `&`/`^` and must not mention `@This()` directly
-    const auto is_dyn_unsafe_slot{
-        [&](const type& t) { return t.get_kind() == type_kind::INTERFACE; }};
-    for (usize i{0}; i < iface.method_names.size(); ++i) {
-        const auto fn{iface.method_sigs[i]->get_data().as_opt<types::function>()};
-        if (!fn) { continue; }
-        bool unsafe{fn->has_self && !fn->params.empty() &&
-                    fn->params[0]->get_kind() != type_kind::POINTER &&
-                    fn->params[0]->get_kind() != type_kind::REFERENCE};
-        for (usize p{fn->has_self ? 1UZ : 0UZ}; !unsafe && p < fn->params.size(); ++p) {
-            unsafe = is_dyn_unsafe_slot(*fn->params[p]);
-        }
-        unsafe = unsafe || is_dyn_unsafe_slot(fn->return_type);
-        if (unsafe) {
-            return last_type_.emplace(ctx_.poison_node(
-                resolving_,
-                id,
-                fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, `@This()`, or an "
-                            "unbound associated type by value",
-                            ctx_.type_display_name(iface_type),
-                            iface.method_names[i]),
-                error::DYN_BY_VALUE_SELF,
-                resolving_.ast.location_of(id)));
-        }
+    // An open interface's methods aren't all known yet, so it is checked once it commits
+    if (!iface_type.is_resolved()) {
+        deferred_dyn_checks_.emplace_back(&iface_type, resolving_.ast.location_of(id));
+    } else if (auto problem{dyn_safety_problem(iface_type)}) {
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   std::move(*problem),
+                                                   error::DYN_BY_VALUE_SELF,
+                                                   resolving_.ast.location_of(id)));
     }
 
     // Every slot is bound or defaulted by now
-    const auto   bound{ctx_.pool.settle(bindings)};
-    types::key_t key{type_kind::DYN, types::mut::CONSTANT, &iface_type};
-    for (usize i{0}; i < bound.size(); ++i) {
-        key.imprint(static_cast<u64>(i + 1));
-        key.imprint(*bound[i]);
-    }
-    auto& dyn_type{*ctx_.pool[key]};
-    dyn_type.resolve_if<types::dyn_t>(iface_type, bound);
+    auto& dyn_type{ctx_.get_dyn(iface_type, ctx_.pool.settle(bindings))};
 
     // `dyn I` is unsized: legal only as the referent of `&` / `^`.
     auto& final_type{apply_explicit_modifiers(id, dyn_type)};
@@ -547,6 +554,42 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::explicit_dyn_type
     }
     resolving_.set_sema_type(id, final_type);
     last_type_.emplace(final_type);
+}
+
+// A method must take `self` by `&`/`^` and must not mention `@This()` directly
+auto type_resolver::dyn_safety_problem(const type& iface_type) const -> stdx::option<std::string> {
+    const auto& iface{iface_type.get_data().as<types::interface_t>()};
+    const auto  is_dyn_unsafe_slot{
+        [](const type& t) { return t.get_kind() == type_kind::INTERFACE; }};
+    for (usize i{0}; i < iface.method_names.size(); ++i) {
+        const auto fn{iface.method_sigs[i]->get_data().as_opt<types::function>()};
+        if (!fn) { continue; }
+        bool unsafe{fn->has_self && !fn->params.empty() &&
+                    fn->params[0]->get_kind() != type_kind::POINTER &&
+                    fn->params[0]->get_kind() != type_kind::REFERENCE};
+        for (usize p{fn->has_self ? 1UZ : 0UZ}; !unsafe && p < fn->params.size(); ++p) {
+            unsafe = is_dyn_unsafe_slot(*fn->params[p]);
+        }
+        unsafe = unsafe || is_dyn_unsafe_slot(fn->return_type);
+        if (unsafe) {
+            return fmt::format("`{}` is not `dyn`-safe: method `{}` passes `self`, `@This()`, or "
+                               "an unbound associated type by value",
+                               ctx_.type_display_name(iface_type),
+                               iface.method_names[i]);
+        }
+    }
+    return stdx::none;
+}
+
+auto type_resolver::check_deferred_dyn_safety(const type& iface_type) -> void {
+    const auto problem{dyn_safety_problem(iface_type)};
+    std::erase_if(deferred_dyn_checks_, [&](const deferred_dyn_check& check) {
+        if (check.iface.get() != &iface_type) { return false; }
+        if (problem) {
+            ctx_.diags.emplace_back(*problem, error::DYN_BY_VALUE_SELF, check.location);
+        }
+        return true;
+    });
 }
 
 // An array whose length folds late is sized before it meets its peers, behind a pointer too

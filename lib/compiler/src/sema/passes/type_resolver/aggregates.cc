@@ -715,6 +715,18 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
             resolve_symbol_info(ac.name, symbol_kind::VALUE);
         }
 
+        auto assoc_type_names{ctx_.arena.make_span<std::string_view>(iface.assoc_types.size())};
+        for (usize i{0}; const auto& at : iface.assoc_types) {
+            assoc_type_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*at.name).name;
+        }
+        auto assoc_const_names{ctx_.arena.make_span<std::string_view>(iface.assoc_consts.size())};
+        for (usize i{0}; const auto& ac : iface.assoc_consts) {
+            assoc_const_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*ac.name).name;
+        }
+
+        // A method may take or return a `&dyn` of this interface before it commits
+        open_interfaces_.emplace_back(&iface_type, assoc_type_names, iface.assoc_types);
+
         // Build the method signatures only (params / return / self) requirements-first, so
         // `requirement_count` partitions the arrays.
         usize      out{0};
@@ -748,15 +760,6 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
         const auto requirement_count{out};
         emit_pass(false);
 
-        auto assoc_type_names{ctx_.arena.make_span<std::string_view>(iface.assoc_types.size())};
-        for (usize i{0}; const auto& at : iface.assoc_types) {
-            assoc_type_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*at.name).name;
-        }
-        auto assoc_const_names{ctx_.arena.make_span<std::string_view>(iface.assoc_consts.size())};
-        for (usize i{0}; const auto& ac : iface.assoc_consts) {
-            assoc_const_names[i++] = resolving_.ast.get_as<ast::identifier_expr>(*ac.name).name;
-        }
-
         committable_resolution<types::interface_t> resolution{iface_type,
                                                               method_sigs,
                                                               method_src,
@@ -770,6 +773,8 @@ auto type_resolver::visit(ID id, const ast::interface_expr& iface) -> void {
                                                               iface.assoc_consts,
                                                               resolving_};
         resolution.commit();
+        open_interfaces_.pop_back();
+        check_deferred_dyn_safety(iface_type);
 
         // With the interface type committed, default-method bodies and defaulted associated
         // items can now resolve `self.method(...)` / `Self`-typed references against the set.
