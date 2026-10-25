@@ -139,6 +139,26 @@ TEST_CASE("multiplying and dividing integers past the inline width goes through 
     )") == 0);
 }
 
+TEST_CASE("128-bit division libcalls agree with compiler_rt on the C ABI") {
+    CHECK(helpers::compile_and_run(R"(
+        const udiv = fn(a: u128, b: u128): u128 { return a / b; };
+        const umod = fn(a: u128, b: u128): u128 { return a % b; };
+        const sdiv = fn(a: i128, b: i128): i128 { return a / b; };
+        const smod = fn(a: i128, b: i128): i128 { return a % b; };
+        const div96 = fn(a: u96, b: u96): u96 { return a / b; };
+        pub const main = fn(): i32 {
+            if (udiv(100, 7) != 14) { return 1; }
+            if (umod(100, 7) != 2) { return 2; }
+            if (sdiv(-100, 7) != -14) { return 3; }
+            if (smod(-100, 7) != -2) { return 4; }
+            if (div96(100, 7) != 14) { return 5; }
+            let big: u128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFF0;
+            if (udiv(big, 0x1_0000_0000) != 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF) { return 6; }
+            return 0;
+        };
+    )") == 0);
+}
+
 TEST_CASE("multiplying and dividing the widest integers compiles promptly") {
     CHECK(helpers::compile_and_run(R"(
         const mul = fn(a: u65535, b: u65535): u65535 { return a * b; };

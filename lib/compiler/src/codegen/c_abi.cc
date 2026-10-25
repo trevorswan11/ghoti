@@ -297,6 +297,7 @@ class classifier {
     }
 
     [[nodiscard]] auto plan_return(abi_model model, llvm::Type* ty) const -> value_plan {
+        if (model == abi_model::WIN64 && is_wide_integer(ty)) { return win64_wide_return(ty); }
         if (!is_by_value_aggregate(ty) || alloc_size(ty) == 0) { return direct(ty); }
         switch (model) {
         case abi_model::WIN64:          return win64(ty);
@@ -318,6 +319,9 @@ class classifier {
     [[nodiscard]] auto
     plan_param(abi_model model, llvm::Type* ty, register_budget& budget, bool fixed) const
         -> value_plan {
+        if (model == abi_model::WIN64 && is_wide_integer(ty)) {
+            return memory(ty, pass_kind::INDIRECT);
+        }
         if (!is_by_value_aggregate(ty) || alloc_size(ty) == 0) {
             if (model == abi_model::SYSV_X86_64) { spend_scalar(ty, budget); }
             if (model == abi_model::RISCV) { riscv_spend_scalar(ty, budget, fixed); }
@@ -342,6 +346,19 @@ class classifier {
         const auto size{alloc_size(ty)};
         if (size == 1 || size == 2 || size == 4 || size == 8) {
             return coerced(ty, {int_of_bytes(size)});
+        }
+        return memory(ty, pass_kind::INDIRECT);
+    }
+
+    [[nodiscard]] static auto is_wide_integer(llvm::Type* ty) -> bool {
+        return ty->isIntegerTy() && ty->getIntegerBitWidth() > 64;
+    }
+
+    // Win64 passes integers wider than 64 bits by reference and returns `i128` in xmm0, which is
+    // also how LLVM calls compiler_rt's `__udivti3` family
+    [[nodiscard]] auto win64_wide_return(llvm::Type* ty) const -> value_plan {
+        if (ty->isIntegerTy(128)) {
+            return coerced(ty, {llvm::FixedVectorType::get(llvm::Type::getInt64Ty(context_), 2)});
         }
         return memory(ty, pass_kind::INDIRECT);
     }
