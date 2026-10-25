@@ -40,6 +40,7 @@
 #include "compiler/codegen/opt_level.hh"
 #include "compiler/codegen/soft_f80.hh"
 #include "compiler/codegen/target.hh"
+#include "compiler/codegen/wide_int_arith.hh"
 #include "compiler/gir/emitter.hh"
 #include "compiler/gir/instruction.hh"
 #include "compiler/gir/module.hh"
@@ -264,6 +265,7 @@ auto apply_target_features(llvm::Module& llvm_mod, const llvm::TargetMachine* ta
     -> stdx::result<void, codegen::diagnostic> {
     apply_target_features(llvm_mod, options.target_machine);
     TRY(codegen::soften_f80(llvm_mod));
+    codegen::expand_wide_int_arith(llvm_mod);
     std::string              err_str;
     llvm::raw_string_ostream os{err_str};
     if (llvm::verifyModule(llvm_mod, &os)) {
@@ -274,6 +276,7 @@ auto apply_target_features(llvm::Module& llvm_mod, const llvm::TargetMachine* ta
         has_always_inline(llvm_mod)) {
         codegen::llvm_optimizer optimizer{llvm_mod.getContext()};
         TRY(optimizer.optimize(llvm_mod, options));
+        codegen::expand_wide_int_arith(llvm_mod);
     }
     return {};
 }

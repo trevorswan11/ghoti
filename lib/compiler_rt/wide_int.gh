@@ -1,0 +1,410 @@
+//! Multiplication and division of integers too wide for LLVM to expand inline
+import std;
+import "compiler_rt.gh" as compiler_rt;
+
+const symbol = compiler_rt.symbol;
+
+comptime {
+    symbol(__ghoti_mulei, "__ghoti_mulei");
+    symbol(__ghoti_umuloei, "__ghoti_umuloei");
+    symbol(__ghoti_smuloei, "__ghoti_smuloei");
+    symbol(__ghoti_udivei, "__ghoti_udivei");
+    symbol(__ghoti_umodei, "__ghoti_umodei");
+    symbol(__ghoti_sdivei, "__ghoti_sdivei");
+    symbol(__ghoti_smodei, "__ghoti_smodei");
+}
+
+const Limb = u32;
+const limb_bits = 32;
+const all_ones: Limb = 0xFFFF_FFFF;
+/// Division's scratch space covers the widest integer, `u65535`
+const max_limbs = (65535 + limb_bits - 1) / limb_bits;
+
+@[inline(.always)] const limb_count = fn(bits: usize): usize {
+    return (bits + limb_bits - 1) / limb_bits;
+};
+
+/// Where limb `i`, counting from the least significant, sits in a `len`-limb buffer
+@[inline(.always)] const index = fn(len: usize, i: usize): usize {
+    @cfg (endian == .little) {
+        return i;
+    }
+    return len - 1 - i;
+};
+
+/// Limb `i` of `x`, or the extension `fill` past its top
+@[inline(.always)] const limb_or = fn(x: ^Limb, len: usize, i: usize, fill: Limb): Limb {
+    return if (i < len) x[index(len, i)] else fill;
+};
+
+@[inline(.always)] const is_negative = fn(x: ^Limb, len: usize): bool {
+    return x[index(len, len - 1)] >> (limb_bits - 1) != 0;
+};
+
+/// The limbs a signed operand extends with
+@[inline(.always)] const extension = fn(x: ^Limb, len: usize, comptime is_signed: bool): Limb {
+    return if (is_signed and is_negative(x, len)) all_ones else 0;
+};
+
+/// Writes the low limbs of `a * b` to `r` column by column, and returns whether the whole product
+/// fits in `bits` when `check` is set. A signed product is exact once both operands are
+/// sign-extended to twice the width, so those columns run twice as far.
+const multiply = fn(
+    r: ^mut Limb,
+    a: ^Limb,
+    b: ^Limb,
+    bits: usize,
+    comptime check: bool,
+    comptime is_signed: bool,
+): bool {
+    let len = limb_count(bits);
+    let span = if (check and is_signed) 2 * len else len;
+    let columns = if (check) 2 * len else len;
+    let fill_a = extension(a, len, is_signed);
+    let fill_b = extension(b, len, is_signed);
+
+    // Every product bit from `first_check` up has to repeat the extension of the result
+    let first_check = if (is_signed) bits - 1 else bits;
+    let sign_limb = (bits - 1) / limb_bits;
+    let mut expected: Limb = 0;
+    let mut fits = true;
+
+    let mut acc: u128 = 0;
+    for (0..columns) |k| {
+        let mut i = if (k >= span) k - span + 1 else 0;
+        let last = @min(k, span - 1);
+        while (i <= last) : (i += 1) {
+            let p = @as(u64, limb_or(a, len, i, fill_a)) * limb_or(b, len, k - i, fill_b);
+            acc += p;
+        }
+        let digit = @truncate(Limb, acc);
+        acc >>= limb_bits;
+        if (k < len) {
+            r[index(len, k)] = digit;
+        }
+
+        if comptime (check) {
+            if (is_signed and k == sign_limb) {
+                let shift: u5 = @intCast((bits - 1) % limb_bits);
+                expected = if ((digit >> shift) & 1 != 0) all_ones else 0;
+            }
+            let start = k * limb_bits;
+            if (start + limb_bits > first_check) {
+                let mask = if (start >= first_check) all_ones
+                    else all_ones << @as(u5, @intCast(first_check - start));
+                if ((digit ^ expected) & mask != 0) {
+                    fits = false;
+                }
+            }
+        }
+    }
+    return fits;
+};
+
+/// Wrapping `a * b`, the same for either signedness
+const __ghoti_mulei = fn(r: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): void {
+    _ = multiply(r, a, b, bits, false, false);
+};
+
+/// Wrapping unsigned `a * b`, returning whether the exact product overflowed `bits`
+const __ghoti_umuloei = fn(r: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): bool {
+    return !multiply(r, a, b, bits, true, false);
+};
+
+/// Wrapping signed `a * b`, returning whether the exact product overflowed `bits`
+const __ghoti_smuloei = fn(r: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): bool {
+    return !multiply(r, a, b, bits, true, true);
+};
+
+/// The number of limbs up to and including the most significant non-zero one
+const significant = fn(x: ^Limb, len: usize): usize {
+    let mut n = len;
+    while (n > 0 and x[index(len, n - 1)] == 0) {
+        n -= 1;
+    }
+    return n;
+};
+
+/// Writes `u / v`, or `u % v` when `want_rem`, for unsigned `len`-limb operands. Knuth's
+/// Algorithm D (TAOCP 4.3.1) as Hacker's Delight's `divmnu` spells it. Division by zero leaves 0.
+const divide = fn(out: ^mut Limb, u: ^Limb, v: ^Limb, len: usize, comptime want_rem: bool): void {
+    for (0..len) |i| {
+        out[i] = 0;
+    }
+    let m = significant(u, len);
+    let n = significant(v, len);
+    if (n == 0) {
+        return;
+    }
+    if (m < n) {
+        if (want_rem) {
+            for (0..len) |i| {
+                out[i] = u[i];
+            }
+        }
+        return;
+    }
+
+    // One limb of divisor needs no normalization: long division a limb at a time
+    if (n == 1) {
+        let d: u64 = v[index(len, 0)];
+        let mut k: u64 = 0;
+        let mut j = m;
+        while (j > 0) {
+            j -= 1;
+            let cur = (k << limb_bits) | u[index(len, j)];
+            if (!want_rem) {
+                out[index(len, j)] = @truncate(Limb, cur / d);
+            }
+            k = cur % d;
+        }
+        if (want_rem) {
+            out[index(len, 0)] = @truncate(Limb, k);
+        }
+        return;
+    }
+
+    // Shift both until the divisor's top limb has its high bit set, so each trial quotient digit
+    // is at most two too large. `un` and `vn` count from the least significant limb.
+    let mut un: [max_limbs + 1]mut Limb = undefined;
+    let mut vn: [max_limbs]mut Limb = undefined;
+    let s: u6 = @intCast(@clz(v[index(len, n - 1)]));
+    let rs: u6 = limb_bits - s;
+    let mut i = n - 1;
+    while (i > 0) : (i -= 1) {
+        let hi = @as(u64, v[index(len, i)]) << s;
+        let lo = @as(u64, v[index(len, i - 1)]) >> rs;
+        vn[i] = @truncate(Limb, hi | lo);
+    }
+    vn[0] = @truncate(Limb, @as(u64, v[index(len, 0)]) << s);
+    un[m] = @truncate(Limb, @as(u64, u[index(len, m - 1)]) >> rs);
+    i = m - 1;
+    while (i > 0) : (i -= 1) {
+        let hi = @as(u64, u[index(len, i)]) << s;
+        let lo = @as(u64, u[index(len, i - 1)]) >> rs;
+        un[i] = @truncate(Limb, hi | lo);
+    }
+    un[0] = @truncate(Limb, @as(u64, u[index(len, 0)]) << s);
+
+    const base: u64 = 1 << limb_bits;
+    let mut j = m - n + 1;
+    while (j > 0) {
+        j -= 1;
+        let top = (@as(u64, un[j + n]) << limb_bits) | un[j + n - 1];
+        let mut qhat = top / vn[n - 1];
+        let mut rhat = top - qhat * vn[n - 1];
+        while (qhat >= base or qhat * vn[n - 2] > (rhat << limb_bits) + un[j + n - 2]) {
+            qhat -= 1;
+            rhat += vn[n - 1];
+            if (rhat >= base) {
+                break;
+            }
+        }
+
+        // Subtract `qhat * vn` from the window of `un` it lines up with
+        let mut borrow: i64 = 0;
+        for (0..n) |k| {
+            let p = qhat * vn[k];
+            let t = @as(i64, un[k + j]) - borrow - @intCast(i64, p & all_ones);
+            un[k + j] = @truncate(Limb, @bitCast(u64, t));
+            borrow = @intCast(i64, p >> limb_bits) - (t >> limb_bits);
+        }
+        let t = @as(i64, un[j + n]) - borrow;
+        un[j + n] = @truncate(Limb, @bitCast(u64, t));
+
+        // Rarely `qhat` was still one too large: add the divisor back
+        if (t < 0) {
+            qhat -= 1;
+            let mut carry: u64 = 0;
+            for (0..n) |k| {
+                let sum = @as(u64, un[k + j]) + vn[k] + carry;
+                un[k + j] = @truncate(Limb, sum);
+                carry = sum >> limb_bits;
+            }
+            un[j + n] +%= @truncate(Limb, carry);
+        }
+        if (!want_rem) {
+            out[index(len, j)] = @truncate(Limb, qhat);
+        }
+    }
+
+    if (want_rem) {
+        for (0..n - 1) |k| {
+            let lo = @as(u64, un[k]) >> s;
+            let hi = @as(u64, un[k + 1]) << rs;
+            out[index(len, k)] = @truncate(Limb, lo | hi);
+        }
+        out[index(len, n - 1)] = un[n - 1] >> @as(u5, @intCast(s));
+    }
+};
+
+/// Writes the two's complement negation of `x` to `dst`, or copies it when `negate` is false
+const negate_into = fn(dst: ^mut Limb, x: ^Limb, len: usize, negate: bool): void {
+    let mut carry: u64 = 1;
+    for (0..len) |i| {
+        let at = index(len, i);
+        if (negate) {
+            let sum = @as(u64, ~x[at]) + carry;
+            dst[at] = @truncate(Limb, sum);
+            carry = sum >> limb_bits;
+        } else {
+            dst[at] = x[at];
+        }
+    }
+};
+
+/// Signed division through the magnitudes: the quotient is negative when the signs differ, the
+/// remainder takes the dividend's sign
+const divide_signed = fn(
+    out: ^mut Limb,
+    a: ^Limb,
+    b: ^Limb,
+    bits: usize,
+    comptime want_rem: bool,
+): void {
+    let len = limb_count(bits);
+    let a_negative = is_negative(a, len);
+    let b_negative = is_negative(b, len);
+    let mut abs_a: [max_limbs]mut Limb = undefined;
+    let mut abs_b: [max_limbs]mut Limb = undefined;
+    negate_into(^mut abs_a[0], a, len, a_negative);
+    negate_into(^mut abs_b[0], b, len, b_negative);
+    divide(out, ^abs_a[0], ^abs_b[0], len, want_rem);
+    let negative = if (want_rem) a_negative else a_negative != b_negative;
+    negate_into(out, out, len, negative);
+};
+
+const __ghoti_udivei = fn(q: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): void {
+    divide(q, a, b, limb_count(bits), false);
+};
+
+const __ghoti_umodei = fn(r: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): void {
+    divide(r, a, b, limb_count(bits), true);
+};
+
+const __ghoti_sdivei = fn(q: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): void {
+    divide_signed(q, a, b, bits, false);
+};
+
+const __ghoti_smodei = fn(r: ^mut Limb, a: ^Limb, b: ^Limb, bits: usize) callconv(.c): void {
+    divide_signed(r, a, b, bits, true);
+};
+
+/// xorshift64, so the tests cover the same operands everywhere
+const Rng = struct {
+    state: u64,
+
+    pub const next = fn(self: ^mut Rng): u64 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        return self.state;
+    };
+};
+
+/// A value of `T` with a random number of significant bits, so every division path runs
+@[testing] const random_operand = fn(comptime T: type, rng: ^mut Rng): T {
+    const U = @Int(.{ .signedness = .unsigned, .bits = @bitSizeOf(T) });
+    let mut x: U = 0;
+    for (0..(@bitSizeOf(T) + 63) / 64) |_| {
+        x = (x << 32 << 32) | @as(U, Rng.next(rng));
+    }
+    let keep = Rng.next(rng) % @bitSizeOf(T);
+    x >>= @intCast(keep);
+    // Negated half the time, so signed operands are negative as often as not
+    if (Rng.next(rng) & 1 != 0) {
+        x = 0 -% x;
+    }
+    return @bitCast(T, x);
+};
+
+@[testing] const limbs = fn(comptime T: type, x: ^T): ^Limb {
+    return @ptrCast(^Limb, x);
+};
+
+@[testing] const limbs_mut = fn(comptime T: type, x: ^mut T): ^mut Limb {
+    return @ptrCast(^mut Limb, x);
+};
+
+@[testing] const is_signed_int = fn(comptime T: type): bool {
+    return @typeInfo(T).int.signedness == .signed;
+};
+
+/// `a * b` wrapped to `T`, called the way lowering calls the routine
+@[testing] const wide_mul = fn(comptime T: type, a: T, b: T): T {
+    let mut r: T = undefined;
+    __ghoti_mulei(limbs_mut(T, ^mut r), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    return r;
+};
+
+/// Whether `a * b` overflows `T`, writing the wrapped product to `r`
+@[testing] const wide_mul_overflows = fn(comptime T: type, a: T, b: T, r: ^mut T): bool {
+    if (is_signed_int(T)) {
+        return __ghoti_smuloei(limbs_mut(T, r), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    }
+    return __ghoti_umuloei(limbs_mut(T, r), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+};
+
+@[testing] const wide_div = fn(comptime T: type, a: T, b: T): T {
+    let mut q: T = undefined;
+    if (is_signed_int(T)) {
+        __ghoti_sdivei(limbs_mut(T, ^mut q), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    } else {
+        __ghoti_udivei(limbs_mut(T, ^mut q), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    }
+    return q;
+};
+
+@[testing] const wide_rem = fn(comptime T: type, a: T, b: T): T {
+    let mut r: T = undefined;
+    if (is_signed_int(T)) {
+        __ghoti_smodei(limbs_mut(T, ^mut r), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    } else {
+        __ghoti_umodei(limbs_mut(T, ^mut r), limbs(T, ^a), limbs(T, ^b), @bitSizeOf(T));
+    }
+    return r;
+};
+
+@[testing] const check_against_native = fn(comptime T: type, rng: ^mut Rng): void {
+    let a = random_operand(T, rng);
+    let b = random_operand(T, rng);
+    @expect(wide_mul(T, a, b) == a *% b);
+
+    let mut product: T = undefined;
+    let mut native: T = undefined;
+    @expect(wide_mul_overflows(T, a, b, ^mut product) == @mulWithOverflow(a, b, ^mut native));
+    @expect(product == native);
+
+    if (b == 0 or (is_signed_int(T) and b == -1)) {
+        return;
+    }
+    @expect(wide_div(T, a, b) == @divTrunc(a, b));
+    @expect(wide_rem(T, a, b) == @rem(a, b));
+};
+
+test "wide integer routines agree with LLVM's own expansion" {
+    let mut rng = Rng{ .state = 0x9E37_79B9_7F4A_7C15 };
+    for (0..400) |_| {
+        check_against_native(u64, ^mut rng);
+        check_against_native(i64, ^mut rng);
+        check_against_native(u160, ^mut rng);
+        check_against_native(i160, ^mut rng);
+        check_against_native(u256, ^mut rng);
+        check_against_native(i256, ^mut rng);
+        check_against_native(u512, ^mut rng);
+        check_against_native(i512, ^mut rng);
+    }
+}
+
+test "signed wide multiplication overflows at the type's edges" {
+    let min: i256 = std.math.min_int(i256);
+    let max: i256 = std.math.max_int(i256);
+    let mut r: i256 = undefined;
+    @expect(wide_mul_overflows(i256, min, -1, ^mut r));
+    @expect(r == min);
+    @expect(!wide_mul_overflows(i256, max, -1, ^mut r));
+    @expect(r == -max);
+    @expect(wide_mul_overflows(i256, max, 2, ^mut r));
+    @expect(!wide_mul_overflows(i256, min / 2, 2, ^mut r));
+    @expect(r == min);
+}

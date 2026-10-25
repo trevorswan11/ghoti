@@ -132,19 +132,7 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             auto& new_ret{remap_type(ctx, fn.return_type, from, to)};
             if (!changed && &new_ret == &fn.return_type) { return t; }
 
-            types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
-            for (auto p : new_params) { key.imprint(*p); }
-            key.imprint(new_ret);
-            key.imprint(static_cast<u64>(fn.has_self));
-            key.imprint(static_cast<u64>(fn.is_variadic));
-            key.imprint(fn.conv);
-            key.imprint(static_cast<u64>(fn.erased));
-            if (t.has_symbol_table_idx()) { key.imprint(t.get_symbol_table_idx()); }
-            auto& nt{*ctx.pool[key]};
-            nt.resolve_if<types::function>(
-                new_params, new_ret, fn.has_self, fn.is_variadic, fn.conv, fn.erased);
-            if (t.has_symbol_table_idx()) { nt.set_symbol_table_idx(t.get_symbol_table_idx()); }
-
+            auto& nt{keyed_function_type(ctx, t, new_params, new_ret)};
             if (&nt != &t) {
                 if (auto info{ctx.generic_functions.get_opt(t)}) {
                     stdx::option<type&> remapped_enclosing{info->enclosing_type};
@@ -175,6 +163,22 @@ auto remap_type(context& ctx, type& t, const type& from, type& to) -> type& {
             return changed ? ctx.get_dyn(d.interface, new_bindings) : t;
         },
         [&t](const auto&) -> type& { return t; });
+}
+
+auto keyed_function_type(context& ctx, type& t, type_span params, type& ret) -> type& {
+    const auto&  fn{t.get_data().as<types::function>()};
+    types::key_t key{type_kind::FUNCTION, t.get_key().get_mut()};
+    for (auto p : params) { key.imprint(*p); }
+    key.imprint(ret);
+    key.imprint(static_cast<u64>(fn.has_self));
+    key.imprint(static_cast<u64>(fn.is_variadic));
+    key.imprint(fn.conv);
+    key.imprint(static_cast<u64>(fn.erased));
+    if (t.has_symbol_table_idx()) { key.imprint(t.get_symbol_table_idx()); }
+    auto& nt{*ctx.pool[key]};
+    nt.resolve_if<types::function>(params, ret, fn.has_self, fn.is_variadic, fn.conv, fn.erased);
+    if (t.has_symbol_table_idx()) { nt.set_symbol_table_idx(t.get_symbol_table_idx()); }
+    return nt;
 }
 
 // Queries whether `operand` implements `builtin.Unwrappable`. If so, extracts the

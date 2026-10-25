@@ -481,6 +481,17 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
     }
     resolve(dot.object);
     if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
+    // `Make().member` builds the type on the spot, as `const M = Make();` would
+    if (const auto deferred{last_type_->get_data().as_opt<types::deferred_call>()}) {
+        const auto&     ctor_call{deferred->call};
+        gir::const_eval evaluator{ctx_, resolving_};
+        auto&           forced{denoted_type(evaluator.force_deferred_call(*last_type_))};
+        if (!forced.get_data().is<types::deferred_call>()) {
+            register_non_generic_type_ctor_members(forced, ctor_call);
+            resolving_.set_sema_type(dot.object, forced);
+            last_type_.emplace(forced);
+        }
+    }
     // An ordinary `Color = enum {...}` names its `enum_t` directly, never wrapped
     auto& object_type{denoted_type(*last_type_.take())};
 

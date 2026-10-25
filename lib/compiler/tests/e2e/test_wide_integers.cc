@@ -89,4 +89,92 @@ TEST_CASE("arbitrary-width integers widen implicitly to wider same-signedness ty
     )") == 0);
 }
 
+TEST_CASE("constants wider than 128 bits keep every bit") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let neg_one: i256 = -1;
+            let neg_five: i200 = -5;
+            let limbs: ^u32 = @ptrCast(^u32, ^neg_one);
+            for (0..8) |i| {
+                if (limbs[i] != 0xFFFF_FFFF) { return 1 + @intCast(i32, i); }
+            }
+            if (@bitCast(u200, neg_five) >> 128 != (1 << 72) - 1) { return 10; }
+            if (~@as(u2048, 0) >> 2041 != 127) { return 11; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("multiplying and dividing integers past the inline width goes through compiler_rt") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let one: u2048 = 1;
+            let a = (one << 1500) + 3;
+            let b = (one << 500) + 5;
+            let product = a * b;
+            // 2^2000 + 5 * 2^1500 + 3 * 2^500 + 15
+            let expected = (one << 2000) + (one << 1502) + (one << 1500) + (one << 501) +
+                (one << 500) + 15;
+            if (product != expected) { return 1; }
+            if (product / b != a) { return 2; }
+            if ((product + 7) % b != 7) { return 3; }
+
+            // Truncating toward zero, the remainder taking the dividend's sign
+            let sa = -@intCast(i2048, a);
+            let sb = @intCast(i2048, b);
+            let sn = -@intCast(i2048, product + 7);
+            if (sn / sb != sa) { return 4; }
+            if (sn % sb != -7) { return 5; }
+            if (sa * sb != -@intCast(i2048, product)) { return 6; }
+
+            let mut wrapped: u2048 = 0;
+            if (!@mulWithOverflow(product, b, ^mut wrapped)) { return 7; }
+            if (@mulWithOverflow(a, b, ^mut wrapped) or wrapped != product) { return 8; }
+            let max = ~@as(u2048, 0);
+            if (product *| b != max) { return 9; }
+            let smax = @intCast(i2048, max >> 1);
+            if (sa *| @intCast(i2048, product) != -smax - 1) { return 10; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("128-bit division libcalls agree with compiler_rt on the C ABI") {
+    CHECK(helpers::compile_and_run(R"(
+        const udiv = fn(a: u128, b: u128): u128 { return a / b; };
+        const umod = fn(a: u128, b: u128): u128 { return a % b; };
+        const sdiv = fn(a: i128, b: i128): i128 { return a / b; };
+        const smod = fn(a: i128, b: i128): i128 { return a % b; };
+        const div96 = fn(a: u96, b: u96): u96 { return a / b; };
+        pub const main = fn(): i32 {
+            if (udiv(100, 7) != 14) { return 1; }
+            if (umod(100, 7) != 2) { return 2; }
+            if (sdiv(-100, 7) != -14) { return 3; }
+            if (smod(-100, 7) != -2) { return 4; }
+            if (div96(100, 7) != 14) { return 5; }
+            let big: u128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFF0;
+            if (udiv(big, 0x1_0000_0000) != 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF) { return 6; }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("multiplying and dividing the widest integers compiles promptly") {
+    CHECK(helpers::compile_and_run(R"(
+        const mul = fn(a: u65535, b: u65535): u65535 { return a * b; };
+        const div = fn(a: u65535, b: u65535): u65535 { return a / b; };
+        const rem = fn(a: i65535, b: i65535): i65535 { return a % b; };
+        pub const main = fn(): i32 {
+            let one: u65535 = 1;
+            let a = (one << 40000) + 1;
+            let b = (one << 20000) + 1;
+            let product = mul(a, b);
+            if (product != (one << 60000) + (one << 40000) + (one << 20000) + 1) { return 1; }
+            if (div(product, b) != a) { return 2; }
+            if (rem(-@intCast(i65535, product) - 2, @intCast(i65535, b)) != -2) { return 3; }
+            return 0;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

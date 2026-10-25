@@ -8,6 +8,7 @@ import "divmod.gh" as _;
 import "divf3.gh" as _;
 import "mulf3.gh" as _;
 import "extendf.gh" as _;
+import "wide_int.gh" as _;
 
 /// Exports `func` with the given name with hidden visitibility and weak linkage
 pub const symbol = fn(comptime func: auto, comptime name: [:0]u8): void {
@@ -160,4 +161,5 @@ test {
     import "divf3.gh";
     import "mulf3.gh";
     import "extendf.gh";
+    import "wide_int.gh";
 }

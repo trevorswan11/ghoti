@@ -66,6 +66,25 @@ namespace {
     return stdx::none;
 }
 
+[[nodiscard]] auto aggregate_members(type& agg) -> gsl::span<stdx::option<type&>> {
+    return agg.get_data().visit([](const auto&) -> gsl::span<stdx::option<type&>> { return {}; },
+                                [](const types::struct_t& s) { return s.members; },
+                                [](const types::union_t& u) { return u.members; },
+                                [](const types::enum_t& e) { return e.members; });
+}
+
+// A non-generic member function's type is one node object that every instance of the ctor
+// re-resolves in place, so each instance keeps the pool's keyed copy of its own signature
+[[nodiscard]] auto detach_member_function(context& ctx, type& member) -> type& {
+    if (!member.is_resolved() || member.is_generic_value() ||
+        ctx.generic_functions.get_opt(member)) {
+        return member;
+    }
+    const auto fn{member.get_data().as_opt<types::function>()};
+    if (!fn) { return member; }
+    return keyed_function_type(ctx, member, fn->params, fn->return_type);
+}
+
 // Records one `context::type_ctor_member_emit` per `const m = fn ...` member of the aggregate
 // returned by a `fn(...): type` constructor.
 auto register_type_ctor_members(context&         ctx,
@@ -99,12 +118,22 @@ auto register_type_ctor_members(context&         ctx,
     }
 
     // The replay must place `@This()` / `.{ ... }` / `^self` nodes at `clone`, not the shared
-    // literal type that later instantiations overwrite.
+    // literal type that later instantiations overwrite. Member signatures go to the clone's copy.
+    const auto src_members{aggregate_members(src_agg)};
+    const auto clone_members{aggregate_members(clone)};
+    const auto rebind{[&](type& ty) -> type& {
+        for (usize i{0}; i < src_members.size() && i < clone_members.size(); ++i) {
+            if (src_members[i] && clone_members[i] && &ty == src_members[i].get()) {
+                return *clone_members[i];
+            }
+        }
+        return remap_type(ctx, ty, src_agg, clone);
+    }};
     for (auto& [_, ty] : typing.node_types) {
-        if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
+        if (ty) { ty.emplace(rebind(*ty)); }
     }
     for (auto& [_, ty] : typing.explicit_types) {
-        if (ty) { ty.emplace(remap_type(ctx, *ty, src_agg, clone)); }
+        if (ty) { ty.emplace(rebind(*ty)); }
     }
 
     // `diff_into` only captures types that changed since the snapshot, so pin the `clone`-remapped
@@ -113,7 +142,7 @@ auto register_type_ctor_members(context&         ctx,
     for (usize idx{0}; idx < node_types.size(); ++idx) {
         auto& ty{node_types[idx]};
         if (!ty) { continue; }
-        auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
+        auto& remapped{rebind(*ty)};
         if (&remapped != ty.get()) {
             typing.node_types.insert_or_assign(idx, stdx::option<type&>{remapped});
         }
@@ -122,7 +151,7 @@ auto register_type_ctor_members(context&         ctx,
     for (usize idx{0}; idx < explicit_types.size(); ++idx) {
         auto& ty{explicit_types[idx]};
         if (!ty) { continue; }
-        auto& remapped{remap_type(ctx, *ty, src_agg, clone)};
+        auto& remapped{rebind(*ty)};
         if (&remapped != ty.get()) {
             typing.explicit_types.insert_or_assign(idx, stdx::option<type&>{remapped});
         }
@@ -170,13 +199,18 @@ auto register_type_ctor_members(context&         ctx,
         for (usize i{0}; i < types.size(); ++i) { out[i] = remap_type(ctx, *types[i], src, fresh); }
         return out;
     }};
+    const auto rebind_members{[&](gsl::span<stdx::option<type&>> members) {
+        auto out{rebind(members)};
+        for (auto& m : out) { m = detach_member_function(ctx, *m); }
+        return out;
+    }};
 
     src.get_data().visit(
         [](const auto&) { UNREACHABLE("clone_anonymous_aggregate on a non-aggregate type"); },
         [&](const types::struct_t& s) {
             fresh.resolve<types::struct_t>(rebind(s.fields),
                                            s.ast_fields,
-                                           rebind(s.members),
+                                           rebind_members(s.members),
                                            s.enclosing,
                                            s.is_c_abi,
                                            s.is_packed,
@@ -185,7 +219,7 @@ auto register_type_ctor_members(context&         ctx,
         [&](const types::union_t& u) {
             fresh.resolve<types::union_t>(rebind(u.fields),
                                           u.ast_fields,
-                                          rebind(u.members),
+                                          rebind_members(u.members),
                                           u.enclosing,
                                           u.is_untagged,
                                           u.is_c_abi,
@@ -193,8 +227,11 @@ auto register_type_ctor_members(context&         ctx,
                                           u.tag_enum);
         },
         [&](const types::enum_t& e) {
-            fresh.resolve<types::enum_t>(
-                e.ast_enumerations, e.non_exhaustive, e.underlying, rebind(e.members), e.enclosing);
+            fresh.resolve<types::enum_t>(e.ast_enumerations,
+                                         e.non_exhaustive,
+                                         e.underlying,
+                                         rebind_members(e.members),
+                                         e.enclosing);
         });
     return fresh;
 }

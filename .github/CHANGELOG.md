@@ -750,6 +750,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `std` and `std/start.gh` declare their `kernel32` imports with it, so programs and `std` link and run on i686 Windows
 - Windows executables link from any host: an import library the program needs (`kernel32`, or any `extern("lib", ...)`) that no SDK or `-L` directory provides is written from the symbols the program imports from it
 - compiler_rt provides 64-bit division for 32-bit targets (`__udivdi3`, `__umoddi3`, `__divdi3`, `__moddi3`, and MSVC's `_aulldiv` / `_aullrem` / `_alldiv` / `_allrem`) and the 32-bit Windows stack probe (`_chkstk` / `_alloca`)
+- On x86-64 Windows, C-convention functions pass integers wider than 64 bits by reference and return `i128` / `u128` in `xmm0`, as clang does, so compiler_rt's `__udivti3` / `__umodti3` / `__divti3` / `__modti3` match the calls LLVM makes for 65 to 128-bit division
 - `f80` works on every target, not only x86
     - Elsewhere it is stored as an 80-bit integer and its arithmetic, comparisons, conversions, and math builtins call compiler_rt routines named as Zig names them (`__addxf3`, `__ltxf2`, `__extenddfxf2`, `__floatdixf`, `__fixxfti`, `__sqrtx`, ...), each taking and returning the value's bits
     - Its layout matches x86's (16 bytes, 16-aligned) in structs, arrays, and closures on every target
@@ -943,9 +944,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a local array sized by a runtime value was accepted and crashed codegen when sliced; its length must be known at compile time
 - Fixed: a math builtin given a type in place of a value (`@clz(u8)`, `@min(u8, 3)`, `@abs(i32)`) crashed the compiler, as did `@branchHint`, `@setRuntimeSafety`, and the eval limit builtins
 - Fixed: a function or function type that passed or returned `opaque` by value crashed codegen; only a pointer to it can be passed
+- Fixed: multiplying or dividing integers wider than 1024 bits left LLVM to expand the operation inline, which took minutes for a `u65535`; `*`, `/`, `%`, the division builtins, `@mulWithOverflow`, and the checked and saturating multiplies now call compiler_rt's `__ghoti_*ei` routines past that width
+- Fixed: a negative constant stored in an integer wider than 128 bits (`let x: i256 = -1;`) kept only its low 128 bits, so the bits above read as zero
+- Fixed: `@intCast` to or from an integer wider than 128 bits crashed the compiler when runtime safety was on
 - Fixed: an argument that didn't fit a generic function with `comptime` parameters was reported by its position among the runtime arguments and under the instance's mangled name (`Argument 1 ... in call to 'sum__usize_cx4'`); it now counts every argument as written and names the function
 - Fixed: a type built by a builtin call in a function type's parameters or return (`extern fn(x: @Int(...)): void`) was taken as a `type` value instead of the type it built
 - An interface method can take or return a `&dyn` / `^dyn` of its own interface (`pub const eq = fn(&self, other: &dyn I): bool;`), and two interfaces can name each other through `dyn` views; holding the interface by value is still rejected
+- Fixed: a static member function of a type constructor's result (`pub const id = fn(a: T): T`) kept one instance's return type for every instance, so `Wrap(i64).id(x)` after `Wrap(u64)` was rejected or returned the wrong type
+- Fixed: a type constructor's member calling a static sibling by bare name (`id(a)`) or through `@This()` (`@This().make(a)`) crashed codegen or failed to link, as did a member call on a non-generic constructor called inline (`Make().id(5)`)
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`
