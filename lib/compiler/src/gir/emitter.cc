@@ -3144,8 +3144,8 @@ auto emitter::emit_array(ast::node_id id, const ast::array_expr& arr) -> value {
 auto emitter::emit_ident(ast::node_id id, const ast::identifier_expr& ident) -> value {
     PROFILE_FUNCTION();
     if (const auto binding{lookup_binding(ident.name)}) {
-        if (binding->is_comptime_mut && !binding->const_val) {
-            // An aggregate `comptime let mut` has no real `gir::value` of its own to cache
+        if (binding->is_comptime_mut) {
+            // A `comptime { ... }` block writes the live frame, not any value cached here
             const auto current{ctx_.lookup_comptime_binding(ident.name)};
             ASSERT(current, "comptime let mut binding must have a live comptime_frame entry");
             return materialize_const(*current);
