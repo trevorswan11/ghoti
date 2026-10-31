@@ -29,7 +29,7 @@ namespace pattern {
 enum class node_kind : u8 {
     WILDCARD,
     VARIANT,    // a tagged union's field, with one child unless the field is void
-    RECORD,     // a struct's fields, or a slice's `len` / `ptr`
+    RECORD,     // a struct's fields, or a slice's `len` / `ptr` / bytes
     ARRAY,      // a fixed array's elements
     DEREF,      // looks through a `&T`
     ENUM_VALUE, // a named enum variant
@@ -122,6 +122,7 @@ enum class step_kind : u8 {
     FIELD,
     ELEMENT,
     DEREF,
+    SLICE_BYTES,
 };
 
 // A location inside the scrutinee, reached from its parent by one step

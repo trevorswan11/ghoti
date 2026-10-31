@@ -8417,6 +8417,14 @@ auto emitter::emit_occurrence_addr(const match_lowering& lowering, usize occ) ->
         auto& ref_type{*lowering.tree.occurrences[*at.parent].value_type};
         return value{builder_.emit_load(value{parent.data, ref_type}, ref_type), field_type};
     }
+    case sema::pattern::step_kind::SLICE_BYTES: {
+        auto& slice_type{*lowering.tree.occurrences[*at.parent].value_type};
+        auto& ptr_type{ctx_.get_pointer(sema::types::mut::CONSTANT,
+                                        slice_type.get_data().as<sema::types::slice>().underlying)};
+        const auto ptr_slot{builder_.emit_get_element_ptr(
+            parent, {value{SLICE_PTR_FIELD_INDEX, usize_type}}, ptr_type)};
+        return value{builder_.emit_load(value{ptr_slot, ptr_type}, ptr_type), ptr_type};
+    }
     }
     UNREACHABLE("Unhandled occurrence step");
 }

@@ -10,6 +10,99 @@
 
 namespace ghoti::tests {
 
+TEST_CASE("Slices match their length and strings their bytes") {
+    SECTION("a slice's length, binding the whole slice") {
+        CHECK(helpers::compile_and_run(R"(
+            const O = union(enum) { some: []u8, none: void };
+            const R = union(enum) { ok: O, err: i32 };
+            const f = fn(r: R): usize {
+                return match (r) {
+                    .ok(.some(.{ .len = 1.. } |raw|)) => raw.len,
+                    _ => 0,
+                };
+            };
+            pub const main = fn(): i32 {
+                let mut buf = [3]u8{ 1, 2, 3 };
+                const empty = R{ .ok = O{ .some = buf[0..0] } };
+                const full = R{ .ok = O{ .some = buf[0..3] } };
+                return @intCast(i32, f(empty) + f(full));
+            };
+        )") == 3);
+    }
+
+    SECTION("string literals, including one sharing a prefix") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(s: []u8): i32 {
+                return match (s) {
+                    "" => 1,
+                    "main" => 2,
+                    "mail" => 3,
+                    "m" => 4,
+                    .{ .len = 4 } => 5,
+                    _ => 6,
+                };
+            };
+            pub const main = fn(): i32 {
+                const ok = f("") == 1 and f("main") == 2 and f("mail") == 3 and f("m") == 4 and f("mint") == 5 and f("nope!") == 6;
+                return if (ok) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("a string nested in a struct") {
+        CHECK(helpers::compile_and_run(R"(
+            const N = struct { pub name: []u8, pub n: i32 };
+            const f = fn(v: N): i32 {
+                return match (v) {
+                    .{ .name = "add", .n = |n| } => n + 1,
+                    .{ .name = "sub", .n = |n| } => n - 1,
+                    _ => 0,
+                };
+            };
+            pub const main = fn(): i32 {
+                return f(N{ .name = "add", .n = 10 }) * 2 + f(N{ .name = "sub", .n = 10 }) + f(N{ .name = "x", .n = 3 });
+            };
+        )") == 31);
+    }
+
+    SECTION("a byte array") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(a: [2]u8): i32 {
+                return match (a) { "ok" => 1, _ => 2 };
+            };
+            pub const main = fn(): i32 {
+                return f([2]u8{ 'o', 'k' }) * 10 + f([2]u8{ 'n', 'o' });
+            };
+        )") == 12);
+    }
+
+    SECTION("folded at compile time") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(s: []u8): i32 {
+                return match (s) {
+                    "main" => 2,
+                    .{ .len = 3 } => 3,
+                    _ => 4,
+                };
+            };
+            const A: i32 = f("main");
+            const B: i32 = f("abc");
+            const C: i32 = f("z");
+            pub const main = fn(): i32 { return A * 100 + B * 10 + C; };
+        )") == 234);
+    }
+
+    SECTION("a string can't overrun a shorter value") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(s: []u8): i32 { return match (s) { "abcdef" => 1, _ => 2 }; };
+            pub const main = fn(): i32 {
+                let mut one = [1]u8{ 'a' };
+                return f(one[0..1]);
+            };
+        )") == 2);
+    }
+}
+
 TEST_CASE("Nested variant patterns reach through payloads") {
     CHECK(helpers::compile_and_run(R"(
         const O = union(enum) { some: i32, none: void };
@@ -557,6 +650,15 @@ TEST_CASE("Malformed nested patterns are rejected with a reason") {
         CHECK(rejects("const W = struct { pub p: P }; let w = W{ .p = p };"
                       " return match (w) { .{ .p = p } => 1, _ => 2 };",
                       ILLEGAL));
+    }
+
+    SECTION("strings") {
+        CHECK(rejects("let s: []u8 = \"a\"; return match (s) { \"a\" => 1 };",
+                      sema::error::MISSING_FIELD));
+        CHECK(
+            rejects("let a = [2]u8{ 1, 2 }; return match (a) { \"abc\" => 1, _ => 2 };", ILLEGAL));
+        CHECK(rejects("let a = [1]i32{ 1 }; return match (a) { \"a\" => 1, _ => 2 };", ILLEGAL));
+        CHECK(rejects("let n: i32 = 1; return match (n) { \"a\" => 1, _ => 2 };", ILLEGAL));
     }
 
     SECTION("open ranges need a sized type") {

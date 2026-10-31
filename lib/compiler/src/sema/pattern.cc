@@ -24,6 +24,11 @@ namespace {
 
 constexpr usize MAX_DECISION_NODES{200'000};
 
+// A slice's third part, which only a string pattern looks at. It sorts after `len`, so the bytes
+// are only ever read once the length is known to fit
+constexpr usize            SLICE_BYTES_FIELD_INDEX{2};
+constexpr std::string_view SLICE_BYTES_FIELD_NAME{"bytes"};
+
 [[nodiscard]] auto make_node(node_kind kind, stdx::option<ast::node_id> source, type& value_type)
     -> node_ptr {
     auto out{std::make_unique<node>(node{.source = source, .value_type = &value_type})};
@@ -135,6 +140,10 @@ class elaborator {
         }
         if (const auto range{tree_.get_as_opt<ast::range_expr>(id)}) {
             return run_range(id, *range, column, top_level);
+        }
+        if (tree_.get_as_opt<ast::string_expr>(id) &&
+            (column.get_kind() == type_kind::SLICE || column.get_kind() == type_kind::ARRAY)) {
+            return run_string(id, column);
         }
         if (const auto init{tree_.get_as_opt<ast::initializer_expr>(id)}) {
             return run_aggregate(id, *init, column, place_is_const);
@@ -440,6 +449,58 @@ class elaborator {
         return out;
     }
 
+    // `"ab"` is `.{ .len = 2, bytes = .{ 'a', 'b' } }`, or just its bytes in a `[2]u8`. Spelling a
+    // string out as bytes lets rows share a prefix, and lets one mix with `.{ .len = ... }`.
+    auto run_string(ast::node_id id, type& column) -> stdx::result<node_ptr, diagnostic> {
+        const auto folded{cx_.callbacks.fold(id)};
+        const auto text{folded ? folded->as_opt<std::string>() : stdx::none};
+        ASSERT(text, "A string literal always folds to its text");
+
+        auto&      byte{column.get_kind() == type_kind::SLICE
+                            ? column.get_data().as<types::slice>().underlying
+                            : column.get_data().as<types::array>().underlying};
+        const auto byte_info{as_integer(byte)};
+        if (!byte_info || byte_info->bits != 8 || byte_info->is_signed) {
+            return make_sema_err(fmt::format("A string can't match a value of type '{}'",
+                                             cx_.ctx.type_display_name(column)),
+                                 error::ILLEGAL_MATCH_PATTERN,
+                                 location_of(id));
+        }
+
+        auto bytes{make_node(node_kind::ARRAY, id, column)};
+        for (usize i{0}; i < text->size(); ++i) {
+            auto element{make_node(node_kind::INT_RANGE, id, byte)};
+            element->lo = big_int{i128{static_cast<u8>((*text)[i])}};
+            element->hi = element->lo;
+            bytes->children.emplace_back(i, "", byte, false, std::move(element));
+        }
+
+        if (const auto arr{column.get_data().as_opt<types::array>()}) {
+            if (arr->len != text->size()) {
+                return make_sema_err(fmt::format("A string of {} bytes can't match a '{}'",
+                                                 text->size(),
+                                                 cx_.ctx.type_display_name(column)),
+                                     error::ILLEGAL_MATCH_PATTERN,
+                                     location_of(id));
+            }
+            return bytes;
+        }
+
+        auto& usize_type{cx_.ctx.get_builtin_resolved_type(type_kind::USIZE)};
+        auto  len{make_node(node_kind::INT_RANGE, id, usize_type)};
+        len->lo = big_int{u128{text->size()}};
+        len->hi = len->lo;
+
+        auto out{make_node(node_kind::RECORD, id, column)};
+        out->children.emplace_back(
+            gir::SLICE_LEN_FIELD_INDEX, "len", usize_type, false, std::move(len));
+        if (!text->empty()) {
+            out->children.emplace_back(
+                SLICE_BYTES_FIELD_INDEX, SLICE_BYTES_FIELD_NAME, column, false, std::move(bytes));
+        }
+        return out;
+    }
+
     auto run_value(ast::node_id id, type& column, bool top_level)
         -> stdx::result<node_ptr, diagnostic> {
         if (column.get_data().is<types::enum_t>()) {
@@ -607,6 +668,13 @@ class tree_builder {
         }
         if (parts.empty()) { return label.empty() ? "_" : label; }
 
+        // A string's bytes say nothing useful once they're spelled out one at a time
+        if (std::ranges::any_of(parts, [&](const auto& part) {
+                return tree_.occurrences[part.first].step == step_kind::SLICE_BYTES;
+            })) {
+            return "_";
+        }
+
         const auto first_step{tree_.occurrences[parts.front().first].step};
         if (first_step == step_kind::DEREF) { return parts.front().second; }
         if (first_step == step_kind::PAYLOAD) {
@@ -717,8 +785,12 @@ class tree_builder {
 
         std::vector<usize> part_occs;
         part_occs.reserve(parts.size());
+        const auto is_slice{kind == node_kind::RECORD &&
+                            tree_.occurrences[parent].value_type->get_kind() == type_kind::SLICE};
         for (const auto* part : parts) {
-            part_occs.emplace_back(add_occurrence(parent, *part, step));
+            const auto is_bytes{is_slice && part->index == SLICE_BYTES_FIELD_INDEX};
+            part_occs.emplace_back(
+                add_occurrence(parent, *part, is_bytes ? step_kind::SLICE_BYTES : step));
         }
 
         for (auto& r : rows) {
