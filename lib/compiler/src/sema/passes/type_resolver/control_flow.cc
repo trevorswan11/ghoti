@@ -1066,170 +1066,6 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     }
 }
 
-namespace {
-
-// Collects potential duplicate implicit access match arms for the structural type
-auto gather_arm_duplicates(gsl::span<const ast::match_expr::arm> arms,
-                           mod::module_t&                        resolving,
-                           type_resolver::structural_validator&  validator,
-                           bool require_implicit_access) -> stdx::option<diagnostic> {
-    for (const auto& arm : arms) {
-        for (const auto& pattern : arm.patterns) {
-            if (pattern.is<ast::discarded>()) { continue; }
-
-            // It's only possible to verify access expressions
-            const auto pattern_node{resolving.ast.get_as_opt<ast::implicit_access_expr>(pattern)};
-            if (!pattern_node) {
-                if (require_implicit_access) {
-                    return diagnostic{
-                        "Match arm may only have an implicit access pattern in this context",
-                        error::ILLEGAL_MATCH_PATTERN,
-                        resolving.ast.location_of(pattern)};
-                }
-                continue;
-            }
-
-            const auto& ident{resolving.ast.get_as<ast::identifier_expr>(pattern_node->member)};
-            if (!validator.seen.insert(ident.name).second) {
-                validator.duplicates.emplace_back(ident.name);
-            }
-            validator.provided.emplace_back(ident.name);
-        }
-    }
-    return stdx::none;
-}
-
-} // namespace
-
-auto type_resolver::validate_enum_arms(ast::node_id           match_id,
-                                       const ast::match_expr& match,
-                                       type& enum_type) -> stdx::option<diagnostic> {
-    enum_validator_.clear();
-
-    if (const auto e_data{enum_type.get_data().as_opt<types::enum_t>()};
-        e_data && e_data->non_exhaustive && !match.catch_all_idx) {
-        return diagnostic{"Match expressions over non-exhaustive enums must have a catch all arm",
-                          error::ILLEGAL_MATCH_PATTERN,
-                          resolving_.ast.location_of(match_id)};
-    }
-
-    // Track seen and duplicate variants in the match arms
-    const auto diag{gather_arm_duplicates(match.arms, resolving_, enum_validator_, false)};
-    ASSERT(!diag, "Enum validation should not return a diagnostic");
-    if (!enum_validator_.duplicates.empty()) {
-        return diagnostic{
-            fmt::format("Match expression contains duplicate enumeration{}: {}",
-                        string_utils::plural_suffix(enum_validator_.duplicates.size()),
-                        fmt::join(enum_validator_.duplicates, ", ")),
-            error::DUPLICATE_ENUMERATION,
-            resolving_.ast.location_of(match_id)};
-    }
-
-    // Check for missing variants only if there's no catch-all
-    if (!match.catch_all_idx) {
-        if (const auto e_data{enum_type.get_data().as_opt<types::enum_t>()}) {
-            const auto& enclosing{e_data->enclosing};
-            for (const auto& e : e_data->ast_enumerations) {
-                const auto& variant_node{enclosing.ast.get_as<ast::identifier_expr>(e.name)};
-                if (!enum_validator_.seen.contains(variant_node.name)) {
-                    enum_validator_.missings.emplace_back(variant_node.name);
-                }
-            }
-        }
-
-        if (!enum_validator_.missings.empty()) {
-            return diagnostic{
-                fmt::format("Match expression is non-exhaustive; missing enumeration{}: {}",
-                            string_utils::plural_suffix(enum_validator_.missings.size()),
-                            fmt::join(enum_validator_.missings, ", ")),
-                error::MISSING_FIELD,
-                resolving_.ast.location_of(match_id)};
-        }
-    }
-
-    // Check for unknown/extra variants
-    const auto  enum_table_idx{enum_type.get_symbol_table_idx()};
-    const auto& enum_table{ctx_.registry.get(enum_table_idx)};
-    for (const auto name : enum_validator_.provided) {
-        if (!enum_table.has(name)) { enum_validator_.unknowns.emplace_back(name); }
-    }
-
-    if (!enum_validator_.unknowns.empty()) {
-        return diagnostic{fmt::format("Match expression contains unknown enumeration{}: {}",
-                                      string_utils::plural_suffix(enum_validator_.unknowns.size()),
-                                      fmt::join(enum_validator_.unknowns, ", ")),
-                          error::UNKNOWN_ENUMERATION,
-                          resolving_.ast.location_of(match_id)};
-    }
-    return stdx::none;
-}
-
-auto type_resolver::validate_union_arms(ast::node_id           match_id,
-                                        const ast::match_expr& match,
-                                        type& union_type) -> stdx::option<diagnostic> {
-    union_validator_.clear();
-    const auto union_data_opt{union_type.get_data().as_opt<types::union_t>()};
-    if (!union_data_opt) { return stdx::none; }
-    const auto& union_data{*union_data_opt};
-
-    // An untagged (extern) union has no runtime discriminant to check a field against
-    if (union_data.is_untagged) {
-        return diagnostic{"Cannot match on an untagged union; it has no runtime tag",
-                          error::TYPE_MISMATCH,
-                          resolving_.ast.location_of(match.matcher)};
-    }
-
-    // Track seen and duplicate fields in the match arms
-    if (auto diag{gather_arm_duplicates(match.arms, resolving_, union_validator_, true)}; diag) {
-        return diag;
-    }
-
-    if (!union_validator_.duplicates.empty()) {
-        return diagnostic{
-            fmt::format("Match expression contains duplicate union field{}: {}",
-                        string_utils::plural_suffix(union_validator_.duplicates.size()),
-                        fmt::join(union_validator_.duplicates, ", ")),
-            error::DUPLICATE_FIELD,
-            resolving_.ast.location_of(match_id)};
-    }
-
-    // Check for missing fields only if there's a missing catch all
-    if (!match.catch_all_idx) {
-        const auto& enclosing{union_data.enclosing};
-        for (const auto& [ident, _1, _2] : union_data.ast_fields) {
-            const auto& field_node{enclosing.ast.get_as<ast::identifier_expr>(ident)};
-            if (!union_validator_.seen.contains(field_node.name)) {
-                union_validator_.missings.emplace_back(field_node.name);
-            }
-        }
-
-        if (!union_validator_.missings.empty()) {
-            return diagnostic{
-                fmt::format("Match expression is non-exhaustive; missing union field{}: {}",
-                            string_utils::plural_suffix(union_validator_.missings.size()),
-                            fmt::join(union_validator_.missings, ", ")),
-                error::MISSING_FIELD,
-                resolving_.ast.location_of(match_id)};
-        }
-    }
-
-    // Check for unknown fields
-    const auto  union_table_idx{union_type.get_symbol_table_idx()};
-    const auto& union_table{ctx_.registry.get(union_table_idx)};
-    for (const auto name : union_validator_.provided) {
-        if (!union_table.has(name)) { union_validator_.unknowns.emplace_back(name); }
-    }
-
-    if (!union_validator_.unknowns.empty()) {
-        return diagnostic{fmt::format("Match expression contains unknown union field{}: {}",
-                                      string_utils::plural_suffix(union_validator_.unknowns.size()),
-                                      fmt::join(union_validator_.unknowns, ", ")),
-                          error::UNKNOWN_FIELD,
-                          resolving_.ast.location_of(match_id)};
-    }
-    return stdx::none;
-}
-
 auto type_resolver::resolve_type_match(ast::node_id           id,
                                        const ast::match_expr& match,
                                        type&                  matcher_type) -> void {
@@ -1381,6 +1217,43 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
 
         comptime_frame frame;
+
+        // Names bound inside the live arm's pattern
+        for (const auto& pattern : live.patterns) {
+            const auto bindings{evaluator.arm_pattern_bindings(pattern, *scrutinee)};
+            if (!bindings) { continue; }
+            if (bindings->empty()) { break; }
+
+            bool                leaf_poisoned{false};
+            const pattern::host callbacks{make_pattern_host(evaluator, leaf_poisoned)};
+            auto elaborated{pattern::elaborate({.mod             = resolving_,
+                                                .ctx             = ctx_,
+                                                .callbacks       = callbacks,
+                                                .target_ptr_bits = target_ptr_bits()},
+                                               *pattern,
+                                               denoted_type(matcher_type),
+                                               true)};
+            if (!elaborated) {
+                if (leaf_poisoned) { return resolving_.set_sema_type(id, *last_type_); }
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, std::move(elaborated).error()));
+            }
+            for (const auto& site : pattern::captures_of(**elaborated)) {
+                if (!site.capture.modifier.is_value()) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "'match comptime' captures cannot use a reference or pointer modifier",
+                        error::ILLEGAL_MATCH_PATTERN,
+                        resolving_.ast.location_of(*site.capture.payload)));
+                }
+                resolving_.set_sema_type(*site.capture.payload, site.value_type);
+                resolve_symbol_info(site.capture.payload, symbol_kind::VALUE);
+            }
+            for (const auto& bound : *bindings) { frame.insert_or_assign(bound.name, bound.value); }
+            break;
+        }
+
         if (live.capture && live.capture->payload.is<ast::identifier_expr>()) {
             if (scrutinee->is<stdx::option<sema::type&>>()) {
                 return last_type_.emplace(
@@ -1447,44 +1320,6 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
     last_type_.emplace(*result_type);
 }
 
-namespace {
-
-// A constant scalar pattern or range, closed on both ends, for overlap detection
-struct arm_interval {
-    i64                       lo;
-    i64                       hi;
-    ast::match_pattern_handle pat;
-};
-
-// Whether a pattern spells anything today's flat matching can't handle
-[[nodiscard]] auto uses_nested_pattern_syntax(const ast::AST& ast, ast::node_id pattern) -> bool {
-    if (ast.get_as_opt<ast::capture_pattern_expr>(pattern) ||
-        ast.get_as_opt<ast::bound_pattern_expr>(pattern) ||
-        ast.get_as_opt<ast::initializer_expr>(pattern)) {
-        return true;
-    }
-    const auto call{ast.get_as_opt<ast::call_expr>(pattern)};
-    return call && std::ranges::any_of(call->arguments, [&](const auto& arg) {
-               const auto value{arg.template as_opt<ast::expr_handle>()};
-               return value && uses_nested_pattern_syntax(ast, **value);
-           });
-}
-
-// The first pattern covering a value an earlier one already covers
-[[nodiscard]] auto first_overlapping_pattern(gsl::span<const arm_interval> intervals)
-    -> stdx::option<ast::match_pattern_handle> {
-    for (usize i{0}; i < intervals.size(); ++i) {
-        for (usize j{i + 1}; j < intervals.size(); ++j) {
-            const auto& a{intervals[i]};
-            const auto& b{intervals[j]};
-            if (a.lo <= b.hi && b.lo <= a.hi) { return b.pat; }
-        }
-    }
-    return stdx::none;
-}
-
-} // namespace
-
 // Whether `n` spells a type: an aggregate or type literal, a primitive, or a type name or alias
 auto type_resolver::expr_denotes_type(ast::node_id n) -> bool {
     const auto& node{resolving_.ast[n]};
@@ -1540,24 +1375,34 @@ auto type_resolver::is_type_match(const ast::match_expr& match, type& matcher_ty
     return cv && cv->is<stdx::option<sema::type&>>();
 }
 
-// Checks a match over an integer, byte, or bool covers every value, and rejects other primitives
-auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& matcher_type)
+// Rejects a scrutinee type no pattern could ever take apart
+auto type_resolver::validate_matcher_kind(const ast::match_expr& match, type& matcher_type)
     -> stdx::option<diagnostic> {
     const auto at{resolving_.ast.location_of(match.matcher)};
-    // It's assumed that any sufficiently large type cannot be fully enumerated
-    stdx::option<u16> required_arm_count;
+    const auto& data{matcher_type.get_data()};
+    if (data.is<types::enum_t>() || data.is<types::struct_t>() || data.is<types::array>() ||
+        data.is<types::integer>() || matcher_type.get_kind() == type_kind::SLICE) {
+        return stdx::none;
+    }
+    if (const auto u{data.as_opt<types::union_t>()}) {
+        if (!u->is_untagged) { return stdx::none; }
+        return diagnostic{
+            "Cannot match on an untagged union; it has no runtime tag", error::TYPE_MISMATCH, at};
+    }
+    if (!data.is<types::builtin_type>()) {
+        return diagnostic{
+            fmt::format("Can only match on enums, unions, structs, arrays, slices, and certain "
+                        "primitive types; found '{}'",
+                        ctx_.type_display_name(matcher_type)),
+            error::TYPE_MISMATCH,
+            at};
+    }
+
     switch (matcher_type.get_kind()) {
-    case type_kind::INT:
-        // Only an 8-bit unsigned integer is small enough to enumerate exhaustively
-        if (const auto info{as_integer(matcher_type)};
-            info && info->bits == 8 && !info->is_signed) {
-            required_arm_count.emplace(256);
-        }
-        break;
     case type_kind::ISIZE:
     case type_kind::USIZE:
-    case type_kind::COMPTIME_INT: break;
-    case type_kind::BOOL:         required_arm_count.emplace(2); break;
+    case type_kind::COMPTIME_INT:
+    case type_kind::BOOL:         return stdx::none;
     case type_kind::F16:
     case type_kind::F32:
     case type_kind::F64:
@@ -1566,11 +1411,11 @@ auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& mat
     case type_kind::COMPTIME_FLOAT:
         return diagnostic{"Cannot match on floats due to precision; use an if statement with "
                           "explicit precision handling",
-                          sema::error::TYPE_MISMATCH,
+                          error::TYPE_MISMATCH,
                           at};
     case type_kind::VOID_:
     case type_kind::UNDEFINED:
-        return diagnostic{"Empty types cannot be matched on", sema::error::TYPE_MISMATCH, at};
+        return diagnostic{"Empty types cannot be matched on", error::TYPE_MISMATCH, at};
     case type_kind::ENUM_LITERAL:
     case type_kind::TYPE:
     case type_kind::AUTO:
@@ -1579,67 +1424,232 @@ auto type_resolver::validate_scalar_arms(const ast::match_expr& match, type& mat
     case type_kind::NULLPTR:
         return diagnostic{fmt::format("Can only match on integers, bytes, and booleans; found '{}'",
                                       ctx_.type_display_name(matcher_type)),
-                          sema::error::TYPE_MISMATCH,
+                          error::TYPE_MISMATCH,
                           at};
     default: UNREACHABLE("Builtin types should never take this type kind");
     }
+}
 
-    // A range arm can never make an integer or byte match exhaustive on its own
-    const bool has_range_arm{std::ranges::any_of(match.arms, [&](const auto& arm) {
-        return std::ranges::any_of(arm.patterns, [&](const auto& p) {
-            return resolving_.ast.get_as_opt<ast::range_expr>(*p).has_value();
-        });
-    })};
-    if (has_range_arm && matcher_type.get_kind() == type_kind::BOOL) {
-        return diagnostic{"Range patterns are not allowed when matching on 'bool'",
-                          sema::error::ILLEGAL_MATCH_PATTERN,
+// Types every name an arm binds, and checks that all its alternatives bind the same ones
+auto type_resolver::bind_pattern_captures(const ast::match_expr::arm&  arm,
+                                          gsl::span<pattern::node_ptr> alternatives,
+                                          const pattern_capture_place& place)
+    -> stdx::option<diagnostic> {
+    using signature = std::vector<std::pair<std::string_view, gsl::not_null<type*>>>;
+
+    stdx::option<signature> expected;
+    for (usize alt{0}; alt < alternatives.size(); ++alt) {
+        if (arm.capture && pattern::binds_any_name(*alternatives[alt])) {
+            return diagnostic{"An arm binding names in its pattern can't also capture after `=>`",
+                              error::ILLEGAL_MATCH_PATTERN,
+                              resolving_.ast.location_of(*arm.capture->payload)};
+        }
+        if (arm.capture) {
+            pattern::attach_arm_capture(*arm.capture, place.is_const, *alternatives[alt]);
+        }
+
+        signature names;
+        for (const auto& site : pattern::captures_of(*alternatives[alt])) {
+            const auto loc{resolving_.ast.location_of(*site.capture.payload)};
+            const auto wants_address{site.capture.modifier.is_ref() ||
+                                     site.capture.modifier.is_ptr()};
+            if (wants_address && site.place_is_bit_packed) {
+                return diagnostic{"A bit-packed field has no address, so it can only be captured "
+                                  "by value",
+                                  error::ILLEGAL_MATCH_PATTERN,
+                                  loc};
+            }
+
+            // A temporary's read-only views stay valid: its value is spilled once
+            const bool wants_mutable{site.capture.modifier.is_mutable_ref() ||
+                                     site.capture.modifier.is_mutable_ptr()};
+            auto       cap_type{resolve_capture_modifier(ctx_,
+                                                         site.capture.modifier,
+                                                         site.value_type,
+                                                         site.place_is_const,
+                                                         place.is_addressable || !wants_mutable,
+                                                         "value",
+                                                         loc,
+                                                         place.is_poly)};
+            if (!cap_type) { return std::move(cap_type).error(); }
+            resolving_.set_sema_type(*site.capture.payload, **cap_type);
+            resolve_symbol_info(site.capture.payload, symbol_kind::VALUE);
+
+            const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*site.capture.payload)};
+            names.emplace_back(ident.name, cap_type->get());
+        }
+        std::ranges::sort(names, {}, [](const auto& entry) { return entry.first; });
+
+        if (!expected) {
+            expected.emplace(std::move(names));
+            continue;
+        }
+        const auto same_names{
+            std::ranges::equal(*expected, names, [](const auto& a, const auto& b) {
+                return a.first == b.first && is_same_unqualified(*a.second, *b.second);
+            })};
+        if (!same_names) {
+            return diagnostic{
+                arm.capture
+                    ? "A capture on a multi-variant match arm requires every listed variant to "
+                      "carry the same payload type"
+                    : "Every alternative of a match arm must bind the same names with the same "
+                      "types",
+                error::ILLEGAL_MATCH_PATTERN,
+                resolving_.ast.location_of(arm.capture ? *arm.capture->payload
+                                                       : *arm.patterns[alt])};
+        }
+    }
+    return stdx::none;
+}
+
+// Reports the first thing wrong with a match's coverage: an arm that can never run, or a value no
+// arm takes
+auto type_resolver::check_match_coverage(ast::node_id                        id,
+                                         const ast::match_expr&              match,
+                                         type&                               matcher_type,
+                                         gsl::span<const pattern::row_input> rows)
+    -> stdx::option<diagnostic> {
+    PROFILE_FUNCTION();
+    auto       tree{pattern::compile(rows, matcher_type, target_ptr_bits())};
+    const auto at{resolving_.ast.location_of(id)};
+    if (tree.too_complex) {
+        return diagnostic{"This match's patterns are too complex to check; split it into smaller "
+                          "matches",
+                          error::ILLEGAL_MATCH_PATTERN,
                           at};
     }
-    if (match.catch_all_idx) { return stdx::none; }
-    if (has_range_arm) {
-        return diagnostic{"A 'match' with a range pattern requires a catch-all '_' arm",
-                          sema::error::ILLEGAL_MATCH_PATTERN,
+
+    const auto is_catch_all{
+        [&](const pattern::row_input& row) { return match.catch_all_idx == row.arm; }};
+    // Variants named twice read better together than one diagnostic at a time
+    std::vector<std::string_view> repeated;
+    stdx::option<ast::node_id>    shadowed;
+    for (usize i{0}; i < rows.size(); ++i) {
+        if (tree.row_reached[i] || is_catch_all(rows[i])) { continue; }
+        const auto& root{*rows[i].root};
+        const auto  source{root.source.value_or(*match.arms[rows[i].arm].primary_pattern())};
+        const auto  bare_variant{root.kind == pattern::node_kind::VARIANT &&
+                                 !resolving_.ast.get_as_opt<ast::call_expr>(source)};
+        if (root.kind == pattern::node_kind::ENUM_VALUE || bare_variant) {
+            if (!std::ranges::contains(repeated, root.name)) { repeated.emplace_back(root.name); }
+        } else if (!shadowed) {
+            shadowed.emplace(source);
+        }
+    }
+    if (shadowed) {
+        return diagnostic{"This match arm pattern can never match; an earlier arm covers it",
+                          error::ILLEGAL_MATCH_PATTERN,
+                          resolving_.ast.location_of(*shadowed)};
+    }
+    if (!repeated.empty()) {
+        const auto is_enum{matcher_type.get_data().is<types::enum_t>()};
+        return diagnostic{fmt::format("Match expression contains duplicate {}{}: {}",
+                                      is_enum ? "enumeration" : "union field",
+                                      string_utils::plural_suffix(repeated.size()),
+                                      fmt::join(repeated, ", ")),
+                          is_enum ? error::DUPLICATE_ENUMERATION : error::DUPLICATE_FIELD,
                           at};
     }
-    if (!required_arm_count) {
+
+    if (tree.missing.empty()) { return stdx::none; }
+    const auto& data{matcher_type.get_data()};
+    if (const auto e{data.as_opt<types::enum_t>()}; e && e->non_exhaustive) {
+        return diagnostic{"Match expressions over non-exhaustive enums must have a catch all arm",
+                          error::ILLEGAL_MATCH_PATTERN,
+                          at};
+    }
+    if (tree.missing_is_flat && (data.is<types::enum_t>() || data.is<types::union_t>())) {
+        std::vector<std::string_view> names;
+        for (const std::string_view text : tree.missing) { names.emplace_back(text.substr(1)); }
+        return diagnostic{fmt::format("Match expression is non-exhaustive; missing {}{}: {}",
+                                      data.is<types::enum_t>() ? "enumeration" : "union field",
+                                      string_utils::plural_suffix(names.size()),
+                                      fmt::join(names, ", ")),
+                          error::MISSING_FIELD,
+                          at};
+    }
+    if (is_integer(matcher_type.get_kind()) || matcher_type.get_kind() == type_kind::BOOL ||
+        matcher_type.get_kind() == type_kind::COMPTIME_INT) {
+        const auto matcher_at{resolving_.ast.location_of(match.matcher)};
+        const auto has_range_arm{std::ranges::any_of(match.arms, [&](const auto& arm) {
+            return std::ranges::any_of(arm.patterns, [&](const auto& p) {
+                return resolving_.ast.get_as_opt<ast::range_expr>(*p).has_value();
+            });
+        })};
+        if (has_range_arm) {
+            return diagnostic{fmt::format("A 'match' with these range patterns requires a "
+                                          "catch-all '_' arm; missing: {}",
+                                          fmt::join(tree.missing, ", ")),
+                              error::ILLEGAL_MATCH_PATTERN,
+                              matcher_at};
+        }
+        // Spelling out what's missing only helps while the type's range is small enough to read
+        const auto info{as_integer(matcher_type)};
+        if (matcher_type.get_kind() == type_kind::BOOL || (info && info->bits <= 8)) {
+            return diagnostic{
+                fmt::format("Matching on type '{}' requires a catch all arm with a pattern of "
+                            "'_' or patterns covering every value; missing: {}",
+                            ctx_.type_display_name(matcher_type),
+                            fmt::join(tree.missing, ", ")),
+                error::TYPE_MISMATCH,
+                matcher_at};
+        }
         return diagnostic{
             fmt::format("Matching on type '{}' requires a catch all arm with a pattern of '_'",
                         ctx_.type_display_name(matcher_type)),
-            sema::error::TYPE_MISMATCH,
-            at};
+            error::TYPE_MISMATCH,
+            matcher_at};
     }
-    usize listed_pattern_count{0};
-    for (const auto& arm : match.arms) { listed_pattern_count += arm.patterns.size(); }
-    if (*required_arm_count == listed_pattern_count) { return stdx::none; }
-    return diagnostic{fmt::format("Matching on type '{}' requires a catch all arm with a pattern "
-                                  "of '_' or exactly {} patterned arms",
-                                  ctx_.type_display_name(matcher_type),
-                                  *required_arm_count),
-                      sema::error::TYPE_MISMATCH,
+    return diagnostic{fmt::format("Match expression is non-exhaustive; missing: {}",
+                                  fmt::join(tree.missing, ", ")),
+                      error::MISSING_FIELD,
                       at};
 }
 
-// The type an arm's capture binds: the matcher itself, or the payload every listed union
-// variant shares. `none` when the variants carry different payloads
-auto type_resolver::arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
-    -> stdx::option<type&> {
-    const auto union_data{matcher_type.get_data().as_opt<types::union_t>()};
-    // A catch-all arm captures the whole scrutinee, whichever variant it holds
-    if (!union_data || arm.primary_pattern().is<ast::discarded>()) { return matcher_type; }
-    const auto&         table{ctx_.registry.get(matcher_type.get_symbol_table_idx())};
-    stdx::option<type&> base_type;
-    for (const auto& pat : arm.patterns) {
-        const auto ia{resolving_.ast.get_as_opt<ast::implicit_access_expr>(*pat)};
-        ASSERT(ia, "Union validator failed to error");
-        const auto& pident{resolving_.ast.get_as<ast::identifier_expr>(ia->member)};
-        auto&       pty{union_data->type_at(table.get_proxy(pident.name).index)};
-        if (!base_type) {
-            base_type.emplace(pty);
-        } else if (!sema::is_same_unqualified(*base_type, pty)) {
+auto type_resolver::make_pattern_host(gir::const_eval& probe, bool& poisoned) -> pattern::host {
+    return pattern::host{
+        .resolve_leaf = [this, &probe, &poisoned](ast::node_id leaf,
+                                                  type&        column) -> stdx::option<diagnostic> {
+            {
+                const structural_guard pattern_g{implicit_type_stack_, column};
+                resolve(ast::expr_handle{leaf});
+            }
+            if (last_type_->is_poison()) {
+                poisoned = true;
+                return diagnostic{
+                    "", error::ILLEGAL_MATCH_PATTERN, resolving_.ast.location_of(leaf)};
+            }
+            const auto at{resolving_.ast.location_of(leaf)};
+            // Matching a value compares it, which a type has nothing to compare with
+            if (column.get_kind() != type_kind::TYPE &&
+                operand_nature(ast::expr_handle{leaf}) == operand_nature_t::TYPE) {
+                return diagnostic{"A `match` on a value expects its patterns to be values, but "
+                                  "this one is a type",
+                                  error::ILLEGAL_MATCH_PATTERN,
+                                  at};
+            }
+            // A scalar pattern must be a value the matcher's type can actually hold
+            if (is_integer(column.get_kind()) || column.get_kind() == type_kind::BOOL ||
+                column.get_kind() == type_kind::COMPTIME_INT) {
+                if (const auto msg{scalar_pattern_mismatch(leaf, column, probe)}) {
+                    return diagnostic{*msg, error::ILLEGAL_MATCH_PATTERN, at};
+                }
+            }
             return stdx::none;
-        }
-    }
-    return base_type;
+        },
+        .fold = [&probe](ast::node_id leaf) -> stdx::option<gir::const_value> {
+            auto folded{probe.try_eval(leaf)};
+            if (folded && folded->is_poison()) { return stdx::none; }
+            return folded;
+        },
+        .denoted_type_of = [this](ast::node_id qualifier) -> stdx::option<type&> {
+            resolve(ast::expr_handle{qualifier});
+            if (last_type_->is_poison()) { return stdx::none; }
+            return denoted_type(*last_type_);
+        },
+        .concrete = [this](type& t) -> type& { return concrete_array_type(t); },
+    };
 }
 
 // Why a scalar pattern `value` can't match `matcher_type`, if it can't
@@ -1684,20 +1694,6 @@ auto type_resolver::visit(ast::node_id id, const ast::bound_pattern_expr&) -> vo
 
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
-    for (const auto& arm : match.arms) {
-        const auto structural{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
-            return uses_nested_pattern_syntax(resolving_.ast, *pattern);
-        })};
-        if (arm.guard || structural) {
-            return last_type_.emplace(
-                ctx_.poison_node(resolving_,
-                                 id,
-                                 "Nested patterns and match guards are not implemented yet",
-                                 error::ILLEGAL_MATCH_PATTERN,
-                                 resolving_.ast.location_of(arm.primary_pattern())));
-        }
-    }
-
     {
         // The value being matched has its own type, not the one the `match` result flows into
         const structural_guard shield{implicit_type_stack_, stdx::none};
@@ -1751,173 +1747,58 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         matcher_is_addressable = is_lvalue_shape(resolving_, match.matcher);
     }
 
-    // Rip through the arms once to validate structural arm rules
-    const auto& matcher_data{effective_matcher_type->get_data()};
-    if (matcher_data.is<types::enum_t>()) {
-        if (auto diag{validate_enum_arms(id, match, *effective_matcher_type)}; diag) {
-            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
-        }
-    } else if (matcher_data.is<types::union_t>()) {
-        if (auto diag{validate_union_arms(id, match, *effective_matcher_type)}; diag) {
-            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
-        }
-    } else if (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) {
-        if (auto diag{validate_scalar_arms(match, *effective_matcher_type)}) {
-            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(diag).value()));
-        }
-    } else {
-        return last_type_.emplace(ctx_.poison_node(
-            resolving_,
-            id,
-            fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
-                        ctx_.type_display_name(*effective_matcher_type)),
-            sema::error::TYPE_MISMATCH,
-            resolving_.ast.location_of(match.matcher)));
+    effective_matcher_type.emplace(concrete_array_type(*effective_matcher_type));
+    if (auto diag{validate_matcher_kind(match, *effective_matcher_type)}) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
     }
 
-    std::vector<arm_interval> const_intervals;
-    gir::const_eval           interval_probe{ctx_, resolving_};
-    const bool                scalar_match{
-        (matcher_data.is<types::builtin_type>() || matcher_data.is<types::integer>()) &&
-        effective_matcher_type->get_kind() != type_kind::BOOL};
+    gir::const_eval                    pattern_probe{ctx_, resolving_};
+    bool                               leaf_poisoned{false};
+    const pattern::host                callbacks{make_pattern_host(pattern_probe, leaf_poisoned)};
+    const pattern::elaboration_context pattern_cx{
+        .mod             = resolving_,
+        .ctx             = ctx_,
+        .callbacks       = callbacks,
+        .target_ptr_bits = target_ptr_bits(),
+    };
+
+    // Patterns come first, so a body is never checked against a match that can't work
+    std::vector<std::vector<pattern::node_ptr>> arm_patterns(match.arms.size());
+    const pattern_capture_place                 capture_place{
+        .is_const       = matcher_is_const,
+        .is_addressable = matcher_is_addressable,
+        .is_poly        = place_mutability(match.matcher) == types::mut::POLY,
+    };
+    for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
+        const auto& arm{match.arms[arm_idx]};
+        auto&       arm_table_type{resolving_.get_sema_type(arm)};
+        const scope arm_scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
+
+        for (const auto& pattern : arm.patterns) {
+            auto elaborated{pattern::elaborate(
+                pattern_cx, *pattern, *effective_matcher_type, matcher_is_const)};
+            if (!elaborated) {
+                if (leaf_poisoned) { return resolving_.set_sema_type(id, *last_type_); }
+                return last_type_.emplace(
+                    ctx_.poison_node(resolving_, id, std::move(elaborated).error()));
+            }
+            arm_patterns[arm_idx].emplace_back(std::move(*elaborated));
+        }
+        if (auto diag{bind_pattern_captures(arm, arm_patterns[arm_idx], capture_place)}) {
+            return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
+        }
+    }
+
+    const auto rows{pattern::rows_of(match, arm_patterns)};
+    if (auto diag{check_match_coverage(id, match, *effective_matcher_type, rows)}) {
+        return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
+    }
 
     // Each arm was assigned a new scope index on the first pass
     for (const auto& arm : match.arms) {
         // Tabled types have prefilled types that should be pushed on the table stack
         auto&       arm_table_type{resolving_.get_sema_type(arm)};
         const scope scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
-
-        if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
-            const auto base_type{arm_capture_base(arm, *effective_matcher_type)};
-            if (!base_type) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    "A capture on a multi-variant match arm requires every listed variant to "
-                    "carry the same payload type",
-                    error::ILLEGAL_MATCH_PATTERN,
-                    resolving_.ast.location_of(*arm.capture->payload)));
-            }
-
-            auto cap_result{
-                resolve_capture_modifier(ctx_,
-                                         arm.capture->modifier,
-                                         *base_type,
-                                         matcher_is_const,
-                                         matcher_is_addressable,
-                                         "value",
-                                         resolving_.ast.location_of(*arm.capture->payload),
-                                         place_mutability(match.matcher) == types::mut::POLY)};
-            if (!cap_result) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_, id, std::move(cap_result).error()));
-            }
-            resolving_.set_sema_type(*arm.capture->payload, **cap_result);
-            resolve_symbol_info(arm.capture->payload, symbol_kind::VALUE);
-        }
-
-        // Each pattern is resolved against the matcher's type
-        for (const auto& pattern : arm.patterns) {
-            if (pattern.is<ast::discarded>()) { continue; }
-
-            const auto range{resolving_.ast.get_as_opt<ast::range_expr>(*pattern)};
-            if (range && !scalar_match) {
-                return last_type_.emplace(ctx_.poison_node(
-                    resolving_,
-                    id,
-                    "Range patterns are only valid when matching on an integer or byte value",
-                    error::ILLEGAL_MATCH_PATTERN,
-                    resolving_.ast.location_of(*pattern)));
-            }
-
-            // `.a .b` (a missing comma) parses as a member of the variant `.a`
-            if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(*pattern)};
-                dot && resolving_.ast.get_as_opt<ast::implicit_access_expr>(dot->object)) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "A variant pattern has no members; separate patterns with a "
-                                     "comma (`.a, .b`)",
-                                     error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(*pattern)));
-            }
-
-            if (range && (!range->lhs || !range->rhs)) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "A range pattern needs both endpoints; open-ended ranges are "
-                                     "only valid inside a subscript",
-                                     error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(*pattern)));
-            }
-
-            {
-                const structural_guard pattern_g{implicit_type_stack_, *effective_matcher_type};
-                if (range) {
-                    TRY_RESOLVE(*range->lhs);
-                    TRY_RESOLVE(*range->rhs);
-                } else {
-                    TRY_RESOLVE(pattern);
-                }
-            }
-
-            // Matching a value compares it, which a type has nothing to compare with
-            if (!range && operand_nature(ast::expr_handle{*pattern}) == operand_nature_t::TYPE) {
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_,
-                                     id,
-                                     "A `match` on a value expects its patterns to be values, but "
-                                     "this one is a type",
-                                     error::ILLEGAL_MATCH_PATTERN,
-                                     resolving_.ast.location_of(*pattern)));
-            }
-
-            // A scalar pattern must be a value the matcher's type can actually hold
-            if (scalar_match || effective_matcher_type->get_kind() == type_kind::BOOL) {
-                const auto values{range ? std::vector<ast::node_id>{*range->lhs, *range->rhs}
-                                        : std::vector<ast::node_id>{*pattern}};
-                for (const auto value : values) {
-                    if (const auto msg{scalar_pattern_mismatch(
-                            value, *effective_matcher_type, interval_probe)}) {
-                        return last_type_.emplace(
-                            ctx_.poison_node(resolving_,
-                                             id,
-                                             *msg,
-                                             error::ILLEGAL_MATCH_PATTERN,
-                                             resolving_.ast.location_of(value)));
-                    }
-                }
-            }
-
-            if (!scalar_match) { continue; }
-            if (range) {
-                const bool inclusive{(*pattern).get_token_type() ==
-                                     syntax::token_type_t::DOT_DOT_EQ};
-                const auto lo{interval_probe.try_eval(*range->lhs)};
-                const auto hi{interval_probe.try_eval(*range->rhs)};
-                if (!lo || !hi) { continue; }
-                const auto lo_i{lo->as_int_opt()};
-                const auto hi_i{hi->as_int_opt()};
-                if (!lo_i || !hi_i) { continue; }
-                const auto lo_closed{static_cast<i64>(*lo_i)};
-                const i64  hi_closed{static_cast<i64>(inclusive ? *hi_i : *hi_i - 1)};
-                if (hi_closed < lo_closed) {
-                    return last_type_.emplace(ctx_.poison_node(
-                        resolving_,
-                        id,
-                        "Range pattern is empty; its lower bound exceeds its upper bound",
-                        error::ILLEGAL_MATCH_PATTERN,
-                        resolving_.ast.location_of(*pattern)));
-                }
-                const_intervals.emplace_back(lo_closed, hi_closed, pattern);
-            } else if (const auto pv{interval_probe.try_eval(*pattern)}) {
-                if (const auto v{pv->as_int_opt()}) {
-                    const_intervals.emplace_back(
-                        static_cast<i64>(*v), static_cast<i64>(*v), pattern);
-                }
-            }
-        }
         {
             const mutating_context_guard branch_g{in_expr_branch_, true};
             const mutating_context_guard unused_g{arm_of_unused_,
@@ -1960,15 +1841,6 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
                         ctx_.type_display_name(denoted_type(resolving_.get_sema_type(*type_arm)))),
             error::TYPE_USED_AS_VALUE,
             resolving_.ast.location_of(*type_arm)));
-    }
-
-    // Two arm patterns that both fold to constants may not cover the same value
-    if (const auto overlap{first_overlapping_pattern(const_intervals)}) {
-        return last_type_.emplace(ctx_.poison_node(resolving_,
-                                                   id,
-                                                   "This match arm pattern overlaps an earlier arm",
-                                                   error::ILLEGAL_MATCH_PATTERN,
-                                                   resolving_.ast.location_of(*overlap)));
     }
 
     if (!first_type || (block_arm && unused_value_nodes_.contains(id.get_index()))) {

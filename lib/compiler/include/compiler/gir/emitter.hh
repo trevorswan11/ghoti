@@ -31,6 +31,7 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
@@ -352,6 +353,27 @@ class emitter {
     auto               emit_comptime_value_read(ast::node_id id) -> value;
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
+
+    // Storage for one name an arm binds, filled along whichever path reaches the arm
+    struct match_capture_slot {
+        std::string_view name;
+        sema::type&      type;
+        local_id         slot;
+        bool             is_alias{false};
+        bool             is_void{false};
+    };
+    struct match_lowering {
+        const ast::match_expr&                           match;
+        const sema::pattern::decision_tree&              tree;
+        value                                            matcher_addr;
+        std::vector<segment_id>                          bodies{};
+        gsl::span<const std::vector<match_capture_slot>> slots{};
+    };
+    [[nodiscard]] auto capture_binding(const match_capture_slot& slot) -> local_binding;
+    auto               emit_occurrence_addr(const match_lowering& lowering, usize occ) -> value;
+    auto emit_interval_test(value subject, const sema::pattern::switch_case& test) -> value;
+    auto emit_opaque_test(value subject, ast::node_id test) -> value;
+    auto emit_decision(const match_lowering& lowering, usize node) -> void;
 
     [[nodiscard]] auto
          fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;

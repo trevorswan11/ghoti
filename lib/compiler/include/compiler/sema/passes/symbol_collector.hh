@@ -169,6 +169,8 @@ class symbol_collector {
     // Collects `body` inside a scope of its own that declares `capture`
     auto collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body) -> void;
 
+    auto declare_pattern_capture(const ast::capture_t& capture) -> void;
+
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};
@@ -191,6 +193,7 @@ class symbol_collector {
     }
 
   private:
+    ankerl::unordered_dense::set<std::string_view> alternative_names_{};
     mod::module_t&      collecting_;
     usize               table_idx_;
     symbol_table_stack  table_stack_;

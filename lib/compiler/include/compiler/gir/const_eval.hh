@@ -139,10 +139,21 @@ class const_eval {
                                            ast::node_id         id,
                                            bool wrapping = false) -> stdx::option<const_value>;
 
+    // A name a matched pattern binds, and its value
+    struct pattern_binding {
+        std::string_view name;
+        const_value      value;
+    };
+
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
-        return match_pattern(pattern, target);
+        return arm_pattern_bindings(pattern, target).has_value();
     }
+    // Everything `pattern` binds on `target`, or none when it doesn't match
+    [[nodiscard]] auto arm_pattern_bindings(const ast::match_pattern_handle& pattern,
+                                            const const_value&               target,
+                                            stdx::option<const_ref>          place = stdx::none)
+        -> stdx::option<std::vector<pattern_binding>>;
 
     // Evaluate and assert. Emits COMPTIME_EVALUATION_FAILED and returns poison on failure.
     [[nodiscard]] auto eval(ast::node_id id) -> const_value;
@@ -512,8 +523,11 @@ class const_eval {
     [[nodiscard]] auto bind_flow_capture(const ast::capture_t& capture,
                                          const flow_eval&      flow,
                                          ast::node_id          at) -> bool;
-    auto match_pattern(const ast::match_pattern_handle& pattern_h, const const_value& target)
-        -> bool;
+    auto               match_pattern(ast::node_id pattern_id, const const_value& target) -> bool;
+    auto               match_structure(ast::node_id                  pattern,
+                                       const const_value&            target,
+                                       stdx::option<const_ref>       place,
+                                       std::vector<pattern_binding>& bindings) -> bool;
 
     auto lookup_local_binding(std::string_view name) const noexcept -> stdx::option<const_value>;
     auto set_local_binding(std::string_view name, const_value val) -> bool;

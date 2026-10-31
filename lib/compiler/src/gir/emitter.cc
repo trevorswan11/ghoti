@@ -8174,31 +8174,41 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     if (const auto arm{active_mod().get_match_arm_opt(id.get_index())}) {
         forced_arm = arm;
         const auto& chosen{match.arms[*arm]};
-        // With no capture there is nothing to bind: emit only the chosen dispatch.
-        if (!chosen.capture) {
-            if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
-            emit_stmt(chosen.dispatch);
-            return value{void_val{}, sema_type};
-        }
 
-        // `match comptime`'s capture: bind it into the comptime_frame
-        if (match.is_comptime) {
-            if (const auto scrutinee{const_eval_.try_eval(match.matcher)}) {
+        // `match comptime`'s captures: bind them into the comptime_frame
+        if (const auto scrutinee{match.is_comptime ? const_eval_.try_eval(match.matcher)
+                                                   : stdx::none}) {
+            sema::comptime_frame cx_frame;
+            for (const auto& pattern : chosen.patterns) {
+                const auto bindings{const_eval_.arm_pattern_bindings(pattern, *scrutinee)};
+                if (!bindings) { continue; }
+                for (const auto& bound : *bindings) {
+                    cx_frame.insert_or_assign(bound.name, bound.value);
+                }
+                break;
+            }
+            if (chosen.capture && chosen.capture->payload.is<ast::identifier_expr>()) {
                 const auto& cap_ident{
                     active_ast().get_as<ast::identifier_expr>(*chosen.capture->payload)};
-                sema::comptime_frame cx_frame;
-                const auto           un{scrutinee->as_opt<const_union>()};
+                const auto un{scrutinee->as_opt<const_union>()};
                 if (un && !chosen.primary_pattern().is<ast::discarded>()) {
                     cx_frame.insert_or_assign(
                         cap_ident.name, !un->payload.empty() ? un->payload.front() : *scrutinee);
                 } else {
                     cx_frame.insert_or_assign(cap_ident.name, *scrutinee);
                 }
-                const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(cx_frame)};
-                if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
-                emit_stmt(chosen.dispatch);
-                return value{void_val{}, sema_type};
             }
+            const comptime_frame_guard cfg{ctx_.comptime_binding_frames, std::move(cx_frame)};
+            if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
+            emit_stmt(chosen.dispatch);
+            return value{void_val{}, sema_type};
+        }
+
+        // With no capture there is nothing to bind: emit only the chosen dispatch.
+        if (!chosen.capture) {
+            if (yields_value) { return emit_stmt_as_value(chosen.dispatch); }
+            emit_stmt(chosen.dispatch);
+            return value{void_val{}, sema_type};
         }
     }
 
@@ -8216,202 +8226,118 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
 
     stdx::option<local_id> res_slot;
     if (yields_value) { res_slot.emplace(builder_.emit_alloca(*sema_type)); }
-
-    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
     auto& merge_seg{fn.add_segment()};
 
-    // A tagged union's tag and a capture both need the scrutinee's address
     auto& matcher_sema_type{active_mod().get_sema_type_opt(match.matcher).value_or(*sema_type)};
     const auto ref_data{matcher_sema_type.get_data().as_opt<sema::types::reference>()};
-    auto&      effective_matcher_type{ref_data ? ref_data->underlying : matcher_sema_type};
-    const auto union_data{effective_matcher_type.get_data().as_opt<sema::types::union_t>()};
-    const bool has_capture{std::ranges::any_of(
-        match.arms, [](const ast::match_expr::arm& arm) { return arm.capture.has_value(); })};
-    stdx::option<value> matcher_addr;
-    value effective_matcher_val{void_val{}, ctx_.get_builtin_resolved_type(sema::type_kind::VOID_)};
+    auto&      effective_matcher_type{
+        const_eval_.force_deferred_array(ref_data ? ref_data->underlying : matcher_sema_type)};
 
-    if (ref_data) {
-        const auto raw_ref{emit_expression_id_raw(*match.matcher)};
-        matcher_addr.emplace(value{raw_ref.data, effective_matcher_type});
-        if (!union_data || union_data->is_untagged) {
-            const auto loaded{builder_.emit_load(raw_ref, effective_matcher_type)};
-            effective_matcher_val = value{loaded, effective_matcher_type};
-        }
-    } else {
-        const auto matcher_val{emit_expression(match.matcher)};
-        effective_matcher_val = matcher_val;
+    const sema::pattern::host callbacks{
+        .resolve_leaf = {},
+        .fold         = [&](ast::node_id leaf) -> stdx::option<const_value> {
+            auto folded{const_eval_.try_eval(leaf)};
+            if (folded && folded->is_poison()) { return stdx::none; }
+            return folded;
+        },
+        .denoted_type_of = {},
+        .concrete        = [&](sema::type& t) -> sema::type& {
+            return const_eval_.force_deferred_array(t);
+        },
+    };
+    const sema::pattern::elaboration_context pattern_cx{
+        .mod             = active_mod(),
+        .ctx             = ctx_,
+        .callbacks       = callbacks,
+        .target_ptr_bits = target_ptr_bits_,
+    };
 
-        if (has_capture || (union_data && !union_data->is_untagged)) {
-            // Anything else is an rvalue: its value is spilled instead of re-evaluating the
-            // matcher.
-            const bool is_lvalue_shape{
-                active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
-                active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
-                active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
-                active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
-            if (is_lvalue_shape) {
-                matcher_addr.emplace(emit_lvalue(match.matcher));
-            } else {
-                matcher_addr.emplace(spill_to_temporary(
-                    matcher_val, matcher_sema_type, matcher_sema_type.is_constant()));
-            }
-        }
-    }
-
-    // The catch-all is tried last, wherever it's written
-    std::vector<usize> arm_order;
-    arm_order.reserve(match.arms.size());
+    std::vector<std::vector<sema::pattern::node_ptr>> arm_patterns(match.arms.size());
     for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
-        if (match.catch_all_idx != arm_idx) { arm_order.emplace_back(arm_idx); }
-    }
-    if (match.catch_all_idx) { arm_order.emplace_back(*match.catch_all_idx); }
-
-    for (const auto arm_idx : arm_order) {
         if (forced_arm && arm_idx != *forced_arm) { continue; }
-        const auto& arm{match.arms[arm_idx]};
-        auto&       arm_body_seg{fn.add_segment()};
-        auto&       next_arm_seg{fn.add_segment()};
-
-        const auto primary_id{*arm.primary_pattern()};
-        const auto is_discard{primary_id.get_token_type() == syntax::token_type_t::UNDERSCORE ||
-                              active_ast()[primary_id].template is<ast::discarded>()};
-
-        // Test one pattern of the arm; the arm is taken if any of its patterns match.
-        const auto emit_pattern_test{[&](ast::node_id pat_id) -> value {
-            if (const auto range{active_ast().get_as_opt<ast::range_expr>(pat_id)}) {
-                ASSERT(range->lhs && range->rhs, "A range pattern needs both endpoints");
-                const auto start_val{emit_expression(*range->lhs)};
-                const auto end_val{emit_expression(*range->rhs)};
-                const auto ge_cond{builder_.emit_binary(
-                    instruction_kind::GE, effective_matcher_val, start_val, bool_type)};
-                const auto le_kind{pat_id.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
-                                       ? instruction_kind::LE
-                                       : instruction_kind::LT};
-                const auto le_cond{
-                    builder_.emit_binary(le_kind, effective_matcher_val, end_val, bool_type)};
-                return value{builder_.emit_binary(instruction_kind::AND,
-                                                  value{ge_cond, bool_type},
-                                                  value{le_cond, bool_type},
-                                                  bool_type),
-                             bool_type};
-            }
-            const auto is_eq{union_data && !union_data->is_untagged
-                                 ? emit_union_tag_eq(*matcher_addr, pat_id)
-                                 : builder_.emit_binary(instruction_kind::EQ,
-                                                        effective_matcher_val,
-                                                        emit_expression_id(pat_id),
-                                                        bool_type)};
-            return value{is_eq, bool_type};
-        }};
-
-        if (forced_arm || is_discard) {
-            // The arm was already selected at compile time, or it is the catch-all.
-            builder_.emit_goto(arm_body_seg.get_id());
-        } else {
-            stdx::option<value> matched;
-            for (const auto& pat : arm.patterns) {
-                const auto test{emit_pattern_test(*pat)};
-                matched = matched ? value{builder_.emit_binary(
-                                              instruction_kind::OR, *matched, test, bool_type),
-                                          bool_type}
-                                  : test;
-            }
-            auto& branch{
-                builder_.emit_cond_goto(*matched, arm_body_seg.get_id(), next_arm_seg.get_id())};
-            apply_branch_hints(branch, branch_hint_of(active_mod(), *arm.dispatch), stdx::none);
+        for (const auto& pattern : match.arms[arm_idx].patterns) {
+            auto elaborated{
+                sema::pattern::elaborate(pattern_cx, *pattern, effective_matcher_type, false)};
+            ASSERT(elaborated, "A resolved pattern must elaborate again");
+            arm_patterns[arm_idx].emplace_back(std::move(*elaborated));
         }
+        if (const auto& capture{match.arms[arm_idx].capture}) {
+            for (auto& alternative : arm_patterns[arm_idx]) {
+                sema::pattern::attach_arm_capture(*capture, false, *alternative);
+            }
+        }
+    }
+    const auto rows{sema::pattern::rows_of(match, arm_patterns)};
+    auto       tree{sema::pattern::compile(rows, effective_matcher_type, target_ptr_bits_)};
 
-        builder_.set_segment(arm_body_seg);
+    // The scrutinee runs once. A place keeps its address when something might alias it or when
+    // it's an aggregate, which is taken apart in memory. Anything else is spilled.
+    const auto holds_alias{std::ranges::any_of(rows, [](const sema::pattern::row_input& row) {
+        return std::ranges::any_of(sema::pattern::captures_of(*row.root), [](const auto& site) {
+            return site.capture.modifier.is_ref() || site.capture.modifier.is_ptr();
+        });
+    })};
+    const auto is_aggregate{effective_matcher_type.get_data().is<sema::types::union_t>() ||
+                            effective_matcher_type.get_data().is<sema::types::struct_t>() ||
+                            effective_matcher_type.get_data().is<sema::types::array>() ||
+                            effective_matcher_type.get_kind() == sema::type_kind::SLICE};
+    const auto is_place{active_ast().get_as_opt<ast::identifier_expr>(match.matcher) ||
+                        active_ast().get_as_opt<ast::dot_expr>(match.matcher) ||
+                        active_ast().get_as_opt<ast::index_expr>(match.matcher) ||
+                        active_ast().get_as_opt<ast::dereference_expr>(match.matcher)};
+    const auto matcher_addr{[&]() -> value {
+        if (ref_data) {
+            return value{emit_expression_id_raw(*match.matcher).data, effective_matcher_type};
+        }
+        if (is_place && (holds_alias || is_aggregate)) { return emit_lvalue(match.matcher); }
+        return spill_to_temporary(
+            emit_expression(match.matcher), matcher_sema_type, matcher_sema_type.is_constant());
+    }()};
+
+    // One storage slot per name per arm, and one body per arm whichever path reaches it
+    match_lowering lowering{.match = match, .tree = tree, .matcher_addr = matcher_addr};
+    lowering.bodies.reserve(match.arms.size());
+    for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
+        lowering.bodies.emplace_back(fn.add_segment().get_id());
+    }
+    std::vector<std::vector<match_capture_slot>> arm_slots(match.arms.size());
+    for (const auto& row : rows) {
+        for (const auto& site : sema::pattern::captures_of(*row.root)) {
+            const auto& ident{active_ast().get_as<ast::identifier_expr>(*site.capture.payload)};
+            auto&       slots{arm_slots[row.arm]};
+            if (std::ranges::any_of(slots, [&](const auto& s) { return s.name == ident.name; })) {
+                continue;
+            }
+            auto&      cap_type{*active_mod().get_sema_type_opt(*site.capture.payload)};
+            const bool is_alias{site.capture.modifier.is_ref() || site.capture.modifier.is_ptr()};
+            const bool is_void{cap_type.get_kind() == sema::type_kind::VOID_};
+            slots.emplace_back(match_capture_slot{
+                .name     = ident.name,
+                .type     = cap_type,
+                .slot     = is_void ? local_id{0, local_kind::TEMPORARY}
+                                    : builder_.emit_alloca(cap_type, {}, !is_alias),
+                .is_alias = is_alias,
+                .is_void  = is_void,
+            });
+        }
+    }
+    lowering.slots = arm_slots;
+
+    emit_decision(lowering, tree.root);
+
+    std::vector<bool> arm_reached(match.arms.size(), false);
+    for (usize i{0}; i < rows.size(); ++i) {
+        if (tree.row_reached[i]) { arm_reached[rows[i].arm] = true; }
+    }
+
+    for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
+        if (!arm_reached[arm_idx]) { continue; }
+        const auto& arm{match.arms[arm_idx]};
+        builder_.set_segment(*fn.get_segment(lowering.bodies[arm_idx]));
         {
             const scope_guard arm_guard{scopes_};
-            // `|_|` is an anonymous capture: it consumes the arm's payload slot but binds nothing.
-            if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
-                const auto& cap_ident{
-                    active_ast().get_as<ast::identifier_expr>(*arm.capture->payload)};
-                auto& cap_type{active_mod()
-                                   .get_sema_type_opt(*arm.capture->payload)
-                                   .value_or(ctx_.get_int(32, true))};
-                ASSERT(matcher_addr, "A capturing arm must have a computed matcher address");
-
-                // Only a `|&v|` / `|^v|` binding aliases the field's storage
-                const bool alias_capture{arm.capture->modifier.is_ref() ||
-                                         arm.capture->modifier.is_ptr()};
-
-                // For an aliasing capture, unwrap the ref/ptr to the type addressing the storage.
-                gsl::not_null underlying{&cap_type};
-                if (alias_capture) {
-                    if (const auto ref_d{cap_type.get_data().as_opt<sema::types::reference>()}) {
-                        underlying = &ref_d->underlying;
-                    } else if (const auto ptr_d{
-                                   cap_type.get_data().as_opt<sema::types::pointer>()}) {
-                        underlying = &ptr_d->underlying;
-                    }
-                }
-
-                // An aliasing capture addresses the storage through a forced-const view so
-                // it can't be written through
-                auto&      qualified{alias_capture ? *ctx_.pool.with_const(*underlying, true)
-                                                   : *underlying};
-                value      field_addr{matcher_addr->data, qualified};
-                const auto ut{matcher_addr->type->get_data().as_opt<sema::types::union_t>()};
-                // A catch-all captures the whole union rather than one variant's payload
-                const bool is_tagged_union_field{ut && !ut->is_untagged && !is_discard};
-                if (is_tagged_union_field) {
-                    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-                    const auto payload_ptr{builder_.emit_get_element_ptr(
-                        *matcher_addr, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, qualified)};
-                    field_addr = value{payload_ptr, qualified};
-                }
-
-                if (alias_capture) {
-                    // `|&v|`/`|&mut v|` and `|^v|`/`|^mut v|` alias the field's own address
-                    const auto capture_slot{builder_.emit_alloca(cap_type)};
-                    builder_.emit_store(capture_slot, value{field_addr.data, cap_type})
-                        .is_initializer = true;
-                    scopes_.back().bindings.emplace(cap_ident.name,
-                                                    local_binding{
-                                                        .id        = capture_slot,
-                                                        .type      = cap_type,
-                                                        .is_alloca = true,
-                                                        .const_val = stdx::none,
-                                                    });
-                } else if (is_tagged_union_field) {
-                    // The forced-const GEP address above already makes this read-only
-                    scopes_.back().bindings.emplace(cap_ident.name,
-                                                    local_binding{
-                                                        .id        = field_addr.data.as<local_id>(),
-                                                        .type      = *field_addr.type,
-                                                        .is_alloca = true,
-                                                        .const_val = stdx::none,
-                                                        .is_const  = true,
-                                                    });
-                } else if (ut && !ut->is_untagged) {
-                    // A catch-all's copy of the whole union has storage, so it can be matched
-                    const auto copy{spill_to_temporary(
-                        value{builder_.emit_load(field_addr.data.as<local_id>(), *underlying),
-                              *underlying},
-                        *underlying,
-                        true)};
-                    scopes_.back().bindings.emplace(cap_ident.name,
-                                                    local_binding{
-                                                        .id        = copy.data.as<local_id>(),
-                                                        .type      = *underlying,
-                                                        .is_alloca = true,
-                                                        .const_val = stdx::none,
-                                                        .is_const  = true,
-                                                    });
-                } else {
-                    // A whole-value capture reuses the scrutinee's own storage id
-                    const auto cur_val{
-                        builder_.emit_load(field_addr.data.as<local_id>(), *underlying)};
-                    scopes_.back().bindings.emplace(
-                        cap_ident.name,
-                        local_binding{local_id{0, local_kind::TEMPORARY},
-                                      *underlying,
-                                      false,
-                                      value{cur_val, *underlying},
-                                      true});
-                }
+            for (const auto& slot : arm_slots[arm_idx]) {
+                scopes_.back().bindings.emplace(slot.name, capture_binding(slot));
             }
 
             if (yields_value && res_slot) {
@@ -8431,12 +8357,6 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
             builder_.emit_goto(merge_seg.get_id());
         }
-
-        builder_.set_segment(next_arm_seg);
-    }
-
-    if (const auto cur_seg{builder_.get_segment()}; cur_seg && !cur_seg->has_terminator()) {
-        builder_.emit_unreachable();
     }
 
     builder_.set_segment(merge_seg);
@@ -8445,6 +8365,226 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         return value{loaded, sema_type};
     }
     return value{void_val{}, sema_type};
+}
+
+auto emitter::capture_binding(const match_capture_slot& slot) -> local_binding {
+    if (slot.is_void) {
+        return local_binding{local_id{0, local_kind::TEMPORARY},
+                             slot.type,
+                             false,
+                             value{void_val{}, slot.type},
+                             true};
+    }
+    return local_binding{
+        .id        = slot.slot,
+        .type      = slot.type,
+        .is_alloca = true,
+        .const_val = stdx::none,
+        .is_const  = !slot.is_alias,
+    };
+}
+
+// The address of one location inside the scrutinee, computed along the path that reached it
+auto emitter::emit_occurrence_addr(const match_lowering& lowering, usize occ) -> value {
+    const auto& at{lowering.tree.occurrences[occ]};
+    if (!at.parent) { return lowering.matcher_addr; }
+
+    const auto parent{emit_occurrence_addr(lowering, *at.parent)};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto&      field_type{*at.value_type};
+    switch (at.step) {
+    case sema::pattern::step_kind::ROOT: UNREACHABLE("Only the root has no parent");
+    case sema::pattern::step_kind::PAYLOAD:
+        return value{builder_.emit_get_element_ptr(
+                         parent, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, field_type),
+                     field_type};
+    case sema::pattern::step_kind::FIELD:
+        if (at.bit_packed) {
+            // A bit-packed field has no address of its own, so a test reads a copy
+            const auto& parent_type{*lowering.tree.occurrences[*at.parent].value_type};
+            const auto  read{emit_packed_field_read(
+                parent, parent_type.get_data().as<sema::types::struct_t>(), at.index, field_type)};
+            return spill_to_temporary(read, field_type, true);
+        }
+        return value{builder_.emit_get_element_ptr(
+                         parent, {value{static_cast<u64>(at.index), usize_type}}, field_type),
+                     field_type};
+    case sema::pattern::step_kind::ELEMENT:
+        return value{builder_.emit_get_element_ptr(
+                         parent, {value{static_cast<u64>(at.index), usize_type}}, field_type),
+                     field_type};
+    case sema::pattern::step_kind::DEREF: {
+        auto& ref_type{*lowering.tree.occurrences[*at.parent].value_type};
+        return value{builder_.emit_load(value{parent.data, ref_type}, ref_type), field_type};
+    }
+    }
+    UNREACHABLE("Unhandled occurrence step");
+}
+
+auto emitter::emit_interval_test(value subject, const sema::pattern::switch_case& test) -> value {
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto& subject_type{*subject.type};
+    if (test.lo == test.hi) {
+        const auto bound{materialize_const(const_value::from_big_int(test.lo, subject_type))};
+        return value{builder_.emit_binary(instruction_kind::EQ, subject, bound, bool_type),
+                     bool_type};
+    }
+    const auto lo{materialize_const(const_value::from_big_int(test.lo, subject_type))};
+    const auto hi{materialize_const(const_value::from_big_int(test.hi, subject_type))};
+    const auto ge{builder_.emit_binary(instruction_kind::GE, subject, lo, bool_type)};
+    const auto le{builder_.emit_binary(instruction_kind::LE, subject, hi, bool_type)};
+    return value{builder_.emit_binary(
+                     instruction_kind::AND, value{ge, bool_type}, value{le, bool_type}, bool_type),
+                 bool_type};
+}
+
+// One opaque pattern as written: a range with runtime ends, or a value compared whole
+auto emitter::emit_opaque_test(value subject, ast::node_id test) -> value {
+    auto& bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    if (const auto range{active_ast().get_as_opt<ast::range_expr>(test)}) {
+        stdx::option<value> matched;
+        const auto          combine{[&](value next) {
+            matched =
+                matched
+                    ? value{builder_.emit_binary(instruction_kind::AND, *matched, next, bool_type),
+                            bool_type}
+                    : next;
+        }};
+        if (range->lhs) {
+            combine(
+                value{builder_.emit_binary(
+                          instruction_kind::GE, subject, emit_expression(*range->lhs), bool_type),
+                      bool_type});
+        }
+        if (range->rhs) {
+            const auto op{test.get_token_type() == syntax::token_type_t::DOT_DOT_EQ
+                              ? instruction_kind::LE
+                              : instruction_kind::LT};
+            combine(
+                value{builder_.emit_binary(op, subject, emit_expression(*range->rhs), bool_type),
+                      bool_type});
+        }
+        ASSERT(matched, "A range pattern has at least one endpoint");
+        return *matched;
+    }
+    return value{
+        builder_.emit_binary(instruction_kind::EQ, subject, emit_expression_id(test), bool_type),
+        bool_type};
+}
+
+auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void {
+    PROFILE_FUNCTION();
+    auto        fn_opt{builder_.get_function()};
+    auto&       fn{*fn_opt};
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&       i32_type{ctx_.get_int(32, true)};
+    auto&       usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    const auto& d{lowering.tree.nodes[node]};
+
+    // Branch weights follow the arm a test leads straight to
+    const auto hint_for{[&](usize target) {
+        const auto& next{lowering.tree.nodes[target]};
+        return next.kind == sema::pattern::decision_kind::LEAF
+                   ? branch_hint_of(active_mod(), *lowering.match.arms[next.arm].dispatch)
+                   : ast::branch_hint::NONE;
+    }};
+
+    switch (d.kind) {
+    case sema::pattern::decision_kind::FAIL: builder_.emit_unreachable(); return;
+    case sema::pattern::decision_kind::LEAF: {
+        for (const auto& bind : d.bindings) {
+            const auto& ident{active_ast().get_as<ast::identifier_expr>(*bind.capture.payload)};
+            const auto& slots{lowering.slots[d.arm]};
+            const auto  slot{
+                std::ranges::find_if(slots, [&](const auto& s) { return s.name == ident.name; })};
+            ASSERT(slot != slots.end(), "Every bound name has a slot in its arm");
+            if (slot->is_void) { continue; }
+            const auto addr{emit_occurrence_addr(lowering, bind.occ)};
+            if (slot->is_alias) {
+                builder_.emit_store(value{slot->slot, slot->type}, value{addr.data, slot->type})
+                    .is_initializer = true;
+            } else {
+                const auto loaded{builder_.emit_load(value{addr.data, slot->type}, slot->type)};
+                builder_.emit_store(value{slot->slot, slot->type}, value{loaded, slot->type})
+                    .is_initializer = true;
+            }
+        }
+        builder_.emit_goto(lowering.bodies[d.arm]);
+        return;
+    }
+    case sema::pattern::decision_kind::SEQUENCE: {
+        const auto  addr{emit_occurrence_addr(lowering, d.occ)};
+        auto&       subject_type{*lowering.tree.occurrences[d.occ].value_type};
+        const value subject{builder_.emit_load(value{addr.data, subject_type}, subject_type),
+                            subject_type};
+        const auto  test{emit_opaque_test(subject, *d.test)};
+        auto&       on_true{fn.add_segment()};
+        auto&       on_false{fn.add_segment()};
+        auto&       branch{builder_.emit_cond_goto(test, on_true.get_id(), on_false.get_id())};
+        apply_branch_hints(branch, hint_for(d.on_true), stdx::none);
+        builder_.set_segment(on_true);
+        emit_decision(lowering, d.on_true);
+        builder_.set_segment(on_false);
+        emit_decision(lowering, d.on_false);
+        return;
+    }
+    case sema::pattern::decision_kind::SWITCH: break;
+    }
+
+    const auto addr{emit_occurrence_addr(lowering, d.occ)};
+    auto&      subject_type{*lowering.tree.occurrences[d.occ].value_type};
+    const auto is_tag{d.cases.front().kind == sema::pattern::test_kind::TAG};
+    const auto subject{[&]() -> value {
+        if (!is_tag) {
+            return value{builder_.emit_load(value{addr.data, subject_type}, subject_type),
+                         subject_type};
+        }
+        const auto tag_ptr{builder_.emit_get_element_ptr(
+            addr, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+        return value{builder_.emit_load(value{tag_ptr, i32_type}, i32_type), i32_type};
+    }()};
+
+    for (usize i{0}; i < d.cases.size(); ++i) {
+        const auto& test{d.cases[i]};
+        // With no fallback, the last case is the only thing left
+        if (i + 1 == d.cases.size() && !d.otherwise) {
+            emit_decision(lowering, test.target);
+            return;
+        }
+
+        const auto matched{[&]() -> value {
+            switch (test.kind) {
+            case sema::pattern::test_kind::TAG:
+                return value{builder_.emit_binary(instruction_kind::EQ,
+                                                  subject,
+                                                  value{static_cast<i64>(test.index), i32_type},
+                                                  bool_type),
+                             bool_type};
+            case sema::pattern::test_kind::ENUM:
+                return value{
+                    builder_.emit_binary(
+                        instruction_kind::EQ, subject, emit_expression_id(*test.source), bool_type),
+                    bool_type};
+            case sema::pattern::test_kind::BOOL:
+                return value{
+                    builder_.emit_binary(
+                        instruction_kind::EQ, subject, value{test.boolean, bool_type}, bool_type),
+                    bool_type};
+            case sema::pattern::test_kind::INTERVAL: return emit_interval_test(subject, test);
+            }
+            UNREACHABLE("Unhandled test kind");
+        }()};
+
+        auto& on_match{fn.add_segment()};
+        auto& on_miss{fn.add_segment()};
+        auto& branch{builder_.emit_cond_goto(matched, on_match.get_id(), on_miss.get_id())};
+        apply_branch_hints(branch, hint_for(test.target), stdx::none);
+        builder_.set_segment(on_match);
+        emit_decision(lowering, test.target);
+        builder_.set_segment(on_miss);
+    }
+    ASSERT(d.otherwise, "A switch with no fallback ends at its last case");
+    emit_decision(lowering, *d.otherwise);
 }
 
 auto emitter::emit_union_active_field_guard(value            union_addr,

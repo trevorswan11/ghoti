@@ -187,7 +187,7 @@ TEST_CASE("Illegal resolved enum matcher type") {
             return {
                 fmt::format("Match expression contains unknown enumeration{}", suffix),
                 sema::error::UNKNOWN_ENUMERATION,
-                std::pair{0UZ, 26UZ},
+                std::pair{0UZ, 47UZ},
             };
         };
 
@@ -195,7 +195,7 @@ TEST_CASE("Illegal resolved enum matcher type") {
                                     expected_diag(": b"));
         helpers::test_resolver_fail(
             "const E = enum { a }; _ = match (E) { .a => 5, .b => 4, .c => 3 };",
-            expected_diag("s: b, c"));
+            expected_diag(": b"));
     }
 }
 
@@ -204,7 +204,7 @@ TEST_CASE("Illegal resolved union matcher type") {
         helpers::test_resolver_fail(
             "const U = union(enum) { a: i32 }; _ = match (U) { 3 => 5 };",
             sema::diagnostic{
-                "Match arm may only have an implicit access pattern in this context",
+                "Match arm may only name a variant of the union in this context",
                 sema::error::ILLEGAL_MATCH_PATTERN,
                 std::pair{0UZ, 50UZ},
             });
@@ -250,7 +250,7 @@ TEST_CASE("Illegal resolved union matcher type") {
             return {
                 fmt::format("Match expression contains unknown union field{}", suffix),
                 sema::error::UNKNOWN_FIELD,
-                std::pair{0UZ, 38UZ},
+                std::pair{0UZ, 59UZ},
             };
         };
 
@@ -259,7 +259,7 @@ TEST_CASE("Illegal resolved union matcher type") {
             expected_diag(": b"));
         helpers::test_resolver_fail(
             "const U = union(enum) { a: i32 }; _ = match (U) { .a => 5, .b => 4, .c => 3 };",
-            expected_diag("s: b, c"));
+            expected_diag(": b"));
     }
 }
 
@@ -283,20 +283,23 @@ TEST_CASE("Illegal match arms with primitives") {
     }
 
     SECTION("Optional catch-all") {
-        const auto expected_diag = [](std::string_view kind,
-                                      usize            required_arms) -> sema::diagnostic {
-            return {
-                fmt::format("Matching on type '{}' requires a catch all arm with "
-                            "a pattern of '_' or exactly {} patterned arms",
-                            kind,
-                            required_arms),
-                sema::error::TYPE_MISMATCH,
-                std::pair{0UZ, 11UZ},
-            };
-        };
-
-        helpers::test_resolver_fail("_ = match (1u8) { 3 => 5 };", expected_diag("u8", 256));
-        helpers::test_resolver_fail("_ = match (false) { 3 => 5 };", expected_diag("bool", 2));
+        helpers::test_resolver_fail(
+            "_ = match (1u8) { 3 => 5 };",
+            sema::diagnostic{"Matching on type 'u8' requires a catch all arm with a pattern of "
+                             "'_' or patterns covering every value; missing: 0..=2, 4..=255",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 11UZ}});
+        helpers::test_resolver_fail(
+            "_ = match (false) { true => 5 };",
+            sema::diagnostic{"Matching on type 'bool' requires a catch all arm with a pattern of "
+                             "'_' or patterns covering every value; missing: false",
+                             sema::error::TYPE_MISMATCH,
+                             std::pair{0UZ, 11UZ}});
+        helpers::test_resolver_fail(
+            "_ = match (false) { 3 => 5 };",
+            sema::diagnostic{"A pattern of type 'comptime_int' cannot match a value of type 'bool'",
+                             sema::error::ILLEGAL_MATCH_PATTERN,
+                             std::pair{0UZ, 20UZ}});
     }
 }
 
@@ -395,27 +398,27 @@ TEST_CASE("A multi-variant capture requires one shared payload type") {
                          std::pair{0UZ, 95UZ}});
 }
 
-TEST_CASE("Multi-value arms still reject overlapping constants") {
-    helpers::test_resolver_fail(
-        "let mut x: i32 = 0; _ = match (x) { 0, 4 => 1, 4..8 => 2, _ => 0 };",
-        sema::diagnostic{"This match arm pattern overlaps an earlier arm",
-                         sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 47UZ}});
+TEST_CASE("Arm patterns may partly overlap, taking the first") {
+    helpers::resolve_and_check(
+        "let mut x: i32 = 0; _ = match (x) { 0, 4 => 1, 4..8 => 2, _ => 0 };");
+    helpers::resolve_and_check(
+        "let mut x: i32 = 0; _ = match (x) { 1..5 => 1, 3..8 => 2, _ => 0 };");
 }
 
 TEST_CASE("Illegal range match arms") {
     helpers::test_resolver_fail(
         "let mut b = true; _ = match (b) { 0..1 => 1, _ => 0 };",
-        sema::diagnostic{"Range patterns are not allowed when matching on 'bool'",
+        sema::diagnostic{"Range patterns are only valid when matching on an integer or byte value",
                          sema::error::ILLEGAL_MATCH_PATTERN,
-                         std::pair{0UZ, 29UZ}});
+                         std::pair{0UZ, 34UZ}});
     helpers::test_resolver_fail(
         "let mut x: i32 = 0; _ = match (x) { 5..1 => 1, _ => 0 };",
         sema::diagnostic{"Range pattern is empty; its lower bound exceeds its upper bound",
                          sema::error::ILLEGAL_MATCH_PATTERN,
                          std::pair{0UZ, 36UZ}});
     helpers::test_resolver_fail("let mut x: i32 = 0; _ = match (x) { 0..5 => 1, 3 => 2, _ => 0 };",
-                                sema::diagnostic{"This match arm pattern overlaps an earlier arm",
+                                sema::diagnostic{"This match arm pattern can never match; an "
+                                                 "earlier arm covers it",
                                                  sema::error::ILLEGAL_MATCH_PATTERN,
                                                  std::pair{0UZ, 47UZ}});
 }
@@ -423,7 +426,8 @@ TEST_CASE("Illegal range match arms") {
 TEST_CASE("Illegal resolved arbitrary matcher type") {
     const auto expected_diag = [](std::string_view type_name, usize col) -> sema::diagnostic {
         return {
-            fmt::format("Can only match on enums, unions, and certain primitive types; found '{}'",
+            fmt::format("Can only match on enums, unions, structs, arrays, slices, and certain "
+                        "primitive types; found '{}'",
                         type_name),
             sema::error::TYPE_MISMATCH,
             std::pair{0UZ, col},
