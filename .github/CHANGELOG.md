@@ -952,6 +952,23 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - An interface method can take or return a `&dyn` / `^dyn` of its own interface (`pub const eq = fn(&self, other: &dyn I): bool;`), and two interfaces can name each other through `dyn` views; holding the interface by value is still rejected
 - Fixed: a static member function of a type constructor's result (`pub const id = fn(a: T): T`) kept one instance's return type for every instance, so `Wrap(i64).id(x)` after `Wrap(u64)` was rejected or returned the wrong type
 - Fixed: a type constructor's member calling a static sibling by bare name (`id(a)`) or through `@This()` (`@This().make(a)`) crashed codegen or failed to link, as did a member call on a non-generic constructor called inline (`Make().id(5)`)
+- Nested and destructuring patterns (#390)
+    - Patterns reach through values: `.ok(.some(|raw|))`, `.{ .x = 0, .y = |y| }`, `.{ |first|, _, |last| }` on a `[N]T`, and qualified `Shape.circle(|r|)` / `Point{ .x = |x| }`
+    - A struct pattern ignores the fields it doesn't name, and looks through a `&T` but never a `^T`
+    - `pattern |name|` refines a value and binds the whole of it, and open ranges (`1..`, `..0`) are valid patterns
+    - Every capture form works at any depth, including `|&mut v|`
+    - A slice matches through `.{ .len = ..., .ptr = ... }` and string literals, and a `[N]u8` matches a string of its length
+    - Arm guards: `pattern if cond => ...`, tried in order and falling through to later arms when false
+    - `let`, `let mut`, `const`, and `comptime let mut` take a pattern, as do module-level declarations: `let .{ .x = |x| } = p;`
+    - `let .ok(|v|) = r else { return; };` takes a pattern that can fail
+    - `for`, `if`, and `while` captures take a pattern that can't: `for (points) |.{ .x = |x| }| { ... }`
+    - `match` now covers exhaustiveness and reachability together, so missing cases are named exactly (`missing: .ok(.none)`) and an arm an earlier one fully covers is an error
+    - Compile-time ranges count toward exhaustiveness at every integer width, so `0..=127, 128..=255` covers a `u8`
+    - **Breaking:** arms may now partly overlap, taking the first; only an arm that can never match is an error
+- A `match` capture without a modifier is now a copy of what it matched, so writing to the matched value in the arm no longer changes what the capture reads
+- `|&v|` on a temporary `match` scrutinee stays valid for the arm instead of being an error
+- Fixed: a `match` on a place evaluated the place twice, so `match (a[next()])` ran `next()` twice whenever an arm captured
+- Fixed: a `comptime { ... }` block's writes to an outer scalar `comptime let mut` were lost to later runtime reads of it
 - Fixed: a `_` match arm written before other arms shadowed them at runtime while compile-time evaluation tried it last, so `match (x) { _ => 1, 5 => 2 }` gave a different answer in each; `_` is now tried last everywhere
 
 ## Standard Library
