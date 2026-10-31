@@ -901,7 +901,10 @@ auto cfg_pass::recurse_into_expr(ast::expr_handle expr) -> void {
         },
         [&](const ast::match_expr& match) {
             recurse_into_expr(match.matcher);
-            for (const auto& arm : match.arms) { recurse_into_bodies(arm.dispatch); }
+            for (const auto& arm : match.arms) {
+                if (arm.guard) { recurse_into_expr(*arm.guard); }
+                recurse_into_bodies(arm.dispatch);
+            }
         },
         [&](const ast::while_loop_expr& loop) {
             recurse_into_expr(loop.condition);

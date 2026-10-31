@@ -854,6 +854,11 @@ class type_resolver {
                                             type&                               matcher_type,
                                             gsl::span<const pattern::row_input> rows)
         -> stdx::option<diagnostic>;
+    [[nodiscard]] auto bind_comptime_pattern(const ast::match_pattern_handle&         pattern,
+                                             const std::vector<gir::pattern_binding>& bindings,
+                                             type&                                    matcher_type,
+                                             gir::const_eval&                         evaluator,
+                                             comptime_frame& frame) -> bool;
     // Pattern elaboration's view of this pass. `poisoned` reports a leaf that already diagnosed
     [[nodiscard]] auto make_pattern_host(gir::const_eval& probe, bool& poisoned) -> pattern::host;
     [[nodiscard]] auto expr_denotes_type(ast::node_id n) -> bool;

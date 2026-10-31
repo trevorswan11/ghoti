@@ -293,4 +293,10 @@ class const_value {
 // type converts, other numbers just retype, and anything else is returned unchanged
 [[nodiscard]] auto with_declared_type(const_value value, sema::type& declared) -> const_value;
 
+// A name a matched pattern binds, and its value
+struct pattern_binding {
+    std::string_view name;
+    const_value      value;
+};
+
 } // namespace ghoti::gir

@@ -7,6 +7,7 @@
 #include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/common.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 
@@ -100,6 +101,139 @@ TEST_CASE("Slices match their length and strings their bytes") {
                 return f(one[0..1]);
             };
         )") == 2);
+    }
+}
+
+TEST_CASE("Guards decide between arms at runtime") {
+    SECTION("a failed guard moves on to the next arm") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            const f = fn(p: P): i32 {
+                return match (p) {
+                    .{ .x = |x|, .y = |y| } if x == y => 1,
+                    .{ .x = 0 } => 2,
+                    .{ .x = |x| } if x > 5 => 3,
+                    _ => 4,
+                };
+            };
+            pub const main = fn(): i32 {
+                let ok = f(P{ .x = 2, .y = 2 }) == 1 and f(P{ .x = 0, .y = 1 }) == 2 and
+                         f(P{ .x = 9, .y = 1 }) == 3 and f(P{ .x = 1, .y = 2 }) == 4;
+                return if (ok) 1 else 0;
+            };
+        )") == 1);
+    }
+
+    SECTION("a guard covers every alternative of its arm") {
+        CHECK(helpers::compile_and_run(R"(
+            const U = union(enum) { a: i32, b: i32 };
+            const f = fn(u: U): i32 {
+                return match (u) {
+                    .a(|v|), .b(|v|) if v > 0 => v,
+                    _ => -1,
+                };
+            };
+            pub const main = fn(): i32 {
+                return f(U{ .a = 3 }) + f(U{ .b = 4 }) * 10 + f(U{ .a = -5 }) + 1;
+            };
+        )") == 43);
+    }
+
+    SECTION("guards on a value and a guarded catch-all") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(n: i32, on: bool): i32 {
+                return match (n) {
+                    1.. if on => 1,
+                    _ if n == 0 => 2,
+                    _ => 3,
+                };
+            };
+            pub const main = fn(): i32 {
+                return f(5, true) * 100 + f(0, false) * 10 + f(5, false);
+            };
+        )") == 123);
+    }
+
+    SECTION("a pointer guard is truthy") {
+        CHECK(helpers::compile_and_run(R"(
+            const f = fn(n: i32, p: ^i32): i32 {
+                return match (n) { 1 if p => 1, _ => 2 };
+            };
+            pub const main = fn(): i32 {
+                let v: i32 = 0;
+                return f(1, ^v) * 10 + f(1, nullptr);
+            };
+        )") == 12);
+    }
+
+    SECTION("a guard runs once per candidate arm, in order") {
+        CHECK(helpers::compile_and_run(R"(
+            const bump = fn(n: &mut i32, result: bool): bool {
+                n = n + 1;
+                return result;
+            };
+            pub const main = fn(): i32 {
+                let mut hits: i32 = 0;
+                let mut x: i32 = 0;
+                x = 2;
+                let r = match (x) {
+                    0 if bump(&mut hits, true) => 10,
+                    2 if bump(&mut hits, false) => 20,
+                    2 if bump(&mut hits, true) => 30,
+                    _ => 40,
+                };
+                return r + hits;
+            };
+        )") == 32);
+    }
+
+    SECTION("a guard can read through an alias capture") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                let mut p = P{ .x = 1 };
+                match (p) {
+                    .{ .x = |&mut x| } if x == 1 => { x = 7; },
+                    _ => {},
+                };
+                return p.x;
+            };
+        )") == 7);
+    }
+}
+
+TEST_CASE("Guards decide between arms at compile time") {
+    SECTION("folding the same match as a runtime one") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            const f = fn(p: P): i32 {
+                return match (p) {
+                    .{ .x = |x|, .y = |y| } if x == y => 1,
+                    .{ .x = |x| } if x > 5 => 2,
+                    _ => 3,
+                };
+            };
+            const A: i32 = f(P{ .x = 2, .y = 2 });
+            const B: i32 = f(P{ .x = 9, .y = 2 });
+            const C: i32 = f(P{ .x = 1, .y = 2 });
+            pub const main = fn(): i32 { return A * 100 + B * 10 + C; };
+        )") == 123);
+    }
+
+    SECTION("match comptime selects past a false guard") {
+        CHECK(helpers::compile_and_run(R"(
+            const size = fn(comptime T: type): i32 {
+                return match comptime (@typeInfo(T)) {
+                    .int(.{ .bits = |b| }) if b > 16 => 3,
+                    .int(.{ .bits = |b| }) if b > 8 => 2,
+                    .int => 1,
+                    _ => 0,
+                };
+            };
+            pub const main = fn(): i32 {
+                return size(u32) * 50 + size(u16) * 10 + size(u8);
+            };
+        )") == 171);
     }
 }
 
@@ -569,6 +703,8 @@ constexpr std::string_view SHAPES{R"(
     const F = packed struct { pub a: u3, pub b: u5 };
     const r = R{ .err = 0 };
     const p = P{ .x = 0, .y = 0 };
+    const bump = fn(n: &mut i32): bool { n = n + 1; return true; };
+    const assign = fn(n: &mut i32): bool { n = 1; return true; };
 )"};
 
 [[nodiscard]] auto rejects(std::string_view body, sema::error code) -> bool {
@@ -661,9 +797,35 @@ TEST_CASE("Malformed nested patterns are rejected with a reason") {
         CHECK(rejects("let n: i32 = 1; return match (n) { \"a\" => 1, _ => 2 };", ILLEGAL));
     }
 
+    SECTION("guards") {
+        CHECK(rejects("return match (r) { .ok(_) if true => 1, .err => 2 };",
+                      sema::error::MISSING_FIELD));
+        CHECK(rejects("const T = i32; return match comptime (T) { i32 if true => 1, _ => 2 };",
+                      sema::error::ILLEGAL_MATCH_PATTERN));
+        CHECK(rejects(
+            "let mut n: i32 = 1; n = 2; return match comptime (1) { 1 if n > 0 => 1, _ => 2 };",
+            sema::error::COMPTIME_EVALUATION_FAILED));
+    }
+
     SECTION("open ranges need a sized type") {
         CHECK(rejects("return match (1) { 0.. => 1, _ => 2 };", ILLEGAL));
     }
+}
+
+TEST_CASE("A guard can't write through an alias capture") {
+    const auto guarded{[](std::string_view guard) {
+        return fmt::format(R"(
+            const P = struct {{ pub x: i32 }};
+            const assign = fn(n: &mut i32): bool {{ n = 1; return true; }};
+            pub const main = fn(): i32 {{
+                let mut q = P{{ .x = 0 }};
+                return match (q) {{ .{{ .x = |&mut x| }} if {} => 1, _ => 2 }};
+            }};
+        )",
+                           guard);
+    }};
+    DISCARD(helpers::expect_compile_error(guarded("assign(x)")));
+    DISCARD(helpers::expect_compile_error(guarded("(x = 5) == 5")));
 }
 
 TEST_CASE("Private fields stay private to patterns") {

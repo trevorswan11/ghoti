@@ -3281,6 +3281,8 @@ auto const_eval::selected_match_arm(const ast::match_expr& match) -> stdx::opt_s
         if (std::ranges::any_of(match.arms[i].patterns, [&](const auto& pattern) {
                 return arm_pattern_matches(pattern, *matcher_val);
             })) {
+            // A guard may need names only the arm itself binds, so this can't tell
+            if (match.arms[i].guard) { return stdx::none; }
             return i;
         }
     }
@@ -3351,6 +3353,14 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
                 for (const auto& bound : *bindings) {
                     call_stack_.back().bindings.insert_or_assign(bound.name, bound.value);
                 }
+            }
+            if (arm.guard) {
+                const auto taken{try_eval(*arm.guard)};
+                if (!taken) {
+                    cond_unknown_ = true;
+                    return stdx::none;
+                }
+                if (const auto truth{taken->as_opt<bool>()}; truth && !*truth) { continue; }
             }
             bind_capture(arm, false);
             return eval_dispatch(arm.dispatch);

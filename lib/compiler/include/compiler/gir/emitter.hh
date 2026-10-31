@@ -370,6 +370,7 @@ class emitter {
         gsl::span<const std::vector<match_capture_slot>> slots{};
     };
     [[nodiscard]] auto capture_binding(const match_capture_slot& slot) -> local_binding;
+    [[nodiscard]] auto const_view_of(sema::type& alias) -> sema::type&;
     auto               emit_occurrence_addr(const match_lowering& lowering, usize occ) -> value;
     auto emit_interval_test(value subject, const sema::pattern::switch_case& test) -> value;
     auto emit_opaque_test(value subject, ast::node_id test) -> value;

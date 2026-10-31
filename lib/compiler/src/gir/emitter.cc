@@ -8367,6 +8367,16 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
     return value{void_val{}, sema_type};
 }
 
+auto emitter::const_view_of(sema::type& alias) -> sema::type& {
+    if (const auto ref{alias.get_data().as_opt<sema::types::reference>()}) {
+        return ctx_.get_reference(sema::types::mut::CONSTANT, ref->underlying);
+    }
+    if (const auto ptr{alias.get_data().as_opt<sema::types::pointer>()}) {
+        return ctx_.get_pointer(sema::types::mut::CONSTANT, ptr->underlying);
+    }
+    return alias;
+}
+
 auto emitter::capture_binding(const match_capture_slot& slot) -> local_binding {
     if (slot.is_void) {
         return local_binding{local_id{0, local_kind::TEMPORARY},
@@ -8517,7 +8527,34 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
                     .is_initializer = true;
             }
         }
-        builder_.emit_goto(lowering.bodies[d.arm]);
+        const auto& guard{lowering.match.arms[d.arm].guard};
+        if (!guard) {
+            builder_.emit_goto(lowering.bodies[d.arm]);
+            return;
+        }
+
+        // A failed guard carries on to the rows after this one, so it can't write what they test
+        auto& on_fail{fn.add_segment()};
+        {
+            const scope_guard guard_scope{scopes_};
+            for (const auto& slot : lowering.slots[d.arm]) {
+                const auto bound{capture_binding(slot)};
+                scopes_.back().bindings.emplace(
+                    slot.name,
+                    local_binding{
+                        .id        = bound.id,
+                        .type      = slot.is_alias ? const_view_of(slot.type) : bound.type,
+                        .is_alloca = bound.is_alloca,
+                        .const_val = bound.const_val,
+                        .is_const  = bound.is_const,
+                    });
+            }
+            const auto passed{coerce_condition(emit_expression(*guard))};
+            builder_.emit_cond_goto(passed, lowering.bodies[d.arm], on_fail.get_id());
+        }
+        builder_.set_segment(on_fail);
+        ASSERT(d.fallthrough, "A guarded row always has somewhere to fall through to");
+        emit_decision(lowering, *d.fallthrough);
         return;
     }
     case sema::pattern::decision_kind::SEQUENCE: {

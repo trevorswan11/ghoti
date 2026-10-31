@@ -139,12 +139,6 @@ class const_eval {
                                            ast::node_id         id,
                                            bool wrapping = false) -> stdx::option<const_value>;
 
-    // A name a matched pattern binds, and its value
-    struct pattern_binding {
-        std::string_view name;
-        const_value      value;
-    };
-
     [[nodiscard]] auto arm_pattern_matches(const ast::match_pattern_handle& pattern,
                                            const const_value&               target) -> bool {
         return arm_pattern_bindings(pattern, target).has_value();

@@ -444,6 +444,7 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
             const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
             try_declare<symbols::capture>(ident.name, *arm.capture);
         }
+        if (arm.guard) { collect(*arm.guard); }
         collect(arm.dispatch);
 
         last_type_.emplace(ctx_.pool[{type_kind::MATCH_ARM, types::mut::CONSTANT, new_idx}]);

@@ -1070,6 +1070,14 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
                                        const ast::match_expr& match,
                                        type&                  matcher_type) -> void {
     PROFILE_FUNCTION();
+    for (const auto& arm : match.arms) {
+        if (!arm.guard) { continue; }
+        return last_type_.emplace(ctx_.poison_node(resolving_,
+                                                   id,
+                                                   "A 'match' on a type can't take a guard",
+                                                   error::ILLEGAL_MATCH_PATTERN,
+                                                   resolving_.ast.location_of(*arm.guard)));
+    }
 
     if (!match.catch_all_idx) {
         return last_type_.emplace(
@@ -1172,6 +1180,48 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
     last_type_.emplace(*result_type);
 }
 
+// Types what a selected `match comptime` pattern binds, and adds the values to `frame`. Leaves a
+// poison in `last_type_` and returns false if it can't
+auto type_resolver::bind_comptime_pattern(const ast::match_pattern_handle&         pattern,
+                                          const std::vector<gir::pattern_binding>& bindings,
+                                          type&                                    matcher_type,
+                                          gir::const_eval&                         evaluator,
+                                          comptime_frame&                          frame) -> bool {
+    if (bindings.empty()) { return true; }
+
+    bool                leaf_poisoned{false};
+    const pattern::host callbacks{make_pattern_host(evaluator, leaf_poisoned)};
+    auto                elaborated{pattern::elaborate({.mod             = resolving_,
+                                                       .ctx             = ctx_,
+                                                       .callbacks       = callbacks,
+                                                       .target_ptr_bits = target_ptr_bits()},
+                                                      *pattern,
+                                                      denoted_type(matcher_type),
+                                                      true)};
+    if (!elaborated) {
+        if (!leaf_poisoned) {
+            last_type_.emplace(
+                ctx_.poison_node(resolving_, *pattern, std::move(elaborated).error()));
+        }
+        return false;
+    }
+    for (const auto& site : pattern::captures_of(**elaborated)) {
+        if (!site.capture.modifier.is_value()) {
+            last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                *pattern,
+                "'match comptime' captures cannot use a reference or pointer modifier",
+                error::ILLEGAL_MATCH_PATTERN,
+                resolving_.ast.location_of(*site.capture.payload)));
+            return false;
+        }
+        resolving_.set_sema_type(*site.capture.payload, site.value_type);
+        resolve_symbol_info(site.capture.payload, symbol_kind::VALUE);
+    }
+    for (const auto& bound : bindings) { frame.insert_or_assign(bound.name, bound.value); }
+    return true;
+}
+
 auto type_resolver::resolve_comptime_match(ast::node_id           id,
                                            const ast::match_expr& match,
                                            type&                  matcher_type) -> void {
@@ -1193,11 +1243,44 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
     stdx::opt_size selected;
     for (usize i{0}; i < match.arms.size() && !selected; ++i) {
         if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
-        for (const auto& pattern : match.arms[i].patterns) {
-            if (evaluator.arm_pattern_matches(pattern, *scrutinee)) {
-                selected.emplace(i);
-                break;
+        const auto& arm{match.arms[i]};
+        for (const auto& pattern : arm.patterns) {
+            const auto bindings{evaluator.arm_pattern_bindings(pattern, *scrutinee)};
+            if (!bindings) { continue; }
+            if (arm.guard) {
+                if (scrutinee->is<stdx::option<sema::type&>>()) {
+                    return last_type_.emplace(
+                        ctx_.poison_node(resolving_,
+                                         id,
+                                         "A 'match' on a type can't take a guard",
+                                         error::ILLEGAL_MATCH_PATTERN,
+                                         resolving_.ast.location_of(*arm.guard)));
+                }
+                auto&       arm_table_type{resolving_.get_sema_type(arm)};
+                const scope arm_scope{
+                    table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
+                comptime_frame guard_frame;
+                if (!bind_comptime_pattern(
+                        pattern, *bindings, matcher_type, evaluator, guard_frame)) {
+                    return resolving_.set_sema_type(id, *last_type_);
+                }
+                const comptime_frame_guard guard_g{ctx_.comptime_binding_frames,
+                                                   std::move(guard_frame)};
+                TRY_RESOLVE(*arm.guard);
+                const auto taken{evaluator.try_eval(*arm.guard)};
+                const auto truth{taken ? taken->as_opt<bool>() : stdx::none};
+                if (!truth) {
+                    return last_type_.emplace(ctx_.poison_node(
+                        resolving_,
+                        id,
+                        "A guard in a 'match comptime' must be known at compile time",
+                        error::COMPTIME_EVALUATION_FAILED,
+                        resolving_.ast.location_of(*arm.guard)));
+                }
+                if (!*truth) { continue; }
             }
+            selected.emplace(i);
+            break;
         }
     }
     if (!selected) { selected = match.catch_all_idx; }
@@ -1222,35 +1305,9 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         for (const auto& pattern : live.patterns) {
             const auto bindings{evaluator.arm_pattern_bindings(pattern, *scrutinee)};
             if (!bindings) { continue; }
-            if (bindings->empty()) { break; }
-
-            bool                leaf_poisoned{false};
-            const pattern::host callbacks{make_pattern_host(evaluator, leaf_poisoned)};
-            auto elaborated{pattern::elaborate({.mod             = resolving_,
-                                                .ctx             = ctx_,
-                                                .callbacks       = callbacks,
-                                                .target_ptr_bits = target_ptr_bits()},
-                                               *pattern,
-                                               denoted_type(matcher_type),
-                                               true)};
-            if (!elaborated) {
-                if (leaf_poisoned) { return resolving_.set_sema_type(id, *last_type_); }
-                return last_type_.emplace(
-                    ctx_.poison_node(resolving_, id, std::move(elaborated).error()));
+            if (!bind_comptime_pattern(pattern, *bindings, matcher_type, evaluator, frame)) {
+                return resolving_.set_sema_type(id, *last_type_);
             }
-            for (const auto& site : pattern::captures_of(**elaborated)) {
-                if (!site.capture.modifier.is_value()) {
-                    return last_type_.emplace(ctx_.poison_node(
-                        resolving_,
-                        id,
-                        "'match comptime' captures cannot use a reference or pointer modifier",
-                        error::ILLEGAL_MATCH_PATTERN,
-                        resolving_.ast.location_of(*site.capture.payload)));
-                }
-                resolving_.set_sema_type(*site.capture.payload, site.value_type);
-                resolve_symbol_info(site.capture.payload, symbol_kind::VALUE);
-            }
-            for (const auto& bound : *bindings) { frame.insert_or_assign(bound.name, bound.value); }
             break;
         }
 
@@ -1559,7 +1616,10 @@ auto type_resolver::check_match_coverage(ast::node_id                        id,
                           error::ILLEGAL_MATCH_PATTERN,
                           at};
     }
-    if (tree.missing_is_flat && (data.is<types::enum_t>() || data.is<types::union_t>())) {
+    const auto names_variants{std::ranges::all_of(
+        tree.missing, [](std::string_view text) { return text.starts_with('.'); })};
+    if (tree.missing_is_flat && names_variants &&
+        (data.is<types::enum_t>() || data.is<types::union_t>())) {
         std::vector<std::string_view> names;
         for (const std::string_view text : tree.missing) { names.emplace_back(text.substr(1)); }
         return diagnostic{fmt::format("Match expression is non-exhaustive; missing {}{}: {}",
@@ -1799,6 +1859,31 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         // Tabled types have prefilled types that should be pushed on the table stack
         auto&       arm_table_type{resolving_.get_sema_type(arm)};
         const scope scope{table_stack_, arm_table_type.get_symbol_table_idx(), table_idx_};
+        if (arm.guard) {
+            // A failed guard carries on to later arms, so it can't write what they test
+            const auto arm_idx{static_cast<usize>(&arm - match.arms.data())};
+            std::vector<std::pair<ast::node_id, gsl::not_null<type*>>> writable;
+            for (const auto& alternative : arm_patterns[arm_idx]) {
+                for (const auto& site : pattern::captures_of(*alternative)) {
+                    auto& cap_type{resolving_.get_sema_type(*site.capture.payload)};
+                    if (!site.capture.modifier.is_mutable_ref() &&
+                        !site.capture.modifier.is_mutable_ptr()) {
+                        continue;
+                    }
+                    writable.emplace_back(*site.capture.payload, &cap_type);
+                    auto& underlying{site.capture.modifier.is_mutable_ref()
+                                         ? ctx_.get_reference(types::mut::CONSTANT, site.value_type)
+                                         : ctx_.get_pointer(types::mut::CONSTANT, site.value_type)};
+                    resolving_.set_sema_type(*site.capture.payload, underlying);
+                }
+            }
+            resolve(*arm.guard);
+            for (const auto& [payload, cap_type] : writable) {
+                resolving_.set_sema_type(payload, *cap_type);
+            }
+            if (last_type_->is_poison()) { return resolving_.set_sema_type(id, *last_type_); }
+            if (reject_type_condition(*arm.guard)) { return; }
+        }
         {
             const mutating_context_guard branch_g{in_expr_branch_, true};
             const mutating_context_guard unused_g{arm_of_unused_,
@@ -2276,7 +2361,10 @@ auto type_resolver::check_deferred_body_jumps(ast::stmt_handle body) -> void {
             },
             [&](const ast::match_expr& data) {
                 self(self, *data.matcher, loop_depth);
-                for (const auto& arm : data.arms) { self(self, *arm.dispatch, loop_depth); }
+                for (const auto& arm : data.arms) {
+                    if (arm.guard) { self(self, **arm.guard, loop_depth); }
+                    self(self, *arm.dispatch, loop_depth);
+                }
             },
             [&](const ast::binary_expr& data) {
                 self(self, *data.lhs, loop_depth);
@@ -2480,6 +2568,7 @@ auto type_resolver::check_unrolled_loop_jumps(ast::stmt_handle body) -> void {
                 self(self, *data.matcher, loop_depth, runtime_control_flow_depth);
                 const usize next_depth{runtime_control_flow_depth + (data.is_comptime ? 0 : 1)};
                 for (const auto& arm : data.arms) {
+                    if (arm.guard) { self(self, **arm.guard, loop_depth, next_depth); }
                     self(self, *arm.dispatch, loop_depth, next_depth);
                 }
             },
