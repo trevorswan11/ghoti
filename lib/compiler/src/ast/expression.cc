@@ -504,6 +504,9 @@ namespace {
     -> stdx::option<std::string_view> {
     return parser.get_ast()[*member].visit(
         [](const decl_stmt& decl) -> stdx::option<std::string_view> {
+            if (decl.destructure || decl.is_synthesized) {
+                return "Member declarations can't destructure; bind each member by name";
+            }
             // Members that violate this wouldn't be usable with C
             if (decl.has_modifier(decl_modifiers::EXTERN) ||
                 decl.has_modifier(decl_modifiers::EXPORT)) {
@@ -799,6 +802,17 @@ auto enum_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synta
                                       std::move(member_cfg_groups));
 }
 
+namespace {
+
+[[nodiscard]] auto parse_capture_pattern(syntax::parser& parser)
+    -> stdx::result<capture_t, syntax::diagnostic>;
+[[nodiscard]] auto wrap_captured_block(syntax::parser&                parser,
+                                       const stdx::option<capture_t>& capture,
+                                       block_handle                   block,
+                                       bool                           is_comptime) -> block_handle;
+
+} // namespace
+
 auto for_loop_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     return parse(parser, false);
 }
@@ -846,8 +860,11 @@ auto for_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
     while (!parser.peek_token_is(syntax::token_type_t::BW_OR) &&
            !parser.peek_token_is(syntax::token_type_t::END)) {
+        const auto holds_pattern{starts_destructure_pattern(parser)};
         parser.advance();
-        if (parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
+        if (holds_pattern) {
+            captures.emplace_back(TRY(parse_capture_pattern(parser)));
+        } else if (parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
             const auto discarded{parser.add_node<discardable_ident_handle, ast::discarded>(
                 parser.get_current_token())};
             captures.emplace_back(type_modifier{}, discarded);
@@ -869,7 +886,10 @@ auto for_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
 
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    const block_handle        block{TRY(block_stmt::parse(parser))};
+    block_handle block{TRY(block_stmt::parse(parser))};
+    for (const auto& capture : std::views::reverse(captures)) {
+        block = wrap_captured_block(parser, stdx::option<capture_t>{capture}, block, is_unrolled);
+    }
     stdx::option<stmt_handle> non_break;
     if (is_unrolled) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
@@ -1298,8 +1318,454 @@ auto identifier_expr::parse(syntax::parser& parser)
 
 namespace {
 
+// One name a pattern binds, and how to reach its value from the whole
+struct pattern_path_step {
+    std::string_view member;
+    stdx::opt_size   element;
+};
+
+struct bound_name {
+    capture_t                      capture;
+    std::vector<pattern_path_step> path;
+};
+
+auto collect_bound_names(const AST&                      ast,
+                         ast::node_id                    pattern,
+                         std::vector<pattern_path_step>& path,
+                         std::vector<bound_name>&        out) -> void {
+    if (const auto capture{ast.get_as_opt<capture_pattern_expr>(pattern)}) {
+        if (capture->capture.payload.is<identifier_expr>()) {
+            out.emplace_back(capture->capture, path);
+        }
+        return;
+    }
+    if (const auto bound{ast.get_as_opt<bound_pattern_expr>(pattern)}) {
+        collect_bound_names(ast, *bound->pattern, path, out);
+        if (bound->capture.payload.is<identifier_expr>()) {
+            out.emplace_back(bound->capture, path);
+        }
+        return;
+    }
+    if (const auto init{ast.get_as_opt<initializer_expr>(pattern)}) {
+        for (usize i{0}; i < init->initializers.size(); ++i) {
+            const auto& entry{init->initializers[i]};
+            if (entry.member) {
+                const auto& access{ast.get_as<implicit_access_expr>(*entry.member)};
+                path.emplace_back(ast.get_as<identifier_expr>(access.member).name, stdx::none);
+            } else {
+                path.emplace_back(std::string_view{}, i);
+            }
+            collect_bound_names(ast, *entry.value, path, out);
+            path.pop_back();
+        }
+        return;
+    }
+    if (const auto call{ast.get_as_opt<call_expr>(pattern)}) {
+        const auto implicit{ast.get_as_opt<implicit_access_expr>(call->function)};
+        const auto dot{ast.get_as_opt<dot_expr>(call->function)};
+        if ((!implicit && !dot) || call->arguments.size() != 1) { return; }
+        const auto arg{call->arguments.front().template as_opt<expr_handle>()};
+        if (!arg) { return; }
+        const auto& member{implicit ? implicit->member : dot->member};
+        path.emplace_back(ast.get_as<identifier_expr>(member).name, stdx::none);
+        collect_bound_names(ast, **arg, path, out);
+        path.pop_back();
+    }
+}
+
+[[nodiscard]] auto bound_names_of(const AST& ast, ast::node_id pattern) -> std::vector<bound_name> {
+    std::vector<bound_name>        names;
+    std::vector<pattern_path_step> path;
+    collect_bound_names(ast, pattern, path, names);
+    return names;
+}
+
+// A name, or a chain of fields off one: a place that's safe to spell more than once
+[[nodiscard]] auto is_plain_field_chain(const AST& ast, ast::node_id id) -> bool {
+    if (ast.get_as_opt<identifier_expr>(id)) { return true; }
+    const auto dot{ast.get_as_opt<dot_expr>(id)};
+    return dot && is_plain_field_chain(ast, *dot->object);
+}
+
+// A fresh copy of `root`, whose nodes another expression can own
+[[nodiscard]] auto clone_field_chain(syntax::parser& parser, ast::node_id root, source_location loc)
+    -> expr_handle {
+    const auto tag{parser.get_current_token()};
+    if (const auto ident{parser.get_ast().get_as_opt<identifier_expr>(root)}) {
+        const auto name{ident->name};
+        const auto copy{parser.add_written_identifier(loc, name)};
+        parser.note_identifier_reference(name, copy);
+        return copy;
+    }
+    const auto&             dot{parser.get_ast().get_as<dot_expr>(root)};
+    const auto              object{*dot.object};
+    const auto              member{parser.get_ast().get_as<identifier_expr>(dot.member).name};
+    const auto              object_copy{clone_field_chain(parser, object, loc)};
+    const identifier_handle member_copy{parser.add_written_identifier(loc, member)};
+    return parser.add_expr<dot_expr>(loc, tag, object_copy, member_copy);
+}
+
+// The expression `root.path` for a name a pattern binds
+[[nodiscard]] auto
+make_path_access(syntax::parser& parser, ast::node_id root, const bound_name& name) -> expr_handle {
+    const auto loc{parser.get_location_of(*name.capture.payload)};
+    const auto tag{parser.get_current_token()};
+    auto       access{clone_field_chain(parser, root, loc)};
+    for (const auto& step : name.path) {
+        if (step.element) {
+            const auto digits{parser.get_ast().intern(fmt::to_string(*step.element))};
+            const auto index{parser.add_expr<int_literal_expr>(
+                loc,
+                tag,
+                int_literal_expr{.value     = static_cast<u128>(*step.element),
+                                 .width     = 0,
+                                 .is_signed = false,
+                                 .is_size   = false,
+                                 .base      = syntax::numeric_base::DECIMAL,
+                                 .spelling  = digits})};
+            access = parser.add_expr<index_expr>(loc, tag, access, index);
+        } else {
+            const identifier_handle member{parser.add_written_identifier(loc, step.member)};
+            access = parser.add_expr<dot_expr>(loc, tag, access, member);
+        }
+    }
+    return access;
+}
+
+// `&place` / `^mut place`, spelled by the modifier of a capture that wants that view
+[[nodiscard]] auto make_view_of(syntax::parser&      parser,
+                                const type_modifier& modifier,
+                                expr_handle          place) -> expr_handle {
+    const auto loc{parser.get_location_of(*place)};
+    auto       tag{parser.get_current_token()};
+    if (modifier.is_ptr()) {
+        tag.type = modifier.is_poly_ptr()      ? syntax::token_type_t::CARET_MUT_POLY
+                   : modifier.is_mutable_ptr() ? syntax::token_type_t::CARET_MUT
+                                               : syntax::token_type_t::CARET;
+        return parser.add_expr<address_of_expr>(loc, tag, place);
+    }
+    tag.type = modifier.is_poly_ref()      ? syntax::token_type_t::AND_MUT_POLY
+               : modifier.is_mutable_ref() ? syntax::token_type_t::AND_MUT
+                                           : syntax::token_type_t::BW_AND;
+    return parser.add_expr<reference_expr>(loc, tag, place);
+}
+
+// `match [comptime] (whole) { pattern => body, [_ => otherwise] }`, standing for a binding
+[[nodiscard]] auto make_binding_match(syntax::parser&           parser,
+                                      ast::node_id              whole,
+                                      match_pattern_handle      pattern,
+                                      stmt_handle               body,
+                                      stdx::option<stmt_handle> otherwise,
+                                      bool                      is_comptime) -> expr_handle {
+    const auto loc{parser.get_location_of(*pattern)};
+    const auto tag{parser.get_current_token()};
+
+    std::vector<match_expr::arm> arms;
+    arms.emplace_back(std::vector<match_pattern_handle>{pattern},
+                      stdx::option<capture_t>{},
+                      body,
+                      false,
+                      stdx::option<expr_handle>{});
+    stdx::opt_size catch_all;
+    if (otherwise) {
+        const auto discard{parser.add_node<discardable_ident_handle, ast::discarded>(tag)};
+        arms.emplace_back(std::vector<match_pattern_handle>{match_pattern_handle{*discard}},
+                          stdx::option<capture_t>{},
+                          *otherwise,
+                          false,
+                          stdx::option<expr_handle>{});
+        catch_all.emplace(1);
+    }
+    const auto matcher{clone_field_chain(parser, whole, loc)};
+    return parser.add_expr<match_expr>(
+        loc, tag, matcher, std::move(arms), catch_all, is_comptime, false, true);
+}
+
+[[nodiscard]] auto is_place_shaped(expr_handle value) noexcept -> bool {
+    return value.is<identifier_expr>() || value.is<dot_expr>() || value.is<index_expr>() ||
+           value.is<dereference_expr>();
+}
+
+} // namespace
+
+auto starts_destructure_pattern(syntax::parser& parser) -> bool {
+    if (parser.peek_token_is(syntax::token_type_t::DOT)) { return true; }
+    if (!parser.peek_token_is(syntax::token_type_t::IDENT)) { return false; }
+    const syntax::parser::transaction tx{parser};
+    parser.advance();
+    if (parser.peek_token_is(syntax::token_type_t::DOT) ||
+        parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+        return true;
+    }
+    if (!parser.peek_token_is(syntax::token_type_t::LBRACE)) { return false; }
+
+    // `Point{ .x = ...` is a pattern, while `|i { a; }` is a capture missing its closing bar
+    parser.advance();
+    return parser.peek_token_is(syntax::token_type_t::DOT) ||
+           parser.peek_token_is(syntax::token_type_t::BW_OR) ||
+           parser.peek_token_is(syntax::token_type_t::UNDERSCORE);
+}
+
+auto parse_destructure(syntax::parser&        parser,
+                       const syntax::token_t& start_token,
+                       source_location        span_start,
+                       decl_modifiers modifiers) -> stdx::result<stmt_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto disallowed{decl_modifiers::EXTERN | decl_modifiers::EXPORT};
+    if ((modifiers & disallowed) != decl_modifiers{}) {
+        return make_syntax_err("A destructuring declaration can't be 'extern' or 'export'",
+                               syntax::error::ILLEGAL_DECL_MODIFIERS,
+                               start_token);
+    }
+
+    parser.advance();
+    const auto pattern_tok{parser.get_current_token()};
+    const auto pattern_raw{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+        const syntax::parser::pattern_scope pattern_scope{parser, true};
+        // Stopping short of the lowest precedence keeps the `=` for the value
+        const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::ASSIGNMENT))};
+        return parser.peek_token_is(syntax::token_type_t::BW_OR)
+                   ? bound_pattern_expr::parse(parser, parsed)
+                   : stdx::result<expr_handle, syntax::diagnostic>{parsed};
+    }()};
+    if (!pattern_raw) { return stdx::err{pattern_raw.error()}; }
+    if (!match_pattern_handle::any_compatible((*pattern_raw)->get_kind())) {
+        return make_syntax_err("Expected a pattern to destructure into",
+                               syntax::error::ILLEGAL_MATCH_PATTERN,
+                               pattern_tok);
+    }
+    const match_pattern_handle pattern{*pattern_raw};
+
+    const auto [decl_type, initialized]{TRY(explicit_type::parse_opt_init(parser))};
+    if (!initialized) {
+        return make_syntax_err("A destructuring declaration needs a value to take apart",
+                               syntax::error::DECL_MISSING_VALUE,
+                               start_token);
+    }
+
+    const bool is_comptime_decl{(modifiers & decl_modifiers::COMPTIME) != decl_modifiers{}};
+    const bool is_const{is_comptime_decl && (modifiers & decl_modifiers::MUT) == decl_modifiers{}};
+    const auto value{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+        const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl, is_const};
+        return parser.parse_expression();
+    }()};
+    if (!value) { return stdx::err{value.error()}; }
+
+    stdx::option<stmt_handle> otherwise;
+    if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
+        parser.advance(2);
+        otherwise.emplace(TRY(parser.parse_restricted_statement(
+            syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED)));
+    }
+    TRY(parser.expect_semicolon());
+
+    auto&                   ast{parser.get_ast()};
+    const auto              hidden_name{parser.next_hidden_name()};
+    const identifier_handle hidden_ident{parser.add_written_identifier(span_start, hidden_name)};
+
+    // A pass that only looks at the source keeps it as written
+    if (!parser.synthesizes_default_wrappers()) {
+        const auto source{parser.add_node<stmt_handle, decl_stmt>(span_start,
+                                                                  start_token,
+                                                                  hidden_ident,
+                                                                  decl_type,
+                                                                  stdx::option<expr_handle>{*value},
+                                                                  modifiers,
+                                                                  stdx::none,
+                                                                  stdx::none,
+                                                                  stdx::none)};
+        auto&      written{ast.get_as_mut<decl_stmt>(*source)};
+        written.destructure.emplace(pattern, otherwise);
+        return source;
+    }
+
+    const auto names{bound_names_of(ast, *pattern)};
+    const auto aliases{[&](auto&& pred) {
+        return std::ranges::any_of(names,
+                                   [&](const bound_name& n) { return pred(n.capture.modifier); });
+    }};
+    const auto wants_view{aliases([](const type_modifier& m) { return m.is_ref() || m.is_ptr(); })};
+    const auto at_module_scope{!parser.in_function_body()};
+    if (wants_view && (is_comptime_decl || at_module_scope)) {
+        return make_syntax_err(
+            is_comptime_decl ? "A compile-time destructuring binds values, so its captures can't "
+                               "take a reference or pointer"
+                             : "A module-level destructuring binds values, so its captures can't "
+                               "take a reference or pointer",
+            syntax::error::ILLEGAL_CAPTURE,
+            pattern_tok);
+    }
+
+    // A plain place is already safe to name again, and may hold a reference of its own
+    const auto reuses_place{wants_view && is_plain_field_chain(ast, **value)};
+    if (reuses_place && decl_type) {
+        return make_syntax_err("A destructuring that aliases a place takes the place's own type",
+                               syntax::error::ILLEGAL_CAPTURE,
+                               pattern_tok);
+    }
+
+    // The value runs once. A place keeps its identity for captures that alias it
+    const auto wants_mutable{
+        aliases([](const type_modifier& m) { return m.is_mutable_ref() || m.is_mutable_ptr(); })};
+    const auto wants_poly{aliases([](const type_modifier& m) { return m.is_poly(); })};
+    const auto keeps_place{wants_view && is_place_shaped(*value)};
+    if (keeps_place && decl_type) {
+        return make_syntax_err("A destructuring that aliases a place takes the place's own type",
+                               syntax::error::ILLEGAL_CAPTURE,
+                               pattern_tok);
+    }
+    auto view_tag{parser.get_current_token()};
+    view_tag.type = wants_poly      ? syntax::token_type_t::AND_MUT_POLY
+                    : wants_mutable ? syntax::token_type_t::AND_MUT
+                                    : syntax::token_type_t::BW_AND;
+    const auto initializer{keeps_place ? make_view_of(parser, type_modifier{view_tag}, *value)
+                                       : *value};
+
+    const auto hidden_modifiers{(at_module_scope || is_comptime_decl) ? decl_modifiers::COMPTIME
+                                                                      : decl_modifiers::LET};
+    stdx::option<stmt_handle> first;
+    const auto                add_statement{[&](stmt_handle stmt) {
+        if (first) {
+            parser.queue_synthesized(stmt);
+        } else {
+            first.emplace(stmt);
+        }
+    }};
+    if (!reuses_place) {
+        const auto hidden{
+            parser.add_node<stmt_handle, decl_stmt>(span_start,
+                                                    start_token,
+                                                    hidden_ident,
+                                                    decl_type,
+                                                    stdx::option<expr_handle>{initializer},
+                                                    hidden_modifiers,
+                                                    stdx::none,
+                                                    stdx::none,
+                                                    stdx::none)};
+        ast.get_as_mut<decl_stmt>(*hidden).is_synthesized = true;
+        add_statement(hidden);
+    }
+    const ast::node_id root{reuses_place ? **value : *hidden_ident};
+
+    // Proves the pattern can't fail, or runs the `else` when it does
+    const auto empty_body{
+        parser.add_stmt<block_stmt>(pattern_tok, block_stmt::statements_t{}, false)};
+    const auto check{make_binding_match(
+        parser, root, pattern, empty_body, otherwise, at_module_scope || is_comptime_decl)};
+    if (at_module_scope) {
+        add_statement(parser.add_stmt<discard_stmt>(pattern_tok, check));
+    } else {
+        add_statement(parser.add_stmt<expr_stmt>(pattern_tok, check, true));
+    }
+
+    const auto carried{modifiers & (decl_modifiers::PUBLIC)};
+    for (const auto& name : names) {
+        const auto              loc{parser.get_location_of(*name.capture.payload)};
+        const auto&             ident{ast.get_as<identifier_expr>(*name.capture.payload)};
+        const identifier_handle bound{parser.add_written_identifier(loc, ident.name, ident.name)};
+        auto                    access{make_path_access(parser, root, name)};
+        const auto is_view{name.capture.modifier.is_ref() || name.capture.modifier.is_ptr()};
+        if (is_view) { access = make_view_of(parser, name.capture.modifier, access); }
+
+        const auto binding{is_view ? decl_modifiers::LET
+                                   : modifiers & (decl_modifiers::LET | decl_modifiers::MUT |
+                                                  decl_modifiers::COMPTIME)};
+        const auto decl{parser.add_node<stmt_handle, decl_stmt>(loc,
+                                                                start_token,
+                                                                bound,
+                                                                stdx::option<explicit_type_id>{},
+                                                                stdx::option<expr_handle>{access},
+                                                                binding | carried,
+                                                                stdx::none,
+                                                                stdx::none,
+                                                                stdx::none)};
+        add_statement(decl);
+    }
+    return *first;
+}
+
+namespace {
+
+// A capture's view of the value its pattern takes apart: as much access as its names ask for
+[[nodiscard]] auto parse_capture_pattern(syntax::parser& parser)
+    -> stdx::result<capture_t, syntax::diagnostic> {
+    const auto pattern_tok{parser.get_current_token()};
+    const auto pattern_raw{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+        const syntax::parser::pattern_scope pattern_scope{parser, true};
+        // Stopping short of the lowest precedence leaves the closing `|` alone
+        return parser.parse_expression(syntax::bind_precedence::ASSIGNMENT);
+    }()};
+    if (!pattern_raw) { return stdx::err{pattern_raw.error()}; }
+    if (!match_pattern_handle::any_compatible((*pattern_raw)->get_kind())) {
+        return make_syntax_err("Expected a pattern to destructure into",
+                               syntax::error::ILLEGAL_MATCH_PATTERN,
+                               pattern_tok);
+    }
+    const match_pattern_handle pattern{*pattern_raw};
+
+    auto       view_tok{parser.get_current_token()};
+    const auto names{bound_names_of(parser.get_ast(), *pattern)};
+    const auto any_name{[&](auto&& pred) {
+        return std::ranges::any_of(names,
+                                   [&](const bound_name& n) { return pred(n.capture.modifier); });
+    }};
+    const auto wants_view{
+        any_name([](const type_modifier& m) { return m.is_ref() || m.is_ptr(); })};
+    if (any_name([](const type_modifier& m) { return m.is_poly(); })) {
+        view_tok.type = syntax::token_type_t::AND_MUT_POLY;
+    } else if (any_name([](const type_modifier& m) {
+                   return m.is_mutable_ref() || m.is_mutable_ptr();
+               })) {
+        view_tok.type = syntax::token_type_t::AND_MUT;
+    } else {
+        view_tok.type = syntax::token_type_t::BW_AND;
+    }
+
+    const identifier_handle hidden{
+        parser.add_written_identifier(parser.get_location_of(*pattern), parser.next_hidden_name())};
+    return capture_t{.modifier = wants_view ? type_modifier{view_tok} : type_modifier{},
+                     .payload  = discardable_ident_handle{*hidden},
+                     .pattern  = pattern};
+}
+
+// A captured body runs inside the single arm that takes its capture's pattern apart
+[[nodiscard]] auto wrap_captured_body(syntax::parser&                parser,
+                                      const stdx::option<capture_t>& capture,
+                                      stmt_handle                    body,
+                                      bool                           is_comptime,
+                                      bool                           is_statement) -> stmt_handle {
+    if (!capture || !capture->pattern || !parser.synthesizes_default_wrappers()) { return body; }
+    const auto tok{parser.get_current_token()};
+    const auto matched{make_binding_match(
+        parser, *capture->payload, *capture->pattern, body, stdx::none, is_comptime)};
+    return parser.add_stmt<expr_stmt>(tok, matched, is_statement);
+}
+
+[[nodiscard]] auto wrap_captured_block(syntax::parser&                parser,
+                                       const stdx::option<capture_t>& capture,
+                                       block_handle                   block,
+                                       bool                           is_comptime) -> block_handle {
+    if (!capture || !capture->pattern || !parser.synthesizes_default_wrappers()) { return block; }
+    const auto tok{parser.get_current_token()};
+    const auto wrapped{wrap_captured_body(parser, capture, stmt_handle{*block}, is_comptime, true)};
+    block_stmt::statements_t statements;
+    statements.emplace_back(wrapped);
+    return block_handle{parser.add_stmt<block_stmt>(tok, std::move(statements), false)};
+}
+
+} // namespace
+
+namespace {
+
 // `|v|`, `|&mut v|`, or `|_|`, with the current token on the opening `|`
 auto parse_capture_body(syntax::parser& parser) -> stdx::result<capture_t, syntax::diagnostic> {
+    if (starts_destructure_pattern(parser)) {
+        parser.advance();
+        auto capture{TRY(parse_capture_pattern(parser))};
+        TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
+        return capture;
+    }
+
     type_modifier modifier;
     if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
         parser.advance();
@@ -1388,10 +1854,19 @@ auto if_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax:
 
     // The consequence and alternate are trivially handled by restricted statement parsers
     parser.advance();
-    const auto consequence{TRY(parser.parse_restricted_statement(
-        syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED))};
+    const auto consequence{wrap_captured_body(
+        parser,
+        payload_capture,
+        TRY(parser.parse_restricted_statement(syntax::error::ILLEGAL_IF_BRANCH,
+                                              syntax::semicolon_behavior::ALLOWED)),
+        comptime_condition,
+        false)};
     auto       alternate{TRY(try_parse_capturing_alternate(
         parser, payload_capture.has_value(), syntax::error::ILLEGAL_IF_BRANCH))};
+    if (alternate.body) {
+        alternate.body = wrap_captured_body(
+            parser, alternate.capture, *alternate.body, comptime_condition, false);
+    }
 
     return parser.add_expr<if_expr>(start_token,
                                     comptime_condition,
@@ -1872,8 +2347,13 @@ auto capture_pattern_expr::parse(syntax::parser& parser)
         };
         return parser.add_expr<capture_pattern_expr>(start_token, discard, true);
     }
-    return parser.add_expr<capture_pattern_expr>(
-        start_token, TRY(parse_capture_body(parser)), false);
+    const auto capture{TRY(parse_capture_body(parser))};
+    if (capture.pattern) {
+        return make_syntax_err("A capture inside a pattern binds a name; write the pattern itself",
+                               syntax::error::ILLEGAL_CAPTURE,
+                               start_token);
+    }
+    return parser.add_expr<capture_pattern_expr>(start_token, capture, false);
 }
 
 auto bound_pattern_expr::parse(syntax::parser& parser, expr_handle lhs)
@@ -1887,8 +2367,13 @@ auto bound_pattern_expr::parse(syntax::parser& parser, expr_handle lhs)
                                syntax::error::ILLEGAL_MATCH_PATTERN,
                                op_token);
     }
-    return parser.add_expr<bound_pattern_expr>(
-        lhs_start, op_token, lhs, TRY(parse_capture_body(parser)));
+    const auto capture{TRY(parse_capture_body(parser))};
+    if (capture.pattern) {
+        return make_syntax_err("A capture inside a pattern binds a name; write the pattern itself",
+                               syntax::error::ILLEGAL_CAPTURE,
+                               op_token);
+    }
+    return parser.add_expr<bound_pattern_expr>(lhs_start, op_token, lhs, capture);
 }
 
 namespace {
@@ -2000,6 +2485,11 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
         // There is an optional capture for every arm
         auto cap{TRY(try_parse_capture(parser))};
+        if (cap && cap->pattern) {
+            return make_syntax_err("Take a payload apart in the pattern itself: `.ok(.{ ... })`",
+                                   syntax::error::ILLEGAL_CAPTURE,
+                                   parser.get_current_token());
+        }
 
         // The resulting statement must be restricted like an if branch
         parser.advance();
@@ -2020,7 +2510,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
 
     TRY(parser.expect_peek(syntax::token_type_t::RBRACE));
     return parser.add_expr<match_expr>(
-        start_token, matcher, std::move(arms), catch_all_idx, is_comptime, arms_force_break);
+        start_token, matcher, std::move(arms), catch_all_idx, is_comptime, arms_force_break, false);
 }
 
 namespace {
@@ -2368,7 +2858,8 @@ auto while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
 
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
-    const block_handle  block{TRY(block_stmt::parse(parser))};
+    const block_handle block{
+        wrap_captured_block(parser, payload_capture, TRY(block_stmt::parse(parser)), is_unrolled)};
     capturing_alternate non_break;
     if (is_unrolled) {
         if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
@@ -2379,6 +2870,10 @@ auto while_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     } else {
         non_break = TRY(try_parse_capturing_alternate(
             parser, payload_capture.has_value(), syntax::error::ILLEGAL_LOOP_NON_BREAK));
+        if (non_break.body) {
+            non_break.body =
+                wrap_captured_body(parser, non_break.capture, *non_break.body, false, false);
+        }
     }
     return parser.add_expr<while_loop_expr>(start_token,
                                             condition,

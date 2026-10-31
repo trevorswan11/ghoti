@@ -171,6 +171,74 @@ TEST_CASE("definition_location_at resolves a type alias from its own declaration
     CHECK(def.span.end.column == 7);
 }
 
+TEST_CASE("definition_location_at resolves names bound inside patterns") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_nested_pattern_defs.gh"};
+    CHECK(loader.add(path, R"(const P = struct { pub x: i32, pub y: i32 };
+const O = union(enum) { some: P, none: void };
+pub const f = fn(o: O): i32 {
+    return match (o) { .some(.{ .x = |ax| }) => ax, .none => 0 };
+};
+pub const g = fn(p: P): i32 {
+    let .{ .x = |gx| } = p;
+    return gx;
+};
+pub const h = fn(ps: [2]P): i32 {
+    for (ps) |.{ .y = |hy| }| { return hy; }
+    return 0;
+};
+pub const .{ .x = |MX| } = P{ .x = 1, .y = 2 };
+pub const m = MX;
+)"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    SECTION("a match arm's nested capture") {
+        const auto def{UNWRAP(lsp::definition_location_at(*module, {3, 48}))};
+        CHECK(def.span.start.line == 3);
+        CHECK(def.span.start.column == 38);
+    }
+
+    SECTION("a destructuring let") {
+        const auto def{UNWRAP(lsp::definition_location_at(*module, {7, 11}))};
+        CHECK(def.span.start.line == 6);
+        CHECK(def.span.start.column == 17);
+    }
+
+    SECTION("a for capture's pattern") {
+        const auto def{UNWRAP(lsp::definition_location_at(*module, {10, 39}))};
+        CHECK(def.span.start.line == 10);
+        CHECK(def.span.start.column == 23);
+    }
+
+    SECTION("a module-level destructuring") {
+        const auto def{UNWRAP(lsp::definition_location_at(*module, {14, 14}))};
+        CHECK(def.span.start.line == 13);
+        CHECK(def.span.start.column == 19);
+    }
+}
+
+TEST_CASE("find_references sees a destructured name's uses once each") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_destructure_refs.gh"};
+    CHECK(loader.add(path, R"(const P = struct { pub x: i32 };
+pub const g = fn(p: P): i32 {
+    let .{ .x = |gx| } = p;
+    return gx + gx;
+};
+)"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto definition{UNWRAP(lsp::definition_location_at(*module, {3, 11}))};
+    CHECK(definition.span.start.line == 2);
+    CHECK(definition.span.start.column == 17);
+    CHECK(definition.span.end.column == 19);
+    CHECK(lsp::find_references(session->get_manager(), definition).size() == 2);
+}
+
 TEST_CASE("definition_location_at returns none off any identifier") {
     mod::overlay_loader         loader;
     const std::filesystem::path path{"test_references_none.gh"};

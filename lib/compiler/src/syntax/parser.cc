@@ -386,6 +386,10 @@ auto parser::starts_extern_type() const noexcept -> bool {
     }
 }
 
+auto parser::next_hidden_name() -> std::string_view {
+    return ast_->intern(fmt::format("__ghoti_destructure@{}", hidden_name_count_++));
+}
+
 auto parser::parse_statement(semicolon_behavior behavior)
     -> stdx::result<ast::stmt_handle, diagnostic> {
     PROFILE_FUNCTION();
@@ -466,9 +470,10 @@ auto parser::parse_expression(bind_precedence precedence)
     // Each chained operator deepens the (left-leaning) tree the later passes recurse through
     usize chain_length{0};
     while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
-        if (ends_type_expression() || (in_pattern_ && peek_token_is(token_type_t::BW_OR))) {
-            break;
-        }
+        // In a pattern, `|` opens a capture and `:` a destructuring's type
+        const bool ends_pattern{in_pattern_ && (peek_token_is(token_type_t::BW_OR) ||
+                                                peek_token_is(token_type_t::COLON))};
+        if (ends_type_expression() || ends_pattern) { break; }
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
         if (++chain_length > MAX_OPERATOR_CHAIN) {

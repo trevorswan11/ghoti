@@ -478,6 +478,7 @@ auto symbol_collector::declare_pattern_capture(const ast::capture_t& capture) ->
             collecting_.ast.location_of(*capture.payload));
         return;
     }
+    collecting_.add_identifier_position(*capture.payload);
     if (ctx_.registry.get(table_idx_).has(ident->name)) { return; }
     try_declare<symbols::capture>(ident->name, capture);
 }

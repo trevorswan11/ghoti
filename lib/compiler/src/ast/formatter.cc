@@ -1265,6 +1265,13 @@ auto formatter::visit(node_id, const enum_expr& node) -> syntax::doc_id {
 }
 
 auto formatter::format_capture(const capture_t& capture, bool trailing_space) -> syntax::doc_id {
+    if (capture.pattern) {
+        return doc_manager_.concat({
+            doc_manager_.text("|"),
+            format(*capture.pattern),
+            doc_manager_.text(trailing_space ? "| " : "|"),
+        });
+    }
     return doc_manager_.concat({
         doc_manager_.text("|"),
         doc_manager_.text(modifier_prefix(capture.modifier)),
@@ -1290,8 +1297,11 @@ auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> captures;
     captures.reserve(node.captures.size());
     for (const auto& capture : node.captures) {
-        captures.emplace_back(doc_manager_.concat(
-            {doc_manager_.text(modifier_prefix(capture.modifier)), format(capture.payload)}));
+        captures.emplace_back(
+            capture.pattern
+                ? format(*capture.pattern)
+                : doc_manager_.concat({doc_manager_.text(modifier_prefix(capture.modifier)),
+                                       format(capture.payload)}));
     }
 
     return doc_manager_.concat({
@@ -2009,16 +2019,21 @@ auto formatter::visit(node_id, const continue_stmt& node) -> syntax::doc_id {
 }
 
 auto formatter::visit(node_id, const decl_stmt& node) -> syntax::doc_id {
+    const node_id written_name{node.destructure ? *node.destructure->pattern : *node.name};
     return doc_manager_.concat({
         with_attributes(node.attributes,
-                        doc_manager_.concat({decl_prefix(node), format(node.name)})),
+                        doc_manager_.concat({decl_prefix(node), format(written_name)})),
         node.explicit_type
             ? doc_manager_.concat({doc_manager_.text(": "), format(*node.explicit_type)})
             : doc_manager_.nil(),
         node.value
             ? assigned_value(node.explicit_type ? ast_.end_location_of(*node.explicit_type).line
-                                                : ast_.end_location_of(node.name).line,
+                                                : ast_.end_location_of(written_name).line,
                              *node.value)
+            : doc_manager_.nil(),
+        node.destructure && node.destructure->otherwise
+            ? doc_manager_.concat(
+                  {doc_manager_.text(" else "), format(*node.destructure->otherwise)})
             : doc_manager_.nil(),
         doc_manager_.text(";"),
     });

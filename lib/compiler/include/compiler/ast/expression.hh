@@ -156,6 +156,8 @@ struct capture_t {
     // Only meaningful when `capture` holds a real (non-discarded) identifier
     type_modifier            modifier;
     discardable_ident_handle payload;
+    // `|.{ .x = |x| }|`: `payload` is then a hidden name for the value the pattern takes apart
+    stdx::option<match_pattern_handle> pattern{};
 };
 
 struct for_loop_expr {
@@ -432,6 +434,9 @@ struct bound_pattern_expr {
         -> stdx::result<expr_handle, syntax::diagnostic>;
 };
 
+// Whether a pattern, not a name, comes after the current token in a binding position
+[[nodiscard]] auto starts_destructure_pattern(syntax::parser& parser) -> bool;
+
 struct match_expr {
     struct arm {
         // One arm may list several patterns (`a, b, 1..8 => ...`) or a single discard
@@ -452,6 +457,7 @@ struct match_expr {
     stdx::opt_size   catch_all_idx;
     bool             is_comptime{false};
     bool             arms_force_break{false}; // trailing comma after the last arm
+    bool             is_binding{false};       // stands for a destructuring's pattern
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

@@ -1285,12 +1285,13 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
     }
     if (!selected) { selected = match.catch_all_idx; }
     if (!selected) {
-        return last_type_.emplace(
-            ctx_.poison_node(resolving_,
-                             id,
-                             "'match comptime' has no arm matching the scrutinee and no '_' arm",
-                             error::COMPTIME_EVALUATION_FAILED,
-                             resolving_.ast.location_of(id)));
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            match.is_binding ? "This value doesn't fit the pattern it's being taken apart by"
+                             : "'match comptime' has no arm matching the scrutinee and no '_' arm",
+            error::COMPTIME_EVALUATION_FAILED,
+            resolving_.ast.location_of(id)));
     }
 
     // Only the live arm is type-checked. The rest is dead code.
@@ -1610,6 +1611,13 @@ auto type_resolver::check_match_coverage(ast::node_id                        id,
     }
 
     if (tree.missing.empty()) { return stdx::none; }
+    if (match.is_binding) {
+        return diagnostic{fmt::format("This pattern can fail, so it needs an `else` or a `match`; "
+                                      "missing: {}",
+                                      fmt::join(tree.missing, ", ")),
+                          error::ILLEGAL_MATCH_PATTERN,
+                          resolving_.ast.location_of(*match.arms.front().primary_pattern())};
+    }
     const auto& data{matcher_type.get_data()};
     if (const auto e{data.as_opt<types::enum_t>()}; e && e->non_exhaustive) {
         return diagnostic{"Match expressions over non-exhaustive enums must have a catch all arm",
@@ -1847,6 +1855,16 @@ auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void
         if (auto diag{bind_pattern_captures(arm, arm_patterns[arm_idx], capture_place)}) {
             return last_type_.emplace(ctx_.poison_node(resolving_, id, std::move(*diag)));
         }
+    }
+
+    if (match.is_binding && match.catch_all_idx &&
+        !always_exits(resolving_.ast, *match.arms[*match.catch_all_idx].dispatch)) {
+        return last_type_.emplace(ctx_.poison_node(
+            resolving_,
+            id,
+            "The `else` of a destructuring can't carry on: nothing it binds would have a value",
+            error::ILLEGAL_MATCH_PATTERN,
+            resolving_.ast.location_of(*match.arms[*match.catch_all_idx].dispatch)));
     }
 
     const auto rows{pattern::rows_of(match, arm_patterns)};

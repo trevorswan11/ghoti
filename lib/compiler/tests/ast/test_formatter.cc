@@ -362,6 +362,27 @@ TEST_CASE("formatter round-trips nested patterns and guards") {
     }
 }
 
+TEST_CASE("formatter round-trips destructuring") {
+    for (const std::string_view src : {
+             "let .{ .x = |x|, .y = |y| } = p;",
+             "let mut .{ |a|, _, |c| } = triple;",
+             "const .{ .bits = |bits| } = @typeInfo(T).int;",
+             "comptime let mut .{ .a = |a| } = v;",
+             "pub const .{ .major = |major| } = version;",
+             "let .{ .x = |x| }: P = .{ .x = 1 };",
+             "let Point{ .x = |x| } = p;",
+             "let Shape.circle(|r|) = s else return;",
+             "let .ok(|v|) = parse(s) else {\n    return;\n};",
+             "for (points) |.{ .x = |x|, .y = |y| }| {\n    plot(x, y);\n}",
+             "for (a, b) |.{ |c| }, d| {\n    e;\n}",
+             "if (opt) |.{ .x = |x| }| {\n    use(x);\n} else {\n    none();\n}",
+             "if (res) |v| {\n    ok(v);\n} else |.{ .code = |c| }| {\n    bad(c);\n}",
+             "while (it.next()) |.{ .x = |&mut x| }| {\n    x = 1;\n}",
+         }) {
+        round_trips(src);
+    }
+}
+
 TEST_CASE("formatter does not double-terminate a jump-statement match arm") {
     round_trips("match (u) { .a => return 1, .b => return 2 };");
     round_trips("match (u) { .a => break :l 1, .b => continue, };");

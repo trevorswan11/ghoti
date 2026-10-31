@@ -1,15 +1,42 @@
 #include <string>
 #include <string_view>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 
+#include <stdx/arena.hh>
+
+#include "compiler/ast/ast.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/syntax/parser.hh"
+
 #include "helpers/codegen.hh"
 #include "helpers/common.hh"
 #include "helpers/sema.hh"
 
 namespace ghoti::tests {
+
+namespace {
+
+constexpr std::string_view SHAPES{R"(
+    const O = union(enum) { some: i32, none: void };
+    const R = union(enum) { ok: O, err: i32 };
+    const P = struct { pub x: i32, pub y: i32 };
+    const F = packed struct { pub a: u3, pub b: u5 };
+    const r = R{ .err = 0 };
+    const p = P{ .x = 0, .y = 0 };
+    const bump = fn(n: &mut i32): bool { n = n + 1; return true; };
+    const assign = fn(n: &mut i32): bool { n = 1; return true; };
+)"};
+
+[[nodiscard]] auto rejects(std::string_view body, sema::error code) -> bool {
+    return helpers::raised(fmt::format("{}\npub const main = fn(): i32 {{ {} }};", SHAPES, body),
+                           code);
+}
+
+} // namespace
 
 TEST_CASE("Slices match their length and strings their bytes") {
     SECTION("a slice's length, binding the whole slice") {
@@ -102,6 +129,485 @@ TEST_CASE("Slices match their length and strings their bytes") {
             };
         )") == 2);
     }
+}
+
+TEST_CASE("Local declarations destructure a value") {
+    SECTION("struct fields") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const main = fn(): i32 {
+                let p = P{ .x = 3, .y = 4 };
+                let .{ .x = |x|, .y = |y| } = p;
+                return x * y;
+            };
+        )") == 12);
+    }
+
+    SECTION("nested, with omitted fields and discards") {
+        CHECK(helpers::compile_and_run(R"(
+            const I = struct { pub a: i32, pub b: i32 };
+            const O = struct { pub i: I, pub arr: [2]i32, pub skip: i32 };
+            pub const main = fn(): i32 {
+                let o = O{ .i = I{ .a = 1, .b = 2 }, .arr = [2]i32{ 3, 4 }, .skip = 0 };
+                let .{ .i = .{ .b = |b| }, .arr = .{ _, |last| } } = o;
+                return b * 10 + last;
+            };
+        )") == 24);
+    }
+
+    SECTION("the value runs once") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            const make = fn(n: &mut i32): P {
+                n = n + 1;
+                return P{ .x = n, .y = n };
+            };
+            pub const main = fn(): i32 {
+                let mut calls: i32 = 0;
+                let .{ .x = |x|, .y = |y| } = make(&mut calls);
+                return calls * 100 + x * 10 + y;
+            };
+        )") == 111);
+    }
+
+    SECTION("let mut makes mutable copies") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                let p = P{ .x = 3 };
+                let mut .{ .x = |x| } = p;
+                x = x + 1;
+                return p.x * 10 + x;
+            };
+        )") == 34);
+    }
+
+    SECTION("a type annotation guides the value") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const main = fn(): i32 {
+                let .{ .y = |y| }: P = .{ .x = 1, .y = 2 };
+                return y;
+            };
+        )") == 2);
+    }
+
+    SECTION("qualified patterns") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                let P{ .x = |x| } = P{ .x = 5 };
+                return x;
+            };
+        )") == 5);
+    }
+
+    SECTION("a one-variant union can't fail") {
+        CHECK(helpers::compile_and_run(R"(
+            const U = union(enum) { only: i32 };
+            pub const main = fn(): i32 {
+                let .only(|v|) = U{ .only = 6 };
+                return v;
+            };
+        )") == 6);
+    }
+}
+
+TEST_CASE("A destructured capture can alias its place") {
+    SECTION("writing through a mutable reference") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const main = fn(): i32 {
+                let mut p = P{ .x = 1, .y = 2 };
+                let .{ .x = |&mut x|, .y = |y| } = p;
+                x = 40;
+                return p.x + y;
+            };
+        )") == 42);
+    }
+
+    SECTION("a pointer into an array") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                let mut a = [2]i32{ 1, 2 };
+                let .{ _, |^mut second| } = a;
+                *second = 9;
+                return a[1];
+            };
+        )") == 9);
+    }
+
+    SECTION("a read-only view of a temporary stays valid") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            const make = fn(): P { return P{ .x = 6 }; };
+            pub const main = fn(): i32 {
+                let .{ .x = |&x| } = make();
+                return x + 1;
+            };
+        )") == 7);
+    }
+
+    SECTION("through a reference value") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            const f = fn(p: &mut P): void {
+                let .{ .x = |&mut x| } = p;
+                x = 8;
+            };
+            pub const main = fn(): i32 {
+                let mut p = P{ .x = 1 };
+                f(&mut p);
+                return p.x;
+            };
+        )") == 8);
+    }
+}
+
+TEST_CASE("let-else takes a pattern that can fail") {
+    SECTION("binding on success, leaving on failure") {
+        CHECK(helpers::compile_and_run(R"(
+            const O = union(enum) { some: i32, none: void };
+            const f = fn(o: O): i32 {
+                let .some(|v|) = o else { return -1; };
+                return v * 2;
+            };
+            pub const main = fn(): i32 { return f(O{ .some = 3 }) + f(O{ .none = {} }) + 1; };
+        )") == 6);
+    }
+
+    SECTION("a jump with no block") {
+        CHECK(helpers::compile_and_run(R"(
+            const O = union(enum) { some: i32, none: void };
+            pub const main = fn(): i32 {
+                let mut total: i32 = 0;
+                for ([3]O{ O{ .some = 1 }, O{ .none = {} }, O{ .some = 2 } }) |item| {
+                    let .some(|v|) = item else continue;
+                    total = total + v;
+                }
+                return total;
+            };
+        )") == 3);
+    }
+
+    SECTION("a refutable value test") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub tag: i32, pub v: i32 };
+            const f = fn(p: P): i32 {
+                let .{ .tag = 1, .v = |v| } = p else return 0;
+                return v;
+            };
+            pub const main = fn(): i32 {
+                return f(P{ .tag = 1, .v = 5 }) * 10 + f(P{ .tag = 2, .v = 5 });
+            };
+        )") == 50);
+    }
+}
+
+TEST_CASE("Compile-time declarations destructure a folded value") {
+    SECTION("const") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const main = fn(): i32 {
+                const .{ .x = |x|, .y = |y| } = P{ .x = 2, .y = 3 };
+                const arr = [x + y]i32{ 1, 2, 3, 4, 5 };
+                return arr[4];
+            };
+        )") == 5);
+    }
+
+    SECTION("a type field") {
+        CHECK(helpers::compile_and_run(R"(
+            const elem_size = fn(comptime T: type): i32 {
+                const .{ .child = |C| } = @typeInfo(T).pointer;
+                return @intCast(i32, @sizeOf(C));
+            };
+            pub const main = fn(): i32 { return elem_size(^u16); };
+        )") == 2);
+    }
+
+    SECTION("in a function folded at compile time") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            const f = fn(p: P): i32 {
+                let mut .{ .x = |x|, .y = |y| } = p;
+                x = x + y;
+                return x;
+            };
+            const K: i32 = f(P{ .x = 2, .y = 3 });
+            pub const main = fn(): i32 { return K; };
+        )") == 5);
+    }
+
+    SECTION("comptime let mut") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                comptime let mut .{ .x = |x| } = P{ .x = 1 };
+                comptime { x = x + 1; }
+                return x;
+            };
+        )") == 2);
+    }
+}
+
+TEST_CASE("Loop and branch captures destructure their value") {
+    SECTION("for") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const main = fn(): i32 {
+                let points = [2]P{ P{ .x = 1, .y = 2 }, P{ .x = 3, .y = 4 } };
+                let mut total: i32 = 0;
+                for (points) |.{ .x = |x|, .y = |y| }| { total = total + x * y; }
+                return total;
+            };
+        )") == 14);
+    }
+
+    SECTION("for with break, continue, and an index") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                let points = [4]P{ P{ .x = 1 }, P{ .x = 2 }, P{ .x = 3 }, P{ .x = 4 } };
+                let mut total: i32 = 0;
+                for (points, 0..4) |.{ .x = |x| }, i| {
+                    if (x == 2) { continue; }
+                    if (i == 3) { break; }
+                    total = total + x;
+                }
+                return total;
+            };
+        )") == 4);
+    }
+
+    SECTION("for writes through an element") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                let points = [2]mut P{ P{ .x = 1 }, P{ .x = 2 } };
+                for (points) |.{ .x = |&mut x| }| { x = x * 10; }
+                return points[0].x + points[1].x;
+            };
+        )") == 30);
+    }
+
+    SECTION("unroll for") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32 };
+            pub const main = fn(): i32 {
+                const points = [2]P{ P{ .x = 4 }, P{ .x = 5 } };
+                let mut total: i32 = 0;
+                unroll for (points) |.{ .x = |x| }| { total = total + x; }
+                return total;
+            };
+        )") == 9);
+    }
+}
+
+TEST_CASE("Destructuring reaches through an unwrap") {
+    constexpr std::string_view types{R"(
+        const Result = fn(comptime T: type, comptime E: type): type {
+            return union(enum) { ok: T, err: E };
+        };
+        impl(T: type, E: type) builtin.Unwrappable for Result(T, E) {
+            const Output = T;
+            const Residual = E;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, E) {
+                return match (self) {
+                    .ok => |&mut? v| .{ .@"continue" = v },
+                    .err => |e| .{ .@"break" = e },
+                };
+            };
+        }
+        const Option = fn(comptime T: type): type {
+            return union(enum) { some: T, none: void };
+        };
+        impl(T: type) builtin.Unwrappable for Option(T) {
+            const Output = T;
+            const Residual = void;
+            pub const branch = fn(&mut? self): builtin.Flow(&mut? T, void) {
+                return match (self) {
+                    .some => |&mut? v| .{ .@"continue" = v },
+                    .none => .{ .@"break" = {} },
+                };
+            };
+        }
+        const P = struct { pub x: i32, pub y: i32 };
+        const Opt = Option(P);
+        const Res = Result(P, P);
+    )"};
+
+    SECTION("if") {
+        CHECK(helpers::compile_and_run(std::string{types} + R"(
+            pub const main = fn(): i32 {
+                let o = Opt{ .some = P{ .x = 2, .y = 3 } };
+                let a = if (o) |.{ .x = |x|, .y = |y| }| x * y else 0;
+                let n = Opt{ .none = {} };
+                let b = if (n) |.{ .x = |x| }| x else 100;
+                return a + b;
+            };
+        )") == 106);
+    }
+
+    SECTION("if with an else capture") {
+        CHECK(helpers::compile_and_run(std::string{types} + R"(
+            pub const main = fn(): i32 {
+                let r = Res{ .err = P{ .x = 7, .y = 8 } };
+                if (r) |.{ .x = |_x| }| {
+                    return 1;
+                } else |.{ .y = |y| }| {
+                    return y;
+                }
+            };
+        )") == 8);
+    }
+
+    SECTION("a payload written in place") {
+        CHECK(helpers::compile_and_run(std::string{types} + R"(
+            pub const main = fn(): i32 {
+                let mut o = Opt{ .some = P{ .x = 2, .y = 3 } };
+                if (o) |.{ .x = |&mut x| }| { x = 20; }
+                return match (o) { .some(.{ .x = |x| }) => x, .none => 0 };
+            };
+        )") == 20);
+    }
+}
+
+TEST_CASE("Module-level declarations destructure a constant") {
+    SECTION("const") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            const .{ .x = |X|, .y = |Y| } = P{ .x = 2, .y = 5 };
+            pub const main = fn(): i32 { return X * Y; };
+        )") == 10);
+    }
+
+    SECTION("used before it's written") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 { return A; };
+            const P = struct { pub a: i32 };
+            const .{ .a = |A| } = P{ .a = 6 };
+        )") == 6);
+    }
+
+    SECTION("let mut gets separate storage per name") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            let mut .{ .x = |gx|, .y = |gy| } = P{ .x = 1, .y = 2 };
+            pub const main = fn(): i32 {
+                gx = 10;
+                return gx + gy;
+            };
+        )") == 12);
+    }
+
+    SECTION("arrays and types") {
+        CHECK(helpers::compile_and_run(R"(
+            const .{ |A|, |B| } = [2]i32{ 3, 4 };
+            const .{ .child = |C| } = @typeInfo(^u32).pointer;
+            pub const main = fn(): i32 { return A + B + @intCast(i32, @sizeOf(C)); };
+        )") == 11);
+    }
+}
+
+TEST_CASE("Destructured names cross modules with pub") {
+    const auto imports{helpers::make_vector<helpers::mock_file>(helpers::mock_file{"cfg.gh",
+                                                                                   R"(
+            const P = struct { pub x: i32, pub y: i32 };
+            pub const .{ .x = |X| } = P{ .x = 7, .y = 8 };
+            const .{ .y = |HIDDEN| } = P{ .x = 7, .y = 8 };
+        )",
+                                                                                   "cfg"})};
+    CHECK_FALSE(helpers::raised("import cfg; pub const main = fn(): i32 { return cfg.X; };",
+                                sema::error::ILLEGAL_PRIVATE_ACCESS,
+                                imports));
+    CHECK(helpers::raised("import cfg; pub const main = fn(): i32 { return cfg.HIDDEN; };",
+                          sema::error::ILLEGAL_PRIVATE_ACCESS,
+                          imports));
+}
+
+TEST_CASE("Destructuring rejects what can't work") {
+    constexpr auto ILLEGAL{sema::error::ILLEGAL_MATCH_PATTERN};
+
+    SECTION("a pattern that can fail needs an else") {
+        CHECK(rejects("let .ok(|v|) = r; return 0;", ILLEGAL));
+        CHECK(rejects("let .{ .x = 0, .y = |y| } = p; return y;", ILLEGAL));
+        CHECK(rejects("for ([1]R{ r }) |.err(|e|)| { return e; } return 0;", ILLEGAL));
+    }
+
+    SECTION("an else has to leave") {
+        CHECK(rejects("let .ok(|v|) = r else { let n: i32 = 0; _ = n; }; return 0;", ILLEGAL));
+    }
+
+    SECTION("a folded value that doesn't fit") {
+        CHECK(rejects("const .ok(|v|) = R{ .err = 1 }; return 0;",
+                      sema::error::COMPTIME_EVALUATION_FAILED));
+    }
+
+    SECTION("a mutable alias needs a mutable place") {
+        DISCARD(helpers::expect_compile_error(fmt::format(
+            "{}\npub const main = fn(): i32 {{ let .{{ .x = |&mut x| }} = p; return 0; }};",
+            SHAPES)));
+    }
+}
+
+TEST_CASE("Destructuring syntax errors") {
+    const auto fails_to_parse{[](std::string_view body) {
+        syntax::parser parser{body};
+        parser.enable_default_wrappers();
+        ghoti::arena arena;
+        ast::AST     ast;
+        return !parser.consume(ast, arena).empty();
+    }};
+
+    CHECK(fails_to_parse("pub const main = fn(): i32 { const .{ .x = |&x| } = p; return 0; };"));
+    CHECK(fails_to_parse("const .{ .x = |^x| } = p;"));
+    CHECK(fails_to_parse("let .{ .x = |x| };"));
+    CHECK(fails_to_parse("extern(\"c\") let .{ .x = |x| } = p;"));
+    CHECK(fails_to_parse("@[align(4)] let .{ .x = |x| } = p;"));
+    CHECK(fails_to_parse(
+        "pub const main = fn(): i32 { match (a) { .b => |.{ .c = |c| }| c }; return 0; };"));
+    CHECK(
+        fails_to_parse("pub const main = fn(): i32 { match (a) { .b(||.c||) => 1 }; return 0; };"));
+    CHECK(fails_to_parse("const S = struct { const .{ .x = |x| } = p; };"));
+}
+
+TEST_CASE("A rich match folds to what it runs") {
+    const auto input{GENERATE(as<std::string_view>{},
+                              "S{ .tag = 0, .o = O{ .none = {} }, .arr = [2]i32{ 0, 0 } }",
+                              "S{ .tag = 1, .o = O{ .none = {} }, .arr = [2]i32{ 0, 0 } }",
+                              "S{ .tag = 1, .o = O{ .some = 5 }, .arr = [2]i32{ 0, 0 } }",
+                              "S{ .tag = 1, .o = O{ .some = -5 }, .arr = [2]i32{ 0, 0 } }",
+                              "S{ .tag = 2, .o = O{ .some = 5 }, .arr = [2]i32{ 3, 0 } }",
+                              "S{ .tag = 2, .o = O{ .some = 5 }, .arr = [2]i32{ 3, 4 } }",
+                              "S{ .tag = 3, .o = O{ .none = {} }, .arr = [2]i32{ 9, 9 } }",
+                              "S{ .tag = 9, .o = O{ .some = 1 }, .arr = [2]i32{ 9, 8 } }",
+                              "S{ .tag = -1, .o = O{ .some = 1 }, .arr = [2]i32{ 1, 1 } }")};
+    CAPTURE(input);
+    CHECK(helpers::compile_and_run(fmt::format(R"(
+        const O = union(enum) {{ some: i32, none: void }};
+        const S = struct {{ pub tag: i32, pub o: O, pub arr: [2]i32 }};
+        const f = fn(s: S): i32 {{
+            return match (s) {{
+                .{{ .tag = 0 }} => 1,
+                .{{ .tag = 1, .o = .none }} => 2,
+                .{{ .tag = 1, .o = .some(|v|) }} if v > 0 => v,
+                .{{ .tag = 1 }} => 3,
+                .{{ .tag = 2, .arr = .{{ 3, 0 }} }} => 4,
+                .{{ .tag = 2, .arr = .{{ |a|, |b| }} }} => a + b,
+                .{{ .tag = 3.., .o = .some(|v|) }} => v + 10,
+                .{{ .arr = .{{ |a|, _ }} }} |whole| if whole.tag > 3 => a,
+                _ => 0,
+            }};
+        }};
+        const K: i32 = f({0});
+        pub const main = fn(): i32 {{
+            let mut s = {0};
+            s.tag = s.tag + 0;
+            return if (f(s) == K) 1 else 0;
+        }};
+    )",
+                                               input)) == 1);
 }
 
 TEST_CASE("Guards decide between arms at runtime") {
@@ -694,25 +1200,6 @@ TEST_CASE("match comptime reads nested patterns") {
 
 namespace ghoti::tests {
 
-namespace {
-
-constexpr std::string_view SHAPES{R"(
-    const O = union(enum) { some: i32, none: void };
-    const R = union(enum) { ok: O, err: i32 };
-    const P = struct { pub x: i32, pub y: i32 };
-    const F = packed struct { pub a: u3, pub b: u5 };
-    const r = R{ .err = 0 };
-    const p = P{ .x = 0, .y = 0 };
-    const bump = fn(n: &mut i32): bool { n = n + 1; return true; };
-    const assign = fn(n: &mut i32): bool { n = 1; return true; };
-)"};
-
-[[nodiscard]] auto rejects(std::string_view body, sema::error code) -> bool {
-    return helpers::raised(fmt::format("{}\npub const main = fn(): i32 {{ {} }};", SHAPES, body),
-                           code);
-}
-
-} // namespace
 
 TEST_CASE("Nested matches report exactly what they miss") {
     constexpr auto ILLEGAL{sema::error::ILLEGAL_MATCH_PATTERN};
