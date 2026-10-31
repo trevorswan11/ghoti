@@ -952,6 +952,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - An interface method can take or return a `&dyn` / `^dyn` of its own interface (`pub const eq = fn(&self, other: &dyn I): bool;`), and two interfaces can name each other through `dyn` views; holding the interface by value is still rejected
 - Fixed: a static member function of a type constructor's result (`pub const id = fn(a: T): T`) kept one instance's return type for every instance, so `Wrap(i64).id(x)` after `Wrap(u64)` was rejected or returned the wrong type
 - Fixed: a type constructor's member calling a static sibling by bare name (`id(a)`) or through `@This()` (`@This().make(a)`) crashed codegen or failed to link, as did a member call on a non-generic constructor called inline (`Make().id(5)`)
+- Fixed: a `_` match arm written before other arms shadowed them at runtime while compile-time evaluation tried it last, so `match (x) { _ => 1, 5 => 2 }` gave a different answer in each; `_` is now tried last everywhere
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`

@@ -8252,7 +8252,15 @@ auto emitter::emit_match(ast::node_id id, const ast::match_expr& match) -> value
         }
     }
 
+    // The catch-all is tried last, wherever it's written
+    std::vector<usize> arm_order;
+    arm_order.reserve(match.arms.size());
     for (usize arm_idx{0}; arm_idx < match.arms.size(); ++arm_idx) {
+        if (match.catch_all_idx != arm_idx) { arm_order.emplace_back(arm_idx); }
+    }
+    if (match.catch_all_idx) { arm_order.emplace_back(*match.catch_all_idx); }
+
+    for (const auto arm_idx : arm_order) {
         if (forced_arm && arm_idx != *forced_arm) { continue; }
         const auto& arm{match.arms[arm_idx]};
         auto&       arm_body_seg{fn.add_segment()};
