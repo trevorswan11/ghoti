@@ -443,7 +443,10 @@ auto parser::parse_expression(bind_precedence precedence)
 
     const auto nesting{TRY(enter_nesting())};
 
-    const auto prefix{get_prefix_fn_opt(current_token_.type)};
+    const bool opens_capture{in_pattern_ && (current_token_is(token_type_t::BW_OR) ||
+                                             current_token_is(token_type_t::UNDERSCORE))};
+    const auto prefix{opens_capture ? stdx::option<prefix_fn>{ast::capture_pattern_expr::parse}
+                                    : get_prefix_fn_opt(current_token_.type)};
     if (!prefix) {
         if (auto lexer_failure{describe_illegal_token(current_token_)}) {
             return stdx::err{std::move(*lexer_failure)};
@@ -463,7 +466,9 @@ auto parser::parse_expression(bind_precedence precedence)
     // Each chained operator deepens the (left-leaning) tree the later passes recurse through
     usize chain_length{0};
     while (!peek_token_is(token_type_t::SEMICOLON) && precedence < get_peek_precedence().first) {
-        if (ends_type_expression()) { break; }
+        if (ends_type_expression() || (in_pattern_ && peek_token_is(token_type_t::BW_OR))) {
+            break;
+        }
         const auto infix{get_poll_infix_fn_opt(peek_token_.type)};
         if (!infix) { break; }
         if (++chain_length > MAX_OPERATOR_CHAIN) {
@@ -476,6 +481,10 @@ auto parser::parse_expression(bind_precedence precedence)
         lhs_expression = TRY((*infix)(*this, lhs_expression));
     }
 
+    if (in_pattern_ && precedence == bind_precedence::LOWEST &&
+        peek_token_is(token_type_t::BW_OR)) {
+        return ast::bound_pattern_expr::parse(*this, lhs_expression);
+    }
     return lhs_expression;
 }
 

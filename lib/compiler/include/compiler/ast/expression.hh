@@ -414,6 +414,24 @@ struct label_expr {
 [[nodiscard]] auto parse_unrolled_loop(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic>;
 
+// `|v|` inside a pattern, or a bare `_`, which binds nothing and is spelled without bars
+struct capture_pattern_expr {
+    capture_t capture;
+    bool      is_bare_discard{false};
+
+    [[nodiscard]] static auto parse(syntax::parser& parser)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
+// `pattern |v|`: refines a value, then binds the whole of it
+struct bound_pattern_expr {
+    expr_handle pattern;
+    capture_t   capture;
+
+    [[nodiscard]] static auto parse(syntax::parser& parser, expr_handle lhs)
+        -> stdx::result<expr_handle, syntax::diagnostic>;
+};
+
 struct match_expr {
     struct arm {
         // One arm may list several patterns (`a, b, 1..8 => ...`) or a single discard
@@ -421,6 +439,7 @@ struct match_expr {
         stdx::option<capture_t>           capture;
         stmt_handle                       dispatch;
         bool                              force_break{false};
+        stdx::option<expr_handle>         guard{}; // `pattern if cond => ...`
 
         // The canonical pattern used for side-table keying and diagnostic locations.
         [[nodiscard]] auto primary_pattern() const noexcept -> match_pattern_handle {

@@ -392,7 +392,13 @@ auto call_expr::parse(syntax::parser& parser, expr_handle function)
         }
 
         // Advance cannot be called here since explicit type relies on peek, not current
+        const bool opens_capture{parser.in_pattern() &&
+                                 (parser.peek_token_is(syntax::token_type_t::BW_OR) ||
+                                  parser.peek_token_is(syntax::token_type_t::UNDERSCORE))};
         if (auto expr_error{try_parse_expr_argument()}) {
+            // A capture is never a type, so its own error is the one to report
+            if (opens_capture) { return stdx::err{std::move(*expr_error)}; }
+
             // Neither parse fits: the expression's error pinpoints the mistake far more often
             auto type_arg{explicit_type::parse(parser)};
             if (!type_arg) { return stdx::err{std::move(*expr_error)}; }
@@ -1251,6 +1257,7 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
 
 auto grouped_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
+    const syntax::parser::pattern_scope plain_scope{parser, false};
     parser.advance();
     const auto inner{TRY(parser.parse_expression())};
     TRY(parser.expect_peek(syntax::token_type_t::RPAREN));
@@ -1291,12 +1298,8 @@ auto identifier_expr::parse(syntax::parser& parser)
 
 namespace {
 
-// `|v|`, `|&mut v|`, or `|_|` after the current token, or none when no `|` follows
-auto try_parse_capture(syntax::parser& parser)
-    -> stdx::result<stdx::option<capture_t>, syntax::diagnostic> {
-    if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) { return stdx::none; }
-    parser.advance(); // current == |
-
+// `|v|`, `|&mut v|`, or `|_|`, with the current token on the opening `|`
+auto parse_capture_body(syntax::parser& parser) -> stdx::result<capture_t, syntax::diagnostic> {
     type_modifier modifier;
     if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
         parser.advance();
@@ -1319,6 +1322,14 @@ auto try_parse_capture(syntax::parser& parser)
     const discardable_ident_handle payload{TRY(identifier_expr::parse(parser))};
     TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
     return capture_t{.modifier = modifier, .payload = payload};
+}
+
+// A capture after the current token, or none when no `|` follows
+auto try_parse_capture(syntax::parser& parser)
+    -> stdx::result<stdx::option<capture_t>, syntax::diagnostic> {
+    if (!parser.peek_token_is(syntax::token_type_t::BW_OR)) { return stdx::none; }
+    parser.advance(); // current == |
+    return stdx::option<capture_t>{TRY(parse_capture_body(parser))};
 }
 
 struct capturing_alternate {
@@ -1402,7 +1413,8 @@ auto index_expr::parse(syntax::parser& parser, expr_handle array)
     }
     parser.advance();
 
-    const auto idx_expr{TRY(parser.parse_expression())};
+    const syntax::parser::pattern_scope plain_scope{parser, false};
+    const auto                          idx_expr{TRY(parser.parse_expression())};
     TRY(parser.expect_peek(syntax::token_type_t::RBRACKET));
     return parser.add_expr<index_expr>(start_token, array, idx_expr);
 }
@@ -1605,7 +1617,9 @@ namespace {
 
 [[nodiscard]] auto parse_range_upper(syntax::parser& parser, syntax::bind_precedence prec)
     -> stdx::result<stdx::option<expr_handle>, syntax::diagnostic> {
-    if (!syntax::parser::get_prefix_fn_opt(parser.get_peek_token().type)) {
+    // A pattern's `if` opens its guard: `1.. if c => ...`
+    if (!syntax::parser::get_prefix_fn_opt(parser.get_peek_token().type) ||
+        (parser.in_pattern() && parser.peek_token_is(syntax::token_type_t::IF))) {
         return stdx::option<expr_handle>{};
     }
     parser.advance();
@@ -1847,6 +1861,56 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
     }
 }
 
+auto capture_pattern_expr::parse(syntax::parser& parser)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto start_token{parser.get_current_token()};
+    if (parser.current_token_is(syntax::token_type_t::UNDERSCORE)) {
+        const capture_t discard{
+            .modifier = {},
+            .payload  = parser.add_node<discardable_ident_handle, ast::discarded>(start_token),
+        };
+        return parser.add_expr<capture_pattern_expr>(start_token, discard, true);
+    }
+    return parser.add_expr<capture_pattern_expr>(
+        start_token, TRY(parse_capture_body(parser)), false);
+}
+
+auto bound_pattern_expr::parse(syntax::parser& parser, expr_handle lhs)
+    -> stdx::result<expr_handle, syntax::diagnostic> {
+    PROFILE_FUNCTION();
+    const auto lhs_start{parser.get_location_of(*lhs)};
+    parser.advance(); // current == |
+    const auto op_token{parser.get_current_token()};
+    if (lhs.is<capture_pattern_expr>()) {
+        return make_syntax_err("A capture can't bind a second name or follow a discard",
+                               syntax::error::ILLEGAL_MATCH_PATTERN,
+                               op_token);
+    }
+    return parser.add_expr<bound_pattern_expr>(
+        lhs_start, op_token, lhs, TRY(parse_capture_body(parser)));
+}
+
+namespace {
+
+// One arm pattern, with `|` opening captures
+auto parse_arm_pattern(syntax::parser& parser)
+    -> stdx::result<match_pattern_handle, syntax::diagnostic> {
+    const auto                          pattern_tok{parser.get_current_token()};
+    const syntax::parser::pattern_scope pattern_scope{parser, true};
+    const auto                          pattern{TRY(parser.parse_expression())};
+    if (!match_pattern_handle::any_compatible(pattern->get_kind())) {
+        return make_syntax_err(
+            fmt::format("Unmatchable expression '{}' used as a match arm pattern",
+                        pattern->display_name()),
+            syntax::error::ILLEGAL_MATCH_PATTERN,
+            pattern_tok);
+    }
+    return match_pattern_handle{pattern};
+}
+
+} // namespace
+
 auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
     const auto start_token{parser.get_current_token()};
@@ -1900,16 +1964,7 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                 parser.get_current_token()));
             catch_all_idx.emplace(arm_idx);
         } else {
-            const auto pattern_tok{parser.get_current_token()};
-            const auto pattern_raw{TRY(parser.parse_expression())};
-            if (!match_pattern_handle::any_compatible(pattern_raw->get_kind())) {
-                return make_syntax_err(
-                    fmt::format("Unmatchable expression '{}' used as a match arm pattern",
-                                pattern_raw->display_name()),
-                    syntax::error::ILLEGAL_MATCH_PATTERN,
-                    pattern_tok);
-            }
-            pattern_opt.emplace(pattern_raw);
+            pattern_opt.emplace(TRY(parse_arm_pattern(parser)));
         }
 
         std::vector<match_pattern_handle> patterns;
@@ -1931,51 +1986,26 @@ auto match_expr::parse(syntax::parser& parser) -> stdx::result<expr_handle, synt
                                        parser.get_current_token());
             }
 
-            const auto extra_tok{parser.get_current_token()};
-            const auto extra_raw{TRY(parser.parse_expression())};
-            if (!match_pattern_handle::any_compatible(extra_raw->get_kind())) {
-                return make_syntax_err(
-                    fmt::format("Unmatchable expression '{}' used as a match arm pattern",
-                                extra_raw->display_name()),
-                    syntax::error::ILLEGAL_MATCH_PATTERN,
-                    extra_tok);
-            }
-            patterns.emplace_back(extra_raw);
+            patterns.emplace_back(TRY(parse_arm_pattern(parser)));
+        }
+
+        stdx::option<expr_handle> guard;
+        if (parser.peek_token_is(syntax::token_type_t::IF)) {
+            parser.advance(2);
+            guard.emplace(TRY(parser.parse_expression()));
+            // A guarded `_` can still fall through, so it doesn't catch everything
+            if (is_catch_all_arm) { catch_all_idx.reset(); }
         }
         TRY(parser.expect_peek(syntax::token_type_t::FAT_ARROW));
 
         // There is an optional capture for every arm
-        stdx::option<capture_t> cap;
-        if (parser.peek_token_is(syntax::token_type_t::BW_OR)) {
-            parser.advance();
-
-            // An underscore is equivalent to a lack of capture; no modifier is allowed on it
-            if (parser.peek_token_is(syntax::token_type_t::UNDERSCORE)) {
-                parser.advance();
-                cap.emplace<capture_t>({
-                    .modifier = {},
-                    .payload  = parser.add_node<discardable_ident_handle, ast::discarded>(
-                        parser.get_current_token()),
-                });
-            } else {
-                // Always check for a modifier and advance past it if present
-                parser.advance();
-                const type_modifier modifier{parser.get_current_token()};
-                if (!modifier.is_value()) { parser.advance(); }
-
-                cap.emplace<capture_t>({
-                    .modifier = modifier,
-                    .payload  = TRY(identifier_expr::parse(parser)),
-                });
-            }
-            TRY(parser.expect_peek(syntax::token_type_t::BW_OR));
-        }
+        auto cap{TRY(try_parse_capture(parser))};
 
         // The resulting statement must be restricted like an if branch
         parser.advance();
         const auto consequence{TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_MATCH_ARM, syntax::semicolon_behavior::DISALLOW))};
-        arms.emplace_back(std::move(patterns), cap, consequence, trailing_comma);
+        arms.emplace_back(std::move(patterns), cap, consequence, trailing_comma, guard);
         arm_idx += 1;
 
         // The lack of a comma must mean we're at the end of the arm list

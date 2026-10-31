@@ -34,6 +34,8 @@ enum class node_kind : u8 {
     DEREFERENCE_EXPRESSION,
     COMPTIME_EXPRESSION,
     IMPLICIT_ACCESS_EXPRESSION,
+    CAPTURE_PATTERN_EXPRESSION,
+    BOUND_PATTERN_EXPRESSION,
     STRING_EXPRESSION,
     INT_LITERAL_EXPRESSION,
     FLOAT_LITERAL_EXPRESSION,
@@ -92,6 +94,8 @@ enum class node_kind : u8 {
     X(address_of_expr)      \
     X(comptime_expr)        \
     X(implicit_access_expr) \
+    X(capture_pattern_expr) \
+    X(bound_pattern_expr)   \
     X(string_expr)          \
     X(int_literal_expr)     \
     X(float_literal_expr)   \
@@ -207,6 +211,8 @@ NODE_KIND_OF_TRAIT(dereference_expr, DEREFERENCE_EXPRESSION)
 NODE_KIND_OF_TRAIT(address_of_expr, ADDRESS_OF_EXPRESSION)
 NODE_KIND_OF_TRAIT(comptime_expr, COMPTIME_EXPRESSION)
 NODE_KIND_OF_TRAIT(implicit_access_expr, IMPLICIT_ACCESS_EXPRESSION)
+NODE_KIND_OF_TRAIT(capture_pattern_expr, CAPTURE_PATTERN_EXPRESSION)
+NODE_KIND_OF_TRAIT(bound_pattern_expr, BOUND_PATTERN_EXPRESSION)
 NODE_KIND_OF_TRAIT(string_expr, STRING_EXPRESSION)
 NODE_KIND_OF_TRAIT(int_literal_expr, INT_LITERAL_EXPRESSION)
 NODE_KIND_OF_TRAIT(float_literal_expr, FLOAT_LITERAL_EXPRESSION)

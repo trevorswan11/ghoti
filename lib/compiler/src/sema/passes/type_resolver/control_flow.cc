@@ -1456,6 +1456,20 @@ struct arm_interval {
     ast::match_pattern_handle pat;
 };
 
+// Whether a pattern spells anything today's flat matching can't handle
+[[nodiscard]] auto uses_nested_pattern_syntax(const ast::AST& ast, ast::node_id pattern) -> bool {
+    if (ast.get_as_opt<ast::capture_pattern_expr>(pattern) ||
+        ast.get_as_opt<ast::bound_pattern_expr>(pattern) ||
+        ast.get_as_opt<ast::initializer_expr>(pattern)) {
+        return true;
+    }
+    const auto call{ast.get_as_opt<ast::call_expr>(pattern)};
+    return call && std::ranges::any_of(call->arguments, [&](const auto& arg) {
+               const auto value{arg.template as_opt<ast::expr_handle>()};
+               return value && uses_nested_pattern_syntax(ast, **value);
+           });
+}
+
 // The first pattern covering a value an earlier one already covers
 [[nodiscard]] auto first_overlapping_pattern(gsl::span<const arm_interval> intervals)
     -> stdx::option<ast::match_pattern_handle> {
@@ -1652,8 +1666,38 @@ auto type_resolver::scalar_pattern_mismatch(ast::node_id     value,
     return stdx::none;
 }
 
+auto type_resolver::visit(ast::node_id id, const ast::capture_pattern_expr&) -> void {
+    last_type_.emplace(ctx_.poison_node(resolving_,
+                                        id,
+                                        "A capture is only valid inside a match arm's pattern",
+                                        error::ILLEGAL_MATCH_PATTERN,
+                                        resolving_.ast.location_of(id)));
+}
+
+auto type_resolver::visit(ast::node_id id, const ast::bound_pattern_expr&) -> void {
+    last_type_.emplace(ctx_.poison_node(resolving_,
+                                        id,
+                                        "A capture is only valid inside a match arm's pattern",
+                                        error::ILLEGAL_MATCH_PATTERN,
+                                        resolving_.ast.location_of(id)));
+}
+
 auto type_resolver::visit(ast::node_id id, const ast::match_expr& match) -> void {
     PROFILE_FUNCTION();
+    for (const auto& arm : match.arms) {
+        const auto structural{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
+            return uses_nested_pattern_syntax(resolving_.ast, *pattern);
+        })};
+        if (arm.guard || structural) {
+            return last_type_.emplace(
+                ctx_.poison_node(resolving_,
+                                 id,
+                                 "Nested patterns and match guards are not implemented yet",
+                                 error::ILLEGAL_MATCH_PATTERN,
+                                 resolving_.ast.location_of(arm.primary_pattern())));
+        }
+    }
+
     {
         // The value being matched has its own type, not the one the `match` result flows into
         const structural_guard shield{implicit_type_stack_, stdx::none};

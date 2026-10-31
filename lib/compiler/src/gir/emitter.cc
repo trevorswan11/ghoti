@@ -3092,6 +3092,12 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::implicit_access_expr& data) -> value {
             return emit_implicit_access(id, data);
         },
+        [&](const ast::capture_pattern_expr&) -> value {
+            UNREACHABLE("A capture pattern is bound by its match, never emitted as a value");
+        },
+        [&](const ast::bound_pattern_expr&) -> value {
+            UNREACHABLE("A bound pattern is bound by its match, never emitted as a value");
+        },
         [&](const ast::while_loop_expr& data) -> value { return emit_while(id, data); },
         [&](const ast::do_while_loop_expr& data) -> value { return emit_do_while(id, data); },
         [&](const ast::infinite_loop_expr& data) -> value { return emit_infinite_loop(id, data); },

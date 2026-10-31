@@ -587,6 +587,21 @@ auto dumper::visit(node_id, const label_expr& label) -> void {
     }
 }
 
+auto dumper::visit(node_id, const capture_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "CapturePatternExpression{}", node.is_bare_discard ? " (bare)" : "");
+    dump_capture("Capture", node.capture);
+}
+
+auto dumper::visit(node_id, const bound_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    fmt::println(out_, "BoundPatternExpression");
+    dump_capture("Capture", node.capture);
+    const indent::guard g{indent_, true};
+    fmt::print(out_, "{}Pattern: ", indent_.current_branch());
+    dump(node.pattern);
+}
+
 auto dumper::visit(node_id, const match_expr& match) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "MatchExpression{}", match.is_comptime ? " (comptime)" : "");
@@ -615,6 +630,12 @@ auto dumper::visit(node_id, const match_expr& match) -> void {
                     fmt::print(out_, "{}Pattern: ", indent_.current_branch());
                     dump(pattern);
                 }
+            }
+
+            if (arm.guard) {
+                const indent::guard g_inner{indent_, false};
+                fmt::print(out_, "{}Guard: ", indent_.current_branch());
+                dump(*arm.guard);
             }
 
             if (arm.capture) {

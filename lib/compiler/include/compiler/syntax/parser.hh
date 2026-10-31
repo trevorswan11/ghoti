@@ -152,6 +152,20 @@ class parser {
         stdx::opt_size saved_;
     };
 
+    // Marks a position holding a pattern, where `|` opens a capture instead of a bitwise or.
+    // Brackets and blocks nested in a pattern hold plain expressions again.
+    class pattern_scope {
+      public:
+        pattern_scope(parser& p, bool enabled) noexcept
+            : parser_{p}, saved_{std::exchange(p.in_pattern_, enabled)} {}
+        ~pattern_scope() { parser_.in_pattern_ = saved_; }
+        MAKE_PINNED(pattern_scope);
+
+      private:
+        parser& parser_;
+        bool    saved_;
+    };
+
     // Marks a position evaluated at compile time: an `if`/`match comptime` or `unroll` header,
     // a `comptime` block or label, or a `const` declaration's initializer
     class compile_time_scope {
@@ -205,6 +219,7 @@ class parser {
         return current_token_;
     }
     [[nodiscard]] auto get_peek_token() const noexcept -> const token_t& { return peek_token_; }
+    [[nodiscard]] auto in_pattern() const noexcept -> bool { return in_pattern_; }
 
     [[nodiscard]] auto current_token_is(token_type_t t) const noexcept -> bool {
         return current_token_.type == t;
@@ -493,6 +508,7 @@ class parser {
     bool                                         infer_next_fn_params_{false};
     bool                                         signature_defaults_armed_{false};
     bool                                         synthesize_default_wrappers_{false};
+    bool                                         in_pattern_{false};
     u32                                          compile_time_depth_outside_functions_{0};
 
     // How many `(`, `[` and `{` enclose the current token, and that depth for an open type

@@ -462,6 +462,21 @@ MAKE_PREFIX_COLLECTOR(comptime_expr)
 MAKE_PREFIX_COLLECTOR(dereference_expr)
 MAKE_PREFIX_COLLECTOR(unary_expr)
 
+auto symbol_collector::visit(ast::node_id, const ast::capture_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(node.capture.payload)}) {
+        try_declare<symbols::capture>(ident->name, node.capture);
+    }
+}
+
+auto symbol_collector::visit(ast::node_id, const ast::bound_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    collect(node.pattern);
+    if (const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(node.capture.payload)}) {
+        try_declare<symbols::capture>(ident->name, node.capture);
+    }
+}
+
 auto symbol_collector::visit(ast::node_id, const ast::unwrap_expr& node) -> void {
     PROFILE_FUNCTION();
     const default_counter::guard g{in_expr_scope_};

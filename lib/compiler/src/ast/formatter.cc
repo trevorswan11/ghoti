@@ -477,10 +477,15 @@ auto formatter::is_function_or_aggregate_node(node_id id) const -> bool {
     return false;
 }
 
-auto formatter::alternatives_head(std::vector<syntax::doc_id> alternatives, bool force_break)
-    -> syntax::doc_id {
+auto formatter::alternatives_head(std::vector<syntax::doc_id>  alternatives,
+                                  bool                         force_break,
+                                  stdx::option<syntax::doc_id> guard) -> syntax::doc_id {
+    const auto guard_clause{
+        guard ? doc_manager_.concat({doc_manager_.text("if "), *guard, doc_manager_.text(" ")})
+              : doc_manager_.nil()};
     if (alternatives.size() == 1) {
-        return doc_manager_.concat({alternatives.front(), doc_manager_.text(" => ")});
+        return doc_manager_.concat(
+            {alternatives.front(), doc_manager_.text(" "), guard_clause, doc_manager_.text("=> ")});
     }
 
     // `a, b, c => ` when it fits on one line, else one alternative per line and `=>` on its own
@@ -492,6 +497,7 @@ auto formatter::alternatives_head(std::vector<syntax::doc_id> alternatives, bool
         doc_manager_.group(
             doc_manager_.concat({doc_manager_.join(std::move(alternatives), sep), trailer}),
             force_break),
+        guard_clause,
         doc_manager_.text("=> "),
     });
 }
@@ -1267,6 +1273,15 @@ auto formatter::format_capture(const capture_t& capture, bool trailing_space) ->
     });
 }
 
+auto formatter::visit(node_id, const capture_pattern_expr& node) -> syntax::doc_id {
+    return node.is_bare_discard ? doc_manager_.text("_") : format_capture(node.capture);
+}
+
+auto formatter::visit(node_id, const bound_pattern_expr& node) -> syntax::doc_id {
+    return doc_manager_.concat(
+        {format(node.pattern), doc_manager_.text(" "), format_capture(node.capture)});
+}
+
 auto formatter::visit(node_id, const for_loop_expr& node) -> syntax::doc_id {
     std::vector<syntax::doc_id> iterables;
     iterables.reserve(node.iterables.size());
@@ -1614,7 +1629,8 @@ auto formatter::visit(node_id id, const match_expr& node) -> syntax::doc_id {
         std::vector<syntax::doc_id> pattern_docs;
         pattern_docs.reserve(arm.patterns.size());
         for (const auto& pattern : arm.patterns) { pattern_docs.emplace_back(format(pattern)); }
-        parts.emplace_back(alternatives_head(std::move(pattern_docs), arm.force_break));
+        const auto guard{arm.guard ? stdx::option<syntax::doc_id>{format(*arm.guard)} : stdx::none};
+        parts.emplace_back(alternatives_head(std::move(pattern_docs), arm.force_break, guard));
         if (arm.capture) {
             parts.emplace_back(doc_manager_.text("|"));
             parts.emplace_back(doc_manager_.text(modifier_prefix(arm.capture->modifier)));

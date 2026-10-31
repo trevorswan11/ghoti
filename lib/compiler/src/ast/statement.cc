@@ -30,7 +30,8 @@ namespace ghoti::ast {
 auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
     -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    const auto start_token{parser.get_current_token()};
+    const auto                          start_token{parser.get_current_token()};
+    const syntax::parser::pattern_scope plain_scope{parser, false};
 
     if (is_comptime && parser.current_token_is(syntax::token_type_t::COMPTIME)) {
         TRY(parser.expect_peek(syntax::token_type_t::LBRACE));

@@ -221,6 +221,62 @@ ExpressionStatement
             └─ Dispatch: ExpressionStatement
                 └─ Expr: IdentifierExpression: f
 ExpressionStatement
+└─ Expr: MatchExpression
+    ├─ Matcher: IdentifierExpression: a
+    └─ Arms:
+        ├─ Arm:
+        │   ├─ Pattern: CallExpression
+        │   │   ├─ Callee: ImplicitAccessExpression
+        │   │   │   └─ Member: IdentifierExpression: b
+        │   │   └─ Arguments:
+        │   │       └─ CallExpression
+        │   │           ├─ Callee: ImplicitAccessExpression
+        │   │           │   └─ Member: IdentifierExpression: c
+        │   │           └─ Arguments:
+        │   │               └─ CapturePatternExpression
+        │   │                   ├─ Capture: d (modifier: VALUE)
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: e
+        ├─ Arm:
+        │   ├─ Pattern: Initializer Expression:
+        │   │   ├─ Object Type: <inferred>
+        │   │   └─ Initializers:
+        │   │       ├─ Initializer:
+        │   │       │   ├─ Member: ImplicitAccessExpression
+        │   │       │   │   └─ Member: IdentifierExpression: f
+        │   │       │   └─ Value: IntLiteralExpression: 0
+        │   │       └─ Initializer:
+        │   │           ├─ Member: ImplicitAccessExpression
+        │   │           │   └─ Member: IdentifierExpression: g
+        │   │           └─ Value: CapturePatternExpression
+        │   │               ├─ Capture: h (modifier: REF)
+        │   ├─ Guard: IdentifierExpression: i
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: j
+        ├─ Arm:
+        │   ├─ Pattern: Initializer Expression:
+        │   │   ├─ Object Type: <inferred>
+        │   │   └─ Initializers:
+        │   │       ├─ Initializer:
+        │   │       │   └─ Value: CapturePatternExpression
+        │   │       │       ├─ Capture: k (modifier: VALUE)
+        │   │       └─ Initializer:
+        │   │           └─ Value: CapturePatternExpression (bare)
+        │   │               ├─ Capture: <discarded>
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: l
+        ├─ Arm:
+        │   ├─ Pattern: BoundPatternExpression
+        │   │   ├─ Capture: n (modifier: VALUE)
+        │   │   └─ Pattern: ImplicitAccessExpression
+        │   │       └─ Member: IdentifierExpression: m
+        │   └─ Dispatch: ExpressionStatement
+        │       └─ Expr: IdentifierExpression: o
+        └─ Catch-All Arm:
+            ├─ Pattern: <discarded>
+            └─ Dispatch: ExpressionStatement
+                └─ Expr: IdentifierExpression: p
+ExpressionStatement
 └─ Expr: InfiniteLoopExpression
     └─ ExpressionStatement
         └─ Expr: IdentifierExpression: a

@@ -72,6 +72,8 @@ class dumper {
     auto visit(node_id, const comptime_expr&) -> void;
     auto visit(node_id, const unary_expr&) -> void;
     auto visit(node_id, const unwrap_expr&) -> void;
+    auto visit(node_id, const capture_pattern_expr&) -> void;
+    auto visit(node_id, const bound_pattern_expr&) -> void;
     auto visit(node_id, const implicit_access_expr&) -> void;
     auto visit(node_id, const string_expr&) -> void;
     auto visit(node_id, const int_literal_expr&) -> void;

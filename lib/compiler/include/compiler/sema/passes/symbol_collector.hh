@@ -85,6 +85,8 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::comptime_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unary_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unwrap_expr&) -> void;
+    auto visit(ast::node_id, const ast::capture_pattern_expr&) -> void;
+    auto visit(ast::node_id, const ast::bound_pattern_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
     auto visit(ast::node_id, const ast::int_literal_expr&) -> void;
