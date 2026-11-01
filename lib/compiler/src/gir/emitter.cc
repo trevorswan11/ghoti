@@ -901,18 +901,23 @@ auto emitter::folded_int(const value& v) noexcept -> stdx::option<i128> {
     return stdx::none;
 }
 
+auto emitter::integer_as_float(const value& v) -> stdx::option<f128> {
+    if (const auto big{v.as_opt<big_int>()}) { return f128::parse(big->to_string()).value; }
+    if (const auto as_unsigned{v.as_opt<u128>()}) { return f128::from_uint(*as_unsigned); }
+    if (const auto as_signed{folded_int(v)}) { return f128::from_int(*as_signed); }
+    return stdx::none;
+}
+
 auto emitter::check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
     -> void {
     // An integer headed for a float type is checked by its exact value
-    stdx::option<f128> f;
-    if (const auto as_float{v.as_opt<f128>()}) {
-        f = *as_float;
-    } else if (const auto as_unsigned{v.as_opt<u128>()}) {
-        f = f128::from_uint(*as_unsigned);
-    } else if (const auto as_signed{folded_int(v)}) {
-        f = f128::from_int(*as_signed);
-    }
-    if (!f || sema::comptime_float_fits(*f, target)) { return; }
+    const bool         is_float_value{v.is<f128>()};
+    stdx::option<f128> f{integer_as_float(v)};
+    if (is_float_value) { f = v.as<f128>(); }
+    if (!f) { return; }
+    // Only a float can already be infinite, so an integer that became one overflowed even f128
+    const bool overflowed_quad{!is_float_value && f->is_infinite()};
+    if (!overflowed_quad && sema::comptime_float_fits(*f, target)) { return; }
     ctx_.diags.emplace_back(fmt::format("float value {} is out of range for type '{}'",
                                         *f,
                                         ctx_.type_display_name(target)),
@@ -961,10 +966,7 @@ auto emitter::untyped_number_as_float(const value& v, sema::type& target, ast::n
     -> value {
     check_comptime_float_fits(v, target, at);
     if (v.is<f128>()) { return value{v.data, target, v.origin}; }
-    if (const auto as_unsigned{v.as_opt<u128>()}) {
-        return value{f128::from_uint(*as_unsigned), target};
-    }
-    if (const auto as_signed{folded_int(v)}) { return value{f128::from_int(*as_signed), target}; }
+    if (const auto as_float{integer_as_float(v)}) { return value{*as_float, target}; }
     return v;
 }
 
@@ -1309,11 +1311,9 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
         if (sema::is_float(dest_type.get_kind()) &&
             val.type->get_kind() == sema::type_kind::COMPTIME_INT) {
             // int literal -> float context: convert the payload to floating point.
-            if (const auto folded{folded_int(val)}) {
-                const auto exact{val.as_opt<u128>() ? f128::from_uint(*val.as_opt<u128>())
-                                                    : f128::from_int(*folded)};
-                check_comptime_float_fits(value{exact}, concrete, *expr_id);
-                return value{exact, concrete};
+            if (const auto exact{integer_as_float(val)}) {
+                check_comptime_float_fits(val, concrete, *expr_id);
+                return value{*exact, concrete};
             }
         }
         // Reject a compile-time integer that does not fit its concrete integer target.
@@ -3005,13 +3005,12 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         [&](const ast::int_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
-            if (data.is_big) { return value{data.exact_value(), t}; }
             // An unsuffixed integer literal in a float context is a float constant.
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
-                return value{f128::from_uint(data.value,
-                                             sema::float_format_of(t).value_or(float_format::QUAD)),
+                return value{data.as_float(sema::float_format_of(t).value_or(float_format::QUAD)),
                              t};
             }
+            if (data.is_big) { return value{data.exact_value(), t}; }
             // Past `i128` max only an unsigned payload keeps the literal's value
             if (sema::is_unsigned_integer(t) ||
                 data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {

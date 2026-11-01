@@ -1803,17 +1803,11 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             const auto sema_type{module_->get_sema_type_opt(id)};
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal used in a float context folds to a float value.
-            if (data.is_big) {
-                if (sema::is_float(t.get_kind()) ||
-                    t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
-                    return stdx::none;
-                }
-                return const_value::from_big_int(data.exact_value(), t);
-            }
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
                 const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
-                return make_scalar_const(f128::from_uint(data.value, format), t);
+                return make_scalar_const(data.as_float(format), t);
             }
+            if (data.is_big) { return const_value::from_big_int(data.exact_value(), t); }
             // Past `i128` max only an unsigned payload keeps the literal's value
             if (sema::is_unsigned_integer(t) ||
                 data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {

@@ -1,7 +1,9 @@
 #include <string_view>
 #include <utility>
 
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -115,6 +117,15 @@ TEST_CASE("Unknown labels resolved") {
 
     test_unknown_label("break", 47);
     test_unknown_label("continue", 50);
+}
+
+TEST_CASE("A label can't share a name with the declaration it initializes") {
+    const std::string_view body{GENERATE("let v = v: { break :v 3; };",
+                                         "let v = (v: { break :v 3; });",
+                                         "let v = 1 + (v: { break :nope 3; });")};
+    CAPTURE(body);
+    CHECK(helpers::raised(fmt::format("const f = fn(): void {{ {} }};", body),
+                          sema::error::SHADOWING_DECLARATION));
 }
 
 } // namespace ghoti::tests

@@ -57,6 +57,11 @@ namespace {
            module.ast.get_as_opt<ast::dereference_expr>(expr);
 }
 
+// A name can resolve to a declaration still being collected, which has no kind yet
+[[nodiscard]] auto is_label(const symbol& sym) noexcept -> bool {
+    return sym.has_kind() && sym.get_kind() == symbol_kind::LABEL;
+}
+
 } // namespace
 
 auto type_resolver::record_range_counter(usize                     loop_table,
@@ -1003,8 +1008,7 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     // The label symbol is shared across generic instantiations, so drop yields from a prior pass
     if (label.name) {
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*label.name)};
-        if (auto sym{ctx_.registry.lookup(table_stack_, ident.name)};
-            sym && sym->get_kind() == symbol_kind::LABEL) {
+        if (auto sym{ctx_.registry.lookup(table_stack_, ident.name)}; sym && is_label(*sym)) {
             symbols::label::from(*sym).clear_yield_types();
         }
     }
@@ -1013,7 +1017,7 @@ auto type_resolver::visit(ast::node_id id, const ast::label_expr& label) -> void
     TRY_RESOLVE(*label.body);
     if (label.name) {
         auto sym{resolve_symbol_info(*label.name, stdx::none)};
-        if (!sym) { return; }
+        if (!sym || !is_label(*sym)) { return; }
         auto& label_data{symbols::label::from(*sym)};
 
         // A labeled loop also yields its `else` value when it runs out without a `break`
@@ -2218,7 +2222,7 @@ auto type_resolver::resolve_control_flow_label(stdx::option<ast::identifier_hand
     if (label) {
         const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*label)};
         auto        sym{ctx_.registry.lookup(table_stack_, ident.name)};
-        if (!sym || sym->get_kind() != symbol_kind::LABEL) {
+        if (!sym || !is_label(*sym)) {
             return make_sema_err(
                 fmt::format("Labeled {} statements must be used with a known label", stmt_name),
                 error::ILLEGAL_CONTROL_FLOW,

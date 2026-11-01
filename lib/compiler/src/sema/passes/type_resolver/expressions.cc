@@ -1514,14 +1514,21 @@ auto type_resolver::visit(ast::node_id id, const ast::int_literal_expr& expr) ->
                 expr.is_big
                     ? comptime_int_fits(expr.exact_value(), *implicit_type, ptr_bits)
                     : comptime_int_fits(static_cast<i128>(expr.value), *implicit_type, ptr_bits)};
-            if ((is_float(implicit_type->get_kind()) && !expr.is_big) || fits) {
+            if (is_float(implicit_type->get_kind()) || fits) {
                 resolved = *ctx_.pool.strip_volatile(*implicit_type);
             }
         }
     }
     if (const auto format{float_format_of(*resolved)}) {
-        if (const auto problem{float_literal_range_problem(
-                f128::from_uint(expr.value), f128::from_uint(expr.value, *format), *resolved)}) {
+        // An integer past even f128 reads back as infinity, which no float check would flag
+        if (expr.as_float().is_infinite()) {
+            return last_type_.emplace(
+                float_literal_out_of_range(id,
+                                           fmt::format("literal is out of range for type '{}'",
+                                                       ctx_.type_display_name(*resolved))));
+        }
+        if (const auto problem{
+                float_literal_range_problem(expr.as_float(), expr.as_float(*format), *resolved)}) {
             return last_type_.emplace(float_literal_out_of_range(id, *problem));
         }
     }

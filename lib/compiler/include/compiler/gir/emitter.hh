@@ -593,6 +593,8 @@ class emitter {
     // Diagnoses a runtime `src` value headed for the untyped `target`
     auto report_runtime_untyped(const sema::type& src, const sema::type& target, ast::node_id at)
         -> void;
+    // A constant integer of any width as a float
+    [[nodiscard]] auto integer_as_float(const value& v) -> stdx::option<f128>;
     // Diagnoses a compile-time float that rounds to infinity in `target`
     auto check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
         -> void;

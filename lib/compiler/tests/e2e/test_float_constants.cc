@@ -1,3 +1,4 @@
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -29,6 +30,37 @@ TEST_CASE("compile-time f32 arithmetic rounds exactly like runtime f32") {
             return 0;
         };
     )") == 0);
+}
+
+TEST_CASE("An integer literal past 128 bits still converts to a float") {
+    SECTION("exactly, when the float holds it") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                let y: f64 = 10000000000000000000000000000000000000000;
+                const z: f64 = 340282366920938463463374607431768211456;
+                const named = 340282366920938463463374607431768211456;
+                const w: f64 = named;
+                if (@bitCast(u64, y) != 0x483D6329F1C35CA5) { return 1; }
+                if (@bitCast(u64, z) != 0x47F0000000000000) { return 2; }
+                if (@bitCast(u64, w) != 0x47F0000000000000) { return 3; }
+                return 0;
+            };
+        )") == 0);
+    }
+
+    SECTION("and is rejected when the float can't") {
+        CHECK(helpers::raised(R"(
+            pub const main = fn(): i32 {
+                let y: f32 = 10000000596046447753906250000000000000000;
+                return @intCast(i32, @bitCast(u32, y));
+            };
+        )",
+                              sema::error::LITERAL_OUT_OF_RANGE));
+        CHECK(helpers::raised(
+            fmt::format("pub const main = fn(): i32 {{ let y: f128 = 1{}; return 0; }};",
+                        std::string(5'000, '0')),
+            sema::error::LITERAL_OUT_OF_RANGE));
+    }
 }
 
 TEST_CASE("f128 constants keep full quad precision") {

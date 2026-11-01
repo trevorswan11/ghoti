@@ -200,6 +200,9 @@ class const_value {
         -> stdx::option<f128> {
         if (const auto u{as_uint_opt()}) { return f128::from_uint(*u, format); }
         if (const auto i{as_int_opt()}) { return f128::from_int(*i, format); }
+        if (const auto big{as_opt<big_int>()}) {
+            return f128::parse(big->to_string(), format).value;
+        }
         return stdx::none;
     }
 
