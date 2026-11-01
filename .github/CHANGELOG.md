@@ -969,6 +969,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `|&v|` on a temporary `match` scrutinee stays valid for the arm instead of being an error
 - Fixed: a `match` on a place evaluated the place twice, so `match (a[next()])` ran `next()` twice whenever an arm captured
 - Fixed: a `comptime { ... }` block's writes to an outer scalar `comptime let mut` were lost to later runtime reads of it
+- Fixed: a closure that only a discarded module-level expression creates and passes to a generic crashed codegen, since nothing ever emitted its body
 - Fixed: a `_` match arm written before other arms shadowed them at runtime while compile-time evaluation tried it last, so `match (x) { _ => 1, 5 => 2 }` gave a different answer in each; `_` is now tried last everywhere
 
 ## Standard Library

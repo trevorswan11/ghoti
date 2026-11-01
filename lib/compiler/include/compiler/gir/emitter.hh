@@ -209,7 +209,11 @@ class emitter {
 
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
     // The GIR function holding a closure's body, unique to its generic instantiation
-    [[nodiscard]] static auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    [[nodiscard]] static auto closure_symbol(const sema::type& closure_type) -> std::string;
+    // Names a closure and remembers that something refers to it
+    [[nodiscard]] auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    // A closure only dead code reaches was never emitted, since nothing runs what encloses it
+    auto emit_unreached_closures() -> void;
     // Binds each capture of environment `env` by name in the current scope
     auto bind_env_captures(local_id                      env,
                            sema::type&                   env_type,
@@ -745,6 +749,7 @@ class emitter {
     std::vector<gsl::not_null<sema::type*>>                 user_type_stack_;
     std::vector<std::string_view>                           pending_builtin_runtime_;
     std::vector<ast::node_id>                               pending_builtin_impls_;
+    std::vector<gsl::not_null<const sema::type*>>           named_closures_;
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};

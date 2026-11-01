@@ -1436,7 +1436,7 @@ auto type_resolver::is_type_match(const ast::match_expr& match, type& matcher_ty
 // Rejects a scrutinee type no pattern could ever take apart
 auto type_resolver::validate_matcher_kind(const ast::match_expr& match, type& matcher_type)
     -> stdx::option<diagnostic> {
-    const auto at{resolving_.ast.location_of(match.matcher)};
+    const auto  at{resolving_.ast.location_of(match.matcher)};
     const auto& data{matcher_type.get_data()};
     if (data.is<types::enum_t>() || data.is<types::struct_t>() || data.is<types::array>() ||
         data.is<types::integer>() || matcher_type.get_kind() == type_kind::SLICE) {

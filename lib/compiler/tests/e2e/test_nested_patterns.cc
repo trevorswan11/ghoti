@@ -1200,7 +1200,6 @@ TEST_CASE("match comptime reads nested patterns") {
 
 namespace ghoti::tests {
 
-
 TEST_CASE("Nested matches report exactly what they miss") {
     constexpr auto ILLEGAL{sema::error::ILLEGAL_MATCH_PATTERN};
     constexpr auto MISSING{sema::error::MISSING_FIELD};
@@ -1313,6 +1312,21 @@ TEST_CASE("A guard can't write through an alias capture") {
     }};
     DISCARD(helpers::expect_compile_error(guarded("assign(x)")));
     DISCARD(helpers::expect_compile_error(guarded("(x = 5) == 5")));
+}
+
+TEST_CASE("A matched place is evaluated once however its arms capture") {
+    const std::string_view arm{GENERATE("|v| => v", "|&v| => v", "1.. |v| => v, _ => 0")};
+    CAPTURE(arm);
+    CHECK(helpers::compile_and_run(fmt::format(R"(
+        pub const main = fn(): i32 {{
+            let a = [3]i32{{ 10, 20, 30 }};
+            let mut calls: i32 = 0;
+            const next = fn(c: &mut i32): usize {{ c = c + 1; return 1; }};
+            let got = match (a[next(&mut calls)]) {{ {} }};
+            return got + calls;
+        }};
+    )",
+                                               arm)) == 21);
 }
 
 TEST_CASE("Private fields stay private to patterns") {

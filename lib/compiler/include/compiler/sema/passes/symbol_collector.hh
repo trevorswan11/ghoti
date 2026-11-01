@@ -194,11 +194,11 @@ class symbol_collector {
 
   private:
     ankerl::unordered_dense::set<std::string_view> alternative_names_{};
-    mod::module_t&      collecting_;
-    usize               table_idx_;
-    symbol_table_stack  table_stack_;
-    context&            ctx_;
-    stdx::option<type&> last_type_;
+    mod::module_t&                                 collecting_;
+    usize                                          table_idx_;
+    symbol_table_stack                             table_stack_;
+    context&                                       ctx_;
+    stdx::option<type&>                            last_type_;
 
     default_counter in_expr_scope_;
     default_counter in_function_scope_;

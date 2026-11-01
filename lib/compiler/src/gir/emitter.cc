@@ -303,6 +303,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
         }
     }
 
+    emit_unreached_closures();
+
     // Any emission error (including a foreign module's) stops this module before type checking,
     // which would otherwise pile follow-on errors onto the poisoned values
     if (attributed_foreign_diags_ || !ctx_.diags.empty()) {
@@ -2214,12 +2216,33 @@ auto emitter::generic_env_arg(const ast::call_expr& call, sema::type& generic_fn
     return value{spill, env_ref};
 }
 
-auto emitter::closure_fn_name(const sema::type& closure_type) -> std::string {
+auto emitter::closure_symbol(const sema::type& closure_type) -> std::string {
     const auto idx{closure_type.get_symbol_table_idx()};
     if (const auto instance{closure_type.get_instance_id()}) {
         return fmt::format("closure{}.{:x}", idx, std::to_underlying(*instance));
     }
     return fmt::format("closure{}", idx);
+}
+
+auto emitter::emit_unreached_closures() -> void {
+    for (const auto closure_type : named_closures_) {
+        const auto fn_name{closure_symbol(*closure_type)};
+        if (gir_module_.has_function(fn_name)) { continue; }
+        const auto& cl{closure_type->get_data().as<sema::types::closure_t>()};
+        const auto& sig{cl.impl_signature.get_data().as<sema::types::function>()};
+        auto&       fn{add_gir_function(fn_name, cl.impl_signature, false, false, sig.is_variadic)};
+        for (usize i{0}; i < sig.params.size(); ++i) {
+            fn.add_param(fmt::format("p{}", i), *sig.params[i]);
+        }
+        auto& entry{fn.add_segment()};
+        builder_.set_insert_point(fn, entry);
+        builder_.emit_unreachable();
+    }
+}
+
+auto emitter::closure_fn_name(const sema::type& closure_type) -> std::string {
+    named_closures_.emplace_back(&closure_type);
+    return closure_symbol(closure_type);
 }
 
 auto emitter::emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type)

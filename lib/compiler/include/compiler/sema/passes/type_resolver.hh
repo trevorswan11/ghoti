@@ -1129,9 +1129,9 @@ class type_resolver {
     std::vector<open_interface> open_interfaces_;
     // `&dyn I` uses of an open interface, checked for `dyn`-safety once it commits
     std::vector<deferred_dyn_check> deferred_dyn_checks_;
-    bool for_generic_instantiation_{false};
-    bool in_subscript_index_{false};
-    bool in_for_iterable_{false};
+    bool                            for_generic_instantiation_{false};
+    bool                            in_subscript_index_{false};
+    bool                            in_for_iterable_{false};
     // Set while resolving a function parameter's declared type
     bool in_param_type_{false};
     bool in_return_type_{false};
