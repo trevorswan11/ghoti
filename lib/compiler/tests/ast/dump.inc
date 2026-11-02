@@ -234,7 +234,7 @@ ExpressionStatement
         │   │           │   └─ Member: IdentifierExpression: c
         │   │           └─ Arguments:
         │   │               └─ CapturePatternExpression
-        │   │                   ├─ Capture: d (modifier: VALUE)
+        │   │                   └─ Capture: d (modifier: VALUE)
         │   └─ Dispatch: ExpressionStatement
         │       └─ Expr: IdentifierExpression: e
         ├─ Arm:
@@ -249,7 +249,7 @@ ExpressionStatement
         │   │           ├─ Member: ImplicitAccessExpression
         │   │           │   └─ Member: IdentifierExpression: g
         │   │           └─ Value: CapturePatternExpression
-        │   │               ├─ Capture: h (modifier: REF)
+        │   │               └─ Capture: h (modifier: REF)
         │   ├─ Guard: IdentifierExpression: i
         │   └─ Dispatch: ExpressionStatement
         │       └─ Expr: IdentifierExpression: j
@@ -259,10 +259,10 @@ ExpressionStatement
         │   │   └─ Initializers:
         │   │       ├─ Initializer:
         │   │       │   └─ Value: CapturePatternExpression
-        │   │       │       ├─ Capture: k (modifier: VALUE)
+        │   │       │       └─ Capture: k (modifier: VALUE)
         │   │       └─ Initializer:
         │   │           └─ Value: CapturePatternExpression (bare)
-        │   │               ├─ Capture: <discarded>
+        │   │               └─ Capture: <discarded>
         │   └─ Dispatch: ExpressionStatement
         │       └─ Expr: IdentifierExpression: l
         ├─ Arm:

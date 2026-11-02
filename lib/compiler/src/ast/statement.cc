@@ -15,6 +15,7 @@
 #include <stdx/result.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -23,6 +24,8 @@
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {

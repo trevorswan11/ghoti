@@ -15,6 +15,7 @@
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
 #include <stdx/result.hh>
+#include <stdx/string.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
@@ -30,6 +31,7 @@
 #include "compiler/sema/instantiation_cache.hh"
 #include "compiler/sema/pack_slice.hh"
 #include "compiler/sema/passes/type_resolver.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/range_steps.hh"
 #include "compiler/sema/symbol.hh"
@@ -1497,7 +1499,8 @@ auto type_resolver::bind_pattern_captures(const ast::match_expr::arm&  arm,
                                           gsl::span<pattern::node_ptr> alternatives,
                                           const pattern_capture_place& place)
     -> stdx::option<diagnostic> {
-    using signature = std::vector<std::pair<std::string_view, gsl::not_null<type*>>>;
+    using signature_pair = std::pair<std::string_view, gsl::not_null<type*>>;
+    using signature      = std::vector<signature_pair>;
 
     stdx::option<signature> expected;
     for (usize alt{0}; alt < alternatives.size(); ++alt) {
@@ -1540,7 +1543,7 @@ auto type_resolver::bind_pattern_captures(const ast::match_expr::arm&  arm,
             const auto& ident{resolving_.ast.get_as<ast::identifier_expr>(*site.capture.payload)};
             names.emplace_back(ident.name, cap_type->get());
         }
-        std::ranges::sort(names, {}, [](const auto& entry) { return entry.first; });
+        std::ranges::sort(names, {}, &signature_pair::first);
 
         if (!expected) {
             expected.emplace(std::move(names));
@@ -1633,7 +1636,9 @@ auto type_resolver::check_match_coverage(ast::node_id                        id,
     if (tree.missing_is_flat && names_variants &&
         (data.is<types::enum_t>() || data.is<types::union_t>())) {
         std::vector<std::string_view> names;
-        for (const std::string_view text : tree.missing) { names.emplace_back(text.substr(1)); }
+        for (const std::string_view text : tree.missing) {
+            names.emplace_back(stdx::string::substr(text, 1));
+        }
         return diagnostic{fmt::format("Match expression is non-exhaustive; missing {}{}: {}",
                                       data.is<types::enum_t>() ? "enumeration" : "union field",
                                       string_utils::plural_suffix(names.size()),
@@ -1656,6 +1661,7 @@ auto type_resolver::check_match_coverage(ast::node_id                        id,
                               error::ILLEGAL_MATCH_PATTERN,
                               matcher_at};
         }
+
         // Spelling out what's missing only helps while the type's range is small enough to read
         const auto info{as_integer(matcher_type)};
         if (matcher_type.get_kind() == type_kind::BOOL || (info && info->bits <= 8)) {

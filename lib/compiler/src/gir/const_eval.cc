@@ -3565,8 +3565,11 @@ auto const_eval::match_structure(ast::node_id                  pattern,
     const auto step_into{[&](ref_step::kind kind, std::string_view name, usize index) {
         auto next{place};
         if (next) {
-            next->path.emplace_back(
-                ref_step{.step = kind, .name = std::string{name}, .index = index});
+            next->path.emplace_back<ref_step>({
+                .step  = kind,
+                .name  = std::string{name},
+                .index = index,
+            });
         }
         return next;
     }};

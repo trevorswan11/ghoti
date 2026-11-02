@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>

@@ -37,6 +37,7 @@
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -137,6 +138,23 @@ class emitter {
         value             flow_slot;
         value             is_break;
         sema::unwrap_info shape;
+    };
+
+    // Storage for one name an arm binds, filled along whichever path reaches the arm
+    struct match_capture_slot {
+        std::string_view name;
+        sema::type&      type;
+        local_id         slot;
+        bool             is_alias{false};
+        bool             is_void{false};
+    };
+
+    struct match_lowering {
+        const ast::match_expr&                           match;
+        const sema::pattern::decision_tree&              tree;
+        value                                            matcher_addr;
+        std::vector<segment_id>                          bodies{};
+        gsl::span<const std::vector<match_capture_slot>> slots{};
     };
 
   private:
@@ -358,21 +376,6 @@ class emitter {
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
 
-    // Storage for one name an arm binds, filled along whichever path reaches the arm
-    struct match_capture_slot {
-        std::string_view name;
-        sema::type&      type;
-        local_id         slot;
-        bool             is_alias{false};
-        bool             is_void{false};
-    };
-    struct match_lowering {
-        const ast::match_expr&                           match;
-        const sema::pattern::decision_tree&              tree;
-        value                                            matcher_addr;
-        std::vector<segment_id>                          bodies{};
-        gsl::span<const std::vector<match_capture_slot>> slots{};
-    };
     [[nodiscard]] auto capture_binding(const match_capture_slot& slot) -> local_binding;
     [[nodiscard]] auto const_view_of(sema::type& alias) -> sema::type&;
     auto               emit_occurrence_addr(const match_lowering& lowering, usize occ) -> value;

@@ -16,6 +16,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 
@@ -81,6 +82,12 @@ enum class decl_modifiers : u16 {
 MAKE_ENUM_OPERATORS(decl_modifiers)
 
 struct decl_stmt {
+    // `let .{ .x = |x| } = v else { ... };` as written, kept for passes that only read the source
+    struct destructure_source {
+        match_pattern_handle      pattern;
+        stdx::option<stmt_handle> otherwise;
+    };
+
     identifier_handle              name;
     stdx::option<explicit_type_id> explicit_type;
     stdx::option<expr_handle>      value;
@@ -92,11 +99,6 @@ struct decl_stmt {
     // defaults off, or the value a destructuring takes apart
     bool is_synthesized{false};
 
-    // `let .{ .x = |x| } = v else { ... };` as written, kept for passes that only read the source
-    struct destructure_source {
-        match_pattern_handle      pattern;
-        stdx::option<stmt_handle> otherwise;
-    };
     stdx::option<destructure_source> destructure{};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)

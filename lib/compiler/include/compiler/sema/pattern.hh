@@ -1,18 +1,19 @@
 #pragma once
 
-#include <functional>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <gsl/pointers>
 #include <gsl/span>
+#include <stdx/function.hh>
+#include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
 #include <stdx/types.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/gir/const_value.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/type.hh"
@@ -39,7 +40,7 @@ enum class node_kind : u8 {
 };
 
 struct node;
-using node_ptr = std::unique_ptr<node>;
+using node_ptr = stdx::nullable_box<node>;
 
 // Where a sub-pattern looks within its parent's value
 struct child {
@@ -74,12 +75,12 @@ struct node {
 // What elaboration needs from the pass running it
 struct host {
     // Types a value leaf against its column, reporting why it can't match. Absent once resolved
-    std::function<stdx::option<diagnostic>(ast::node_id, type&)> resolve_leaf;
-    std::function<stdx::option<gir::const_value>(ast::node_id)>  fold;
+    stdx::function<stdx::option<diagnostic>(ast::node_id, type&)> resolve_leaf;
+    stdx::function<stdx::option<gir::const_value>(ast::node_id)>  fold;
     // Resolves a qualifier such as `Shape` in `Shape.circle(...)`, and gives the type it names
-    std::function<stdx::option<type&>(ast::node_id)> denoted_type_of;
+    stdx::function<stdx::option<type&>(ast::node_id)> denoted_type_of;
     // Sizes an array whose length was deferred until now
-    std::function<type&(type&)> concrete;
+    stdx::function<type&(type&)> concrete;
 };
 
 struct elaboration_context {
@@ -98,7 +99,7 @@ struct elaboration_context {
 // One alternative of one arm, tried in the order given
 struct row_input {
     usize       arm{0};
-    const node* root{nullptr};
+    const node* root;
     bool        guarded{false};
 };
 

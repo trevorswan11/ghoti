@@ -964,7 +964,7 @@ This is a heavily rust inspired release, sorry if that's not your thing!
     - `for`, `if`, and `while` captures take a pattern that can't: `for (points) |.{ .x = |x| }| { ... }`
     - `match` now covers exhaustiveness and reachability together, so missing cases are named exactly (`missing: .ok(.none)`) and an arm an earlier one fully covers is an error
     - Compile-time ranges count toward exhaustiveness at every integer width, so `0..=127, 128..=255` covers a `u8`
-    - **Breaking:** arms may now partly overlap, taking the first; only an arm that can never match is an error
+    - **Breaking:** arms may now partly overlap, taking the first. Only an arm that can never match is an error
 - A `match` capture without a modifier is now a copy of what it matched, so writing to the matched value in the arm no longer changes what the capture reads
 - `|&v|` on a temporary `match` scrutinee stays valid for the arm instead of being an error
 - Fixed: a `match` on a place evaluated the place twice, so `match (a[next()])` ran `next()` twice whenever an arm captured

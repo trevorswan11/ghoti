@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <concepts>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,6 +29,8 @@
 #include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::ast {
 
@@ -887,7 +890,7 @@ auto for_loop_expr::parse(syntax::parser& parser, bool is_unrolled)
     // Loops must have a well formed block and may have an alternate in non-break cases
     TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
     block_handle block{TRY(block_stmt::parse(parser))};
-    for (const auto& capture : std::views::reverse(captures)) {
+    for (const auto& capture : captures | std::views::reverse) {
         block = wrap_captured_block(parser, stdx::option<capture_t>{capture}, block, is_unrolled);
     }
     stdx::option<stmt_handle> non_break;
@@ -1318,10 +1321,9 @@ auto identifier_expr::parse(syntax::parser& parser)
 
 namespace {
 
-// One name a pattern binds, and how to reach its value from the whole
 struct pattern_path_step {
-    std::string_view member;
-    stdx::opt_size   element;
+    std::string_view member;  // The name bound by the pattern
+    stdx::opt_size   element; // How to reach the name from the whole
 };
 
 struct bound_name {
@@ -1414,15 +1416,17 @@ make_path_access(syntax::parser& parser, ast::node_id root, const bound_name& na
     for (const auto& step : name.path) {
         if (step.element) {
             const auto digits{parser.get_ast().intern(fmt::to_string(*step.element))};
-            const auto index{parser.add_expr<int_literal_expr>(
-                loc,
-                tag,
-                int_literal_expr{.value     = static_cast<u128>(*step.element),
-                                 .width     = 0,
-                                 .is_signed = false,
-                                 .is_size   = false,
-                                 .base      = syntax::numeric_base::DECIMAL,
-                                 .spelling  = digits})};
+            const auto index{
+                parser.add_expr<int_literal_expr>(loc,
+                                                  tag,
+                                                  int_literal_expr{
+                                                      .value     = static_cast<u128>(*step.element),
+                                                      .width     = 0,
+                                                      .is_signed = false,
+                                                      .is_size   = false,
+                                                      .base      = syntax::numeric_base::DECIMAL,
+                                                      .spelling  = digits,
+                                                  })};
             access = parser.add_expr<index_expr>(loc, tag, access, index);
         } else {
             const identifier_handle member{parser.add_written_identifier(loc, step.member)};
@@ -1511,7 +1515,7 @@ auto parse_destructure(syntax::parser&        parser,
                        source_location        span_start,
                        decl_modifiers modifiers) -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    const auto disallowed{decl_modifiers::EXTERN | decl_modifiers::EXPORT};
+    constexpr auto disallowed{decl_modifiers::EXTERN | decl_modifiers::EXPORT};
     if ((modifiers & disallowed) != decl_modifiers{}) {
         return make_syntax_err("A destructuring declaration can't be 'extern' or 'export'",
                                syntax::error::ILLEGAL_DECL_MODIFIERS,
@@ -1520,7 +1524,7 @@ auto parse_destructure(syntax::parser&        parser,
 
     parser.advance();
     const auto pattern_tok{parser.get_current_token()};
-    const auto pattern_raw{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+    const auto pattern_raw{[&] -> stdx::result<expr_handle, syntax::diagnostic> {
         const syntax::parser::pattern_scope pattern_scope{parser, true};
         // Stopping short of the lowest precedence keeps the `=` for the value
         const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::ASSIGNMENT))};
@@ -1545,7 +1549,7 @@ auto parse_destructure(syntax::parser&        parser,
 
     const bool is_comptime_decl{(modifiers & decl_modifiers::COMPTIME) != decl_modifiers{}};
     const bool is_const{is_comptime_decl && (modifiers & decl_modifiers::MUT) == decl_modifiers{}};
-    const auto value{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+    const auto value{[&] -> stdx::result<expr_handle, syntax::diagnostic> {
         const syntax::parser::compile_time_scope cx_scope{parser, is_comptime_decl, is_const};
         return parser.parse_expression();
     }()};
@@ -1690,7 +1694,7 @@ namespace {
 [[nodiscard]] auto parse_capture_pattern(syntax::parser& parser)
     -> stdx::result<capture_t, syntax::diagnostic> {
     const auto pattern_tok{parser.get_current_token()};
-    const auto pattern_raw{[&]() -> stdx::result<expr_handle, syntax::diagnostic> {
+    const auto pattern_raw{[&] -> stdx::result<expr_handle, syntax::diagnostic> {
         const syntax::parser::pattern_scope pattern_scope{parser, true};
         // Stopping short of the lowest precedence leaves the closing `|` alone
         return parser.parse_expression(syntax::bind_precedence::ASSIGNMENT);
@@ -1723,9 +1727,11 @@ namespace {
 
     const identifier_handle hidden{
         parser.add_written_identifier(parser.get_location_of(*pattern), parser.next_hidden_name())};
-    return capture_t{.modifier = wants_view ? type_modifier{view_tok} : type_modifier{},
-                     .payload  = discardable_ident_handle{*hidden},
-                     .pattern  = pattern};
+    return capture_t{
+        .modifier = wants_view ? type_modifier{view_tok} : type_modifier{},
+        .payload  = discardable_ident_handle{*hidden},
+        .pattern  = pattern,
+    };
 }
 
 // A captured body runs inside the single arm that takes its capture's pattern apart

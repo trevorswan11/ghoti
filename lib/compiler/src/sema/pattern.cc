@@ -1,22 +1,38 @@
 #include "compiler/sema/pattern.hh"
 
 #include <algorithm>
-#include <ranges>
-#include <set>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/span>
+#include <stdx/assert.hh>
+#include <stdx/memory.hh>
+#include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
+#include <stdx/types.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/gir/layout.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/sema/type.hh"
+#include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
+#include "support/diagnostic.hh"
+#include "support/int128.hh"
 
 namespace ghoti::sema::pattern {
 
@@ -31,7 +47,7 @@ constexpr std::string_view SLICE_BYTES_FIELD_NAME{"bytes"};
 
 [[nodiscard]] auto make_node(node_kind kind, stdx::option<ast::node_id> source, type& value_type)
     -> node_ptr {
-    auto out{std::make_unique<node>(node{.source = source, .value_type = &value_type})};
+    auto out{stdx::make_nullable_box<node>(node{.source = source, .value_type = &value_type})};
     out->kind = kind;
     return out;
 }
@@ -310,8 +326,8 @@ class elaborator {
                                  location_of(id));
         }
 
-        auto                       out{make_node(node_kind::RECORD, id, column)};
-        std::set<std::string_view> seen;
+        auto out{make_node(node_kind::RECORD, id, column)};
+        ankerl::unordered_dense::set<std::string_view> seen;
         for (const auto& entry : init.initializers) {
             if (!entry.member) {
                 return make_sema_err("A struct pattern names its fields: `.{ .x = ... }`",
@@ -755,10 +771,9 @@ class tree_builder {
 
     // Drops column `at` from a row, splicing `replacement` cells in its place
     static auto replace_cell(row& r, usize at, gsl::span<const node* const> replacement) -> void {
-        r.cells.erase(r.cells.begin() + static_cast<std::ptrdiff_t>(at));
-        r.cells.insert(r.cells.begin() + static_cast<std::ptrdiff_t>(at),
-                       replacement.begin(),
-                       replacement.end());
+        r.cells.erase(r.cells.begin() + static_cast<idiff>(at));
+        r.cells.insert(
+            r.cells.begin() + static_cast<idiff>(at), replacement.begin(), replacement.end());
     }
 
     // A value with one shape needs no test: its parts just become columns of their own
@@ -809,9 +824,9 @@ class tree_builder {
             }
             replace_cell(r, col, replacement);
         }
-        columns.erase(columns.begin() + static_cast<std::ptrdiff_t>(col));
+        columns.erase(columns.begin() + static_cast<idiff>(col));
         columns.insert(
-            columns.begin() + static_cast<std::ptrdiff_t>(col), part_occs.begin(), part_occs.end());
+            columns.begin() + static_cast<idiff>(col), part_occs.begin(), part_occs.end());
         return decide(std::move(rows), std::move(columns), path);
     }
 
@@ -831,7 +846,7 @@ class tree_builder {
 
     [[nodiscard]] static auto without_column(std::vector<usize> columns, usize col)
         -> std::vector<usize> {
-        columns.erase(columns.begin() + static_cast<std::ptrdiff_t>(col));
+        columns.erase(columns.begin() + static_cast<idiff>(col));
         return columns;
     }
 
@@ -882,10 +897,9 @@ class tree_builder {
             }
 
             auto next_columns{columns};
-            next_columns.erase(next_columns.begin() + static_cast<std::ptrdiff_t>(col));
+            next_columns.erase(next_columns.begin() + static_cast<idiff>(col));
             if (payload_occ) {
-                next_columns.insert(next_columns.begin() + static_cast<std::ptrdiff_t>(col),
-                                    *payload_occ);
+                next_columns.insert(next_columns.begin() + static_cast<idiff>(col), *payload_occ);
             }
             path.emplace_back(occ, fmt::format(".{}", union_field_name(union_data, variant)));
             const auto target{decide(std::move(specialized), std::move(next_columns), path)};

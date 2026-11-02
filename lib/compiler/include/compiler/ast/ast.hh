@@ -291,6 +291,7 @@ class AST {
         std::string text;
     };
 
+  private:
     // Copies a node still shared with the tree this one borrowed from into this tree's arena
     auto own_node(usize index) -> void {
         if (index >= shared_nodes_.size() || !shared_nodes_[index]) { return; }

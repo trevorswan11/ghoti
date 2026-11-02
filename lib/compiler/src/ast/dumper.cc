@@ -413,8 +413,8 @@ auto dumper::visit(node_id, const if_expr& if_expr) -> void {
         fmt::print(out_, "{}Condition: ", indent_.current_branch());
         dump(*if_expr.condition);
     }
-    dump_capture("Payload Capture", if_expr.payload_capture);
-    dump_capture("Else Capture", if_expr.else_capture);
+    dump_capture("Payload Capture", if_expr.payload_capture, false);
+    dump_capture("Else Capture", if_expr.else_capture, false);
 
     const auto has_alternate{if_expr.alternate.has_value()};
     {
@@ -590,13 +590,13 @@ auto dumper::visit(node_id, const label_expr& label) -> void {
 auto dumper::visit(node_id, const capture_pattern_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "CapturePatternExpression{}", node.is_bare_discard ? " (bare)" : "");
-    dump_capture("Capture", node.capture);
+    dump_capture("Capture", node.capture, true);
 }
 
 auto dumper::visit(node_id, const bound_pattern_expr& node) -> void {
     PROFILE_FUNCTION();
     fmt::println(out_, "BoundPatternExpression");
-    dump_capture("Capture", node.capture);
+    dump_capture("Capture", node.capture, false);
     const indent::guard g{indent_, true};
     fmt::print(out_, "{}Pattern: ", indent_.current_branch());
     dump(node.pattern);
@@ -941,8 +941,8 @@ auto dumper::visit(node_id, const while_loop_expr& while_expr) -> void {
         dump(while_expr.condition);
     }
 
-    dump_capture("Payload Capture", while_expr.payload_capture);
-    dump_capture("Else Capture", while_expr.else_capture);
+    dump_capture("Payload Capture", while_expr.payload_capture, false);
+    dump_capture("Else Capture", while_expr.else_capture, false);
     if (while_expr.continuation) {
         const indent::guard g{indent_, false};
         fmt::print(out_, "{}Continuation: ", indent_.current_branch());

@@ -125,9 +125,10 @@ class dumper {
         }
     }
 
-    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture) -> void {
+    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture, bool last)
+        -> void {
         if (!capture) { return; }
-        const indent::guard g{indent_, false};
+        const indent::guard g{indent_, last};
         fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
         if (capture->payload.is<ast::discarded>()) {
             fmt::println(out_, "<discarded>");

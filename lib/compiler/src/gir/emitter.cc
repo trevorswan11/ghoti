@@ -47,12 +47,15 @@
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/pack_element.hh"
 #include "compiler/sema/pack_slice.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/peer_type.hh"
+#include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
+#include "support/big_int.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
 
@@ -8619,7 +8622,7 @@ auto emitter::emit_decision(const match_lowering& lowering, usize node) -> void 
             return;
         }
 
-        const auto matched{[&]() -> value {
+        const auto matched{[&] -> value {
             switch (test.kind) {
             case sema::pattern::test_kind::TAG:
                 return value{builder_.emit_binary(instruction_kind::EQ,

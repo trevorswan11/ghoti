@@ -308,9 +308,7 @@ class parser {
         return add_node<ast::expr_handle, Data>(span_start, tag_token, std::forward<Args>(args)...);
     }
 
-    // An identifier the parser wrote itself. `spelled` is how much of the source at `at` it spans,
-    // which is nothing unless the user wrote that name there, so a lookup by position never
-    // lands on it by accident
+    // An identifier the parser wrote itself. `spelled` is how much of the source at `at` it spans
     [[nodiscard]] auto add_written_identifier(const source_location& at,
                                               std::string_view       name,
                                               std::string_view spelled = {}) -> ast::expr_handle {

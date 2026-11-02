@@ -445,6 +445,13 @@ class type_resolver {
         source_location      location;
     };
 
+    // How the place a match takes apart limits what its captures may do with it
+    struct pattern_capture_place {
+        bool is_const{false};
+        bool is_addressable{false};
+        bool is_poly{false};
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -835,13 +842,6 @@ class type_resolver {
 
     auto visit(ast::node_id, const ast::initializer_expr&) -> void;
     auto visit(ast::node_id, const ast::label_expr&) -> void;
-
-    // How the place a match takes apart limits what its captures may do with it
-    struct pattern_capture_place {
-        bool is_const{false};
-        bool is_addressable{false};
-        bool is_poly{false};
-    };
 
     [[nodiscard]] auto validate_matcher_kind(const ast::match_expr& match, type& matcher_type)
         -> stdx::option<diagnostic>;
