@@ -10,6 +10,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/assert.hh>
 #include <stdx/memory.hh>
@@ -38,10 +39,7 @@ namespace ghoti::sema::pattern {
 
 namespace {
 
-constexpr usize MAX_DECISION_NODES{200'000};
-
-// A slice's third part, which only a string pattern looks at. It sorts after `len`, so the bytes
-// are only ever read once the length is known to fit
+constexpr usize            MAX_DECISION_NODES{200'000};
 constexpr usize            SLICE_BYTES_FIELD_INDEX{2};
 constexpr std::string_view SLICE_BYTES_FIELD_NAME{"bytes"};
 
@@ -591,6 +589,7 @@ class elaborator {
         return make_node(node_kind::OPAQUE, id, column);
     }
 
+  private:
     const elaboration_context& cx_;
     const ast::AST&            tree_;
 };
@@ -600,14 +599,12 @@ auto collect_captures(const node& n, std::vector<capture_site>& out) -> void {
     for (const auto& sub : n.children) { collect_captures(*sub.pattern, out); }
 }
 
-// ---------------------------------------------------------------------- decision trees
-
 struct row {
-    usize                    id{0};
-    usize                    arm{0};
-    bool                     guarded{false};
-    std::vector<const node*> cells{};
-    std::vector<binding>     bindings{};
+    usize                                   id{0};
+    usize                                   arm{0};
+    bool                                    guarded{false};
+    std::vector<gsl::not_null<const node*>> cells{};
+    std::vector<binding>                    bindings{};
 };
 
 struct witness_step {
@@ -619,7 +616,7 @@ class tree_builder {
   public:
     tree_builder(gsl::span<const row_input> inputs, type& scrutinee, u32 ptr_bits)
         : ptr_bits_{ptr_bits} {
-        tree_.occurrences.emplace_back(occurrence{.value_type = &scrutinee});
+        tree_.occurrences.emplace_back<occurrence>({.value_type = &scrutinee});
         tree_.row_reached.assign(inputs.size(), false);
 
         std::vector<row> rows;
@@ -637,12 +634,12 @@ class tree_builder {
     [[nodiscard]] auto take() && -> decision_tree { return std::move(tree_); }
 
   private:
-    static auto add_cell(row& r, const node* cell, usize occ) -> void {
+    static auto add_cell(row& r, gsl::not_null<const node*> cell, usize occ) -> void {
         for (const auto& site : cell->captures) { r.bindings.emplace_back(site.capture, occ); }
         r.cells.emplace_back(cell);
     }
 
-    [[nodiscard]] auto wildcard(type& t) -> const node* {
+    [[nodiscard]] auto wildcard(type& t) -> gsl::not_null<const node*> {
         wildcards_.emplace_back(make_node(node_kind::WILDCARD, stdx::none, t));
         return wildcards_.back().get();
     }
@@ -653,7 +650,7 @@ class tree_builder {
     }
 
     auto add_occurrence(usize parent, const child& c, step_kind step) -> usize {
-        tree_.occurrences.emplace_back(occurrence{
+        tree_.occurrences.emplace_back<occurrence>({
             .parent     = parent,
             .step       = step,
             .index      = c.index,
@@ -731,8 +728,9 @@ class tree_builder {
         if (rows.empty()) { return fail(path); }
 
         const auto& first{rows.front()};
-        const auto  col{std::ranges::find_if(
-            first.cells, [](const node* cell) { return cell->kind != node_kind::WILDCARD; })};
+        const auto  col{std::ranges::find_if(first.cells, [](gsl::not_null<const node*> cell) {
+            return cell->kind != node_kind::WILDCARD;
+        })};
         if (col == first.cells.end()) { return leaf(std::move(rows), std::move(columns), path); }
         const auto col_idx{static_cast<usize>(col - first.cells.begin())};
 
@@ -770,7 +768,9 @@ class tree_builder {
     }
 
     // Drops column `at` from a row, splicing `replacement` cells in its place
-    static auto replace_cell(row& r, usize at, gsl::span<const node* const> replacement) -> void {
+    static auto replace_cell(row&                                        r,
+                             usize                                       at,
+                             gsl::span<const gsl::not_null<const node*>> replacement) -> void {
         r.cells.erase(r.cells.begin() + static_cast<idiff>(at));
         r.cells.insert(
             r.cells.begin() + static_cast<idiff>(at), replacement.begin(), replacement.end());
@@ -788,35 +788,35 @@ class tree_builder {
                                                    : step_kind::DEREF};
 
         // Every part any row looks at, in layout order
-        std::vector<const child*> parts;
+        std::vector<gsl::not_null<const child*>> parts;
         for (const auto& r : rows) {
             for (const auto& c : r.cells[col]->children) {
                 const auto known{std::ranges::any_of(
-                    parts, [&](const child* p) { return p->index == c.index; })};
+                    parts, [&](gsl::not_null<const child*> p) { return p->index == c.index; })};
                 if (!known) { parts.emplace_back(&c); }
             }
         }
-        std::ranges::sort(parts, {}, [](const child* c) { return c->index; });
+        std::ranges::sort(parts, {}, [](gsl::not_null<const child*> c) { return c->index; });
 
         std::vector<usize> part_occs;
         part_occs.reserve(parts.size());
         const auto is_slice{kind == node_kind::RECORD &&
                             tree_.occurrences[parent].value_type->get_kind() == type_kind::SLICE};
-        for (const auto* part : parts) {
+        for (const auto part : parts) {
             const auto is_bytes{is_slice && part->index == SLICE_BYTES_FIELD_INDEX};
             part_occs.emplace_back(
                 add_occurrence(parent, *part, is_bytes ? step_kind::SLICE_BYTES : step));
         }
 
         for (auto& r : rows) {
-            const auto*              cell{r.cells[col]};
-            std::vector<const node*> replacement;
+            const auto                              cell{r.cells[col]};
+            std::vector<gsl::not_null<const node*>> replacement;
             replacement.reserve(parts.size());
             for (usize i{0}; i < parts.size(); ++i) {
-                const auto  found{std::ranges::find_if(
+                const auto found{std::ranges::find_if(
                     cell->children, [&](const child& c) { return c.index == parts[i]->index; })};
-                const node* sub{found != cell->children.end() ? found->pattern.get()
-                                                              : wildcard(parts[i]->value_type)};
+                const auto sub{found != cell->children.end() ? found->pattern.get()
+                                                             : wildcard(parts[i]->value_type)};
                 for (const auto& site : sub->captures) {
                     r.bindings.emplace_back(site.capture, part_occs[i]);
                 }
@@ -860,7 +860,7 @@ class tree_builder {
 
         std::vector<usize> listed;
         for (const auto& r : rows) {
-            const auto* cell{r.cells[col]};
+            const auto cell{r.cells[col]};
             if (cell->kind == node_kind::VARIANT && !std::ranges::contains(listed, cell->index)) {
                 listed.emplace_back(cell->index);
             }
@@ -870,7 +870,7 @@ class tree_builder {
         for (const auto variant : listed) {
             auto&      payload{union_data.type_at(variant)};
             const bool has_payload{payload.get_kind() != type_kind::VOID_};
-            const auto payload_occ{[&]() -> stdx::opt_size {
+            const auto payload_occ{[&] -> stdx::opt_size {
                 if (!has_payload) { return stdx::none; }
                 const child part{
                     variant, union_field_name(union_data, variant), payload, false, {}};
@@ -879,19 +879,21 @@ class tree_builder {
 
             std::vector<row> specialized;
             for (const auto& r : rows) {
-                const auto* cell{r.cells[col]};
+                const auto cell{r.cells[col]};
                 if (cell->kind == node_kind::VARIANT && cell->index != variant) { continue; }
-                auto        copy{r};
-                const node* sub{nullptr};
-                if (has_payload) {
-                    sub = cell->kind == node_kind::VARIANT ? cell->children.front().pattern.get()
-                                                           : wildcard(payload);
+                auto copy{r};
+
+                const auto make_payload_sub{[&] -> std::vector<gsl::not_null<const node*>> {
+                    const auto sub{cell->kind == node_kind::VARIANT
+                                       ? cell->children.front().pattern.get()
+                                       : wildcard(payload)};
                     for (const auto& site : sub->captures) {
                         copy.bindings.emplace_back(site.capture, *payload_occ);
                     }
-                }
-                const std::vector<const node*> cells{has_payload ? std::vector<const node*>{sub}
-                                                                 : std::vector<const node*>{}};
+                    return {sub};
+                }};
+                const auto cells{has_payload ? make_payload_sub()
+                                             : std::vector<gsl::not_null<const node*>>{}};
                 replace_cell(copy, col, cells);
                 specialized.emplace_back(std::move(copy));
             }
@@ -904,8 +906,11 @@ class tree_builder {
             path.emplace_back(occ, fmt::format(".{}", union_field_name(union_data, variant)));
             const auto target{decide(std::move(specialized), std::move(next_columns), path)};
             path.pop_back();
-            out.cases.emplace_back(
-                switch_case{.kind = test_kind::TAG, .index = variant, .target = target});
+            out.cases.emplace_back<switch_case>({
+                .kind   = test_kind::TAG,
+                .index  = variant,
+                .target = target,
+            });
         }
 
         if (listed.size() < union_data.fields.size()) {
@@ -948,21 +953,22 @@ class tree_builder {
         auto&      enum_type{*tree_.occurrences[occ].value_type};
         const auto enum_data{enum_type.get_data().as<types::enum_t>()};
 
-        std::vector<const node*> listed;
+        std::vector<gsl::not_null<const node*>> listed;
         for (const auto& r : rows) {
-            const auto* cell{r.cells[col]};
+            const auto cell{r.cells[col]};
             if (cell->kind == node_kind::ENUM_VALUE &&
-                std::ranges::none_of(listed,
-                                     [&](const node* l) { return l->index == cell->index; })) {
+                std::ranges::none_of(listed, [&](gsl::not_null<const node*> l) {
+                    return l->index == cell->index;
+                })) {
                 listed.emplace_back(cell);
             }
         }
 
         decision out{.kind = decision_kind::SWITCH, .occ = occ};
-        for (const auto* variant : listed) {
+        for (const auto variant : listed) {
             std::vector<row> specialized;
             for (const auto& r : rows) {
-                const auto* cell{r.cells[col]};
+                const auto cell{r.cells[col]};
                 if (cell->kind == node_kind::ENUM_VALUE && cell->index != variant->index) {
                     continue;
                 }
@@ -982,8 +988,8 @@ class tree_builder {
         if (listed.size() < enum_data.ast_enumerations.size() || enum_data.non_exhaustive) {
             std::vector<std::string> missing;
             for (usize i{0}; i < enum_data.ast_enumerations.size(); ++i) {
-                const auto named{
-                    std::ranges::any_of(listed, [&](const node* l) { return l->index == i; })};
+                const auto named{std::ranges::any_of(
+                    listed, [&](gsl::not_null<const node*> l) { return l->index == i; })};
                 if (!named) {
                     missing.emplace_back(fmt::format(".{}", enum_variant_name(enum_data, i)));
                 }
@@ -1003,7 +1009,7 @@ class tree_builder {
         std::vector<std::string> missing;
         for (const bool value : {true, false}) {
             const auto named{std::ranges::any_of(rows, [&](const row& r) {
-                const auto* cell{r.cells[col]};
+                const auto cell{r.cells[col]};
                 return cell->kind == node_kind::BOOL_VALUE && cell->boolean == value;
             })};
             if (!named) {
@@ -1012,7 +1018,7 @@ class tree_builder {
             }
             std::vector<row> specialized;
             for (const auto& r : rows) {
-                const auto* cell{r.cells[col]};
+                const auto cell{r.cells[col]};
                 if (cell->kind == node_kind::BOOL_VALUE && cell->boolean != value) { continue; }
                 auto copy{r};
                 replace_cell(copy, col, {});
@@ -1040,7 +1046,7 @@ class tree_builder {
         // Cut the number line wherever a range starts or ends, so each piece is all-or-nothing
         std::vector<big_int> cuts;
         for (const auto& r : rows) {
-            const auto* cell{r.cells[col]};
+            const auto cell{r.cells[col]};
             if (cell->kind == node_kind::INT_RANGE) {
                 cuts.emplace_back(cell->lo);
                 cuts.emplace_back(cell->hi + one);
@@ -1060,7 +1066,7 @@ class tree_builder {
             const auto         hi{cuts[i + 1] - one};
             std::vector<usize> covering;
             for (usize k{0}; k < rows.size(); ++k) {
-                const auto* cell{rows[k].cells[col]};
+                const auto cell{rows[k].cells[col]};
                 if (cell->kind == node_kind::INT_RANGE && cell->lo <= lo && hi <= cell->hi) {
                     covering.emplace_back(k);
                 }
@@ -1120,8 +1126,8 @@ class tree_builder {
                   std::vector<usize>         columns,
                   usize                      col,
                   std::vector<witness_step>& path) -> usize {
-        const auto  occ{columns[col]};
-        const auto* cell{rows.front().cells[col]};
+        const auto occ{columns[col]};
+        const auto cell{rows.front().cells[col]};
         ASSERT(cell->source, "An opaque test comes from a written pattern");
 
         decision out{.kind = decision_kind::SEQUENCE, .occ = occ, .test = cell->source};
@@ -1135,6 +1141,7 @@ class tree_builder {
         return add_node(std::move(out));
     }
 
+  private:
     u32                   ptr_bits_;
     decision_tree         tree_;
     std::vector<node_ptr> wildcards_;

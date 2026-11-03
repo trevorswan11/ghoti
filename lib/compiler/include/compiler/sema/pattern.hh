@@ -98,9 +98,9 @@ struct elaboration_context {
 
 // One alternative of one arm, tried in the order given
 struct row_input {
-    usize       arm{0};
-    const node* root;
-    bool        guarded{false};
+    usize                      arm{0};
+    gsl::not_null<const node*> root;
+    bool                       guarded{false};
 };
 
 // One row per alternative of every elaborated arm, in the order they're tried: `_` always last
@@ -179,13 +179,12 @@ struct decision {
 };
 
 struct decision_tree {
-    std::vector<occurrence> occurrences{};
-    std::vector<decision>   nodes{};
-    usize                   root{0};
-    // Witnesses to what no arm covers: `.ok(.none)`, `0..=9`. `flat_missing` holds only names
-    std::vector<std::string> missing;
-    bool                     missing_is_flat{true};
+    std::vector<occurrence>  occurrences{};
+    std::vector<decision>    nodes{};
+    usize                    root{0};
+    std::vector<std::string> missing; // Witnesses to what no arm covers: `.ok(.none)`, `0..=9`
     std::vector<bool>        row_reached{};
+    bool                     missing_is_flat{true}; // `missing` holds only names
     bool                     too_complex{false};
 };
 
