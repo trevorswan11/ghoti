@@ -743,7 +743,7 @@ auto type_resolver::reject_unsized_slot(ast::explicit_type_id at, const type& sl
 }
 
 auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle value,
-                                                           const type&      declared,
+                                                           type&            declared,
                                                            bool             arrays_only) -> bool {
     const auto value_type{resolving_.get_sema_type_opt(value)};
     if (!value_type || value_type->is_poison() || !declared.is_resolved() || declared.is_poison()) {
@@ -762,7 +762,7 @@ auto type_resolver::reject_unassignable_global_initializer(ast::expr_handle valu
     // Arrays fold element by element, so their elements are what has to fit
     if (is_array_like(*value_type) && array_target) {
         auto&      sized_value{concrete_array_type(*value_type)};
-        auto&      sized_declared{concrete_array_type(const_cast<type&>(declared))};
+        auto&      sized_declared{concrete_array_type(declared)};
         const bool fits{sized_value.get_data().is<types::deferred_array>() ||
                         sized_declared.get_data().is<types::deferred_array>() ||
                         declared_kind == type_kind::POINTER ||
