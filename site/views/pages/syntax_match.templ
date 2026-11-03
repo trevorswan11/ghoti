@@ -42,8 +42,8 @@ templ SyntaxMatchPage() {
 			A range may be used as a pattern: <code>lo..hi</code> (exclusive) or <code>lo..=hi</code> (inclusive)
 			<ul>
 				<li>Endpoints may be any expression, including runtime values (<code>a..c</code>, <code>5..=arr.len</code>)</li>
-				<li>When both endpoints are compile-time constants, the range may not overlap another constant arm</li>
-				<li>A range never satisfies exhaustiveness on its own, so a catch-all <code>_</code> is still required</li>
+				<li>Compile-time ranges count toward exhaustiveness, so <code>0..=127, 128..=255</code> covers a <code>u8</code>. A range with a runtime endpoint covers nothing</li>
+				<li>A range may leave off an end to reach the limit of the type: <code>1..</code>, <code>..0</code></li>
 			</ul>
 		</li>
 		<li>
@@ -54,5 +54,52 @@ templ SyntaxMatchPage() {
 			</ul>
 		</li>
 	</ul>
+	<h2>Nested patterns</h2>
+	<ul>
+		<li>
+			A pattern can reach through a value and bind the parts it finds
+			<ul>
+				<li>A union variant takes one pattern for its payload: <code>{ ".ok(.some(|raw|))" }</code>. A bare <code>.ok</code> means <code>.ok(_)</code></li>
+				<li>A struct pattern names fields and ignores the rest: <code>{ ".{ .x = 0, .y = |y| }" }</code></li>
+				<li>A fixed array lists every element: <code>{ ".{ |first|, _, |last| }" }</code></li>
+				<li>A slice matches its <code>.len</code> and <code>.ptr</code>, or a string literal</li>
+				<li>Any of these can name their type: <code>{ "Shape.circle(|r|)" }</code>, <code>{ "Point{ .x = |x| }" }</code></li>
+			</ul>
+		</li>
+		<li><code>|name|</code> binds what's there, in any capture form (<code>|&amp;mut v|</code>), and <code>_</code> ignores it</li>
+		<li><code>{ "pattern |name|" }</code> tests a value and binds the whole of it. On a variant with a payload, write <code>{ ".ok(_) |whole|" }</code>, since <code>{ ".ok(|v|)" }</code> binds the payload</li>
+		<li>Patterns look through a <code>&amp;T</code>, but never a <code>^T</code>: a pointer can only be captured or compared with a constant</li>
+		<li>Values nested inside a pattern must be known at compile time. Only a top-level pattern may be a runtime expression</li>
+		<li>Every alternative of an arm must bind the same names with the same types</li>
+		<li>The first arm that matches wins, with <code>_</code> always tried last. An arm an earlier one fully covers is an error</li>
+		<li>
+			A guard adds a condition: <code>{ ".{ .x = |x| } if x > 0 => x" }</code>
+			<ul>
+				<li>When it's false, matching carries on with the arms after it</li>
+				<li>A guarded arm never counts toward exhaustiveness</li>
+				<li>A guard can read through <code>|&amp;mut v|</code> but can't write through it</li>
+			</ul>
+		</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `match (r) {
+    .ok(.some(|raw|)) => use(raw),
+    .ok(.none), .err => fallback(),
+}
+
+match (p) {
+    .{ .x = 0, .y = 0 } => origin(),
+    .{ .x = |x|, .y = |y| } if x == y => diagonal(x),
+    .{ .x = |x|, .y = |y| } => general(x, y),
+}
+
+match (s) {
+    "main" => entry(),
+    .{ .len = 1.. } |name| => other(name),
+    _ => empty(),
+}` }
+		</code>
+	</pre>
 	<pre><code class="language-ghoti">{ "match (a) { 2 => { c; }, _ => d }; // Standard match on a non-union value\nmatch (a) { .b => |b| { c; } }; // Match on a union value that has a field `b`\nmatch (n) { 1, 2, 3 => |v| v * 2, 4..8 => 0, _ => -1 }; // Multi-value and range arms\nmatch comptime (@TypeOf(x)) { i32 => small(), _ => big() }; // Compile-time arm selection" }</code></pre>
 }

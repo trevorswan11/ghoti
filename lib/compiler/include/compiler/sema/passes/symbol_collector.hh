@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
@@ -85,6 +86,8 @@ class symbol_collector {
     auto                                visit(ast::node_id, const ast::comptime_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unary_expr&) -> void;
     auto                                visit(ast::node_id, const ast::unwrap_expr&) -> void;
+    auto visit(ast::node_id, const ast::capture_pattern_expr&) -> void;
+    auto visit(ast::node_id, const ast::bound_pattern_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
     auto visit(ast::node_id, const ast::int_literal_expr&) -> void;
@@ -167,6 +170,8 @@ class symbol_collector {
     // Collects `body` inside a scope of its own that declares `capture`
     auto collect_captured(const ast::capture_t& capture, const ast::stmt_handle& body) -> void;
 
+    auto declare_pattern_capture(const ast::capture_t& capture) -> void;
+
     template <typename SymbolicVariant, typename... Args>
     auto try_declare(std::string_view name, Args&&... args) -> bool {
         const SymbolicVariant node{std::forward<Args>(args)...};
@@ -189,11 +194,12 @@ class symbol_collector {
     }
 
   private:
-    mod::module_t&      collecting_;
-    usize               table_idx_;
-    symbol_table_stack  table_stack_;
-    context&            ctx_;
-    stdx::option<type&> last_type_;
+    ankerl::unordered_dense::set<std::string_view> alternative_names_{};
+    mod::module_t&                                 collecting_;
+    usize                                          table_idx_;
+    symbol_table_stack                             table_stack_;
+    context&                                       ctx_;
+    stdx::option<type&>                            last_type_;
 
     default_counter in_expr_scope_;
     default_counter in_function_scope_;

@@ -200,6 +200,9 @@ class const_value {
         -> stdx::option<f128> {
         if (const auto u{as_uint_opt()}) { return f128::from_uint(*u, format); }
         if (const auto i{as_int_opt()}) { return f128::from_int(*i, format); }
+        if (const auto big{as_opt<big_int>()}) {
+            return f128::parse(big->to_string(), format).value;
+        }
         return stdx::none;
     }
 
@@ -292,5 +295,11 @@ class const_value {
 // A number as its declared type rather than its untyped initializer's: an integer bound to a float
 // type converts, other numbers just retype, and anything else is returned unchanged
 [[nodiscard]] auto with_declared_type(const_value value, sema::type& declared) -> const_value;
+
+// A name a matched pattern binds, and its value
+struct pattern_binding {
+    std::string_view name;
+    const_value      value;
+};
 
 } // namespace ghoti::gir

@@ -244,7 +244,7 @@ auto with_declared_type(const_value value, sema::type& declared) -> const_value 
         return value;
     }
     const bool is_number{value.is<i64>() || value.is<u64>() || value.is<i128>() ||
-                         value.is<u128>() || value.is<f128>()};
+                         value.is<u128>() || value.is<big_int>() || value.is<f128>()};
     if (!is_number || !sema::is_numeric(declared.get_kind())) { return value; }
     const auto format{sema::float_format_of(declared)};
     if (format && !value.is<f128>()) {

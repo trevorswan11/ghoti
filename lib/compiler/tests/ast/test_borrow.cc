@@ -49,9 +49,9 @@ TEST_CASE("A borrowed tree copies any other node before its first write") {
     auto         borrowed{original.borrow(arena)};
     CHECK(&borrowed.get_as<ast::decl_stmt>(decl) == &original.get_as<ast::decl_stmt>(decl));
 
-    borrowed.get_as_mut<ast::decl_stmt>(decl).is_default_wrapper = true;
-    CHECK(borrowed.get_as<ast::decl_stmt>(decl).is_default_wrapper);
-    CHECK_FALSE(original.get_as<ast::decl_stmt>(decl).is_default_wrapper);
+    borrowed.get_as_mut<ast::decl_stmt>(decl).is_synthesized = true;
+    CHECK(borrowed.get_as<ast::decl_stmt>(decl).is_synthesized);
+    CHECK_FALSE(original.get_as<ast::decl_stmt>(decl).is_synthesized);
 }
 
 } // namespace ghoti::tests

@@ -1803,17 +1803,11 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
             const auto sema_type{module_->get_sema_type_opt(id)};
             auto&      t{sema_type ? *sema_type : ctx_.get_int(32, true)};
             // An unsuffixed integer literal used in a float context folds to a float value.
-            if (data.is_big) {
-                if (sema::is_float(t.get_kind()) ||
-                    t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
-                    return stdx::none;
-                }
-                return const_value::from_big_int(data.exact_value(), t);
-            }
             if (sema::is_float(t.get_kind()) || t.get_kind() == sema::type_kind::COMPTIME_FLOAT) {
                 const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
-                return make_scalar_const(f128::from_uint(data.value, format), t);
+                return make_scalar_const(data.as_float(format), t);
             }
+            if (data.is_big) { return const_value::from_big_int(data.exact_value(), t); }
             // Past `i128` max only an unsigned payload keeps the literal's value
             if (sema::is_unsigned_integer(t) ||
                 data.value > static_cast<u128>(std::numeric_limits<i128>::max())) {
@@ -3279,8 +3273,10 @@ auto const_eval::selected_match_arm(const ast::match_expr& match) -> stdx::opt_s
     for (usize i{0}; i < match.arms.size(); ++i) {
         if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
         if (std::ranges::any_of(match.arms[i].patterns, [&](const auto& pattern) {
-                return match_pattern(pattern, *matcher_val);
+                return arm_pattern_matches(pattern, *matcher_val);
             })) {
+            // A guard may need names only the arm itself binds, so this can't tell
+            if (match.arms[i].guard) { return stdx::none; }
             return i;
         }
     }
@@ -3341,10 +3337,25 @@ auto const_eval::eval_match(ast::node_id id, const ast::match_expr& match)
     for (usize i{0}; i < match.arms.size(); ++i) {
         if (match.catch_all_idx && i == *match.catch_all_idx) { continue; }
         const auto& arm{match.arms[i]};
-        const bool  arm_matches{std::ranges::any_of(arm.patterns, [&](const auto& pattern) {
-            return match_pattern(pattern, *matcher_val);
-        })};
-        if (arm_matches) {
+        for (const auto& pattern : arm.patterns) {
+            const auto bindings{
+                arm_pattern_bindings(pattern,
+                                     *matcher_val,
+                                     call_stack_.empty() ? stdx::none : eval_place(match.matcher))};
+            if (!bindings) { continue; }
+            if (!call_stack_.empty()) {
+                for (const auto& bound : *bindings) {
+                    call_stack_.back().bindings.insert_or_assign(bound.name, bound.value);
+                }
+            }
+            if (arm.guard) {
+                const auto taken{try_eval(*arm.guard)};
+                if (!taken) {
+                    cond_unknown_ = true;
+                    return stdx::none;
+                }
+                if (const auto truth{taken->as_opt<bool>()}; truth && !*truth) { continue; }
+            }
             bind_capture(arm, false);
             return eval_dispatch(arm.dispatch);
         }
@@ -3515,16 +3526,170 @@ auto const_eval::eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap)
     return const_value::make_poison();
 }
 
-auto const_eval::match_pattern(const ast::match_pattern_handle& pattern_h,
-                               const const_value&               target) -> bool {
+// Whether `target` fits a pattern, noting what it binds. `place` is where `target` lives, if known
+auto const_eval::match_structure(ast::node_id                  pattern,
+                                 const const_value&            target,
+                                 stdx::option<const_ref>       place,
+                                 std::vector<pattern_binding>& bindings) -> bool {
+    const auto bind_whole{[&](const ast::capture_t& capture) {
+        const auto ident{module_->ast.get_as_opt<ast::identifier_expr>(capture.payload)};
+        if (!ident) { return; }
+        if (!capture.modifier.is_value() &&
+            (capture.modifier.is_ref() || capture.modifier.is_ptr())) {
+            auto where{place ? *place : ref_to_temporary(target)};
+            bindings.emplace_back(
+                ident->name,
+                const_value{std::move(where), module_->get_sema_type_opt(*capture.payload)});
+            return;
+        }
+        bindings.emplace_back(ident->name, target);
+    }};
+
+    if (module_->ast[pattern].is<ast::discarded>()) { return true; }
+    if (const auto capture{module_->ast.get_as_opt<ast::capture_pattern_expr>(pattern)}) {
+        if (!capture->is_bare_discard) { bind_whole(capture->capture); }
+        return true;
+    }
+    if (const auto bound{module_->ast.get_as_opt<ast::bound_pattern_expr>(pattern)}) {
+        if (!match_structure(*bound->pattern, target, place, bindings)) { return false; }
+        bind_whole(bound->capture);
+        return true;
+    }
+
+    // A `&T` is transparent to everything but a capture of the reference itself
+    if (const auto ref{target.as_opt<const_ref>()}) {
+        const auto loaded{load_ref(*ref, pattern)};
+        return loaded && match_structure(pattern, *loaded, *ref, bindings);
+    }
+
+    const auto step_into{[&](ref_step::kind kind, std::string_view name, usize index) {
+        auto next{place};
+        if (next) {
+            next->path.emplace_back<ref_step>({
+                .step  = kind,
+                .name  = std::string{name},
+                .index = index,
+            });
+        }
+        return next;
+    }};
+
+    // A string, or an array of its bytes, can stand in for a slice
+    const auto bytes_of{[](const const_value& value) -> stdx::option<std::string> {
+        if (const auto text{value.as_opt<std::string>()}) { return *text; }
+        const auto arr{value.as_opt<const_array>()};
+        if (!arr) { return stdx::none; }
+        std::string out;
+        out.reserve(arr->elements.size());
+        for (const auto& element : arr->elements) {
+            const auto byte{element.as_int_opt()};
+            if (!byte) { return stdx::none; }
+            out.push_back(static_cast<char>(*byte));
+        }
+        return out;
+    }};
+    if (module_->ast.get_as_opt<ast::string_expr>(pattern)) {
+        const auto text{try_eval(pattern)};
+        const auto wanted{text ? text->as_opt<std::string>() : stdx::none};
+        const auto actual{bytes_of(target)};
+        return wanted && actual && *wanted == *actual;
+    }
+
+    if (const auto init{module_->ast.get_as_opt<ast::initializer_expr>(pattern)}) {
+        const auto names_fields{std::ranges::any_of(
+            init->initializers, [](const auto& entry) { return entry.member.has_value(); })};
+        if (const auto arr{target.as_opt<const_array>()}; arr && !names_fields) {
+            if (arr->elements.size() != init->initializers.size()) { return false; }
+            for (usize i{0}; i < arr->elements.size(); ++i) {
+                if (!match_structure(*init->initializers[i].value,
+                                     arr->elements[i],
+                                     step_into(ref_step::kind::INDEX, "", i),
+                                     bindings)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        for (const auto& entry : init->initializers) {
+            if (!entry.member) { return false; }
+            const auto& access{module_->ast.get_as<ast::implicit_access_expr>(*entry.member)};
+            const auto  name{module_->ast.get_as<ast::identifier_expr>(access.member).name};
+
+            const auto strukt{target.as_opt<const_struct>()};
+            if (strukt) {
+                const auto field{strukt->get_field_opt(name)};
+                if (!field || !match_structure(*entry.value,
+                                               *field,
+                                               step_into(ref_step::kind::FIELD, name, 0),
+                                               bindings)) {
+                    return false;
+                }
+                continue;
+            }
+
+            // Only a slice's length has a compile-time value to compare
+            const auto actual{bytes_of(target)};
+            if (!actual || name != "len") { return false; }
+            const const_value len{static_cast<u64>(actual->size()),
+                                  ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+            if (!match_structure(*entry.value, len, stdx::none, bindings)) { return false; }
+        }
+        return true;
+    }
+
+    // `.ok(...)` / `Shape.circle(...)`
+    if (const auto call{module_->ast.get_as_opt<ast::call_expr>(pattern)}) {
+        if (const auto un{target.as_opt<const_union>()}) {
+            const auto implicit{module_->ast.get_as_opt<ast::implicit_access_expr>(call->function)};
+            const auto dot{module_->ast.get_as_opt<ast::dot_expr>(call->function)};
+            if (!implicit && !dot) { return false; }
+            const auto& member{implicit ? implicit->member : dot->member};
+            const auto  name{module_->ast.get_as<ast::identifier_expr>(member).name};
+            if (un->active_field != name) { return false; }
+            if (un->payload.empty() || call->arguments.size() != 1) { return false; }
+            const auto arg{call->arguments.front().template as_opt<ast::expr_handle>()};
+            return arg && match_structure(**arg,
+                                          un->payload.front(),
+                                          step_into(ref_step::kind::PAYLOAD, name, 0),
+                                          bindings);
+        }
+    }
+
+    // Open-ended ranges have no endpoint for `match_pattern` to compare with
+    if (const auto range{module_->ast.get_as_opt<ast::range_expr>(pattern)};
+        range && (!range->lhs || !range->rhs)) {
+        const auto value{target.as_big_int_opt()};
+        if (!value) { return false; }
+        if (range->lhs) {
+            const auto lo{try_eval(*range->lhs)};
+            const auto lo_int{lo ? lo->as_big_int_opt() : stdx::none};
+            return lo_int && *value >= *lo_int;
+        }
+        if (!range->rhs) { return true; }
+        const auto hi{try_eval(*range->rhs)};
+        const auto hi_int{hi ? hi->as_big_int_opt() : stdx::none};
+        if (!hi_int) { return false; }
+        return pattern.get_token_type() == syntax::token_type_t::DOT_DOT_EQ ? *value <= *hi_int
+                                                                            : *value < *hi_int;
+    }
+    return match_pattern(pattern, target);
+}
+
+auto const_eval::arm_pattern_bindings(const ast::match_pattern_handle& pattern,
+                                      const const_value&               target,
+                                      stdx::option<const_ref>          place)
+    -> stdx::option<std::vector<pattern_binding>> {
+    std::vector<pattern_binding> bindings;
+    if (!match_structure(*pattern, target, std::move(place), bindings)) { return stdx::none; }
+    return bindings;
+}
+
+auto const_eval::match_pattern(ast::node_id pattern_id, const const_value& target) -> bool {
     PROFILE_FUNCTION();
-    const auto pattern_id{*pattern_h};
+    if (module_->ast[pattern_id].is<ast::discarded>()) { return true; }
 
-    if (pattern_h.is<ast::discarded>()) { return true; }
-
-    if (pattern_h.is<ast::implicit_access_expr>()) {
-        const auto& imp{module_->ast.get_as<ast::implicit_access_expr>(pattern_id)};
-        const auto& name{module_->ast.get_as<ast::identifier_expr>(imp.member).name};
+    if (const auto implicit{module_->ast.get_as_opt<ast::implicit_access_expr>(pattern_id)}) {
+        const auto& name{module_->ast.get_as<ast::identifier_expr>(implicit->member).name};
         if (const auto en{target.as_opt<const_enum>()}) { return en->name == name; }
         if (const auto un{target.as_opt<const_union>()}) { return un->active_field == name; }
         return false;

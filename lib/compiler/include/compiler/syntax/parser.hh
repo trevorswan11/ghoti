@@ -152,6 +152,31 @@ class parser {
         stdx::opt_size saved_;
     };
 
+    // Marks a position holding a pattern, where `|` opens a capture instead of a bitwise or.
+    // Brackets and blocks nested in a pattern hold plain expressions again.
+    class pattern_scope {
+      public:
+        pattern_scope(parser& p, bool enabled) noexcept
+            : parser_{p}, saved_{std::exchange(p.in_pattern_, enabled)} {}
+        ~pattern_scope() { parser_.in_pattern_ = saved_; }
+        MAKE_PINNED(pattern_scope);
+
+      private:
+        parser& parser_;
+        bool    saved_;
+    };
+
+    // Marks the body of a block, where a declaration is local rather than module-level
+    class block_scope {
+      public:
+        explicit block_scope(parser& p) noexcept : parser_{p} { ++parser_.block_depth_; }
+        ~block_scope() { --parser_.block_depth_; }
+        MAKE_PINNED(block_scope);
+
+      private:
+        parser& parser_;
+    };
+
     // Marks a position evaluated at compile time: an `if`/`match comptime` or `unroll` header,
     // a `comptime` block or label, or a `const` declaration's initializer
     class compile_time_scope {
@@ -205,6 +230,10 @@ class parser {
         return current_token_;
     }
     [[nodiscard]] auto get_peek_token() const noexcept -> const token_t& { return peek_token_; }
+    [[nodiscard]] auto in_pattern() const noexcept -> bool { return in_pattern_; }
+    [[nodiscard]] auto in_function_body() const noexcept -> bool { return block_depth_ > 0; }
+    // A name for a value a destructuring takes apart, which no source can spell
+    [[nodiscard]] auto next_hidden_name() -> std::string_view;
 
     [[nodiscard]] auto current_token_is(token_type_t t) const noexcept -> bool {
         return current_token_.type == t;
@@ -277,6 +306,15 @@ class parser {
     [[nodiscard]] constexpr auto
     add_expr(const source_location& span_start, const syntax::token_t& tag_token, Args&&... args) {
         return add_node<ast::expr_handle, Data>(span_start, tag_token, std::forward<Args>(args)...);
+    }
+
+    // An identifier the parser wrote itself. `spelled` is how much of the source at `at` it spans
+    [[nodiscard]] auto add_written_identifier(const source_location& at,
+                                              std::string_view       name,
+                                              std::string_view spelled = {}) -> ast::expr_handle {
+        const token_t end{token_type_t::IDENT, spelled, at.line, at.column};
+        return ast::expr_handle{
+            ast_->add_node(at, current_token_, end, ast::identifier_expr{name})};
     }
 
     // Adds a statement to the ast and returns its handle
@@ -493,6 +531,9 @@ class parser {
     bool                                         infer_next_fn_params_{false};
     bool                                         signature_defaults_armed_{false};
     bool                                         synthesize_default_wrappers_{false};
+    bool                                         in_pattern_{false};
+    usize                                        block_depth_{0};
+    usize                                        hidden_name_count_{0};
     u32                                          compile_time_depth_outside_functions_{0};
 
     // How many `(`, `[` and `{` enclose the current token, and that depth for an open type

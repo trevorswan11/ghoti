@@ -96,15 +96,44 @@ TEST_CASE("Catch-all cannot be part of a multi-value match arm") {
 }
 
 TEST_CASE("Illegal match arm capture modifier on a discarded capture") {
-    helpers::test_parser_fail(
-        "match (a) { b => |&mut _| c, };",
-        syntax::diagnostic{
-            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 23});
+    helpers::test_parser_fail("match (a) { b => |&mut _| c, };",
+                              syntax::diagnostic{"A discarded capture `_` can't take a modifier",
+                                                 syntax::error::ILLEGAL_CAPTURE,
+                                                 0,
+                                                 23});
 
-    helpers::test_parser_fail(
-        "match (a) { b => |^ _| c, };",
-        syntax::diagnostic{
-            "Expected an identifier, found '_'", syntax::error::ILLEGAL_IDENTIFIER, 0, 20});
+    helpers::test_parser_fail("match (a) { b => |^ _| c, };",
+                              syntax::diagnostic{"A discarded capture `_` can't take a modifier",
+                                                 syntax::error::ILLEGAL_CAPTURE,
+                                                 0,
+                                                 20});
+}
+
+TEST_CASE("Malformed nested patterns") {
+    SECTION("A capture can't bind a second name") {
+        helpers::test_parser_fail("match (a) { .b(|c| |d|) => e, };",
+                                  syntax::diagnostic{"A capture can't bind a second name or follow "
+                                                     "a discard",
+                                                     syntax::error::ILLEGAL_MATCH_PATTERN,
+                                                     0,
+                                                     19});
+    }
+
+    SECTION("A discard can't bind a name") {
+        helpers::test_parser_fail("match (a) { .b(_ |d|) => e, };",
+                                  syntax::diagnostic{"A capture can't bind a second name or follow "
+                                                     "a discard",
+                                                     syntax::error::ILLEGAL_MATCH_PATTERN,
+                                                     0,
+                                                     17});
+    }
+
+    SECTION("A guarded catch-all doesn't take the catch-all's place") {
+        helpers::test_parser_fail(
+            "match (a) { _ if b => c, _ => d, _ => e, };",
+            syntax::diagnostic{
+                "Duplicate catch-all match arm", syntax::error::ILLEGAL_MATCH_CATCH_ALL, 0, 33});
+    }
 }
 
 TEST_CASE("Malformed `if` / `while` captures") {

@@ -268,6 +268,26 @@ const p: ^i32 = P;                  // Illegal: 'P' is a type, not a '^i32' valu
 			</ul>
 		</li>
 	</ul>
+	<h2>Destructuring</h2>
+	<ul>
+		<li><code>let</code>, <code>let mut</code>, <code>const</code>, and <code>comptime let mut</code> can take a <a href="/doc/syntax/match">pattern</a> in place of a name</li>
+		<li>The value is evaluated once, and each <code>|name|</code> becomes a declaration of its own. <code>let mut</code> makes mutable copies</li>
+		<li>A capture such as <code>|&amp;mut x|</code> aliases the place being taken apart instead of copying it</li>
+		<li>A pattern that can fail needs an <code>else</code> that leaves the enclosing block</li>
+		<li><code>for</code>, <code>if</code>, and <code>while</code> captures take a pattern too, which must not be able to fail</li>
+		<li>At module level, <code>const</code> and <code>let mut</code> destructure a compile-time value, and <code>pub</code> applies to every name</li>
+		<li>Struct members and function parameters can't destructure</li>
+	</ul>
+	<pre>
+		<code class="language-ghoti">
+			{ `let .{ .x = |x|, .y = |y| } = point;
+let mut .{ |a|, _, |c| } = triple;
+const .{ .bits = |bits| } = @typeInfo(T).int;
+let .ok(|value|) = parse(text) else { return; };
+for (points) |.{ .x = |x|, .y = |y| }| { plot(x, y); }
+pub const .{ .major = |major|, .minor = |minor| } = version;` }
+		</code>
+	</pre>
 	<pre>
 		<code class="language-ghoti">
 			{ `const S = &struct { ... };        // Illegal

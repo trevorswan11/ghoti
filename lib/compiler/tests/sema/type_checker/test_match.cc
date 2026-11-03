@@ -20,7 +20,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
                 };
             };
         )",
-            sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
+            sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
                              std::pair{5UZ, 32UZ}});
     }
@@ -37,7 +37,7 @@ TEST_CASE("Mutating a plain match arm capture is always rejected") {
                 };
             };
         )",
-            sema::diagnostic{"Cannot assign to an element of a non-mutable array or slice",
+            sema::diagnostic{"Cannot assign to constant variable",
                              sema::error::ASSIGNMENT_TO_CONST,
                              std::pair{5UZ, 32UZ}});
     }

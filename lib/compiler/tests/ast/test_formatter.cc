@@ -2,6 +2,7 @@
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 #include <stdx/types.hh>
 
 #include "helpers/formatter.hh"
@@ -337,6 +338,49 @@ TEST_CASE("formatter lays out if / match") {
     _ => {},
 };
 )");
+}
+
+TEST_CASE("formatter round-trips nested patterns and guards") {
+    for (const std::string_view arm : {
+             ".ok(.some(|raw|)) => use(raw),",
+             ".ok(.none), .err => fallback(),",
+             ".{ .x = 0, .y = |y| } => y,",
+             ".{ .x = |&mut x|, .y = _ } => x,",
+             ".{ |first|, _, |^last| } => first,",
+             "Shape.circle(|r|) => r,",
+             "Point{ .x = 1..=5, .y = ..0 } => 1,",
+             ".ok(.some(.{ .len = 1.. } |raw|)) => raw,",
+             ".{ .a = |&mut? a| } => a,",
+             "1.. if n > 2 => 3,",
+             ".{ .x = |x| } if x > 0 and ready() => x,",
+             "a, b if c => 4,",
+             "|whole| => whole,",
+             "_ if n == 1 => 6,",
+             "b[c | d] => 7,",
+         }) {
+        round_trips(fmt::format("match (n) {{\n    {}\n}};", arm));
+    }
+}
+
+TEST_CASE("formatter round-trips destructuring") {
+    for (const std::string_view src : {
+             "let .{ .x = |x|, .y = |y| } = p;",
+             "let mut .{ |a|, _, |c| } = triple;",
+             "const .{ .bits = |bits| } = @typeInfo(T).int;",
+             "comptime let mut .{ .a = |a| } = v;",
+             "pub const .{ .major = |major| } = version;",
+             "let .{ .x = |x| }: P = .{ .x = 1 };",
+             "let Point{ .x = |x| } = p;",
+             "let Shape.circle(|r|) = s else return;",
+             "let .ok(|v|) = parse(s) else {\n    return;\n};",
+             "for (points) |.{ .x = |x|, .y = |y| }| {\n    plot(x, y);\n}",
+             "for (a, b) |.{ |c| }, d| {\n    e;\n}",
+             "if (opt) |.{ .x = |x| }| {\n    use(x);\n} else {\n    none();\n}",
+             "if (res) |v| {\n    ok(v);\n} else |.{ .code = |c| }| {\n    bad(c);\n}",
+             "while (it.next()) |.{ .x = |&mut x| }| {\n    x = 1;\n}",
+         }) {
+        round_trips(src);
+    }
 }
 
 TEST_CASE("formatter does not double-terminate a jump-statement match arm") {

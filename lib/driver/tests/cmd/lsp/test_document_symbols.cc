@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <stdx/memory.hh>
@@ -49,6 +51,28 @@ TEST_CASE("document_symbols outlines every top-level declaration with the right 
 
     CHECK(symbols.at(4).at("name") == "Color");
     CHECK(symbols.at(4).at("kind") == 10); // Enum
+}
+
+TEST_CASE("document_symbols lists what a destructuring binds, not its hidden value") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_document_symbols_destructure.gh"};
+    CHECK(loader.add(path,
+                     "const P = struct { pub x: i32, pub y: i32 };\n"
+                     "pub const .{ .x = |A|, .y = |B| } = P{ .x = 1, .y = 2 };\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+
+    const auto symbols = lsp::document_symbols(*module);
+    const auto names{[&] {
+        std::vector<std::string> out;
+        for (const auto& symbol : symbols) { out.emplace_back(symbol["name"].get<std::string>()); }
+        return out;
+    }()};
+    CHECK(std::ranges::contains(names, "A"));
+    CHECK(std::ranges::contains(names, "B"));
+    CHECK_FALSE(std::ranges::any_of(
+        names, [](const std::string& name) { return name.starts_with("__ghoti"); }));
 }
 
 TEST_CASE("document_symbols selectionRange lands on the name; range covers the whole statement") {

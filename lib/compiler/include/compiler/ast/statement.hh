@@ -16,6 +16,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/syntax/error.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/diagnostic.hh"
 
@@ -81,6 +82,12 @@ enum class decl_modifiers : u16 {
 MAKE_ENUM_OPERATORS(decl_modifiers)
 
 struct decl_stmt {
+    // `let .{ .x = |x| } = v else { ... };` as written, kept for passes that only read the source
+    struct destructure_source {
+        match_pattern_handle      pattern;
+        stdx::option<stmt_handle> otherwise;
+    };
+
     identifier_handle              name;
     stdx::option<explicit_type_id> explicit_type;
     stdx::option<expr_handle>      value;
@@ -88,8 +95,11 @@ struct decl_stmt {
     stdx::option<string_handle>    extern_target;
     stdx::option<string_handle>    link_name;
     stdx::option<attribute_list>   attributes;
-    // A hidden `__ghoti_f@default<k>` the parser wrote for a call leaving `f`'s defaults off
-    bool is_default_wrapper{false};
+    // Written by the parser rather than the user: `__ghoti_f@default<k>` for a call leaving `f`'s
+    // defaults off, or the value a destructuring takes apart
+    bool is_synthesized{false};
+
+    stdx::option<destructure_source> destructure{};
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
@@ -137,6 +147,13 @@ struct expr_stmt {
     [[nodiscard]] static auto parse(syntax::parser& parser, syntax::semicolon_behavior behavior)
         -> stdx::result<stmt_handle, syntax::diagnostic>;
 };
+
+// `let .{ .x = |x| } = v;`, with the current token on the last modifier
+[[nodiscard]] auto parse_destructure(syntax::parser&        parser,
+                                     const syntax::token_t& start_token,
+                                     source_location        span_start,
+                                     decl_modifiers         modifiers)
+    -> stdx::result<stmt_handle, syntax::diagnostic>;
 
 class AST;
 

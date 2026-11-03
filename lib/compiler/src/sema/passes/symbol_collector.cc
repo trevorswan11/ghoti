@@ -436,11 +436,15 @@ auto symbol_collector::visit(ast::node_id, const ast::match_expr& match) -> void
         const auto  new_idx{ctx_.registry.create()};
         const scope s{table_stack_, new_idx, table_idx_};
 
-        for (const auto& pattern : arm.patterns) { collect(pattern); }
+        for (const auto& pattern : arm.patterns) {
+            alternative_names_.clear();
+            collect(pattern);
+        }
         if (arm.capture && arm.capture->payload.is<ast::identifier_expr>()) {
             const auto& ident{collecting_.ast.get_as<ast::identifier_expr>(*arm.capture->payload)};
             try_declare<symbols::capture>(ident.name, *arm.capture);
         }
+        if (arm.guard) { collect(*arm.guard); }
         collect(arm.dispatch);
 
         last_type_.emplace(ctx_.pool[{type_kind::MATCH_ARM, types::mut::CONSTANT, new_idx}]);
@@ -461,6 +465,34 @@ MAKE_PREFIX_COLLECTOR(address_of_expr)
 MAKE_PREFIX_COLLECTOR(comptime_expr)
 MAKE_PREFIX_COLLECTOR(dereference_expr)
 MAKE_PREFIX_COLLECTOR(unary_expr)
+
+// Every alternative of an arm binds the same names into one scope, but no alternative may bind a
+// name twice
+auto symbol_collector::declare_pattern_capture(const ast::capture_t& capture) -> void {
+    const auto ident{collecting_.ast.get_as_opt<ast::identifier_expr>(capture.payload)};
+    if (!ident) { return; }
+    if (!alternative_names_.insert(ident->name).second) {
+        ctx_.diags.emplace_back(
+            fmt::format("Name '{}' is bound twice in this pattern", ident->name),
+            error::ILLEGAL_MATCH_PATTERN,
+            collecting_.ast.location_of(*capture.payload));
+        return;
+    }
+    collecting_.add_identifier_position(*capture.payload);
+    if (ctx_.registry.get(table_idx_).has(ident->name)) { return; }
+    try_declare<symbols::capture>(ident->name, capture);
+}
+
+auto symbol_collector::visit(ast::node_id, const ast::capture_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    declare_pattern_capture(node.capture);
+}
+
+auto symbol_collector::visit(ast::node_id, const ast::bound_pattern_expr& node) -> void {
+    PROFILE_FUNCTION();
+    collect(node.pattern);
+    declare_pattern_capture(node.capture);
+}
 
 auto symbol_collector::visit(ast::node_id, const ast::unwrap_expr& node) -> void {
     PROFILE_FUNCTION();

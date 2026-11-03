@@ -13,6 +13,17 @@
 // Inputs the mutation fuzzer turned into compiler crashes; each must now be a clean diagnostic
 namespace ghoti::tests {
 
+TEST_CASE("A closure only a discarded module-level expression makes still compiles") {
+    CHECK(helpers::compile_and_run(R"(
+        const ap = fn(g: auto, v: i32): i32 { return g(v); };
+        _ = fn(): i32 {
+            let k: i32 = 5;
+            return ap(fn(n: i32): i32 { return n + k; }, 1);
+        };
+        pub const main = fn(): i32 { return 3; };
+    )") == 3);
+}
+
 TEST_CASE("An attribute argument with a builtin arity error is reported, not a crash") {
     helpers::expect_compile_error(R"(
         const misaligned = fn(comptime T: type): i32 {

@@ -56,6 +56,51 @@ TEST_CASE("labeled comptime block yields break value with prefix syntax (comptim
     )") == 123);
 }
 
+TEST_CASE("A comptime block's writes to an outer comptime let mut stay visible") {
+    SECTION("a plain write") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                comptime let mut x: i32 = 1;
+                comptime { x = 5; }
+                return x;
+            };
+        )") == 5);
+    }
+
+    SECTION("a read-modify-write") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                comptime let mut x: i32 = 1;
+                comptime { x += 1; x = x + 1; }
+                return x;
+            };
+        )") == 3);
+    }
+
+    SECTION("alongside writes outside the block") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                comptime let mut x: i32 = 1;
+                x = x + 1;
+                comptime { x = x * 10; }
+                x = x + 1;
+                return x;
+            };
+        )") == 21);
+    }
+
+    SECTION("an aggregate's field") {
+        CHECK(helpers::compile_and_run(R"(
+            const P = struct { pub a: i32 };
+            pub const main = fn(): i32 {
+                comptime let mut p = P{ .a = 1 };
+                comptime { p.a = 8; }
+                return p.a;
+            };
+        )") == 8);
+    }
+}
+
 TEST_CASE("comptime block with loops and variable mutation") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {

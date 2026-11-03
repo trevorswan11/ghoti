@@ -22,6 +22,81 @@ TEST_CASE("Match over a tagged union dispatches to the active field") {
     )") == 2);
 }
 
+TEST_CASE("A catch-all arm is tried last wherever it's written") {
+    SECTION("before a value arm at runtime") {
+        CHECK(helpers::compile_and_run(R"(
+            const pick = fn(x: i32): i32 {
+                return match (x) { _ => 1, 5 => 2 };
+            };
+            pub const main = fn(): i32 {
+                let mut x: i32 = 0;
+                x = 5;
+                let hit = pick(x);
+                x = 6;
+                return hit * 10 + pick(x);
+            };
+        )") == 21);
+    }
+
+    SECTION("between arms, as a statement") {
+        CHECK(helpers::compile_and_run(R"(
+            pub const main = fn(): i32 {
+                let mut x: i32 = 0;
+                x = 7;
+                let mut r: i32 = 0;
+                match (x) {
+                    1 => { r = 1; },
+                    _ => { r = 2; },
+                    7 => { r = 3; },
+                };
+                return r;
+            };
+        )") == 3);
+    }
+
+    SECTION("before a union variant") {
+        CHECK(helpers::compile_and_run(R"(
+            const U = union(enum) { a: i32, b: i32 };
+            pub const main = fn(): i32 {
+                let mut u = U{ .a = 4 };
+                u = U{ .b = 9 };
+                return match (u) {
+                    _ => |_| 1,
+                    .b => |v| v,
+                };
+            };
+        )") == 9);
+    }
+
+    SECTION("before an enum variant") {
+        CHECK(helpers::compile_and_run(R"(
+            const E = enum { a, b, c };
+            pub const main = fn(): i32 {
+                let mut e = E.a;
+                e = E.c;
+                return match (e) {
+                    _ => 1,
+                    .c => 2,
+                };
+            };
+        )") == 2);
+    }
+
+    SECTION("agrees with the same match folded at compile time") {
+        CHECK(helpers::compile_and_run(R"(
+            const pick = fn(x: i32): i32 {
+                return match (x) { _ => 1, 5 => 2 };
+            };
+            const FOLDED: i32 = pick(5);
+            pub const main = fn(): i32 {
+                let mut x: i32 = 0;
+                x = 5;
+                return if (pick(x) == FOLDED) 1 else 0;
+            };
+        )") == 1);
+    }
+}
+
 TEST_CASE("A plain match arm capture reads the current field value") {
     CHECK(helpers::compile_and_run(R"(
         const U = union(enum) { a: i32 };

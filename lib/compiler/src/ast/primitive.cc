@@ -257,6 +257,11 @@ auto int_literal_expr::exact_value() const -> big_int {
         base == syntax::numeric_base::DECIMAL ? digits : stdx::string::substr(digits, 2), base);
 }
 
+auto int_literal_expr::as_float(float_format format) const -> f128 {
+    if (!is_big) { return f128::from_uint(value, format); }
+    return f128::parse(exact_value().to_string(), format).value;
+}
+
 auto float_literal_expr::parse(syntax::parser& parser)
     -> stdx::result<expr_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();

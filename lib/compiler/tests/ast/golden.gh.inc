@@ -17,6 +17,7 @@ R"([_:0]^N{a, b, c, d, e, 3, "54" };
     match comptime (a) { b => |c| d, _ => e, };
     match (a) { 1..8 => f, 8..=16 => |g| h, _ => i, };
     match (a) { b, c, 1..4 => |d| e, _ => f, };
+    match (a) { .b(.c(|d|)) => e, .{ .f = 0, .g = |&h| } if i => j, .{ |k|, _ } => l, .m |n| => o, _ => p, };
     loop { a; };
     (*arr[i][j]) = 2;
     if (a) { b; } else { c; };

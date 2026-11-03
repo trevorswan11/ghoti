@@ -15,6 +15,7 @@
 #include <stdx/result.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
@@ -23,6 +24,8 @@
 #include "compiler/ast/type.hh"
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/precedence.hh"
+#include "compiler/syntax/token.hh"
 #include "compiler/syntax/token_type.hh"
 
 namespace ghoti::ast {
@@ -30,7 +33,9 @@ namespace ghoti::ast {
 auto block_stmt::parse(syntax::parser& parser, bool is_comptime)
     -> stdx::result<stmt_handle, syntax::diagnostic> {
     PROFILE_FUNCTION();
-    const auto start_token{parser.get_current_token()};
+    const auto                          start_token{parser.get_current_token()};
+    const syntax::parser::pattern_scope plain_scope{parser, false};
+    const syntax::parser::block_scope   block_scope{parser};
 
     if (is_comptime && parser.current_token_is(syntax::token_type_t::COMPTIME)) {
         TRY(parser.expect_peek(syntax::token_type_t::LBRACE));
@@ -337,6 +342,16 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
             std::move(msg).value(), syntax::error::ILLEGAL_DECL_MODIFIERS, start_token);
     }
 
+    if (starts_destructure_pattern(parser)) {
+        if (attributes) {
+            return make_syntax_err("A destructuring declaration can't take attributes",
+                                   syntax::error::MISPLACED_ATTRIBUTES,
+                                   span_start);
+        }
+        return parse_destructure(
+            parser, start_token, source_info<syntax::token_t>::get(span_start), modifiers);
+    }
+
     TRY(parser.expect_peek(syntax::token_type_t::IDENT));
     const auto              decl_name_token{parser.get_current_token()};
     const identifier_handle decl_name{TRY(identifier_expr::parse(parser))};
@@ -397,7 +412,7 @@ auto decl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                 stdx::none,
                 stdx::none,
                 stdx::none)};
-            ast.get_as_mut<decl_stmt>(*wrapper_decl).is_default_wrapper = true;
+            ast.get_as_mut<decl_stmt>(*wrapper_decl).is_synthesized = true;
             ast.get_as_mut<function_expr>(*wrapper.fn).declaring_decl.emplace(*wrapper_decl);
             parser.queue_synthesized(wrapper_decl);
         }

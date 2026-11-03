@@ -114,7 +114,9 @@ class formatter {
                                                   ItemEnd&&    item_end) -> syntax::doc_id;
 
     // `a, b, c => ` heading a match or `@cfgValue` arm, `force_break` from a trailing comma
-    [[nodiscard]] auto alternatives_head(std::vector<syntax::doc_id> alternatives, bool force_break)
+    [[nodiscard]] auto alternatives_head(std::vector<syntax::doc_id>  alternatives,
+                                         bool                         force_break,
+                                         stdx::option<syntax::doc_id> guard = stdx::none)
         -> syntax::doc_id;
     // `@cfg (pred) ` before an arm, or ` else ` / ` else @cfg (pred) ` after the first
     [[nodiscard]] auto cfg_arm_head(bool first, const stdx::option<expr_handle>& predicate)
@@ -168,6 +170,8 @@ class formatter {
     auto visit(node_id, const comptime_expr&) -> syntax::doc_id;
     auto visit(node_id, const unary_expr&) -> syntax::doc_id;
     auto visit(node_id, const unwrap_expr&) -> syntax::doc_id;
+    auto visit(node_id, const capture_pattern_expr&) -> syntax::doc_id;
+    auto visit(node_id, const bound_pattern_expr&) -> syntax::doc_id;
     auto visit(node_id, const implicit_access_expr&) -> syntax::doc_id;
     auto visit(node_id, const string_expr&) -> syntax::doc_id;
     auto visit(node_id, const int_literal_expr&) -> syntax::doc_id;

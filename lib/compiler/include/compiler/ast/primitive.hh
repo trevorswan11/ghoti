@@ -40,6 +40,8 @@ struct int_literal_expr {
 
     // The literal's value, however wide
     [[nodiscard]] auto exact_value() const -> big_int;
+    // The literal's value rounded once into `format`
+    [[nodiscard]] auto as_float(float_format format = float_format::QUAD) const -> f128;
 
     [[nodiscard]] static auto parse(syntax::parser& parser)
         -> stdx::result<expr_handle, syntax::diagnostic>;

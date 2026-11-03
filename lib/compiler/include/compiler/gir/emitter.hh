@@ -31,11 +31,13 @@
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/generic.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/sema/unwrap_shape.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/counter.hh"
+#include "support/float128.hh"
 #include "support/int128.hh"
 #include "support/scope_guard.hh"
 
@@ -138,6 +140,23 @@ class emitter {
         sema::unwrap_info shape;
     };
 
+    // Storage for one name an arm binds, filled along whichever path reaches the arm
+    struct match_capture_slot {
+        std::string_view name;
+        sema::type&      type;
+        local_id         slot;
+        bool             is_alias{false};
+        bool             is_void{false};
+    };
+
+    struct match_lowering {
+        const ast::match_expr&                           match;
+        const sema::pattern::decision_tree&              tree;
+        value                                            matcher_addr;
+        std::vector<segment_id>                          bodies{};
+        gsl::span<const std::vector<match_capture_slot>> slots{};
+    };
+
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
@@ -208,7 +227,11 @@ class emitter {
 
     auto emit_closure_env(const sema::types::closure_t& cl, sema::type& closure_type) -> value;
     // The GIR function holding a closure's body, unique to its generic instantiation
-    [[nodiscard]] static auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    [[nodiscard]] static auto closure_symbol(const sema::type& closure_type) -> std::string;
+    // Names a closure and remembers that something refers to it
+    [[nodiscard]] auto closure_fn_name(const sema::type& closure_type) -> std::string;
+    // A closure only dead code reaches was never emitted, since nothing runs what encloses it
+    auto emit_unreached_closures() -> void;
     // Binds each capture of environment `env` by name in the current scope
     auto bind_env_captures(local_id                      env,
                            sema::type&                   env_type,
@@ -352,6 +375,13 @@ class emitter {
     auto               emit_comptime_value_read(ast::node_id id) -> value;
     auto               emit_if(ast::node_id id, const ast::if_expr& if_expr) -> value;
     auto               emit_match(ast::node_id id, const ast::match_expr& match) -> value;
+
+    [[nodiscard]] auto capture_binding(const match_capture_slot& slot) -> local_binding;
+    [[nodiscard]] auto const_view_of(sema::type& alias) -> sema::type&;
+    auto               emit_occurrence_addr(const match_lowering& lowering, usize occ) -> value;
+    auto emit_interval_test(value subject, const sema::pattern::switch_case& test) -> value;
+    auto emit_opaque_test(value subject, ast::node_id test) -> value;
+    auto emit_decision(const match_lowering& lowering, usize node) -> void;
 
     [[nodiscard]] auto
          fold_compile_time_only(ast::node_id id, std::string_view what, sema::type& type) -> value;
@@ -566,6 +596,8 @@ class emitter {
     // Diagnoses a runtime `src` value headed for the untyped `target`
     auto report_runtime_untyped(const sema::type& src, const sema::type& target, ast::node_id at)
         -> void;
+    // A constant integer of any width as a float
+    [[nodiscard]] auto integer_as_float(const value& v) -> stdx::option<f128>;
     // Diagnoses a compile-time float that rounds to infinity in `target`
     auto check_comptime_float_fits(const value& v, const sema::type& target, ast::node_id at)
         -> void;
@@ -722,6 +754,7 @@ class emitter {
     std::vector<gsl::not_null<sema::type*>>                 user_type_stack_;
     std::vector<std::string_view>                           pending_builtin_runtime_;
     std::vector<ast::node_id>                               pending_builtin_impls_;
+    std::vector<gsl::not_null<const sema::type*>>           named_closures_;
     symbol_scoping                                          symbol_scoping_;
     bool                                                    runtime_safety_{true};
     u32                                                     target_ptr_bits_{64};

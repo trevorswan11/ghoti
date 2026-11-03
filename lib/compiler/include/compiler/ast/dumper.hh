@@ -72,6 +72,8 @@ class dumper {
     auto visit(node_id, const comptime_expr&) -> void;
     auto visit(node_id, const unary_expr&) -> void;
     auto visit(node_id, const unwrap_expr&) -> void;
+    auto visit(node_id, const capture_pattern_expr&) -> void;
+    auto visit(node_id, const bound_pattern_expr&) -> void;
     auto visit(node_id, const implicit_access_expr&) -> void;
     auto visit(node_id, const string_expr&) -> void;
     auto visit(node_id, const int_literal_expr&) -> void;
@@ -123,9 +125,10 @@ class dumper {
         }
     }
 
-    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture) -> void {
+    auto dump_capture(std::string_view label, const stdx::option<capture_t>& capture, bool last)
+        -> void {
         if (!capture) { return; }
-        const indent::guard g{indent_, false};
+        const indent::guard g{indent_, last};
         fmt::print(out_, "{}{}: ", indent_.current_branch(), label);
         if (capture->payload.is<ast::discarded>()) {
             fmt::println(out_, "<discarded>");

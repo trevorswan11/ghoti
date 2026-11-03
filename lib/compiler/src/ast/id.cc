@@ -47,6 +47,8 @@ constexpr auto NODE_NAMES{stdx::fixed::enum_map<node_kind, std::string_view>::fr
     name_mapping{node_kind::DEREFERENCE_EXPRESSION, "dereference"},
     name_mapping{node_kind::COMPTIME_EXPRESSION, "comptime"},
     name_mapping{node_kind::IMPLICIT_ACCESS_EXPRESSION, "implicit access"},
+    name_mapping{node_kind::CAPTURE_PATTERN_EXPRESSION, "capture pattern"},
+    name_mapping{node_kind::BOUND_PATTERN_EXPRESSION, "bound pattern"},
     name_mapping{node_kind::STRING_EXPRESSION, "string"},
     name_mapping{node_kind::INT_LITERAL_EXPRESSION, "int-literal"},
     name_mapping{node_kind::FLOAT_LITERAL_EXPRESSION, "float-literal"},

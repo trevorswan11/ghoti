@@ -34,6 +34,7 @@
 #include "compiler/sema/generic.hh"
 #include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/instantiation_cache.hh"
+#include "compiler/sema/pattern.hh"
 #include "compiler/sema/peer_type.hh"
 #include "compiler/sema/side_tables.hh"
 #include "compiler/sema/symbol.hh"
@@ -444,6 +445,13 @@ class type_resolver {
         source_location      location;
     };
 
+    // How the place a match takes apart limits what its captures may do with it
+    struct pattern_capture_place {
+        bool is_const{false};
+        bool is_addressable{false};
+        bool is_poly{false};
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -835,17 +843,26 @@ class type_resolver {
     auto visit(ast::node_id, const ast::initializer_expr&) -> void;
     auto visit(ast::node_id, const ast::label_expr&) -> void;
 
-    [[nodiscard]] auto validate_enum_arms(ast::node_id, const ast::match_expr&, type&)
+    [[nodiscard]] auto validate_matcher_kind(const ast::match_expr& match, type& matcher_type)
         -> stdx::option<diagnostic>;
-
-    [[nodiscard]] auto validate_union_arms(ast::node_id, const ast::match_expr&, type&)
+    [[nodiscard]] auto bind_pattern_captures(const ast::match_expr::arm&  arm,
+                                             gsl::span<pattern::node_ptr> alternatives,
+                                             const pattern_capture_place& place)
         -> stdx::option<diagnostic>;
-    [[nodiscard]] auto validate_scalar_arms(const ast::match_expr& match, type& matcher_type)
+    [[nodiscard]] auto check_match_coverage(ast::node_id                        id,
+                                            const ast::match_expr&              match,
+                                            type&                               matcher_type,
+                                            gsl::span<const pattern::row_input> rows)
         -> stdx::option<diagnostic>;
+    [[nodiscard]] auto bind_comptime_pattern(const ast::match_pattern_handle&         pattern,
+                                             const std::vector<gir::pattern_binding>& bindings,
+                                             type&                                    matcher_type,
+                                             gir::const_eval&                         evaluator,
+                                             comptime_frame& frame) -> bool;
+    // Pattern elaboration's view of this pass. `poisoned` reports a leaf that already diagnosed
+    [[nodiscard]] auto make_pattern_host(gir::const_eval& probe, bool& poisoned) -> pattern::host;
     [[nodiscard]] auto expr_denotes_type(ast::node_id n) -> bool;
     [[nodiscard]] auto is_type_match(const ast::match_expr& match, type& matcher_type) -> bool;
-    [[nodiscard]] auto arm_capture_base(const ast::match_expr::arm& arm, type& matcher_type)
-        -> stdx::option<type&>;
     [[nodiscard]] auto scalar_pattern_mismatch(ast::node_id     value,
                                                type&            matcher_type,
                                                gir::const_eval& probe) -> stdx::option<std::string>;
@@ -871,6 +888,8 @@ class type_resolver {
     auto visit(ast::node_id, const ast::comptime_expr&) -> void;
     auto visit(ast::node_id, const ast::unary_expr&) -> void;
     auto visit(ast::node_id, const ast::unwrap_expr&) -> void;
+    auto visit(ast::node_id, const ast::capture_pattern_expr&) -> void;
+    auto visit(ast::node_id, const ast::bound_pattern_expr&) -> void;
     auto visit(ast::node_id, const ast::implicit_access_expr&) -> void;
     auto visit(ast::node_id, const ast::string_expr&) -> void;
     auto visit(ast::node_id, const ast::int_literal_expr&) -> void;
@@ -1110,9 +1129,9 @@ class type_resolver {
     std::vector<open_interface> open_interfaces_;
     // `&dyn I` uses of an open interface, checked for `dyn`-safety once it commits
     std::vector<deferred_dyn_check> deferred_dyn_checks_;
-    bool for_generic_instantiation_{false};
-    bool in_subscript_index_{false};
-    bool in_for_iterable_{false};
+    bool                            for_generic_instantiation_{false};
+    bool                            in_subscript_index_{false};
+    bool                            in_for_iterable_{false};
     // Set while resolving a function parameter's declared type
     bool in_param_type_{false};
     bool in_return_type_{false};
@@ -1185,8 +1204,6 @@ class type_resolver {
 
     named_test_map_t     named_tests_;
     structural_validator struct_validator_;
-    structural_validator enum_validator_;
-    structural_validator union_validator_;
 
     context&                    ctx_;
     stdx::option<type&>         last_type_;
