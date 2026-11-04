@@ -2458,7 +2458,7 @@ auto emitter::report_comptime_failure(usize diags_before, std::string_view what,
 auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at) -> bool {
     if (!const_eval_.last_eval_returned()) { return false; }
     stdx::option<value> ret_val;
-    if (!returned.is<void_val>()) { ret_val.emplace(returned.to_gir_value()); }
+    if (!returned.is<void_val>()) { ret_val.emplace(materialize_const(returned)); }
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(at));
     builder_.emit_return(ret_val);
@@ -6877,7 +6877,8 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             return value{void_val{}, sema_type};
         }
         if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
-        if (yields_value) { return cv->to_gir_value(); }
+        // An aggregate result has no immediate form, so it's built in a stack slot
+        if (yields_value) { return materialize_const(*cv); }
         return value{void_val{}, sema_type};
     }
 
