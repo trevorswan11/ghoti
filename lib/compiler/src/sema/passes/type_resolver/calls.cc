@@ -117,8 +117,10 @@ auto type_resolver::is_auto_pattern(const type& t) -> bool {
     return false;
 }
 
-auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<type&>& leaf)
+auto type_resolver::match_auto_pattern(type& pattern, type& arg_level, stdx::option<type&>& leaf)
     -> stdx::option<type&> {
+    // An array reached through a pointer or reference may still have an unfolded length
+    auto& arg{concrete_array_type(arg_level)};
     if (pattern.get_kind() == type_kind::AUTO) {
         leaf = arg;
         return arg;
@@ -166,8 +168,18 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<ty
         return ctx_.get_reference(*m, *inner);
     }
     if (const auto sl{pdata.as_opt<types::slice>()}) {
-        const auto a{adata.as_opt<types::slice>()};
-        const auto m{a ? mutability(arg) : stdx::none};
+        if (const auto a{adata.as_opt<types::slice>()}) {
+            const auto m{mutability(arg)};
+            if (!m || (sl->null_terminated && !a->null_terminated)) { return stdx::none; }
+            const auto inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
+            if (!inner) { return stdx::none; }
+            return ctx_.get_slice(*m, sl->null_terminated, *inner);
+        }
+        // `[N]T` and `&[N]T` coerce to a slice of the array's elements, as for a `[]T` parameter
+        const auto ref{adata.as_opt<types::reference>()};
+        auto&      array_type{concrete_array_type(ref ? ref->underlying : arg)};
+        const auto a{array_type.get_data().as_opt<types::array>()};
+        const auto m{a ? mutability(array_type) : stdx::none};
         if (!m || (sl->null_terminated && !a->null_terminated)) { return stdx::none; }
         const auto inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
         if (!inner) { return stdx::none; }

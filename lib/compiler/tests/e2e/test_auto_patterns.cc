@@ -68,8 +68,54 @@ TEST_CASE("an argument that doesn't match an `auto` pattern is an error at the c
         const f = fn(xs: [3]auto): i32 { return 0; };
         pub const main = fn(): i32 { let a: [2]u8 = .{ 1, 2 }; return f(a); };
     )");
+    // An array coerces to a slice pattern only with the elements' own mutability and sentinel
+    mismatch(R"(
+        const f = fn(x: []mut auto): i32 { return 1; };
+        pub const main = fn(): i32 { let a = [_]i64{ 1, 2 }; return f(&a); };
+    )");
+    mismatch(R"(
+        const f = fn(x: [:0]auto): i32 { return 1; };
+        pub const main = fn(): i32 { let a = [_]u8{ 1, 2 }; return f(a); };
+    )");
+    mismatch(R"(
+        const f = fn(x: []auto): i32 { return 1; };
+        pub const main = fn(): i32 { let a = [_]u8{ 1, 2 }; return f(^a); };
+    )");
     // `auto` inside a slice or array is only a parameter pattern
     CHECK(helpers::raised("let x: []auto = undefined;", sema::error::ILLEGAL_AUTO_USAGE));
+}
+
+TEST_CASE("a slice `auto` pattern takes an array or a reference to one, as a `[]T` does") {
+    CHECK(helpers::compile_and_run(R"(
+        const sum = fn(xs: []auto): i64 {
+            let mut t: i64 = 0;
+            for (xs) |x| { t += x; }
+            return t;
+        };
+        const fill = fn(xs: []mut auto, v: auto): void { for (xs) |&mut x| { x = v; } };
+        const zlen = fn(xs: [:0]auto): usize { return xs.len; };
+        pub const main = fn(): i64 {
+            let a = [_]i32{ 1, 2, 3 };
+            let mut b: [3]mut u8 = .{ 0, 0, 0 };
+            fill(&mut b, 4);
+            fill(b, 5);
+            const z = [_:0]u8{ 1, 2 };
+            return sum(a) + sum(&a) + sum(&b) + @as(i64, @intCast(i64, zlen(&z)));
+        };
+    )") == 6 + 6 + 15 + 2);
+}
+
+TEST_CASE("an array behind a reference matches a sized array `auto` pattern") {
+    CHECK(helpers::compile_and_run(R"(
+        const total = fn(xs: &mut [3]mut auto): i32 {
+            xs[0] += 1;
+            return @intCast(i32, xs[0] + xs[1] + xs[2]);
+        };
+        pub const main = fn(): i32 {
+            let mut b: [3]mut u8 = .{ 1, 2, 3 };
+            return total(&mut b) * 10 + @as(i32, b[0]);
+        };
+    )") == 72);
 }
 
 TEST_CASE("`impl I` under a pattern checks its bound on the innermost type") {

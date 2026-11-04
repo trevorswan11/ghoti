@@ -731,7 +731,7 @@ class type_resolver {
     [[nodiscard]] static auto is_auto_pattern(const type& t) -> bool;
     // The parameter type `pattern` takes for an argument of type `arg`, with `leaf` set to what
     // `auto` bound to; none when a level doesn't match
-    auto match_auto_pattern(type& pattern, type& arg, stdx::option<type&>& leaf)
+    auto match_auto_pattern(type& pattern, type& arg_level, stdx::option<type&>& leaf)
         -> stdx::option<type&>;
     // Why `arg` can't be called as the `impl Fn(...)` signature `pattern`, if it can't
     auto callable_mismatch(const type& pattern, type& arg) -> stdx::option<std::string>;
