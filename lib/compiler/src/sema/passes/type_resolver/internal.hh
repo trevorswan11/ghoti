@@ -326,6 +326,12 @@ keeps_comptime_numeric(const ast::function_expr::parameter& param) noexcept -> b
 [[nodiscard]] inline auto inferred_comptime_reason(const mod::module_t&                 owner,
                                                    const ast::function_expr::parameter& param)
     -> std::string {
+    if (param.explicit_type &&
+        (param.explicit_type->get_token_type() == syntax::token_type_t::COMPTIME_INT_TYPE ||
+         param.explicit_type->get_token_type() == syntax::token_type_t::COMPTIME_FLOAT_TYPE)) {
+        return "; the parameter is compile-time because an untyped number only exists at compile "
+               "time";
+    }
     if (!param.comptime_read) {
         return "; the parameter is compile-time because this function reads it in a "
                "compile-time position";

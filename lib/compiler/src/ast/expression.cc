@@ -1173,8 +1173,18 @@ auto parse_function_header(syntax::parser& parser)
             const bool type_param{
                 param_explicit_type && param_explicit_type->get_modifier().is_value() &&
                 param_explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE};
-            auto& param{parameters.emplace_back(
-                name, param_explicit_type, is_comptime && !type_param, is_pack, is_comptime)};
+            // An untyped number only exists at compile time, so its parameter binds there as an
+            // `auto` one given a literal does
+            const bool untyped_param{
+                param_explicit_type && param_explicit_type->get_modifier().is_value() &&
+                (param_explicit_type->get_token_type() == syntax::token_type_t::COMPTIME_INT_TYPE ||
+                 param_explicit_type->get_token_type() ==
+                     syntax::token_type_t::COMPTIME_FLOAT_TYPE)};
+            auto& param{parameters.emplace_back(name,
+                                                param_explicit_type,
+                                                (is_comptime || untyped_param) && !type_param,
+                                                is_pack,
+                                                is_comptime)};
             param.default_value = default_value;
             attach_param_doc(name);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {

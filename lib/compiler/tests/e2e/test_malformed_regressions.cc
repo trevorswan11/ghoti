@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -658,6 +659,56 @@ TEST_CASE("A global union keeps an aggregate payload") {
             return a + b + c;
         };
     )") == 10 + 20 + 12);
+}
+
+TEST_CASE("A global aggregate's elements and fields are checked against their types") {
+    // These once reached LLVM with a mistyped constant, or silently truncated
+    const auto source{GENERATE(as<std::string_view>{},
+                               "const Q = [_]u8{ true, 2 };",
+                               "const Q = [_][2]u8{ .{ true, 2 } };",
+                               "const Q = [_]u8{ 300, 2 };",
+                               "const Q = [_]u8{ 1.5, 2 };",
+                               "const Q = [_]bool{ 1, true };",
+                               "const Q = [_]f32{ true, 2 };",
+                               "const P = struct { a: u8 }; const Q = P{ .a = true };",
+                               "const U = union(enum) { a: u8 }; const Q = U{ .a = 256 };")};
+    DISCARD(helpers::expect_compile_error(
+        fmt::format("{}\npub const main = fn(): i32 {{ return 0; }};", source)));
+}
+
+TEST_CASE("A global aggregate whose elements and fields fit still folds") {
+    CHECK(helpers::compile_and_run(R"(
+        const P = struct { a: u8, b: f32, c: bool };
+        const Q = [_]P{ .{ .a = 255, .b = 2, .c = true }, .{ .a = 0, .b = 1.5, .c = false } };
+        const N = [_]i8{ -128, 127 };
+        pub const main = fn(): i32 {
+            return @as(i32, Q[0].a) - 200 + @intFromFloat(i32, Q[1].b * 2) + @as(i32, N[0]) + N[1];
+        };
+    )") == 255 - 200 + 3 - 128 + 127);
+}
+
+TEST_CASE("An enum variant can't be named through a value of the enum") {
+    const auto access{GENERATE(as<std::string_view>{}, "E.x.z", ".x .z", "a.z")};
+    CHECK(helpers::raised(fmt::format(R"(
+        const E = enum {{ x, y, z }};
+        const h = fn(e: E): i32 {{ return if (e == .z) 3 else 1; }};
+        pub const main = fn(): i32 {{ let a: E = .x; return h({}); }};
+    )",
+                                      access),
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A comptime_int parameter binds at compile time") {
+    // A runtime `comptime_int` once took a 32-bit slot, crashing LLVM on a wider argument
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(m: comptime_int): i32 { return @intCast(i32, m >> 100); };
+        const g = fn(x: comptime_float): i32 { return @intFromFloat(i32, x * 2); };
+        pub const main = fn(): i32 { return f(1 << 102) + f(3 << 100) + g(2.5); };
+    )") == 4 + 3 + 5);
+    helpers::expect_compile_error(R"(
+        const f = fn(m: comptime_int): i32 { return @intCast(i32, m); };
+        pub const main = fn(): i32 { let mut x: i32 = 3; x += 1; return f(x); };
+    )");
 }
 
 } // namespace ghoti::tests

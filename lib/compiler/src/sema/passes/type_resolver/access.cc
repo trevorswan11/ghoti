@@ -636,6 +636,29 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         }
     }
 
+    // A variant belongs to its enum type, so naming one through a value (`e.z`, `.x.z`) is a slip
+    if (const auto en{object_type.get_data().as_opt<types::enum_t>()};
+        en && operand_nature(dot.object) == operand_nature_t::VALUE) {
+        const auto& member_name{resolving_.ast.get_as<ast::identifier_expr>(dot.member).name};
+        const bool  names_variant{std::ranges::any_of(en->ast_enumerations, [&](const auto& e) {
+            return en->enclosing.ast.get_as<ast::identifier_expr>(e.name).name == member_name;
+        })};
+        if (names_variant) {
+            return last_type_.emplace(ctx_.poison_node(
+                resolving_,
+                id,
+                fmt::format("'{}' is a variant of '{}', not a member of a value of it; write "
+                            "'.{}' or '{}.{}'",
+                            member_name,
+                            ctx_.type_display_name(object_type),
+                            member_name,
+                            ctx_.type_display_name(object_type),
+                            member_name),
+                error::TYPE_MISMATCH,
+                resolving_.ast.location_of(dot.member)));
+        }
+    }
+
     // A slice, array, pointer, or function type has members only through a value of it
     if (const auto kind{object_type.get_kind()};
         (kind == type_kind::SLICE || kind == type_kind::ARRAY || kind == type_kind::POINTER ||

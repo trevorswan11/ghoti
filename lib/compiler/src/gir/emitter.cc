@@ -1083,6 +1083,72 @@ namespace {
     return un && !un->is_untagged;
 }
 
+// The type a folded scalar holds, for a value folded without one
+[[nodiscard]] auto leaf_type(sema::context& ctx, const const_value& cv) -> sema::type& {
+    if (const auto t{cv.get_type()}) { return *t; }
+    if (cv.is<bool>()) { return ctx.get_builtin_resolved_type(sema::type_kind::BOOL); }
+    if (cv.is<f128>()) { return ctx.get_builtin_resolved_type(sema::type_kind::COMPTIME_FLOAT); }
+    return ctx.get_builtin_resolved_type(sema::type_kind::COMPTIME_INT);
+}
+
+// Why a folded aggregate's scalar doesn't fit the element or field it initializes. A global's
+// aggregate initializer is never stored through, so the type checker never sees its scalars
+[[nodiscard]] auto mistyped_const_leaf(sema::context&     ctx,
+                                       const const_value& cv,
+                                       const sema::type&  expected,
+                                       u32                ptr_bits) -> stdx::option<std::string> {
+    const auto& data{expected.get_data()};
+    if (const auto arr{data.as_opt<sema::types::array>()}) {
+        if (const auto elems{cv.as_opt<const_array>()}) {
+            for (const auto& elem : elems->elements) {
+                if (auto why{mistyped_const_leaf(ctx, elem, arr->underlying, ptr_bits)}) {
+                    return why;
+                }
+            }
+        }
+        return stdx::none;
+    }
+    if (const auto st{data.as_opt<sema::types::struct_t>()}) {
+        const auto fields{cv.as_opt<const_struct>()};
+        if (!fields || st->is_bit_packed()) { return stdx::none; }
+        for (usize i{0}; i < st->fields.size() && i < st->ast_fields.size(); ++i) {
+            const auto& name{
+                st->enclosing.ast.get_as<ast::identifier_expr>(st->ast_fields[i].name).name};
+            const auto field{fields->get_field_opt(name)};
+            if (!field || !st->fields[i]) { continue; }
+            if (auto why{mistyped_const_leaf(ctx, *field, *st->fields[i], ptr_bits)}) {
+                return why;
+            }
+        }
+        return stdx::none;
+    }
+    if (const auto un{data.as_opt<sema::types::union_t>()}) {
+        const auto active{cv.as_opt<const_union>()};
+        if (!active || active->payload.empty() || un->is_bit_packed()) { return stdx::none; }
+        for (usize i{0}; i < un->fields.size() && i < un->ast_fields.size(); ++i) {
+            const auto& name{
+                un->enclosing.ast.get_as<ast::identifier_expr>(un->ast_fields[i].name).name};
+            if (name != active->active_field || !un->fields[i]) { continue; }
+            return mistyped_const_leaf(ctx, active->payload.front(), *un->fields[i], ptr_bits);
+        }
+        return stdx::none;
+    }
+
+    const auto kind{expected.get_kind()};
+    const bool is_int_value{cv.as_big_int_opt() && !cv.is<const_enum>()};
+    const bool wrong_kind{(sema::is_integer(kind) && (cv.is<bool>() || cv.is<f128>())) ||
+                          (kind == sema::type_kind::BOOL && (is_int_value || cv.is<f128>())) ||
+                          (sema::is_float(kind) && cv.is<bool>())};
+    if (wrong_kind) { return ctx.store_mismatch_message(leaf_type(ctx, cv), expected, ptr_bits); }
+    if (sema::is_integer(kind) && is_int_value &&
+        !sema::comptime_int_fits(*cv.as_big_int_opt(), expected, ptr_bits)) {
+        return fmt::format("integer value {} is out of range for type '{}'",
+                           cv.as_big_int_opt()->to_string(),
+                           ctx.type_display_name(expected));
+    }
+    return stdx::none;
+}
+
 } // namespace
 
 // A declaration's folded initializer; an enum literal becomes the declared enum or union value
@@ -1505,6 +1571,11 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
                 cv->is<const_dyn_fat_ptr>()) {
+                if (const auto why{mistyped_const_leaf(ctx_, *cv, *sema_type, target_ptr_bits_)}) {
+                    ctx_.diags.emplace_back(
+                        *why, sema::error::TYPE_MISMATCH, active_ast().location_of(*decl.value));
+                    return;
+                }
                 const_init.emplace(std::move(*cv));
             } else {
                 auto v{cv->to_gir_value()};
