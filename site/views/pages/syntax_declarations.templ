@@ -176,6 +176,13 @@ export const x = 1;                     // Illegal, a const has no symbol to exp
 			The runner entry point is <code>test_runner(args: [][:0]u8, tests: []Test): i32</code>; it receives the process
 			arguments (as <code>main</code> does) plus the discovered tests. A <code>weak</code> default is provided.
 		</li>
+		<li>
+			The runner is the root file's own <code>test_runner</code>, else <code>std.testing</code>'s once the program imports <code>std</code>, else the <code>builtin</code> default
+			<ul>
+				<li><code>std.testing</code>'s runner prints each failure's location and a summary</li>
+				<li>The <code>builtin</code> default can't do I/O, so it reports nothing: a failing test only shows as an exit code of 1. Add <code>import std;</code> to see what failed</li>
+			</ul>
+		</li>
 		<li><code>{ "@expect" }(cond)</code> fails the test and keeps going, <code>{ "@require" }(cond)</code> fails it and stops, and <code>{ "@skip" }()</code> stops it without failing</li>
 		<li>
 			A function marked <code>{ "@[testing]" }</code> may use them too, so a check too involved for one expression can live in a helper
