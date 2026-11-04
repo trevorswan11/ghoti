@@ -95,10 +95,11 @@ pub const suggest_lanes = fn(comptime T: type): comptime_int {
 pub const iota = fn(comptime V: type): V {
     let mut v: V = undefined;
     for (0..lanes_of(V)) |i| {
-        v[i] = match comptime (@typeInfo(Lane(V))) {
-            .float => @floatFromInt(i),
-            _ => @intCast(i),
-        };
+        v[i] =
+            match comptime (@typeInfo(Lane(V))) {
+                .float => @floatFromInt(i),
+                _ => @intCast(i),
+            };
     }
     return v;
 };
