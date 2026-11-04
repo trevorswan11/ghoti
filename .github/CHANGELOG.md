@@ -973,6 +973,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: an integer literal past 128 bits assigned to a float kept its integer payload, crashing `@bitCast`, rejecting `const`, and skipping the range check; it now converts exactly
 - Fixed: a block label named after the declaration it initializes (`let v = v: { ... };`) crashed the compiler instead of reporting the shadowing
 - Fixed: a `_` match arm written before other arms shadowed them at runtime while compile-time evaluation tried it last, so `match (x) { _ => 1, 5 => 2 }` gave a different answer in each; `_` is now tried last everywhere
+- Fixed: a `.{ ... }` or `.of(...)` argument to a parameter typed against an earlier `comptime` parameter (`o: Option(T)`, `xs: [n]T`) took the generic template's type and crashed codegen; it now takes the instantiation's
+- Fixed: a call folded into a module-level constant skipped its argument type checks, so a `[2]u8` passed to a `[1]u8` parameter and an `i64` narrowed silently into an `i8`
+- Fixed: calling through a reference to a function (`&f`, `&fn(...) { ... }`) or a pointer to a function literal (`^fn(...) { ... }`) miscompiled or crashed the compiler
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`
