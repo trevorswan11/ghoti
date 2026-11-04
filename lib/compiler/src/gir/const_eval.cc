@@ -6618,7 +6618,10 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
             // A folded call never reaches the type checker, so a number can't stand in for an
             // aggregate or a sequence here
-            const auto param_type{module_->get_sema_type_opt(param.name)};
+            // A type argument (`Wrap(u8)`) carries the type it names, never a number
+            const auto param_type{args[arg_idx].is<stdx::option<sema::type&>>()
+                                      ? stdx::none
+                                      : module_->get_sema_type_opt(param.name)};
             const auto arg_type{args[arg_idx].get_type()};
             if (param_type && arg_type && binds_number_to_non_number(*arg_type, *param_type)) {
                 const auto at{module_->ast.location_of(call_id.value_or(ast::node_id{param.name}))};
