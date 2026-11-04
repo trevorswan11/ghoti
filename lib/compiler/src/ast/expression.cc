@@ -1557,6 +1557,13 @@ auto parse_destructure(syntax::parser&        parser,
 
     stdx::option<stmt_handle> otherwise;
     if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
+        // Nothing runs at module scope, so there is nowhere for an `else` to leave to
+        if (!parser.in_function_body()) {
+            return make_syntax_err("A module-level destructuring can't have an `else`; its "
+                                   "pattern has to match its value",
+                                   syntax::error::ILLEGAL_MATCH_PATTERN,
+                                   parser.get_peek_token());
+        }
         parser.advance(2);
         otherwise.emplace(TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED)));

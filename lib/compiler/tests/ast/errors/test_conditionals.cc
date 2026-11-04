@@ -119,6 +119,16 @@ TEST_CASE("Malformed nested patterns") {
                                                      19});
     }
 
+    SECTION("A module-level destructuring can't have an else") {
+        helpers::test_parser_fail(
+            "const .a(|v|) = b else { unreachable; };",
+            syntax::diagnostic{"A module-level destructuring can't have an `else`; its pattern "
+                               "has to match its value",
+                               syntax::error::ILLEGAL_MATCH_PATTERN,
+                               0,
+                               18});
+    }
+
     SECTION("A discard can't bind a name") {
         helpers::test_parser_fail("match (a) { .b(_ |d|) => e, };",
                                   syntax::diagnostic{"A capture can't bind a second name or follow "
