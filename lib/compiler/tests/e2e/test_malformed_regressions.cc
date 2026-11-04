@@ -579,4 +579,56 @@ TEST_CASE("A function type can't pass or return 'opaque' by value") {
                                 sema::error::ILLEGAL_OPAQUE_TYPE));
 }
 
+TEST_CASE("A mistyped argument to a call folded into a module constant is reported") {
+    // A folded call never reaches the type checker, so these once compiled or crashed LLVM
+    helpers::expect_compile_error(R"(
+        const chain = fn(a: auto, b: @TypeOf("s")): @TypeOf(b) { return b; };
+        const call_chain = chain(1, "xy");
+        pub const main = fn(): u8 { return call_chain[0]; };
+    )");
+    helpers::expect_compile_error(R"(
+        const f = fn(x: [1:0]u8): [1:0]u8 { return x; };
+        const c = f("xy");
+        pub const main = fn(): u8 { return c[0]; };
+    )");
+    helpers::expect_compile_error(R"(
+        const f = fn(x: [1]u8): u8 { return x[0]; };
+        const c = f([_]u8{ 1, 2 });
+        pub const main = fn(): u8 { return c; };
+    )");
+    helpers::expect_compile_error(R"(
+        const P = struct { a: u8 };
+        const Q = struct { a: u8 };
+        const f = fn(x: P): u8 { return x.a; };
+        const c = f(Q{ .a = 1 });
+        pub const main = fn(): u8 { return c; };
+    )");
+    helpers::expect_compile_error(R"(
+        const f = fn(x: i8): i8 { return x; };
+        const c = f(@as(i64, 5));
+        pub const main = fn(): i8 { return c; };
+    )");
+    // What the type checker would accept still folds
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(x: i64, s: []u8, y: u8): i64 { return x + @intCast(i64, s.len) + y; };
+        const c = f(@as(i32, 5), "abc", 2);
+        pub const main = fn(): i64 { return c; };
+    )") == 10);
+}
+
+TEST_CASE("A reference or pointer to a function literal calls it") {
+    CHECK(helpers::compile_and_run(R"(
+        const ap = &fn(m: fn(x: i32): bool): bool { return m(1); };
+        const bp = ^fn(x: i32): i32 { return x * 2; };
+        const g = fn(m: fn(x: i32): bool): bool { return m(2); };
+        const cp = &g;
+        const is_pos = fn(x: i32): bool { return x > 0; };
+        const call_it = fn(f: &fn(x: i32): i32): i32 { return f(5); };
+        pub const main = fn(): i32 {
+            return @intFromBool(ap(is_pos)) + bp(3) + @intFromBool(cp(is_pos)) +
+                   call_it(&fn(x: i32): i32 { return x; });
+        };
+    )") == 1 + 6 + 1 + 5);
+}
+
 } // namespace ghoti::tests

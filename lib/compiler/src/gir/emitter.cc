@@ -5363,6 +5363,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                    cv && cv->template is<std::string>() && cv->get_type() &&
                    cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
             callee_name.emplace(cv->template as<std::string>());
+        } else if (cv && cv->template is<const_closure>() && cv->get_type() &&
+                   cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+            // A constant naming a function literal (`const f = &fn(...) { ... };`)
+            callee_name.emplace(emit_comptime_closure(cv->template as<const_closure>()));
         } else if (callee_is_fn_pointer_global(*ident, call.function)) {
             // A module-scope function-pointer variable holds its target; load and call through it
             indirect_callee.emplace(emit_expression(call.function));
@@ -5575,6 +5579,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     if (fn_type_opt) {
         if (const auto ptr_data{fn_type_opt->get_data().as_opt<sema::types::pointer>()}) {
             fn_data = ptr_data->underlying.get_data().as_opt<sema::types::function>();
+        } else if (const auto ref_data{fn_type_opt->get_data().as_opt<sema::types::reference>()}) {
+            // `&f` calls the function it refers to, as `^f` does
+            fn_data = ref_data->underlying.get_data().as_opt<sema::types::function>();
         } else if (const auto cl_data{fn_type_opt->get_data().as_opt<sema::types::closure_t>()}) {
             fn_data = cl_data->impl_signature.get_data().as_opt<sema::types::function>();
         } else {
@@ -7047,6 +7054,12 @@ auto emitter::spill_to_temporary(value val, sema::type& type, bool is_const) -> 
 
 auto emitter::materialize_const(const const_value& cv) -> value {
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // A folded function literal (`const f = ^fn(...) { ... };`) is emitted as code of its own
+    if (const auto cl{cv.as_opt<const_closure>()};
+        cl && cv.get_type() && cv.get_type()->get_kind() == sema::type_kind::FUNCTION) {
+        return value{emit_comptime_closure(*cl), cv.get_type()};
+    }
 
     if (const auto arr{cv.as_opt<const_array>()}) {
         const auto type_opt{cv.get_type()};
@@ -9721,7 +9734,11 @@ auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) ->
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Reference expression must have a resolved sema type");
-    const auto target{emit_lvalue(ref.rhs)};
+    // A function literal has no place of its own, so it's spilled like a named function's value
+    const auto rhs_type{active_mod().get_sema_type_opt(*ref.rhs)};
+    const auto target{active_ast().get_as_opt<ast::function_expr>(*ref.rhs) && rhs_type
+                          ? spill_to_temporary(emit_expression(ref.rhs), *rhs_type)
+                          : emit_lvalue(ref.rhs)};
     auto&      res_type{*sema_type};
     const auto ptr{builder_.emit_address_of(target, res_type)};
     return value{ptr, sema_type};

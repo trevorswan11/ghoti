@@ -1557,8 +1557,9 @@ auto parse_destructure(syntax::parser&        parser,
 
     stdx::option<stmt_handle> otherwise;
     if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
-        // Nothing runs at module scope, so there is nowhere for an `else` to leave to
-        if (!parser.in_function_body()) {
+        // Nothing runs at module scope, so there is nowhere for an `else` to leave to. A parse
+        // that only reads the source (`ghoti fmt`) keeps it as written
+        if (!parser.in_function_body() && parser.synthesizes_default_wrappers()) {
             return make_syntax_err("A module-level destructuring can't have an `else`; its "
                                    "pattern has to match its value",
                                    syntax::error::ILLEGAL_MATCH_PATTERN,

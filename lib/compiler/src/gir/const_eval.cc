@@ -1964,9 +1964,9 @@ auto const_eval::eval_address_of(ast::node_id id, ast::node_id rhs) -> stdx::opt
     }
 
     const auto rhs_val{try_eval(rhs)};
-    // `^f` of a function is `f`'s own code address
-    if (rhs_val && rhs_val->is<std::string>() && rhs_val->get_type() &&
-        rhs_val->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+    // `^f` of a function is `f`'s own code address, and `^fn(...) { ... }` is the literal's
+    if (rhs_val && (rhs_val->is<std::string>() || rhs_val->is<const_closure>()) &&
+        rhs_val->get_type() && rhs_val->get_type()->get_kind() == sema::type_kind::FUNCTION) {
         return rhs_val;
     }
     if (rhs_val && rhs_val->is<stdx::option<sema::type&>>()) {
@@ -6564,6 +6564,38 @@ namespace {
     }
 }
 
+// Types whose values a folded call can check against a parameter without any coercion of its own
+[[nodiscard]] auto is_plain_data(const sema::type& t) -> bool {
+    switch (t.get_kind()) {
+    case sema::type_kind::INT:
+    case sema::type_kind::ISIZE:
+    case sema::type_kind::USIZE:
+    case sema::type_kind::BOOL:
+    case sema::type_kind::F16:
+    case sema::type_kind::F32:
+    case sema::type_kind::F64:
+    case sema::type_kind::F80:
+    case sema::type_kind::F128:
+    case sema::type_kind::ARRAY:
+    case sema::type_kind::SLICE:
+    case sema::type_kind::STRUCT:
+    case sema::type_kind::UNION:
+    case sema::type_kind::ENUM:   return true;
+    default:                      return false;
+    }
+}
+
+// A function whose parameter types are the same at every call, so a folded call can check them
+[[nodiscard]] auto has_fixed_signature(const ast::AST& tree, const ast::function_expr& fn) -> bool {
+    return std::ranges::none_of(fn.parameters, [&](const ast::function_expr::parameter& p) {
+        return p.is_comptime || p.is_pack || p.spells_type() || !p.explicit_type ||
+               p.explicit_type->get_token_type() == syntax::token_type_t::AUTO_TYPE ||
+               (tree.get_as_opt<ast::explicit_array_type>(*p.explicit_type) &&
+                tree.get_as<ast::explicit_array_type>(*p.explicit_type)
+                        .inner_explicit_type.get_token_type() == syntax::token_type_t::AUTO_TYPE);
+    });
+}
+
 // An untyped `comptime_int` / `comptime_float` bound to a parameter of a concrete number type
 [[nodiscard]] auto takes_concrete_number(const sema::type& arg, const sema::type& param) -> bool {
     const auto a{arg.get_kind()};
@@ -6598,6 +6630,7 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
         return const_value::make_poison();
     }
 
+    const bool fixed_signature{has_fixed_signature(module_->ast, fn_expr)};
     call_frame frame;
     usize      arg_idx{0};
     if (has_self) {
@@ -6617,13 +6650,18 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
             // A folded call never reaches the type checker, so a number can't stand in for an
-            // aggregate or a sequence here
+            // aggregate or a sequence here, and a fixed signature's data argument has to fit
             // A type argument (`Wrap(u8)`) carries the type it names, never a number
             const auto param_type{args[arg_idx].is<stdx::option<sema::type&>>()
                                       ? stdx::none
                                       : module_->get_sema_type_opt(param.name)};
             const auto arg_type{args[arg_idx].get_type()};
-            if (param_type && arg_type && binds_number_to_non_number(*arg_type, *param_type)) {
+            const bool mistyped{
+                param_type && arg_type &&
+                (binds_number_to_non_number(*arg_type, *param_type) ||
+                 (fixed_signature && is_plain_data(*arg_type) && is_plain_data(*param_type) &&
+                  !sema::is_arg_assignable(*arg_type, *param_type)))};
+            if (mistyped) {
                 const auto at{module_->ast.location_of(call_id.value_or(ast::node_id{param.name}))};
                 ctx_.diags.emplace_back(
                     fmt::format("Argument {} of type '{}' is not assignable to parameter type '{}'",

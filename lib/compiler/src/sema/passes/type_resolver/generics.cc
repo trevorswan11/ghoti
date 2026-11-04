@@ -393,6 +393,32 @@ ctor_instance_display_name(const context&                                       
     }
 }
 
+// Why a data argument can't bind to the concrete parameter type an instantiation resolved, as the
+// type checker would say for a runtime call
+[[nodiscard]] auto mistyped_data_argument(const context& ctx, const type& arg, const type& param)
+    -> stdx::option<std::string> {
+    const auto plain{[](const type& t) {
+        switch (t.get_kind()) {
+        case type_kind::INT:
+        case type_kind::ISIZE:
+        case type_kind::USIZE:
+        case type_kind::BOOL:
+        case type_kind::ARRAY:
+        case type_kind::SLICE:
+        case type_kind::STRUCT:
+        case type_kind::UNION:
+        case type_kind::ENUM:   return true;
+        default:                return is_float(t.get_kind());
+        }
+    }};
+    if (!plain(arg) || !plain(param) || is_generic_type(param) || is_arg_assignable(arg, param)) {
+        return stdx::none;
+    }
+    return fmt::format("Argument of type '{}' is not assignable to parameter type '{}'",
+                       ctx.type_display_name(arg),
+                       ctx.type_display_name(param));
+}
+
 } // namespace
 
 auto type_resolver::record_type_ctor_member_call(ast::node_id call_id, const ast::call_expr& call)
@@ -901,6 +927,15 @@ auto type_resolver::instantiate_generic(type&                             callee
                 inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take())))};
             // `&auto` / `[]mut auto` has no concrete shape until its argument matched it
             if (!is_auto_pattern(resolved_param_type)) {
+                // A call folded at compile time never reaches the type checker
+                if (const auto why{mistyped_data_argument(ctx_, *arg_type, resolved_param_type)}) {
+                    ctx_.diags.emplace_back(*why,
+                                            error::TYPE_MISMATCH,
+                                            p_idx < instantiating_arg_locations_.size()
+                                                ? instantiating_arg_locations_[p_idx]
+                                                : fn_mod.ast.location_of(fn_info.node_id));
+                    return stdx::none;
+                }
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;
