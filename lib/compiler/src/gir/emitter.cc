@@ -5343,8 +5343,18 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             // A generic function's binding holds its environment, never code to call through
             const bool is_fn_val_binding{binding->type.get_kind() == sema::type_kind::FUNCTION &&
                                          !binding->type.is_generic_value()};
+            const auto fn_ref{binding->type.get_data().as_opt<sema::types::reference>()};
             if (binding->const_val && binding->const_val->template is<std::string>()) {
                 callee_name.emplace(binding->const_val->template as<std::string>());
+            } else if (fn_ref && fn_ref->underlying.get_kind() == sema::type_kind::FUNCTION) {
+                // A reference to a function value is called through the value it refers to
+                const auto ref_val{binding->is_alloca
+                                       ? value{builder_.emit_load(value{binding->id, binding->type},
+                                                                  binding->type),
+                                               binding->type}
+                                       : value{binding->id, binding->type}};
+                indirect_callee.emplace(
+                    value{builder_.emit_load(ref_val, fn_ref->underlying), fn_ref->underlying});
             } else if (is_fn_ptr_binding || is_fn_val_binding) {
                 if (binding->is_alloca) {
                     const auto loaded{

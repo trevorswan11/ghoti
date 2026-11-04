@@ -625,10 +625,13 @@ TEST_CASE("A reference or pointer to a function literal calls it") {
         const is_pos = fn(x: i32): bool { return x > 0; };
         const call_it = fn(f: &fn(x: i32): i32): i32 { return f(5); };
         pub const main = fn(): i32 {
+            let lp = &fn(x: i32): i32 { return x + 1; };
+            let h = fn(x: i32): i32 { return x * 3; };
+            let hp = &h;
             return @intFromBool(ap(is_pos)) + bp(3) + @intFromBool(cp(is_pos)) +
-                   call_it(&fn(x: i32): i32 { return x; });
+                   call_it(&fn(x: i32): i32 { return x; }) + lp(3) + hp(2) + call_it(hp);
         };
-    )") == 1 + 6 + 1 + 5);
+    )") == 1 + 6 + 1 + 5 + 4 + 6 + 15);
 }
 
 } // namespace ghoti::tests
