@@ -35,28 +35,25 @@ comptime {
     // symbol(__trunctfxf2, "__trunctfxf2");
 }
 
-const __truncxfhf2 = fn(a: f80) callconv(.c): f16 {
+const __truncxfhf2 = fn(a: compiler_rt.f80) callconv(.c): f16 {
+    return f16_float_cast_f80(@bitCast(a));
+};
+
+@[inline(.always)] const f16_float_cast_f80 = fn(a: f80): f16 {
     return trunc_f80(f16, a);
 };
 
-@[testing] const test__truncxfhf2 = fn(a: f80, expected: u16): bool {
-    const actual: u16 = @bitCast(__truncxfhf2(a));
+@[testing] const test_f16_float_cast_f80 = fn(a: f80, expected: u16): bool {
+    const actual: u16 = @bitCast(f16_float_cast_f80(a));
     return expected == actual;
 };
 
-test "__truncxfhf2" {
-    @skip("Failing on macOS");
-    @expect(test__truncxfhf2(0x1p-24, 0x0001));
-    @expect(test__truncxfhf2(0x1.8p-24, 0x0002));
-    @expect(test__truncxfhf2(0x1.8p-20, 0x0018));
-    @expect(test__truncxfhf2(0x1p-17, 0x0080));
-    @expect(test__truncxfhf2(0x1.fep-15, 0x03fc));
-
-    @expect(test__truncxfhf2(0x1p-149, 0x00000001));
-    @expect(test__truncxfhf2(0x1p-147, 0x00000004));
-
-    @expect(test__truncxfhf2(0x1p-1074, 0x0000000000000001));
-    @expect(test__truncxfhf2(0x1.8p-1073, 0x0000000000000003));
+test "f16_float_cast_f80" {
+    @expect(test_f16_float_cast_f80(0x1p-24, 0x0001));
+    @expect(test_f16_float_cast_f80(0x1.8p-24, 0x0002));
+    @expect(test_f16_float_cast_f80(0x1.8p-20, 0x0018));
+    @expect(test_f16_float_cast_f80(0x1p-17, 0x0080));
+    @expect(test_f16_float_cast_f80(0x1.fep-15, 0x03fc));
 }
 
 @[inline(.always)] const trunc_f80 = fn(comptime Dst: type, a: f80): Dst {
