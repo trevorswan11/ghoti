@@ -605,7 +605,7 @@ TEST_CASE("A mistyped argument to a call folded into a module constant is report
     )");
     helpers::expect_compile_error(R"(
         const f = fn(x: i8): i8 { return x; };
-        const c = f(@as(i64, 5));
+        const c = f(@as(i64, 300));
         pub const main = fn(): i8 { return c; };
     )");
     // What the type checker would accept still folds

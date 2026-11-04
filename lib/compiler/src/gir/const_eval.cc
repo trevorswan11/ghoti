@@ -4366,12 +4366,14 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
         if (op_type == syntax::token_type_t::NOT) { unary_op = semantics::int_unary_op::NOT; }
         // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
         // exact path below negates it first and range-checks the result
-        const bool in_range{
-            sema::comptime_int_fits(*val->as_int_opt(), *type, target_pointer_bits())};
+        // A value past 128 bits has no narrow view and takes the exact path below
+        const auto narrow{val->as_int_opt()};
+        const bool in_range{narrow &&
+                            sema::comptime_int_fits(*narrow, *type, target_pointer_bits())};
         if (unary_op && width && width->first <= 128 && in_range) {
             const semantics::int_domain domain{width->first, width->second};
-            const auto                  folded{semantics::fold_int_unary(
-                *unary_op, domain, static_cast<u128>(*val->as_int_opt()))};
+            const auto                  folded{
+                semantics::fold_int_unary(*unary_op, domain, static_cast<u128>(*narrow))};
             if (!folded) {
                 ctx_.diags.emplace_back(
                     semantics::describe(folded.error(), domain, ctx_.type_display_name(*type)),
@@ -4387,9 +4389,9 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
         const auto type{val->get_type()};
         const auto width{type ? integer_target_width(*type, target_pointer_bits()) : stdx::none};
         if (is_integer_arm(*val) && width && width->second) {
-            const auto exact{
-                checked_signed_arith(syntax::token_type_t::MINUS, 0, *val->as_int_opt())};
-            if (!exact || !sema::comptime_int_fits(*exact, *type, target_pointer_bits())) {
+            // Negated exactly at any width, since an `i256`'s value can be past 128 bits
+            const auto exact{-*val->as_big_int_opt()};
+            if (!sema::comptime_int_fits(exact, *type, target_pointer_bits())) {
                 ctx_.diags.emplace_back(fmt::format("Signed integer overflow in compile-time "
                                                     "constant expression: the result does not "
                                                     "fit '{}'",
@@ -4398,7 +4400,7 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
                                         module_->ast.location_of(id));
                 return const_value::make_poison();
             }
-            return make_scalar_const(*exact, type);
+            return const_value::from_big_int(exact, type);
         }
         if (is_integer_arm(*val) && is_comptime_int_result(type)) {
             return const_value::from_big_int(-*val->as_big_int_opt(), type);
@@ -4431,11 +4433,16 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
             negated.emplace(static_cast<i128>(~static_cast<u128>(val->as<i128>()) + 1),
                             val->get_type());
         }
+        // A value past 128 bits, of either signedness, negates exactly and then wraps
+        if (val->is<big_int>()) {
+            negated.emplace(const_value::from_big_int(-val->as<big_int>(), val->get_type()));
+        }
         if (!negated) { return stdx::none; }
 
         const auto res_type{negated->get_type()};
         if (res_type && res_type->get_kind() == sema::type_kind::INT) {
-            return wrap_to_width(*negated, sema::int_width(*res_type), true, res_type);
+            return wrap_to_width(
+                *negated, sema::int_width(*res_type), sema::is_signed_integer(*res_type), res_type);
         }
         if (res_type && res_type->get_kind() == sema::type_kind::ISIZE) {
             const auto ptr_bits{target_pointer_bits()};
@@ -6656,11 +6663,18 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
                                       ? stdx::none
                                       : module_->get_sema_type_opt(param.name)};
             const auto arg_type{args[arg_idx].get_type()};
+            // A known integer converts to any integer type its value fits, as at runtime
+            const auto fits_as_int{[&] {
+                const auto exact{args[arg_idx].as_big_int_opt()};
+                return exact && sema::is_integer(arg_type->get_kind()) &&
+                       sema::is_integer(param_type->get_kind()) &&
+                       sema::comptime_int_fits(*exact, *param_type, target_pointer_bits());
+            }};
             const bool mistyped{
                 param_type && arg_type &&
                 (binds_number_to_non_number(*arg_type, *param_type) ||
                  (fixed_signature && is_plain_data(*arg_type) && is_plain_data(*param_type) &&
-                  !sema::is_arg_assignable(*arg_type, *param_type)))};
+                  !sema::is_arg_assignable(*arg_type, *param_type) && !fits_as_int()))};
             if (mistyped) {
                 const auto at{module_->ast.location_of(call_id.value_or(ast::node_id{param.name}))};
                 ctx_.diags.emplace_back(

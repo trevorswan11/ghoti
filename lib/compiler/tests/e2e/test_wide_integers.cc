@@ -177,4 +177,26 @@ TEST_CASE("multiplying and dividing the widest integers compiles promptly") {
     )") == 0);
 }
 
+TEST_CASE("negating a constant past 128 bits folds to its exact value") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): i32 {
+            let max: i256 = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+            let min: i256 = -max - 1;
+            let top: u256 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+            let mut r = max;
+            r = r *% -1;
+            if (r != -max) { return 1; }
+            if (-%min != min) { return 2; }
+            if (-%top != 1) { return 3; }
+            if (-(-max) != max) { return 4; }
+            return 0;
+        };
+    )") == 0);
+    helpers::expect_compile_error(R"(
+        const max: i256 = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+        const min: i256 = -max - 1;
+        pub const main = fn(): i32 { const n = -min; return @intCast(i32, n >> 255); };
+    )");
+}
+
 } // namespace ghoti::tests
