@@ -513,6 +513,13 @@ class const_eval {
     auto eval_unwrap(ast::node_id id, const ast::unwrap_expr& unwrap) -> stdx::option<const_value>;
     [[nodiscard]] auto eval_flow(ast::expr_handle operand, ast::node_id at)
         -> stdx::option<flow_eval>;
+    // `branch(&self)` of a value already folded, through `self` when it names a place
+    [[nodiscard]] auto eval_flow_of(const const_value&      operand,
+                                    sema::type&             operand_type,
+                                    stdx::option<const_ref> self,
+                                    ast::node_id            at) -> stdx::option<flow_eval>;
+    // Whether a frame still owes an `errdefer`, so a returned failure has one to run
+    [[nodiscard]] auto has_pending_errdefer() const noexcept -> bool;
     // Binds an `if`/`while` capture from a folded `Flow` in the current frame
     [[nodiscard]] auto bind_flow_capture(const ast::capture_t& capture,
                                          const flow_eval&      flow,

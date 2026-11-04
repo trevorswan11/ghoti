@@ -213,11 +213,11 @@ pub const main = fn(): void {
 	</ul>
 	<h2>Errdefer</h2>
 	<ul>
-		<li><code>errdefer</code> is a <code>defer</code> that only runs when the function exits through <code>?</code> propagating an error</li>
+		<li><code>errdefer</code> is a <code>defer</code> that only runs when the function exits with a failure: through <code>?</code> propagating one, or a <code>return</code> of one such as <code>return .fail(e);</code></li>
 		<li>
-			An explicit <code>return</code>, even of an error value such as <code>return .fail(e);</code>, runs the <code>defer</code>s but not the <code>errdefer</code>s
+			A returned value is a failure when the return type's <code>builtin.Unwrappable</code> <code>branch</code> takes its <code>break</code> path, the same test <code>?</code> uses. A value known only at runtime is checked as the function returns, and only in a function that has an <code>errdefer</code> in scope
 		</li>
-		<li><code>{ "errdefer |e| ..." }</code> binds the residual <code>?</code> propagated, by value; <code>|&amp;e|</code>, <code>|^e|</code>, and <code>|_|</code> also work</li>
+		<li><code>{ "errdefer |e| ..." }</code> binds the failure's residual (the error a <code>Result</code> holds), by value; <code>|&amp;e|</code>, <code>|^e|</code>, and <code>|_|</code> also work</li>
 		<li>The enclosing function must return a type implementing <code>builtin.Rewrappable</code>, such as a <code>Result</code></li>
 		<li><code>errdefer</code>s interleave with <code>defer</code>s in LIFO order, and their bodies can't <code>return</code>, <code>break</code>, <code>continue</code>, or use <code>?</code></li>
 	</ul>
@@ -231,8 +231,9 @@ const parse = fn(ok: bool): std.Result(u32, u8) {
 
 const load = fn(ok: bool, log: &mut u32): std.Result(u32, u8) {
     defer log += 1;                   // runs on every exit
-    errdefer |code| log += code * 10; // runs only when ? propagates an error
+    errdefer |code| log += code * 10; // runs only when load fails
     let v = parse(ok)?;
+    if (v > 100) { return .fail(9); } // a returned failure runs it too
     return .of(v);
 };` }
 		</code>

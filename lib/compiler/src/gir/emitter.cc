@@ -2529,9 +2529,7 @@ auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at)
     if (!const_eval_.last_eval_returned()) { return false; }
     stdx::option<value> ret_val;
     if (!returned.is<void_val>()) { ret_val.emplace(materialize_const(returned)); }
-    emit_defers_up_to(0);
-    builder_.set_location(active_ast().location_of(at));
-    builder_.emit_return(ret_val);
+    emit_function_exit(ret_val, at);
     return true;
 }
 
@@ -2636,6 +2634,93 @@ auto emitter::emit_defers_up_to(usize target_depth, bool error_edge) -> void {
     for (usize i{scopes_.size()}; i > target_depth; --i) {
         emit_defers_for_scope(i - 1, error_edge);
     }
+}
+
+auto emitter::has_pending_errdefer() const noexcept -> bool {
+    return std::ranges::any_of(scopes_, [](const auto& scope) {
+        return std::ranges::any_of(scope.defers, &deferred_entry::on_error);
+    });
+}
+
+auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -> void {
+    PROFILE_FUNCTION();
+    const auto leave{[&](bool error_edge) {
+        emit_defers_up_to(0, error_edge);
+        builder_.set_location(active_ast().location_of(at));
+        builder_.emit_return(ret_val);
+    }};
+    const auto fn_opt{builder_.get_function()};
+    const auto fn_data{fn_opt ? fn_opt->get_type().get_data().as_opt<sema::types::function>()
+                              : stdx::none};
+    if (!ret_val || !fn_data || !has_pending_errdefer()) { return leave(false); }
+
+    // A returned failure runs the `errdefer`s just as `?` propagating it would. Whether the value
+    // is one is what the return type's `branch` says, and its residual is what a capture binds
+    auto&      ret_type{fn_data->return_type};
+    const auto shape{sema::unwrap_shape_of(ctx_, ret_type)};
+    const auto rewrap{sema::rewrap_shape_of(ctx_, ret_type)};
+    if (!shape || !rewrap || !shape->flow_type) { return leave(false); }
+    auto&      residual_type{*shape->residual_type};
+    auto&      from_type{*rewrap->from_type};
+    const bool residual_converts{residual_type == from_type ||
+                                 sema::is_implicit_widenable(residual_type, from_type) ||
+                                 sema::is_assignable(residual_type, from_type)};
+    if (!residual_converts) { return leave(false); }
+
+    auto&      fn{*fn_opt};
+    auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+    auto&      i32_type{ctx_.get_int(32, true)};
+    auto&      bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    auto&      base_operand{*shape->operand_type};
+    auto&      flow_type{const_eval_.force_deferred_call(*shape->flow_type)};
+    const auto returned_slot{spill_to_temporary(*ret_val, ret_type, false)};
+    const auto flow_dest{builder_.emit_call(
+        shape->gir_method_name(sema::builtin_impl::BRANCH, symbol_scoping_),
+        {value{returned_slot.data, ctx_.get_reference(sema::types::mut::POLY, base_operand)}},
+        flow_type)};
+    ASSERT(flow_dest, "branch() must return a Flow union value");
+    const auto flow_slot{spill_to_temporary(value{*flow_dest, flow_type}, flow_type, false)};
+
+    u64 break_idx{1};
+    if (flow_type.has_symbol_table_idx()) {
+        const auto& table{ctx_.registry.get(flow_type.get_symbol_table_idx())};
+        if (const auto proxy{table.get_proxy_opt(sema::builtin_impl::FLOW_BREAK)}) {
+            break_idx = proxy->index;
+        }
+    }
+    const auto tag_ptr{builder_.emit_get_element_ptr(
+        flow_slot, {value{TAGGED_UNION_DISCRIMINANT_INDEX, usize_type}}, i32_type)};
+    const auto tag_val{builder_.emit_load(value{tag_ptr, i32_type}, i32_type)};
+    const auto is_failure{builder_.emit_binary(instruction_kind::EQ,
+                                               value{tag_val, i32_type},
+                                               value{static_cast<i64>(break_idx), i32_type},
+                                               bool_type)};
+
+    auto& failure_seg{fn.add_segment()};
+    auto& success_seg{fn.add_segment()};
+    builder_.emit_cond_goto(
+        value{is_failure, bool_type}, failure_seg.get_id(), success_seg.get_id());
+
+    builder_.set_segment(failure_seg);
+    const auto prev_error_slot{current_error_slot_};
+    if (from_type.get_kind() == sema::type_kind::VOID_ || shape->residual_is_void) {
+        current_error_slot_ = value{void_val{}, from_type};
+    } else {
+        const auto residual_ptr{builder_.emit_get_element_ptr(
+            flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
+        value      residual{builder_.emit_load(value{residual_ptr, residual_type}, residual_type),
+                            residual_type};
+        if (residual_type != from_type) {
+            residual = value{builder_.emit_cast(instruction_kind::WIDEN_CAST, residual, from_type),
+                             from_type};
+        }
+        current_error_slot_ = spill_to_temporary(residual, from_type, false);
+    }
+    leave(true);
+    current_error_slot_ = prev_error_slot;
+
+    builder_.set_segment(success_seg);
+    leave(false);
 }
 
 auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void {
@@ -2991,9 +3076,7 @@ auto emitter::emit_return_stmt(ast::node_id stmt_id, const ast::return_stmt& ret
         // The value already left the function (`return comptime { ...; return r; }`)
         if (const auto seg{builder_.get_segment()}; seg && seg->has_terminator()) { return; }
     }
-    emit_defers_up_to(0);
-    builder_.set_location(active_ast().location_of(stmt_id));
-    builder_.emit_return(ret_val);
+    emit_function_exit(ret_val, stmt_id);
 }
 
 auto emitter::emit_expression_id(ast::node_id id) -> value {

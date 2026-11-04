@@ -276,7 +276,10 @@ class emitter {
 
     auto emit_defers_for_scope(usize scope_idx, bool error_edge = false) -> void;
     auto emit_defers_up_to(usize target_depth, bool error_edge = false) -> void;
-    auto emit_lvalue(ast::node_id id) -> value;
+    // Leaves the function with `ret_val`, running the `errdefer`s too when it is a failure
+    auto               emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -> void;
+    [[nodiscard]] auto has_pending_errdefer() const noexcept -> bool;
+    auto               emit_lvalue(ast::node_id id) -> value;
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
