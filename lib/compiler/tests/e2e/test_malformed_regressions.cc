@@ -634,4 +634,30 @@ TEST_CASE("A reference or pointer to a function literal calls it") {
     )") == 1 + 6 + 1 + 5 + 4 + 6 + 15);
 }
 
+TEST_CASE("A global union keeps an aggregate payload") {
+    CHECK(helpers::compile_and_run(R"(
+        const O = union(enum) { none: void, some: i32 };
+        const R = union(enum) { ok: O, err: u8 };
+        const S = struct { a: i32, b: [2]i16 };
+        const U = union(enum) { e: void, s: S };
+        const g = R{ .ok = .{ .some = 10 } };
+        const rs = [_]R{ .{ .err = 4 }, .{ .ok = .{ .some = 20 } } };
+        const u = U{ .s = .{ .a = 3, .b = .{ 4, 5 } } };
+        pub const main = fn(): i32 {
+            let mut i: usize = 1;
+            i += 0;
+            let mut r = g;
+            let copy = r;
+            r = copy;
+            let mut w = u;
+            let wc = w;
+            w = wc;
+            let a = match (r) { .ok(.some(|v|)) => v, _ => 0 };
+            let b = match (rs[i]) { .ok(.some(|v|)) => v, _ => 0 };
+            let c = match (w) { .s(.{ .a = |x|, .b = .{ |y|, |z| } }) => x + y + z, .e => 0 };
+            return a + b + c;
+        };
+    )") == 10 + 20 + 12);
+}
+
 } // namespace ghoti::tests

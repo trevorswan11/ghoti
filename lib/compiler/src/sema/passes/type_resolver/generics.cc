@@ -393,25 +393,14 @@ ctor_instance_display_name(const context&                                       
     }
 }
 
-// Why a data argument can't bind to the concrete parameter type an instantiation resolved, as the
-// type checker would say for a runtime call
+// Why an array argument can't bind to the array parameter an instantiation resolved, as the type
+// checker would say for a runtime call. Only the length is checked: an argument's literals are
+// already defaulted here (`3` is an `i32`), so its element type may still coerce
 [[nodiscard]] auto mistyped_data_argument(const context& ctx, const type& arg, const type& param)
     -> stdx::option<std::string> {
-    const auto plain{[](const type& t) {
-        switch (t.get_kind()) {
-        case type_kind::INT:
-        case type_kind::ISIZE:
-        case type_kind::USIZE:
-        case type_kind::BOOL:
-        case type_kind::ARRAY:
-        case type_kind::SLICE:
-        case type_kind::STRUCT:
-        case type_kind::UNION:
-        case type_kind::ENUM:   return true;
-        default:                return is_float(t.get_kind());
-        }
-    }};
-    if (!plain(arg) || !plain(param) || is_generic_type(param) || is_arg_assignable(arg, param)) {
+    const auto arg_arr{arg.get_data().as_opt<types::array>()};
+    const auto param_arr{param.get_data().as_opt<types::array>()};
+    if (!arg_arr || !param_arr || is_generic_type(param) || arg_arr->len == param_arr->len) {
         return stdx::none;
     }
     return fmt::format("Argument of type '{}' is not assignable to parameter type '{}'",
