@@ -3380,7 +3380,22 @@ auto const_eval::eval_flow(ast::expr_handle operand_expr, ast::node_id at)
     if (!operand) { return stdx::none; }
     const auto operand_type{module_->get_sema_type_opt(operand_expr)};
     if (!operand_type) { return stdx::none; }
-    const auto shape{sema::unwrap_shape_of(ctx_, *operand_type)};
+    // `branch(&mut? self)` refers to the operand's own place, or to a temporary
+    return eval_flow_of(*operand, *operand_type, eval_place(operand_expr), at);
+}
+
+auto const_eval::has_pending_errdefer() const noexcept -> bool {
+    return std::ranges::any_of(call_stack_, [](const call_frame& frame) {
+        return std::ranges::any_of(frame.defers, &defer_entry::is_errdefer);
+    });
+}
+
+auto const_eval::eval_flow_of(const const_value&      operand_value,
+                              sema::type&             operand_type,
+                              stdx::option<const_ref> place,
+                              ast::node_id            at) -> stdx::option<flow_eval> {
+    const stdx::option<const_value> operand{operand_value};
+    const auto                      shape{sema::unwrap_shape_of(ctx_, operand_type)};
     if (!shape) { return stdx::none; }
 
     const auto branch_m{shape->impl->find_method(sema::builtin_impl::BRANCH)};
@@ -3393,8 +3408,7 @@ auto const_eval::eval_flow(ast::expr_handle operand_expr, ast::node_id at)
     const auto fn_expr{decl_mod.ast.get_as_opt<ast::function_expr>(*decl->value)};
     if (!fn_expr) { return stdx::none; }
 
-    // `branch(&mut? self)` refers to the operand's own place, or to a temporary
-    auto self{eval_place(operand_expr)};
+    auto self{place};
     if (!self && !call_stack_.empty()) { self = ref_to_temporary(*operand); }
     if (!self) { return stdx::none; }
     const auto prev{module_};
@@ -6801,6 +6815,13 @@ auto const_eval::eval_stmt(const ast::stmt_handle& stmt) -> stdx::option<const_v
                     val = std::move(pointee);
                 }
                 if (!val) { return stdx::none; }
+            }
+            // A returned failure runs the `errdefer`s as `?` propagating it would
+            if (data.expression && ret_type && has_pending_errdefer()) {
+                if (const auto flow{eval_flow_of(*val, *ret_type, stdx::none, *data.expression)};
+                    flow && flow->is_break) {
+                    current_error_val_ = flow->payload;
+                }
             }
             current_signal_ = eval_signal{
                 .kind         = eval_signal_kind::RETURN,

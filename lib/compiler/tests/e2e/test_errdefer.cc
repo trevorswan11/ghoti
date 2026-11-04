@@ -235,17 +235,92 @@ TEST_CASE("errdefer with Option capturing void") {
     )") == 42);
 }
 
-TEST_CASE("errdefer does not trigger on direct static error return under Definition A") {
+TEST_CASE("errdefer runs when a function returns a failure explicitly") {
     CHECK(helpers::compile_and_run(std::string{RESULT_PRELUDE} + R"(
-        const R = Result(i32, i32);
-        const direct_err = fn(log: ^mut i32): R {
-            errdefer *log = 100;
-            return R{ .err = 1 };
+        const R = Result(i32, u8);
+        const work = fn(mode: i32, log: ^mut i32): R {
+            defer *log = *log * 10 + 1;
+            errdefer |e| *log = *log * 10 + @as(i32, e);
+            if (mode == 0) { return R{ .err = 7 }; }
+            if (mode == 1) { return R{ .ok = 5 }; }
+            // Known only at runtime, so `branch` decides
+            let r: R = if (mode == 2) .{ .err = 3 } else .{ .ok = 9 };
+            return r;
+        };
+        const run = fn(mode: i32): i32 {
+            let mut log: i32 = 0;
+            _ = work(mode, ^mut log);
+            return log;
         };
         pub const main = fn(): i32 {
+            let mut m: i32 = 0;
+            m += 0;
+            if (run(m) != 71 or run(m + 1) != 1 or run(m + 2) != 31 or run(m + 3) != 1) {
+                return 1;
+            }
+            return 0;
+        };
+    )") == 0);
+}
+
+TEST_CASE("errdefer runs on a returned failure at compile time as at runtime") {
+    CHECK(helpers::compile_and_run(std::string{RESULT_PRELUDE} + R"(
+        const R = Result(i32, u8);
+        const work = fn(mode: i32, log: &mut i32): R {
+            defer log = log * 10 + 1;
+            errdefer |e| log = log * 10 + @as(i32, e);
+            if (mode == 0) { return R{ .err = 7 }; }
+            let r: R = if (mode == 2) .{ .err = 3 } else .{ .ok = 9 };
+            return r;
+        };
+        const run = fn(mode: i32): i32 {
             let mut log: i32 = 0;
-            _ = direct_err(^mut log);
-            return log; // Remains 0 because static return does not trigger errdefer under Definition A
+            _ = work(mode, &mut log);
+            return log;
+        };
+        const folded = [_]i32{ run(0), run(1), run(2) };
+        pub const main = fn(): i32 {
+            let mut m: i32 = 0;
+            m += 0;
+            if (folded[0] != run(m) or folded[1] != run(m + 1) or folded[2] != run(m + 2)) {
+                return 1;
+            }
+            return folded[0] + folded[2];
+        };
+    )") == 71 + 31);
+}
+
+TEST_CASE("A returned failure runs only the errdefers still in scope") {
+    CHECK(helpers::compile_and_run(std::string{RESULT_PRELUDE} + R"(
+        const R = Result(i32, u8);
+        const nested = fn(mode: i32, log: ^mut i32): R {
+            errdefer *log += 1;
+            {
+                errdefer *log += 10;
+                if (mode == 0) { return R{ .err = 1 }; }
+            }
+            if (mode == 1) { return R{ .err = 2 }; }
+            return R{ .ok = 0 };
+        };
+        const opt = fn(mode: i32, log: ^mut i32): Option(i32) {
+            errdefer *log += 100;
+            if (mode == 0) { return .{ .none = {} }; }
+            return .{ .some = mode };
+        };
+        pub const main = fn(): i32 {
+            let mut m: i32 = 0;
+            m += 0;
+            let mut a: i32 = 0;
+            let mut b: i32 = 0;
+            let mut c: i32 = 0;
+            let mut d: i32 = 0;
+            let mut e: i32 = 0;
+            _ = nested(m, ^mut a);
+            _ = nested(m + 1, ^mut b);
+            _ = nested(m + 2, ^mut c);
+            _ = opt(m, ^mut d);
+            _ = opt(m + 1, ^mut e);
+            return if (a == 11 and b == 1 and c == 0 and d == 100 and e == 0) 0 else 1;
         };
     )") == 0);
 }

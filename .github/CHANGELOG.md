@@ -980,6 +980,9 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a module-level aggregate constant's elements and fields were never checked against their types, so `const Q = [_]u8{ true, 2 };` or a `bool` field given `1` crashed LLVM, and `[_]u8{ 300 }` silently truncated
 - Fixed: naming an enum variant through a value (`e.z`, `E.x.z`) was accepted and crashed codegen; it is now an error pointing at `.z` / `E.z`
 - Fixed: a parameter typed `comptime_int` or `comptime_float` without `comptime` took a 32-bit runtime slot, crashing LLVM for a wider argument; it now binds at compile time like a `comptime` one
+- **Breaking:** `errdefer` now runs whenever the function exits with a failure, including an explicit `return` of one (`return .fail(e);`), not only when `?` propagates it
+    - A returned value is a failure when the return type's `Unwrappable.branch` takes its `break` path, the same test `?` uses, and `errdefer |e|` binds its residual
+    - A value known only at runtime is checked on the way out, and only in a function with an `errdefer` in scope; compile-time evaluation follows the same rule
 - `@intFromBool(b)` with no type in its context is a `u1` instead of an error, and a `bool` vector gives `u1` lanes
 
 ## Standard Library
