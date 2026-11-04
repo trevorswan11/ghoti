@@ -459,16 +459,21 @@ auto type_resolver::check_builtin_arity(const ast::call_expr&          call,
     return {};
 }
 
-auto type_resolver::cast_args_of(const ast::call_expr& call, std::string_view name)
+auto type_resolver::cast_args_of(const ast::call_expr& call,
+                                 std::string_view      name,
+                                 stdx::option<type&>   fallback)
     -> stdx::result<cast_args, diagnostic> {
     cast_args args;
 
     if (call.arguments.size() == 1) {
-        const auto implicit_type{implicit_type_stack_.peek()};
+        auto implicit_type{implicit_type_stack_.peek()};
         if (!implicit_type || !implicit_type->is_resolved() ||
             implicit_type->get_kind() == type_kind::AUTO ||
             implicit_type->get_kind() == type_kind::COMPTIME_INT ||
             implicit_type->get_kind() == type_kind::COMPTIME_FLOAT) {
+            implicit_type = fallback;
+        }
+        if (!implicit_type) {
             return make_sema_err(
                 fmt::format(
                     "cannot infer the target type of '{}' here; write '{}(T, x)'", name, name),
@@ -790,7 +795,8 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         break;
     }
     case syntax::builtin_t::INT_FROM_BOOL: {
-        const auto args_res{cast_args_of(call, "@intFromBool")};
+        // A bool's 0/1 needs one bit, so an untyped `@intFromBool(b)` is a `u1`
+        const auto args_res{cast_args_of(call, "@intFromBool", ctx_.get_int(1, false))};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }
         auto& target{*args_res->target};

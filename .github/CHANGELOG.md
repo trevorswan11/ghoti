@@ -976,6 +976,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: a `.{ ... }` or `.of(...)` argument to a parameter typed against an earlier `comptime` parameter (`o: Option(T)`, `xs: [n]T`) took the generic template's type and crashed codegen; it now takes the instantiation's
 - Fixed: a call folded into a module-level constant skipped its argument type checks, so a `[2]u8` passed to a `[1]u8` parameter and an `i64` narrowed silently into an `i8`
 - Fixed: calling through a reference to a function (`&f`, `&fn(...) { ... }`) or a pointer to a function literal (`^fn(...) { ... }`) miscompiled or crashed the compiler
+- Fixed: a global tagged union whose payload is a struct, array, or union was emitted with a zeroed payload, so `const g = R{ .ok = .{ .some = 10 } };` read back as `.ok(.none)` at runtime
+- `@intFromBool(b)` with no type in its context is a `u1` instead of an error, and a `bool` vector gives `u1` lanes
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`

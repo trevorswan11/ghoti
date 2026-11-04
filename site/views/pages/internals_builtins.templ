@@ -31,6 +31,9 @@ templ InternalsBuiltinsPage() {
 	<h3>{ "@floatCast" }</h3>
 	<pre><code class="language-ghoti">{ `@floatCast(comptime T: type, expression: auto): T` }</code></pre>
 	<p>Converts a float to the float type <code>T</code>, whether that narrows, widens, or keeps the type, rounding to the nearest representable value. <code>T</code> can be omitted when inferable from context. A compile-time-known finite operand that overflows <code>T</code> is a compile error; at runtime the conversion follows IEEE 754 and an overflow rounds to infinity, with no runtime safety check. An integer operand is rejected; use <code>{ "@floatFromInt" }</code>.</p>
+	<h3>{ "@intFromBool" }</h3>
+	<pre><code class="language-ghoti">{ `@intFromBool(comptime T: type, expression: bool): T` }</code></pre>
+	<p>Converts a <code>bool</code> to the integer type <code>T</code>: <code>false</code> is <code>0</code> and <code>true</code> is <code>1</code>. <code>T</code> can be omitted when inferable from context, and is <code>u1</code> where the context names no type (<code>{ "let bit = @intFromBool(b);" }</code>). A <code>bool</code> vector converts lane by lane, to <code>u1</code> lanes when untyped. Its inverse is <code>{ "@boolFromInt" }</code>.</p>
 	<h3>{ "@backingInt" }</h3>
 	<pre><code class="language-ghoti">{ `@backingInt(expression: auto): BackingInt(@TypeOf(expression))` }</code></pre>
 	<p>Returns the integer a value is stored as: an enum's underlying type (<code>{ "enum : u8 { ... }" }</code> gives a <code>u8</code>), the <code>uN</code> holding every bit of a <code>packed struct</code> or <code>packed union</code>, or the <code>i32</code> index of a tagged union's active field. Folds at compile time for a compile-time-known enum value.</p>

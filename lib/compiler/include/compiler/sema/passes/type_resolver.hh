@@ -466,7 +466,10 @@ class type_resolver {
                                            const types::builtin_function& builtin,
                                            syntax::builtin_t              builtin_id) const
         -> stdx::result<void, diagnostic>;
-    [[nodiscard]] auto cast_args_of(const ast::call_expr& call, std::string_view name)
+    // `fallback` is the target a one-argument form takes when its context names no type
+    [[nodiscard]] auto cast_args_of(const ast::call_expr& call,
+                                    std::string_view      name,
+                                    stdx::option<type&>   fallback = stdx::none)
         -> stdx::result<cast_args, diagnostic>;
     template <ast::IndexableID ID>
     [[nodiscard]] auto resolve_cast_builtin(ID id, builtin_site& site)
