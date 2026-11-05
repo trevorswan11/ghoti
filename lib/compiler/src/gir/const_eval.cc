@@ -4364,10 +4364,11 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
             unary_op = semantics::int_unary_op::WRAP_NEG;
         }
         if (op_type == syntax::token_type_t::NOT) { unary_op = semantics::int_unary_op::NOT; }
-        // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
-        // exact path below negates it first and range-checks the result
         // A value past 128 bits has no narrow view and takes the exact path below
         const auto narrow{val->as_int_opt()};
+
+        // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
+        // exact path below negates it first and range-checks the result
         const bool in_range{narrow &&
                             sema::comptime_int_fits(*narrow, *type, target_pointer_bits())};
         if (unary_op && width && width->first <= 128 && in_range) {
@@ -4389,7 +4390,6 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
         const auto type{val->get_type()};
         const auto width{type ? integer_target_width(*type, target_pointer_bits()) : stdx::none};
         if (is_integer_arm(*val) && width && width->second) {
-            // Negated exactly at any width, since an `i256`'s value can be past 128 bits
             const auto exact{-*val->as_big_int_opt()};
             if (!sema::comptime_int_fits(exact, *type, target_pointer_bits())) {
                 ctx_.diags.emplace_back(fmt::format("Signed integer overflow in compile-time "
@@ -6656,13 +6656,11 @@ auto const_eval::eval_comptime_fn(stdx::option<ast::node_id>        call_id,
         }
         if (param.name.is<ast::identifier_expr>()) {
             const auto& ident{module_->ast.get_as<ast::identifier_expr>(param.name)};
-            // A folded call never reaches the type checker, so a number can't stand in for an
-            // aggregate or a sequence here, and a fixed signature's data argument has to fit
-            // A type argument (`Wrap(u8)`) carries the type it names, never a number
-            const auto param_type{args[arg_idx].is<stdx::option<sema::type&>>()
-                                      ? stdx::none
-                                      : module_->get_sema_type_opt(param.name)};
-            const auto arg_type{args[arg_idx].get_type()};
+            const auto  param_type{args[arg_idx].is<stdx::option<sema::type&>>()
+                                       ? stdx::none
+                                       : module_->get_sema_type_opt(param.name)};
+            const auto  arg_type{args[arg_idx].get_type()};
+
             // A known integer converts to any integer type its value fits, as at runtime
             const auto fits_as_int{[&] {
                 const auto exact{args[arg_idx].as_big_int_opt()};

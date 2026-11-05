@@ -393,9 +393,7 @@ ctor_instance_display_name(const context&                                       
     }
 }
 
-// Why an array argument can't bind to the array parameter an instantiation resolved, as the type
-// checker would say for a runtime call. Only the length is checked: an argument's literals are
-// already defaulted here (`3` is an `i32`), so its element type may still coerce
+// Why an array argument can't bind to the array parameter an instantiation resolved
 [[nodiscard]] auto mistyped_data_argument(const context& ctx, const type& arg, const type& param)
     -> stdx::option<std::string> {
     const auto arg_arr{arg.get_data().as_opt<types::array>()};

@@ -1208,9 +1208,7 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                           : stdx::none};
                     return init && !init->object_type;
                 }};
-                // `.{ ... }`, `.name`, `.name(...)`, and `&` of one take their type from the
-                // parameter, which a type written against earlier `comptime` parameters only has
-                // in the monomorph, so the literal is typed once that exists
+
                 if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
                     !bound_idx && arg_h && i < fn_params.size() &&
                     param_type->get_kind() != type_kind::AUTO &&

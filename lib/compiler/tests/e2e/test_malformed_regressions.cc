@@ -1,3 +1,5 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
@@ -9,6 +11,7 @@
 #include "helpers/ast.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "stdx/utility.hh"
 #include "support/test.hh"
 
 // Inputs the mutation fuzzer turned into compiler crashes; each must now be a clean diagnostic
@@ -581,40 +584,43 @@ TEST_CASE("A function type can't pass or return 'opaque' by value") {
 }
 
 TEST_CASE("A mistyped argument to a call folded into a module constant is reported") {
-    // A folded call never reaches the type checker, so these once compiled or crashed LLVM
-    helpers::expect_compile_error(R"(
+    SECTION("A folded call never reaches the type checker") {
+        helpers::expect_compile_error(R"(
         const chain = fn(a: auto, b: @TypeOf("s")): @TypeOf(b) { return b; };
         const call_chain = chain(1, "xy");
         pub const main = fn(): u8 { return call_chain[0]; };
     )");
-    helpers::expect_compile_error(R"(
+        helpers::expect_compile_error(R"(
         const f = fn(x: [1:0]u8): [1:0]u8 { return x; };
         const c = f("xy");
         pub const main = fn(): u8 { return c[0]; };
     )");
-    helpers::expect_compile_error(R"(
+        helpers::expect_compile_error(R"(
         const f = fn(x: [1]u8): u8 { return x[0]; };
         const c = f([_]u8{ 1, 2 });
         pub const main = fn(): u8 { return c; };
     )");
-    helpers::expect_compile_error(R"(
+        helpers::expect_compile_error(R"(
         const P = struct { a: u8 };
         const Q = struct { a: u8 };
         const f = fn(x: P): u8 { return x.a; };
         const c = f(Q{ .a = 1 });
         pub const main = fn(): u8 { return c; };
     )");
-    helpers::expect_compile_error(R"(
+        helpers::expect_compile_error(R"(
         const f = fn(x: i8): i8 { return x; };
         const c = f(@as(i64, 300));
         pub const main = fn(): i8 { return c; };
     )");
-    // What the type checker would accept still folds
-    CHECK(helpers::compile_and_run(R"(
+    }
+
+    SECTION("What the type checker would accept still folds") {
+        CHECK(helpers::compile_and_run(R"(
         const f = fn(x: i64, s: []u8, y: u8): i64 { return x + @intCast(i64, s.len) + y; };
         const c = f(@as(i32, 5), "abc", 2);
         pub const main = fn(): i64 { return c; };
     )") == 10);
+    }
 }
 
 TEST_CASE("A reference or pointer to a function literal calls it") {
@@ -662,7 +668,6 @@ TEST_CASE("A global union keeps an aggregate payload") {
 }
 
 TEST_CASE("A global aggregate's elements and fields are checked against their types") {
-    // These once reached LLVM with a mistyped constant, or silently truncated
     const auto source{GENERATE(as<std::string_view>{},
                                "const Q = [_]u8{ true, 2 };",
                                "const Q = [_][2]u8{ .{ true, 2 } };",
@@ -699,7 +704,6 @@ TEST_CASE("An enum variant can't be named through a value of the enum") {
 }
 
 TEST_CASE("A comptime_int parameter binds at compile time") {
-    // A runtime `comptime_int` once took a 32-bit slot, crashing LLVM on a wider argument
     CHECK(helpers::compile_and_run(R"(
         const f = fn(m: comptime_int): i32 { return @intCast(i32, m >> 100); };
         const g = fn(x: comptime_float): i32 { return @intFromFloat(i32, x * 2); };

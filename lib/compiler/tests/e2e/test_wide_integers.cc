@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "helpers/codegen.hh"
+#include "helpers/sema.hh"
 
 namespace ghoti::tests {
 

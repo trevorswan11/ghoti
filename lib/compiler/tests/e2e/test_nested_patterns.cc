@@ -571,7 +571,6 @@ TEST_CASE("Destructuring syntax errors") {
         fails_to_parse("pub const main = fn(): i32 { match (a) { .b(||.c||) => 1 }; return 0; };"));
     CHECK(fails_to_parse("const S = struct { const .{ .x = |x| } = p; };"));
     CHECK(fails_to_parse("const .ok(|v|) = r else unreachable;"));
-    // Inside a function an `else` has somewhere to go
     CHECK_FALSE(fails_to_parse(
         "pub const main = fn(): i32 { const .ok(|v|) = r else return 1; return v; };"));
 }

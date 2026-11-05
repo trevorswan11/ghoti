@@ -795,7 +795,6 @@ auto type_resolver::resolve_cast_builtin(ID, builtin_site& site) -> stdx::result
         break;
     }
     case syntax::builtin_t::INT_FROM_BOOL: {
-        // A bool's 0/1 needs one bit, so an untyped `@intFromBool(b)` is a `u1`
         const auto args_res{cast_args_of(call, "@intFromBool", ctx_.get_int(1, false))};
         if (!args_res) { return make_sema_err(args_res.error()); }
         if (!args_res->target || args_res->target->is_poison()) { break; }

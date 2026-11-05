@@ -636,7 +636,7 @@ auto type_resolver::resolve_dot(ID id, const ast::dot_expr& dot) -> void {
         }
     }
 
-    // A variant belongs to its enum type, so naming one through a value (`e.z`, `.x.z`) is a slip
+    // A variant belongs to its enum type, so naming one through a value is wrong
     if (const auto en{object_type.get_data().as_opt<types::enum_t>()};
         en && operand_nature(dot.object) == operand_nature_t::VALUE) {
         const auto& member_name{resolving_.ast.get_as<ast::identifier_expr>(dot.member).name};

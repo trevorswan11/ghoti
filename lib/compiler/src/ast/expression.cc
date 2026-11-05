@@ -1173,8 +1173,7 @@ auto parse_function_header(syntax::parser& parser)
             const bool type_param{
                 param_explicit_type && param_explicit_type->get_modifier().is_value() &&
                 param_explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE};
-            // An untyped number only exists at compile time, so its parameter binds there as an
-            // `auto` one given a literal does
+            // An untyped number only exists at compile time
             const bool untyped_param{
                 param_explicit_type && param_explicit_type->get_modifier().is_value() &&
                 (param_explicit_type->get_token_type() == syntax::token_type_t::COMPTIME_INT_TYPE ||
@@ -1567,8 +1566,6 @@ auto parse_destructure(syntax::parser&        parser,
 
     stdx::option<stmt_handle> otherwise;
     if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
-        // Nothing runs at module scope, so there is nowhere for an `else` to leave to. A parse
-        // that only reads the source (`ghoti fmt`) keeps it as written
         if (!parser.in_function_body() && parser.synthesizes_default_wrappers()) {
             return make_syntax_err("A module-level destructuring can't have an `else`; its "
                                    "pattern has to match its value",

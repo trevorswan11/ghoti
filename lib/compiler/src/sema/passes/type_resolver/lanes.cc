@@ -556,9 +556,9 @@ auto type_resolver::resolve_vector_cast_builtin(builtin_site& site)
         kind == syntax::builtin_t::FLOAT_FROM_INT || kind == syntax::builtin_t::FLOAT_CAST};
     if (!lane_cast) { return stdx::none; }
     // The scalar path reports a missing or ill-formed target
-    // An untyped `@intFromBool` over a bool vector gives as many `u1` lanes
     stdx::option<type&> fallback;
     if (kind == syntax::builtin_t::INT_FROM_BOOL && call.arguments.size() == 1) {
+        // An untyped `@intFromBool` over a bool vector gives as many `u1` lanes
         auto& operand_type{*get_call_arg_value_type(call.arguments[0])};
         if (is_vector(operand_type)) {
             fallback.emplace(ctx_.with_lane(operand_type, ctx_.get_int(1, false)));

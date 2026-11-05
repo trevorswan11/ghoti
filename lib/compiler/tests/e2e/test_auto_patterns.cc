@@ -1,9 +1,10 @@
 #include <string_view>
-
-#include <fmt/format.h>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/format.h>
 
+#include "compiler/sema/error.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
 
@@ -68,7 +69,7 @@ TEST_CASE("an argument that doesn't match an `auto` pattern is an error at the c
         const f = fn(xs: [3]auto): i32 { return 0; };
         pub const main = fn(): i32 { let a: [2]u8 = .{ 1, 2 }; return f(a); };
     )");
-    // An array coerces to a slice pattern only with the elements' own mutability and sentinel
+
     mismatch(R"(
         const f = fn(x: []mut auto): i32 { return 1; };
         pub const main = fn(): i32 { let a = [_]i64{ 1, 2 }; return f(&a); };
@@ -81,7 +82,7 @@ TEST_CASE("an argument that doesn't match an `auto` pattern is an error at the c
         const f = fn(x: []auto): i32 { return 1; };
         pub const main = fn(): i32 { let a = [_]u8{ 1, 2 }; return f(^a); };
     )");
-    // `auto` inside a slice or array is only a parameter pattern
+
     CHECK(helpers::raised("let x: []auto = undefined;", sema::error::ILLEGAL_AUTO_USAGE));
 }
 

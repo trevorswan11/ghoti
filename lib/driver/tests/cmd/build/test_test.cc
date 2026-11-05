@@ -544,8 +544,6 @@ TEST_CASE("test command execution") {
         REQUIRE(cmd.execute());
     }
 
-    // Folding `Wrap(T)` while `Wrap`'s own parameter is retyped to a bound argument once rejected
-    // the type argument `u8` as a number given to a struct parameter
     SECTION("A type built up in a `comptime let mut` initializes after other generic tests") {
         codegen::llvm_scope scope;
         tempfile            src_file{"test_driver_comptime_type_var.gh"};

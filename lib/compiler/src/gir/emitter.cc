@@ -1091,8 +1091,7 @@ namespace {
     return ctx.get_builtin_resolved_type(sema::type_kind::COMPTIME_INT);
 }
 
-// Why a folded aggregate's scalar doesn't fit the element or field it initializes. A global's
-// aggregate initializer is never stored through, so the type checker never sees its scalars
+// Why a folded aggregate's scalar doesn't fit the element or field it initializes
 [[nodiscard]] auto mistyped_const_leaf(sema::context&     ctx,
                                        const const_value& cv,
                                        const sema::type&  expected,
@@ -6965,7 +6964,6 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             return value{void_val{}, sema_type};
         }
         if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
-        // An aggregate result has no immediate form, so it's built in a stack slot
         if (yields_value) { return materialize_const(*cv); }
         return value{void_val{}, sema_type};
     }
