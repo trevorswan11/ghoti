@@ -1,4 +1,7 @@
+#include <string_view>
+
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <fmt/format.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -8,6 +11,7 @@
 #include "helpers/ast.hh"
 #include "helpers/codegen.hh"
 #include "helpers/sema.hh"
+#include "stdx/utility.hh"
 #include "support/test.hh"
 
 // Inputs the mutation fuzzer turned into compiler crashes; each must now be a clean diagnostic
@@ -577,6 +581,138 @@ TEST_CASE("A function type can't pass or return 'opaque' by value") {
     // A pointer to it is the way to hand one around
     CHECK_FALSE(helpers::raised("pub const F = extern fn(o: ^mut opaque): ^mut opaque;",
                                 sema::error::ILLEGAL_OPAQUE_TYPE));
+}
+
+TEST_CASE("A mistyped argument to a call folded into a module constant is reported") {
+    SECTION("A folded call never reaches the type checker") {
+        helpers::expect_compile_error(R"(
+        const chain = fn(a: auto, b: @TypeOf("s")): @TypeOf(b) { return b; };
+        const call_chain = chain(1, "xy");
+        pub const main = fn(): u8 { return call_chain[0]; };
+    )");
+        helpers::expect_compile_error(R"(
+        const f = fn(x: [1:0]u8): [1:0]u8 { return x; };
+        const c = f("xy");
+        pub const main = fn(): u8 { return c[0]; };
+    )");
+        helpers::expect_compile_error(R"(
+        const f = fn(x: [1]u8): u8 { return x[0]; };
+        const c = f([_]u8{ 1, 2 });
+        pub const main = fn(): u8 { return c; };
+    )");
+        helpers::expect_compile_error(R"(
+        const P = struct { a: u8 };
+        const Q = struct { a: u8 };
+        const f = fn(x: P): u8 { return x.a; };
+        const c = f(Q{ .a = 1 });
+        pub const main = fn(): u8 { return c; };
+    )");
+        helpers::expect_compile_error(R"(
+        const f = fn(x: i8): i8 { return x; };
+        const c = f(@as(i64, 300));
+        pub const main = fn(): i8 { return c; };
+    )");
+    }
+
+    SECTION("What the type checker would accept still folds") {
+        CHECK(helpers::compile_and_run(R"(
+        const f = fn(x: i64, s: []u8, y: u8): i64 { return x + @intCast(i64, s.len) + y; };
+        const c = f(@as(i32, 5), "abc", 2);
+        pub const main = fn(): i64 { return c; };
+    )") == 10);
+    }
+}
+
+TEST_CASE("A reference or pointer to a function literal calls it") {
+    CHECK(helpers::compile_and_run(R"(
+        const ap = &fn(m: fn(x: i32): bool): bool { return m(1); };
+        const bp = ^fn(x: i32): i32 { return x * 2; };
+        const g = fn(m: fn(x: i32): bool): bool { return m(2); };
+        const cp = &g;
+        const is_pos = fn(x: i32): bool { return x > 0; };
+        const call_it = fn(f: &fn(x: i32): i32): i32 { return f(5); };
+        pub const main = fn(): i32 {
+            let lp = &fn(x: i32): i32 { return x + 1; };
+            let h = fn(x: i32): i32 { return x * 3; };
+            let hp = &h;
+            return @intFromBool(ap(is_pos)) + bp(3) + @intFromBool(cp(is_pos)) +
+                   call_it(&fn(x: i32): i32 { return x; }) + lp(3) + hp(2) + call_it(hp);
+        };
+    )") == 1 + 6 + 1 + 5 + 4 + 6 + 15);
+}
+
+TEST_CASE("A global union keeps an aggregate payload") {
+    CHECK(helpers::compile_and_run(R"(
+        const O = union(enum) { none: void, some: i32 };
+        const R = union(enum) { ok: O, err: u8 };
+        const S = struct { a: i32, b: [2]i16 };
+        const U = union(enum) { e: void, s: S };
+        const g = R{ .ok = .{ .some = 10 } };
+        const rs = [_]R{ .{ .err = 4 }, .{ .ok = .{ .some = 20 } } };
+        const u = U{ .s = .{ .a = 3, .b = .{ 4, 5 } } };
+        pub const main = fn(): i32 {
+            let mut i: usize = 1;
+            i += 0;
+            let mut r = g;
+            let copy = r;
+            r = copy;
+            let mut w = u;
+            let wc = w;
+            w = wc;
+            let a = match (r) { .ok(.some(|v|)) => v, _ => 0 };
+            let b = match (rs[i]) { .ok(.some(|v|)) => v, _ => 0 };
+            let c = match (w) { .s(.{ .a = |x|, .b = .{ |y|, |z| } }) => x + y + z, .e => 0 };
+            return a + b + c;
+        };
+    )") == 10 + 20 + 12);
+}
+
+TEST_CASE("A global aggregate's elements and fields are checked against their types") {
+    const auto source{GENERATE(as<std::string_view>{},
+                               "const Q = [_]u8{ true, 2 };",
+                               "const Q = [_][2]u8{ .{ true, 2 } };",
+                               "const Q = [_]u8{ 300, 2 };",
+                               "const Q = [_]u8{ 1.5, 2 };",
+                               "const Q = [_]bool{ 1, true };",
+                               "const Q = [_]f32{ true, 2 };",
+                               "const P = struct { a: u8 }; const Q = P{ .a = true };",
+                               "const U = union(enum) { a: u8 }; const Q = U{ .a = 256 };")};
+    DISCARD(helpers::expect_compile_error(
+        fmt::format("{}\npub const main = fn(): i32 {{ return 0; }};", source)));
+}
+
+TEST_CASE("A global aggregate whose elements and fields fit still folds") {
+    CHECK(helpers::compile_and_run(R"(
+        const P = struct { a: u8, b: f32, c: bool };
+        const Q = [_]P{ .{ .a = 255, .b = 2, .c = true }, .{ .a = 0, .b = 1.5, .c = false } };
+        const N = [_]i8{ -128, 127 };
+        pub const main = fn(): i32 {
+            return @as(i32, Q[0].a) - 200 + @intFromFloat(i32, Q[1].b * 2) + @as(i32, N[0]) + N[1];
+        };
+    )") == 255 - 200 + 3 - 128 + 127);
+}
+
+TEST_CASE("An enum variant can't be named through a value of the enum") {
+    const auto access{GENERATE(as<std::string_view>{}, "E.x.z", ".x .z", "a.z")};
+    CHECK(helpers::raised(fmt::format(R"(
+        const E = enum {{ x, y, z }};
+        const h = fn(e: E): i32 {{ return if (e == .z) 3 else 1; }};
+        pub const main = fn(): i32 {{ let a: E = .x; return h({}); }};
+    )",
+                                      access),
+                          sema::error::TYPE_MISMATCH));
+}
+
+TEST_CASE("A comptime_int parameter binds at compile time") {
+    CHECK(helpers::compile_and_run(R"(
+        const f = fn(m: comptime_int): i32 { return @intCast(i32, m >> 100); };
+        const g = fn(x: comptime_float): i32 { return @intFromFloat(i32, x * 2); };
+        pub const main = fn(): i32 { return f(1 << 102) + f(3 << 100) + g(2.5); };
+    )") == 4 + 3 + 5);
+    helpers::expect_compile_error(R"(
+        const f = fn(m: comptime_int): i32 { return @intCast(i32, m); };
+        pub const main = fn(): i32 { let mut x: i32 = 3; x += 1; return f(x); };
+    )");
 }
 
 } // namespace ghoti::tests

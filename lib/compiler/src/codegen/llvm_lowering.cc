@@ -114,6 +114,10 @@ auto apply_visibility(llvm::GlobalValue& value, stdx::option<ast::symbol_visibil
     return bytes;
 }
 
+[[nodiscard]] auto is_aggregate_const(const gir::const_value& cv) -> bool {
+    return cv.is<gir::const_struct>() || cv.is<gir::const_array>() || cv.is<gir::const_union>();
+}
+
 // Reads `source`'s bytes back as a constant of `ty` starting `offset` bytes in, one scalar at a
 // time, with zeroes past its end
 [[nodiscard]] auto
@@ -1081,6 +1085,16 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 st, {tag_c, llvm::Constant::getNullValue(st->getElementType(1))});
         }
 
+        // An aggregate payload is lowered as its own type and then read back as payload bytes
+        if (!un->payload.empty() && active_idx < ud->fields.size() &&
+            is_aggregate_const(un->payload.front())) {
+            auto* member{
+                const_to_llvm(un->payload.front(), types_.translate(*ud->fields[active_idx]))};
+            return llvm::ConstantStruct::get(
+                st,
+                {tag_c,
+                 reinterpret_constant(member, payload_arr_ty, 0, llvm_module_->getDataLayout())});
+        }
         const auto bytes{
             un->payload.empty()
                 ? std::string(payload_arr_ty->getNumElements(), '\0')

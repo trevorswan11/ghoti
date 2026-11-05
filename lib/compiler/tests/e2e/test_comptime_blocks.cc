@@ -101,6 +101,43 @@ TEST_CASE("A comptime block's writes to an outer comptime let mut stay visible")
     }
 }
 
+TEST_CASE("labeled comptime block yields an array built by a loop") {
+    CHECK(helpers::compile_and_run(R"(
+        pub const main = fn(): u32 {
+            const sq = comptime blk: {
+                let mut acc: [4]mut u32 = undefined;
+                for (0..4) |i| { acc[i] = @as(u32, @intCast(u32, i * i)); }
+                break :blk acc;
+            };
+            let t = comptime blk: { break :blk [_]u32{ 1, 2, 3 }; };
+            return sq[3] + sq[2] * 10 + t[1];
+        };
+    )") == 51);
+}
+
+TEST_CASE("labeled comptime block yields a struct") {
+    CHECK(helpers::compile_and_run(R"(
+        const P = struct { a: i32, b: i32 };
+        pub const main = fn(): i32 {
+            const p = comptime blk: {
+                let mut q = P{ .a = 1, .b = 2 };
+                q.b = 40;
+                break :blk q;
+            };
+            return p.a + p.b + 1;
+        };
+    )") == 42);
+}
+
+TEST_CASE("comptime block returning an array returns it from the function") {
+    CHECK(helpers::compile_and_run(R"(
+        const pick = fn(): [3]u8 {
+            comptime { return [_]u8{ 4, 5, 6 }; }
+        };
+        pub const main = fn(): u8 { return pick()[2] * 7; };
+    )") == 42);
+}
+
 TEST_CASE("comptime block with loops and variable mutation") {
     CHECK(helpers::compile_and_run(R"(
         pub const main = fn(): i32 {

@@ -156,6 +156,7 @@ const closure = move fn(): i32 { return val; };` }
 			<ul>
 				<li><code>{ "x: &auto" }</code> takes a <code>{ "&T" }</code> (or a <code>{ "&mut T" }</code>, viewed as constant) and binds <code>T</code>; a plain <code>T</code> value is an error, like it is for a <code>{ "&T" }</code> parameter</li>
 				<li><code>{ "&mut auto" }</code> and <code>{ "^mut auto" }</code> need a mutable argument, <code>{ "[]mut auto" }</code> mutable elements, and <code>{ "[3]auto" }</code> an array of exactly that length</li>
+				<li>Like a <code>{ "[]T" }</code> parameter, <code>{ "[]auto" }</code> also takes an array or a reference to one (<code>{ "sum(arr)" }</code>, <code>{ "sum(&arr)" }</code>), viewing the original elements</li>
 				<li><code>{ "mut?" }</code> takes the argument's own mutability, and levels nest (<code>{ "&[]auto" }</code>, <code>{ "^^auto" }</code>)</li>
 				<li><code>impl I</code> works in the same positions, checking <code>I</code> against what <code>auto</code> bound to (<code>{ "xs: []impl Area" }</code>)</li>
 			</ul>

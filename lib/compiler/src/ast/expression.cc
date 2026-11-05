@@ -1173,8 +1173,17 @@ auto parse_function_header(syntax::parser& parser)
             const bool type_param{
                 param_explicit_type && param_explicit_type->get_modifier().is_value() &&
                 param_explicit_type->get_token_type() == syntax::token_type_t::TYPE_TYPE};
-            auto& param{parameters.emplace_back(
-                name, param_explicit_type, is_comptime && !type_param, is_pack, is_comptime)};
+            // An untyped number only exists at compile time
+            const bool untyped_param{
+                param_explicit_type && param_explicit_type->get_modifier().is_value() &&
+                (param_explicit_type->get_token_type() == syntax::token_type_t::COMPTIME_INT_TYPE ||
+                 param_explicit_type->get_token_type() ==
+                     syntax::token_type_t::COMPTIME_FLOAT_TYPE)};
+            auto& param{parameters.emplace_back(name,
+                                                param_explicit_type,
+                                                (is_comptime || untyped_param) && !type_param,
+                                                is_pack,
+                                                is_comptime)};
             param.default_value = default_value;
             attach_param_doc(name);
             if (!parser.peek_token_is(syntax::token_type_t::RPAREN)) {
@@ -1557,6 +1566,12 @@ auto parse_destructure(syntax::parser&        parser,
 
     stdx::option<stmt_handle> otherwise;
     if (parser.peek_token_is(syntax::token_type_t::ELSE)) {
+        if (!parser.in_function_body() && parser.synthesizes_default_wrappers()) {
+            return make_syntax_err("A module-level destructuring can't have an `else`; its "
+                                   "pattern has to match its value",
+                                   syntax::error::ILLEGAL_MATCH_PATTERN,
+                                   parser.get_peek_token());
+        }
         parser.advance(2);
         otherwise.emplace(TRY(parser.parse_restricted_statement(
             syntax::error::ILLEGAL_IF_BRANCH, syntax::semicolon_behavior::ALLOWED)));

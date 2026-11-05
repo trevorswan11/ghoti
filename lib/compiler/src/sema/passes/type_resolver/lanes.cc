@@ -556,7 +556,15 @@ auto type_resolver::resolve_vector_cast_builtin(builtin_site& site)
         kind == syntax::builtin_t::FLOAT_FROM_INT || kind == syntax::builtin_t::FLOAT_CAST};
     if (!lane_cast) { return stdx::none; }
     // The scalar path reports a missing or ill-formed target
-    const auto args{cast_args_of(call, name)};
+    stdx::option<type&> fallback;
+    if (kind == syntax::builtin_t::INT_FROM_BOOL && call.arguments.size() == 1) {
+        // An untyped `@intFromBool` over a bool vector gives as many `u1` lanes
+        auto& operand_type{*get_call_arg_value_type(call.arguments[0])};
+        if (is_vector(operand_type)) {
+            fallback.emplace(ctx_.with_lane(operand_type, ctx_.get_int(1, false)));
+        }
+    }
+    const auto args{cast_args_of(call, name, fallback)};
     if (!args || !args->target || args->target->is_poison()) { return stdx::none; }
     auto& target{*args->target};
     auto& src{*get_call_arg_value_type(*args->operand)};

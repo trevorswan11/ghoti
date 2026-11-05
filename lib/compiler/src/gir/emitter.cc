@@ -1083,6 +1083,71 @@ namespace {
     return un && !un->is_untagged;
 }
 
+// The type a folded scalar holds, for a value folded without one
+[[nodiscard]] auto leaf_type(sema::context& ctx, const const_value& cv) -> sema::type& {
+    if (const auto t{cv.get_type()}) { return *t; }
+    if (cv.is<bool>()) { return ctx.get_builtin_resolved_type(sema::type_kind::BOOL); }
+    if (cv.is<f128>()) { return ctx.get_builtin_resolved_type(sema::type_kind::COMPTIME_FLOAT); }
+    return ctx.get_builtin_resolved_type(sema::type_kind::COMPTIME_INT);
+}
+
+// Why a folded aggregate's scalar doesn't fit the element or field it initializes
+[[nodiscard]] auto mistyped_const_leaf(sema::context&     ctx,
+                                       const const_value& cv,
+                                       const sema::type&  expected,
+                                       u32                ptr_bits) -> stdx::option<std::string> {
+    const auto& data{expected.get_data()};
+    if (const auto arr{data.as_opt<sema::types::array>()}) {
+        if (const auto elems{cv.as_opt<const_array>()}) {
+            for (const auto& elem : elems->elements) {
+                if (auto why{mistyped_const_leaf(ctx, elem, arr->underlying, ptr_bits)}) {
+                    return why;
+                }
+            }
+        }
+        return stdx::none;
+    }
+    if (const auto st{data.as_opt<sema::types::struct_t>()}) {
+        const auto fields{cv.as_opt<const_struct>()};
+        if (!fields || st->is_bit_packed()) { return stdx::none; }
+        for (usize i{0}; i < st->fields.size() && i < st->ast_fields.size(); ++i) {
+            const auto& name{
+                st->enclosing.ast.get_as<ast::identifier_expr>(st->ast_fields[i].name).name};
+            const auto field{fields->get_field_opt(name)};
+            if (!field || !st->fields[i]) { continue; }
+            if (auto why{mistyped_const_leaf(ctx, *field, *st->fields[i], ptr_bits)}) {
+                return why;
+            }
+        }
+        return stdx::none;
+    }
+    if (const auto un{data.as_opt<sema::types::union_t>()}) {
+        const auto active{cv.as_opt<const_union>()};
+        if (!active || active->payload.empty() || un->is_bit_packed()) { return stdx::none; }
+        for (usize i{0}; i < un->fields.size() && i < un->ast_fields.size(); ++i) {
+            const auto& name{
+                un->enclosing.ast.get_as<ast::identifier_expr>(un->ast_fields[i].name).name};
+            if (name != active->active_field || !un->fields[i]) { continue; }
+            return mistyped_const_leaf(ctx, active->payload.front(), *un->fields[i], ptr_bits);
+        }
+        return stdx::none;
+    }
+
+    const auto kind{expected.get_kind()};
+    const bool is_int_value{cv.as_big_int_opt() && !cv.is<const_enum>()};
+    const bool wrong_kind{(sema::is_integer(kind) && (cv.is<bool>() || cv.is<f128>())) ||
+                          (kind == sema::type_kind::BOOL && (is_int_value || cv.is<f128>())) ||
+                          (sema::is_float(kind) && cv.is<bool>())};
+    if (wrong_kind) { return ctx.store_mismatch_message(leaf_type(ctx, cv), expected, ptr_bits); }
+    if (sema::is_integer(kind) && is_int_value &&
+        !sema::comptime_int_fits(*cv.as_big_int_opt(), expected, ptr_bits)) {
+        return fmt::format("integer value {} is out of range for type '{}'",
+                           cv.as_big_int_opt()->to_string(),
+                           ctx.type_display_name(expected));
+    }
+    return stdx::none;
+}
+
 } // namespace
 
 // A declaration's folded initializer; an enum literal becomes the declared enum or union value
@@ -1505,6 +1570,11 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
             }
             if (cv->is<const_struct>() || cv->is<const_array>() || cv->is<const_union>() ||
                 cv->is<const_dyn_fat_ptr>()) {
+                if (const auto why{mistyped_const_leaf(ctx_, *cv, *sema_type, target_ptr_bits_)}) {
+                    ctx_.diags.emplace_back(
+                        *why, sema::error::TYPE_MISMATCH, active_ast().location_of(*decl.value));
+                    return;
+                }
                 const_init.emplace(std::move(*cv));
             } else {
                 auto v{cv->to_gir_value()};
@@ -2458,7 +2528,7 @@ auto emitter::report_comptime_failure(usize diags_before, std::string_view what,
 auto emitter::emit_comptime_return(const const_value& returned, ast::node_id at) -> bool {
     if (!const_eval_.last_eval_returned()) { return false; }
     stdx::option<value> ret_val;
-    if (!returned.is<void_val>()) { ret_val.emplace(returned.to_gir_value()); }
+    if (!returned.is<void_val>()) { ret_val.emplace(materialize_const(returned)); }
     emit_defers_up_to(0);
     builder_.set_location(active_ast().location_of(at));
     builder_.emit_return(ret_val);
@@ -5343,8 +5413,18 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             // A generic function's binding holds its environment, never code to call through
             const bool is_fn_val_binding{binding->type.get_kind() == sema::type_kind::FUNCTION &&
                                          !binding->type.is_generic_value()};
+            const auto fn_ref{binding->type.get_data().as_opt<sema::types::reference>()};
             if (binding->const_val && binding->const_val->template is<std::string>()) {
                 callee_name.emplace(binding->const_val->template as<std::string>());
+            } else if (fn_ref && fn_ref->underlying.get_kind() == sema::type_kind::FUNCTION) {
+                // A reference to a function value is called through the value it refers to
+                const auto ref_val{binding->is_alloca
+                                       ? value{builder_.emit_load(value{binding->id, binding->type},
+                                                                  binding->type),
+                                               binding->type}
+                                       : value{binding->id, binding->type}};
+                indirect_callee.emplace(
+                    value{builder_.emit_load(ref_val, fn_ref->underlying), fn_ref->underlying});
             } else if (is_fn_ptr_binding || is_fn_val_binding) {
                 if (binding->is_alloca) {
                     const auto loaded{
@@ -5363,6 +5443,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                    cv && cv->template is<std::string>() && cv->get_type() &&
                    cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
             callee_name.emplace(cv->template as<std::string>());
+        } else if (cv && cv->template is<const_closure>() && cv->get_type() &&
+                   cv->get_type()->get_kind() == sema::type_kind::FUNCTION) {
+            // A constant naming a function literal (`const f = &fn(...) { ... };`)
+            callee_name.emplace(emit_comptime_closure(cv->template as<const_closure>()));
         } else if (callee_is_fn_pointer_global(*ident, call.function)) {
             // A module-scope function-pointer variable holds its target; load and call through it
             indirect_callee.emplace(emit_expression(call.function));
@@ -5575,6 +5659,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     if (fn_type_opt) {
         if (const auto ptr_data{fn_type_opt->get_data().as_opt<sema::types::pointer>()}) {
             fn_data = ptr_data->underlying.get_data().as_opt<sema::types::function>();
+        } else if (const auto ref_data{fn_type_opt->get_data().as_opt<sema::types::reference>()}) {
+            // `&f` calls the function it refers to, as `^f` does
+            fn_data = ref_data->underlying.get_data().as_opt<sema::types::function>();
         } else if (const auto cl_data{fn_type_opt->get_data().as_opt<sema::types::closure_t>()}) {
             fn_data = cl_data->impl_signature.get_data().as_opt<sema::types::function>();
         } else {
@@ -6877,7 +6964,7 @@ auto emitter::emit_label(ast::node_id id, const ast::label_expr& label) -> value
             return value{void_val{}, sema_type};
         }
         if (emit_comptime_return(*cv, id)) { return value{void_val{}, sema_type}; }
-        if (yields_value) { return cv->to_gir_value(); }
+        if (yields_value) { return materialize_const(*cv); }
         return value{void_val{}, sema_type};
     }
 
@@ -7046,6 +7133,12 @@ auto emitter::spill_to_temporary(value val, sema::type& type, bool is_const) -> 
 
 auto emitter::materialize_const(const const_value& cv) -> value {
     auto& usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+
+    // A folded function literal (`const f = ^fn(...) { ... };`) is emitted as code of its own
+    if (const auto cl{cv.as_opt<const_closure>()};
+        cl && cv.get_type() && cv.get_type()->get_kind() == sema::type_kind::FUNCTION) {
+        return value{emit_comptime_closure(*cl), cv.get_type()};
+    }
 
     if (const auto arr{cv.as_opt<const_array>()}) {
         const auto type_opt{cv.get_type()};
@@ -9720,7 +9813,11 @@ auto emitter::emit_reference(ast::node_id id, const ast::reference_expr& ref) ->
     PROFILE_FUNCTION();
     const auto sema_type{active_mod().get_sema_type_opt(id)};
     ASSERT(sema_type, "Reference expression must have a resolved sema type");
-    const auto target{emit_lvalue(ref.rhs)};
+    // A function literal has no place of its own, so it's spilled like a named function's value
+    const auto rhs_type{active_mod().get_sema_type_opt(*ref.rhs)};
+    const auto target{active_ast().get_as_opt<ast::function_expr>(*ref.rhs) && rhs_type
+                          ? spill_to_temporary(emit_expression(ref.rhs), *rhs_type)
+                          : emit_lvalue(ref.rhs)};
     auto&      res_type{*sema_type};
     const auto ptr{builder_.emit_address_of(target, res_type)};
     return value{ptr, sema_type};

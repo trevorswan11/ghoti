@@ -97,6 +97,94 @@ namespace {
     }
 }
 
+// A literal typed only by where it's written: `.{ ... }`, `.name`, `.name(...)`, or `&` of one
+[[nodiscard]] auto is_contextual_literal(const ast::AST& tree, ast::node_id expr) -> bool {
+    if (const auto init{tree.get_as_opt<ast::initializer_expr>(expr)}) {
+        return !init->object_type;
+    }
+    if (tree.get_as_opt<ast::implicit_access_expr>(expr)) { return true; }
+    if (const auto call{tree.get_as_opt<ast::call_expr>(expr)}) {
+        return call->function.is<ast::implicit_access_expr>();
+    }
+    if (const auto ref{tree.get_as_opt<ast::reference_expr>(expr)}) {
+        return is_contextual_literal(tree, *ref->rhs);
+    }
+    return false;
+}
+
+using name_set = gsl::span<const std::string_view>;
+
+[[nodiscard]] auto type_names_any(const ast::AST& tree, ast::explicit_type_id t, name_set names)
+    -> bool;
+
+// Whether an expression in a written type reads one of `names`
+[[nodiscard]] auto expr_names_any(const ast::AST& tree, ast::node_id e, name_set names) -> bool {
+    if (const auto ident{tree.get_as_opt<ast::identifier_expr>(e)}) {
+        return std::ranges::contains(names, ident->name);
+    }
+    if (const auto dot{tree.get_as_opt<ast::dot_expr>(e)}) {
+        return expr_names_any(tree, *dot->object, names);
+    }
+    if (const auto bin{tree.get_as_opt<ast::binary_expr>(e)}) {
+        return expr_names_any(tree, *bin->lhs, names) || expr_names_any(tree, *bin->rhs, names);
+    }
+    if (const auto call{tree.get_as_opt<ast::call_expr>(e)}) {
+        if (expr_names_any(tree, *call->function, names)) { return true; }
+        return std::ranges::any_of(call->arguments, [&](const ast::call_expr::argument& arg) {
+            return arg.visit(
+                [&](ast::expr_handle x) { return expr_names_any(tree, *x, names); },
+                [&](ast::explicit_type_id x) { return type_names_any(tree, x, names); });
+        });
+    }
+    return false;
+}
+
+// Whether a written type reads one of `names`, as `Option(T)` or `[n]T` do
+[[nodiscard]] auto type_names_any(const ast::AST& tree, ast::explicit_type_id t, name_set names)
+    -> bool {
+    if (const auto ident{tree.get_as_opt<ast::identifier_expr>(t)}) {
+        return std::ranges::contains(names, ident->name);
+    }
+    if (const auto dot{tree.get_as_opt<ast::dot_expr>(t)}) {
+        return expr_names_any(tree, *dot->object, names);
+    }
+    if (const auto call{tree.get_as_opt<ast::call_expr>(t)}) {
+        if (expr_names_any(tree, *call->function, names)) { return true; }
+        return std::ranges::any_of(call->arguments, [&](const ast::call_expr::argument& arg) {
+            return arg.visit(
+                [&](ast::expr_handle x) { return expr_names_any(tree, *x, names); },
+                [&](ast::explicit_type_id x) { return type_names_any(tree, x, names); });
+        });
+    }
+    if (const auto nested{tree.get_as_opt<ast::explicit_type_id>(t)}) {
+        return type_names_any(tree, *nested, names);
+    }
+    if (const auto arr{tree.get_as_opt<ast::explicit_array_type>(t)}) {
+        if (arr->dimension && expr_names_any(tree, **arr->dimension, names)) { return true; }
+        return type_names_any(tree, arr->inner_explicit_type, names);
+    }
+    if (const auto ex{tree.get_as_opt<ast::explicit_expr_type>(t)}) {
+        return expr_names_any(tree, *ex->expr, names);
+    }
+    return false;
+}
+
+// Whether parameter `idx`'s written type reads a `comptime` or `type` parameter before it
+[[nodiscard]] auto
+mentions_earlier_comptime_param(const ast::AST&                                tree,
+                                gsl::span<const ast::function_expr::parameter> params,
+                                usize                                          idx) -> bool {
+    if (idx >= params.size() || !params[idx].explicit_type) { return false; }
+    std::vector<std::string_view> names;
+    for (usize j{0}; j < idx; ++j) {
+        const auto& p{params[j]};
+        if ((p.is_comptime || p.spells_type()) && p.name.is<ast::identifier_expr>()) {
+            names.emplace_back(tree.get_as<ast::identifier_expr>(p.name).name);
+        }
+    }
+    return !names.empty() && type_names_any(tree, *params[idx].explicit_type, names);
+}
+
 } // namespace
 
 auto type_resolver::resolve_param_type(stdx::option<ast::explicit_type_id> param_type) -> void {
@@ -117,8 +205,10 @@ auto type_resolver::is_auto_pattern(const type& t) -> bool {
     return false;
 }
 
-auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<type&>& leaf)
+auto type_resolver::match_auto_pattern(type& pattern, type& arg_level, stdx::option<type&>& leaf)
     -> stdx::option<type&> {
+    // An array reached through a pointer or reference may still have an unfolded length
+    auto& arg{concrete_array_type(arg_level)};
     if (pattern.get_kind() == type_kind::AUTO) {
         leaf = arg;
         return arg;
@@ -166,8 +256,18 @@ auto type_resolver::match_auto_pattern(type& pattern, type& arg, stdx::option<ty
         return ctx_.get_reference(*m, *inner);
     }
     if (const auto sl{pdata.as_opt<types::slice>()}) {
-        const auto a{adata.as_opt<types::slice>()};
-        const auto m{a ? mutability(arg) : stdx::none};
+        if (const auto a{adata.as_opt<types::slice>()}) {
+            const auto m{mutability(arg)};
+            if (!m || (sl->null_terminated && !a->null_terminated)) { return stdx::none; }
+            const auto inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
+            if (!inner) { return stdx::none; }
+            return ctx_.get_slice(*m, sl->null_terminated, *inner);
+        }
+        // `[N]T` and `&[N]T` coerce to a slice of the array's elements, as for a `[]T` parameter
+        const auto ref{adata.as_opt<types::reference>()};
+        auto&      array_type{concrete_array_type(ref ? ref->underlying : arg)};
+        const auto a{array_type.get_data().as_opt<types::array>()};
+        const auto m{a ? mutability(array_type) : stdx::none};
         if (!m || (sl->null_terminated && !a->null_terminated)) { return stdx::none; }
         const auto inner{match_auto_pattern(sl->underlying, a->underlying, leaf)};
         if (!inner) { return stdx::none; }
@@ -1069,6 +1169,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
             const auto                       fixed_params{params.subspan(param_offset)};
             const auto&                      fn_params{fn_info_opt->fn_expr->parameters};
             const auto&                      fn_ast{fn_info_opt->module->ast};
+            // Literal arguments typed by the monomorph's parameter once it's instantiated
+            std::vector<usize> instance_typed_args;
 
             for (usize i{0}; i < effective_arity; ++i) {
                 // Beyond the fixed parameters, every trailing argument is a pack element and
@@ -1106,6 +1208,16 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                                           : stdx::none};
                     return init && !init->object_type;
                 }};
+
+                if (const auto arg_h{arg.template as_opt<ast::expr_handle>()};
+                    !bound_idx && arg_h && i < fn_params.size() &&
+                    param_type->get_kind() != type_kind::AUTO &&
+                    is_contextual_literal(resolving_.ast, ast::node_id{*arg_h}) &&
+                    mentions_earlier_comptime_param(fn_ast, fn_params, i)) {
+                    arg_slots[i] = *param_type;
+                    instance_typed_args.emplace_back(i);
+                    continue;
+                }
                 if (!is_generic_type(*param_type)) {
                     g.emplace(implicit_type_stack_, *param_type);
                 } else if (const auto vector_type{
@@ -1310,8 +1422,30 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
                 .enclosing_type  = fn_info_copy.enclosing_type,
             };
 
+            // Types each deferred literal by the monomorph's own parameter, so the two agree
+            const auto type_instance_args{[&](std::string_view mangled) -> bool {
+                const auto request{ctx_.instantiation_cache.get_request(mangled)};
+                for (const auto i : instance_typed_args) {
+                    usize runtime_idx{0};
+                    for (usize p{0}; p < i; ++p) {
+                        if (!binds_comptime(fn_ast, *fn_info_opt->fn_expr, p, concrete_arg_types)) {
+                            ++runtime_idx;
+                        }
+                    }
+                    const auto expected{request && runtime_idx < request->arg_types.size()
+                                            ? stdx::option<type&>{*request->arg_types[runtime_idx]}
+                                            : stdx::option<type&>{*concrete_arg_types[i]}};
+                    const structural_guard g{implicit_type_stack_, expected};
+                    resolve(
+                        call.arguments[expanded.source_index[i]].template as<ast::expr_handle>());
+                    if (!last_type_ || last_type_->is_poison()) { return false; }
+                }
+                return true;
+            }};
+
             if (const auto cached{ctx_.instantiation_cache.find(key)}) {
-                if (reject_type_of_args(call, *fn_info_opt->fn_expr, cached->mangled_name)) {
+                if (reject_type_of_args(call, *fn_info_opt->fn_expr, cached->mangled_name) ||
+                    !type_instance_args(cached->mangled_name)) {
                     return last_type_.emplace(ctx_.poison_node(resolving_, id));
                 }
                 resolving_.set_generic_call_target(id, cached->mangled_name);
@@ -1340,7 +1474,8 @@ auto type_resolver::resolve_call(ID id, const ast::call_expr& call) -> void {
 
             auto& return_type{*inst_res->return_type};
             auto  mangled_name{inst_res->mangled_name};
-            if (reject_type_of_args(call, *fn_info_copy.fn_expr, mangled_name)) {
+            if (reject_type_of_args(call, *fn_info_copy.fn_expr, mangled_name) ||
+                !type_instance_args(mangled_name)) {
                 return last_type_.emplace(ctx_.poison_node(resolving_, id));
             }
             if (!building_param_template_) {

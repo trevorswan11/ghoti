@@ -393,6 +393,19 @@ ctor_instance_display_name(const context&                                       
     }
 }
 
+// Why an array argument can't bind to the array parameter an instantiation resolved
+[[nodiscard]] auto mistyped_data_argument(const context& ctx, const type& arg, const type& param)
+    -> stdx::option<std::string> {
+    const auto arg_arr{arg.get_data().as_opt<types::array>()};
+    const auto param_arr{param.get_data().as_opt<types::array>()};
+    if (!arg_arr || !param_arr || is_generic_type(param) || arg_arr->len == param_arr->len) {
+        return stdx::none;
+    }
+    return fmt::format("Argument of type '{}' is not assignable to parameter type '{}'",
+                       ctx.type_display_name(arg),
+                       ctx.type_display_name(param));
+}
+
 } // namespace
 
 auto type_resolver::record_type_ctor_member_call(ast::node_id call_id, const ast::call_expr& call)
@@ -901,6 +914,15 @@ auto type_resolver::instantiate_generic(type&                             callee
                 inst_resolver.concrete_array_type(denoted_type(*inst_resolver.last_type_.take())))};
             // `&auto` / `[]mut auto` has no concrete shape until its argument matched it
             if (!is_auto_pattern(resolved_param_type)) {
+                // A call folded at compile time never reaches the type checker
+                if (const auto why{mistyped_data_argument(ctx_, *arg_type, resolved_param_type)}) {
+                    ctx_.diags.emplace_back(*why,
+                                            error::TYPE_MISMATCH,
+                                            p_idx < instantiating_arg_locations_.size()
+                                                ? instantiating_arg_locations_[p_idx]
+                                                : fn_mod.ast.location_of(fn_info.node_id));
+                    return stdx::none;
+                }
                 decl_p_type = &resolved_param_type;
                 if (resolved_param_type.get_kind() != type_kind::TYPE) {
                     body_p_type = &resolved_param_type;

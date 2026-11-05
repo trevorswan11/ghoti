@@ -33,4 +33,23 @@ TEST_CASE("@boolFromInt and @intFromBool const-evaluate at compile time") {
     )") == 0);
 }
 
+TEST_CASE("An untyped @intFromBool is a u1") {
+    CHECK(helpers::compile_and_run(R"(
+        const F = @intFromBool(true);
+        pub const main = fn(): i32 {
+            let mut b = false;
+            b = !b;
+            let bit = @intFromBool(b);
+            const folded = @intFromBool(false);
+            let v: @Vector(3, bool) = .{ true, false, b };
+            let lanes = @intFromBool(v);
+            if (@TypeOf(bit) != u1 or @TypeOf(F) != u1 or @TypeOf(folded) != u1) { return 1; }
+            if (@TypeOf(lanes) != @Vector(3, u1)) { return 2; }
+            // A typed context still picks its own type
+            let wide: i32 = @intFromBool(b) + 40;
+            return @as(i32, bit) + @as(i32, F) + @as(i32, folded) + @as(i32, lanes[2]) + wide;
+        };
+    )") == 1 + 1 + 0 + 1 + 41);
+}
+
 } // namespace ghoti::tests

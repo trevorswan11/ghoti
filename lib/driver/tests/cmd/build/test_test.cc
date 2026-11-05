@@ -543,6 +543,72 @@ TEST_CASE("test command execution") {
         }};
         REQUIRE(cmd.execute());
     }
+
+    SECTION("A type built up in a `comptime let mut` initializes after other generic tests") {
+        codegen::llvm_scope scope;
+        tempfile            src_file{"test_driver_comptime_type_var.gh"};
+
+        {
+            std::ofstream out{src_file.path};
+            fmt::print(out, R"(
+                import std;
+
+                const Counter = struct {{
+                    n: u32,
+                    limit: u32,
+                    pub const next = fn(&mut self): std.Option(u32) {{
+                        if (self.n >= self.limit) {{ return .empty; }}
+                        self.n += 1;
+                        return .of(self.n);
+                    }};
+                }};
+
+                const first_even = fn(xs: []u32): std.Option(u32) {{
+                    for (xs) |x| {{ if (x % 2 == 0) {{ return .of(x); }} }}
+                    return .empty;
+                }};
+
+                const half_of_first_even = fn(xs: []u32): std.Option(u32) {{
+                    let v = first_even(xs)?;
+                    return .of(v / 2);
+                }};
+
+                const Wrap = fn(comptime T: type): type {{ return struct {{ inner: T }}; }};
+
+                const fail_after = fn(log: &mut u32): std.Result(void, bool) {{
+                    errdefer log += 10;
+                    defer log += 1;
+                    return .fail(true);
+                }};
+
+                test "while capture iterator" {{
+                    let mut c = Counter{{ .n = 0, .limit = 3 }};
+                    let mut total: u32 = 0;
+                    while (c.next()) |v| {{ total += v; }}
+                    @expect(total == 6);
+                }}
+
+                test "option" {{
+                    let xs = [_]u32{{ 3, 8, 5 }};
+                    @expect(half_of_first_even(xs[0..]).eq(@as(u32, 4)));
+                    let ys = [_]u32{{ 1, 3 }};
+                    @expect(half_of_first_even(ys[0..]) == .none);
+                }}
+
+                test "comptime let mut type building" {{
+                    comptime let mut T: type = u8;
+                    unroll for (0..3) |_| {{ T = Wrap(T); }}
+                    let w: T = .{{ .inner = .{{ .inner = .{{ .inner = 5 }} }} }};
+                    @expect(w.inner.inner.inner == 5);
+                }}
+            )");
+        }
+
+        cmd::test_cmd cmd{{
+            .input_path = src_file,
+        }};
+        REQUIRE(cmd.execute());
+    }
 }
 
 } // namespace ghoti::tests

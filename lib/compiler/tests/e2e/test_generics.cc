@@ -852,4 +852,38 @@ TEST_CASE("A `[n]auto` parameter sized by a comptime parameter matches any eleme
     )");
 }
 
+TEST_CASE("A literal argument takes a parameter type written against an earlier comptime one") {
+    CHECK(helpers::compile_and_run(R"(
+        const Opt = fn(comptime T: type): type {
+            return union(enum) {
+                some: T,
+                none: void,
+                pub const of = fn(v: T): @This() { return .{ .some = v }; };
+            };
+        };
+        const P = fn(comptime T: type): type { return struct { a: T, b: T }; };
+        const E = fn(comptime T: type): type { return enum { a, b }; };
+        const opt_or = fn(comptime T: type, o: Opt(T), d: T): T {
+            return match (o) { .some(|v|) => v, .none => d };
+        };
+        const add = fn(comptime T: type, p: P(T)): T { return p.a + p.b; };
+        const pick = fn(comptime T: type, e: E(T)): T { return match (e) { .a => 1, .b => 2 }; };
+        const sum = fn(comptime T: type, comptime n: usize, xs: [n]T): T {
+            let mut t: T = 0;
+            for (xs) |x| { t += x; }
+            return t;
+        };
+        pub const main = fn(): u8 {
+            return opt_or(u8, .of(4), 9) + opt_or(u8, .{ .none = {} }, 30) +
+                   add(u8, .{ .a = 1, .b = 2 }) + pick(u8, .b) + sum(u8, 3, .{ 1, 2, 3 });
+        };
+    )") == 4 + 30 + 3 + 2 + 6);
+    CHECK(helpers::type_check_diags(R"(
+        const P = fn(comptime T: type): type { return struct { a: T }; };
+        const f = fn(comptime T: type, p: P(T)): T { return p.a; };
+        pub const main = fn(): u8 { return f(u8, .{ .a = 300 }); };
+    )")
+              .message_contains("out of range for type 'u8'"));
+}
+
 } // namespace ghoti::tests

@@ -973,6 +973,14 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Fixed: an integer literal past 128 bits assigned to a float kept its integer payload, crashing `@bitCast`, rejecting `const`, and skipping the range check; it now converts exactly
 - Fixed: a block label named after the declaration it initializes (`let v = v: { ... };`) crashed the compiler instead of reporting the shadowing
 - Fixed: a `_` match arm written before other arms shadowed them at runtime while compile-time evaluation tried it last, so `match (x) { _ => 1, 5 => 2 }` gave a different answer in each; `_` is now tried last everywhere
+- Fixed: a `.{ ... }` or `.of(...)` argument to a parameter typed against an earlier `comptime` parameter (`o: Option(T)`, `xs: [n]T`) took the generic template's type and crashed codegen; it now takes the instantiation's
+- Fixed: a call folded into a module-level constant skipped its argument type checks, so a `[2]u8` passed to a `[1]u8` parameter and an `i64` narrowed silently into an `i8`
+- Fixed: calling through a reference to a function (`&f`, `&fn(...) { ... }`) or a pointer to a function literal (`^fn(...) { ... }`) miscompiled or crashed the compiler
+- Fixed: a global tagged union whose payload is a struct, array, or union was emitted with a zeroed payload, so `const g = R{ .ok = .{ .some = 10 } };` read back as `.ok(.none)` at runtime
+- Fixed: a module-level aggregate constant's elements and fields were never checked against their types, so `const Q = [_]u8{ true, 2 };` or a `bool` field given `1` crashed LLVM, and `[_]u8{ 300 }` silently truncated
+- Fixed: naming an enum variant through a value (`e.z`, `E.x.z`) was accepted and crashed codegen; it is now an error pointing at `.z` / `E.z`
+- Fixed: a parameter typed `comptime_int` or `comptime_float` without `comptime` took a 32-bit runtime slot, crashing LLVM for a wider argument; it now binds at compile time like a `comptime` one
+- `@intFromBool(b)` with no type in its context is a `u1` instead of an error, and a `bool` vector gives `u1` lanes
 
 ## Standard Library
 - Add `std.simd`, portable helpers for `@Vector`
