@@ -45,7 +45,7 @@ comptime {
 }
 
 @cfg (os == .macos and arch == .x86) {
-    // Darwin uses different abi for f16 for some reason
+    // Darwin x86 uses different abi for f16 for some reason
     const __extendhfsf2 = fn(a: u16) callconv(.c): f32 {
         return f32_float_cast_f16(@bitCast(a));
     };
