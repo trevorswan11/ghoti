@@ -289,6 +289,15 @@ TEST_CASE("a template first reached from another template's body stays a top-lev
     )") == 16);
 }
 
+TEST_CASE("comptime strings that differ only in punctuation instantiate different functions") {
+    CHECK(helpers::compile_and_run(R"(
+        const second = fn(comptime text: []u8): u8 { return text[1]; };
+        pub const main = fn(): i32 {
+            return @as(i32, second("[{}]")) - @as(i32, second("{:?}"));
+        };
+    )") == '{' - ':');
+}
+
 TEST_CASE("a comptime slice parameter accepts a concatenation of comptime strings") {
     CHECK(helpers::compile_and_run(R"(
         const measure = fn(comptime text: []u8): usize {

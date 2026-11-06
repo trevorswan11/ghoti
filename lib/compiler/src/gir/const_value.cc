@@ -204,8 +204,17 @@ auto const_value::mangle() const -> std::string {
         },
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {
+            // Any other byte is `.` and its hex value, so two strings never share a name
+            // (`"{:?}"` and `"[{}]"` instantiate different functions)
             std::string out;
-            for (const char c : v) { out += (std::isalnum(static_cast<u8>(c)) != 0) ? c : '.'; }
+            for (const char c : v) {
+                const auto byte{static_cast<u8>(c)};
+                if (std::isalnum(byte) != 0) {
+                    out += c;
+                } else {
+                    out += fmt::format(".{:02x}", byte);
+                }
+            }
             return out;
         },
         [](const stdx::option<sema::type&>& t) -> std::string {
