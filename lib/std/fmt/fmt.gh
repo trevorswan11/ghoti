@@ -79,6 +79,42 @@ pub const buf_print = fn(buf: []mut u8, comptime fmt: []u8, args...): Result([]u
     return .of(buf[..stream.pos]);
 };
 
+/// What `alloc_print` fails with: a formatting failure, or no memory to hold the result
+pub const AllocPrintError = Error || std.mem.AllocError;
+
+/// Formats `fmt` into memory from `allocator`, measured by a first pass so it is exactly as long
+/// as the output. The caller frees it with `allocator.free`
+pub const alloc_print = fn(
+    allocator: std.mem.Allocator,
+    comptime fmt: []u8,
+    args...,
+): Result([]mut u8, AllocPrintError) {
+    let mut counter: CountingWriter = .{};
+    format(&mut counter, fmt, args...)?;
+    let buf = allocator.alloc(u8, counter.count)?;
+    match (buf_print(buf, fmt, args...)) {
+        .ok => {},
+        .err => |e| {
+            allocator.free(buf);
+            return .fail(e);
+        },
+    }
+    return .of(buf);
+};
+
+/// Discards what it is given, keeping only how many bytes that was
+const CountingWriter = struct {
+    pub count: usize = 0,
+};
+
+impl Writer for CountingWriter {
+    const Error = std.io.Error;
+    pub const write = fn(&mut self, bytes: []u8): Result(usize, Error) {
+        self.count += bytes.len;
+        return .of(bytes.len);
+    };
+}
+
 /// Formats one value according to `spec`, dispatching on its type.
 /// Types that implement `Format` take precedence over the builtin formatting
 pub const format_value = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(void, Error) {
@@ -99,14 +135,131 @@ pub const format_value = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Resul
         .bool => format_str(w, if (value) "true" else "false", spec_),
         .enum => format_str(w, @tagName(value), spec_),
         .void => format_str(w, "void", spec_),
-        .array => |info| if comptime (info.child == u8) format_str(w, value[..], spec_)
+        .array => |info| if comptime (info.child == u8) format_text(w, value[..], spec_)
             else format_list(w, value[..], spec_),
-        .slice => |info| if comptime (info.child == u8) format_str(w, value, spec_)
+        .slice => |info| if comptime (info.child == u8) format_text(w, value, spec_)
             else format_list(w, value, spec_),
-        .reference => format_value(w, *value, spec_),
+        // `{:p}` is where the reference points, anything else what it points at
+        .reference => if (has_kind(spec_, .p)) format_address(w, @intFromPtr(^*value), spec_)
+            else format_value(w, *value, spec_),
         .pointer => format_address(w, @intFromPtr(value), spec_),
+        .union => match comptime (union_shape(T)) {
+            .option => format_option(w, value, spec_),
+            .result => format_result(w, value, spec_),
+            .other => @compileError("fmt: no formatter for " ++ @typeName(T)),
+        },
         _ => @compileError("fmt: no formatter for " ++ @typeName(T)),
     };
+};
+
+/// Whether `spec_` names `kind` explicitly
+const has_kind = fn(spec_: Spec, kind: spec.Kind): bool {
+    return match (spec_.kind) {
+        .some => |k| k == kind,
+        .none => false,
+    };
+};
+
+const UnionShape = enum { option, result, other };
+
+/// Whether a union is an `Option` (`some`/`none`) or a `Result` (`ok`/`err`), by its tags
+const union_shape = fn(comptime T: type): UnionShape {
+    const fields = @typeInfo(T).union.fields;
+    if comptime (fields.len != 2) return .other;
+    if comptime (std.mem.eql(u8, fields[0].name, "some") and
+        std.mem.eql(u8, fields[1].name, "none")) {
+        return .option;
+    }
+    if comptime (std.mem.eql(u8, fields[0].name, "ok") and std.mem.eql(u8, fields[1].name, "err")) {
+        return .result;
+    }
+    return .other;
+};
+
+/// Formats `.some` as `some(value)` and `.none` as `none`
+const format_option = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(void, Error) {
+    return match (value) {
+        .some => |inner| format_wrapped(w, "some(", inner, spec_),
+        .none => format_str(w, "none", spec_),
+    };
+};
+
+/// Formats `.ok` as `ok(value)` and `.err` as `err(error)`
+const format_result = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(void, Error) {
+    return match (value) {
+        .ok => |inner| format_wrapped(w, "ok(", inner, spec_),
+        .err => |e| format_wrapped(w, "err(", e, spec_),
+    };
+};
+
+const format_wrapped = fn(
+    w: &mut dyn Writer,
+    open: []u8,
+    inner: auto,
+    spec_: Spec,
+): Result(void, Error) {
+    w.write_all(open)?;
+    format_value(w, inner, spec_)?;
+    w.write_byte(')')?;
+    return .done;
+};
+
+/// Formats a string. `{:?}` quotes it and escapes what isn't printable, as Rust's `Debug` does
+const format_text = fn(w: &mut dyn Writer, text: []u8, spec_: Spec): Result(void, Error) {
+    if (!has_kind(spec_, .@"?")) return format_str(w, text, spec_);
+
+    let len = match (spec_.precision) {
+        .some => |max| @min(max, text.len),
+        .none => text.len,
+    };
+    let body = text[..len];
+    let mut quoted_len: usize = 2;
+    for (body) |c| {
+        quoted_len += escaped_len(c);
+    }
+    let width = spec_.width.unwrap_or(0);
+    let padding = if (width > quoted_len) width - quoted_len else 0;
+    let left = match (spec_.align.unwrap_or(.left)) {
+        .left => 0uz,
+        .right => padding,
+        .center => padding / 2,
+    };
+
+    write_fill_n(w, spec_.fill, left)?;
+    w.write_byte('"')?;
+    for (body) |c| {
+        write_escaped(w, c)?;
+    }
+    w.write_byte('"')?;
+    write_fill_n(w, spec_.fill, padding - left)?;
+    return .done;
+};
+
+/// How many bytes `write_escaped` writes for `c`
+const escaped_len = fn(c: u8): usize {
+    return match (c) {
+        '\n', '\r', '\t', '\\', '"' => 2,
+        0..=0x1f, 0x7f => 4,
+        _ => 1,
+    };
+};
+
+/// Writes `c` as it reads inside a quoted string: a backslash escape, `\xNN`, or itself
+const write_escaped = fn(w: &mut dyn Writer, c: u8): Result(void, Error) {
+    match (c) {
+        '\n' => w.write_all("\\n")?,
+        '\r' => w.write_all("\\r")?,
+        '\t' => w.write_all("\\t")?,
+        '\\' => w.write_all("\\\\")?,
+        '"' => w.write_all("\\\"")?,
+        0..=0x1f, 0x7f => {
+            w.write_all("\\x")?;
+            w.write_byte(int.digit_to_char(c >> 4, .lower))?;
+            w.write_byte(int.digit_to_char(c & 0xf, .lower))?;
+        },
+        _ => w.write_byte(c)?,
+    }
+    return .done;
 };
 
 /// Formats text, where a precision caps how many bytes are written
@@ -243,6 +396,60 @@ test "format text, bools, and enums" {
     check("true false", "{} {}", true, false);
     check("green", "{}", Color.green);
     check("void", "{}", {});
+}
+
+test "format quotes and escapes text under {:?}" {
+    check("\"hi\"", "{:?}", "hi");
+    check("\"a\\nb\\t\\\"c\\\\\"", "{:?}", "a\nb\t\"c\\");
+    check("\"\\x01\\x7f\"", "{:?}", "\x01\x7f");
+    check("  \"ab\"", "{:>6?}", "ab");
+    check("\"ab\"", "{:.2?}", "abc");
+    // Words that aren't strings stay bare
+    check("true green", "{:?} {:?}", true, Color2.green);
+}
+
+const Color2 = enum { red, green };
+
+test "format options and results" {
+    let some: std.Option(i32) = .of(5);
+    let none: std.Option(i32) = .empty;
+    let ok: std.Result(u8, Error) = .of(7);
+    let err: std.Result(u8, Error) = .fail(.bad_spec);
+    check("some(5) none", "{} {}", some, none);
+    check("ok(7) err(bad_spec)", "{} {}", ok, err);
+    check("some(0x5)", "{:#x}", some);
+}
+
+test "alloc_print allocates exactly the formatted output" {
+    let allocator = std.heap.page_allocator;
+    match (alloc_print(allocator, "{} + {} = {}", 2, 40, 42)) {
+        .ok => |text| {
+            defer allocator.free(text);
+            @expect(std.mem.eql(u8, "2 + 40 = 42", text));
+        },
+        .err => {
+            @expect(false, "alloc_print failed");
+        },
+    }
+    // An allocation failure and a formatting failure are both `AllocPrintError`s
+    let failure: AllocPrintError = .out_of_memory;
+    let bad: AllocPrintError = Error.bad_spec;
+    @expect(failure != bad);
+}
+
+test "format a reference's address with {:p}" {
+    let n: u32 = 9;
+    let r: &u32 = &n;
+    let mut backing: [32]mut u8 = undefined;
+    match (buf_print(backing[..], "{:p} {}", r, r)) {
+        .ok => |written| {
+            @expect(std.mem.eql(u8, "0x", written[..2]));
+            @expect(written[written.len - 2] == ' ' and written[written.len - 1] == '9');
+        },
+        .err => {
+            @expect(false, "format failed");
+        },
+    }
 }
 
 test "format arrays, slices, and references" {
