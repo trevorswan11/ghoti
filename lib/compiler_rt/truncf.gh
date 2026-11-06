@@ -22,14 +22,14 @@ comptime {
     symbol(__truncsfhf2, "__truncsfhf2");
     symbol(__truncdfhf2, "__truncdfhf2");
     symbol(__truncxfhf2, "__truncxfhf2");
-    // symbol(__trunctfhf2, "__trunctfhf2");
+    symbol(__trunctfhf2, "__trunctfhf2");
 
     @cfg (compiler_rt.want_aeabi) {
-        // symbol(__aeabi_d2f, "__aeabi_d2f");
+        symbol(__aeabi_d2f, "__aeabi_d2f");
     }
-    // symbol(__truncdfsf2, "__truncdfsf2");
+    symbol(__truncdfsf2, "__truncdfsf2");
     symbol(__truncxfsf2, "__truncxfsf2");
-    // symbol(__trunctfsf2, "__trunctfsf2");
+    symbol(__trunctfsf2, "__trunctfsf2");
     symbol(__truncxfdf2, "__truncxfdf2");
     // symbol(__trunctfdf2, "__trunctfdf2");
     // symbol(__trunctfxf2, "__trunctfxf2");
@@ -39,9 +39,13 @@ comptime {
     const __aeabi_f2h = fn(a: u32) callconv(.aapcs): u16 {
         return @bitCast(f16_float_cast_f32(@bitCast(a)));
     };
-    
+
     const __aeabi_d2h = fn(a: u64) callconv(.aapcs): u16 {
         return @bitCast(f16_float_cast_f64(@bitCast(a)));
+    };
+
+    const __aeabi_d2f = fn(a: f64) callconv(.aapcs): f32 {
+        return f32_float_cast_f64(a);
     };
 }
 
@@ -126,7 +130,7 @@ test "f16_float_cast_f32" {
     @expect(test_f16_float_cast_f32(0x33000000, 0x0000)); // 0x1.0p-25 -> zero
 }
 
-@[inline(.always)] const f16_float_cast_f64 = fn (a: f64): f16 {
+@[inline(.always)] const f16_float_cast_f64 = fn(a: f64): f16 {
     return truncf(f16, f64, a);
 };
 
@@ -211,6 +215,96 @@ test "f16_float_cast_f80" {
     @expect(test_f16_float_cast_f80(0x1.fep-15, 0x03fc));
 }
 
+const __trunctfhf2 = fn(a: f128) callconv(.c): f16 {
+    return truncf(f16, f128, a);
+};
+
+@[testing] const test__trunctfhf2 = fn(a: f128, expected: u16): bool {
+    let x: u16 = @bitCast(__trunctfhf2(a));
+    return x == expected;
+};
+
+test "__trunctfhf2" {
+    // qNaN
+    @expect(test__trunctfhf2(@bitCast(0x7fff8000000000000000000000000000u128), 0x7e00));
+    // NaN
+    @expect(test__trunctfhf2(@bitCast(0x7fff0000000000000000000000000001u128), 0x7e00));
+    // inf
+    @expect(test__trunctfhf2(@bitCast(0x7fff0000000000000000000000000000u128), 0x7c00));
+    @expect(test__trunctfhf2(-@bitCast(0x7fff0000000000000000000000000000u128), 0xfc00));
+    // zero
+    @expect(test__trunctfhf2(0.0, 0x0));
+    @expect(test__trunctfhf2(-0.0, 0x8000));
+
+    @expect(test__trunctfhf2(3.1415926535, 0x4248));
+    @expect(test__trunctfhf2(-3.1415926535, 0xc248));
+    @expect(test__trunctfhf2(0x1.987124876876324p+100, 0x7c00));
+    @expect(test__trunctfhf2(0x1.987124876876324p+12, 0x6e62));
+    @expect(test__trunctfhf2(0x1.0p+0, 0x3c00));
+    @expect(test__trunctfhf2(0x1.0p-14, 0x0400));
+    // denormal
+    @expect(test__trunctfhf2(0x1.0p-20, 0x0010));
+    @expect(test__trunctfhf2(0x1.0p-24, 0x0001));
+    @expect(test__trunctfhf2(-0x1.0p-24, 0x8001));
+    @expect(test__trunctfhf2(0x1.5p-25, 0x0001));
+    // and back to zero
+    @expect(test__trunctfhf2(0x1.0p-25, 0x0000));
+    @expect(test__trunctfhf2(-0x1.0p-25, 0x8000));
+    // max (precise)
+    @expect(test__trunctfhf2(65504.0, 0x7bff));
+    // max (rounded)
+    @expect(test__trunctfhf2(65519.0, 0x7bff));
+    // max (to +inf)
+    @expect(test__trunctfhf2(65520.0, 0x7c00));
+    @expect(test__trunctfhf2(65536.0, 0x7c00));
+    @expect(test__trunctfhf2(-65520.0, 0xfc00));
+
+    @expect(test__trunctfhf2(0x1.23a2abb4a2ddee355f36789abcdep+5, 0x508f));
+    @expect(test__trunctfhf2(0x1.e3d3c45bd3abfd98b76a54cc321fp-9, 0x1b8f));
+    @expect(test__trunctfhf2(0x1.234eebb5faa678f4488693abcdefp+453, 0x7c00));
+    @expect(test__trunctfhf2(0x1.edcba9bb8c76a5a43dd21f334634p-43, 0x0));
+}
+
+const __truncdfsf2 = fn(a: f64) callconv(.c): f32 {
+    return f32_float_cast_f64(a);
+};
+
+@[inline(.always)] const f32_float_cast_f64 = fn(a: f64): f32 {
+    return truncf(f32, f64, a);
+};
+
+@[testing] const test_f32_float_cast_f64 = fn(a: f64, expected: u32): bool {
+    let x = f32_float_cast_f64(a);
+
+    let rep: u32 = @bitCast(x);
+    if (rep == expected) {
+        return true;
+    }
+    // test other possible NaN representation(signal NaN)
+    else if (expected == 0x7fc00000) {
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) {
+            return true;
+        }
+    }
+    return false;
+};
+
+test "f32_float_cast_f64" {
+    // nan & qnan
+    @expect(test_f32_float_cast_f64(@bitCast(0x7ff8000000000000u64), 0x7fc00000));
+    @expect(test_f32_float_cast_f64(@bitCast(0x7ff0000000000001u64), 0x7fc00000));
+    // inf
+    @expect(test_f32_float_cast_f64(@bitCast(0x7ff0000000000000u64), 0x7f800000));
+    @expect(test_f32_float_cast_f64(@bitCast(0xfff0000000000000u64), 0xff800000));
+
+    @expect(test_f32_float_cast_f64(0.0, 0x0));
+    @expect(test_f32_float_cast_f64(1.0, 0x3f800000));
+    @expect(test_f32_float_cast_f64(-1.0, 0xbf800000));
+
+    // huge number becomes inf
+    @expect(test_f32_float_cast_f64(340282366920938463463374607431768211456.0, 0x7f800000));
+}
+
 const __truncxfsf2 = fn(a: compiler_rt.f80) callconv(.c): f32 {
     return f32_float_cast_f80(@bitCast(a));
 };
@@ -227,6 +321,45 @@ const __truncxfsf2 = fn(a: compiler_rt.f80) callconv(.c): f32 {
 test "f32_float_cast_f80" {
     @expect(test_f32_float_cast_f80(0x1p-149, 0x00000001));
     @expect(test_f32_float_cast_f80(0x1p-147, 0x00000004));
+}
+
+const __trunctfsf2 = fn(a: f128) callconv(.c): f32 {
+    return truncf(f32, f128, a);
+};
+
+@[testing] const test__trunctfsf2 = fn(a: f128, expected: u32): bool {
+    let x = __trunctfsf2(a);
+
+    let rep: u32 = @bitCast(x);
+    if (rep == expected) {
+        return true;
+    }
+    // test other possible NaN representation(signal NaN)
+    else if (expected == 0x7fc00000) {
+        if ((rep & 0x7f800000) == 0x7f800000 and (rep & 0x7fffff) > 0) {
+            return true;
+        }
+    }
+    return false;
+};
+
+test "__trunctfsf2" {
+    // qnan
+    @expect(test__trunctfsf2(@bitCast(0x7fff800000000000 << 64), 0x7fc00000));
+    // nan
+    @expect(test__trunctfsf2(
+        @bitCast((0x7fff000000000000 | (0x810000000000 & 0xffffffffffff)) << 64),
+        0x7fc08000,
+    ));
+    // inf
+    @expect(test__trunctfsf2(@bitCast(0x7fff000000000000 << 64), 0x7f800000));
+    // zero
+    @expect(test__trunctfsf2(0.0, 0x0));
+
+    @expect(test__trunctfsf2(0x1.23a2abb4a2ddee355f36789abcdep+5, 0x4211d156));
+    @expect(test__trunctfsf2(0x1.e3d3c45bd3abfd98b76a54cc321fp-9, 0x3b71e9e2));
+    @expect(test__trunctfsf2(0x1.234eebb5faa678f4488693abcdefp+4534, 0x7f800000));
+    @expect(test__trunctfsf2(0x1.edcba9bb8c76a5a43dd21f334634p-435, 0x0));
 }
 
 const __truncxfdf2 = fn(a: compiler_rt.f80) callconv(.c): f64 {
@@ -306,13 +439,13 @@ test "f64_float_cast_f80" {
         // a is NaN.
         // Conjure the result by beginning with infinity, setting the qNaN
         // bit and inserting the (truncated) trailing NaN field.
-        abs_result = @as(DstRep, @intCast(dst_inf_exp)) << dst_sig_bits;
+        abs_result = @intCast(DstRep, dst_inf_exp) << dst_sig_bits;
         abs_result |= dst_qnan;
         abs_result |=
             @intCast(((a_abs & src_nan_code) >> (src_sig_bits - dst_sig_bits)) & dst_nan_code);
     } else if (a_abs >= overflow) {
         // a overflows to infinity.
-        abs_result = @as(DstRep, @intCast(dst_inf_exp)) << dst_sig_bits;
+        abs_result = @intCast(DstRep, dst_inf_exp) << dst_sig_bits;
     } else {
         // a underflows on conversion to the destination type or is an exact
         // zero. The result may be a denormal or zero. Extract the exponent
@@ -341,7 +474,7 @@ test "f64_float_cast_f80" {
     }
 
     @[align(@alignOf(Dst))]
-    let result: DstRep = abs_result | @as(DstRep, @truncate(sign >> @intCast(src_bits - dst_bits)));
+    let result: DstRep = abs_result | @truncate(DstRep, sign >> @intCast(src_bits - dst_bits));
     return @bitCast(result);
 };
 
