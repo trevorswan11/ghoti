@@ -613,6 +613,20 @@ class type_resolver {
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
     [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    struct synthetic_tag {
+        std::string name;
+        i128        value;
+    };
+    // An enum with exactly these tags, which no source declares
+    [[nodiscard]] auto build_synthetic_enum(gsl::span<const synthetic_tag>        tags,
+                                            type&                                 tag_type,
+                                            bool                                  non_exhaustive,
+                                            gsl::span<const gsl::not_null<type*>> merged_from)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // `A || B` on two enum types: one enum holding every tag of both, matched by name
+    auto               resolve_enum_merge(ast::node_id id, const ast::binary_expr& binary) -> void;
+    [[nodiscard]] auto merge_enums(type& lhs, type& rhs)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor; each field's
     // own `default_value` supplies that field's default, if any
     [[nodiscard]] auto synthesize_struct(source_location loc, const gir::const_struct& desc)

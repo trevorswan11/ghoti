@@ -355,6 +355,13 @@ class emitter {
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
     auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
+    // The `(from, to)` tag values that differ between an enum and a merge built from it
+    [[nodiscard]] auto enum_widen_remaps(const sema::type& from, const sema::type& to)
+        -> std::vector<std::pair<i128, i128>>;
+    // An enum value as the `A || B` merge `to` built from its type, each tag kept by name
+    auto emit_enum_widen(value v, sema::type& to) -> value;
+    // A `?` residual as the return type's `From`, by widening or by an enum merge's tag names
+    auto convert_residual(value residual, sema::type& from_type) -> value;
     struct slice_bytes {
         std::string bytes;
         sema::type& slice_type;

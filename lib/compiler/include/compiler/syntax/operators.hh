@@ -16,6 +16,8 @@ namespace operators {
 constexpr operator_t ASSIGN{"=", token_type_t::ASSIGN};
 constexpr operator_t PLUS{"+", token_type_t::PLUS};
 constexpr operator_t PLUS_PLUS{"++", token_type_t::PLUS_PLUS};
+// Merges two enum types into one holding every tag of both
+constexpr operator_t PIPE_PIPE{"||", token_type_t::PIPE_PIPE};
 constexpr operator_t PLUS_ASSIGN{"+=", token_type_t::PLUS_ASSIGN};
 constexpr operator_t PLUS_PERCENT{"+%", token_type_t::PLUS_PERCENT};
 constexpr operator_t PLUS_PERCENT_ASSIGN{"+%=", token_type_t::PLUS_PERCENT_ASSIGN};

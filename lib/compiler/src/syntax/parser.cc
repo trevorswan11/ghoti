@@ -606,6 +606,7 @@ constexpr auto INFIX_FNS = [] -> auto {
 
     fns[token_type_t::PLUS]                 = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PLUS]            = ast::binary_expr::parse;
+    fns[token_type_t::PIPE_PIPE]            = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PERCENT]         = ast::binary_expr::parse;
     fns[token_type_t::PLUS_PIPE]            = ast::binary_expr::parse;
     fns[token_type_t::MINUS]                = ast::binary_expr::parse;

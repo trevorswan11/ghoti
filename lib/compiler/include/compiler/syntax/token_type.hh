@@ -34,6 +34,7 @@ enum class token_type_t : u8 {
     ASSIGN,
     PLUS,
     PLUS_PLUS,
+    PIPE_PIPE,
     MINUS,
     STAR,
     SLASH,

@@ -1155,6 +1155,7 @@ namespace {
 auto emitter::fold_initializer(ast::expr_handle init, sema::type& declared)
     -> stdx::option<const_value> {
     auto cv{const_eval_.try_eval(*init)};
+    if (cv) { cv = const_eval_.widen_enum_const(std::move(*cv), declared); }
     if (!cv || !cv->get_type() || cv->get_type()->get_kind() != sema::type_kind::ENUM_LITERAL ||
         !takes_enum_literal(declared) || !cv->is<const_enum>()) {
         return cv;
@@ -1190,6 +1191,83 @@ auto emitter::emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_ty
     }
     report_missing_enum_member(dest_type, literal->as<const_enum>().name, expr_id);
     return value{undefined_val{}, dest_type};
+}
+
+auto emitter::enum_widen_remaps(const sema::type& from, const sema::type& to)
+    -> std::vector<std::pair<i128, i128>> {
+    const auto& from_en{from.get_data().as<sema::types::enum_t>()};
+    const auto& to_en{to.get_data().as<sema::types::enum_t>()};
+    const auto  tag_name{[](const sema::types::enum_t& en, usize idx) {
+        return en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[idx].name).name;
+    }};
+    const auto  from_values{const_eval_.enum_member_values(from_en)};
+    const auto  to_values{const_eval_.enum_member_values(to_en)};
+
+    std::vector<std::pair<i128, i128>> remaps;
+    for (usize i{0}; i < from_values.size(); ++i) {
+        for (usize j{0}; j < to_values.size(); ++j) {
+            if (tag_name(from_en, i) != tag_name(to_en, j)) { continue; }
+            if (from_values[i] != to_values[j]) {
+                remaps.emplace_back(from_values[i], to_values[j]);
+            }
+            break;
+        }
+    }
+    return remaps;
+}
+
+auto emitter::emit_enum_widen(value v, sema::type& to) -> value {
+    auto& from{*v.type};
+    // A one-tag enum's zero-bit value holds nothing to compare, so it is that tag
+    if (const auto& from_en{from.get_data().as<sema::types::enum_t>()};
+        from_en.ast_enumerations.size() == 1) {
+        const auto name{
+            from_en.enclosing.ast.get_as<ast::identifier_expr>(from_en.ast_enumerations[0].name)
+                .name};
+        if (const auto only{const_eval_.coerce_enum_literal(
+                const_value{const_enum{std::string{name}, 0}}, to)}) {
+            return materialize_const(*only);
+        }
+    }
+    auto&       from_tag{from.get_data().as<sema::types::enum_t>().underlying};
+    auto&       to_tag{to.get_data().as<sema::types::enum_t>().underlying};
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  remaps{enum_widen_remaps(from, to)};
+    const value src_int{builder_.emit_cast(instruction_kind::WIDEN_CAST, v, from_tag), from_tag};
+    value       dst_int{
+        sema::is_same_unqualified(from_tag, to_tag)
+            ? src_int
+            : value{builder_.emit_cast(instruction_kind::INT_CAST, src_int, to_tag), to_tag}};
+
+    // A tag whose value moved is rewritten. Any other value, an unnamed one included, keeps its
+    // bits
+    if (!remaps.empty()) {
+        auto&      fn{*builder_.get_function()};
+        const auto slot{builder_.emit_alloca(to_tag)};
+        builder_.emit_store(slot, dst_int).is_initializer = true;
+        for (const auto& [src_val, dst_val] : remaps) {
+            const auto is_tag{builder_.emit_binary(
+                instruction_kind::EQ, src_int, value{src_val, from_tag}, bool_type)};
+            auto&      rewrite_seg{fn.add_segment()};
+            auto&      next_seg{fn.add_segment()};
+            builder_.emit_cond_goto(
+                value{is_tag, bool_type}, rewrite_seg.get_id(), next_seg.get_id());
+            builder_.set_segment(rewrite_seg);
+            builder_.emit_store(slot, value{dst_val, to_tag});
+            builder_.emit_goto(next_seg.get_id());
+            builder_.set_segment(next_seg);
+        }
+        dst_int = value{builder_.emit_load(value{slot, to_tag}, to_tag), to_tag};
+    }
+    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, dst_int, to), to};
+}
+
+auto emitter::convert_residual(value residual, sema::type& from_type) -> value {
+    if (!residual.type || *residual.type == from_type) { return residual; }
+    if (sema::is_enum_widenable(*residual.type, from_type)) {
+        return emit_enum_widen(residual, from_type);
+    }
+    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, residual, from_type), from_type};
 }
 
 // A `union(MyEnum)` read as its `MyEnum` tag: the variant its active field names
@@ -1414,6 +1492,17 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             auto& concrete{dest_type};
             return coerce_comptime_int(v, concrete, *expr_id);
         }
+    }
+
+    // An enum widens into a merge built from it, keeping each tag by name
+    if (val.type && sema::is_enum_widenable(*val.type, dest_type)) {
+        if (const auto cv{const_eval_.try_eval(*expr_id)}) {
+            const auto widened{const_eval_.widen_enum_const(*cv, dest_type)};
+            if (widened.get_type() && &*widened.get_type() == &dest_type) {
+                return materialize_const(widened);
+            }
+        }
+        return emit_enum_widen(val, dest_type);
     }
 
     // A numeric value narrower than dest widens implicitly (`iW`->`iV`, `f32`->`f64`, ...)
@@ -2718,10 +2807,7 @@ auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -
             flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
         value      residual{builder_.emit_load(value{residual_ptr, residual_type}, residual_type),
                             residual_type};
-        if (residual_type != from_type) {
-            residual = value{builder_.emit_cast(instruction_kind::WIDEN_CAST, residual, from_type),
-                             from_type};
-        }
+        residual            = convert_residual(residual, from_type);
         current_error_slot_ = spill_to_temporary(residual, from_type, false);
     }
     leave(true);
@@ -9233,8 +9319,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     if (res_val.type && *res_val.type != from_type &&
         (sema::is_implicit_widenable(*res_val.type, from_type) ||
          sema::is_assignable(*res_val.type, from_type))) {
-        const auto casted{builder_.emit_cast(instruction_kind::WIDEN_CAST, res_val, from_type)};
-        res_val = value{casted, from_type};
+        res_val = convert_residual(res_val, from_type);
     }
 
     // Preserve the error payload for errdefer captures.

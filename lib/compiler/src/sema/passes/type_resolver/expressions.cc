@@ -466,6 +466,8 @@ auto type_resolver::visit(ast::node_id id, const ast::binary_expr& binary) -> vo
             resolving_.ast.location_of(operand)));
     }
 
+    if (op == syntax::token_type_t::PIPE_PIPE) { return resolve_enum_merge(id, binary); }
+
     // Types only exist at compile time and only compare for identity against other types
     const auto lhs_nature{operand_nature(binary.lhs)};
     const auto rhs_nature{lhs_nature == operand_nature_t::UNKNOWN ? operand_nature_t::UNKNOWN
@@ -685,6 +687,107 @@ auto type_resolver::resolve_vector_binary(ast::node_id            id,
 }
 
 // `lhs ++ rhs`: compile-time array/slice concatenation. Result is `[N+M]T`, sentinel from `rhs`.
+auto type_resolver::resolve_enum_merge(ast::node_id id, const ast::binary_expr& binary) -> void {
+    auto& lhs{denoted_type(resolving_.get_sema_type(binary.lhs))};
+    auto& rhs{denoted_type(resolving_.get_sema_type(binary.rhs))};
+    // A merge over a type parameter is only known once it's instantiated
+    if (is_generic_type(lhs) || is_generic_type(rhs)) {
+        auto& placeholder{*ctx_.pool[{type_kind::AUTO, types::mut::CONSTANT}]};
+        resolving_.set_sema_type(id, placeholder);
+        return last_type_.emplace(placeholder);
+    }
+    for (const auto& [operand, operand_type] :
+         {std::pair{binary.lhs, &lhs}, std::pair{binary.rhs, &rhs}}) {
+        if (operand_type->get_kind() == type_kind::ENUM &&
+            operand_type->get_data().is<types::enum_t>()) {
+            continue;
+        }
+        const bool is_bool{operand_type->get_kind() == type_kind::BOOL};
+        return last_type_.emplace(
+            ctx_.poison_node(resolving_,
+                             id,
+                             fmt::format("'||' merges two enum types, but found '{}'{}",
+                                         ctx_.type_display_name(*operand_type),
+                                         is_bool ? "; use 'or' for a logical or" : ""),
+                             error::TYPE_MISMATCH,
+                             resolving_.ast.location_of(operand)));
+    }
+
+    auto merged{merge_enums(lhs, rhs)};
+    if (!merged) {
+        ctx_.diags.emplace_back(std::move(merged).error());
+        return last_type_.emplace(ctx_.poison_node(resolving_, id));
+    }
+    auto meta{ctx_.pool[{type_kind::TYPE, types::mut::CONSTANT, **merged}]};
+    meta->resolve_if<types::meta_type>(**merged);
+    type_valued_results_.insert(id.get_index());
+    resolving_.set_sema_type(id, *meta);
+    last_type_.emplace(*meta);
+}
+
+auto type_resolver::merge_enums(type& lhs, type& rhs)
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    const std::pair key{reinterpret_cast<uptr>(&lhs), reinterpret_cast<uptr>(&rhs)};
+    if (const auto it{ctx_.enum_merges.find(key)}; it != ctx_.enum_merges.end()) {
+        return it->second;
+    }
+
+    // The left enum keeps its values, so widening from it changes no bits. A tag only the right
+    // has follows the largest value so far, and a name both have is one tag
+    const auto&                lhs_en{lhs.get_data().as<types::enum_t>()};
+    const auto&                rhs_en{rhs.get_data().as<types::enum_t>()};
+    gir::const_eval            evaluator{ctx_, resolving_};
+    std::vector<synthetic_tag> tags;
+    const auto                 tag_name{[](const types::enum_t& en, usize idx) {
+        return std::string{
+            en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[idx].name).name};
+    }};
+    const auto                 lhs_values{evaluator.enum_member_values(lhs_en)};
+    for (usize i{0}; i < lhs_values.size(); ++i) {
+        tags.emplace_back(synthetic_tag{.name = tag_name(lhs_en, i), .value = lhs_values[i]});
+    }
+    i128 next{0};
+    for (const auto& tag : tags) { next = std::max(next, tag.value + 1); }
+    for (usize i{0}; i < rhs_en.ast_enumerations.size(); ++i) {
+        auto name{tag_name(rhs_en, i)};
+        if (std::ranges::any_of(tags, [&name](const auto& tag) { return tag.name == name; })) {
+            continue;
+        }
+        tags.emplace_back(synthetic_tag{.name = std::move(name), .value = next++});
+    }
+
+    // The tag type of either side that holds every value, else the narrowest integer that does
+    const auto ptr_bits{codegen::target_facts::resolve(ctx_.target_opts.triple_str).ptr_bits};
+    const auto holds_all{[&](const type& candidate) {
+        return std::ranges::all_of(tags, [&](const auto& tag) {
+            return comptime_int_fits(big_int{tag.value}, candidate, ptr_bits);
+        });
+    }};
+    gsl::not_null<type*> tag_type{&lhs_en.underlying};
+    if (!holds_all(*tag_type)) {
+        tag_type = &rhs_en.underlying;
+        if (!holds_all(*tag_type)) {
+            const bool negative{
+                std::ranges::any_of(tags, [](const auto& t) { return t.value < 0; })};
+            tag_type = &ctx_.get_int(64, negative);
+            for (const auto bits : std::array<u16, 4>{8, 16, 32, 64}) {
+                if (holds_all(ctx_.get_int(bits, negative))) {
+                    tag_type = &ctx_.get_int(bits, negative);
+                    break;
+                }
+            }
+        }
+    }
+
+    auto sources{make_uninit_span<gsl::not_null<type*>>(ctx_.arena, 2)};
+    new (&sources[0]) gsl::not_null<type*>{&lhs};
+    new (&sources[1]) gsl::not_null<type*>{&rhs};
+    auto merged{TRY(build_synthetic_enum(
+        tags, *tag_type, lhs_en.non_exhaustive || rhs_en.non_exhaustive, sources))};
+    ctx_.enum_merges.emplace(key, merged);
+    return merged;
+}
+
 auto type_resolver::resolve_concat(ast::node_id            id,
                                    const ast::binary_expr& binary,
                                    type&                   lhs_type_in,

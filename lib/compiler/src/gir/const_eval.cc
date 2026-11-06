@@ -2639,6 +2639,30 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
     return stdx::none;
 }
 
+auto const_eval::widen_enum_const(const_value value, sema::type& declared) -> const_value {
+    // An annotation's own type is the meta type naming the enum
+    auto&      dest{sema::denoted_type(declared)};
+    const auto source{value.get_type()};
+    if (!source || !sema::is_enum_widenable(*source, dest)) { return value; }
+
+    // A folded member is a `const_enum`, or just its value typed as the enum
+    std::string name;
+    if (const auto named{value.as_opt<const_enum>()}) {
+        name = named->name;
+    } else if (const auto raw{value.as_int_opt()}) {
+        const auto& en{source->get_data().as<sema::types::enum_t>()};
+        const auto  values{enum_member_values(en)};
+        for (usize i{0}; i < values.size(); ++i) {
+            if (values[i] != *raw) { continue; }
+            name = en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[i].name).name;
+            break;
+        }
+    }
+    if (name.empty()) { return value; }
+    auto widened{coerce_enum_literal(const_value{const_enum{std::move(name), 0}}, dest)};
+    return widened ? std::move(*widened) : value;
+}
+
 auto const_eval::coerce_enum_literal(const const_value& literal, sema::type& dest)
     -> stdx::option<const_value> {
     const auto lit{literal.as_opt<const_enum>()};
@@ -4259,6 +4283,14 @@ auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
     const auto op_type{id.get_token_type()};
     if (const auto result{module_->get_sema_type_opt(id)}; result && sema::is_vector(*result)) {
         return eval_vector_binary(id, binary, *result);
+    }
+
+    // `A || B` is the merged enum sema built
+    if (op_type == syntax::token_type_t::PIPE_PIPE) {
+        const auto result{module_->get_sema_type_opt(id)};
+        const auto meta{result ? result->get_data().as_opt<sema::types::meta_type>() : stdx::none};
+        if (!meta) { return stdx::none; }
+        return const_value{meta->instance};
     }
 
     // Short-circuit logical operators
@@ -6498,12 +6530,12 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
                                        : stdx::none};
             if (bound && *bound) {
                 if (expand_undefined) { return undefined_value_of(**bound); }
-                return with_declared_type(std::move(*value), **bound);
+                return with_declared_type(widen_enum_const(std::move(*value), **bound), **bound);
             }
         }
         if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
             if (expand_undefined) { return undefined_value_of(*declared); }
-            return with_declared_type(std::move(*value), *declared);
+            return with_declared_type(widen_enum_const(std::move(*value), *declared), *declared);
         }
     }
     return value;

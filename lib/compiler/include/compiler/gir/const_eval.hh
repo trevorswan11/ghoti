@@ -73,6 +73,9 @@ class const_eval {
     // of that name; `none` when `dest` has no such member
     [[nodiscard]] auto coerce_enum_literal(const const_value& literal, sema::type& dest)
         -> stdx::option<const_value>;
+    // A folded enum value as an `A || B` merge built from its type, which keeps the tag's name;
+    // any other value is returned as is
+    [[nodiscard]] auto widen_enum_const(const_value value, sema::type& declared) -> const_value;
 
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {

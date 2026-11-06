@@ -137,6 +137,9 @@ constexpr u16 CHAR_CONSTANT_BITS{21};
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
+// Whether `from` is an enum an `A || B` merge `to` was built from, at any depth, so each of its
+// tags is a tag of `to` with the same name
+[[nodiscard]] auto is_enum_widenable(const type& from, const type& to) noexcept -> bool;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {
     switch (kind) {
@@ -304,6 +307,8 @@ struct enum_t {
     type&                                        underlying;
     gsl::span<stdx::option<type&>>               members;
     mod::module_t&                               enclosing;
+    // The enums an `A || B` merge was built from, empty for any other enum
+    gsl::span<const gsl::not_null<type*>> merged_from{};
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first

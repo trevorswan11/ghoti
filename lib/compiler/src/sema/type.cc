@@ -345,9 +345,47 @@ auto int_range_fits(const types::integer& from, const types::integer& to) noexce
     return to.is_signed ? to.bits > from.bits : to.bits >= from.bits;
 }
 
+namespace {
+
+[[nodiscard]] auto same_enum(const type& a, const type& b) noexcept -> bool {
+    return a.get_kind() == type_kind::ENUM && b.get_kind() == type_kind::ENUM &&
+           a.has_symbol_table_idx() && b.has_symbol_table_idx() &&
+           a.get_symbol_table_idx() == b.get_symbol_table_idx();
+}
+
+[[nodiscard]] auto merged_sources(const type& t) noexcept -> gsl::span<const gsl::not_null<type*>> {
+    const auto en{t.get_data().as_opt<types::enum_t>()};
+    return en ? en->merged_from : gsl::span<const gsl::not_null<type*>>{};
+}
+
+// Whether `leaf` is `merged` or one of the enums it was built from, at any depth
+[[nodiscard]] auto merge_contains(const type& merged, const type& leaf) noexcept -> bool {
+    if (same_enum(merged, leaf)) { return true; }
+    return std::ranges::any_of(merged_sources(merged), [&leaf](const auto source) {
+        return merge_contains(*source, leaf);
+    });
+}
+
+// Whether every enum `from` was built from, or `from` itself, is part of `to`
+[[nodiscard]] auto merge_covers(const type& to, const type& from) noexcept -> bool {
+    const auto sources{merged_sources(from)};
+    if (sources.empty()) { return merge_contains(to, from); }
+    return std::ranges::all_of(sources,
+                               [&to](const auto source) { return merge_covers(to, *source); });
+}
+
+} // namespace
+
+auto is_enum_widenable(const type& from, const type& to) noexcept -> bool {
+    if (from.get_kind() != type_kind::ENUM || to.get_kind() != type_kind::ENUM) { return false; }
+    if (same_enum(from, to) || merged_sources(to).empty()) { return false; }
+    return merge_covers(to, from);
+}
+
 auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool {
     const auto from_kind{from.get_kind()};
     const auto to_kind{to.get_kind()};
+    if (is_enum_widenable(from, to)) { return true; }
 
     // An unsuffixed integer literal coerces to any concrete integer or float
     if (from_kind == type_kind::COMPTIME_INT) { return is_numeric(to_kind); }
