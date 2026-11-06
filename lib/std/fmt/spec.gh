@@ -163,8 +163,8 @@ test "Spec.parse_body parses all spec inputs at compile time" {
 }
 
 pub const Placeholder = struct {
-    spec: Spec,
-    next: usize,
+    pub spec: Spec,
+    pub next: usize,
 
     pub const parse = fn(comptime fmt: []u8, comptime at: usize): @This() {
         comptime let mut i = at + 1;
@@ -276,9 +276,14 @@ test "next_placeholder at compile time" {
     @expect(p4 == 4);
 }
 
+/// Checks `fmt` against `arg_count` arguments at compile time according to:
+/// - A `{}` takes the next argument not yet taken by a `{}`
+/// - A `{N}` names an argument at an index
+/// - Every argument must be used at least once
 pub const validate = fn(comptime fmt: []u8, comptime arg_count: usize): void {
     comptime let mut i: usize = 0;
-    comptime let mut placeholder_count: usize = 0;
+    comptime let mut next_implicit: usize = 0;
+    comptime let mut used = 0;
     unroll while (i < fmt.len) {
         if comptime (fmt[i] == '{') {
             if comptime (i + 1 < fmt.len and fmt[i + 1] == '{') {
@@ -286,15 +291,24 @@ pub const validate = fn(comptime fmt: []u8, comptime arg_count: usize): void {
                 continue;
             }
 
-            // parseAt will compile error internally if the spec is bad
+            // Placeholder.parse will compile error internally if the spec is bad
             const parsed: Placeholder = .parse(fmt, i);
-            match comptime (parsed.spec.arg_idx) {
-                .some => |arg_idx| if comptime (arg_idx >= arg_count) {
-                    @compileError("fmt: explicit arg index out of range");
-                },
-                .none => {},
+            if comptime (parsed.next > fmt.len or fmt[parsed.next - 1] != '}') {
+                @compileError("fmt: unterminated placeholder, expected '}'");
             }
-            placeholder_count += 1;
+
+            const explicit = parsed.spec.arg_idx != .none;
+            const arg_idx = parsed.spec.arg_idx.unwrap_or(next_implicit);
+            if comptime (arg_idx >= arg_count) {
+                if comptime (explicit) {
+                    @compileError("fmt: explicit arg index out of range");
+                }
+                @compileError("fmt: more placeholders than arguments");
+            }
+            if comptime (!explicit) {
+                next_implicit += 1;
+            }
+            used |= 1 << arg_idx;
             i = parsed.next;
             continue;
         }
@@ -309,16 +323,21 @@ pub const validate = fn(comptime fmt: []u8, comptime arg_count: usize): void {
         i += 1;
     }
 
-    if comptime (placeholder_count != arg_count) {
-        @compileError("fmt: wrong number of arguments");
+    if comptime (used != (1 << arg_count) - 1) {
+        @compileError("fmt: an argument is never used");
     }
 };
 
 test "validate at compile time" {
     validate("{}", 1);
     validate("hello {0} world {1}", 2);
+    validate("{1} {0}", 2);
+    validate("{0} {0} {}", 1);
+    validate("{} {0} {}", 2);
     validate("{{}} {}", 1);
     validate("{:#08x} = {:+5.2f}", 2);
+    validate("x {:>5} {:<} {:^8}", 3);
+    validate("no placeholders", 0);
 }
 
 const to_io_err = fn(_: std.io.Error): std.fmt.Error {

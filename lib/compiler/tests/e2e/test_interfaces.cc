@@ -894,4 +894,21 @@ TEST_CASE(
     )") == 42);
 }
 
+TEST_CASE("an impl method may share a name with a module-level declaration") {
+    CHECK(helpers::compile_and_run(R"(
+        const Show = interface {
+            const format = fn(&self): i32;
+        };
+        const format = fn(v: auto): i32 { return v.format() + 1; };
+        const Point = struct { x: i32 };
+        impl Show for Point {
+            const format = fn(&self): i32 { return self.x; };
+        }
+        pub const main = fn(): i32 {
+            let p = Point{ .x = 20 };
+            return format(p) + p.format() + 1;
+        };
+    )") == 42);
+}
+
 } // namespace ghoti::tests

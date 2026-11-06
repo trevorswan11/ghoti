@@ -80,4 +80,16 @@ TEST_CASE("a pack expansion's spliced arity is still checked against the callee"
     )");
 }
 
+TEST_CASE("a reference passed to a pack stays a reference, directly and when forwarded") {
+    CHECK(helpers::compile_and_run(R"(
+        const first = fn(rest...): u32 { return *rest[0]; };
+        const forward = fn(lead: u32, rest...): u32 { return lead + first(rest...); };
+        pub const main = fn(): i32 {
+            let n: u32 = 9;
+            let r = &n;
+            return @intCast(first(&n) + first(r, 1) + forward(1, &n));
+        };
+    )") == 28);
+}
+
 } // namespace ghoti::tests

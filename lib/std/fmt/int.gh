@@ -57,7 +57,8 @@ pub const format_radix = fn(
             is_negative = value < 0;
             break :blk if (is_negative) 0 -% bits else bits;
         } else {
-            break :blk value;
+            // `usize` is its own type, distinct from the `u64` that `@Int` builds
+            break :blk @intCast(MinInt, value);
         }
     };
     let mut index = buf.len;
@@ -184,6 +185,13 @@ test "format_radix base 10" {
     check_radix(7i8, 10, .lower, "7");
     check_radix(-128i8, 10, .lower, "-128");
     check_radix(18446744073709551615u64, 10, .lower, "18446744073709551615");
+}
+
+test "format_radix pointer-sized integers" {
+    check_radix(12345uz, 10, .lower, "12345");
+    check_radix(0uz, 10, .lower, "0");
+    check_radix(@as(isize, -42), 10, .lower, "-42");
+    check_fmt(255uz, .{ .alt = true, .kind = .of(.x) }, "0xff");
 }
 
 test "format_radix other bases" {

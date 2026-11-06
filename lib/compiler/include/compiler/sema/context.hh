@@ -49,6 +49,13 @@ struct active_block_frame {
     stdx::option<comptime_frame> carried{};
 };
 
+// How simulating an active block's statements left it early, if they did
+enum class simulated_exit : u8 {
+    BREAK,
+    CONTINUE,
+    RETURN,
+};
+
 // Mirrors `builtin.OptimizeMode`
 enum class optimize_mode : u8 {
     DEBUG,

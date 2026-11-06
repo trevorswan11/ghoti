@@ -5882,15 +5882,17 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     // A generic's parameter (`x: auto`, `y: @TypeOf(x)`, `p: &auto`) is only typed in the
     // monomorph, so its argument converts to that
     const auto instantiated_param{[&](usize i) -> stdx::option<sema::type&> {
-        if (!generic_target_fn || !callee_name || i >= generic_target_fn->parameters.size()) {
-            return stdx::none;
-        }
+        if (!generic_target_fn || !callee_name) { return stdx::none; }
         const auto& params{generic_target_fn->parameters};
-        if (params[i].is_pack) { return stdx::none; }
-        usize runtime_idx{0};
-        for (usize p{0}; p < i; ++p) {
+        // Every argument from a trailing pack's position on is one of its runtime elements
+        const bool in_pack{!params.empty() && params.back().is_pack && i + 1 >= params.size()};
+        if (!in_pack && i >= params.size()) { return stdx::none; }
+        const usize fixed_before{in_pack ? params.size() - 1 : i};
+        usize       runtime_idx{0};
+        for (usize p{0}; p < fixed_before; ++p) {
             if (!binds_comptime_arg(p)) { ++runtime_idx; }
         }
+        if (in_pack) { runtime_idx += i - fixed_before; }
         if (const auto req{ctx_.instantiation_cache.get_request(*callee_name)};
             req && runtime_idx < req->arg_types.size()) {
             return *req->arg_types[runtime_idx];

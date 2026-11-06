@@ -248,6 +248,8 @@ class type_resolver {
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
     // Whether `root` assigns to a `comptime let mut` type anywhere outside a nested function
     [[nodiscard]] auto assigns_comptime_type_var(ast::node_id root) -> bool;
+    // Whether `root` makes a call anywhere outside a nested function or loop
+    [[nodiscard]] auto makes_call(ast::node_id root) -> bool;
     // Types an `unroll while` body once per iteration, recording each pass's typing; true if
     // the body poisoned
     [[nodiscard]] auto resolve_unrolled_while_iterations(ast::node_id                id,
@@ -994,6 +996,8 @@ class type_resolver {
     // materializing the latest compile-time values of mutable `comptime let mut` locals.
     // The resulting frame is installed into `ctx_.comptime_binding_frames` during isolated folds.
     [[nodiscard]] auto make_simulated_frame() -> comptime_frame;
+    // Whether the statements simulated so far leave the innermost active block early
+    [[nodiscard]] auto simulated_block_exit() -> stdx::option<simulated_exit>;
 
     // Returns `true` if the resolution was successful
     [[nodiscard]] auto resolve_control_flow_label(stdx::option<ast::identifier_handle> label,

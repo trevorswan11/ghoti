@@ -35,16 +35,12 @@ test {
 
 @cfg (os.HAS_BACKEND) {
     pub const panic_handler = fn(msg: []u8, loc: builtin.SourceLocation): noreturn {
-        _ = io.eprint(loc.file);
-        _ = io.eprint(": ");
-        _ = io.eprintln(msg);
+        _ = io.eprintln("{}:{}:{}: {}", loc.file, loc.line, loc.column, msg);
         @trap();
     };
 
     pub const assert_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        _ = io.eprint(loc.file);
-        _ = io.eprint(": ");
-        _ = io.eprintln(msg);
+        _ = io.eprintln("{}:{}:{}: {}", loc.file, loc.line, loc.column, msg);
         @trap();
     };
 }

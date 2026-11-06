@@ -1,9 +1,7 @@
 import std;
 
 pub const main = fn(): std.Result(i32, std.mem.AllocError) {
-    errdefer |e| {
-        std.io.eprintln(@tagName(e))!;
-    }
+    errdefer |e| std.io.eprintln("{}", e)!;
 
     let allocator = std.heap.page_allocator;
     let mem = allocator.alloc(i32, 10)?;

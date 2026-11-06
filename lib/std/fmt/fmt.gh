@@ -28,24 +28,272 @@ test {
 }
 
 const Writer = std.io.Writer;
+const Result = std.Result;
 
 pub const Error = enum { overflow = 1, bad_spec, bad_arg, unsupported, io };
 
+/// Implemented by types that format themselves inside a `{}`
 pub const Format = interface {
     const format = fn(
         &self,
         spec: Spec,
         w: &mut dyn Writer,
-    ): std.Result(void, Error);
+    ): Result(void, Error);
 };
 
 pub const Case = enum : u1 { lower, upper };
 
-pub const format = fn(w: &mut impl Writer, comptime fmt: []u8, args...): std.Result(void, Error) {
+const to_fmt_err = fn(_: std.io.Error): Error {
+    return .io;
+};
+
+/// Writes `fmt` to `w`, replacing each placeholder with its formatted argument.
+/// The format string is checked against `args` at compile time
+pub const format = fn(w: &mut impl Writer, comptime fmt: []u8, args...): Result(void, Error) {
     comptime spec.validate(fmt, args.len);
 
     let mut dyn_w: &mut dyn Writer = w;
     comptime let mut cursor: usize = 0;
+    comptime let mut next_implicit: usize = 0;
 
-    unroll for (args, 0..) |arg, i| {}
+    unroll while (cursor < fmt.len) {
+        const lit_end = spec.next_placeholder(fmt, cursor);
+        if comptime (lit_end > cursor) {
+            write_literal(dyn_w, fmt[cursor..lit_end])?;
+        }
+        if comptime (lit_end == fmt.len) break;
+
+        const parsed: spec.Placeholder = .parse(fmt, lit_end);
+        const arg_idx = parsed.spec.arg_idx.unwrap_or(next_implicit);
+        if comptime (parsed.spec.arg_idx == .none) {
+            next_implicit += 1;
+        }
+        format_value(dyn_w, args[arg_idx], parsed.spec)?;
+        cursor = parsed.next;
+    }
+    return .done;
 };
+
+/// Formats `fmt` into `buf`, returning the written prefix of `buf`.
+/// Fails with `.io` if `buf` is too small
+pub const buf_print = fn(buf: []mut u8, comptime fmt: []u8, args...): Result([]u8, Error) {
+    let mut stream: std.io.FixedBufferStream = .{ .buf = buf };
+    format(&mut stream, fmt, args...)?;
+    return .of(buf[..stream.pos]);
+};
+
+/// Formats one value according to `spec`, dispatching on its type.
+/// Types that implement `Format` take precedence over the builtin formatting
+pub const format_value = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(void, Error) {
+    const T = @TypeOf(value);
+    if comptime (@implements(T, Format)) {
+        return value.format(spec_, w);
+    }
+
+    return match comptime (@typeInfo(T)) {
+        .int => int.format(w, value, spec_),
+        .comptime_int => int.format(w, @as(ComptimeIntRuntime(value), value), spec_),
+        .float, .comptime_float => float.format(w, value, spec_),
+        .bool => format_str(w, if (value) "true" else "false", spec_),
+        .enum => format_str(w, @tagName(value), spec_),
+        .void => format_str(w, "void", spec_),
+        .array => |info| if comptime (info.child == u8) format_str(w, value[..], spec_)
+            else format_list(w, value[..], spec_),
+        .slice => |info| if comptime (info.child == u8) format_str(w, value, spec_)
+            else format_list(w, value, spec_),
+        .reference => format_value(w, *value, spec_),
+        .pointer => format_address(w, @intFromPtr(value), spec_),
+        _ => @compileError("fmt: no formatter for " ++ @typeName(T)),
+    };
+};
+
+/// The 128-bit integer type that holds a `comptime_int` value
+const ComptimeIntRuntime = fn(comptime value: comptime_int): type {
+    return if comptime (value < 0) i128 else u128;
+};
+
+/// Formats text, where a precision caps how many bytes are written
+const format_str = fn(w: &mut dyn Writer, text: []u8, spec_: Spec): Result(void, Error) {
+    match (spec_.kind.unwrap_or(.s)) {
+        .s, .@"?" => {},
+        _ => return .fail(.bad_spec),
+    }
+    let len = match (spec_.precision) {
+        .some => |max| @min(max, text.len),
+        .none => text.len,
+    };
+    return pad(w, spec_, text[..len], .left);
+};
+
+/// Formats an address as `0x` followed by lowercase hex digits
+const format_address = fn(w: &mut dyn Writer, address: usize, spec_: Spec): Result(void, Error) {
+    match (spec_.kind.unwrap_or(.p)) {
+        .p, .x, .@"?" => {},
+        _ => return .fail(.bad_spec),
+    }
+    let mut hex_spec = spec_;
+    hex_spec.alt = true;
+    hex_spec.kind = .of(.x);
+    return int.format(w, address, hex_spec);
+};
+
+/// Formats each element with `spec_`, written as `[a, b, c]`
+const format_list = fn(w: &mut dyn Writer, items: auto, spec_: Spec): Result(void, Error) {
+    w.write_byte('[').map_err(to_fmt_err)?;
+    for (items, 0..) |item, i| {
+        if (i > 0) {
+            w.write_all(", ").map_err(to_fmt_err)?;
+        }
+        format_value(w, item, spec_)?;
+    }
+    return w.write_byte(']').map_err(to_fmt_err);
+};
+
+/// Formats with `format` into a scratch buffer and expects `expected`
+@[testing] const check = fn(expected: []u8, comptime fmt: []u8, args...): void {
+    let mut backing: [256]mut u8 = undefined;
+    match (buf_print(backing[..], fmt, args...)) {
+        .ok => |written| {
+            if (!std.mem.eql(u8, expected, written)) {
+                let mut err = std.io.stderr()!;
+                format(&mut err, "expected '{}' but got '{}'\n", expected, written)!;
+                @expect(false);
+            }
+        },
+        .err => |e| {
+            let mut err = std.io.stderr()!;
+            format(&mut err, "expected '{}' but formatting failed with {}\n", expected, e)!;
+            @expect(false, "format failed");
+        },
+    }
+};
+
+/// Formats with `format` and expects it to fail with `expected`
+@[testing] const check_err = fn(expected: Error, comptime fmt: []u8, args...): void {
+    let mut backing: [256]mut u8 = undefined;
+    match (buf_print(backing[..], fmt, args...)) {
+        .ok => {
+            @expect(false, "format succeeded");
+        },
+        .err => |e| {
+            @expect(e == expected);
+        },
+    }
+};
+
+test "format literals and escapes" {
+    check("", "");
+    check("no placeholders", "no placeholders");
+    check("{}", "{{}}");
+    check("a{b}c", "a{{b}}c");
+    check("{7}", "{{{}}}", 7);
+}
+
+test "format integers" {
+    check("42", "{}", 42);
+    check("-42", "{}", -42);
+    check("x = 7, y = -3", "x = {}, y = {}", 7u8, -3i64);
+    check("0xff", "{:#x}", 255u32);
+    check("   42|42   ", "{:5}|{:<5}", 42u16, 42u16);
+    check("00042", "{:05}", 42);
+    check("+5", "{:+}", 5i32);
+    check("A", "{:c}", 65u8);
+    check("12", "{}", 12uz);
+    check(
+        "340282366920938463463374607431768211455",
+        "{}",
+        @as(u128, 340282366920938463463374607431768211455),
+    );
+}
+
+test "format_value keeps a comptime_int's full range" {
+    let mut backing: [64]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
+    @expect(format_value(&mut stream, 340282366920938463463374607431768211455, .{}) == .ok);
+    @expect(format_value(&mut stream, -9223372036854775809, .{}) == .ok);
+    @expect(std.mem.eql(
+        u8,
+        "340282366920938463463374607431768211455-9223372036854775809",
+        backing[..stream.pos],
+    ));
+}
+
+test "format floats" {
+    check("1.5", "{}", 1.5);
+    check("0.1", "{}", 0.1);
+    check("3.14", "{:.2}", 3.14159f64);
+    check("1.5e0", "{:e}", 1.5f32);
+    check("  2.50", "{:6.2}", 2.5f64);
+}
+
+test "format text, bools, and enums" {
+    const Color = enum { red, green };
+
+    let s: []u8 = "hi";
+    check("hi", "{}", s);
+    check("lit", "{}", "lit");
+    check("hi   |   hi", "{:<5}|{:>5}", s, s);
+    check("he", "{:.2}", "hello");
+    check("true false", "{} {}", true, false);
+    check("green", "{}", Color.green);
+    check("void", "{}", {});
+}
+
+test "format arrays, slices, and references" {
+    let nums = [_]i32{ 1, -2, 3 };
+    check("[1, -2, 3]", "{}", nums);
+    check("[1, -2, 3]", "{}", nums[..]);
+    check("[0x1, 0xa]", "{:#x}", [_]u16{ 1, 10 }[..]);
+    let n: u32 = 9;
+    check("9", "{}", &n);
+
+    let mut backing: [32]mut u8 = undefined;
+    let p = ^n;
+    match (buf_print(backing[..], "{:p}", p)) {
+        .ok => |written| {
+            @expect(written.len > 2 and std.mem.eql(u8, "0x", written[..2]));
+        },
+        .err => {
+            @expect(false, "format failed");
+        },
+    }
+}
+
+test "format explicit and reused argument indices" {
+    check("b a", "{1} {0}", "a", "b");
+    check("x x", "{0} {0}", "x");
+    check("1 2 1", "{} {} {0}", 1, 2);
+    check("1 1 2", "{} {0} {}", 1, 2);
+}
+
+test "format reports runtime spec errors" {
+    check_err(.bad_spec, "{:x}", true);
+    check_err(.bad_spec, "{:d}", "text");
+    check_err(.bad_arg, "{:c}", 300u16);
+    let mut tiny: [2]mut u8 = undefined;
+    @expect(buf_print(tiny[..], "{}", 12345) == .err);
+}
+
+@cfg (testing) {
+    const Point = struct {
+        pub x: i32,
+        pub y: i32,
+    };
+
+    impl Format for Point {
+        const format = fn(&self, spec_: Spec, w: &mut dyn Writer): Result(void, Error) {
+            w.write_byte('(').map_err(to_fmt_err)?;
+            format_value(w, self.x, spec_)?;
+            w.write_all(", ").map_err(to_fmt_err)?;
+            format_value(w, self.y, spec_)?;
+            return w.write_byte(')').map_err(to_fmt_err);
+        };
+    }
+}
+
+test "format a user type through Format" {
+    let p: Point = .{ .x = 3, .y = -4 };
+    check("(3, -4)", "{}", p);
+    check("(+3, -4)", "{:+}", p);
+    check("at (3, -4)!", "at {}!", p);
+}

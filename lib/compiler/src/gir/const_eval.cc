@@ -7304,8 +7304,9 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
 }
 
 auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
-                                        sema::comptime_frame& out_frame) -> void {
-    if (blocks.empty()) { return; }
+                                        sema::comptime_frame&                     out_frame)
+    -> stdx::option<sema::simulated_exit> {
+    if (blocks.empty()) { return stdx::none; }
     const comptime_context_guard g{*this, true};
 
     // Fast pre-scan: if none of the active blocks contain a `comptime let mut` declaration,
@@ -7325,7 +7326,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
         if (!frame.block) { continue; }
         for (const auto& s : frame.block->statements) { scan_decl(s); }
     }
-    if (active_cx_vars_.empty()) { return; }
+    if (active_cx_vars_.empty()) { return stdx::none; }
 
     // Ensure a call frame exists on `call_stack_` to host local bindings during simulation.
     bool pushed_frame{false};
@@ -7346,8 +7347,10 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
 
     // Sequentially simulate preceding statements in each active block from outermost to innermost,
     // stopping strictly before `current_stmt_idx` in each frame.
+    stdx::option<sema::simulated_exit> exit;
     for (const auto& frame : blocks) {
         if (!frame.block) { continue; }
+        exit = stdx::none;
         if (frame.carried) {
             for (const auto& [k, v] : *frame.carried) {
                 call_stack_.back().bindings.insert_or_assign(k, v);
@@ -7357,9 +7360,14 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
             simulate_stmt(frame.block->statements[i]);
             if (cond_unknown_) {
                 out_frame.clear();
-                return;
+                return stdx::none;
             }
             if (current_signal_.kind) {
+                switch (*current_signal_.kind) {
+                case eval_signal_kind::CONTINUE: exit = sema::simulated_exit::CONTINUE; break;
+                case eval_signal_kind::RETURN:   exit = sema::simulated_exit::RETURN; break;
+                default:                         exit = sema::simulated_exit::BREAK; break;
+                }
                 current_signal_ = eval_signal{};
                 break;
             }
@@ -7374,6 +7382,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
             if (!ref_into_frames(v, 0)) { out_frame.insert_or_assign(k, v); }
         }
     }
+    return exit;
 }
 
 auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
@@ -7449,7 +7458,7 @@ auto const_eval::simulate_expr(ast::node_id id) -> void {
     } else if (const auto if_expr = module_->ast.get_as_opt<ast::if_expr>(id)) {
         simulate_if(*if_expr);
     } else if (const auto while_loop = module_->ast.get_as_opt<ast::while_loop_expr>(id)) {
-        simulate_while(*while_loop);
+        simulate_while(id, *while_loop);
     } else if (const auto do_while = module_->ast.get_as_opt<ast::do_while_loop_expr>(id)) {
         simulate_do_while(*do_while);
     } else if (const auto infinite_loop = module_->ast.get_as_opt<ast::infinite_loop_expr>(id)) {
@@ -7639,7 +7648,16 @@ auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
     }
 }
 
-auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
+auto const_eval::unrolled_while_iteration_diff(ast::node_id id, usize k)
+    -> stdx::option<const sema::body_type_diff&> {
+    return ctx_.instantiation_cache.get_body_type_diff(
+        fmt::format("{}whileloop#{}#{}",
+                    typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",
+                    id.get_index(),
+                    k));
+}
+
+auto const_eval::simulate_while(ast::node_id id, const ast::while_loop_expr& loop) -> void {
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
@@ -7650,7 +7668,16 @@ auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
             return;
         }
 
+        // A body typed once per iteration folds its calls with that iteration's instances
+        const auto diff{loop.is_unrolled ? unrolled_while_iteration_diff(id, iterations - 1)
+                                         : stdx::none};
+        stdx::option<mod::body_diff_guard> diff_guard;
+        if (diff) {
+            clear_memo();
+            diff_guard.emplace(*module_, diff);
+        }
         simulate_stmt(loop.block);
+        diff_guard.reset();
         if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
         if (loop.continuation) {
             simulate_expr(*loop.continuation);

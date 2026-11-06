@@ -1,5 +1,9 @@
 import std;
 
+const to_io_err = fn(_: std.fmt.Error): std.io.Error {
+    return .input_output;
+};
+
 pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
     if (args.len <= 1) {
         std.io.eprintln("Expected at least 1 arg")!;
@@ -7,9 +11,7 @@ pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
     }
 
     // This will print the error name on failure from a ? propagation
-    errdefer |e| {
-        std.io.eprintln(@tagName(e))!;
-    }
+    errdefer |e| std.io.eprintln("{}", e)!;
 
     let mut file: std.io.File = .open(args[1], .{})?;
     defer file.close();
@@ -20,7 +22,7 @@ pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
         if (n == 0) {
             break;
         } else {
-            std.io.println(buf[0..n])?;
+            std.io.print("{}", buf[0..n]).map_err(to_io_err)?;
         }
     }
 
