@@ -223,10 +223,8 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
     });
 }
 
-// Whether an import, at any depth, reaches a module that failed. One reached only through an import
-// cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
-// its own, so lowering it would walk untyped code.
-[[nodiscard]] auto reaches_failed_module(mod::module_t& root) -> bool {
+// Whether an import of `root`, at any depth, reaches a module `pred` holds for
+[[nodiscard]] auto reaches_import(mod::module_t& root, auto&& pred) -> bool {
     ankerl::unordered_dense::set<gsl::not_null<const mod::module_t*>> seen{&root};
     std::vector<gsl::not_null<mod::module_t*>>                        frontier{&root};
     while (!frontier.empty()) {
@@ -238,11 +236,23 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
             const auto data{import_type->get_data().as_opt<types::module_t>()};
             if (!data) { continue; }
             auto& imported{data->imported};
-            if (imported.is_poisoned() || imported.is_errored()) { return true; }
+            if (pred(imported)) { return true; }
             if (seen.insert(&imported).second) { frontier.emplace_back(&imported); }
         }
     }
     return false;
+}
+
+// Whether an import, at any depth, reaches a module that failed. One reached only through an import
+// cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
+// its own, so lowering it would walk untyped code.
+[[nodiscard]] auto reaches_failed_module(mod::module_t& root) -> bool {
+    return reaches_import(root,
+                          [](const mod::module_t& m) { return m.is_poisoned() || m.is_errored(); });
+}
+
+[[nodiscard]] auto reaches_module(mod::module_t& root, const mod::module_t& target) -> bool {
+    return reaches_import(root, [&target](const mod::module_t& m) { return &m == &target; });
 }
 
 // LLVM's `target-features` replaces the target's whole feature string for a function, so an
@@ -310,6 +320,12 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     if (module->is_errored()) { return gir::module_t{*module, ctx_.arena}; }
 
     collect_symbols(*module);
+    // A std module tested as the root (`ghoti test lib/std/fmt/fmt.gh`) resolves in the order std
+    // imports it, since starting mid-std can reach back into a declaration still resolving
+    if (const auto std_mod{modules_.find_loaded_library_module("std")};
+        std_mod && &*std_mod != module.get() && reaches_module(*std_mod, *module)) {
+        resolve_types(*std_mod);
+    }
     resolve_types(*module);
     // A cancelled analysis skipped declarations, so nothing past this point can rely on it
     if (ctx_.cancelled()) { return gir::module_t{*module, ctx_.arena}; }
