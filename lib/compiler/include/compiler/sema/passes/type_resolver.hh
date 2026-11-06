@@ -622,6 +622,7 @@ class type_resolver {
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `comptime_int` / `comptime_float` as the concrete type it materializes to
     [[nodiscard]] auto comptime_numeric_view(type& t) -> type&;
+    [[nodiscard]] auto fitted_comptime_int_type(ast::node_id arg) -> stdx::option<type&>;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 

@@ -92,7 +92,12 @@ pub const format_value = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Resul
 
     return match comptime (@typeInfo(T)) {
         .int => int.format(w, value, spec_),
-        .comptime_int => int.format(w, @as(ComptimeIntRuntime(value), value), spec_),
+        // Through the narrowest integer type that holds it
+        .comptime_int => int.format(
+            w,
+            @as(std.math.IntFittingRange(@min(value, 0), @max(value, 1)), value),
+            spec_,
+        ),
         .float, .comptime_float => float.format(w, value, spec_),
         .bool => format_str(w, if (value) "true" else "false", spec_),
         .enum => format_str(w, @tagName(value), spec_),
@@ -105,11 +110,6 @@ pub const format_value = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Resul
         .pointer => format_address(w, @intFromPtr(value), spec_),
         _ => @compileError("fmt: no formatter for " ++ @typeName(T)),
     };
-};
-
-/// The 128-bit integer type that holds a `comptime_int` value
-const ComptimeIntRuntime = fn(comptime value: comptime_int): type {
-    return if comptime (value < 0) i128 else u128;
 };
 
 /// Formats text, where a precision caps how many bytes are written
@@ -204,6 +204,13 @@ test "format integers" {
         "{}",
         @as(u128, 340282366920938463463374607431768211455),
     );
+}
+
+test "format keeps a comptime_int argument's full range" {
+    check("340282366920938463463374607431768211455", "{}", 340282366920938463463374607431768211455);
+    check("-9223372036854775809", "{}", -9223372036854775809);
+    check("18446744073709551615 -2147483649", "{} {}", 18446744073709551615, -2147483649);
+    check("0 1 ff", "{} {} {:x}", 0, 1, 255);
 }
 
 test "format_value keeps a comptime_int's full range" {

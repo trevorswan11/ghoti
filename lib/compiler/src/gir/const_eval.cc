@@ -3813,6 +3813,13 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
                                                    : integer_result_type(lhs, rhs)};
     const auto width{res_type ? integer_target_width(*res_type, ptr_bits) : stdx::none};
 
+    // A comparison reads both values exactly, as no shared 128-bit view holds `-1` and `2^128 - 1`
+    if (const auto l{lhs.as_big_int_opt()}, r{rhs.as_big_int_opt()}; l && r) {
+        if (const auto cmp{compare_big_int(op_type, *l, *r)}) {
+            return const_value{*cmp, bool_type};
+        }
+    }
+
     // Past 128 bits, in an operand or the result's type, only exact arithmetic holds the value
     const bool wide{lhs.is<big_int>() || rhs.is<big_int>() || (width && width->first > 128)};
     if (wide || (is_comptime_int_result(res_type) &&
@@ -4369,8 +4376,10 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
 
         // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
         // exact path below negates it first and range-checks the result
-        const bool in_range{narrow &&
-                            sema::comptime_int_fits(*narrow, *type, target_pointer_bits())};
+        // Read exactly, since the `2^127` of `-2^127` would otherwise view as `i128` min
+        const auto exact{val->as_big_int_opt()};
+        const bool in_range{narrow && exact &&
+                            sema::comptime_int_fits(*exact, *type, target_pointer_bits())};
         if (unary_op && width && width->first <= 128 && in_range) {
             const semantics::int_domain domain{width->first, width->second};
             const auto                  folded{
@@ -5151,9 +5160,9 @@ auto const_eval::fold_math(syntax::builtin_t             builtin_type,
     switch (builtin_type) {
     case syntax::builtin_t::ABS: {
         if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (arg->is<i64>()) {
-            const auto v{arg->as<i64>()};
-            return const_value{v < 0 ? -v : v, arg->get_type()};
+        // A `comptime_int` takes its exact magnitude, however wide
+        if (const auto exact{arg->as_big_int_opt()}) {
+            return const_value::from_big_int(exact->abs(), arg->get_type());
         }
         if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;

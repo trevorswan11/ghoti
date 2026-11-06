@@ -928,9 +928,32 @@ auto type_resolver::generic_arg_type(ArgID arg_id, type& param_type, bool keeps_
         return denoted;
     }
     if (keeps_comptime && is_comptime_numeric(arg_type->get_kind())) { return *arg_type; }
+    if constexpr (std::convertible_to<decltype(arg_id), ast::node_id>) {
+        if (arg_type->get_kind() == type_kind::COMPTIME_INT) {
+            if (const auto fitted{fitted_comptime_int_type(ast::node_id{arg_id})}) {
+                return *fitted;
+            }
+        }
+    }
     // Literals materialize and deferred `[n]T` locals fold before binding a generic
     // parameter, so instantiations stay concrete
     return &comptime_numeric_view(concrete_array_type(*arg_type));
+}
+
+// The narrowest of `i64`, `u64`, `i128`, and `u128` that holds a `comptime_int` argument too wide
+// for its `i32` default, so binding it to a generic slot never truncates it
+auto type_resolver::fitted_comptime_int_type(ast::node_id arg) -> stdx::option<type&> {
+    gir::const_eval evaluator{ctx_, resolving_};
+    const auto      folded{evaluator.try_eval(arg)};
+    const auto      value{folded ? folded->as_big_int_opt() : stdx::none};
+    if (!value || value->fits(32, true)) { return stdx::none; }
+    for (const auto [bits, is_signed] : {std::pair<u16, bool>{64, true},
+                                         std::pair<u16, bool>{64, false},
+                                         std::pair<u16, bool>{128, true},
+                                         std::pair<u16, bool>{128, false}}) {
+        if (value->fits(bits, is_signed)) { return ctx_.get_int(bits, is_signed); }
+    }
+    return stdx::none;
 }
 
 // The struct, union, or enum a method receiver denotes through at most one pointer or reference

@@ -1031,15 +1031,21 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
         return v;
     }
     const auto folded{folded_int(v)};
-    if (folded && !sema::comptime_int_fits(*folded, target, target_ptr_bits_)) {
-        ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::COMPTIME_INT
-                                    ? fmt::format("integer literal is out of range for type '{}'",
-                                                  ctx_.type_display_name(target))
-                                    : fmt::format("integer value {} is out of range for type '{}'",
-                                                  *folded,
-                                                  ctx_.type_display_name(target)),
-                                sema::error::LITERAL_OUT_OF_RANGE,
-                                active_ast().location_of(at));
+    // A `u128` past `i128` max views as negative through `folded`, so it is checked exactly
+    const auto wide_unsigned{v.as_opt<u128>()};
+    const bool fits{wide_unsigned
+                        ? sema::comptime_int_fits(big_int{*wide_unsigned}, target, target_ptr_bits_)
+                        : sema::comptime_int_fits(folded.value_or(0), target, target_ptr_bits_)};
+    if (folded && !fits) {
+        ctx_.diags.emplace_back(
+            v.type && v.type->get_kind() == sema::type_kind::COMPTIME_INT
+                ? fmt::format("integer literal is out of range for type '{}'",
+                              ctx_.type_display_name(target))
+                : fmt::format("integer value {} is out of range for type '{}'",
+                              wide_unsigned ? big_int{*wide_unsigned} : big_int{*folded},
+                              ctx_.type_display_name(target)),
+            sema::error::LITERAL_OUT_OF_RANGE,
+            active_ast().location_of(at));
     }
     if (folded) {
         const auto effective_bits{[this](const sema::type& t) noexcept -> u32 {
