@@ -28,7 +28,6 @@ TEST_CASE("An untyped integer bound to `auto` stays comptime_int") {
 }
 
 TEST_CASE("`@as` of a comptime_float bound to a parameter keeps its full precision") {
-    // 0.1 rounded straight to f128 differs from 0.1 rounded to f64 first
     CHECK(helpers::compile_and_run(R"(
         const widen = fn(x: auto): f128 { return @as(f128, x); };
         const widen_ct = fn(comptime x: comptime_float): f128 { return @as(f128, x); };

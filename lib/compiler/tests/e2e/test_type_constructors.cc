@@ -107,7 +107,6 @@ TEST_CASE("A type-constructor return type may name a member of a `comptime type`
         };
     )") == 9);
 
-    // A member that is a value still can't stand for a type once the parameter is bound
     helpers::expect_compile_error(R"(
         const Box = fn(comptime T: type): type { return struct { val: T }; };
         const Backend = struct { const bias = 2; };

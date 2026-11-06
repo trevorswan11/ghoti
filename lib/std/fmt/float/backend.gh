@@ -1,4 +1,4 @@
-//! Floating point formatting with the Ryu shortest round-trip algorithm
+//! Ryu's power-of-five lookup and wide multiply backends, one per float width and build mode
 //! Paper: https://dl.acm.org/doi/pdf/10.1145/3360595
 //! Ported from: https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/fmt/float.zig
 //! Zig is licensed under the MIT license
@@ -85,9 +85,11 @@ const Backend128 = struct {
     pub const mul_shift = mul_shift128;
     pub const POW5_INV_BITCOUNT = tables.FLOAT128_POW5_INV_BITCOUNT;
     pub const POW5_BITCOUNT = tables.FLOAT128_POW5_BITCOUNT;
+
     pub const bound1 = 55;
     pub const bound2 = 127;
     pub const adjust_q = true;
+
     pub const compute_pow5 = fn(i: u32): [4]u64 {
         let base = i / tables.FLOAT128_POW5_TABLE_SIZE;
         let base2 = base * tables.FLOAT128_POW5_TABLE_SIZE;
@@ -131,9 +133,11 @@ const Backend64Full = struct {
     pub const mul_shift = mul_shift64;
     pub const POW5_INV_BITCOUNT = tables.FLOAT64_POW5_INV_BITCOUNT;
     pub const POW5_BITCOUNT = tables.FLOAT64_POW5_BITCOUNT;
+
     pub const bound1 = 21;
     pub const bound2 = 63;
     pub const adjust_q = false;
+
     pub const compute_pow5 = fn(i: u32): [2]u64 {
         return tables.FLOAT64_POW5_SPLIT[i];
     };
@@ -155,9 +159,11 @@ const Backend64Small = struct {
     pub const mul_shift = mul_shift64;
     pub const POW5_INV_BITCOUNT = tables.FLOAT64_POW5_INV_BITCOUNT;
     pub const POW5_BITCOUNT = tables.FLOAT64_POW5_BITCOUNT;
+
     pub const bound1 = 21;
     pub const bound2 = 63;
     pub const adjust_q = false;
+
     pub const compute_pow5 = fn(i: u32): [2]u64 {
         let base = i / tables.FLOAT64_POW5_TABLE_SIZE;
         let base2 = base * tables.FLOAT64_POW5_TABLE_SIZE;
