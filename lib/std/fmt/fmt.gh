@@ -30,7 +30,8 @@ test {
 const Writer = std.io.Writer;
 const Result = std.Result;
 
-pub const Error = enum { overflow = 1, bad_spec, bad_arg, unsupported, io };
+/// Every `std.io.Error`, so a failed write keeps its cause, and the failures of formatting itself
+pub const Error = std.io.Error || enum { overflow, bad_spec, bad_arg, unsupported };
 
 /// Implemented by types that format themselves inside a `{}`
 pub const Format = interface {
@@ -42,10 +43,6 @@ pub const Format = interface {
 };
 
 pub const Case = enum : u1 { lower, upper };
-
-const to_fmt_err = fn(_: std.io.Error): Error {
-    return .io;
-};
 
 /// Writes `fmt` to `w`, replacing each placeholder with its formatted argument.
 /// The format string is checked against `args` at compile time
@@ -75,7 +72,7 @@ pub const format = fn(w: &mut impl Writer, comptime fmt: []u8, args...): Result(
 };
 
 /// Formats `fmt` into `buf`, returning the written prefix of `buf`.
-/// Fails with `.io` if `buf` is too small
+/// Fails with `.no_space` if `buf` is too small
 pub const buf_print = fn(buf: []mut u8, comptime fmt: []u8, args...): Result([]u8, Error) {
     let mut stream: std.io.FixedBufferStream = .{ .buf = buf };
     format(&mut stream, fmt, args...)?;
@@ -139,14 +136,15 @@ const format_address = fn(w: &mut dyn Writer, address: usize, spec_: Spec): Resu
 
 /// Formats each element with `spec_`, written as `[a, b, c]`
 const format_list = fn(w: &mut dyn Writer, items: auto, spec_: Spec): Result(void, Error) {
-    w.write_byte('[').map_err(to_fmt_err)?;
+    w.write_byte('[')?;
     for (items, 0..) |item, i| {
         if (i > 0) {
-            w.write_all(", ").map_err(to_fmt_err)?;
+            w.write_all(", ")?;
         }
         format_value(w, item, spec_)?;
     }
-    return w.write_byte(']').map_err(to_fmt_err);
+    w.write_byte(']')?;
+    return .done;
 };
 
 /// Formats with `format` into a scratch buffer and expects `expected`
@@ -289,11 +287,12 @@ test "format reports runtime spec errors" {
 
     impl Format for Point {
         const format = fn(&self, spec_: Spec, w: &mut dyn Writer): Result(void, Error) {
-            w.write_byte('(').map_err(to_fmt_err)?;
+            w.write_byte('(')?;
             format_value(w, self.x, spec_)?;
-            w.write_all(", ").map_err(to_fmt_err)?;
+            w.write_all(", ")?;
             format_value(w, self.y, spec_)?;
-            return w.write_byte(')').map_err(to_fmt_err);
+            w.write_byte(')')?;
+            return .done;
         };
     }
 }

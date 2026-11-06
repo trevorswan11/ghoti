@@ -340,21 +340,17 @@ test "validate at compile time" {
     validate("no placeholders", 0);
 }
 
-const to_io_err = fn(_: std.io.Error): std.fmt.Error {
-    return .io;
-};
-
 pub const pad = fn(
     w: &mut dyn std.io.Writer,
     spec: Spec,
     body: []u8,
     default_align: Align,
 ): std.Result(void, std.fmt.Error) {
-    let width = match (spec.width) {
-        .some => |explicit_width| explicit_width,
-        .none => return w.write_all(body).map_err(to_io_err),
-    };
-    if (width <= body.len) return w.write_all(body).map_err(to_io_err);
+    let width = spec.width.unwrap_or(0);
+    if (width <= body.len) {
+        w.write_all(body)?;
+        return .done;
+    }
 
     let padding = width - body.len;
     let left_pad = match (spec.align.unwrap_or(default_align)) {
@@ -365,12 +361,12 @@ pub const pad = fn(
     let right_pad = padding - left_pad;
 
     for (0..left_pad) |_| {
-        w.write_byte(spec.fill).map_err(to_io_err)?;
+        w.write_byte(spec.fill)?;
     }
-    w.write_all(body).map_err(to_io_err)?;
+    w.write_all(body)?;
 
     for (0..right_pad) |_| {
-        w.write_byte(spec.fill).map_err(to_io_err)?;
+        w.write_byte(spec.fill)?;
     }
     return .done;
 };
@@ -394,7 +390,7 @@ pub const write_fill_n = fn(
     n: usize,
 ): std.Result(void, std.fmt.Error) {
     for (0..n) |_| {
-        w.write_byte(byte).map_err(to_io_err)?;
+        w.write_byte(byte)?;
     }
     return .done;
 };
@@ -407,16 +403,17 @@ pub const pad_number = fn(
     body: []u8,
     prefix_len: usize,
 ): std.Result(void, std.fmt.Error) {
-    let width = match (spec.width) {
-        .some => |explicit_width| explicit_width,
-        .none => return w.write_all(body).map_err(to_io_err),
-    };
-    if (width <= body.len) return w.write_all(body).map_err(to_io_err);
+    let width = spec.width.unwrap_or(0);
+    if (width <= body.len) {
+        w.write_all(body)?;
+        return .done;
+    }
 
     if (spec.zero) {
-        w.write_all(body[..prefix_len]).map_err(to_io_err)?;
+        w.write_all(body[..prefix_len])?;
         write_fill_n(w, '0', width - body.len)?;
-        return w.write_all(body[prefix_len..]).map_err(to_io_err);
+        w.write_all(body[prefix_len..])?;
+        return .done;
     }
     return pad(w, spec, body, .right);
 };
@@ -471,9 +468,9 @@ pub const write_literal = fn(
         if (i >= raw.len) break;
         if (raw[i] == '{' or raw[i] == '}') {
             if (i > start) {
-                w.write_all(raw[start..i]).map_err(to_io_err)?;
+                w.write_all(raw[start..i])?;
             }
-            w.write_byte(raw[i]).map_err(to_io_err)?;
+            w.write_byte(raw[i])?;
             i += 2;
             start = i;
             continue;
@@ -481,7 +478,7 @@ pub const write_literal = fn(
         i += 1;
     }
     if (raw.len > start) {
-        w.write_all(raw[start..]).map_err(to_io_err)?;
+        w.write_all(raw[start..])?;
     }
     return .done;
 };

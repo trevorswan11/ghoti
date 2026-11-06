@@ -31,10 +31,6 @@ pub const stderr = fn(): Result(File, Error) {
 
 const FmtError = std.fmt.Error;
 
-const to_fmt_err = fn(_: Error): FmtError {
-    return .io;
-};
-
 /// Formats `fmt` with `args` into `stream`, optionally followed by a newline
 const write_formatted = fn(
     stream: Result(File, Error),
@@ -42,10 +38,10 @@ const write_formatted = fn(
     comptime fmt: []u8,
     args...,
 ): Result(void, FmtError) {
-    let mut f = stream.map_err(to_fmt_err)?;
+    let mut f = stream?;
     std.fmt.format(&mut f, fmt, args...)?;
     if comptime (newline) {
-        return f.write_byte('\n').map_err(to_fmt_err);
+        f.write_byte('\n')?;
     }
     return .done;
 };

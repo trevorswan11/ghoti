@@ -1,10 +1,7 @@
 import std;
 
-const to_io_err = fn(_: std.fmt.Error): std.io.Error {
-    return .input_output;
-};
-
-pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
+// `std.fmt.Error` is `std.io.Error || enum { ... }`, so every io failure below `?`s into it as is
+pub const main = fn(args: [][:0]u8): std.Result(i32, std.fmt.Error) {
     if (args.len <= 1) {
         std.io.eprintln("Expected at least 1 arg")!;
         return .of(1);
@@ -22,7 +19,7 @@ pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
         if (n == 0) {
             break;
         } else {
-            std.io.print("{}", buf[0..n]).map_err(to_io_err)?;
+            std.io.print("{}", buf[0..n])?;
         }
     }
 
