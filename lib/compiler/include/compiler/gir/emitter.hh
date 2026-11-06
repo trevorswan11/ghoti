@@ -104,6 +104,7 @@ class emitter {
         bool                                        on_error{false};
         stdx::option<ast::discardable_ident_handle> capture{};
         ast::type_modifier                          modifier{};
+        stdx::option<gir::function&>                owner{}; // only its own exits run it
     };
 
     struct scope_frame {
@@ -279,6 +280,9 @@ class emitter {
     // Leaves the function with `ret_val`, running the `errdefer`s too when it is a failure
     auto               emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -> void;
     [[nodiscard]] auto has_pending_errdefer() const noexcept -> bool;
+    // A closure's body is emitted over its enclosing function's scopes, whose defers it must skip
+    [[nodiscard]] auto owned_by_current_function(const deferred_entry& entry) const noexcept
+        -> bool;
     auto               emit_lvalue(ast::node_id id) -> value;
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;

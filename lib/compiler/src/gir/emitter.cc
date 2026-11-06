@@ -2584,6 +2584,7 @@ auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
     const auto defers{scopes_[scope_idx].defers};
     for (const auto& entry : defers | std::views::reverse) {
         if (entry.on_error && !error_edge) { continue; }
+        if (!owned_by_current_function(entry)) { continue; }
         if (entry.on_error && entry.capture && entry.capture->template is<ast::identifier_expr>()) {
             const scope_guard g{scopes_};
             const auto&       ident{active_ast().get_as<ast::identifier_expr>(**entry.capture)};
@@ -2636,9 +2637,15 @@ auto emitter::emit_defers_up_to(usize target_depth, bool error_edge) -> void {
     }
 }
 
+auto emitter::owned_by_current_function(const deferred_entry& entry) const noexcept -> bool {
+    return entry.owner.get() == builder_.get_function().get();
+}
+
 auto emitter::has_pending_errdefer() const noexcept -> bool {
-    return std::ranges::any_of(scopes_, [](const auto& scope) {
-        return std::ranges::any_of(scope.defers, &deferred_entry::on_error);
+    return std::ranges::any_of(scopes_, [this](const auto& scope) {
+        return std::ranges::any_of(scope.defers, [this](const deferred_entry& entry) {
+            return entry.on_error && owned_by_current_function(entry);
+        });
     });
 }
 
@@ -2729,6 +2736,7 @@ auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void 
     scopes_.back().defers.emplace_back(deferred_entry{
         .deferred = def.deferred,
         .on_error = false,
+        .owner    = builder_.get_function(),
     });
 }
 
@@ -2740,6 +2748,7 @@ auto emitter::emit_errdefer_stmt(ast::node_id, const ast::errdefer_stmt& errdef)
         .on_error = true,
         .capture  = errdef.capture,
         .modifier = errdef.modifier,
+        .owner    = builder_.get_function(),
     });
 }
 
