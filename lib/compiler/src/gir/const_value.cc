@@ -50,6 +50,20 @@ auto const_addr::operator==(const const_addr& other) const noexcept -> bool {
     return symbol == other.symbol && pointee == other.pointee;
 }
 
+auto const_value::as_bytes_opt() const -> stdx::option<std::string> {
+    if (const auto text{as_opt<std::string>()}) { return *text; }
+    const auto arr{as_opt<const_array>()};
+    if (!arr) { return stdx::none; }
+    std::string out;
+    out.reserve(arr->elements.size());
+    for (const auto& element : arr->elements) {
+        const auto byte{element.as_int_opt()};
+        if (!byte) { return stdx::none; }
+        out.push_back(static_cast<char>(*byte));
+    }
+    return out;
+}
+
 auto const_value::make_string(sema::context& ctx, std::string str) -> const_value {
     auto& t_u8{ctx.get_int(8, false)};
     auto& t_c_str{ctx.get_slice(sema::types::mut::CONSTANT, true, t_u8)};

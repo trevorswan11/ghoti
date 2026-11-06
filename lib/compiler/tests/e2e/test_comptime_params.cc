@@ -289,4 +289,19 @@ TEST_CASE("a template first reached from another template's body stays a top-lev
     )") == 16);
 }
 
+TEST_CASE("a comptime slice parameter accepts a concatenation of comptime strings") {
+    CHECK(helpers::compile_and_run(R"(
+        const measure = fn(comptime text: []u8): usize {
+            let tail = text[2..];
+            return text.len * 10 + tail.len + @as(usize, text[text.len - 1] - '0');
+        };
+        const labeled = fn(comptime prefix: []u8): usize {
+            return measure(prefix ++ ":7");
+        };
+        pub const main = fn(): i32 {
+            return @intCast(i32, labeled("ab"));
+        };
+    )") == 49);
+}
+
 } // namespace ghoti::tests

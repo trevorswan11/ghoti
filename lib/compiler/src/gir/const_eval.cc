@@ -3588,24 +3588,10 @@ auto const_eval::match_structure(ast::node_id                  pattern,
         return next;
     }};
 
-    // A string, or an array of its bytes, can stand in for a slice
-    const auto bytes_of{[](const const_value& value) -> stdx::option<std::string> {
-        if (const auto text{value.as_opt<std::string>()}) { return *text; }
-        const auto arr{value.as_opt<const_array>()};
-        if (!arr) { return stdx::none; }
-        std::string out;
-        out.reserve(arr->elements.size());
-        for (const auto& element : arr->elements) {
-            const auto byte{element.as_int_opt()};
-            if (!byte) { return stdx::none; }
-            out.push_back(static_cast<char>(*byte));
-        }
-        return out;
-    }};
     if (module_->ast.get_as_opt<ast::string_expr>(pattern)) {
         const auto text{try_eval(pattern)};
         const auto wanted{text ? text->as_opt<std::string>() : stdx::none};
-        const auto actual{bytes_of(target)};
+        const auto actual{target.as_bytes_opt()};
         return wanted && actual && *wanted == *actual;
     }
 
@@ -3642,7 +3628,7 @@ auto const_eval::match_structure(ast::node_id                  pattern,
             }
 
             // Only a slice's length has a compile-time value to compare
-            const auto actual{bytes_of(target)};
+            const auto actual{target.as_bytes_opt()};
             if (!actual || name != "len") { return false; }
             const const_value len{static_cast<u64>(actual->size()),
                                   ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};

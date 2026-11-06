@@ -355,6 +355,16 @@ class emitter {
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
     auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
+    struct slice_bytes {
+        std::string bytes;
+        sema::type& slice_type;
+    };
+    // The bytes of a comptime argument whose parameter is declared as a slice, when it holds a
+    // string or a folded byte array (`prefix ++ "..."`), without an array's sentinel
+    [[nodiscard]] auto comptime_slice_bytes(const const_value&                   val,
+                                            const ast::function_expr::parameter& param,
+                                            mod::module_t&                       fn_mod) const
+        -> stdx::option<slice_bytes>;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
     auto emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> value;
     // Wraps a thin function or a closure into the `{ctx, code}` pair of a `fn(...)`/`^fn(...)`

@@ -530,17 +530,12 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 value       bound{value{void_val{}, btype}};
                 if (val.is<const_closure>()) {
                     bound = value{emit_comptime_closure(val.as<const_closure>()), btype};
+                } else if (const auto slice_bytes{comptime_slice_bytes(val, param, fn_mod)}) {
+                    // A comptime string or byte array bound to a `[]T` slice param needs a real
+                    // {ptr, len} fat pointer, not the raw bytes `btype` alone would store
+                    bound = emit_string_as_slice(slice_bytes->bytes, slice_bytes->slice_type);
                 } else if (val.is<std::string>()) {
-                    // A string-literal comptime arg bound to a `[]T` slice param needs a real
-                    // {ptr, len} fat pointer, not the raw bytes `btype` alone would store.
-                    const auto declared_type{param.explicit_type
-                                                 ? fn_mod.get_sema_type_opt(*param.explicit_type)
-                                                 : stdx::none};
-                    if (declared_type && declared_type->get_kind() == sema::type_kind::SLICE) {
-                        bound = emit_string_as_slice(val.as<std::string>(), *declared_type);
-                    } else {
-                        bound = value{val.as<std::string>(), btype};
-                    }
+                    bound = value{val.as<std::string>(), btype};
                 } else {
                     bound = materialize_const(val);
                 }
@@ -7431,6 +7426,26 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     }
 
     return cv.to_gir_value();
+}
+
+auto emitter::comptime_slice_bytes(const const_value&                   val,
+                                   const ast::function_expr::parameter& param,
+                                   mod::module_t& fn_mod) const -> stdx::option<slice_bytes> {
+    if (!param.explicit_type) { return stdx::none; }
+    const auto declared_type{fn_mod.get_sema_type_opt(*param.explicit_type)};
+    if (!declared_type || declared_type->get_kind() != sema::type_kind::SLICE) {
+        return stdx::none;
+    }
+    auto bytes{val.as_bytes_opt()};
+    if (!bytes) { return stdx::none; }
+
+    // A sentinel-terminated array also carries its terminator, which is not part of the slice
+    const auto arr_type{val.get_type() ? val.get_type()->get_data().as_opt<sema::types::array>()
+                                       : stdx::none};
+    if (val.is<const_array>() && arr_type && bytes->size() > arr_type->len) {
+        bytes->resize(arr_type->len);
+    }
+    return slice_bytes{.bytes = std::move(*bytes), .slice_type = *declared_type};
 }
 
 auto emitter::emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value {
