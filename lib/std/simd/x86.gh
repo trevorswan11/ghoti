@@ -69,7 +69,24 @@ test "movemask gathers the top bits" {
 
 test "shuffle_epi8 looks bytes up in a table" {
     @cfg (cpu.has(.ssse3)) {
-        let table: u8x16 = .{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p' };
+        let table: u8x16 = .{
+            'a',
+            'b',
+            'c',
+            'd',
+            'e',
+            'f',
+            'g',
+            'h',
+            'i',
+            'j',
+            'k',
+            'l',
+            'm',
+            'n',
+            'o',
+            'p',
+        };
         let mut idx: u8x16 = @splat(0x80);
         idx[0] = 2;
         idx[1] = 15;

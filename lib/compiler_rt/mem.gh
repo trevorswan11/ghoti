@@ -60,7 +60,7 @@ const run_size = 4 * chunk_size;
 
 /// Whether the `len` bytes at `a` and `b` differ anywhere
 @[inline(.always)] const bytes_differ = fn(comptime len: usize, a: ^u8, b: ^u8): bool {
-    return @reduce(.@"or", load_bytes(len, a) != load_bytes(len, b));
+    return @reduce(.or, load_bytes(len, a) != load_bytes(len, b));
 };
 
 /// A comparison past a wide chunk narrows down in 16-byte steps, which also cover short ranges
@@ -179,7 +179,8 @@ test "memset fills with the low byte of its argument" {
     let mut i: usize = 0;
     // Matching chunks are skipped whole; the bytes find the first difference in the one that isn't
     if comptime (has_chunks) {
-        while (i + chunk_size <= n and !bytes_differ(chunk_size, a + i, b + i)) : (i += chunk_size) {}
+        while (i + chunk_size <= n and
+            !bytes_differ(chunk_size, a + i, b + i)) : (i += chunk_size) {}
     }
     if comptime (has_steps) {
         while (i + step_size <= n and !bytes_differ(step_size, a + i, b + i)) : (i += step_size) {}

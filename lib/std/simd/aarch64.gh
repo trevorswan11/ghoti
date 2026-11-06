@@ -18,7 +18,24 @@ const u8x16 = @Vector(16, u8);
 
 test "tbl looks bytes up in a table" {
     @cfg (cpu.has(.neon)) {
-        let table: u8x16 = .{ 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p' };
+        let table: u8x16 = .{
+            'a',
+            'b',
+            'c',
+            'd',
+            'e',
+            'f',
+            'g',
+            'h',
+            'i',
+            'j',
+            'k',
+            'l',
+            'm',
+            'n',
+            'o',
+            'p',
+        };
         let mut idx: u8x16 = @splat(200);
         idx[0] = 2;
         idx[1] = 15;

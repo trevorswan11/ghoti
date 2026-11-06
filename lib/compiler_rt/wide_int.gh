@@ -400,6 +400,7 @@ test "signed wide multiplication overflows at the type's edges" {
     let min: i256 = std.math.min_int(i256);
     let max: i256 = std.math.max_int(i256);
     let mut r: i256 = undefined;
+
     @expect(wide_mul_overflows(i256, min, -1, ^mut r));
     @expect(r == min);
     @expect(!wide_mul_overflows(i256, max, -1, ^mut r));
