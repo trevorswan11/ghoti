@@ -31,8 +31,8 @@ comptime {
     symbol(__truncxfsf2, "__truncxfsf2");
     symbol(__trunctfsf2, "__trunctfsf2");
     symbol(__truncxfdf2, "__truncxfdf2");
-    // symbol(__trunctfdf2, "__trunctfdf2");
-    // symbol(__trunctfxf2, "__trunctfxf2");
+    symbol(__trunctfdf2, "__trunctfdf2");
+    symbol(__trunctfxf2, "__trunctfxf2");
 }
 
 @cfg (compiler_rt.want_aeabi) {
@@ -378,6 +378,120 @@ const __truncxfdf2 = fn(a: compiler_rt.f80) callconv(.c): f64 {
 test "f64_float_cast_f80" {
     @expect(test_f64_float_cast_f80(0x1p-1074, 0x0000000000000001));
     @expect(test_f64_float_cast_f80(0x1.8p-1073, 0x0000000000000003));
+}
+
+const __trunctfdf2 = fn(a: f128) callconv(.c): f64 {
+    return truncf(f64, f128, a);
+};
+
+@[testing] const test__trunctfdf2 = fn(a: f128, expected: u64): bool {
+    let x = __trunctfdf2(a);
+
+    let rep: u64 = @bitCast(x);
+    if (rep == expected) {
+        return true;
+    }
+    // test other possible NaN representation(signal NaN)
+    else if (expected == 0x7ff8000000000000) {
+        if ((rep & 0x7ff0000000000000) == 0x7ff0000000000000 and (rep & 0xfffffffffffff) > 0) {
+            return true;
+        }
+    }
+    return false;
+};
+
+test "__trunctfdf2" {
+    // qnan
+    @expect(test__trunctfdf2(@bitCast(0x7fff800000000000 << 64), 0x7ff8000000000000));
+    // nan
+    @expect(test__trunctfdf2(
+        @bitCast((0x7fff000000000000 | (0x810000000000 & 0xffffffffffff)) << 64),
+        0x7ff8100000000000,
+    ));
+    // inf
+    @expect(test__trunctfdf2(@bitCast(0x7fff000000000000 << 64), 0x7ff0000000000000));
+    // zero
+    @expect(test__trunctfdf2(0.0, 0x0));
+
+    @expect(test__trunctfdf2(0x1.af23456789bbaaab347645365cdep+5, 0x404af23456789bbb));
+    @expect(test__trunctfdf2(0x1.dedafcff354b6ae9758763545432p-9, 0x3f6dedafcff354b7));
+    @expect(test__trunctfdf2(0x1.2f34dd5f437e849b4baab754cdefp+4534, 0x7ff0000000000000));
+    @expect(test__trunctfdf2(0x1.edcbff8ad76ab5bf46463233214fp-435, 0x24cedcbff8ad76ab));
+}
+
+const __trunctfxf2 = fn(a: f128) callconv(.c): compiler_rt.f80 {
+    return @bitCast(f80_float_cast_f128(a));
+};
+
+@[inline(.always)] const f80_float_cast_f128 = fn(a: f128): f80 {
+    const src_sig_bits = math.float_mantissa_bits(f128);
+    const dst_sig_bits = math.float_mantissa_bits(f80) - 1; // -1 for the integer bit
+
+    const src_bits = @typeInfo(f128).float.bits;
+    const src_exp_bits = src_bits - src_sig_bits - 1;
+    const src_inf_exp = 0x7FFF;
+
+    const src_inf = src_inf_exp << src_sig_bits;
+    const src_sign_mask = 1 << (src_sig_bits + src_exp_bits);
+    const src_abs_mask = src_sign_mask - 1;
+    const round_mask = (1 << (src_sig_bits - dst_sig_bits)) - 1;
+    const halfway = 1 << (src_sig_bits - dst_sig_bits - 1);
+
+    // Break a into a sign and representation of the absolute value
+    let a_rep: u128 = @bitCast(a);
+    let a_abs = a_rep & src_abs_mask;
+    let sign: u16 = if (a_rep & src_sign_mask != 0) 0x8000 else 0;
+    let integer_bit = 1 << 63;
+
+    let mut res: math.f80 = undefined;
+
+    if (a_abs > src_inf) {
+        // a is NaN.
+        // Conjure the result by beginning with infinity, setting the qNaN
+        // bit and inserting the (truncated) trailing NaN field.
+        res.exp = 0x7fff;
+        res.fraction = 0x8000000000000000;
+        res.fraction |= @as(u64, @truncate(a_abs >> (src_sig_bits - dst_sig_bits)));
+    } else {
+        // The exponent of a is within the range of normal numbers in the
+        // destination format. We can convert by simply right-shifting with
+        // rounding, adding the explicit integer bit, and adjusting the exponent
+        res.fraction = @as(u64, @truncate(a_abs >> (src_sig_bits - dst_sig_bits))) | integer_bit;
+        res.exp = @truncate(a_abs >> src_sig_bits);
+
+        let round_bits = a_abs & round_mask;
+        if (round_bits > halfway) {
+            // Round to nearest
+            let mut add_res: u64 = undefined;
+            let overflow = @addWithOverflow(res.fraction, 1, &mut add_res);
+            res.fraction = add_res;
+            res.exp += @intFromBool(overflow);
+            res.fraction |= @intFromBool(u64, overflow) << 63; // Restore integer bit after carry
+        } else if (round_bits == halfway) {
+            // Ties to even
+            let mut add_res: u64 = undefined;
+            let overflow = @addWithOverflow(res.fraction, res.fraction & 1, &mut add_res);
+            res.fraction = add_res;
+            res.exp += @intFromBool(overflow);
+            res.fraction |= @intFromBool(u64, overflow) << 63; // Restore integer bit after carry
+        }
+        if (res.exp == 0) res.fraction &= ~@as(u64, integer_bit); // Remove integer bit for de-normals
+    }
+
+    res.exp |= sign;
+    return res.to_float();
+};
+
+@[testing] const test_f80_float_cast_f128 = fn(a: f128, expected: f80): bool {
+    const x = f80_float_cast_f128(a);
+    return x == expected;
+};
+
+test "f80_float_cast_f128" {
+    @expect(test_f80_float_cast_f128(1.5, 1.5));
+    @expect(test_f80_float_cast_f128(2.5, 2.5));
+    @expect(test_f80_float_cast_f128(-2.5, -2.5));
+    @expect(test_f80_float_cast_f128(0.0, 0.0));
 }
 
 @[inline(.always)] const truncf = fn(comptime Dst: type, comptime Src: type, a: Src): Dst {
