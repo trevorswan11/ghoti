@@ -114,6 +114,36 @@ TEST_CASE("Statements that only do control flow or store need no binding") {
     SECTION("an if used as a value") { ok("let v = if (r > 0) r else 0; _ = v;"); }
 }
 
+TEST_CASE("A compile-time branch used as a value inside an unused statement's block") {
+    const auto with_main{[](std::string_view body) {
+        return fmt::format(R"(
+            const pick = fn(comptime flag: bool, v: i32): i32 {{
+                let mut r: i32 = 0;
+                {}
+                return r;
+            }};
+            pub const main = fn(): i32 {{ return pick(true, 7) + pick(false, 7); }};
+        )",
+                           body);
+    }};
+    const auto ok{[](const std::string& source) {
+        auto [ctx, idx]{helpers::resolve(source)};
+        helpers::check_errors<sema::diagnostics>(ctx->root_mod);
+    }};
+
+    SECTION("an if comptime bound by a let") {
+        ok(with_main("if (v > 0) { let x = if comptime (flag) v + 1 else v; r = x; }"));
+    }
+    SECTION("a match comptime bound by a let") {
+        ok(with_main(
+            "if (v > 0) { let x = match comptime (flag) { true => v + 1, false => v }; r = x; }"));
+    }
+    SECTION("the live arm of an unused if comptime is still checked") {
+        CHECK(has_error(with_main("if (v > 0) { if comptime (flag) v + 1 else v; }"),
+                        sema::error::UNUSED_RESULT));
+    }
+}
+
 TEST_CASE("A @[discardable] callee may be dropped with no diagnostic") {
     const auto ok{[](std::string_view body) {
         auto [ctx, idx]{helpers::resolve(body)};
