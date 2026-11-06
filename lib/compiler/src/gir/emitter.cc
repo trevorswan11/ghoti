@@ -289,6 +289,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
         }
     }
 
+    emit_parameterized_impl_defaults();
+
     // Each may reach more of `builtin`, so both queues drain until neither grows
     for (usize runtime{0}, impls{0};
          runtime < pending_builtin_runtime_.size() || impls < pending_builtin_impls_.size();) {
@@ -724,13 +726,13 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> v
     auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     // Register one private vtable global per `(I, T)`; slots hold the impl methods in order.
-    const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
+    const auto vtable_sym{rec ? symbol_scoping::vtable_name(*rec) : std::string{"__vtable.0"}};
     if (rec && std::ranges::none_of(
                    ast_module_.dyn_vtables, // Use the root mod for lowering discoverability
                    [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
-            v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
+            v.slots.emplace_back(symbol_scoping_.impl_method_name(*rec, name));
         }
         ast_module_.dyn_vtables.emplace_back(std::move(v));
     }
@@ -1753,8 +1755,8 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         if (!fx || fx->is_type_expr) { continue; }
 
         // Emit each body once against the interface's  module with that typing replayed.
-        emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, m.name),
-                                 rec->body_scope_idx,
+        emit_impl_default_method(symbol_scoping_.impl_method_name(*rec, m.name),
+                                 *rec,
                                  *m.defining_mod,
                                  *m.signature,
                                  *fx,
@@ -1763,8 +1765,31 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
     }
 }
 
+auto emitter::emit_parameterized_impl_defaults() -> void {
+    PROFILE_FUNCTION();
+    for (const auto rec : ctx_.impls.records()) {
+        if (!rec->from_parameterized || !rec->target_type ||
+            sema::is_generic_type(*rec->target_type)) {
+            continue;
+        }
+        const type_guard target_g{user_type_stack_, rec->target_type.get()};
+        for (const auto& m : rec->methods) {
+            if (!m.inherited || !m.defining_mod || !m.signature) { continue; }
+            const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(*m.signature)};
+            if (!fx || fx->is_type_expr) { continue; }
+            emit_impl_default_method(symbol_scoping_.impl_method_name(*rec, m.name),
+                                     *rec,
+                                     *m.defining_mod,
+                                     *m.signature,
+                                     *fx,
+                                     m.fn_type,
+                                     m.typing_key);
+        }
+    }
+}
+
 auto emitter::emit_impl_default_method(std::string_view          gir_name,
-                                       usize                     impl_scope_idx,
+                                       const sema::impl_record&  impl,
                                        mod::module_t&            iface_mod,
                                        ast::node_id              sig_id,
                                        const ast::function_expr& fn_expr,
@@ -1840,9 +1865,9 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
         }
     }
 
-    emitting_impl_default_scope_.emplace(impl_scope_idx);
+    emitting_impl_default_.emplace(impl);
     emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
-    emitting_impl_default_scope_.reset();
+    emitting_impl_default_.reset();
 
     if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()}) {
         emit_implicit_return(fd->return_type);
@@ -5740,10 +5765,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 const auto callee_val{emit_expression(call.function)};
                 indirect_callee.emplace(callee_val);
             }
-        } else if (emitting_impl_default_scope_) {
+        } else if (emitting_impl_default_) {
             // Inside an inherited default body: `self.method(...)` targets this impl's method.
             callee_name.emplace(
-                symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
+                symbol_scoping_.impl_method_name(*emitting_impl_default_, member_ident.name));
         } else if (emitting_impl_body_scope_ && fn_d && fn_d->has_self && [&] {
                        // Inside a method written in an `impl` block, a call on the method's own
                        // receiver resolves to that impl's own scoped symbol so cross-module method
@@ -5824,7 +5849,16 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 user_type_stack_.back()->get_symbol_table_idx_opt() == t->get_symbol_table_idx()) {
                 t = user_type_stack_.back();
             }
-            if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
+            // A method an `impl` block adds to the instance is emitted under that impl's name, and
+            // only a member the ctor's own body declares takes the instance's prefix
+            const auto impl_methods{ctx_.impls.methods_of(*t)};
+            const auto from_impl{std::ranges::find_if(
+                impl_methods, [&](const auto& em) { return em.method->name == *member_nm; })};
+            if (from_impl != impl_methods.end()) {
+                callee_name.emplace(
+                    symbol_scoping_.impl_method_name(*from_impl->record, *member_nm));
+                resolved_generic_target = true;
+            } else if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
                 callee_name.emplace(fmt::format("{}.{}", *prefix, *member_nm));
                 resolved_generic_target = true;
             }
@@ -5855,16 +5889,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // Inside an inherited default body, `self.method(...)` was sema-resolved against the abstract
     // interface (`self: &interface`).
-    if (emitting_impl_default_scope_ && dot_call) {
+    if (emitting_impl_default_ && dot_call) {
         const auto mn{active_ast().get_as<ast::identifier_expr>(dot_call->member).name};
-        for (const auto r : ctx_.impls.records()) {
-            if (r->body_scope_idx != *emitting_impl_default_scope_) { continue; }
-            if (const auto m{r->find_method(mn)}; m && m->fn_type) {
-                // Retarget its signature to this impl's concrete method so the
-                // implicit-self argument is typed for the real target.
-                fn_data = m->fn_type->get_data().as_opt<sema::types::function>();
-            }
-            break;
+        // Retarget its signature to this impl's concrete method so the implicit-self argument
+        // is typed for the real target
+        if (const auto m{emitting_impl_default_->find_method(mn)}; m && m->fn_type) {
+            fn_data = m->fn_type->get_data().as_opt<sema::types::function>();
         }
     }
 

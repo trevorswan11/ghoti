@@ -18,6 +18,7 @@
 #include "compiler/ast/statement.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/impl_registry.hh"
 #include "compiler/sema/type.hh"
 
 namespace ghoti::gir {
@@ -167,6 +168,17 @@ auto symbol_scoping::build(const sema::context&                    ctx,
 auto symbol_scoping::is_scoped(usize owner_table_idx, std::string_view name) const -> bool {
     if (!collided_names_.contains(std::string{name})) { return false; }
     return scopable_defs_.contains(key_of(owner_table_idx, name));
+}
+
+auto symbol_scoping::impl_method_name(const sema::impl_record& impl, std::string_view method) const
+    -> std::string {
+    if (impl.from_parameterized) { return fmt::format("{}.{}", impl.gir_prefix, method); }
+    return name_for(impl.body_scope_idx, method);
+}
+
+auto symbol_scoping::vtable_name(const sema::impl_record& impl) -> std::string {
+    if (impl.from_parameterized) { return fmt::format("__vtable.{}", impl.gir_prefix); }
+    return fmt::format("__vtable.{}", impl.body_scope_idx);
 }
 
 auto symbol_scoping::name_for(usize owner_table_idx, std::string_view name) const -> std::string {

@@ -2132,13 +2132,14 @@ auto const_eval::coerce_dyn(const const_value& val, sema::type& dest_type)
     const auto rec{ctx_.impls.lookup(*target, dyn.interface)};
     if (!rec) { return stdx::none; }
 
-    const auto vtable_sym{fmt::format("__vtable.{}", rec->body_scope_idx)};
+    const auto vtable_sym{symbol_scoping::vtable_name(*rec)};
     auto&      vtable_owner{vtable_root_ ? *vtable_root_ : *module_};
     if (std::ranges::none_of(vtable_owner.dyn_vtables,
                              [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
-            v.slots.emplace_back(scoped_symbol_name(rec->body_scope_idx, name));
+            v.slots.emplace_back(symbol_scoping_ ? symbol_scoping_->impl_method_name(*rec, name)
+                                                 : std::string{name});
         }
         vtable_owner.dyn_vtables.emplace_back(std::move(v));
     }

@@ -11,7 +11,12 @@
 
 namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
 
-namespace ghoti::sema { struct context; } // namespace ghoti::sema
+namespace ghoti::sema {
+
+struct context;
+struct impl_record;
+
+} // namespace ghoti::sema
 
 namespace ghoti::gir {
 
@@ -34,6 +39,12 @@ class symbol_scoping {
 
     // The GIR symbol name to use for a declaration named `name` owned by the given table
     [[nodiscard]] auto name_for(usize owner_table_idx, std::string_view name) const -> std::string;
+
+    // An impl method's symbol: under the instantiation's prefix for an expanded `impl(P) ...`
+    [[nodiscard]] auto impl_method_name(const sema::impl_record& impl,
+                                        std::string_view         method) const -> std::string;
+    // The vtable of the `(interface, target)` pair `impl` fills, one per expanded instantiation
+    [[nodiscard]] static auto vtable_name(const sema::impl_record& impl) -> std::string;
 
     // Whether `name_for(owner_table_idx, name)` would qualify the name.
     [[nodiscard]] auto is_scoped(usize owner_table_idx, std::string_view name) const -> bool;

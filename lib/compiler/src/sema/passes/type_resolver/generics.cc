@@ -425,6 +425,13 @@ auto type_resolver::record_type_ctor_member_call(ast::node_id call_id, const ast
     gsl::not_null<type*> t{obj_type.get()};
     if (const auto meta{t->get_data().as_opt<types::meta_type>()}) { t = &meta->instance; }
 
+    // A method an `impl` block adds is no member of the ctor's body, and keeps its impl name
+    const auto impl_methods{ctx_.impls.methods_of(*t)};
+    if (std::ranges::any_of(impl_methods,
+                            [&](const auto& em) { return em.method->name == *member_name; })) {
+        return;
+    }
+
     if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
         resolving_.set_generic_call_target(call_id, fmt::format("{}.{}", *prefix, *member_name));
     }

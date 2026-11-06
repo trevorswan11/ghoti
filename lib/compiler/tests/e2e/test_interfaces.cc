@@ -911,4 +911,59 @@ TEST_CASE("an impl method may share a name with a module-level declaration") {
     )") == 42);
 }
 
+TEST_CASE("a parameterized impl fills each expansion's own vtable, defaults included") {
+    CHECK(helpers::compile_and_run(R"(
+        const Sink = interface {
+            pub const put = fn(&mut self, x: i32): i32;
+            pub const put_twice = fn(&mut self, x: i32): i32 {
+                return self.put(x) + self.put(x);
+            };
+        };
+        const Box = fn(comptime T: type): type {
+            return struct { pub total: T = 0 };
+        };
+        impl(T: type) Sink for Box(T) {
+            pub const put = fn(&mut self, x: i32): i32 {
+                self.total += @intCast(T, x);
+                return x;
+            };
+        }
+        pub const main = fn(): i32 {
+            let mut wide: Box(i64) = .{};
+            let mut narrow: Box(i8) = .{};
+            let a: &mut dyn Sink = &mut wide;
+            let b: &mut dyn Sink = &mut narrow;
+            if (a.put(3) != 3 or a.put_twice(4) != 8) { return 1; }
+            if (b.put_twice(5) != 10) { return 2; }
+            return @intCast(i32, wide.total) + @intCast(i32, narrow.total);
+        };
+    )") == 21);
+}
+
+TEST_CASE("an impl written for one instance of a type constructor is called by its own name") {
+    CHECK(helpers::compile_and_run(R"(
+        const Sink = interface {
+            pub const put = fn(&mut self, x: i64): i64;
+        };
+        const Box = fn(comptime T: type): type {
+            return struct { pub total: T = 0 };
+        };
+        impl Box(i64) {
+            pub const add = fn(&mut self, x: i64): i64 {
+                self.total += x;
+                return self.total;
+            };
+        }
+        impl Sink for Box(i64) {
+            pub const put = fn(&mut self, x: i64): i64 { return self.add(x * 10); };
+        }
+        pub const main = fn(): i32 {
+            let mut b: Box(i64) = .{};
+            _ = b.add(3);
+            let s: &mut dyn Sink = &mut b;
+            return @intCast(i32, s.put(4));
+        };
+    )") == 43);
+}
+
 } // namespace ghoti::tests

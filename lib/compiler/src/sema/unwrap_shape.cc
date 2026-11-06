@@ -78,14 +78,12 @@ namespace {
 
 auto unwrap_info::gir_method_name(std::string_view           method_name,
                                   const gir::symbol_scoping& scoping) const -> std::string {
-    if (impl->from_parameterized) { return fmt::format("{}.{}", impl->gir_prefix, method_name); }
-    return scoping.name_for(impl->body_scope_idx, method_name);
+    return scoping.impl_method_name(*impl, method_name);
 }
 
 auto rewrap_info::gir_method_name(std::string_view           method_name,
                                   const gir::symbol_scoping& scoping) const -> std::string {
-    if (impl->from_parameterized) { return fmt::format("{}.{}", impl->gir_prefix, method_name); }
-    return scoping.name_for(impl->body_scope_idx, method_name);
+    return scoping.impl_method_name(*impl, method_name);
 }
 
 // Deep structural substitution: replaces all occurrences of `from` with `to` across

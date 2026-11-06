@@ -169,8 +169,10 @@ class emitter {
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
     // Emits one inherited interface default-method body for a concrete impl target
+    // The interface defaults each expanded `impl(P) I for Ctor(P)` inherits, once per expansion
+    auto emit_parameterized_impl_defaults() -> void;
     auto emit_impl_default_method(std::string_view          gir_name,
-                                  usize                     impl_scope_idx,
+                                  const sema::impl_record&  impl,
                                   mod::module_t&            iface_mod,
                                   ast::node_id              sig_id,
                                   const ast::function_expr& fn_expr,
@@ -789,7 +791,8 @@ class emitter {
 
     // While emitting an inherited interface default-method body: bare `self.method(...)` calls
     // are rewritten to target this impl's own methods (its body symbol table).
-    stdx::opt_size emitting_impl_default_scope_;
+    // The impl whose inherited default body is being emitted, so `self.method(...)` reaches it
+    stdx::option<const sema::impl_record&> emitting_impl_default_;
     // For emitting a method body written directly in an `impl` block
     stdx::opt_size emitting_impl_body_scope_;
 
