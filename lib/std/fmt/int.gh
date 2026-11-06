@@ -18,8 +18,8 @@ test "digits2" {
 
 pub const digit_to_char = fn(digit: u8, case: std.fmt.Case): u8 {
     return match (digit) {
-        0..9 => digit + '0',
-        10..35 => digit + ((if (case == .upper) 'A' else 'a') - 10),
+        0..=9 => digit + '0',
+        10..=35 => digit + ((if (case == .upper) 'A' else 'a') - 10),
         _ => unreachable,
     };
 };
@@ -28,6 +28,8 @@ test "digit_to_char" {
     @expect(digit_to_char(1, .lower) == '1');
     @expect(digit_to_char(10, .lower) == 'a');
     @expect(digit_to_char(10, .upper) == 'A');
+    @expect(digit_to_char(9, .lower) == '9');
+    @expect(digit_to_char(35, .lower) == 'z');
 }
 
 /// Formats an integer in an explicit radix and case.
