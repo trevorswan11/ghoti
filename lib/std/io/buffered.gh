@@ -1,0 +1,67 @@
+//! A writer that collects small writes into one buffer before passing them on
+import std;
+
+const Result = std.Result;
+const Error = std.io.Error;
+
+/// Collects writes for `Inner`, a `Writer`, in `buf`, writing them on `flush` or when `buf` is
+/// full. Nothing reaches `Inner` until then, so call `flush` before dropping it
+pub const BufferedWriter = fn(comptime Inner: type): type {
+    return struct {
+        pub inner: ^mut Inner,
+        pub buf: []mut u8,
+        pub len: usize = 0,
+
+        /// Writes whatever is buffered to the inner writer
+        pub const flush = fn(&mut self): Result(void, Error) {
+            if (self.len == 0) return .done;
+            let pending = self.len;
+            self.len = 0;
+            return self.inner.write_all(self.buf[0..pending]);
+        };
+    };
+};
+
+impl(Inner: type) std.io.Writer for BufferedWriter(Inner) {
+    const Error = std.io.Error;
+    pub const write = fn(&mut self, bytes: []u8): Result(usize, Error) {
+        // What can never fit goes straight through, after what is already waiting
+        if (bytes.len > self.buf.len) {
+            self.flush()?;
+            self.inner.write_all(bytes)?;
+            return .of(bytes.len);
+        }
+        if (self.len + bytes.len > self.buf.len) {
+            self.flush()?;
+        }
+        @memcpy(self.buf[self.len..self.len + bytes.len], bytes);
+        self.len += bytes.len;
+        return .of(bytes.len);
+    };
+}
+
+test "BufferedWriter holds writes until flushed or full" {
+    let mut backing: [32]mut u8 = undefined;
+    let mut sink: std.io.FixedBufferStream = .{ .buf = backing };
+    let mut scratch: [8]mut u8 = undefined;
+    let mut buffered: BufferedWriter(std.io.FixedBufferStream) = .{
+        .inner = ^mut sink,
+        .buf = scratch[..],
+    };
+    let w: &mut dyn std.io.Writer = &mut buffered;
+
+    @expect(w.write_all("abc") == .ok);
+    @expect(sink.pos == 0);
+    @expect(w.write_all("defgh") == .ok);
+    @expect(sink.pos == 0);
+    // A ninth byte doesn't fit, so the first eight go out
+    @expect(w.write_all("i") == .ok);
+    @expect(sink.pos == 8);
+    @expect(buffered.flush() == .ok);
+    @expect(std.mem.eql(u8, "abcdefghi", backing[..sink.pos]));
+
+    // Longer than the whole buffer: written through, in order
+    @expect(w.write_all("xy") == .ok);
+    @expect(w.write_all("0123456789") == .ok);
+    @expect(std.mem.eql(u8, "abcdefghixy0123456789", backing[..sink.pos]));
+}

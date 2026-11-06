@@ -39,10 +39,15 @@ const write_formatted = fn(
     args...,
 ): Result(void, FmtError) {
     let mut f = stream?;
-    std.fmt.format(&mut f, fmt, args...)?;
+    // Gathered so a whole line usually reaches the stream in one write
+    let mut scratch: [512]mut u8 = undefined;
+    let mut buffered: std.io.BufferedWriter(File) = .{ .inner = ^mut f, .buf = scratch[..] };
+    std.fmt.format(&mut buffered, fmt, args...)?;
     if comptime (newline) {
-        f.write_byte('\n')?;
+        let w: &mut dyn std.io.Writer = &mut buffered;
+        w.write_byte('\n')?;
     }
+    buffered.flush()?;
     return .done;
 };
 
