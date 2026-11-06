@@ -4777,11 +4777,14 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                         check_comptime_float_fits(operand, ret_type, *op_expr);
                     }
                     // A compile-time operand folds, so an out-of-range float is a compile error
-                    // An untyped operand has no width of its own to reinterpret
+                    // An untyped operand has no width of its own to reinterpret, and `@as` of
+                    // one would otherwise round through its `f64` materialization first
                     if (fn_token == syntax::builtin_t::INT_FROM_FLOAT ||
                         fn_token == syntax::builtin_t::FLOAT_FROM_INT ||
                         fn_token == syntax::builtin_t::FLOAT_CAST ||
-                        (fn_token == syntax::builtin_t::BIT_CAST && is_untyped_number(operand))) {
+                        ((fn_token == syntax::builtin_t::BIT_CAST ||
+                          fn_token == syntax::builtin_t::AS) &&
+                         is_untyped_number(operand))) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }
