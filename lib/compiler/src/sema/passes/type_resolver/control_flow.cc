@@ -770,6 +770,8 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
 
                 stdx::option<type&>          live_type;
                 const mutating_context_guard branch_g{in_expr_branch_, true};
+                const mutating_context_guard unused_g{arm_of_unused_,
+                                                      unused_value_nodes_.contains(id.get_index())};
                 if (*folded) {
                     TRY_RESOLVE(if_expr.consequence);
                     live_type.emplace(arm_value_type(if_expr.consequence));
@@ -1169,6 +1171,8 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
         auto&       live_table_type{resolving_.get_sema_type(live)};
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
         const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
         TRY_RESOLVE(live.dispatch);
     }
 
@@ -1363,6 +1367,8 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         }
 
         const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
         const comptime_frame_guard   cfg{ctx_.comptime_binding_frames, std::move(frame)};
         TRY_RESOLVE(live.dispatch);
     }

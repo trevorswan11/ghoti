@@ -1643,6 +1643,12 @@ auto type_resolver::operand_nature(ast::expr_handle expr) const -> operand_natur
     if (const auto ref{resolving_.ast.get_as_opt<ast::reference_expr>(expr)}) {
         return operand_nature(ref->rhs);
     }
+    // `B.T` through an unbound `B: type` is only known once `B` is instantiated
+    if (const auto dot{resolving_.ast.get_as_opt<ast::dot_expr>(expr)};
+        dot && t->get_kind() == type_kind::AUTO &&
+        operand_nature(dot->object) == operand_nature_t::UNKNOWN) {
+        return operand_nature_t::UNKNOWN;
+    }
     if (decl_value_denotes_type(expr)) { return operand_nature_t::TYPE; }
     // A bound `T: type` parameter or `@TypeOf(...)` only reveals itself by folding
     const auto folded{probe_fold(expr)};

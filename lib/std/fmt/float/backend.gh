@@ -1,0 +1,196 @@
+//! Ryu's power-of-five lookup and wide multiply backends, one per float width and build mode
+//! Paper: https://dl.acm.org/doi/pdf/10.1145/3360595
+//! Ported from: https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/fmt/float.zig
+//! Zig is licensed under the MIT license
+import "ryu_tables.gh" as tables;
+
+/// Picks the lookup table backend for float type `T`
+pub const Backend = fn(comptime T: type): type {
+    if comptime (@bitSizeOf(T) > 64) {
+        return Backend128;
+    } else if comptime (@optimizeMode() == .release_small) {
+        return Backend64Small;
+    } else {
+        return Backend64Full;
+    }
+};
+
+pub const mul_shift128 = fn(m: u128, mul: [4]u64, j: u32): u128 {
+    @assert(j > 128);
+    let r = mul_128_256_shift(split_u128(m), mul, j, 0);
+    return (@as(u128, r[1]) << 64) | r[0];
+};
+
+/// Splits `v` into its low and high 64-bit halves
+pub const split_u128 = fn(v: u128): [2]u64 {
+    let lo: u64 = @truncate(v);
+    let hi: u64 = @truncate(v >> 64);
+    return [_]u64{ lo, hi };
+};
+
+/// Computes `(a * b + corr) >> shift` for a 128-bit `a` and 256-bit `b`, keeping the low 256 bits
+pub const mul_128_256_shift = fn(a: [2]u64, b: [4]u64, shift: u32, corr: u32): [4]u64 {
+    @assert(shift > 0 and shift < 256);
+
+    let b00 = @as(u128, a[0]) * b[0];
+    let b01 = @as(u128, a[0]) * b[1];
+    let b02 = @as(u128, a[0]) * b[2];
+    let b03 = @as(u128, a[0]) * b[3];
+    let b10 = @as(u128, a[1]) * b[0];
+    let b11 = @as(u128, a[1]) * b[1];
+    let b12 = @as(u128, a[1]) * b[2];
+    let b13 = @as(u128, a[1]) * b[3];
+
+    let s0 = b00;
+    let s1 = b01 +% b10;
+    let c1 = @intFromBool(u128, s1 < b01);
+    let s2 = b02 +% b11;
+    let c2 = @intFromBool(u128, s2 < b02);
+    let s3 = b03 +% b12;
+    let c3 = @intFromBool(u128, s3 < b03);
+
+    let p0 = s0 +% (s1 << 64);
+    let d0 = @intFromBool(u128, p0 < b00);
+    let q1 = s2 +% (s1 >> 64) +% (s3 << 64);
+    let d1 = @intFromBool(u128, q1 < s2);
+    let p1 = q1 +% (c1 << 64) +% d0;
+    let d2 = @intFromBool(u128, p1 < q1);
+    let p2 = b13 +% (s3 >> 64) +% c2 +% (c3 << 64) +% d1 +% d2;
+
+    let wide_corr = @as(u128, corr);
+    let mut r0: u128 = undefined;
+    let mut r1: u128 = undefined;
+    if (shift < 128) {
+        let cshift: u7 = @intCast(shift);
+        let sshift: u7 = @intCast(128 - shift);
+        r0 = wide_corr +% ((p0 >> cshift) | (p1 << sshift));
+        r1 = ((p1 >> cshift) | (p2 << sshift)) +% @intFromBool(u128, r0 < wide_corr);
+    } else if (shift == 128) {
+        r0 = wide_corr +% p1;
+        r1 = p2 +% @intFromBool(u128, r0 < wide_corr);
+    } else {
+        let ashift: u7 = @intCast(shift - 128);
+        let sshift: u7 = @intCast(256 - shift);
+        r0 = wide_corr +% ((p1 >> ashift) | (p2 << sshift));
+        r1 = (p2 >> ashift) +% @intFromBool(u128, r0 < wide_corr);
+    }
+
+    let lo = split_u128(r0);
+    let hi = split_u128(r1);
+    return [_]u64{ lo[0], lo[1], hi[0], hi[1] };
+};
+
+const Backend128 = struct {
+    pub const T = u128;
+    pub const mul_shift = mul_shift128;
+    pub const POW5_INV_BITCOUNT = tables.FLOAT128_POW5_INV_BITCOUNT;
+    pub const POW5_BITCOUNT = tables.FLOAT128_POW5_BITCOUNT;
+
+    pub const bound1 = 55;
+    pub const bound2 = 127;
+    pub const adjust_q = true;
+
+    pub const compute_pow5 = fn(i: u32): [4]u64 {
+        let base = i / tables.FLOAT128_POW5_TABLE_SIZE;
+        let base2 = base * tables.FLOAT128_POW5_TABLE_SIZE;
+        let mul = tables.FLOAT128_POW5_SPLIT[base];
+        if (i == base2) return mul;
+
+        let m = tables.FLOAT128_POW5_TABLE[i - base2];
+        let delta = pow5_bits(i) - pow5_bits(base2);
+        let shift: u6 = @intCast(2 * (i % 32));
+        let corr = @intCast(u32, (tables.FLOAT128_POW5_ERRORS[i / 32] >> shift) & 3);
+        return mul_128_256_shift(m, mul, delta, corr);
+    };
+
+    pub const compute_inv_pow5 = fn(i: u32): [4]u64 {
+        let base = (i + tables.FLOAT128_POW5_TABLE_SIZE - 1) / tables.FLOAT128_POW5_TABLE_SIZE;
+        let base2 = base * tables.FLOAT128_POW5_TABLE_SIZE;
+        let mul = tables.FLOAT128_POW5_INV_SPLIT[base]; // 1 / 5^base2
+        if (i == base2) return [_]u64{ mul[0] + 1, mul[1], mul[2], mul[3] };
+
+        let m = tables.FLOAT128_POW5_TABLE[base2 - i]; // 5^offset
+        let delta = pow5_bits(base2) - pow5_bits(i);
+        let shift: u6 = @intCast(2 * (i % 32));
+        let corr = @intCast(u32, ((tables.FLOAT128_POW5_INV_ERRORS[i / 32] >> shift) & 3) + 1);
+        return mul_128_256_shift(m, mul, delta, corr);
+    };
+};
+
+const mul_shift64 = fn(m: u64, mul: [2]u64, j: u32): u64 {
+    @assert(j > 64);
+    if (j >= 128) return 0;
+
+    let b0 = @as(u128, m) * mul[0];
+    let b2 = @as(u128, m) * mul[1];
+    let shift: u6 = @intCast(j - 64);
+    return @intCast(((b0 >> 64) + b2) >> shift);
+};
+
+/// Uses the full 64-bit tables for speed
+const Backend64Full = struct {
+    pub const T = u64;
+    pub const mul_shift = mul_shift64;
+    pub const POW5_INV_BITCOUNT = tables.FLOAT64_POW5_INV_BITCOUNT;
+    pub const POW5_BITCOUNT = tables.FLOAT64_POW5_BITCOUNT;
+
+    pub const bound1 = 21;
+    pub const bound2 = 63;
+    pub const adjust_q = false;
+
+    pub const compute_pow5 = fn(i: u32): [2]u64 {
+        return tables.FLOAT64_POW5_SPLIT[i];
+    };
+
+    pub const compute_inv_pow5 = fn(i: u32): [2]u64 {
+        return tables.FLOAT64_POW5_INV_SPLIT[i];
+    };
+};
+
+/// if (e == 0) 1 else ceil(log_2(5^e))
+pub const pow5_bits = fn(e: u32): u32 {
+    @assert(e <= 1 << 15);
+    return @intCast(((@as(u64, e) * 163391164108059) >> 46) + 1);
+};
+
+/// Rebuilds the 64-bit table entries from much smaller tables for release_small builds
+const Backend64Small = struct {
+    pub const T = u64;
+    pub const mul_shift = mul_shift64;
+    pub const POW5_INV_BITCOUNT = tables.FLOAT64_POW5_INV_BITCOUNT;
+    pub const POW5_BITCOUNT = tables.FLOAT64_POW5_BITCOUNT;
+
+    pub const bound1 = 21;
+    pub const bound2 = 63;
+    pub const adjust_q = false;
+
+    pub const compute_pow5 = fn(i: u32): [2]u64 {
+        let base = i / tables.FLOAT64_POW5_TABLE_SIZE;
+        let base2 = base * tables.FLOAT64_POW5_TABLE_SIZE;
+        let mul = tables.FLOAT64_POW5_SPLIT2[base];
+        if (i == base2) return mul;
+
+        let m = tables.FLOAT64_POW5_TABLE[i - base2];
+        let b0 = @as(u128, m) * mul[0];
+        let b2 = @as(u128, m) * mul[1];
+        let delta: u7 = @intCast(pow5_bits(i) - pow5_bits(base2));
+        let shift: u5 = @intCast((i % 16) << 1);
+        let offset = @as(u128, (tables.FLOAT64_POW5_OFFSETS[i / 16] >> shift) & 3);
+        return split_u128(((b0 >> delta) + (b2 << (64 - delta))) + 1 + offset);
+    };
+
+    pub const compute_inv_pow5 = fn(i: u32): [2]u64 {
+        let base = (i + tables.FLOAT64_POW5_TABLE_SIZE - 1) / tables.FLOAT64_POW5_TABLE_SIZE;
+        let base2 = base * tables.FLOAT64_POW5_TABLE_SIZE;
+        let mul = tables.FLOAT64_POW5_INV_SPLIT2[base]; // 1 / 5^base2
+        if (i == base2) return mul;
+
+        let m = tables.FLOAT64_POW5_TABLE[base2 - i]; // 5^offset
+        let b0 = @as(u128, m) * (mul[0] - 1);
+        let b2 = @as(u128, m) * mul[1]; // 1/5^base2 * 5^offset = 1/5^(base2-offset) = 1/5^i
+        let delta: u7 = @intCast(pow5_bits(base2) - pow5_bits(i));
+        let shift: u5 = @intCast((i % 16) << 1);
+        let offset = @as(u128, (tables.FLOAT64_POW5_INV_OFFSETS[i / 16] >> shift) & 3);
+        return split_u128(((b0 >> delta) + (b2 << (64 - delta))) + 1 + offset);
+    };
+};

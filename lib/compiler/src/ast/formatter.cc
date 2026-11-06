@@ -665,7 +665,7 @@ auto formatter::format_members(std::vector<syntax::doc_id>&                     
         if (leading != doc_manager_.nil()) {
             member_doc = doc_manager_.concat({leading, member_doc});
         } else if (region_end ? member_start_line(i) > *region_end + 1
-                              : i != 0 && is_function_or_aggregate_node(members[i - 1])) {
+                              : i != 0 && blank_line_between(members[i - 1], members[i])) {
             member_doc = doc_manager_.concat({doc_manager_.hard_line(), member_doc});
         }
         region_end = stdx::none;
@@ -1443,16 +1443,26 @@ auto formatter::visit(node_id id, const identifier_expr& node) -> syntax::doc_id
 
 auto formatter::visit(node_id id, const if_expr& node) -> syntax::doc_id {
     const auto head_clause{[&](const if_expr& n) -> syntax::doc_id {
-        return doc_manager_.concat({
-            doc_manager_.text("if "),
-            n.comptime_condition ? doc_manager_.text("comptime ") : doc_manager_.nil(),
-            n.condition
-                ? doc_manager_.concat(
-                      {doc_manager_.text("("), format(*n.condition), doc_manager_.text(") ")})
-                : doc_manager_.nil(),
-            n.payload_capture ? format_capture(*n.payload_capture, true) : doc_manager_.nil(),
-            n.alternate ? format(n.consequence) : tail_clause(n.consequence),
-        });
+        std::vector<syntax::doc_id> head{
+            doc_manager_.text(n.comptime_condition ? "if comptime" : "if")};
+        if (n.condition) {
+            head.emplace_back(doc_manager_.concat(
+                {doc_manager_.text(" ("), format(*n.condition), doc_manager_.text(")")}));
+        }
+        if (n.payload_capture) {
+            head.emplace_back(doc_manager_.concat(
+                {doc_manager_.text(" "), format_capture(*n.payload_capture, false)}));
+        }
+
+        // A value arm too wide for its head's line moves under it before its own operands split
+        if (n.alternate && ast_.get_as_opt<expr_stmt>(n.consequence)) {
+            head.emplace_back(doc_manager_.group(doc_manager_.nest(
+                doc_manager_.concat({doc_manager_.line(), format(n.consequence)}))));
+        } else {
+            head.emplace_back(doc_manager_.text(" "));
+            head.emplace_back(n.alternate ? format(n.consequence) : tail_clause(n.consequence));
+        }
+        return doc_manager_.concat(std::move(head));
     }};
 
     // `if (c) { ... } else { ... }` keeps `} else {` on one line
