@@ -886,4 +886,26 @@ TEST_CASE("A literal argument takes a parameter type written against an earlier 
               .message_contains("out of range for type 'u8'"));
 }
 
+TEST_CASE("an instance nested through another generic keeps its enclosing instance's typing") {
+    CHECK(helpers::compile_and_run(R"(
+        const S = struct { x: i32 };
+        const shape = fn(comptime T: type): bool {
+            return @typeInfo(T).struct.fields.len == 1;
+        };
+        const f = fn(v: auto): i32 {
+            const T = @TypeOf(v);
+            return match comptime (@typeInfo(T)) {
+                .int => 1,
+                .struct => match comptime (shape(T)) {
+                    true => g(v) + 10,
+                    false => 0,
+                },
+                _ => 0,
+            };
+        };
+        const g = fn(v: auto): i32 { return f(v.x); };
+        pub const main = fn(): i32 { return f(S{ .x = 1 }); };
+    )") == 11);
+}
+
 } // namespace ghoti::tests

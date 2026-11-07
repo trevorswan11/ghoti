@@ -153,4 +153,29 @@ TEST_CASE("Builtins see through a concrete array with a deferred `[M]T` element"
     CHECK(exit_code == 0);
 }
 
+TEST_CASE("A nested instantiation folds none of its caller's deferred array dimensions") {
+    CHECK(helpers::compile_and_run(R"(
+        const size_of = fn(comptime T: type): comptime_int {
+            comptime @assert(@typeInfo(T) == .float);
+            return @sizeOf(T);
+        };
+        const Bits = fn(comptime T: type): type {
+            return if comptime (@sizeOf(T) == 4) u32 else u64;
+        };
+        const inner = fn(comptime T: type, x: T): T {
+            let y: T = x;
+            return y;
+        };
+        const g = fn(value: auto): u32 {
+            const T = @TypeOf(value);
+            let buf: [1 + size_of(T)]u8 = undefined;
+            _ = buf;
+            return @intCast(u32, inner(Bits(T), 3)) + @sizeOf(T);
+        };
+        pub const main = fn(): i32 {
+            return @intCast(i32, g(1.5f32) + g(2.5f64));
+        };
+    )") == 18);
+}
+
 } // namespace ghoti::tests

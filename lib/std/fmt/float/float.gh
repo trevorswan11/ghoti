@@ -1,0 +1,648 @@
+//! Floating point formatting with the Ryu shortest round-trip algorithm
+//! Paper: https://dl.acm.org/doi/pdf/10.1145/3360595
+//! Ported from: https://codeberg.org/ziglang/zig/src/tag/0.17.0/lib/std/fmt/float.zig
+//! Zig is licensed under the MIT license
+import std;
+
+import "ryu.gh" as ryu;
+
+const Result = std.Result;
+const Option = std.Option;
+const Error = std.fmt.Error;
+const SPECIAL_EXPONENT = ryu.SPECIAL_EXPONENT;
+const DecimalInt = ryu.DecimalInt;
+const decimal_length = ryu.decimal_length;
+
+pub const FloatDecimal = ryu.FloatDecimal;
+pub const to_decimal = ryu.to_decimal;
+pub const binary_to_decimal = ryu.binary_to_decimal;
+
+test {
+    import "ryu.gh";
+    import "backend.gh";
+}
+
+/// Any buffer passed to `render` must be at least this large
+pub const MIN_BUFFER_SIZE = 53;
+
+pub const Mode = enum { scientific, decimal };
+
+/// Returns the minimum buffer size needed to render every value of `T` in `mode` at full precision
+pub const buffer_size = fn(comptime mode: Mode, comptime T: type): comptime_int {
+    comptime @assert(@typeInfo(T) == .float);
+    return match comptime (mode) {
+        .scientific => MIN_BUFFER_SIZE,
+        // Based on the minimum subnormal values
+        .decimal => match comptime (@bitSizeOf(T)) {
+            16 => MIN_BUFFER_SIZE,
+            32 => 55,
+            64 => 347,
+            80 => 4996,
+            128 => 5011,
+            _ => @compileError("unknown floating point type " ++ @typeName(T)),
+        },
+    };
+};
+
+pub const Options = struct {
+    pub mode: Mode = .scientific,
+    pub precision: Option(usize) = .empty,
+};
+
+/// The concrete float type a value of type `T` renders as
+const Runtime = fn(comptime T: type): type {
+    return match comptime (T) {
+        // comptime_float is an f128 internally so this keeps its full precision
+        comptime_float => f128,
+        _ => T,
+    };
+};
+
+/// Renders a float into `buf` and returns the written slice of it.
+/// Full precision output is the shortest string that reads back as the same value.
+/// Scientific mode fits any value in `MIN_BUFFER_SIZE` bytes, while full precision decimal
+/// output needs `buffer_size(.decimal, T)` bytes. Fails with `.overflow` if `buf` is too small
+pub const render = fn(buf: []mut u8, value: auto, options: Options): Result([]u8, Error) {
+    const T = Runtime(@TypeOf(value));
+    const Wide = DecimalInt(T);
+
+    let decimal = to_decimal(T, @as(T, value));
+    return match (options.mode) {
+        .scientific => format_scientific(Wide, buf, decimal, options.precision),
+        .decimal => format_decimal(Wide, buf, decimal, options.precision),
+    };
+};
+
+/// Formats a float according to `spec.kind`, defaulting to decimal.
+/// `.e` is scientific and `.d`, `.f`, and `.?` are decimal. Precision, sign, and padding are honored.
+/// Fails with `.overflow` if a large precision does not fit the internal buffer
+pub const format = fn(
+    w: &mut dyn std.io.Writer,
+    value: auto,
+    spec: std.fmt.Spec,
+): Result(void, Error) {
+    const T = Runtime(@TypeOf(value));
+    const Wide = DecimalInt(T);
+
+    let mode: Mode = match (spec.kind.unwrap_or(.d)) {
+        .d, .f, .@"?" => .decimal,
+        .e => .scientific,
+        .x, .X, .b, .o, .c, .s, .p => return .fail(.bad_spec),
+    };
+
+    // The first byte is reserved for an explicit '+'
+    let mut buf: [1 + buffer_size(.decimal, T)]mut u8 = undefined;
+    let decimal = to_decimal(T, @as(T, value));
+    let body = match (mode) {
+        .scientific => format_scientific(Wide, buf[1..], decimal, spec.precision)?,
+        .decimal => format_decimal(Wide, buf[1..], decimal, spec.precision)?,
+    };
+
+    let is_special = decimal.exponent == SPECIAL_EXPONENT;
+    let is_nan = is_special and decimal.mantissa != 0;
+
+    let mut start = 1uz;
+    if (spec.plus and !decimal.sign and !is_nan) {
+        start = 0;
+        buf[0] = '+';
+    }
+    let signed_body = buf[start..1 + body.len];
+
+    // nan and inf are padded like text since zeros around them are meaningless
+    if (is_special) {
+        return std.fmt.pad(w, spec, signed_body, .right);
+    }
+    let sign_len = 1uz - start + @intFromBool(usize, decimal.sign);
+    return std.fmt.pad_number(w, spec, signed_body, sign_len);
+};
+
+/// Writes "nan", "inf", or "-inf" for a special `f`
+const copy_special_str = fn(buf: []mut u8, f: auto): []u8 {
+    let offset = @intFromBool(usize, f.sign);
+    if (f.sign) {
+        buf[0] = '-';
+    }
+
+    let name = if (f.mantissa != 0) "nan" else "inf";
+    @memcpy(buf[offset..][0..3], name);
+    return buf[0..3 + offset];
+};
+
+/// Writes the low `count` digits of `value` right-aligned in `buf[0..count]`.
+/// Returns what is left of `value` once those digits are consumed
+const write_decimal = fn(buf: []mut u8, value: auto, count: usize): @TypeOf(value) {
+    let mut remaining = value;
+    let mut i: usize = 0;
+
+    while (i + 2 < count) : (i += 2) {
+        let d = std.fmt.digits2(@intCast(remaining % 100));
+        remaining /= 100;
+        buf[count - i - 1] = d[1];
+        buf[count - i - 2] = d[0];
+    }
+
+    while (i < count) : (i += 1) {
+        let c: u8 = @intCast(remaining % 10);
+        remaining /= 10;
+        buf[count - i - 1] = '0' + c;
+    }
+    return remaining;
+};
+
+const is_power_of_10 = fn(value: u128): bool {
+    let mut n = value;
+    while (n != 0) : (n /= 10) {
+        if (n % 10 != 0) return false;
+    }
+    return true;
+};
+
+const RoundMode = enum {
+    /// 1234.56 = precision 2
+    decimal,
+    /// 1.23456e3 = precision 5
+    scientific,
+};
+
+/// Rounds `f` half up to `precision` digits after the point
+const round = fn(
+    comptime T: type,
+    f: FloatDecimal(T),
+    mode: RoundMode,
+    precision: usize,
+): FloatDecimal(T) {
+    let mut output = f.mantissa;
+    let mut exp = f.exponent;
+    let olength = decimal_length(output);
+
+    let round_digit: usize = match (mode) {
+        .decimal => blk: {
+            if (f.exponent > 0) {
+                break :blk (olength - 1) + precision + @intCast(usize, f.exponent);
+            }
+            let digits = precision + olength;
+            let min_exp_required = @intCast(usize, -f.exponent);
+            break :blk if (digits > min_exp_required) digits - min_exp_required else 0;
+        },
+        .scientific => 1 + precision,
+    };
+
+    if (round_digit < olength) {
+        for (round_digit + 1..olength) |_| {
+            output /= 10;
+            exp += 1;
+        }
+
+        if (output % 10 >= 5) {
+            output /= 10;
+            output += 1;
+            exp += 1;
+
+            // e.g. 9999 -> 10000
+            if (is_power_of_10(output)) {
+                output /= 10;
+                exp += 1;
+            }
+        }
+    }
+
+    return .{ .mantissa = output, .exponent = exp, .sign = f.sign };
+};
+
+/// Writes `f` to `buf` in scientific form like "1.2345e-6".
+/// Never fails without a precision. With one, it writes up to `8 + precision` bytes and
+/// fails with `.overflow` if those do not fit
+pub const format_scientific = fn(
+    comptime T: type,
+    buf: []mut u8,
+    f_: FloatDecimal(T),
+    precision: Option(usize),
+): Result([]u8, Error) {
+    @assert(buf.len >= MIN_BUFFER_SIZE, "float buffers must hold at least MIN_BUFFER_SIZE bytes");
+    if (f_.exponent == SPECIAL_EXPONENT) {
+        return .of(copy_special_str(buf, f_));
+    }
+
+    let mut f = f_;
+    if (precision) |prec| {
+        f = round(T, f, .scientific, prec);
+
+        // sign(1) + leading_digit(1) + point(1) + exp_sign(1) + exp_max(4)
+        if (buf.len < 8 + prec) return .fail(.overflow);
+    }
+
+    let mut output = f.mantissa;
+    let olength = decimal_length(output);
+
+    let mut index: usize = 0;
+    if (f.sign) {
+        buf[index] = '-';
+        index += 1;
+    }
+
+    // 1.12345
+    output = write_decimal(buf[index + 2..], output, olength - 1);
+    buf[index] = '0' + @intCast(u8, output % 10);
+    buf[index + 1] = '.';
+    index += 2;
+    let dp_index = index;
+    if (olength > 1) {
+        index += olength - 1;
+    } else {
+        index -= 1;
+    }
+
+    if (precision) |prec| {
+        index += @intFromBool(usize, olength == 1);
+        if (prec > olength - 1) {
+            let len = prec - (olength - 1);
+            @memset(buf[index..][0..len], '0');
+            index += len;
+        } else {
+            index = dp_index + prec - @intFromBool(usize, prec == 0);
+        }
+    }
+
+    // e100
+    buf[index] = 'e';
+    index += 1;
+    let mut exp = f.exponent + @intCast(i32, olength) - 1;
+    if (exp < 0) {
+        buf[index] = '-';
+        index += 1;
+        exp = -exp;
+    }
+    let uexp = @intCast(u32, exp);
+    let elength = decimal_length(uexp);
+    _ = write_decimal(buf[index..], uexp, elength);
+    index += elength;
+
+    return .of(buf[0..index]);
+};
+
+/// Writes `f` to `buf` in decimal form like "0.0000012345".
+/// Fails with `.overflow` if the digits do not fit, even without a precision.
+/// With a precision, exactly that many digits follow the point
+pub const format_decimal = fn(
+    comptime T: type,
+    buf: []mut u8,
+    f_: FloatDecimal(T),
+    precision: Option(usize),
+): Result([]u8, Error) {
+    @assert(buf.len >= MIN_BUFFER_SIZE, "float buffers must hold at least MIN_BUFFER_SIZE bytes");
+    if (f_.exponent == SPECIAL_EXPONENT) {
+        return .of(copy_special_str(buf, f_));
+    }
+
+    let mut f = f_;
+    if (precision) |prec| {
+        f = round(T, f, .decimal, prec);
+    }
+
+    let mut output = f.mantissa;
+    let olength = decimal_length(output);
+
+    // leading_digit(1) + point(1)
+    let abs_exponent = @intCast(usize, @abs(f.exponent));
+    let extra_digits = precision.unwrap_or(0);
+    let digit_bytes = if (f.exponent >= 0) abs_exponent + olength + extra_digits
+        else @max(abs_exponent + olength, extra_digits);
+    let req_bytes = 2 + digit_bytes;
+    if (buf.len < req_bytes) return .fail(.overflow);
+
+    let mut index: usize = 0;
+    if (f.sign) {
+        buf[index] = '-';
+        index += 1;
+    }
+
+    let dp_offset = f.exponent + @intCast(i32, olength);
+    if (dp_offset <= 0) {
+        // 0.000001234
+        buf[index] = '0';
+        buf[index + 1] = '.';
+        index += 2;
+        let dp_index = index;
+
+        let leading_zeros = @intCast(usize, -dp_offset);
+        @memset(buf[index..][0..leading_zeros], '0');
+        index += leading_zeros;
+        _ = write_decimal(buf[index..], output, olength);
+        index += olength;
+
+        if (precision) |prec| {
+            let dp_written = index - dp_index;
+            if (prec > dp_written) {
+                @memset(buf[index..][0..prec - dp_written], '0');
+            }
+            index = dp_index + prec - @intFromBool(usize, prec == 0);
+        }
+    } else {
+        let dp_uoffset = @intCast(usize, dp_offset);
+        if (dp_uoffset >= olength) {
+            // 123456000
+            _ = write_decimal(buf[index..], output, olength);
+            index += olength;
+            @memset(buf[index..][0..dp_uoffset - olength], '0');
+            index += dp_uoffset - olength;
+
+            if (precision) |prec| {
+                if (prec != 0) {
+                    buf[index] = '.';
+                    index += 1;
+                    @memset(buf[index..][0..prec], '0');
+                    index += prec;
+                }
+            }
+        } else {
+            // 12345.6789
+            output = write_decimal(buf[index + dp_uoffset + 1..], output, olength - dp_uoffset);
+            buf[index + dp_uoffset] = '.';
+            let dp_index = index + dp_uoffset + 1;
+            _ = write_decimal(buf[index..], output, dp_uoffset);
+            index += olength + 1;
+
+            if (precision) |prec| {
+                let dp_written = olength - dp_uoffset;
+                if (prec > dp_written) {
+                    @memset(buf[index..][0..prec - dp_written], '0');
+                }
+                index = dp_index + prec - @intFromBool(usize, prec == 0);
+            }
+        }
+    }
+
+    return .of(buf[0..index]);
+};
+
+/// Renders `value` at full precision in scientific mode and expects `expected`
+@[testing] const check = fn(comptime T: type, value: T, expected: []u8): void {
+    let mut buf: [6000]mut u8 = undefined;
+    match (render(buf[..], value, .{})) {
+        .ok => |s| @expect(std.mem.eql(u8, expected, s)),
+        .err => @expect(false, "render failed"),
+    }
+};
+
+/// Renders `value` with `options` and expects `expected`
+@[testing] const check_render = fn(value: auto, options: Options, expected: []u8): void {
+    let mut buf: [6000]mut u8 = undefined;
+    match (render(buf[..], value, options)) {
+        .ok => |s| @expect(std.mem.eql(u8, expected, s)),
+        .err => @expect(false, "render failed"),
+    }
+};
+
+/// Formats `value` with `format` and expects `expected`
+@[testing] const check_fmt = fn(value: auto, spec: std.fmt.Spec, expected: []u8): void {
+    let mut backing: [128]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
+    match (format(&mut stream, value, spec)) {
+        .ok => @expect(std.mem.eql(u8, expected, backing[..stream.pos])),
+        .err => @expect(false, "format failed"),
+    }
+};
+
+/// Formats `value` with `format` and expects it to fail with `expected`
+@[testing] const check_fmt_err = fn(value: auto, spec: std.fmt.Spec, expected: Error): void {
+    let mut backing: [128]mut u8 = undefined;
+    let mut stream: std.io.FixedBufferStream = .{ .buf = backing };
+    match (format(&mut stream, value, spec)) {
+        .ok => @expect(false, "format succeeded"),
+        .err => |e| @expect(e == expected),
+    }
+};
+
+test "render f32" {
+    check(f32, 0.0, "0e0");
+    check(f32, -0.0, "-0e0");
+    check(f32, 1.0, "1e0");
+    check(f32, -1.0, "-1e0");
+    check(f32, std.math.nan(f32), "nan");
+    check(f32, std.math.inf(f32), "inf");
+    check(f32, -std.math.inf(f32), "-inf");
+    check(f32, 1.1754944e-38, "1.1754944e-38");
+    check(f32, @bitCast(f32, 0x7f7fffffu32), "3.4028235e38");
+    check(f32, @bitCast(f32, 1u32), "1e-45");
+    check(f32, 3.355445E7, "3.355445e7");
+    check(f32, 8.999999e9, "9e9");
+    check(f32, 3.4366717e10, "3.436672e10");
+    check(f32, 3.0540412e5, "3.0540412e5");
+    check(f32, 8.0990312e3, "8.0990312e3");
+    check(f32, 2.4414062e-4, "2.4414062e-4");
+    check(f32, 2.4414062e-3, "2.4414062e-3");
+    check(f32, 4.3945312e-3, "4.3945312e-3");
+    check(f32, 6.3476562e-3, "6.3476562e-3");
+    check(f32, 4.7223665e21, "4.7223665e21");
+    check(f32, 8388608.0, "8.388608e6");
+    check(f32, 1.6777216e7, "1.6777216e7");
+    check(f32, 3.3554436e7, "3.3554436e7");
+    check(f32, 6.7131496e7, "6.7131496e7");
+    check(f32, 1.9310392e-38, "1.9310392e-38");
+    check(f32, -2.47e-43, "-2.47e-43");
+    check(f32, 1.993244e-38, "1.993244e-38");
+    check(f32, 4103.9003, "4.1039004e3");
+    check(f32, 5.3399997e9, "5.3399997e9");
+    check(f32, 6.0898e-39, "6.0898e-39");
+    check(f32, 0.0010310042, "1.0310042e-3");
+    check(f32, 2.8823261e17, "2.882326e17");
+    check(f32, 7.038531e-26, "7.038531e-26");
+    check(f32, 9.2234038e17, "9.223404e17");
+    check(f32, 6.7108872e7, "6.710887e7");
+    check(f32, 1.0e-44, "1e-44");
+    check(f32, 2.816025e14, "2.816025e14");
+    check(f32, 9.223372e18, "9.223372e18");
+    check(f32, 1.5846085e29, "1.5846086e29");
+    check(f32, 1.1811161e19, "1.1811161e19");
+    check(f32, 5.368709e18, "5.368709e18");
+    check(f32, 4.6143165e18, "4.6143166e18");
+    check(f32, 0.007812537, "7.812537e-3");
+    check(f32, 1.4e-45, "1e-45");
+    check(f32, 1.18697724e20, "1.18697725e20");
+    check(f32, 1.00014165e-36, "1.00014165e-36");
+    check(f32, 200.0, "2e2");
+    check(f32, 3.3554432e7, "3.3554432e7");
+
+    check(f32, 1.2, "1.2e0");
+    check(f32, 1.23, "1.23e0");
+    check(f32, 1.234, "1.234e0");
+    check(f32, 1.2345, "1.2345e0");
+    check(f32, 1.23456, "1.23456e0");
+    check(f32, 1.234567, "1.234567e0");
+    check(f32, 1.2345678, "1.2345678e0");
+    check(f32, 1.23456735e-36, "1.23456735e-36");
+}
+
+test "render f64" {
+    check(f64, 0.0, "0e0");
+    check(f64, -0.0, "-0e0");
+    check(f64, 1.0, "1e0");
+    check(f64, -1.0, "-1e0");
+    check(f64, std.math.nan(f64), "nan");
+    check(f64, std.math.inf(f64), "inf");
+    check(f64, -std.math.inf(f64), "-inf");
+    check(f64, 2.2250738585072014e-308, "2.2250738585072014e-308");
+    check(f64, @bitCast(f64, 0x7fefffffffffffffu64), "1.7976931348623157e308");
+    check(f64, @bitCast(f64, 1u64), "5e-324");
+    check(f64, 2.98023223876953125e-8, "2.9802322387695312e-8");
+    check(f64, -2.109808898695963e16, "-2.109808898695963e16");
+    check(f64, 4.940656e-318, "4.940656e-318");
+    check(f64, 1.18575755e-316, "1.18575755e-316");
+    check(f64, 2.989102097996e-312, "2.989102097996e-312");
+    check(f64, 9.0608011534336e15, "9.0608011534336e15");
+    check(f64, 4.708356024711512e18, "4.708356024711512e18");
+    check(f64, 9.409340012568248e18, "9.409340012568248e18");
+    check(f64, @bitCast(f64, 0x4830f0cf064dd592u64), "5.764607523034235e39");
+    check(f64, @bitCast(f64, 0x4840f0cf064dd592u64), "1.152921504606847e40");
+    check(f64, @bitCast(f64, 0x4850f0cf064dd592u64), "2.305843009213694e40");
+
+    check(f64, 1.2, "1.2e0");
+    check(f64, 1.23, "1.23e0");
+    check(f64, 1.234, "1.234e0");
+    check(f64, 1.2345, "1.2345e0");
+    check(f64, 1.23456, "1.23456e0");
+    check(f64, 1.234567, "1.234567e0");
+    check(f64, 1.2345678, "1.2345678e0");
+    check(f64, 1.23456789, "1.23456789e0");
+    check(f64, 1.234567895, "1.234567895e0");
+    check(f64, 1.2345678901, "1.2345678901e0");
+    check(f64, 1.23456789012, "1.23456789012e0");
+    check(f64, 1.234567890123, "1.234567890123e0");
+    check(f64, 1.2345678901234, "1.2345678901234e0");
+    check(f64, 1.23456789012345, "1.23456789012345e0");
+    check(f64, 1.234567890123456, "1.234567890123456e0");
+    check(f64, 1.2345678901234567, "1.2345678901234567e0");
+
+    check(f64, 4.294967294, "4.294967294e0");
+    check(f64, 4.294967295, "4.294967295e0");
+    check(f64, 4.294967296, "4.294967296e0");
+    check(f64, 4.294967297, "4.294967297e0");
+    check(f64, 4.294967298, "4.294967298e0");
+}
+
+test "render f80" {
+    check(f80, 0.0, "0e0");
+    check(f80, -0.0, "-0e0");
+    check(f80, 1.0, "1e0");
+    check(f80, -1.0, "-1e0");
+    check(f80, std.math.nan(f80), "nan");
+    check(f80, std.math.inf(f80), "inf");
+    check(f80, -std.math.inf(f80), "-inf");
+
+    check(f80, 2.2250738585072014e-308, "2.2250738585072014e-308");
+    check(f80, 2.98023223876953125e-8, "2.98023223876953125e-8");
+    check(f80, -2.109808898695963e16, "-2.109808898695963e16");
+    check(f80, 4.940656e-318, "4.940656e-318");
+    check(f80, 1.18575755e-316, "1.18575755e-316");
+    check(f80, 2.989102097996e-312, "2.989102097996e-312");
+    check(f80, 9.0608011534336e15, "9.0608011534336e15");
+    check(f80, 4.708356024711512e18, "4.708356024711512e18");
+    check(f80, 9.409340012568248e18, "9.409340012568248e18");
+    check(f80, 1.2345678, "1.2345678e0");
+}
+
+test "render f128" {
+    check(f128, 0.0, "0e0");
+    check(f128, -0.0, "-0e0");
+    check(f128, 1.0, "1e0");
+    check(f128, -1.0, "-1e0");
+    check(f128, std.math.nan(f128), "nan");
+    check(f128, std.math.inf(f128), "inf");
+    check(f128, -std.math.inf(f128), "-inf");
+
+    check(f128, 2.2250738585072014e-308, "2.2250738585072014e-308");
+    check(f128, 2.98023223876953125e-8, "2.98023223876953125e-8");
+    check(f128, -2.109808898695963e16, "-2.109808898695963e16");
+    check(f128, 4.940656e-318, "4.940656e-318");
+    check(f128, 1.18575755e-316, "1.18575755e-316");
+    check(f128, 2.989102097996e-312, "2.989102097996e-312");
+    check(f128, 9.0608011534336e15, "9.0608011534336e15");
+    check(f128, 4.708356024711512e18, "4.708356024711512e18");
+    check(f128, 9.409340012568248e18, "9.409340012568248e18");
+    check(f128, 1.2345678, "1.2345678e0");
+}
+
+test "render f16" {
+    check(f16, 0.0, "0e0");
+    check(f16, 1.0, "1e0");
+    check(f16, -1.5, "-1.5e0");
+    check(f16, 65504.0, "6.55e4");
+    check(f16, std.math.inf(f16), "inf");
+}
+
+test "render decimal mode" {
+    check_render(1.5f64, .{ .mode = .decimal }, "1.5");
+    check_render(-0.0f64, .{ .mode = .decimal }, "-0");
+    check_render(100.0f64, .{ .mode = .decimal }, "100");
+    check_render(0.000123f64, .{ .mode = .decimal }, "0.000123");
+    check_render(123456.789f64, .{ .mode = .decimal }, "123456.789");
+    check_render(1e21f64, .{ .mode = .decimal }, "1000000000000000000000");
+    check_render(std.math.nan(f64), .{ .mode = .decimal }, "nan");
+}
+
+test "render with precision" {
+    check_render(3.14159f64, .{ .mode = .decimal, .precision = .of(2) }, "3.14");
+    check_render(2.5f64, .{ .mode = .decimal, .precision = .of(0) }, "3");
+    check_render(1.0f64, .{ .mode = .decimal, .precision = .of(3) }, "1.000");
+    check_render(9.999f64, .{ .mode = .decimal, .precision = .of(2) }, "10.00");
+    check_render(0.001234f64, .{ .mode = .decimal, .precision = .of(5) }, "0.00123");
+    check_render(1234.5f64, .{ .mode = .scientific, .precision = .of(2) }, "1.23e3");
+    check_render(1.0f64, .{ .mode = .scientific, .precision = .of(2) }, "1.00e0");
+    check_render(5.0f64, .{ .mode = .scientific, .precision = .of(0) }, "5e0");
+}
+
+test "render comptime_float" {
+    check_render(0.1, .{}, "1e-1");
+    check_render(0.1, .{ .mode = .decimal }, "0.1");
+}
+
+test "render fails on a small decimal buffer" {
+    let mut buf: [MIN_BUFFER_SIZE]mut u8 = undefined;
+    @expect(render(buf[..], 1e300f64, .{ .mode = .decimal }) == .err);
+    @expect(render(buf[..], 1e300f64, .{}) == .ok);
+}
+
+test "format float to decimal with zero precision" {
+    check_fmt(5.0f64, .{ .precision = .of(0) }, "5");
+    check_fmt(6.0f64, .{ .precision = .of(0) }, "6");
+    check_fmt(7.0f64, .{ .precision = .of(0) }, "7");
+    check_fmt(8.0f64, .{ .precision = .of(0) }, "8");
+}
+
+test "format kinds" {
+    check_fmt(1.5f64, .{}, "1.5");
+    check_fmt(1.5f64, .{ .kind = .of(.d) }, "1.5");
+    check_fmt(1.5f64, .{ .kind = .of(.f) }, "1.5");
+    check_fmt(1.5f64, .{ .kind = .of(.@"?") }, "1.5");
+    check_fmt(1500.0f32, .{ .kind = .of(.e) }, "1.5e3");
+    check_fmt(1.25f64, .{ .kind = .of(.f), .precision = .of(1) }, "1.3");
+}
+
+test "format sign, width, and zero padding" {
+    check_fmt(1.5f64, .{ .plus = true }, "+1.5");
+    check_fmt(-1.5f64, .{ .plus = true }, "-1.5");
+    check_fmt(1.5f64, .{ .width = .of(6) }, "   1.5");
+    check_fmt(1.5f64, .{ .width = .of(6), .align = .of(.left) }, "1.5   ");
+    check_fmt(1.5f64, .{ .width = .of(7), .fill = '*', .align = .of(.center) }, "**1.5**");
+    check_fmt(-1.5f64, .{ .width = .of(7), .zero = true }, "-0001.5");
+    check_fmt(1.5f64, .{ .width = .of(7), .zero = true, .plus = true }, "+0001.5");
+    check_fmt(1.5f64, .{ .width = .of(2) }, "1.5");
+}
+
+test "format nan and inf ignore zero padding" {
+    check_fmt(std.math.nan(f64), .{ .width = .of(5), .zero = true }, "  nan");
+    check_fmt(std.math.nan(f64), .{ .plus = true }, "nan");
+    check_fmt(std.math.inf(f64), .{ .plus = true }, "+inf");
+    check_fmt(std.math.inf(f64), .{ .width = .of(6), .zero = true, .plus = true }, "  +inf");
+    check_fmt(-std.math.inf(f64), .{ .width = .of(6) }, "  -inf");
+}
+
+test "format rejects non-float kinds" {
+    check_fmt_err(1.0f64, .{ .kind = .of(.x) }, .bad_spec);
+    check_fmt_err(1.0f64, .{ .kind = .of(.s) }, .bad_spec);
+    check_fmt_err(1.0f64, .{ .kind = .of(.c) }, .bad_spec);
+}
+
+test "format fails when precision overflows the buffer" {
+    check_fmt_err(1.0f32, .{ .precision = .of(500) }, .overflow);
+}

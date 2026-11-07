@@ -456,6 +456,25 @@ TEST_CASE("formatter breaks a wide value if/else-if chain one arm per line") {
           "const d = if (a) 1 else if (b) 2 else 3;\n");
 }
 
+TEST_CASE("formatter moves a wide if arm under its head before splitting the arm") {
+    const auto out{format_source(
+        "const d = if (precision + olength > min_exp) precision + olength - min_exp else 0;", 60)};
+    CHECK(out == R"(const d = if (precision + olength > min_exp)
+    precision + olength - min_exp
+    else 0;
+)");
+
+    // The arm still splits once it is too wide on its own line
+    const auto split{format_source(
+        "const d = if (c) aaaaaaaaaaaaaaaa + bbbbbbbbbbbbbbbb + cccccccccccccccc else 0;", 40)};
+    CHECK(split == R"(const d = if (c)
+    aaaaaaaaaaaaaaaa +
+        bbbbbbbbbbbbbbbb +
+        cccccccccccccccc
+    else 0;
+)");
+}
+
 TEST_CASE("formatter keeps a trailing comment on an interior if-chain arm") {
     constexpr std::string_view source{R"(const f = fn(): i32 {
     let d = if (aaaaaaaaaaaaaaaaaaaa) 1
@@ -711,6 +730,32 @@ const b = 2;
     a();
 
     b();
+};
+)");
+}
+
+TEST_CASE("formatter preserves a single blank line between aggregate members") {
+    constexpr std::string_view source{R"(const S = struct {
+    pub x: u32,
+
+    const T = u64;
+    const mul = mul64;
+
+    const bound = 21;
+
+    const compute = fn(i: u32): u64 {
+        return i;
+    };
+};
+)"};
+    CHECK(format_source(source) == source);
+
+    CHECK(format_source("const S = struct {\n    const a = 1;\n\n\n    const b = 2;\n    const c = "
+                        "3;\n};") == R"(const S = struct {
+    const a = 1;
+
+    const b = 2;
+    const c = 3;
 };
 )");
 }

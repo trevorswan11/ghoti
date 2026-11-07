@@ -73,6 +73,9 @@ class const_eval {
     // of that name; `none` when `dest` has no such member
     [[nodiscard]] auto coerce_enum_literal(const const_value& literal, sema::type& dest)
         -> stdx::option<const_value>;
+    // A folded enum value as an `A || B` merge built from its type, which keeps the tag's name;
+    // any other value is returned as is
+    [[nodiscard]] auto widen_enum_const(const_value value, sema::type& declared) -> const_value;
 
     // The struct/union/enum whose member body is currently being evaluated
     auto set_enclosing_type(stdx::option<sema::type&> type) noexcept -> void {
@@ -209,9 +212,16 @@ class const_eval {
         -> stdx::option<const_value>;
 
     /// Simulates the execution of preceding statements across active lexical blocks
-    /// up to each frame's `current_stmt_idx` for `comptime let mut` observability
+    /// up to each frame's `current_stmt_idx` for `comptime let mut` observability.
+    /// Reports how the innermost block's statements left it early, if they did
     auto simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
-                                sema::comptime_frame&                     out_frame) -> void;
+                                sema::comptime_frame&                     out_frame)
+        -> stdx::option<sema::simulated_exit>;
+
+    // The resolver's typing scope, which keys the per-iteration typing of unrolled loops
+    auto set_typing_scope_prefix(std::string_view prefix) -> void {
+        typing_scope_prefix_ = std::string{prefix};
+    }
 
     [[nodiscard]] auto is_comptime_context() const noexcept -> bool {
         return recursion_depth_ > 0 || comptime_context_;
@@ -545,16 +555,21 @@ class const_eval {
                              const ast::assignment_expr& assign,
                              syntax::token_type_t        op) -> void;
     auto simulate_if(const ast::if_expr& if_expr) -> void;
-    auto simulate_while(const ast::while_loop_expr& loop) -> void;
+    auto simulate_while(ast::node_id id, const ast::while_loop_expr& loop) -> void;
     auto simulate_do_while(const ast::do_while_loop_expr& loop) -> void;
     auto simulate_infinite_loop(const ast::infinite_loop_expr& loop) -> void;
     auto simulate_for(const ast::for_loop_expr& loop) -> void;
+
+    // The typing the resolver recorded for iteration `k` of the `unroll while` at `id`, if any
+    auto unrolled_while_iteration_diff(ast::node_id id, usize k)
+        -> stdx::option<const sema::body_type_diff&>;
     auto simulate_block(const ast::block_stmt& block) -> void;
     auto simulate_label(const ast::label_expr& label) -> void;
 
   private:
     // Names of mutable `comptime let mut` bindings currently in scope during simulation.
     ankerl::unordered_dense::set<std::string_view> active_cx_vars_;
+    std::string                                    typing_scope_prefix_{};
     usize                                          max_recursion_depth_{256};
     std::vector<usize>                             recursion_limit_stack_;
     sema::context&                                 ctx_;

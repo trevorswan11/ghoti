@@ -835,6 +835,11 @@ auto symbol_collector::visit(ast::node_id id, const ast::impl_stmt& impl) -> voi
 
     if (impl.interface_type) { collect(*impl.interface_type); }
     collect(impl.target_type);
+
+    // Like an aggregate body, an impl's members are reached through its type, so a method may
+    // share a name with a declaration in an enclosing scope
+    aggregate_table_stack_.emplace_back(new_idx, std::string_view{});
+    const auto agg_cleanup{gsl::finally([this] { aggregate_table_stack_.pop_back(); })};
     for (const auto& member : impl.members) { collect(*member); }
 
     last_type_.emplace(ctx_.pool[{type_kind::BLOCK, types::mut::CONSTANT, new_idx}]);

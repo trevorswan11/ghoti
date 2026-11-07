@@ -27,6 +27,19 @@ TEST_CASE("An untyped integer bound to `auto` stays comptime_int") {
     )") == 5);
 }
 
+TEST_CASE("`@as` of a comptime_float bound to a parameter keeps its full precision") {
+    CHECK(helpers::compile_and_run(R"(
+        const widen = fn(x: auto): f128 { return @as(f128, x); };
+        const widen_ct = fn(comptime x: comptime_float): f128 { return @as(f128, x); };
+        const exact = @bitCast(u128, 0.1f128);
+        pub const main = fn(): i32 {
+            let a = @bitCast(u128, widen(0.1)) == exact;
+            let b = @bitCast(u128, widen_ct(0.1)) == exact;
+            return @intFromBool(i32, a) + @intFromBool(i32, b) * 2;
+        };
+    )") == 3);
+}
+
 TEST_CASE("An `auto` parameter read at compile time keeps a comptime_int argument") {
     CHECK(helpers::compile_and_run(R"(
         const bits = fn(x: auto): @TypeOf(x) {

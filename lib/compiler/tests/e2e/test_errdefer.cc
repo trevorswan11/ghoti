@@ -325,4 +325,28 @@ TEST_CASE("A returned failure runs only the errdefers still in scope") {
     )") == 0);
 }
 
+TEST_CASE("A return inside a function literal runs none of the enclosing function's defers") {
+    CHECK(helpers::compile_and_run(std::string{RESULT_PRELUDE} + R"(
+        const R = Result(i32, u8);
+        const apply = fn(f: impl Fn(x: i32): i32, v: i32): i32 {
+            return f(v);
+        };
+        const work = fn(log: ^mut i32): R {
+            defer *log += 1;
+            errdefer *log += 100;
+            const doubled = apply(fn(x: i32): i32 {
+                if (x > 100) { return 0; }
+                return x * 2;
+            }, 20);
+            if (doubled != 40) { return R{ .err = 1 }; }
+            return R{ .ok = doubled };
+        };
+        pub const main = fn(): i32 {
+            let mut log: i32 = 0;
+            const r = work(^mut log);
+            return if (r == .ok and log == 1) 0 else 1;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

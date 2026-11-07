@@ -23,22 +23,35 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
     std::vector<usize> folded_node_idxs, folded_explicit_idxs;
     {
         gir::const_eval folder{ctx, m};
-        const auto      fold{[&](auto& slots, std::vector<usize>& folded_idxs) {
-            for (usize i{0}; i < slots.size(); ++i) {
-                auto& slot{slots[i]};
-                if (!slot || !slot->get_data().template as_opt<types::deferred_array>()) {
-                    continue;
-                }
-                const gsl::not_null<type*> original{slot.get()};
-                if (auto& forced{folder.force_deferred_array(*slot)}; &forced != original) {
-                    folded.emplace_back(&slot, original);
-                    folded_idxs.emplace_back(i);
-                    slot.emplace(forced);
-                }
+        const auto      fold_slot{[&](auto& slots, usize i, std::vector<usize>& folded_idxs) {
+            if (i >= slots.size()) { return; }
+            auto& slot{slots[i]};
+            if (!slot || !slot->get_data().template as_opt<types::deferred_array>()) { return; }
+            const gsl::not_null<type*> original{slot.get()};
+            if (auto& forced{folder.force_deferred_array(*slot)}; &forced != original) {
+                folded.emplace_back(&slot, original);
+                folded_idxs.emplace_back(i);
+                slot.emplace(forced);
             }
         }};
-        fold(m.sema_side_tables.node_types.values, folded_node_idxs);
-        fold(m.sema_side_tables.explicit_types.values, folded_explicit_idxs);
+
+        // Only what this instantiation wrote folds under its bindings
+        const auto fold{[&](auto&                                   slots,
+                            stdx::option<const std::vector<usize>&> written,
+                            std::vector<usize>&                     folded_idxs) {
+            if (written) {
+                for (const auto i : *written) { fold_slot(slots, i, folded_idxs); }
+                return;
+            }
+            for (usize i{0}; i < slots.size(); ++i) { fold_slot(slots, i, folded_idxs); }
+        }};
+        fold(m.sema_side_tables.node_types.values,
+             write_log ? stdx::option<const std::vector<usize>&>{write_log->node_idxs} : stdx::none,
+             folded_node_idxs);
+        fold(m.sema_side_tables.explicit_types.values,
+             write_log ? stdx::option<const std::vector<usize>&>{write_log->explicit_idxs}
+                       : stdx::none,
+             folded_explicit_idxs);
     }
 
     if (write_log) {

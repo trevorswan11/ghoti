@@ -343,12 +343,18 @@ auto explicit_type::parse(syntax::parser& parser, bool allow_trailing_brace)
         // Indexing (`Ts[0]`) and a labeled block (`blk: { ... }`) compute the type
         const bool computed{parser.peek_token_is(syntax::token_type_t::LBRACKET) ||
                             starts_labeled_block(parser)};
-        // Manually dispatch to prevent weird consumption
+        // Manually dispatch to prevent weird consumption. `A || B` merges enums into a type
         if (computed || parser.peek_token_is(syntax::token_type_t::DOT) ||
-            parser.peek_token_is(syntax::token_type_t::LPAREN)) {
+            parser.peek_token_is(syntax::token_type_t::LPAREN) ||
+            parser.peek_token_is(syntax::token_type_t::PIPE_PIPE)) {
             const syntax::parser::type_expression_scope type_scope{parser};
             const syntax::parser::compile_time_scope    cx_scope{parser, computed};
-            const auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+            auto parsed{TRY(parser.parse_expression(syntax::bind_precedence::TYPE))};
+            // `A || B` binds looser than a type expression, so its chain is read here
+            while (parser.peek_token_is(syntax::token_type_t::PIPE_PIPE)) {
+                parser.advance();
+                parsed = TRY(binary_expr::parse(parser, parsed));
+            }
             if (parsed.is<dot_expr>()) {
                 return parser.add_type<dot_expr>(
                     modifier_token, modifier, parser.get_node<dot_expr>(*parsed));

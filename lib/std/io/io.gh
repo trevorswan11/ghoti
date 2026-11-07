@@ -4,9 +4,13 @@ import "reader.gh" as reader;
 import "writer.gh" as writer;
 import "seeker.gh" as seeker;
 import "fixed_buffer.gh" as fixed_buffer;
+import "buffered.gh" as buffered;
+import "counting.gh" as counting;
 
 test {
     import "fixed_buffer.gh";
+    import "buffered.gh";
+    import "counting.gh";
 }
 
 pub const Error = error.Error;
@@ -15,6 +19,8 @@ pub const Writer = writer.Writer;
 pub const Seeker = seeker.Seeker;
 pub const Whence = seeker.Whence;
 pub const FixedBufferStream = fixed_buffer.FixedBufferStream;
+pub const BufferedWriter = buffered.BufferedWriter;
+pub const CountingWriter = counting.CountingWriter;
 
 @cfg (std.os.HAS_BACKEND) {
     import "file.gh" as file;

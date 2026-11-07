@@ -46,9 +46,11 @@ auto type_resolver::resolve_pack_index(ast::node_id           id,
             error::MALFORMED_PACK_USE,
             resolving_.ast.location_of(index.index)));
     }
-    gir::const_eval evaluator{ctx_, resolving_};
-    const auto      folded{evaluator.try_eval(index.index)};
-    const auto      k{folded ? folded->as_int_opt() : stdx::none};
+    // The index may read a `comptime let mut` an enclosing unrolled loop advances
+    const comptime_frame_guard sim_guard{ctx_.comptime_binding_frames, make_simulated_frame()};
+    gir::const_eval            evaluator{ctx_, resolving_};
+    const auto                 folded{evaluator.try_eval(index.index)};
+    const auto                 k{folded ? folded->as_int_opt() : stdx::none};
     if (!k) {
         return last_type_.emplace(ctx_.poison_node(
             resolving_,

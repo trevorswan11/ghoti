@@ -215,4 +215,31 @@ TEST_CASE("A root that reaches a failed module through an import cycle is not lo
     CHECK(gir.get_functions().empty());
 }
 
+TEST_CASE("A std module analyzed as the root resolves in the order std imports it") {
+    std::stringstream errors;
+    auto              ctx{helpers::analyze(
+        "a.gh",
+        errors,
+        "pub const a: i32 = 1;\n",
+        mock_file{.path   = "std.gh",
+                  .source = "pub import \"sub.gh\" as sub;\n"
+                            "pub const total = fn(): i32 { return sub.show(sub.make()); };\n",
+                  .name   = "std"},
+        mock_file{.path   = "sub.gh",
+                  .source = "import std;\nimport \"inner.gh\" as inner;\n"
+                            "pub const Spec = inner.Spec;\n"
+                            "pub const make = fn(): Spec { return .{ .v = 2 }; };\n"
+                            "pub const show = fn(s: Spec): i32 { return s.v; };\n"},
+        mock_file{.path = "inner.gh",
+                  .source =
+                      "import std;\npub const Spec = struct { pub v: i32 };\n"
+                      "pub const twice = fn(): i32 { return std.sub.show(.{ .v = 4 }); };\n"})};
+    REQUIRE_FALSE(ctx->root_mod.is_poisoned());
+
+    DISCARD(ctx->analyzer.analyze("sub.gh"));
+    const auto sub{UNWRAP(ctx->manager.try_get_file_module("sub.gh"))};
+    CHECK_FALSE(sub->is_poisoned());
+    CHECK(errors.str().empty());
+}
+
 } // namespace ghoti::tests

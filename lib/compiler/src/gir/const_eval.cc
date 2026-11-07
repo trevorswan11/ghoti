@@ -2132,13 +2132,14 @@ auto const_eval::coerce_dyn(const const_value& val, sema::type& dest_type)
     const auto rec{ctx_.impls.lookup(*target, dyn.interface)};
     if (!rec) { return stdx::none; }
 
-    const auto vtable_sym{fmt::format("__vtable.{}", rec->body_scope_idx)};
+    const auto vtable_sym{symbol_scoping::vtable_name(*rec)};
     auto&      vtable_owner{vtable_root_ ? *vtable_root_ : *module_};
     if (std::ranges::none_of(vtable_owner.dyn_vtables,
                              [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
-            v.slots.emplace_back(scoped_symbol_name(rec->body_scope_idx, name));
+            v.slots.emplace_back(symbol_scoping_ ? symbol_scoping_->impl_method_name(*rec, name)
+                                                 : std::string{name});
         }
         vtable_owner.dyn_vtables.emplace_back(std::move(v));
     }
@@ -2637,6 +2638,30 @@ auto const_eval::eval_dot(ast::node_id id, const ast::dot_expr& dot) -> stdx::op
 
     // Cannot do anything with ptr at compile time
     return stdx::none;
+}
+
+auto const_eval::widen_enum_const(const_value value, sema::type& declared) -> const_value {
+    // An annotation's own type is the meta type naming the enum
+    auto&      dest{sema::denoted_type(declared)};
+    const auto source{value.get_type()};
+    if (!source || !sema::is_enum_widenable(*source, dest)) { return value; }
+
+    // A folded member is a `const_enum`, or just its value typed as the enum
+    std::string name;
+    if (const auto named{value.as_opt<const_enum>()}) {
+        name = named->name;
+    } else if (const auto raw{value.as_int_opt()}) {
+        const auto& en{source->get_data().as<sema::types::enum_t>()};
+        const auto  values{enum_member_values(en)};
+        for (usize i{0}; i < values.size(); ++i) {
+            if (values[i] != *raw) { continue; }
+            name = en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[i].name).name;
+            break;
+        }
+    }
+    if (name.empty()) { return value; }
+    auto widened{coerce_enum_literal(const_value{const_enum{std::move(name), 0}}, dest)};
+    return widened ? std::move(*widened) : value;
 }
 
 auto const_eval::coerce_enum_literal(const const_value& literal, sema::type& dest)
@@ -3588,24 +3613,10 @@ auto const_eval::match_structure(ast::node_id                  pattern,
         return next;
     }};
 
-    // A string, or an array of its bytes, can stand in for a slice
-    const auto bytes_of{[](const const_value& value) -> stdx::option<std::string> {
-        if (const auto text{value.as_opt<std::string>()}) { return *text; }
-        const auto arr{value.as_opt<const_array>()};
-        if (!arr) { return stdx::none; }
-        std::string out;
-        out.reserve(arr->elements.size());
-        for (const auto& element : arr->elements) {
-            const auto byte{element.as_int_opt()};
-            if (!byte) { return stdx::none; }
-            out.push_back(static_cast<char>(*byte));
-        }
-        return out;
-    }};
     if (module_->ast.get_as_opt<ast::string_expr>(pattern)) {
         const auto text{try_eval(pattern)};
         const auto wanted{text ? text->as_opt<std::string>() : stdx::none};
-        const auto actual{bytes_of(target)};
+        const auto actual{target.as_bytes_opt()};
         return wanted && actual && *wanted == *actual;
     }
 
@@ -3642,7 +3653,7 @@ auto const_eval::match_structure(ast::node_id                  pattern,
             }
 
             // Only a slice's length has a compile-time value to compare
-            const auto actual{bytes_of(target)};
+            const auto actual{target.as_bytes_opt()};
             if (!actual || name != "len") { return false; }
             const const_value len{static_cast<u64>(actual->size()),
                                   ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
@@ -3826,6 +3837,13 @@ auto const_eval::fold_integer_binary(syntax::token_type_t op_type,
     const auto res_type{is_shift && lhs.get_type() ? lhs.get_type()
                                                    : integer_result_type(lhs, rhs)};
     const auto width{res_type ? integer_target_width(*res_type, ptr_bits) : stdx::none};
+
+    // A comparison reads both values exactly, as no shared 128-bit view holds `-1` and `2^128 - 1`
+    if (const auto l{lhs.as_big_int_opt()}, r{rhs.as_big_int_opt()}; l && r) {
+        if (const auto cmp{compare_big_int(op_type, *l, *r)}) {
+            return const_value{*cmp, bool_type};
+        }
+    }
 
     // Past 128 bits, in an operand or the result's type, only exact arithmetic holds the value
     const bool wide{lhs.is<big_int>() || rhs.is<big_int>() || (width && width->first > 128)};
@@ -4268,6 +4286,14 @@ auto const_eval::eval_binary(ast::node_id id, const ast::binary_expr& binary)
         return eval_vector_binary(id, binary, *result);
     }
 
+    // `A || B` is the merged enum sema built
+    if (op_type == syntax::token_type_t::PIPE_PIPE) {
+        const auto result{module_->get_sema_type_opt(id)};
+        const auto meta{result ? result->get_data().as_opt<sema::types::meta_type>() : stdx::none};
+        if (!meta) { return stdx::none; }
+        return const_value{meta->instance};
+    }
+
     // Short-circuit logical operators
     if (op_type == syntax::token_type_t::BOOLEAN_AND) {
         const auto lhs{try_eval(binary.lhs)};
@@ -4381,10 +4407,10 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
         // A value past 128 bits has no narrow view and takes the exact path below
         const auto narrow{val->as_int_opt()};
 
-        // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
-        // exact path below negates it first and range-checks the result
-        const bool in_range{narrow &&
-                            sema::comptime_int_fits(*narrow, *type, target_pointer_bits())};
+        // Read exactly, since the `2^127` of `-2^127` would otherwise view as `i128` min
+        const auto exact{val->as_big_int_opt()};
+        const bool in_range{narrow && exact &&
+                            sema::comptime_int_fits(*exact, *type, target_pointer_bits())};
         if (unary_op && width && width->first <= 128 && in_range) {
             const semantics::int_domain domain{width->first, width->second};
             const auto                  folded{
@@ -5165,9 +5191,9 @@ auto const_eval::fold_math(syntax::builtin_t             builtin_type,
     switch (builtin_type) {
     case syntax::builtin_t::ABS: {
         if (auto folded{fold_int_builtin_unary(id, builtin_type, *arg)}) { return folded; }
-        if (arg->is<i64>()) {
-            const auto v{arg->as<i64>()};
-            return const_value{v < 0 ? -v : v, arg->get_type()};
+        // A `comptime_int` takes its exact magnitude, however wide
+        if (const auto exact{arg->as_big_int_opt()}) {
+            return const_value::from_big_int(exact->abs(), arg->get_type());
         }
         if (const auto f{arg->as_opt<f128>()}) { return const_value{f->abs(), arg->get_type()}; }
         return arg;
@@ -6503,12 +6529,12 @@ auto const_eval::eval_decl_value(const ast::decl_stmt& decl) -> stdx::option<con
                                        : stdx::none};
             if (bound && *bound) {
                 if (expand_undefined) { return undefined_value_of(**bound); }
-                return with_declared_type(std::move(*value), **bound);
+                return with_declared_type(widen_enum_const(std::move(*value), **bound), **bound);
             }
         }
         if (const auto declared{module_->get_sema_type_opt(*decl.explicit_type)}) {
             if (expand_undefined) { return undefined_value_of(*declared); }
-            return with_declared_type(std::move(*value), *declared);
+            return with_declared_type(widen_enum_const(std::move(*value), *declared), *declared);
         }
     }
     return value;
@@ -7304,8 +7330,9 @@ auto const_eval::eval_for(ast::node_id, const ast::for_loop_expr& loop)
 }
 
 auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame> blocks,
-                                        sema::comptime_frame& out_frame) -> void {
-    if (blocks.empty()) { return; }
+                                        sema::comptime_frame&                     out_frame)
+    -> stdx::option<sema::simulated_exit> {
+    if (blocks.empty()) { return stdx::none; }
     const comptime_context_guard g{*this, true};
 
     // Fast pre-scan: if none of the active blocks contain a `comptime let mut` declaration,
@@ -7325,7 +7352,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
         if (!frame.block) { continue; }
         for (const auto& s : frame.block->statements) { scan_decl(s); }
     }
-    if (active_cx_vars_.empty()) { return; }
+    if (active_cx_vars_.empty()) { return stdx::none; }
 
     // Ensure a call frame exists on `call_stack_` to host local bindings during simulation.
     bool pushed_frame{false};
@@ -7346,8 +7373,10 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
 
     // Sequentially simulate preceding statements in each active block from outermost to innermost,
     // stopping strictly before `current_stmt_idx` in each frame.
+    stdx::option<sema::simulated_exit> exit;
     for (const auto& frame : blocks) {
         if (!frame.block) { continue; }
+        exit = stdx::none;
         if (frame.carried) {
             for (const auto& [k, v] : *frame.carried) {
                 call_stack_.back().bindings.insert_or_assign(k, v);
@@ -7357,9 +7386,14 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
             simulate_stmt(frame.block->statements[i]);
             if (cond_unknown_) {
                 out_frame.clear();
-                return;
+                return stdx::none;
             }
             if (current_signal_.kind) {
+                switch (*current_signal_.kind) {
+                case eval_signal_kind::CONTINUE: exit = sema::simulated_exit::CONTINUE; break;
+                case eval_signal_kind::RETURN:   exit = sema::simulated_exit::RETURN; break;
+                default:                         exit = sema::simulated_exit::BREAK; break;
+                }
                 current_signal_ = eval_signal{};
                 break;
             }
@@ -7374,6 +7408,7 @@ auto const_eval::simulate_active_blocks(gsl::span<const sema::active_block_frame
             if (!ref_into_frames(v, 0)) { out_frame.insert_or_assign(k, v); }
         }
     }
+    return exit;
 }
 
 auto const_eval::simulate_stmt(const ast::stmt_handle& stmt) -> void {
@@ -7449,7 +7484,7 @@ auto const_eval::simulate_expr(ast::node_id id) -> void {
     } else if (const auto if_expr = module_->ast.get_as_opt<ast::if_expr>(id)) {
         simulate_if(*if_expr);
     } else if (const auto while_loop = module_->ast.get_as_opt<ast::while_loop_expr>(id)) {
-        simulate_while(*while_loop);
+        simulate_while(id, *while_loop);
     } else if (const auto do_while = module_->ast.get_as_opt<ast::do_while_loop_expr>(id)) {
         simulate_do_while(*do_while);
     } else if (const auto infinite_loop = module_->ast.get_as_opt<ast::infinite_loop_expr>(id)) {
@@ -7639,7 +7674,16 @@ auto const_eval::simulate_if(const ast::if_expr& if_expr) -> void {
     }
 }
 
-auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
+auto const_eval::unrolled_while_iteration_diff(ast::node_id id, usize k)
+    -> stdx::option<const sema::body_type_diff&> {
+    return ctx_.instantiation_cache.get_body_type_diff(
+        fmt::format("{}whileloop#{}#{}",
+                    typing_scope_prefix_.empty() ? std::string{} : typing_scope_prefix_ + "#",
+                    id.get_index(),
+                    k));
+}
+
+auto const_eval::simulate_while(ast::node_id id, const ast::while_loop_expr& loop) -> void {
     const auto own_label{std::exchange(pending_loop_label_, stdx::none)};
     usize      iterations{0};
     while (!exceeded_unroll_limit(iterations)) {
@@ -7650,7 +7694,16 @@ auto const_eval::simulate_while(const ast::while_loop_expr& loop) -> void {
             return;
         }
 
+        // A body typed once per iteration folds its calls with that iteration's instances
+        const auto diff{loop.is_unrolled ? unrolled_while_iteration_diff(id, iterations - 1)
+                                         : stdx::none};
+        stdx::option<mod::body_diff_guard> diff_guard;
+        if (diff) {
+            clear_memo();
+            diff_guard.emplace(*module_, diff);
+        }
         simulate_stmt(loop.block);
+        diff_guard.reset();
         if (consume_loop_signal(own_label) != loop_step::NEXT) { return; }
         if (loop.continuation) {
             simulate_expr(*loop.continuation);

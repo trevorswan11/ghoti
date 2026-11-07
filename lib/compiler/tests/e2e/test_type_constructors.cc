@@ -88,6 +88,37 @@ TEST_CASE("A later parameter's type is a type-constructor call over an earlier p
     )") == 9);
 }
 
+TEST_CASE("A type-constructor return type may name a member of a `comptime type` parameter") {
+    CHECK(helpers::compile_and_run(R"(
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
+        const Backend = struct {
+            const T = i32;
+            const bias = 2;
+        };
+
+        const make = fn(comptime B: type, x: B.T): Box(B.T) {
+            return .{ .val = x + B.bias };
+        };
+
+        pub const main = fn(): i32 {
+            let boxed = make(Backend, 7);
+            if (@TypeOf(boxed.val) != i32) { return 0; }
+            return boxed.val;
+        };
+    )") == 9);
+
+    helpers::expect_compile_error(R"(
+        const Box = fn(comptime T: type): type { return struct { val: T }; };
+        const Backend = struct { const bias = 2; };
+        const make = fn(comptime B: type): Box(B.bias) { return undefined; };
+
+        pub const main = fn(): i32 {
+            _ = make(Backend);
+            return 0;
+        };
+    )");
+}
+
 TEST_CASE("The return type may also be a type-constructor call over an earlier parameter") {
     CHECK(helpers::compile_and_run(R"(
         const Box = fn(comptime T: type): type { return struct { val: T }; };

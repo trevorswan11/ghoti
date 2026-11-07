@@ -1,15 +1,14 @@
 import std;
 
-pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
+// `std.fmt.Error` is `std.io.Error || enum { ... }`, so every io failure below `?`s into it as is
+pub const main = fn(args: [][:0]u8): std.Result(i32, std.fmt.Error) {
     if (args.len <= 1) {
         std.io.eprintln("Expected at least 1 arg")!;
         return .of(1);
     }
 
     // This will print the error name on failure from a ? propagation
-    errdefer |e| {
-        std.io.eprintln(@tagName(e))!;
-    }
+    errdefer |e| std.io.eprintln("{}", e)!;
 
     let mut file: std.io.File = .open(args[1], .{})?;
     defer file.close();
@@ -20,7 +19,7 @@ pub const main = fn(args: [][:0]u8): std.Result(i32, std.io.Error) {
         if (n == 0) {
             break;
         } else {
-            std.io.println(buf[0..n])?;
+            std.io.print("{}", buf[0..n])?;
         }
     }
 

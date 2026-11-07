@@ -167,6 +167,9 @@ class const_value {
 
     [[nodiscard]] constexpr auto is_poison() const noexcept -> bool { return is<poison_val>(); }
 
+    // The bytes of a string, or of an array of integers, which can stand in for a slice
+    [[nodiscard]] auto as_bytes_opt() const -> stdx::option<std::string>;
+
     // Signed view of any integer-like arm, widened to the 128-bit comptime domain
     [[nodiscard]] constexpr auto as_int_opt() const noexcept -> stdx::option<i128> {
         if (is<i64>()) { return as<i64>(); }

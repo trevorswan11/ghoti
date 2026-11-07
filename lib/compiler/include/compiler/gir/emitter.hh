@@ -104,6 +104,7 @@ class emitter {
         bool                                        on_error{false};
         stdx::option<ast::discardable_ident_handle> capture{};
         ast::type_modifier                          modifier{};
+        stdx::option<gir::function&>                owner{}; // only its own exits run it
     };
 
     struct scope_frame {
@@ -157,6 +158,11 @@ class emitter {
         gsl::span<const std::vector<match_capture_slot>> slots{};
     };
 
+    struct slice_bytes {
+        std::string bytes;
+        sema::type& slice_type;
+    };
+
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
@@ -167,9 +173,11 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
+    // The interface defaults each expanded `impl(P) I for Ctor(P)` inherits, once per expansion
+    auto emit_parameterized_impl_defaults() -> void;
     // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
-                                  usize                     impl_scope_idx,
+                                  const sema::impl_record&  impl,
                                   mod::module_t&            iface_mod,
                                   ast::node_id              sig_id,
                                   const ast::function_expr& fn_expr,
@@ -279,7 +287,10 @@ class emitter {
     // Leaves the function with `ret_val`, running the `errdefer`s too when it is a failure
     auto               emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -> void;
     [[nodiscard]] auto has_pending_errdefer() const noexcept -> bool;
-    auto               emit_lvalue(ast::node_id id) -> value;
+    // A closure's body is emitted over its enclosing function's scopes, whose defers it must skip
+    [[nodiscard]] auto owned_by_current_function(const deferred_entry& entry) const noexcept
+        -> bool;
+    auto emit_lvalue(ast::node_id id) -> value;
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
@@ -351,6 +362,19 @@ class emitter {
     // Materializes a folded string constant that is typed as a slice (`const S: []u8 = "..."`)
     // into a `{ptr, len}` value by spilling the bytes to a fresh array temporary and decaying it.
     auto emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value;
+    // The `(from, to)` tag values that differ between an enum and a merge built from it
+    [[nodiscard]] auto enum_widen_remaps(const sema::type& from, const sema::type& to)
+        -> std::vector<std::pair<i128, i128>>;
+    // An enum value as the `A || B` merge `to` built from its type, each tag kept by name
+    auto emit_enum_widen(value v, sema::type& to) -> value;
+    // A `?` residual as the return type's `From`, by widening or by an enum merge's tag names
+    auto convert_residual(value residual, sema::type& from_type) -> value;
+    // The bytes of a comptime argument whose parameter is declared as a slice, when it holds a
+    // string or a folded byte array (`prefix ++ "..."`), without an array's sentinel
+    [[nodiscard]] auto comptime_slice_bytes(const const_value&                   val,
+                                            const ast::function_expr::parameter& param,
+                                            mod::module_t&                       fn_mod) const
+        -> stdx::option<slice_bytes>;
     // Builds a `&dyn I` / `^dyn I` fat pointer `{ data, vtable }` from `src` (a `&T` / `^T`)
     auto emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> value;
     // Wraps a thin function or a closure into the `{ctx, code}` pair of a `fn(...)`/`^fn(...)`
@@ -766,9 +790,8 @@ class emitter {
     // The local generic each monomorph being emitted instantiates, innermost last
     std::vector<gsl::not_null<const sema::type*>> generic_env_owners_;
 
-    // While emitting an inherited interface default-method body: bare `self.method(...)` calls
-    // are rewritten to target this impl's own methods (its body symbol table).
-    stdx::opt_size emitting_impl_default_scope_;
+    // The impl whose inherited default body is being emitted, so `self.method(...)` reaches it
+    stdx::option<const sema::impl_record&> emitting_impl_default_;
     // For emitting a method body written directly in an `impl` block
     stdx::opt_size emitting_impl_body_scope_;
 

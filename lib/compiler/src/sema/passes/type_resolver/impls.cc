@@ -707,12 +707,16 @@ auto type_resolver::instantiate_impls_for(
         if (trait && stored->interface_type && !is_abstract) {
             if (const auto iface{stored->interface_type->get_data().as_opt<types::interface_t>()}) {
                 check_impl_conformance(*stored, *iface);
+                // Its interface defaults are this expansion's methods too, as for a plain impl
+                resolve_inherited_default_methods(*stored, *iface);
             }
         }
 
         // A target holding `type`s only exists at compile time, so its methods have no runtime body
         if (!is_abstract && !holds_type_values(concrete)) {
             for (const auto& m : stored->methods) {
+                // An inherited default is the interface's body, emitted with the emitter's defaults
+                if (m.inherited) { continue; }
                 if (m.fn_type && ctx_.generic_functions.get_opt(*m.fn_type)) { continue; }
                 impl_mod.impl_ctor_member_emits.emplace_back<type_ctor_member_emit>({
                     .owner_clone = &concrete,
@@ -1531,8 +1535,13 @@ auto type_resolver::resolve_inherited_default_methods(impl_record&              
 
         body_type_diff diff;
         snap.diff_into(ctx_, imod, diff);
+        // The diff holds this target's typing, and the shared body reads as the template again
+        snap.restore_to(imod);
 
-        auto typing_key{fmt::format("impldef{}#{}", rec.body_scope_idx, name)};
+        // Each expansion of an `impl(P) ...` shares its body scope, so its prefix tells them apart
+        auto typing_key{rec.from_parameterized
+                            ? fmt::format("impldef{}#{}", rec.gir_prefix, name)
+                            : fmt::format("impldef{}#{}", rec.body_scope_idx, name)};
         if (!diff.empty()) {
             ctx_.instantiation_cache.set_body_type_diff(typing_key, std::move(diff));
         }

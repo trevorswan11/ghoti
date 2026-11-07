@@ -29,28 +29,43 @@ pub const stderr = fn(): Result(File, Error) {
     };
 };
 
-/// Print the contents of `bytes` to stdout
-pub const print = fn(bytes: []u8): Result(void, Error) {
-    let mut f = stdout()?;
-    return f.write_all(bytes);
+const FmtError = std.fmt.Error;
+
+/// Formats `fmt` with `args` into `stream`, optionally followed by a newline
+const write_formatted = fn(
+    stream: Result(File, Error),
+    comptime newline: bool,
+    comptime fmt: []u8,
+    args...,
+): Result(void, FmtError) {
+    let mut f = stream?;
+    let mut scratch: [512]mut u8 = undefined;
+    let mut buffered: std.io.BufferedWriter(File) = .{ .inner = &mut f, .buf = scratch[..] };
+    std.fmt.format(&mut buffered, fmt, args...)?;
+    if comptime (newline) {
+        let w: &mut dyn std.io.Writer = &mut buffered;
+        w.write_byte('\n')?;
+    }
+    buffered.flush()?;
+    return .done;
 };
 
-/// Print the contents of `bytes` to stdout, followed by a newline
-pub const println = fn(bytes: []u8): Result(void, Error) {
-    let mut f = stdout()?;
-    f.write_all(bytes)?;
-    return f.write_byte('\n');
+/// Prints `fmt` formatted with `args` to stdout, as `std.fmt.format` does
+pub const print = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
+    return write_formatted(stdout(), false, fmt, args...);
 };
 
-/// Print the contents of `bytes` to stderr
-pub const eprint = fn(bytes: []u8): Result(void, Error) {
-    let mut f = stderr()?;
-    return f.write_all(bytes);
+/// Prints `fmt` formatted with `args` to stdout, followed by a newline
+pub const println = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
+    return write_formatted(stdout(), true, fmt, args...);
 };
 
-/// Print the contents of `bytes` to stderr, followed by a newline
-pub const eprintln = fn(bytes: []u8): Result(void, Error) {
-    let mut f = stderr()?;
-    f.write_all(bytes)?;
-    return f.write_byte('\n');
+/// Prints `fmt` formatted with `args` to stderr, as `std.fmt.format` does
+pub const eprint = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
+    return write_formatted(stderr(), false, fmt, args...);
+};
+
+/// Prints `fmt` formatted with `args` to stderr, followed by a newline
+pub const eprintln = fn(comptime fmt: []u8, args...): Result(void, FmtError) {
+    return write_formatted(stderr(), true, fmt, args...);
 };

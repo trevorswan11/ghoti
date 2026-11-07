@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -275,25 +276,38 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
     if (!fields_arr) { return field_err("descriptor is missing 'fields'"); }
     if (!exhaustive_v) { return field_err("descriptor is missing 'exhaustive'"); }
 
-    auto enumerations{
-        make_uninit_span<ast::enum_expr::enumeration>(ctx_.arena, fields_arr->elements.size())};
-    const auto scope_idx{ctx_.registry.create()};
-    for (usize i{0}; i < fields_arr->elements.size(); ++i) {
-        const auto fs{fields_arr->elements[i].as_opt<gir::const_struct>()};
+    std::vector<synthetic_tag> tags;
+    tags.reserve(fields_arr->elements.size());
+    for (const auto& element : fields_arr->elements) {
+        const auto fs{element.as_opt<gir::const_struct>()};
         const auto name_v{fs ? read_desc_field<std::string>(*fs, "name") : stdx::none};
         const auto value_v{fs ? fs->get_field_opt("value") : stdx::none};
         const auto value_i{value_v ? value_v->as_int_opt() : stdx::none};
         if (!name_v || !value_i) {
             return field_err("every element of 'fields' needs a compile-time 'name' and 'value'");
         }
+        tags.emplace_back(synthetic_tag{.name = *name_v, .value = *value_i});
+    }
+    return build_synthetic_enum(tags, *tag_v, !*exhaustive_v, {});
+}
 
-        const auto            name_ident{synthesize_ident(*name_v, false)};
+auto type_resolver::build_synthetic_enum(gsl::span<const synthetic_tag>        tags,
+                                         type&                                 tag_type,
+                                         bool                                  non_exhaustive,
+                                         gsl::span<const gsl::not_null<type*>> merged_from)
+    -> stdx::result<gsl::not_null<type*>, diagnostic> {
+    auto       enumerations{make_uninit_span<ast::enum_expr::enumeration>(ctx_.arena, tags.size())};
+    const auto scope_idx{ctx_.registry.create()};
+    for (usize i{0}; i < tags.size(); ++i) {
+        const auto            name_ident{synthesize_ident(tags[i].name, false)};
         const syntax::token_t val_tok{syntax::token_type_t::INT_10, "0"};
-        const auto            val_node{resolving_.ast.add_node(
-            val_tok,
-            val_tok,
-            ast::int_literal_expr{
-                .value = static_cast<u128>(*value_i), .is_signed = true, .spelling = "0"})};
+        const auto val_node{resolving_.ast.add_node(val_tok,
+                                                    val_tok,
+                                                    ast::int_literal_expr{
+                                                        .value = static_cast<u128>(tags[i].value),
+                                                        .is_signed = true,
+                                                        .spelling  = "0",
+                                                    })};
         resolving_.sync_side_tables_for_new_node();
         new (&enumerations[i])
             ast::enum_expr::enumeration{.name = name_ident, .value = ast::expr_handle{val_node}};
@@ -310,12 +324,16 @@ auto type_resolver::synthesize_enum(source_location loc, const gir::const_struct
         auto& variant_sym{ctx_.registry.get(scope_idx).get(stable_name)};
         variant_sym.set_kind(symbol_kind::VALUE);
         variant_sym.set_status(symbol_status::RESOLVED);
-        resolving_.set_sema_type(name_ident, *tag_v);
+        resolving_.set_sema_type(name_ident, tag_type);
     }
 
     auto& enum_type{*ctx_.pool[{type_kind::ENUM, types::mut::CONSTANT, scope_idx}]};
-    enum_type.resolve_if<types::enum_t>(
-        enumerations, !*exhaustive_v, *tag_v, gsl::span<stdx::option<type&>>{}, resolving_);
+    enum_type.resolve_if<types::enum_t>(enumerations,
+                                        non_exhaustive,
+                                        tag_type,
+                                        gsl::span<stdx::option<type&>>{},
+                                        resolving_,
+                                        merged_from);
     enum_type.set_symbol_table_idx(scope_idx);
     return gsl::not_null{&enum_type};
 }

@@ -248,6 +248,8 @@ class type_resolver {
     [[nodiscard]] auto resolve_block_statements(const ast::block_stmt& block) -> bool;
     // Whether `root` assigns to a `comptime let mut` type anywhere outside a nested function
     [[nodiscard]] auto assigns_comptime_type_var(ast::node_id root) -> bool;
+    // Whether `root` makes a call anywhere outside a nested function or loop
+    [[nodiscard]] auto makes_call(ast::node_id root) -> bool;
     // Types an `unroll while` body once per iteration, recording each pass's typing; true if
     // the body poisoned
     [[nodiscard]] auto resolve_unrolled_while_iterations(ast::node_id                id,
@@ -452,6 +454,11 @@ class type_resolver {
         bool is_poly{false};
     };
 
+    struct synthetic_tag {
+        std::string name;
+        i128        value;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -611,6 +618,16 @@ class type_resolver {
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
     [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // An enum with exactly these tags, which no source declares
+    [[nodiscard]] auto build_synthetic_enum(gsl::span<const synthetic_tag>        tags,
+                                            type&                                 tag_type,
+                                            bool                                  non_exhaustive,
+                                            gsl::span<const gsl::not_null<type*>> merged_from)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
+    // `A || B` on two enum types: one enum holding every tag of both, matched by name
+    auto               resolve_enum_merge(ast::node_id id, const ast::binary_expr& binary) -> void;
+    [[nodiscard]] auto merge_enums(type& lhs, type& rhs)
+        -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Builds a `types::struct_t` directly from a folded `StructInfo` descriptor; each field's
     // own `default_value` supplies that field's default, if any
     [[nodiscard]] auto synthesize_struct(source_location loc, const gir::const_struct& desc)
@@ -620,6 +637,7 @@ class type_resolver {
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
     // Views a `comptime_int` / `comptime_float` as the concrete type it materializes to
     [[nodiscard]] auto comptime_numeric_view(type& t) -> type&;
+    [[nodiscard]] auto fitted_comptime_int_type(ast::node_id arg) -> stdx::option<type&>;
     [[nodiscard]] auto get_call_arg_location(const ast::call_expr::argument& arg)
         -> source_location;
 
@@ -994,6 +1012,8 @@ class type_resolver {
     // materializing the latest compile-time values of mutable `comptime let mut` locals.
     // The resulting frame is installed into `ctx_.comptime_binding_frames` during isolated folds.
     [[nodiscard]] auto make_simulated_frame() -> comptime_frame;
+    // Whether the statements simulated so far leave the innermost active block early
+    [[nodiscard]] auto simulated_block_exit() -> stdx::option<simulated_exit>;
 
     // Returns `true` if the resolution was successful
     [[nodiscard]] auto resolve_control_flow_label(stdx::option<ast::identifier_handle> label,

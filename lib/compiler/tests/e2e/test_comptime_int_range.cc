@@ -107,4 +107,59 @@ TEST_CASE("concrete integer overflow keeps its type-named messages") {
                          std::pair{0UZ, 29UZ}});
 }
 
+TEST_CASE("comptime_int comparisons and @abs read the exact value across the 128-bit views") {
+    CHECK(helpers::compile_and_run(R"(
+        const le = fn(comptime from: comptime_int, comptime to: comptime_int): bool {
+            return from <= to;
+        };
+        pub const main = fn(): i32 {
+            const UMAX = 340282366920938463463374607431768211455;
+            let mut r: i32 = 0;
+            if comptime (!(0 <= UMAX) or !(-1 < UMAX) or UMAX < 0) { r |= 1; }
+            if comptime (!le(0, UMAX)) { r |= 2; }
+            if comptime (@abs(-9223372036854775809) != 9223372036854775809) { r |= 4; }
+            if comptime (@abs(-9223372036854775808) != 9223372036854775808) { r |= 8; }
+            return r;
+        };
+    )") == 0);
+}
+
+TEST_CASE("the most negative i128 can be written as a literal") {
+    CHECK(helpers::compile_and_run(R"(
+        const M: i128 = -170141183460469231731687303715884105728;
+        pub const main = fn(): i32 {
+            let m: i128 = -170141183460469231731687303715884105728;
+            let n = -170141183460469231731687303715884105728i128;
+            if (m != M or n != M) { return 1; }
+            if (m + 1 != -170141183460469231731687303715884105727) { return 2; }
+            return 0;
+        };
+    )") == 0);
+    helpers::test_checker_fail(
+        "const a: i128 = 170141183460469231731687303715884105728;",
+        sema::diagnostic{
+            "integer value 170141183460469231731687303715884105728 is out of range for type 'i128'",
+            sema::error::LITERAL_OUT_OF_RANGE,
+            std::pair{0UZ, 16UZ}});
+}
+
+TEST_CASE("a comptime_int bound to a generic slot takes the narrowest type that holds it") {
+    CHECK(helpers::compile_and_run(R"(
+        const bits = fn(args...): u32 {
+            return @typeInfo(@TypeOf(args[0])).int.bits + @typeInfo(@TypeOf(args[1])).int.bits;
+        };
+        const low = fn(args...): u64 {
+            return @truncate(u64, args[0]);
+        };
+        pub const main = fn(): i32 {
+            let mut r: i32 = 0;
+            if (bits(7, -2147483648) != 64) { r |= 1; }
+            if (bits(2147483648, 18446744073709551615) != 128) { r |= 2; }
+            if (bits(-9223372036854775809, 340282366920938463463374607431768211455) != 256) { r |= 4; }
+            if (low(340282366920938463463374607431768211455) != 18446744073709551615) { r |= 8; }
+            return r;
+        };
+    )") == 0);
+}
+
 } // namespace ghoti::tests

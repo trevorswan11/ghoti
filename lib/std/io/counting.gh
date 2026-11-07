@@ -1,0 +1,15 @@
+//! A writer that strictly counts the number of bytes writen
+import std;
+
+/// Discards all data given, keeping track of only the amount received
+pub const CountingWriter = struct {
+    pub count: usize = 0,
+};
+
+impl std.io.Writer for CountingWriter {
+    const Error = std.io.Error;
+    pub const write = fn(&mut self, bytes: []u8): std.Result(usize, std.io.Error) {
+        self.count += bytes.len;
+        return .of(bytes.len);
+    };
+}

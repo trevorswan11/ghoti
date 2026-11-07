@@ -289,6 +289,8 @@ auto emitter::emit(bool include_builtin_test_runtime) -> module_t {
         }
     }
 
+    emit_parameterized_impl_defaults();
+
     // Each may reach more of `builtin`, so both queues drain until neither grows
     for (usize runtime{0}, impls{0};
          runtime < pending_builtin_runtime_.size() || impls < pending_builtin_impls_.size();) {
@@ -530,17 +532,12 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 value       bound{value{void_val{}, btype}};
                 if (val.is<const_closure>()) {
                     bound = value{emit_comptime_closure(val.as<const_closure>()), btype};
+                } else if (const auto slice_bytes{comptime_slice_bytes(val, param, fn_mod)}) {
+                    // A comptime string or byte array bound to a `[]T` slice param needs a real
+                    // {ptr, len} fat pointer, not the raw bytes `btype` alone would store
+                    bound = emit_string_as_slice(slice_bytes->bytes, slice_bytes->slice_type);
                 } else if (val.is<std::string>()) {
-                    // A string-literal comptime arg bound to a `[]T` slice param needs a real
-                    // {ptr, len} fat pointer, not the raw bytes `btype` alone would store.
-                    const auto declared_type{param.explicit_type
-                                                 ? fn_mod.get_sema_type_opt(*param.explicit_type)
-                                                 : stdx::none};
-                    if (declared_type && declared_type->get_kind() == sema::type_kind::SLICE) {
-                        bound = emit_string_as_slice(val.as<std::string>(), *declared_type);
-                    } else {
-                        bound = value{val.as<std::string>(), btype};
-                    }
+                    bound = value{val.as<std::string>(), btype};
                 } else {
                     bound = materialize_const(val);
                 }
@@ -729,13 +726,13 @@ auto emitter::emit_dyn_coercion(ast::expr_handle src, sema::type& fat_type) -> v
     auto& usize_ty{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
 
     // Register one private vtable global per `(I, T)`; slots hold the impl methods in order.
-    const auto vtable_sym{fmt::format("__vtable.{}", rec ? rec->body_scope_idx : 0UZ)};
+    const auto vtable_sym{rec ? symbol_scoping::vtable_name(*rec) : std::string{"__vtable.0"}};
     if (rec && std::ranges::none_of(
                    ast_module_.dyn_vtables, // Use the root mod for lowering discoverability
                    [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
         for (const auto name : iface.method_names) {
-            v.slots.emplace_back(symbol_scoping_.name_for(rec->body_scope_idx, name));
+            v.slots.emplace_back(symbol_scoping_.impl_method_name(*rec, name));
         }
         ast_module_.dyn_vtables.emplace_back(std::move(v));
     }
@@ -1036,15 +1033,21 @@ auto emitter::coerce_comptime_int(value v, sema::type& target, ast::node_id at) 
         return v;
     }
     const auto folded{folded_int(v)};
-    if (folded && !sema::comptime_int_fits(*folded, target, target_ptr_bits_)) {
-        ctx_.diags.emplace_back(v.type && v.type->get_kind() == sema::type_kind::COMPTIME_INT
-                                    ? fmt::format("integer literal is out of range for type '{}'",
-                                                  ctx_.type_display_name(target))
-                                    : fmt::format("integer value {} is out of range for type '{}'",
-                                                  *folded,
-                                                  ctx_.type_display_name(target)),
-                                sema::error::LITERAL_OUT_OF_RANGE,
-                                active_ast().location_of(at));
+    // A `u128` past `i128` max views as negative through `folded`, so it is checked exactly
+    const auto wide_unsigned{v.as_opt<u128>()};
+    const bool fits{wide_unsigned
+                        ? sema::comptime_int_fits(big_int{*wide_unsigned}, target, target_ptr_bits_)
+                        : sema::comptime_int_fits(folded.value_or(0), target, target_ptr_bits_)};
+    if (folded && !fits) {
+        ctx_.diags.emplace_back(
+            v.type && v.type->get_kind() == sema::type_kind::COMPTIME_INT
+                ? fmt::format("integer literal is out of range for type '{}'",
+                              ctx_.type_display_name(target))
+                : fmt::format("integer value {} is out of range for type '{}'",
+                              wide_unsigned ? big_int{*wide_unsigned} : big_int{*folded},
+                              ctx_.type_display_name(target)),
+            sema::error::LITERAL_OUT_OF_RANGE,
+            active_ast().location_of(at));
     }
     if (folded) {
         const auto effective_bits{[this](const sema::type& t) noexcept -> u32 {
@@ -1154,6 +1157,7 @@ namespace {
 auto emitter::fold_initializer(ast::expr_handle init, sema::type& declared)
     -> stdx::option<const_value> {
     auto cv{const_eval_.try_eval(*init)};
+    if (cv) { cv = const_eval_.widen_enum_const(std::move(*cv), declared); }
     if (!cv || !cv->get_type() || cv->get_type()->get_kind() != sema::type_kind::ENUM_LITERAL ||
         !takes_enum_literal(declared) || !cv->is<const_enum>()) {
         return cv;
@@ -1189,6 +1193,82 @@ auto emitter::emit_enum_literal_as(ast::expr_handle expr_id, sema::type& dest_ty
     }
     report_missing_enum_member(dest_type, literal->as<const_enum>().name, expr_id);
     return value{undefined_val{}, dest_type};
+}
+
+auto emitter::enum_widen_remaps(const sema::type& from, const sema::type& to)
+    -> std::vector<std::pair<i128, i128>> {
+    const auto& from_en{from.get_data().as<sema::types::enum_t>()};
+    const auto& to_en{to.get_data().as<sema::types::enum_t>()};
+    const auto  tag_name{[](const sema::types::enum_t& en, usize idx) {
+        return en.enclosing.ast.get_as<ast::identifier_expr>(en.ast_enumerations[idx].name).name;
+    }};
+    const auto  from_values{const_eval_.enum_member_values(from_en)};
+    const auto  to_values{const_eval_.enum_member_values(to_en)};
+
+    std::vector<std::pair<i128, i128>> remaps;
+    for (usize i{0}; i < from_values.size(); ++i) {
+        for (usize j{0}; j < to_values.size(); ++j) {
+            if (tag_name(from_en, i) != tag_name(to_en, j)) { continue; }
+            if (from_values[i] != to_values[j]) {
+                remaps.emplace_back(from_values[i], to_values[j]);
+            }
+            break;
+        }
+    }
+    return remaps;
+}
+
+auto emitter::emit_enum_widen(value v, sema::type& to) -> value {
+    auto& from{*v.type};
+    // A one-tag enum's zero-bit value holds nothing to compare, so it is that tag
+    if (const auto& from_en{from.get_data().as<sema::types::enum_t>()};
+        from_en.ast_enumerations.size() == 1) {
+        const auto name{
+            from_en.enclosing.ast.get_as<ast::identifier_expr>(from_en.ast_enumerations[0].name)
+                .name};
+        if (const auto only{const_eval_.coerce_enum_literal(
+                const_value{const_enum{std::string{name}, 0}}, to)}) {
+            return materialize_const(*only);
+        }
+    }
+    auto&       from_tag{from.get_data().as<sema::types::enum_t>().underlying};
+    auto&       to_tag{to.get_data().as<sema::types::enum_t>().underlying};
+    auto&       bool_type{ctx_.get_builtin_resolved_type(sema::type_kind::BOOL)};
+    const auto  remaps{enum_widen_remaps(from, to)};
+    const value src_int{builder_.emit_cast(instruction_kind::WIDEN_CAST, v, from_tag), from_tag};
+    value       dst_int{
+        sema::is_same_unqualified(from_tag, to_tag)
+            ? src_int
+            : value{builder_.emit_cast(instruction_kind::INT_CAST, src_int, to_tag), to_tag}};
+
+    // A tag whose value moved is rewritten. Any other value keeps its bits
+    if (!remaps.empty()) {
+        auto&      fn{*builder_.get_function()};
+        const auto slot{builder_.emit_alloca(to_tag)};
+        builder_.emit_store(slot, dst_int).is_initializer = true;
+        for (const auto& [src_val, dst_val] : remaps) {
+            const auto is_tag{builder_.emit_binary(
+                instruction_kind::EQ, src_int, value{src_val, from_tag}, bool_type)};
+            auto&      rewrite_seg{fn.add_segment()};
+            auto&      next_seg{fn.add_segment()};
+            builder_.emit_cond_goto(
+                value{is_tag, bool_type}, rewrite_seg.get_id(), next_seg.get_id());
+            builder_.set_segment(rewrite_seg);
+            builder_.emit_store(slot, value{dst_val, to_tag});
+            builder_.emit_goto(next_seg.get_id());
+            builder_.set_segment(next_seg);
+        }
+        dst_int = value{builder_.emit_load(value{slot, to_tag}, to_tag), to_tag};
+    }
+    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, dst_int, to), to};
+}
+
+auto emitter::convert_residual(value residual, sema::type& from_type) -> value {
+    if (!residual.type || *residual.type == from_type) { return residual; }
+    if (sema::is_enum_widenable(*residual.type, from_type)) {
+        return emit_enum_widen(residual, from_type);
+    }
+    return value{builder_.emit_cast(instruction_kind::WIDEN_CAST, residual, from_type), from_type};
 }
 
 // A `union(MyEnum)` read as its `MyEnum` tag: the variant its active field names
@@ -1413,6 +1493,17 @@ auto emitter::emit_coerced_expr(ast::expr_handle expr_id, sema::type& dest_type)
             auto& concrete{dest_type};
             return coerce_comptime_int(v, concrete, *expr_id);
         }
+    }
+
+    // An enum widens into a merge built from it, keeping each tag by name
+    if (val.type && sema::is_enum_widenable(*val.type, dest_type)) {
+        if (const auto cv{const_eval_.try_eval(*expr_id)}) {
+            const auto widened{const_eval_.widen_enum_const(*cv, dest_type)};
+            if (widened.get_type() && &*widened.get_type() == &dest_type) {
+                return materialize_const(widened);
+            }
+        }
+        return emit_enum_widen(val, dest_type);
     }
 
     // A numeric value narrower than dest widens implicitly (`iW`->`iV`, `f32`->`f64`, ...)
@@ -1663,8 +1754,8 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
         if (!fx || fx->is_type_expr) { continue; }
 
         // Emit each body once against the interface's  module with that typing replayed.
-        emit_impl_default_method(symbol_scoping_.name_for(rec->body_scope_idx, m.name),
-                                 rec->body_scope_idx,
+        emit_impl_default_method(symbol_scoping_.impl_method_name(*rec, m.name),
+                                 *rec,
                                  *m.defining_mod,
                                  *m.signature,
                                  *fx,
@@ -1673,8 +1764,31 @@ auto emitter::emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -
     }
 }
 
+auto emitter::emit_parameterized_impl_defaults() -> void {
+    PROFILE_FUNCTION();
+    for (const auto rec : ctx_.impls.records()) {
+        if (!rec->from_parameterized || !rec->target_type ||
+            sema::is_generic_type(*rec->target_type)) {
+            continue;
+        }
+        const type_guard target_g{user_type_stack_, rec->target_type.get()};
+        for (const auto& m : rec->methods) {
+            if (!m.inherited || !m.defining_mod || !m.signature) { continue; }
+            const auto fx{m.defining_mod->ast.get_as_opt<ast::function_expr>(*m.signature)};
+            if (!fx || fx->is_type_expr) { continue; }
+            emit_impl_default_method(symbol_scoping_.impl_method_name(*rec, m.name),
+                                     *rec,
+                                     *m.defining_mod,
+                                     *m.signature,
+                                     *fx,
+                                     m.fn_type,
+                                     m.typing_key);
+        }
+    }
+}
+
 auto emitter::emit_impl_default_method(std::string_view          gir_name,
-                                       usize                     impl_scope_idx,
+                                       const sema::impl_record&  impl,
                                        mod::module_t&            iface_mod,
                                        ast::node_id              sig_id,
                                        const ast::function_expr& fn_expr,
@@ -1750,9 +1864,9 @@ auto emitter::emit_impl_default_method(std::string_view          gir_name,
         }
     }
 
-    emitting_impl_default_scope_.emplace(impl_scope_idx);
+    emitting_impl_default_.emplace(impl);
     emit_block(active_ast().get_as<ast::block_stmt>(*fn_expr.body));
-    emitting_impl_default_scope_.reset();
+    emitting_impl_default_.reset();
 
     if (const auto fd{sema_type->get_data().as_opt<sema::types::function>()}) {
         emit_implicit_return(fd->return_type);
@@ -2584,6 +2698,7 @@ auto emitter::emit_defers_for_scope(usize scope_idx, bool error_edge) -> void {
     const auto defers{scopes_[scope_idx].defers};
     for (const auto& entry : defers | std::views::reverse) {
         if (entry.on_error && !error_edge) { continue; }
+        if (!owned_by_current_function(entry)) { continue; }
         if (entry.on_error && entry.capture && entry.capture->template is<ast::identifier_expr>()) {
             const scope_guard g{scopes_};
             const auto&       ident{active_ast().get_as<ast::identifier_expr>(**entry.capture)};
@@ -2636,9 +2751,15 @@ auto emitter::emit_defers_up_to(usize target_depth, bool error_edge) -> void {
     }
 }
 
+auto emitter::owned_by_current_function(const deferred_entry& entry) const noexcept -> bool {
+    return entry.owner.get() == builder_.get_function().get();
+}
+
 auto emitter::has_pending_errdefer() const noexcept -> bool {
-    return std::ranges::any_of(scopes_, [](const auto& scope) {
-        return std::ranges::any_of(scope.defers, &deferred_entry::on_error);
+    return std::ranges::any_of(scopes_, [this](const auto& scope) {
+        return std::ranges::any_of(scope.defers, [this](const deferred_entry& entry) {
+            return entry.on_error && owned_by_current_function(entry);
+        });
     });
 }
 
@@ -2710,10 +2831,7 @@ auto emitter::emit_function_exit(stdx::option<value> ret_val, ast::node_id at) -
             flow_slot, {value{TAGGED_UNION_PAYLOAD_INDEX, usize_type}}, residual_type)};
         value      residual{builder_.emit_load(value{residual_ptr, residual_type}, residual_type),
                             residual_type};
-        if (residual_type != from_type) {
-            residual = value{builder_.emit_cast(instruction_kind::WIDEN_CAST, residual, from_type),
-                             from_type};
-        }
+        residual            = convert_residual(residual, from_type);
         current_error_slot_ = spill_to_temporary(residual, from_type, false);
     }
     leave(true);
@@ -2729,6 +2847,7 @@ auto emitter::emit_defer_stmt(ast::node_id, const ast::defer_stmt& def) -> void 
     scopes_.back().defers.emplace_back(deferred_entry{
         .deferred = def.deferred,
         .on_error = false,
+        .owner    = builder_.get_function(),
     });
 }
 
@@ -2740,6 +2859,7 @@ auto emitter::emit_errdefer_stmt(ast::node_id, const ast::errdefer_stmt& errdef)
         .on_error = true,
         .capture  = errdef.capture,
         .modifier = errdef.modifier,
+        .owner    = builder_.get_function(),
     });
 }
 
@@ -4776,12 +4896,17 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                     if (fn_token == syntax::builtin_t::AS) {
                         check_comptime_float_fits(operand, ret_type, *op_expr);
                     }
+
+                    // An untyped operand has no width of its own to reinterpret, and `@as` of
+                    // one would otherwise round through its `f64` materialization first
+                    const auto untyped_reinterpret = (fn_token == syntax::builtin_t::BIT_CAST ||
+                                                      fn_token == syntax::builtin_t::AS) &&
+                                                     is_untyped_number(operand);
+
                     // A compile-time operand folds, so an out-of-range float is a compile error
-                    // An untyped operand has no width of its own to reinterpret
                     if (fn_token == syntax::builtin_t::INT_FROM_FLOAT ||
                         fn_token == syntax::builtin_t::FLOAT_FROM_INT ||
-                        fn_token == syntax::builtin_t::FLOAT_CAST ||
-                        (fn_token == syntax::builtin_t::BIT_CAST && is_untyped_number(operand))) {
+                        fn_token == syntax::builtin_t::FLOAT_CAST || untyped_reinterpret) {
                         if (const auto cv{const_eval_.try_eval(id)}) {
                             return materialize_const(*cv);
                         }
@@ -5639,10 +5764,10 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 const auto callee_val{emit_expression(call.function)};
                 indirect_callee.emplace(callee_val);
             }
-        } else if (emitting_impl_default_scope_) {
+        } else if (emitting_impl_default_) {
             // Inside an inherited default body: `self.method(...)` targets this impl's method.
             callee_name.emplace(
-                symbol_scoping_.name_for(*emitting_impl_default_scope_, member_ident.name));
+                symbol_scoping_.impl_method_name(*emitting_impl_default_, member_ident.name));
         } else if (emitting_impl_body_scope_ && fn_d && fn_d->has_self && [&] {
                        // Inside a method written in an `impl` block, a call on the method's own
                        // receiver resolves to that impl's own scoped symbol so cross-module method
@@ -5723,7 +5848,16 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 user_type_stack_.back()->get_symbol_table_idx_opt() == t->get_symbol_table_idx()) {
                 t = user_type_stack_.back();
             }
-            if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
+            // A method an `impl` block adds to the instance is emitted under that impl's name, and
+            // only a member the ctor's own body declares takes the instance's prefix
+            const auto impl_methods{ctx_.impls.methods_of(*t)};
+            const auto from_impl{std::ranges::find_if(
+                impl_methods, [&](const auto& em) { return em.method->name == *member_nm; })};
+            if (from_impl != impl_methods.end()) {
+                callee_name.emplace(
+                    symbol_scoping_.impl_method_name(*from_impl->record, *member_nm));
+                resolved_generic_target = true;
+            } else if (const auto prefix{ctx_.generic_functions.get_type_ctor_member_prefix(*t)}) {
                 callee_name.emplace(fmt::format("{}.{}", *prefix, *member_nm));
                 resolved_generic_target = true;
             }
@@ -5754,16 +5888,12 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
 
     // Inside an inherited default body, `self.method(...)` was sema-resolved against the abstract
     // interface (`self: &interface`).
-    if (emitting_impl_default_scope_ && dot_call) {
+    if (emitting_impl_default_ && dot_call) {
         const auto mn{active_ast().get_as<ast::identifier_expr>(dot_call->member).name};
-        for (const auto r : ctx_.impls.records()) {
-            if (r->body_scope_idx != *emitting_impl_default_scope_) { continue; }
-            if (const auto m{r->find_method(mn)}; m && m->fn_type) {
-                // Retarget its signature to this impl's concrete method so the
-                // implicit-self argument is typed for the real target.
-                fn_data = m->fn_type->get_data().as_opt<sema::types::function>();
-            }
-            break;
+        // Retarget its signature to this impl's concrete method so the implicit-self argument
+        // is typed for the real target
+        if (const auto m{emitting_impl_default_->find_method(mn)}; m && m->fn_type) {
+            fn_data = m->fn_type->get_data().as_opt<sema::types::function>();
         }
     }
 
@@ -5877,15 +6007,17 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
     // A generic's parameter (`x: auto`, `y: @TypeOf(x)`, `p: &auto`) is only typed in the
     // monomorph, so its argument converts to that
     const auto instantiated_param{[&](usize i) -> stdx::option<sema::type&> {
-        if (!generic_target_fn || !callee_name || i >= generic_target_fn->parameters.size()) {
-            return stdx::none;
-        }
+        if (!generic_target_fn || !callee_name) { return stdx::none; }
         const auto& params{generic_target_fn->parameters};
-        if (params[i].is_pack) { return stdx::none; }
-        usize runtime_idx{0};
-        for (usize p{0}; p < i; ++p) {
+        // Every argument from a trailing pack's position on is one of its runtime elements
+        const bool in_pack{!params.empty() && params.back().is_pack && i + 1 >= params.size()};
+        if (!in_pack && i >= params.size()) { return stdx::none; }
+        const usize fixed_before{in_pack ? params.size() - 1 : i};
+        usize       runtime_idx{0};
+        for (usize p{0}; p < fixed_before; ++p) {
             if (!binds_comptime_arg(p)) { ++runtime_idx; }
         }
+        if (in_pack) { runtime_idx += i - fixed_before; }
         if (const auto req{ctx_.instantiation_cache.get_request(*callee_name)};
             req && runtime_idx < req->arg_types.size()) {
             return *req->arg_types[runtime_idx];
@@ -7415,6 +7547,26 @@ auto emitter::materialize_const(const const_value& cv) -> value {
     }
 
     return cv.to_gir_value();
+}
+
+auto emitter::comptime_slice_bytes(const const_value&                   val,
+                                   const ast::function_expr::parameter& param,
+                                   mod::module_t& fn_mod) const -> stdx::option<slice_bytes> {
+    if (!param.explicit_type) { return stdx::none; }
+    const auto declared_type{fn_mod.get_sema_type_opt(*param.explicit_type)};
+    if (!declared_type || declared_type->get_kind() != sema::type_kind::SLICE) {
+        return stdx::none;
+    }
+    auto bytes{val.as_bytes_opt()};
+    if (!bytes) { return stdx::none; }
+
+    // A sentinel-terminated array also carries its terminator, which is not part of the slice
+    const auto arr_type{val.get_type() ? val.get_type()->get_data().as_opt<sema::types::array>()
+                                       : stdx::none};
+    if (val.is<const_array>() && arr_type && bytes->size() > arr_type->len) {
+        bytes->resize(arr_type->len);
+    }
+    return slice_bytes{.bytes = std::move(*bytes), .slice_type = *declared_type};
 }
 
 auto emitter::emit_string_as_slice(const std::string& bytes, sema::type& slice_type) -> value {
@@ -9196,8 +9348,7 @@ auto emitter::emit_unwrap_propagation(value                    flow_slot,
     if (res_val.type && *res_val.type != from_type &&
         (sema::is_implicit_widenable(*res_val.type, from_type) ||
          sema::is_assignable(*res_val.type, from_type))) {
-        const auto casted{builder_.emit_cast(instruction_kind::WIDEN_CAST, res_val, from_type)};
-        res_val = value{casted, from_type};
+        res_val = convert_residual(res_val, from_type);
     }
 
     // Preserve the error payload for errdefer captures.

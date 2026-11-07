@@ -289,4 +289,56 @@ TEST_CASE("a template first reached from another template's body stays a top-lev
     )") == 16);
 }
 
+TEST_CASE("comptime strings that differ only in punctuation instantiate different functions") {
+    CHECK(helpers::compile_and_run(R"(
+        const second = fn(comptime text: []u8): u8 { return text[1]; };
+        pub const main = fn(): i32 {
+            return @as(i32, second("[{}]")) - @as(i32, second("{:?}"));
+        };
+    )") == '{' - ':');
+}
+
+TEST_CASE("a comptime slice parameter accepts a concatenation of comptime strings") {
+    CHECK(helpers::compile_and_run(R"(
+        const measure = fn(comptime text: []u8): usize {
+            let tail = text[2..];
+            return text.len * 10 + tail.len + @as(usize, text[text.len - 1] - '0');
+        };
+        const labeled = fn(comptime prefix: []u8): usize {
+            return measure(prefix ++ ":7");
+        };
+        pub const main = fn(): i32 {
+            return @intCast(i32, labeled("ab"));
+        };
+    )") == 49);
+}
+
+TEST_CASE("a `comptime T: type` parameter is not replaced by a later module type of that name") {
+    CHECK(helpers::compile_and_run(R"(
+        const id = fn(comptime T: type, x: T): T { return x; };
+        const T = u8;
+        pub const main = fn(): i32 {
+            return @intCast(i32, id(u64, 300) - 290);
+        };
+    )") == 10);
+}
+
+TEST_CASE("an impl parameter is not replaced by a later module type of that name") {
+    CHECK(helpers::compile_and_run(R"(
+        const Show = interface { const show = fn(&self): i32; };
+        const Wrap = fn(comptime E: type): type { return struct { v: E }; };
+        impl(E: type) Show for Wrap(E) {
+            const show = fn(&self): i32 {
+                let x: E = self.v;
+                return @intCast(i32, x - 290);
+            };
+        }
+        const E = u8;
+        pub const main = fn(): i32 {
+            let w: Wrap(u64) = .{ .v = 300 };
+            return w.show();
+        };
+    )") == 10);
+}
+
 } // namespace ghoti::tests

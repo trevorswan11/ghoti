@@ -1450,6 +1450,15 @@ auto type_resolver::visit(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 ctx_.user_type_names.try_emplace(value_type.get(), decl_ident.name);
             }
         }
+        // `const E = A || B` names the merged enum the same way
+        if (decl.value &&
+            ast::node_id{*decl.value}.get_token_type() == syntax::token_type_t::PIPE_PIPE) {
+            if (const auto value_type{resolving_.get_sema_type_opt(*decl.value)};
+                value_type && !value_type->is_poison()) {
+                const auto& decl_ident{resolving_.ast.get_as<ast::identifier_expr>(decl.name)};
+                ctx_.user_type_names.try_emplace(&denoted_type(*value_type), decl_ident.name);
+            }
+        }
     }
 
     if (reresolve_local) {

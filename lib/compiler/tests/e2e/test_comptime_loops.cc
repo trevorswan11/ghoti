@@ -424,6 +424,54 @@ TEST_CASE("`comptime` before a loop evaluates it like a `comptime` block") {
     )");
 }
 
+TEST_CASE("An `unroll while` body folds each pass's calls with that its compile-time arguments") {
+    CHECK(helpers::compile_and_run(R"(
+        const Spec = struct {
+            pub wide: bool = false,
+
+            pub const parse_body = fn(&mut self, comptime fmt: []u8, comptime start: usize): usize {
+                comptime let mut i = start;
+                if comptime (fmt[i] == '>') {
+                    self.wide = true;
+                    i += 1;
+                }
+                return i;
+            };
+        };
+
+        const parse = fn(comptime fmt: []u8, comptime at: usize): usize {
+            comptime let mut i = at + 1;
+            comptime let mut s: Spec = .{};
+            if comptime (fmt[i] == ':') {
+                i = s.parse_body(fmt, i + 1);
+            }
+            return i + 1;
+        };
+
+        const count = fn(comptime fmt: []u8): usize {
+            comptime let mut i: usize = 0;
+            comptime let mut c: usize = 0;
+            unroll while (i < fmt.len) {
+                if comptime (fmt[i] == '{') {
+                    const next = parse(fmt, i);
+                    c += 1;
+                    i = next;
+                    continue;
+                }
+                i += 1;
+            }
+            if comptime (c != 2) {
+                @compileError("wrong count");
+            }
+            return c;
+        };
+
+        pub const main = fn(): i32 {
+            return @intCast(count("x{:>} {}") + count("{} y{:>}"));
+        };
+    )") == 4);
+}
+
 TEST_CASE("`unroll for` over a range past the unroll limit is an error, not a hang") {
     CHECK(helpers::raised(R"(
         pub const f = fn(): void { unroll for (0..1000000) |i| { _ = i; } };

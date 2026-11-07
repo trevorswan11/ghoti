@@ -251,7 +251,9 @@ struct unrolled_for_driver {
 class iteration_write_log {
   public:
     explicit iteration_write_log(mod::module_t& m) noexcept
-        : mod_{m}, outer_{std::exchange(m.active_write_log, stdx::option<body_write_log&>{log_})} {}
+        : mod_{m}, outer_{std::exchange(m.active_write_log, stdx::option<body_write_log&>{log_})} {
+        log_.parent = outer_;
+    }
 
     ~iteration_write_log() noexcept {
         mod_.active_write_log = outer_;
@@ -770,6 +772,8 @@ auto type_resolver::visit(ast::node_id id, const ast::if_expr& if_expr) -> void 
 
                 stdx::option<type&>          live_type;
                 const mutating_context_guard branch_g{in_expr_branch_, true};
+                const mutating_context_guard unused_g{arm_of_unused_,
+                                                      unused_value_nodes_.contains(id.get_index())};
                 if (*folded) {
                     TRY_RESOLVE(if_expr.consequence);
                     live_type.emplace(arm_value_type(if_expr.consequence));
@@ -1169,6 +1173,8 @@ auto type_resolver::resolve_type_match(ast::node_id           id,
         auto&       live_table_type{resolving_.get_sema_type(live)};
         const scope live_scope{table_stack_, live_table_type.get_symbol_table_idx(), table_idx_};
         const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
         TRY_RESOLVE(live.dispatch);
     }
 
@@ -1363,6 +1369,8 @@ auto type_resolver::resolve_comptime_match(ast::node_id           id,
         }
 
         const mutating_context_guard branch_g{in_expr_branch_, true};
+        const mutating_context_guard unused_g{arm_of_unused_,
+                                              unused_value_nodes_.contains(id.get_index())};
         const comptime_frame_guard   cfg{ctx_.comptime_binding_frames, std::move(frame)};
         TRY_RESOLVE(live.dispatch);
     }
@@ -2071,11 +2079,15 @@ auto type_resolver::visit(ast::node_id id, const ast::while_loop_expr& while_loo
             if (!last_type_ || last_type_->is_poison()) { return fail_scoped_body(); }
         }
         const auto& block{resolving_.ast.get_as<ast::block_stmt>(while_loop.block)};
-        const mutating_context_guard cx_loop_g{in_unrolled_loop_,
-                                               while_loop.is_unrolled || in_unrolled_loop_};
-        // A body that changes a `comptime let mut` type is typed once per iteration
+        // A body that changes a `comptime let mut` type, or whose calls may see different
+        // compile-time arguments each pass, is typed once per iteration. Calls only count when
+        // no enclosing unrolled loop is typed just once, since its values aren't exact here
         const bool per_iteration{while_loop.is_unrolled && !while_loop.continuation &&
-                                 assigns_comptime_type_var(*while_loop.block)};
+                                 (assigns_comptime_type_var(*while_loop.block) ||
+                                  (!in_unrolled_loop_ && makes_call(*while_loop.block)))};
+        // Each pass knows its exact values, so its `if comptime`s fold like an `unroll for`'s
+        const mutating_context_guard cx_loop_g{
+            in_unrolled_loop_, in_unrolled_loop_ || (while_loop.is_unrolled && !per_iteration)};
         if (per_iteration ? resolve_unrolled_while_iterations(id, while_loop, block)
                           : resolve_block_statements(block)) {
             return fail_scoped_body();
@@ -2125,6 +2137,52 @@ auto type_resolver::assigns_comptime_type_var(ast::node_id root) -> bool {
     return found;
 }
 
+auto type_resolver::makes_call(ast::node_id root) -> bool {
+    bool       found{false};
+    const auto walk{[&](this const auto& self, stdx::option<ast::node_id> n) -> void {
+        if (found || !n) { return; }
+        resolving_.ast[*n].visit([&](const ast::call_expr&) { found = true; },
+                                 [&](const ast::block_stmt& data) {
+                                     for (const auto s : data) { self(*s); }
+                                 },
+                                 [&](const ast::expr_stmt& data) { self(*data.expression); },
+                                 [&](const ast::decl_stmt& data) {
+                                     if (data.value) { self(**data.value); }
+                                 },
+                                 [&](const ast::return_stmt& data) {
+                                     if (data.expression) { self(**data.expression); }
+                                 },
+                                 [&](const ast::discard_stmt& data) { self(*data.discarded); },
+                                 [&](const ast::assignment_expr& data) {
+                                     self(*data.lhs);
+                                     self(*data.rhs);
+                                 },
+                                 [&](const ast::binary_expr& data) {
+                                     self(*data.lhs);
+                                     self(*data.rhs);
+                                 },
+                                 [&](const ast::unary_expr& data) { self(*data.rhs); },
+                                 [&](const ast::dot_expr& data) { self(*data.object); },
+                                 [&](const ast::index_expr& data) {
+                                     self(*data.array);
+                                     self(*data.index);
+                                 },
+                                 [&](const ast::if_expr& data) {
+                                     if (data.condition) { self(**data.condition); }
+                                     self(*data.consequence);
+                                     if (data.alternate) { self(**data.alternate); }
+                                 },
+                                 [&](const ast::match_expr& data) {
+                                     self(*data.matcher);
+                                     for (const auto& arm : data.arms) { self(*arm.dispatch); }
+                                 },
+                                 [&](const ast::label_expr& data) { self(*data.body); },
+                                 [&](const auto&) {});
+    }};
+    walk(root);
+    return found;
+}
+
 auto type_resolver::resolve_unrolled_while_iterations(ast::node_id                id,
                                                       const ast::while_loop_expr& while_loop,
                                                       const ast::block_stmt&      block) -> bool {
@@ -2165,12 +2223,16 @@ auto type_resolver::resolve_unrolled_while_iterations(ast::node_id              
         const iteration_write_log  writes{resolving_};
         const active_block_guard   guard{active_blocks_, block};
         active_blocks_.back().carried = carried;
-        for (usize idx{0}; idx < block.statements.size(); ++idx) {
-            active_blocks_.back().current_stmt_idx = idx;
-            resolve(block.statements[idx]);
+        // Statements past a `break` or `continue` this pass takes never run in it
+        stdx::option<simulated_exit> exit;
+        usize                        typed{0};
+        while (typed < block.statements.size() && !exit) {
+            active_blocks_.back().current_stmt_idx = typed;
+            resolve(block.statements[typed]);
             if (last_type_->is_poison()) { return true; }
+            active_blocks_.back().current_stmt_idx = ++typed;
+            exit                                   = simulated_block_exit();
         }
-        active_blocks_.back().current_stmt_idx = block.statements.size();
         carried.emplace(make_simulated_frame());
 
         body_type_diff typing;
@@ -2181,6 +2243,7 @@ auto type_resolver::resolve_unrolled_while_iterations(ast::node_id              
                         id.get_index(),
                         k),
             std::move(typing));
+        if (exit && *exit != simulated_exit::CONTINUE) { return false; }
     }
     return false;
 }
@@ -2218,8 +2281,17 @@ auto type_resolver::make_simulated_frame() -> comptime_frame {
     comptime_frame frame;
     if (active_blocks_.empty()) { return frame; }
     gir::const_eval evaluator{ctx_, resolving_};
-    evaluator.simulate_active_blocks(active_blocks_, frame);
+    evaluator.set_typing_scope_prefix(typing_scope_prefix_);
+    DISCARD(evaluator.simulate_active_blocks(active_blocks_, frame));
     return frame;
+}
+
+auto type_resolver::simulated_block_exit() -> stdx::option<simulated_exit> {
+    if (active_blocks_.empty()) { return stdx::none; }
+    comptime_frame  frame;
+    gir::const_eval evaluator{ctx_, resolving_};
+    evaluator.set_typing_scope_prefix(typing_scope_prefix_);
+    return evaluator.simulate_active_blocks(active_blocks_, frame);
 }
 
 auto type_resolver::resolve_control_flow_label(stdx::option<ast::identifier_handle> label,

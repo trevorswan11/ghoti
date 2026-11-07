@@ -49,6 +49,13 @@ struct active_block_frame {
     stdx::option<comptime_frame> carried{};
 };
 
+// How simulating an active block's statements left it early, if they did
+enum class simulated_exit : u8 {
+    BREAK,
+    CONTINUE,
+    RETURN,
+};
+
 // Mirrors `builtin.OptimizeMode`
 enum class optimize_mode : u8 {
     DEBUG,
@@ -193,6 +200,8 @@ struct context {
     ankerl::unordered_dense::map<std::string, stdx::option<type&>> instantiations_in_progress;
     // Module constant pts whose initializers are being folded, so one reading itself is caught
     ankerl::unordered_dense::set<uptr> globals_in_evaluation;
+    // Each `A || B` merge by its operands, so writing the same merge twice names one enum
+    ankerl::unordered_dense::map<std::pair<uptr, uptr>, gsl::not_null<type*>> enum_merges;
 
     // Generic function's parameter bounds by function literal so each of a type ctor's
     // per-instantiation members shares them

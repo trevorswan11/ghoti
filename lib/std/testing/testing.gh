@@ -6,65 +6,74 @@ extern const __ghoti_test_take_skipped: fn(): bool;
 
 @cfg (std.os.HAS_BACKEND) {
     pub const test_runner = fn(args: [][:0]u8, tests: []Test): i32 {
-        let mut failures: i32 = 0;
-        let mut skipped: i32 = 0;
+        let mut failures: usize = 0;
+        let mut skipped: usize = 0;
         for (tests) |entry| {
             let passed = entry.func();
             if (__ghoti_test_take_skipped()) {
                 skipped += 1;
             } else if (!passed) {
                 failures += 1;
+                std.io.eprintln("FAILED: {}", display_name(entry))!;
             }
         }
 
-        // TODO(tcs): print the number of failures and skips once std.fmt lands
-        if (failures > 0 or skipped > 0) {
-            if (failures > 0) std.io.eprintln("Some tests failed!")!;
-            if (skipped > 0) std.io.eprintln("Some tests were skipped!")!;
+        let passes = tests.len - failures - skipped;
+        if (failures > 0) {
+            std.io.eprintln(
+                "Some tests failed! ({} passed, {} failed, {} skipped)",
+                passes,
+                failures,
+                skipped,
+            )!;
+        } else if (skipped > 0) {
+            std.io.eprintln("Some tests were skipped! ({} passed, {} skipped)", passes, skipped)!;
         } else {
-            std.io.println("All tests passed!")!;
+            std.io.println("All tests passed! ({} passed)", passes)!;
         }
 
         return if (failures > 0) 1 else 0;
     };
 
-    pub const expect_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        std.io.eprint("Test failed: ")!;
-        std.io.eprint(loc.file)!;
-        let mut stderr = std.io.stderr()!;
-        let mut writer: &mut dyn std.io.Writer = &mut stderr;
-        std.io.eprint(":")!;
-        std.fmt.int.format(writer, loc.line, .{})!;
-        std.io.eprint(":")!;
-        std.fmt.int.format(writer, loc.column, .{})!;
+    /// A test's name, or where it is declared when it has none
+    const display_name = fn(entry: Test): []u8 {
+        return if (entry.name.len > 0) entry.name else entry.loc.file;
+    };
 
+    /// Reports a failed check as `<prefix> file:line:column: (<label>) message`
+    @[inline(.always)] const report = fn(
+        comptime prefix: []u8,
+        comptime label: []u8,
+        msg: []u8,
+        loc: builtin.SourceLocation,
+    ): void {
         if (msg.len > 0) {
-            std.io.eprint(": (EXPECTED) ")!;
-            std.io.eprintln(msg)!;
+            std.io.eprintln(
+                prefix ++ " {}:{}:{}: (" ++ label ++ ") {}",
+                loc.file,
+                loc.line,
+                loc.column,
+                msg,
+            )!;
         } else {
-            std.io.eprintln(": (EXPECTED)")!;
+            std.io.eprintln(
+                prefix ++ " {}:{}:{}: (" ++ label ++ ")",
+                loc.file,
+                loc.line,
+                loc.column,
+            )!;
         }
+    };
+
+    pub const expect_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
+        report("Test failed:", "EXPECTED", msg, loc);
     };
 
     pub const require_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        std.io.eprint("Test failed: ")!;
-        std.io.eprint(loc.file)!;
-        if (msg.len > 0) {
-            std.io.eprint(": (REQUIRED) ")!;
-            std.io.eprintln(msg)!;
-        } else {
-            std.io.eprintln(": (REQUIRED)")!;
-        }
+        report("Test failed:", "REQUIRED", msg, loc);
     };
 
     pub const skip_handler = fn(msg: []u8, loc: builtin.SourceLocation): void {
-        std.io.eprint("Test skipped: ")!;
-        std.io.eprint(loc.file)!;
-        if (msg.len > 0) {
-            std.io.eprint(": (SKIPPED) ")!;
-            std.io.eprintln(msg)!;
-        } else {
-            std.io.eprintln(": (SKIPPED)")!;
-        }
+        report("Test skipped:", "SKIPPED", msg, loc);
     };
 }
