@@ -6,7 +6,9 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include <fmt/color.h>
 #include <fmt/format.h>
@@ -32,30 +34,47 @@
 #include "compiler/syntax/error.hh"
 #include "compiler/syntax/parser.hh"
 #include "support/diagnostic.hh"
+#include "support/diagnostic_renderer.hh"
 #include "support/path_utils.hh"
 #include "support/source_file.hh"
 #include "support/style.hh"
 
 namespace ghoti::mod {
 
-auto format_module_diagnostic(std::ostream&                         os, // NOLINT
-                              const detail::formattable_diagnostic& diag,
-                              stdx::option<const mod::module_t&>    module,
-                              stdx::option<bool>                    in_terminal) -> std::ostream& {
-    const auto tty{in_terminal.value_or(stdx::is_tty())};
+namespace {
 
-    // Without a module, there is no source path and formatting is done trivially
-    if (!module) { return format_diagnostic(os, diag, stdx::none, tty); }
+[[nodiscard]] auto render_source_of(const module_t& mod) -> render_source {
+    return {mod.path, path_utils::display(mod.path), &mod.source};
+}
 
-    // Without location, there's no way to point to an error
-    format_diagnostic(os, diag, path_utils::display(module->path), tty);
-    if (!diag.location) { return os; }
+auto render_printable(std::ostream&               os,
+                      const printable_diagnostic& diag,
+                      const source_resolver&      resolve) -> void {
+    render_options options{.color = diag.in_terminal.value_or(stdx::is_tty())};
+    render_diagnostic(os, diag.view, render_source_of(*diag.owner), resolve, options);
+}
 
-    // Diagnostic error messages can include the location
-    const auto [line, caret]{module->source.get_diagnostic_strings(*diag.location)};
-    fmt::print(os, "\n    {}", line);
-    if (caret) { os << fmt::format(tty ? style::GREEN : style::BASE, "\n    {}", *caret); }
-    return os;
+[[nodiscard]] auto counts_toward_limit(const printable_diagnostic& diag) -> bool {
+    return diag.view.level.value_or(diagnostic_level::ERROR) == diagnostic_level::ERROR;
+}
+
+} // namespace
+
+auto sort_diagnostics(std::vector<printable_diagnostic>& diagnostics) -> void {
+    const auto key{[](const printable_diagnostic& d) {
+        return std::tuple{path_utils::display(d.owner->path),
+                          d.view.location(),
+                          d.view.error_name,
+                          d.view.message};
+    }};
+    std::ranges::stable_sort(diagnostics, [&key](const auto& a, const auto& b) {
+        const auto [a_path, a_at, a_code, a_message]{key(a)};
+        const auto [b_path, b_at, b_code, b_message]{key(b)};
+        if (a_path != b_path) { return a_path < b_path; }
+        if (a_at != b_at) { return !a_at || (b_at && *a_at < *b_at); }
+        if (a_code != b_code) { return a_code < b_code; }
+        return a_message < b_message;
+    });
 }
 
 auto module_t::source_of(ast::node_id id) const -> std::string_view {
@@ -75,23 +94,38 @@ auto module_t::source_of(ast::node_id id) const -> std::string_view {
     return start < end ? stdx::string::substr(text, start, end - start) : std::string_view{};
 }
 
+auto module_t::printable_diagnostics() const -> std::vector<printable_diagnostic> {
+    std::vector<printable_diagnostic> out;
+    diagnostics.visit([](const stdx::monostate&) -> void {},
+                      [this, &out](const auto& list) -> void {
+                          for (const auto& diag : list) {
+                              const auto& owner{diag.origin() ? *diag.origin() : *this};
+                              // The module the error points into may already report it itself
+                              if (&owner != this && owner.reports(diag)) { continue; }
+                              out.push_back(
+                                  {&owner, diag.to_formattable(), list.get_terminal_status()});
+                          }
+                      });
+    return out;
+}
+
+auto module_t::printable_warnings() const -> std::vector<printable_diagnostic> {
+    std::vector<printable_diagnostic> out;
+    for (const auto& warning : warnings) {
+        out.push_back({this, warning.to_formattable(), warnings.get_terminal_status()});
+    }
+    return out;
+}
+
 auto module_t::print_diagnostics(std::ostream& os) const -> void {
     PROFILE_FUNCTION();
     if (is_ok()) { return; }
-    diagnostics.visit(
-        [this, &os](const auto& list) -> void {
-            for (const auto& diag : list) {
-                const auto& owner{diag.origin() ? *diag.origin() : *this};
-                // The module the error points into may already report it itself
-                if (&owner != this && owner.reports(diag)) { continue; }
-                format_module_diagnostic(
-                    os, diag.to_formattable(), owner, list.get_terminal_status())
-                    << "\n";
-            }
-        },
-        [](stdx::monostate) -> void {
-            UNREACHABLE("This function should've never been called with stdx::monostate");
-        });
+    auto pending{printable_diagnostics()};
+    sort_diagnostics(pending);
+    for (const auto& diag : pending) {
+        render_printable(os, diag, {});
+        os << "\n";
+    }
 }
 
 auto module_manager::try_get_file_module(const std::filesystem::path& path,
@@ -155,28 +189,85 @@ auto module_manager::add_library_module(std::string_view name, const std::filesy
 }
 
 auto module_t::print_warnings(std::ostream& os) const -> void {
-    for (const auto& warning : warnings) {
-        format_module_diagnostic(
-            os, warning.to_formattable(), *this, warnings.get_terminal_status())
-            << "\n";
+    auto pending{printable_warnings()};
+    sort_diagnostics(pending);
+    for (const auto& warning : pending) {
+        render_printable(os, warning, {});
+        os << "\n";
     }
 }
 
-auto module_manager::print_all_warnings(std::ostream& os) const -> void {
-    for (const auto& [path, mod] : modules_) { mod->print_warnings(os); }
+auto module_manager::find_loaded(const std::filesystem::path& path) const
+    -> stdx::option<const module_t&> {
+    if (const auto it{modules_.find(path)}; it != modules_.end()) { return *it->second; }
+    for (const auto* special : {builtin_module_.get(), start_module_.get()}) {
+        if (special && special->path == path) { return *special; }
+    }
+    return stdx::none;
 }
 
-auto module_manager::print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void {
-    if (!mod.is_poisoned() && !mod.is_errored()) { return; }
-    if (!printed_diagnostics_.insert(&mod).second) { return; }
-    mod.print_diagnostics(os);
+auto module_manager::print_all_warnings(std::ostream& os) const -> void {
+    std::vector<printable_diagnostic> pending;
+    for (const auto& [path, mod] : modules_) {
+        auto warnings{mod->printable_warnings()};
+        pending.insert(pending.end(), warnings.begin(), warnings.end());
+    }
+    sort_diagnostics(pending);
+    const source_resolver resolve{[this](const std::filesystem::path& path) {
+        return find_loaded(path).transform(render_source_of);
+    }};
+    for (const auto& warning : pending) {
+        render_printable(os, warning, resolve);
+        os << "\n";
+    }
+}
+
+auto module_manager::take_unprinted(const module_t& mod) const
+    -> std::vector<printable_diagnostic> {
+    if (!mod.is_poisoned() && !mod.is_errored()) { return {}; }
+    if (!printed_diagnostics_.insert(&mod).second) { return {}; }
+    return mod.printable_diagnostics();
+}
+
+auto module_manager::print_limited(std::vector<printable_diagnostic>&& pending,
+                                   std::ostream&                       os) const -> void {
+    sort_diagnostics(pending);
+    const source_resolver resolve{[this](const std::filesystem::path& path) {
+        return find_loaded(path).transform(render_source_of);
+    }};
+
+    usize hidden{0};
+    for (const auto& diag : pending) {
+        if (counts_toward_limit(diag)) {
+            if (error_limit_ && errors_printed_ >= *error_limit_) {
+                hidden += 1;
+                continue;
+            }
+            errors_printed_ += 1;
+        }
+        render_printable(os, diag, resolve);
+        os << "\n";
+    }
+    if (hidden > 0) {
+        fmt::println(os, "{} more error{} not shown", hidden, hidden == 1 ? "" : "s");
+    }
+}
+
+auto module_manager::print_module_diagnostics(const module_t& mod, std::ostream& os) const -> void {
+    print_limited(take_unprinted(mod), os);
 }
 
 auto module_manager::print_all_diagnostics(std::ostream& os) const -> void {
-    for (const auto& [path, mod] : modules_) { print_diagnostics_once(*mod, os); }
+    std::vector<printable_diagnostic> pending;
+    const auto                        take{[&](const module_t& mod) {
+        auto taken{take_unprinted(mod)};
+        pending.insert(pending.end(), taken.begin(), taken.end());
+    }};
+    for (const auto& [path, mod] : modules_) { take(*mod); }
     // An error inside an emitted `builtin` declaration is attributed to `builtin` itself
-    if (builtin_module_) { print_diagnostics_once(*builtin_module_, os); }
-    if (start_module_) { print_diagnostics_once(*start_module_, os); }
+    if (builtin_module_) { take(*builtin_module_); }
+    if (start_module_) { take(*start_module_); }
+    print_limited(std::move(pending), os);
 }
 
 auto module_manager::any_errored() const noexcept -> bool {

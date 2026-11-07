@@ -151,7 +151,7 @@ TEST_CASE("A post-resolution error inside an imported generic's monomorph is att
         REQUIRE_FALSE(diags.empty());
         for (const auto& d : diags) {
             CHECK(d.get_error() == expected);
-            const auto loc{UNWRAP(d.to_formattable().location)};
+            const auto loc{UNWRAP(d.location())};
             const auto [line, _]{dep_module.source.get_diagnostic_strings(loc)};
             CHECK(line != "<invalid line>");
         }

@@ -65,6 +65,18 @@ enum class module_state : u8 {
 using diagnotic_list_variant =
     stdx::variant<stdx::monostate, syntax::diagnostics, sema::diagnostics>;
 
+struct module_t;
+
+// A view of a diagnostic ready to print, with the module its location points into
+struct printable_diagnostic {
+    gsl::not_null<const module_t*> owner;
+    detail::formattable_diagnostic view;
+    stdx::option<bool>             in_terminal;
+};
+
+// Orders by (module path, primary start, error code, message) so analysis order never shows
+auto sort_diagnostics(std::vector<printable_diagnostic>& diagnostics) -> void;
+
 struct cfg_value_result {
     bool                       boolean{false};
     bool                       is_predicate{true};
@@ -220,6 +232,10 @@ struct module_t {
 
     // Prints the modules diagnostics to the stream, doing nothing if an error state is not present
     auto print_diagnostics(std::ostream& os) const -> void;
+
+    // The errors this module prints, skipping those another module already reports itself
+    [[nodiscard]] auto printable_diagnostics() const -> std::vector<printable_diagnostic>;
+    [[nodiscard]] auto printable_warnings() const -> std::vector<printable_diagnostic>;
 
     // The source text a node was parsed from
     [[nodiscard]] auto source_of(ast::node_id id) const -> std::string_view;
@@ -521,9 +537,20 @@ class module_manager {
     [[nodiscard]] auto add_library_module(std::string_view name, const std::filesystem::path& path)
         -> stdx::result<void, diagnostic>;
 
-    // Prints every poisoned/errored module's diagnostics not already printed by an earlier call
+    // Prints every poisoned/errored module's diagnostics not already printed by an earlier call,
+    // sorted and capped by the error limit
     auto print_all_diagnostics(std::ostream& os = std::cerr) const -> void;
     auto print_all_warnings(std::ostream& os = std::cerr) const -> void;
+
+    // Prints one module's diagnostics as `print_all_diagnostics` would, if not printed yet
+    auto print_module_diagnostics(const module_t& mod, std::ostream& os = std::cerr) const -> void;
+
+    // Stops printing errors after `limit`, then says how many were left out
+    auto set_error_limit(stdx::option<usize> limit) noexcept -> void { error_limit_ = limit; }
+
+    // The loaded module at `path`, including the `builtin` and start modules
+    [[nodiscard]] auto find_loaded(const std::filesystem::path& path) const
+        -> stdx::option<const module_t&>;
 
     // True if any module ever loaded through this manager is poisoned or errored
     [[nodiscard]] auto any_errored() const noexcept -> bool;
@@ -552,7 +579,10 @@ class module_manager {
     // Whether `path` is `lib/std/start.gh`, opened like any other file (by the LSP, say)
     [[nodiscard]] auto is_start_path(const std::filesystem::path& path) -> bool;
 
-    auto print_diagnostics_once(const module_t& mod, std::ostream& os) const -> void;
+    // The module's printable diagnostics, marking it printed, or nothing when it was already
+    [[nodiscard]] auto take_unprinted(const module_t& mod) const
+        -> std::vector<printable_diagnostic>;
+    auto print_limited(std::vector<printable_diagnostic>&& pending, std::ostream& os) const -> void;
 
   private:
     source_loader&                                    loader_;
@@ -563,6 +593,8 @@ class module_manager {
     stdx::box<ghoti::arena>                           arena_{stdx::make_box<ghoti::arena>()};
     mutable ankerl::unordered_dense::set<gsl::not_null<const module_t*>> printed_diagnostics_;
     stdx::option<parse_cache&>                                           parse_cache_;
+    stdx::option<usize>                                                  error_limit_;
+    mutable usize                                                        errors_printed_{0};
 
     // Maps physical ghoti modules to their path on disk
     module_name_map module_lut_;

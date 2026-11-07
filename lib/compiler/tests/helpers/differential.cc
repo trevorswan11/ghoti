@@ -421,9 +421,9 @@ auto classify_all(const std::vector<expr_template>&              templates,
         bool reported{false};
         for (const auto& diag : *diags) {
             const auto snap{diag.snapshot()};
-            if (snap.level != diagnostic_level::ERROR || !snap.location) { continue; }
-            if (snap.location->line >= pending.size()) { continue; }
-            const auto [t, k]{pending[snap.location->line]};
+            if (snap.level != diagnostic_level::ERROR || !snap.location()) { continue; }
+            if (snap.location()->line >= pending.size()) { continue; }
+            const auto [t, k]{pending[snap.location()->line]};
             auto& target{classified[t][k]};
             if (target.outcome != fold_outcome::VALUE) { continue; }
             // Folding reports its own failures with these kinds; anything else means the fold

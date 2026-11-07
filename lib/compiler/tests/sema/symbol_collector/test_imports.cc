@@ -113,9 +113,12 @@ TEST_CASE("Unknown file module") {
     REQUIRE(ctx->root_mod.diagnostics.as_opt<sema::diagnostics>());
 
     constexpr std::string_view expected{
-        R"(test.gh:1:8: error: Could not find path 'a.gh' in virtual file system
-    import "a.gh" as a;
-           ^
+        R"(error[MODULE_LOAD_ERROR]: Could not find path 'a.gh' in virtual file system
+  --> test.gh:1:8
+   |
+ 1 | import "a.gh" as a;
+   |        ^
+
 )"};
     CHECK(ss.view() == expected);
 }

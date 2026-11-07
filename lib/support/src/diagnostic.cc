@@ -23,8 +23,8 @@ auto format_diagnostic(std::ostream&                    os,
     if (source_path) {
         const auto& local_style{tty ? style::WHITE_BOLD : style::BASE};
         os << fmt::format(local_style, "{}:", *source_path);
-        if (diag.location) {
-            os << fmt::format(local_style, "{}: ", *diag.location);
+        if (const auto at{diag.location()}) {
+            os << fmt::format(local_style, "{}: ", *at);
         } else {
             fmt::print(os, " ");
         }
@@ -36,13 +36,9 @@ auto format_diagnostic(std::ostream&                    os,
         os << fmt::format(tty ? level_style(*diag.level) : style::BASE, "{}:", name);
     }
 
-    // The optional message changes position based on source path presence
-    if (diag.message) {
-        fmt::print(os, " {}", *diag.message);
-    } else {
-        fmt::print(os, " {}", diag.error_name);
-    }
-    if (!source_path && diag.location) { os << fmt::format(" {}", *diag.location); }
+    // The location trails the message when there's no source path to lead with
+    fmt::print(os, " {}", diag.message);
+    if (const auto at{diag.location()}; !source_path && at) { os << fmt::format(" {}", *at); }
     return os;
 }
 

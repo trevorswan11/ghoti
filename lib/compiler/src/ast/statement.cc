@@ -234,7 +234,7 @@ struct binding_args {
             if (parser.get_node<string_expr>(*handle).value.empty()) {
                 return make_syntax_err(fmt::format("{} may not be empty", what),
                                        syntax::error::EMPTY_EXTERN_TARGET,
-                                       parser.get_location_of(*handle));
+                                       parser.get_span_of(*handle));
             }
             return handle;
         }};
@@ -436,7 +436,7 @@ auto defer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synt
     if (!stmt.any<expr_stmt, discard_stmt, block_stmt>()) {
         return make_syntax_err("Deferred statements must be expressions, discards, or blocks",
                                syntax::error::ILLEGAL_DEFERRED_STATEMENT,
-                               parser.get_location_of(*stmt));
+                               parser.get_span_of(*stmt));
     }
     return parser.add_stmt<defer_stmt>(start_token, stmt);
 }
@@ -474,7 +474,7 @@ auto errdefer_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, s
     if (!stmt.any<expr_stmt, discard_stmt, block_stmt>()) {
         return make_syntax_err("Deferred statements must be expressions, discards, or blocks",
                                syntax::error::ILLEGAL_DEFERRED_STATEMENT,
-                               parser.get_location_of(*stmt));
+                               parser.get_span_of(*stmt));
     }
     return parser.add_stmt<errdefer_stmt>(start_token, stmt, capture, modifier);
 }
@@ -563,7 +563,7 @@ namespace {
         if (parser.get_node<string_expr>(*string).value.empty()) {
             return make_syntax_err("File import names cannot be empty",
                                    syntax::error::EMPTY_FILE_IMPORT,
-                                   parser.get_location_of(*string));
+                                   parser.get_span_of(*string));
         }
         return string;
     }
@@ -652,7 +652,7 @@ auto test_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
         if (parser.get_node<string_expr>(**description).value.empty()) {
             return make_syntax_err("Test descriptions may not be empty when present",
                                    syntax::error::EMPTY_TEST_DESCRIPTION,
-                                   parser.get_location_of(**description));
+                                   parser.get_span_of(**description));
         }
     }
 
@@ -740,7 +740,7 @@ auto impl_stmt::parse(syntax::parser& parser) -> stdx::result<stmt_handle, synta
                 return make_syntax_err("An implementation of an interface can't give a parameter "
                                        "a default value; calls use the interface's defaults",
                                        syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                       parser.get_location_of(**param.default_value));
+                                       parser.get_span_of(**param.default_value));
             }
         }
     }

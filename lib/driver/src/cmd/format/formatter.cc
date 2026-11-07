@@ -22,6 +22,8 @@
 #include "driver/cmd/format/options.hh"
 #include "driver/platform/win32.hh"
 #include "ghoti/config.h"
+#include "support/diagnostic_renderer.hh"
+#include "support/source_file.hh"
 #include "support/string_utils.hh"
 
 namespace ghoti::cmd {
@@ -73,10 +75,14 @@ auto formatter::process_target(std::string_view                           source
     const auto     diagnostics{parser.consume(ast, arena)};
 
     if (!diagnostics.empty()) {
+        const source_file    file{source_code};
+        const render_options options{
+            .color = diagnostics.get_terminal_status().value_or(stdx::is_tty())};
+        const render_source source{file_path ? *file_path : std::filesystem::path{"<stdin>"},
+                                   display_name.value_or("<stdin>"),
+                                   &file};
         for (const auto& diag : diagnostics) {
-            fmt::println(error_stream_,
-                         "{}",
-                         diag.to_string(display_name, diagnostics.get_terminal_status()));
+            render_diagnostic(error_stream_, diag.to_formattable(), source, {}, options) << '\n';
         }
         return false;
     }

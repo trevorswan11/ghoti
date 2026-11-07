@@ -503,7 +503,7 @@ auto parser::parse_expression(bind_precedence precedence)
                     ast::continue_stmt,
                     ast::return_stmt,
                     ast::block_stmt>()) {
-        return make_syntax_err(error, ast_->location_of(*clause));
+        return make_syntax_err(error, get_span_of(*clause));
     }
     return clause;
 }
@@ -686,6 +686,14 @@ auto parser::get_location_of(ast::node_id id) -> source_location { return ast_->
 
 auto parser::get_location_of(ast::explicit_type_id id) -> source_location {
     return ast_->location_of(id);
+}
+
+auto parser::get_span_of(ast::node_id id) -> source_span {
+    return {ast_->location_of(id), ast_->end_location_of(id)};
+}
+
+auto parser::get_span_of(ast::explicit_type_id id) -> source_span {
+    return {ast_->location_of(id), ast_->end_location_of(id)};
 }
 
 } // namespace ghoti::syntax

@@ -1099,7 +1099,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         const auto bytes{un->payload.empty()
                              ? std::string(payload_len, '\0')
                              : union_payload_bytes(un->payload.front(), payload_len)};
-        auto* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
+        auto*      payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }
     if (const auto st{cv.as_opt<gir::const_struct>()}) {
