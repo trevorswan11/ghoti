@@ -225,7 +225,7 @@ TEST_CASE("Explicit reference construction from value types") {
         };
 
         const val: i32 = 10;
-        const r_var: &i32 = &val;
+        const r_const: &i32 = &val;
     )");
 }
 

@@ -87,8 +87,8 @@ TEST_CASE("Nested array with comptime dimensions and runtime indices") {
                     m[i][j] = @intCast(i * N + j);
                 }
             }
-            let mut i: usize = 2;
-            return m[i][1] * 10 + m[1][i];
+            let mut at: usize = 2;
+            return m[at][1] * 10 + m[1][at];
         };
     )") == 75);
 }
