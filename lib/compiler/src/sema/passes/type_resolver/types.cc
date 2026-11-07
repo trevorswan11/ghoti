@@ -159,8 +159,10 @@ auto type_resolver::visit(ast::explicit_type_id id, const ast::identifier_expr& 
             symbol_table = *ctx_.prelude_index;
         }
     }
-    bool overrode_shadow{false};
-    if (symbol_opt &&
+    // A parameter  is what its name means in the signature and body
+    const bool is_parameter{symbol_opt && symbol_opt->get_data().is<symbols::parameter>()};
+    bool       overrode_shadow{false};
+    if (symbol_opt && !is_parameter &&
         (!symbol_opt->has_kind() || symbol_opt->get_kind() != sema::symbol_kind::TYPE)) {
         for (const auto idx : table_stack_ | std::views::reverse) {
             if (const auto sym{ctx_.registry.get(idx).get_opt(ident.name)};

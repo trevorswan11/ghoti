@@ -251,7 +251,9 @@ struct unrolled_for_driver {
 class iteration_write_log {
   public:
     explicit iteration_write_log(mod::module_t& m) noexcept
-        : mod_{m}, outer_{std::exchange(m.active_write_log, stdx::option<body_write_log&>{log_})} {}
+        : mod_{m}, outer_{std::exchange(m.active_write_log, stdx::option<body_write_log&>{log_})} {
+        log_.parent = outer_;
+    }
 
     ~iteration_write_log() noexcept {
         mod_.active_write_log = outer_;

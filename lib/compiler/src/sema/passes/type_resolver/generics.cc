@@ -536,26 +536,26 @@ auto restore_shared_typing(mod::module_t&                fn_mod,
     rollback_poisoned(tables.node_types.values, snap.nodes, typing.node_types);
     rollback_poisoned(tables.explicit_types.values, snap.types, typing.explicit_types);
 
-    // Nested in another instantiation of this module, this one may have retyped nodes the outer
-    // one already typed, so hand those back for the outer diff to record
+    // Nested in other instantiations of this module, this one may have retyped nodes an enclosing
+    // one already typed, so hand those back for that enclosing diff to record
     if (outer_log) {
-        const auto give_back{[](auto&                     live,
-                                const auto&               snapshot,
-                                const std::vector<usize>& ours,
-                                const std::vector<usize>& enclosing) {
-            const ankerl::unordered_dense::set<usize> enclosing_idxs(enclosing.begin(),
-                                                                     enclosing.end());
+        ankerl::unordered_dense::set<usize> enclosing_nodes;
+        ankerl::unordered_dense::set<usize> enclosing_explicits;
+        for (auto log{outer_log}; log; log = log->parent) {
+            enclosing_nodes.insert(log->node_idxs.begin(), log->node_idxs.end());
+            enclosing_explicits.insert(log->explicit_idxs.begin(), log->explicit_idxs.end());
+        }
+        const auto give_back{[](auto&                                      live,
+                                const auto&                                snapshot,
+                                const std::vector<usize>&                  ours,
+                                const ankerl::unordered_dense::set<usize>& enclosing) {
             for (const auto idx : ours) {
-                if (idx < snapshot.size() && enclosing_idxs.contains(idx)) {
-                    live[idx] = snapshot[idx];
-                }
+                if (idx < snapshot.size() && enclosing.contains(idx)) { live[idx] = snapshot[idx]; }
             }
         }};
-        give_back(tables.node_types.values, snap.nodes, write_log.node_idxs, outer_log->node_idxs);
-        give_back(tables.explicit_types.values,
-                  snap.types,
-                  write_log.explicit_idxs,
-                  outer_log->explicit_idxs);
+        give_back(tables.node_types.values, snap.nodes, write_log.node_idxs, enclosing_nodes);
+        give_back(
+            tables.explicit_types.values, snap.types, write_log.explicit_idxs, enclosing_explicits);
     }
     for (const auto& [idx, target] : typing.call_targets) {
         if (idx < snap.calls.size()) { tables.generic_call_targets.values[idx] = snap.calls[idx]; }
@@ -840,8 +840,9 @@ auto type_resolver::instantiate_generic(type&                             callee
 
     // Record so the diff below can be built from exactly what was written rather than
     // inferred by comparing against `snap`
-    sema::body_write_log write_log;
     const auto           prev_write_log{fn_mod.active_write_log};
+    sema::body_write_log write_log;
+    write_log.parent        = prev_write_log;
     fn_mod.active_write_log = &write_log;
     const auto restore_write_log{
         gsl::finally([&fn_mod, prev_write_log] { fn_mod.active_write_log = prev_write_log; })};

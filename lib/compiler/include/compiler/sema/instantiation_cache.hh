@@ -275,6 +275,9 @@ struct body_write_log {
     std::vector<usize> explicit_idxs;
     std::vector<usize> attribute_idxs;
     std::vector<usize> call_idxs;
+
+    // The log that was active when this one was installed
+    stdx::option<body_write_log&> parent{};
 };
 
 // Snapshots a module's typing side tables so a scoped body resolution can be diffed back out as a
