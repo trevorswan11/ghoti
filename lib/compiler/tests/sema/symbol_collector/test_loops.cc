@@ -106,14 +106,15 @@ TEST_CASE("Non-break collected as separate scope") {
 
 TEST_CASE("Non-break collection shadowing") {
     helpers::test_collector_fail(
-        "const a = for (0..5) |i| { let foo = bar; } else { let mut a: i32 = undefined; };",
+        "const a = for (0..5) |i| { let foo = bar; } else { let mut a: i32 = undefined; }; "
+        "const bar = 1;",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 59UZ}});
 
     helpers::test_collector_fail(
         "const a = while (true) : (i += 1) { let foo = bar; } else { let mut a: i32 = undefined; "
-        "};",
+        "}; const bar = 1; let mut i: i32 = 0;",
         sema::diagnostic{"Attempt to shadow identifier 'a'; previous declaration here: 1:7",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 68UZ}});
