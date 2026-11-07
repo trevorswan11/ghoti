@@ -1,6 +1,7 @@
 #include "support/diagnostic_renderer.hh"
 
 #include <algorithm>
+#include <filesystem>
 #include <ostream>
 #include <set>
 #include <string>
@@ -8,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/base.h>
 #include <fmt/color.h>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -62,6 +64,7 @@ class painter {
         }
     }
 
+  private:
     bool             color_;
     diagnostic_level level_;
 };
@@ -261,6 +264,13 @@ class snippet_renderer {
     }
 
   private:
+    struct placed {
+        usize             start;
+        usize             end;
+        const annotation* source;
+    };
+
+  private:
     // Only one multi-line span gets the gutter margin, the others shrink to their first line
     auto pick_margin(section& sec) -> void {
         margin_ = stdx::none;
@@ -420,12 +430,6 @@ class snippet_renderer {
         return row;
     }
 
-    struct placed {
-        usize             start;
-        usize             end;
-        const annotation* source;
-    };
-
     // Underlines first, then the rightmost label inline and the others hung below on pipes
     [[nodiscard]] auto single_line_rows(const section&       sec,
                                         usize                line,
@@ -497,6 +501,7 @@ class snippet_renderer {
         os_ << '\n';
     }
 
+  private:
     std::ostream&            os_;
     const painter&           paint_;
     usize                    gutter_;
@@ -544,6 +549,7 @@ class section_builder {
         unresolved_.push_back(&label);
     }
 
+  private:
     const source_resolver&               resolve_;
     std::vector<section>                 sections_;
     std::vector<const diagnostic_label*> unresolved_;

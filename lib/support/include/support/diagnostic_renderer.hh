@@ -26,12 +26,14 @@ using source_resolver = stdx::function<stdx::option<render_source>(const std::fi
 
 struct render_options {
     bool color{false};
-    // Longer source lines are trimmed around their spans with `…`
+    // Longer source lines are trimmed around their spans with ellipses
     usize max_line_width{120};
 };
 
-// Renders `diag` rustc-style: a `level[CODE]: message` header, a `-->` location, and source
-// snippets with the primary span drawn with `^`, secondary labels with `-`, then the notes.
+// Renders `diag` rustc-style:
+// - a `level[CODE]: message` header
+// - a `-->` location, and source snippets with the primary span drawn with `^`
+// - secondary labels with `-`, then the notes
 // Without a source the header is followed by the location alone. Ends with a newline.
 auto render_diagnostic(std::ostream&                         os,
                        const detail::formattable_diagnostic& diag,

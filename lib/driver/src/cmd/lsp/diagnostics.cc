@@ -80,6 +80,7 @@ class diagnostic_converter {
         };
     }
 
+  private:
     const mod::module_t&      module_;
     std::string_view          text_;
     const source_text_lookup& lookup_;
