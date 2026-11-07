@@ -1095,10 +1095,10 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
                 {tag_c,
                  reinterpret_constant(member, payload_arr_ty, 0, llvm_module_->getDataLayout())});
         }
-        const auto bytes{
-            un->payload.empty()
-                ? std::string(payload_arr_ty->getNumElements(), '\0')
-                : union_payload_bytes(un->payload.front(), payload_arr_ty->getNumElements())};
+        const auto payload_len{static_cast<usize>(payload_arr_ty->getNumElements())};
+        const auto bytes{un->payload.empty()
+                             ? std::string(payload_len, '\0')
+                             : union_payload_bytes(un->payload.front(), payload_len)};
         auto* payload_c{llvm::ConstantDataArray::getString(context_, bytes, false)};
         return llvm::ConstantStruct::get(st, {tag_c, payload_c});
     }

@@ -349,7 +349,8 @@ auto type_resolver::resolve_slice_copy(ast::node_id                id,
 
     // `.{...}` on the right infers as an array of the destination's length
     {
-        auto& expected{ctx_.get_array(types::mut::CONSTANT, false, *dest_len, dest_elem)};
+        auto& expected{
+            ctx_.get_array(types::mut::CONSTANT, false, static_cast<usize>(*dest_len), dest_elem)};
         const structural_guard g{implicit_type_stack_, expected};
         TRY_RESOLVE(assign.rhs);
     }
@@ -1369,8 +1370,10 @@ auto type_resolver::visit(ast::node_id id, const ast::dereference_expr& deref) -
                 error::UNKNOWN_SLICE_LENGTH,
                 resolving_.ast.location_of(id)));
         }
-        last_type_.emplace(
-            ctx_.get_array(container_element_mutability(rhs_type), false, *len, slice->underlying));
+        last_type_.emplace(ctx_.get_array(container_element_mutability(rhs_type),
+                                          false,
+                                          static_cast<usize>(*len),
+                                          slice->underlying));
     } else {
         return last_type_.emplace(
             ctx_.poison_node(resolving_,

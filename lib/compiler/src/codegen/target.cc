@@ -329,12 +329,12 @@ auto type_layout::vector_align(u64 bits) const noexcept -> usize {
     for (usize k{0}; k < vector_aligns.size(); ++k) {
         if (bits == (u64{8} << k)) { return vector_aligns[k]; }
     }
-    return std::bit_ceil(std::max<u64>((bits + 7) / 8, 1));
+    return static_cast<usize>(std::bit_ceil(std::max<u64>((bits + 7) / 8, 1)));
 }
 
 auto type_layout::vector_size(u64 bits) const noexcept -> usize {
     const auto align{vector_align(bits)};
-    return ((bits + 7) / 8 + align - 1) / align * align;
+    return static_cast<usize>(((bits + 7) / 8 + align - 1) / align * align);
 }
 
 auto type_layout::resolve(const llvm::DataLayout& dl) -> type_layout {
@@ -342,14 +342,15 @@ auto type_layout::resolve(const llvm::DataLayout& dl) -> type_layout {
     std::array<usize, 11> vector_aligns{};
     for (usize k{0}; k < vector_aligns.size(); ++k) {
         auto* bytes{llvm::FixedVectorType::get(llvm::Type::getInt8Ty(ctx), 1U << k)};
-        vector_aligns[k] = dl.getABITypeAlign(bytes).value();
+        vector_aligns[k] = static_cast<usize>(dl.getABITypeAlign(bytes).value());
     }
     return type_layout{
-        .ptr_bytes     = dl.getPointerSize(),
-        .i64_align     = dl.getABITypeAlign(llvm::Type::getInt64Ty(ctx)).value(),
-        .f64_align     = dl.getABITypeAlign(llvm::Type::getDoubleTy(ctx)).value(),
-        .f80_size      = dl.getTypeAllocSize(llvm::Type::getX86_FP80Ty(ctx)).getFixedValue(),
-        .f80_align     = dl.getABITypeAlign(llvm::Type::getX86_FP80Ty(ctx)).value(),
+        .ptr_bytes = dl.getPointerSize(),
+        .i64_align = static_cast<usize>(dl.getABITypeAlign(llvm::Type::getInt64Ty(ctx)).value()),
+        .f64_align = static_cast<usize>(dl.getABITypeAlign(llvm::Type::getDoubleTy(ctx)).value()),
+        .f80_size =
+            static_cast<usize>(dl.getTypeAllocSize(llvm::Type::getX86_FP80Ty(ctx)).getFixedValue()),
+        .f80_align = static_cast<usize>(dl.getABITypeAlign(llvm::Type::getX86_FP80Ty(ctx)).value()),
         .vector_aligns = vector_aligns,
     };
 }

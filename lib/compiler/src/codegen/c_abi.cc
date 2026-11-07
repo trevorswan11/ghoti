@@ -472,7 +472,7 @@ class classifier {
             if (misaligned || straddles) { return stdx::none; }
 
             const auto [first, second]{sysv_leaf_classes(leaf_ty)};
-            const auto eightbyte{offset / 8};
+            const auto eightbyte{static_cast<usize>(offset / 8)};
             classes[eightbyte] = merge(classes[eightbyte], first);
             if (second != NONE) { classes[eightbyte + 1] = merge(classes[eightbyte + 1], second); }
             if (classes[0] == MEMORY || classes[1] == MEMORY) { return stdx::none; }
@@ -497,8 +497,8 @@ class classifier {
         const auto               size{alloc_size(ty)};
         const auto               leaves{leaves_of(ty)};
         std::vector<llvm::Type*> parts;
-        for (u64 eightbyte{0}; eightbyte * 8 < size; ++eightbyte) {
-            const auto offset{eightbyte * 8};
+        for (usize eightbyte{0}; eightbyte * 8 < size; ++eightbyte) {
+            const u64 offset{eightbyte * 8};
             if (classes[eightbyte] == sysv_class::INTEGER) {
                 auto* part{integer_type_at(ty, offset, offset, size, leaves)};
                 parts.emplace_back(part);
