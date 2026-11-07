@@ -216,13 +216,16 @@ const __extenddfxf2 = fn(a: f64) callconv(.c): compiler_rt.f80 {
 };
 
 @[testing] const test__extenddfxf2 = fn(a: f64, expected: u80): bool {
-    let x = __extenddfxf2(a);
-
-    let rep: u80 = @bitCast(x);
+    let rep: u80 = @bitCast(__extenddfxf2(a));
     if (rep == expected) return true;
-    // test other possible NaN representation(signal NaN)
-    if (math.is_nan(@bitCast(f80, expected)) and math.is_nan(x)) return true;
-    return false;
+
+    // test other possible NaN representation
+    const is_nan_f80 = fn(x: u80): bool {
+        return (x & 0x7fff0000000000000000) == 0x7fff0000000000000000 and
+            (x & 0x7fffffffffffffff) > 0;
+    };
+
+    return is_nan_f80(expected) and is_nan_f80(rep);
 };
 
 test "__extenddfxf2" {

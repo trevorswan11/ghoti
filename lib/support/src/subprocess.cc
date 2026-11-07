@@ -164,7 +164,7 @@ auto open_child_log(const std::filesystem::path& log) -> ::HANDLE {
 // Starts the child with `log` as its only inherited handle, so a spawn on another thread can't
 // leak its own log into this child
 auto create_logged_process(std::string& cmd_line, ::HANDLE log, ::PROCESS_INFORMATION& pi) -> bool {
-    usize list_size{0};
+    ::SIZE_T list_size{0};
     ::InitializeProcThreadAttributeList(nullptr, 1, 0, &list_size);
     std::string list_storage(list_size, '\0');
     auto*       list{reinterpret_cast<::LPPROC_THREAD_ATTRIBUTE_LIST>(list_storage.data())};

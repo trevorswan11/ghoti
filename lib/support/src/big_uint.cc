@@ -17,6 +17,11 @@ namespace {
 
 [[nodiscard]] constexpr auto wide(u64 v) noexcept -> u128 { return u128{v}; }
 
+// Limb holding bit `bit`, narrowed to the vector index width
+[[nodiscard]] constexpr auto limb_of(u64 bit) noexcept -> usize {
+    return static_cast<usize>(bit / 64);
+}
+
 } // namespace
 
 big_uint::big_uint(u128 value) : limbs_{value.low, value.high} { trim(); }
@@ -45,13 +50,13 @@ auto big_uint::bit_length() const noexcept -> u64 {
 }
 
 auto big_uint::bit(u64 index) const noexcept -> bool {
-    const auto limb{index / 64};
+    const auto limb{limb_of(index)};
     return limb < limbs_.size() && ((limbs_[limb] >> (index % 64)) & 1U) != 0;
 }
 
 auto big_uint::any_below(u64 count) const noexcept -> bool {
-    const auto whole_limbs{std::min<u64>(count / 64, limbs_.size())};
-    for (u64 i{0}; i < whole_limbs; ++i) {
+    const auto whole_limbs{std::min(limb_of(count), limbs_.size())};
+    for (usize i{0}; i < whole_limbs; ++i) {
         if (limbs_[i] != 0) { return true; }
     }
     if (whole_limbs == limbs_.size() || count % 64 == 0) { return false; }
@@ -66,7 +71,7 @@ auto big_uint::low_u128() const noexcept -> u128 {
 
 auto big_uint::shift_left(u64 count) -> void {
     if (limbs_.empty() || count == 0) { return; }
-    const auto       limb_shift{count / 64};
+    const auto       limb_shift{limb_of(count)};
     const auto       bit_shift{count % 64};
     std::vector<u64> shifted(limbs_.size() + limb_shift + 1, 0);
     for (usize i{0}; i < limbs_.size(); ++i) {
@@ -79,7 +84,7 @@ auto big_uint::shift_left(u64 count) -> void {
 }
 
 auto big_uint::shift_right(u64 count) -> void {
-    const auto limb_shift{count / 64};
+    const auto limb_shift{limb_of(count)};
     if (limb_shift >= limbs_.size()) {
         limbs_.clear();
         return;
@@ -96,7 +101,7 @@ auto big_uint::shift_right(u64 count) -> void {
 }
 
 auto big_uint::keep_low(u64 count) -> void {
-    const auto kept_limbs{(count + 63) / 64};
+    const auto kept_limbs{limb_of(count + 63)};
     if (limbs_.size() > kept_limbs) { limbs_.resize(kept_limbs); }
     if (count % 64 != 0 && limbs_.size() == kept_limbs) {
         limbs_.back() &= (u64{1} << (count % 64)) - 1U;
@@ -177,12 +182,12 @@ auto big_uint::divide(big_uint& numerator, const big_uint& divisor) -> big_uint 
     big_uint   remainder{numerator};
     remainder.shift_right(quotient_bits);
     big_uint quotient;
-    quotient.limbs_.assign((quotient_bits + 63) / 64, 0);
+    quotient.limbs_.assign(limb_of(quotient_bits + 63), 0);
     for (u64 i{quotient_bits}; i-- > 0;) {
         remainder.shift_left_one(numerator.bit(i));
         if (remainder >= divisor) {
             remainder.subtract(divisor);
-            quotient.limbs_[i / 64] |= u64{1} << (i % 64);
+            quotient.limbs_[limb_of(i)] |= u64{1} << (i % 64);
         }
     }
     quotient.trim();
