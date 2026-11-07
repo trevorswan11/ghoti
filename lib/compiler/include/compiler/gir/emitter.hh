@@ -158,6 +158,11 @@ class emitter {
         gsl::span<const std::vector<match_capture_slot>> slots{};
     };
 
+    struct slice_bytes {
+        std::string bytes;
+        sema::type& slice_type;
+    };
+
   private:
     // The `undefined` literal or anything aliasing it
     [[nodiscard]] auto is_undefined_value(ast::node_id expr) -> bool;
@@ -168,9 +173,9 @@ class emitter {
     // Emits the member functions of an `impl [I for] T { ... }` block under names scoped to the
     // impl's own symbol table, plus any interface default methods the impl inherits.
     auto emit_top_level_impl(ast::node_id id, const ast::impl_stmt& impl) -> void;
-    // Emits one inherited interface default-method body for a concrete impl target
     // The interface defaults each expanded `impl(P) I for Ctor(P)` inherits, once per expansion
     auto emit_parameterized_impl_defaults() -> void;
+    // Emits one inherited interface default-method body for a concrete impl target
     auto emit_impl_default_method(std::string_view          gir_name,
                                   const sema::impl_record&  impl,
                                   mod::module_t&            iface_mod,
@@ -285,7 +290,7 @@ class emitter {
     // A closure's body is emitted over its enclosing function's scopes, whose defers it must skip
     [[nodiscard]] auto owned_by_current_function(const deferred_entry& entry) const noexcept
         -> bool;
-    auto               emit_lvalue(ast::node_id id) -> value;
+    auto emit_lvalue(ast::node_id id) -> value;
     // The lvalue of an already-bound local, by name
     auto lvalue_of_binding(std::string_view name) -> value;
 
@@ -364,10 +369,6 @@ class emitter {
     auto emit_enum_widen(value v, sema::type& to) -> value;
     // A `?` residual as the return type's `From`, by widening or by an enum merge's tag names
     auto convert_residual(value residual, sema::type& from_type) -> value;
-    struct slice_bytes {
-        std::string bytes;
-        sema::type& slice_type;
-    };
     // The bytes of a comptime argument whose parameter is declared as a slice, when it holds a
     // string or a folded byte array (`prefix ++ "..."`), without an array's sentinel
     [[nodiscard]] auto comptime_slice_bytes(const const_value&                   val,
@@ -789,8 +790,6 @@ class emitter {
     // The local generic each monomorph being emitted instantiates, innermost last
     std::vector<gsl::not_null<const sema::type*>> generic_env_owners_;
 
-    // While emitting an inherited interface default-method body: bare `self.method(...)` calls
-    // are rewritten to target this impl's own methods (its body symbol table).
     // The impl whose inherited default body is being emitted, so `self.method(...)` reaches it
     stdx::option<const sema::impl_record&> emitting_impl_default_;
     // For emitting a method body written directly in an `impl` block

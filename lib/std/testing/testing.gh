@@ -41,8 +41,7 @@ extern const __ghoti_test_take_skipped: fn(): bool;
     };
 
     /// Reports a failed check as `<prefix> file:line:column: (<label>) message`
-    @[inline(.always)]
-    const report = fn(
+    @[inline(.always)] const report = fn(
         comptime prefix: []u8,
         comptime label: []u8,
         msg: []u8,

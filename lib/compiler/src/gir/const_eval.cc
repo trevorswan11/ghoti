@@ -4407,8 +4407,6 @@ auto const_eval::fold_unary_value(syntax::token_type_t op_type,
         // A value past 128 bits has no narrow view and takes the exact path below
         const auto narrow{val->as_int_opt()};
 
-        // A literal like the `128i8` in `-128i8` holds its exact value until negated; the
-        // exact path below negates it first and range-checks the result
         // Read exactly, since the `2^127` of `-2^127` would otherwise view as `i128` min
         const auto exact{val->as_big_int_opt()};
         const bool in_range{narrow && exact &&

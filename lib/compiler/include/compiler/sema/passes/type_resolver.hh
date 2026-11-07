@@ -454,6 +454,11 @@ class type_resolver {
         bool is_poly{false};
     };
 
+    struct synthetic_tag {
+        std::string name;
+        i128        value;
+    };
+
   private:
     auto visit(ast::node_id, const ast::array_expr&) -> void;
     auto visit(ast::node_id, const ast::asm_expr&) -> void;
@@ -613,10 +618,6 @@ class type_resolver {
     // Builds a `types::enum_t` directly from a folded `EnumInfo` descriptor
     [[nodiscard]] auto synthesize_enum(source_location loc, const gir::const_struct& desc)
         -> stdx::result<gsl::not_null<type*>, diagnostic>;
-    struct synthetic_tag {
-        std::string name;
-        i128        value;
-    };
     // An enum with exactly these tags, which no source declares
     [[nodiscard]] auto build_synthetic_enum(gsl::span<const synthetic_tag>        tags,
                                             type&                                 tag_type,

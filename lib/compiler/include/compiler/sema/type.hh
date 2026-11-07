@@ -137,8 +137,7 @@ constexpr u16 CHAR_CONSTANT_BITS{21};
 }
 
 [[nodiscard]] auto is_implicit_widenable(const type& from, const type& to) noexcept -> bool;
-// Whether `from` is an enum an `A || B` merge `to` was built from, at any depth, so each of its
-// tags is a tag of `to` with the same name
+// Whether `from` is an enum an `A || B` merge `to` was built from, at any depth
 [[nodiscard]] auto is_enum_widenable(const type& from, const type& to) noexcept -> bool;
 
 [[nodiscard]] constexpr auto is_value_type(type_kind kind) noexcept -> bool {

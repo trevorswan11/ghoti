@@ -5,10 +5,10 @@ const Result = std.Result;
 const Error = std.io.Error;
 
 /// Collects writes for `Inner`, a `Writer`, in `buf`, writing them on `flush` or when `buf` is
-/// full. Nothing reaches `Inner` until then, so call `flush` before dropping it
+/// full. Call `flush` before the writer leaves its scope
 pub const BufferedWriter = fn(comptime Inner: type): type {
     return struct {
-        pub inner: ^mut Inner,
+        pub inner: &mut Inner,
         pub buf: []mut u8,
         pub len: usize = 0,
 
@@ -25,7 +25,6 @@ pub const BufferedWriter = fn(comptime Inner: type): type {
 impl(Inner: type) std.io.Writer for BufferedWriter(Inner) {
     const Error = std.io.Error;
     pub const write = fn(&mut self, bytes: []u8): Result(usize, Error) {
-        // What can never fit goes straight through, after what is already waiting
         if (bytes.len > self.buf.len) {
             self.flush()?;
             self.inner.write_all(bytes)?;
@@ -45,7 +44,7 @@ test "BufferedWriter holds writes until flushed or full" {
     let mut sink: std.io.FixedBufferStream = .{ .buf = backing };
     let mut scratch: [8]mut u8 = undefined;
     let mut buffered: BufferedWriter(std.io.FixedBufferStream) = .{
-        .inner = ^mut sink,
+        .inner = &mut sink,
         .buf = scratch[..],
     };
     let w: &mut dyn std.io.Writer = &mut buffered;

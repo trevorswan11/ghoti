@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <array>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <fmt/ranges.h>
 #include <gsl/pointers>
@@ -12,6 +14,7 @@
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/arena.hh"
 #include "compiler/ast/format.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/statement.hh"
@@ -29,6 +32,7 @@
 #include "compiler/syntax/operators.hh"
 #include "compiler/syntax/token_type.hh"
 #include "internal.hh"
+#include "support/big_int.hh"
 #include "support/diagnostic.hh"
 #include "support/float128.hh"
 #include "support/int128.hh"
@@ -780,8 +784,8 @@ auto type_resolver::merge_enums(type& lhs, type& rhs)
     }
 
     auto sources{make_uninit_span<gsl::not_null<type*>>(ctx_.arena, 2)};
-    new (&sources[0]) gsl::not_null<type*>{&lhs};
-    new (&sources[1]) gsl::not_null<type*>{&rhs};
+    sources[0] = &lhs;
+    sources[1] = &rhs;
     auto merged{TRY(build_synthetic_enum(
         tags, *tag_type, lhs_en.non_exhaustive || rhs_en.non_exhaustive, sources))};
     ctx_.enum_merges.emplace(key, merged);

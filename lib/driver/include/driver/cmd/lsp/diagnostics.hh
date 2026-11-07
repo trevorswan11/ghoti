@@ -14,7 +14,7 @@ namespace ghoti::lsp {
 [[nodiscard]] auto to_lsp_diagnostics(const mod::module_t& module) -> nlohmann::json;
 
 // Diagnostics only carry a start point today, so end is a same-line one-character placeholder
-// TODO: change diags to carry more data
+// TODO: change diags to carry more data so squiggles span errors instead of pointing to start
 // `text` is the source the location is in, for the client's column units
 [[nodiscard]] auto range_of(stdx::option<source_location> loc, std::string_view text)
     -> nlohmann::json;

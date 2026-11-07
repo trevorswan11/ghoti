@@ -79,17 +79,16 @@ pub const buf_print = fn(buf: []mut u8, comptime fmt: []u8, args...): Result([]u
     return .of(buf[..stream.pos]);
 };
 
-/// What `alloc_print` fails with: a formatting failure, or no memory to hold the result
 pub const AllocPrintError = Error || std.mem.AllocError;
 
 /// Formats `fmt` into memory from `allocator`, measured by a first pass so it is exactly as long
-/// as the output. The caller frees it with `allocator.free`
+/// as the output. The caller owns the resulting slice and must free it accordingly
 pub const alloc_print = fn(
     allocator: std.mem.Allocator,
     comptime fmt: []u8,
     args...,
 ): Result([]mut u8, AllocPrintError) {
-    let mut counter: CountingWriter = .{};
+    let mut counter: std.io.CountingWriter = .{};
     format(&mut counter, fmt, args...)?;
     let buf = allocator.alloc(u8, counter.count)?;
     match (buf_print(buf, fmt, args...)) {
@@ -101,19 +100,6 @@ pub const alloc_print = fn(
     }
     return .of(buf);
 };
-
-/// Discards what it is given, keeping only how many bytes that was
-const CountingWriter = struct {
-    pub count: usize = 0,
-};
-
-impl Writer for CountingWriter {
-    const Error = std.io.Error;
-    pub const write = fn(&mut self, bytes: []u8): Result(usize, Error) {
-        self.count += bytes.len;
-        return .of(bytes.len);
-    };
-}
 
 /// Formats one value according to `spec`, dispatching on its type.
 /// Types that implement `Format` take precedence over the builtin formatting
@@ -184,6 +170,20 @@ const format_option = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(v
     };
 };
 
+// TODO(tcs): crashes the compiler or runner? :(
+// impl(T: type) Format for std.Option(T) {
+//     const format = fn(
+//         &self,
+//         spec_: Spec,
+//         w: &mut dyn Writer,
+//     ): Result(void, Error) {
+//         return match (self) {
+//             .some => |inner| format_wrapped(w, "some(", inner, spec_),
+//             .none => format_str(w, "none", spec_),
+//         };
+//     };
+// }
+
 /// Formats `.ok` as `ok(value)` and `.err` as `err(error)`
 const format_result = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(void, Error) {
     return match (value) {
@@ -191,6 +191,20 @@ const format_result = fn(w: &mut dyn Writer, value: auto, spec_: Spec): Result(v
         .err => |e| format_wrapped(w, "err(", e, spec_),
     };
 };
+
+// TODO(tcs): crashes the compiler or runner? :(
+// impl(T: type, E: type) Format for Result(T, E) {
+//     const format = fn(
+//         &self,
+//         spec_: Spec,
+//         w: &mut dyn Writer,
+//     ): Result(void, Error) {
+//         return match (self) {
+//             .ok => |inner| format_wrapped(w, "ok(", inner, spec_),
+//             .err => |e| format_wrapped(w, "err(", e, spec_),
+//         };
+//     };
+// }
 
 const format_wrapped = fn(
     w: &mut dyn Writer,
@@ -354,7 +368,7 @@ test "format integers" {
     check(
         "340282366920938463463374607431768211455",
         "{}",
-        @as(u128, 340282366920938463463374607431768211455),
+        340282366920938463463374607431768211455u128,
     );
 }
 
@@ -399,16 +413,16 @@ test "format text, bools, and enums" {
 }
 
 test "format quotes and escapes text under {:?}" {
+    const Color = enum { red, green };
+
     check("\"hi\"", "{:?}", "hi");
     check("\"a\\nb\\t\\\"c\\\\\"", "{:?}", "a\nb\t\"c\\");
     check("\"\\x01\\x7f\"", "{:?}", "\x01\x7f");
     check("  \"ab\"", "{:>6?}", "ab");
     check("\"ab\"", "{:.2?}", "abc");
     // Words that aren't strings stay bare
-    check("true green", "{:?} {:?}", true, Color2.green);
+    check("true green", "{:?} {:?}", true, Color.green);
 }
-
-const Color2 = enum { red, green };
 
 test "format options and results" {
     let some: std.Option(i32) = .of(5);

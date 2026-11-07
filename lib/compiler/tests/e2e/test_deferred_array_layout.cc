@@ -154,7 +154,6 @@ TEST_CASE("Builtins see through a concrete array with a deferred `[M]T` element"
 }
 
 TEST_CASE("A nested instantiation folds none of its caller's deferred array dimensions") {
-    // `buf`'s dimension reads `g`'s `T`, which `inner`'s own `T` would mistype when folded
     CHECK(helpers::compile_and_run(R"(
         const size_of = fn(comptime T: type): comptime_int {
             comptime @assert(@typeInfo(T) == .float);

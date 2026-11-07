@@ -14,6 +14,7 @@
 #include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/util>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Function.h>
@@ -243,9 +244,7 @@ auto mark_dll_exports(llvm::Module& llvm_mod) -> void {
     return false;
 }
 
-// Whether an import, at any depth, reaches a module that failed. One reached only through an import
-// cycle can finish resolving before a module it depends on is poisoned and keep a clean state of
-// its own, so lowering it would walk untyped code.
+// Whether an import, at any depth, reaches a module that failed
 [[nodiscard]] auto reaches_failed_module(mod::module_t& root) -> bool {
     return reaches_import(root,
                           [](const mod::module_t& m) { return m.is_poisoned() || m.is_errored(); });
@@ -320,8 +319,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     if (module->is_errored()) { return gir::module_t{*module, ctx_.arena}; }
 
     collect_symbols(*module);
-    // A std module tested as the root (`ghoti test lib/std/fmt/fmt.gh`) resolves in the order std
-    // imports it, since starting mid-std can reach back into a declaration still resolving
+    // A std module tested as the root resolves in the order std imports it
     if (const auto std_mod{modules_.find_loaded_library_module("std")};
         std_mod && &*std_mod != module.get() && reaches_module(*std_mod, *module)) {
         resolve_types(*std_mod);

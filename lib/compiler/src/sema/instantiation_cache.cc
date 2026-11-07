@@ -34,8 +34,8 @@ auto body_typing_snapshot::diff_into(context&                            ctx,
                 slot.emplace(forced);
             }
         }};
-        // Only what this instantiation wrote folds under its bindings. Another generic's slot in
-        // the same module, still mid-instantiation, would fold its dimension against these
+
+        // Only what this instantiation wrote folds under its bindings
         const auto fold{[&](auto&                                   slots,
                             stdx::option<const std::vector<usize>&> written,
                             std::vector<usize>&                     folded_idxs) {

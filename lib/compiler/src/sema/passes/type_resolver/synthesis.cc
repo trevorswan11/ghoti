@@ -2,6 +2,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <ankerl/unordered_dense.h>
 #include <gsl/pointers>
@@ -300,11 +301,13 @@ auto type_resolver::build_synthetic_enum(gsl::span<const synthetic_tag>        t
     for (usize i{0}; i < tags.size(); ++i) {
         const auto            name_ident{synthesize_ident(tags[i].name, false)};
         const syntax::token_t val_tok{syntax::token_type_t::INT_10, "0"};
-        const auto            val_node{resolving_.ast.add_node(
-            val_tok,
-            val_tok,
-            ast::int_literal_expr{
-                .value = static_cast<u128>(tags[i].value), .is_signed = true, .spelling = "0"})};
+        const auto val_node{resolving_.ast.add_node(val_tok,
+                                                    val_tok,
+                                                    ast::int_literal_expr{
+                                                        .value = static_cast<u128>(tags[i].value),
+                                                        .is_signed = true,
+                                                        .spelling  = "0",
+                                                    })};
         resolving_.sync_side_tables_for_new_node();
         new (&enumerations[i])
             ast::enum_expr::enumeration{.name = name_ident, .value = ast::expr_handle{val_node}};

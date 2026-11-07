@@ -1241,8 +1241,7 @@ auto emitter::emit_enum_widen(value v, sema::type& to) -> value {
             ? src_int
             : value{builder_.emit_cast(instruction_kind::INT_CAST, src_int, to_tag), to_tag}};
 
-    // A tag whose value moved is rewritten. Any other value, an unnamed one included, keeps its
-    // bits
+    // A tag whose value moved is rewritten. Any other value keeps its bits
     if (!remaps.empty()) {
         auto&      fn{*builder_.get_function()};
         const auto slot{builder_.emit_alloca(to_tag)};

@@ -205,7 +205,6 @@ auto const_value::mangle() const -> std::string {
         [](bool v) -> std::string { return v ? "true" : "false"; },
         [](const std::string& v) {
             // Any other byte is `.` and its hex value, so two strings never share a name
-            // (`"{:?}"` and `"[{}]"` instantiate different functions)
             std::string out;
             for (const char c : v) {
                 const auto byte{static_cast<u8>(c)};
