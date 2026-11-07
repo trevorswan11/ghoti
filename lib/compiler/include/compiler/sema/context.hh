@@ -405,4 +405,7 @@ class comptime_evaluation_scope {
     bool   enabled_;
 };
 
+// The `builtin` module's source for a target: the shared declarations, then the target CPU's
+[[nodiscard]] auto builtin_module_source(const codegen::target_options& target_opts) -> std::string;
+
 } // namespace ghoti::sema
