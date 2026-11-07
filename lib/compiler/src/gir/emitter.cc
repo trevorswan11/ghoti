@@ -5037,8 +5037,9 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
                 const auto op_len{call.arguments[1].as_opt<ast::expr_handle>()};
                 if (op_ptr && op_len) {
                     const auto ptr_val{emit_expression(*op_ptr)};
-                    const auto len_val{emit_expression(*op_len)};
                     auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
+                    // An untyped length like `@sizeOf(T)` must widen to the full usize field
+                    const auto len_val{emit_coerced_expr(*op_len, usize_type)};
                     const auto slice_slot{builder_.emit_alloca(ret_type)};
                     auto&      ptr_type{ptr_val.type.value_or(ret_type)};
                     const auto field0{

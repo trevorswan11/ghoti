@@ -84,4 +84,27 @@ TEST_CASE("LLVM lowering volatile load and store") {
     CHECK(ir_str.contains("load volatile"));
 }
 
+TEST_CASE("`@sliceFromPtr` widens an untyped length to the full usize field") {
+    llvm::LLVMContext context;
+
+    auto [ctx, idx]{helpers::resolve_and_check(R"(
+        const Pair = struct { a: u64, b: u32 };
+
+        pub const as_bytes = fn(p: ^mut Pair): []mut u8 {
+            return @sliceFromPtr(@ptrCast(^mut u8, p), @sizeOf(Pair));
+        };
+    )")};
+
+    gir::emitter emitter{ctx->analyzer.get_ctx(), ctx->root_mod};
+    const auto   gir_mod{emitter.emit()};
+
+    codegen::llvm_lowering lowering{context, "test_slice_from_ptr"};
+    auto                   llvm_mod{lowering.lower(gir_mod)};
+    CHECK_FALSE(llvm::verifyModule(*llvm_mod));
+    // A 32-bit store into the 64-bit length field leaves its upper half uninitialized
+    const auto ir_str{helpers::ir_text(*llvm_mod)};
+    CHECK(ir_str.contains("store i64 16"));
+    CHECK_FALSE(ir_str.contains("store i32 16"));
+}
+
 } // namespace ghoti::tests
