@@ -67,6 +67,12 @@ namespace {
     return sema::deprecation_policy::WARN;
 }
 
+// `--error-limit 0` is the default and means no limit
+[[nodiscard]] auto error_limit_of(usize raw) -> stdx::option<usize> {
+    if (raw == 0) { return stdx::none; }
+    return raw;
+}
+
 } // namespace
 
 auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void {
@@ -92,6 +98,15 @@ auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void {
                      "How a use of a @[deprecated] declaration is reported (warn, error, ignore)")
         ->check(CLI::IsMember({"warn", "error", "ignore"}))
         ->default_val(opts.deprecated);
+}
+
+auto add_error_limit_option(CLI::App* subcmd, raw_options& opts) -> void {
+    subcmd
+        ->add_option("--error-limit",
+                     opts.error_limit,
+                     "Stop printing errors after N, then say how many more there were (0 for all)")
+        ->type_name("N")
+        ->default_val(opts.error_limit);
 }
 
 auto options::process_raw(const raw_options&   raw,
@@ -178,6 +193,7 @@ auto options::process_raw(const raw_options&   raw,
         .mode              = *mode,
         .runtime_safety    = mode_has_runtime_safety(*mode),
         .deprecated_policy = parse_deprecation_policy(raw.deprecated),
+        .error_limit       = error_limit_of(raw.error_limit),
         .output_explicit   = !raw.output.empty(),
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
@@ -202,6 +218,7 @@ compilation::compilation(options& opts, std::ostream& error_stream)
     : opts_{opts}, error_stream_{error_stream}, manager_{loader_},
       analyzer_{manager_, error_stream_, true, opts_.target_opts, false, opts_.runtime_safety} {
     analyzer_.set_deprecation_policy(opts_.deprecated_policy);
+    manager_.set_error_limit(opts_.error_limit);
     analyzer_.set_optimize_mode(opts_.mode);
     // Spawned children resolve a bare relative name via PATH, so pin the output path first
     opts_.make_output_path_absolute();
@@ -389,6 +406,7 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
     subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
         ->default_val(opts.time_passes);
     add_deprecated_option(subcmd, opts);
+    add_error_limit_option(subcmd, opts);
     subcmd
         ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")
         ->type_name("FILE");

@@ -108,7 +108,7 @@ struct root_error {
     if (const auto diags{root->diagnostics.as_opt<sema::diagnostics>()}) {
         for (const auto& diag : *diags) {
             found.emplace_back<root_error>(
-                {UNWRAP(diag.to_formattable().location).line, UNWRAP(diag.get_message())});
+                {UNWRAP(diag.location()).line, UNWRAP(diag.get_message())});
         }
     }
     return found;
@@ -575,7 +575,7 @@ TEST_CASE("The entry code's @compileError is reported at the program's main") {
     REQUIRE(diags.size() == 1);
     const auto& diag{diags[0]};
     CHECK(diag.get_error() == sema::error::COMPILE_ERROR_REACHED);
-    CHECK(UNWRAP(diag.to_formattable().location).line == 2);
+    CHECK(UNWRAP(diag.location()).line == 2);
     const auto message{UNWRAP(diag.get_message())};
     CHECK(message.starts_with("main must take its arguments (required by "));
     CHECK(message.ends_with("start.gh:3:9)"));

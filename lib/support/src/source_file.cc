@@ -33,6 +33,15 @@ line_offsets::line_offsets(std::string_view input) {
     }
 }
 
+auto source_file::line_text(usize line) const noexcept -> stdx::option<std::string_view> {
+    if (line >= offsets_.size()) { return stdx::none; }
+    const auto start{offsets_[line]};
+    const auto end{line + 1 < offsets_.size() ? offsets_[line + 1] : source_.size()};
+    auto       text{stdx::string::substr(source_, start, end - start)};
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) { text.remove_suffix(1); }
+    return text;
+}
+
 auto source_file::get_diagnostic_strings_at(const source_location& loc) const
     -> std::pair<std::string_view, stdx::option<std::string>> {
     PROFILE_FUNCTION();

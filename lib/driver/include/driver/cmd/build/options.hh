@@ -49,6 +49,7 @@ struct raw_options {
     bool                     dynamic{false};
     bool                     no_compiler_rt{false};
     std::string              deprecated{"warn"};
+    usize                    error_limit{0};
 
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
@@ -70,6 +71,7 @@ struct options {
     sema::optimize_mode                mode{sema::optimize_mode::DEBUG};
     bool                               runtime_safety{true};
     sema::deprecation_policy           deprecated_policy{sema::deprecation_policy::WARN};
+    stdx::option<usize>                error_limit{};
     bool output_explicit{false}; // `ghoti test` only: true when `-o/--output` was given
 
     stdx::option<std::filesystem::path> emit_gir_path{};
@@ -134,6 +136,8 @@ class compilation {
 // Helper to register standard build options into CLI subcommands
 // `--deprecated=warn|error|ignore`, shared by every subcommand that runs sema
 auto add_deprecated_option(CLI::App* subcmd, raw_options& opts) -> void;
+// `--error-limit N`, shared by every subcommand that prints compile errors
+auto add_error_limit_option(CLI::App* subcmd, raw_options& opts) -> void;
 // `-M,--mode debug|release_safe|release_fast|release_small`, shared by every compiling subcommand
 auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
 

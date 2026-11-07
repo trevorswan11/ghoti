@@ -14,6 +14,9 @@ namespace ghoti {
 // indicator pair (a flag) are one wide cluster; malformed UTF-8 counts a column per byte.
 [[nodiscard]] auto display_width(std::string_view text) noexcept -> usize;
 
+// Bytes in the code point `text` starts with, 1 for a malformed sequence or empty text
+[[nodiscard]] auto code_point_length(std::string_view text) noexcept -> usize;
+
 // UTF-16 code units in `text`, counting malformed bytes as one unit each
 [[nodiscard]] auto utf16_length(std::string_view text) noexcept -> usize;
 

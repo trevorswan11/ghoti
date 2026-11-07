@@ -61,9 +61,14 @@ auto analysis_snapshot::build(analysis_inputs                        inputs,
     if (cancelled()) { return stdx::none; }
 
     // Only what this analysis reached is indexed
-    for (const auto& [mod_path, mod] : session.get_manager()) {
+    const auto&              manager{session.get_manager()};
+    const source_text_lookup lookup{[&manager](const std::filesystem::path& path) {
+        return manager.find_loaded(path).transform(
+            [](const mod::module_t& found) { return std::string_view{found.source}; });
+    }};
+    for (const auto& [mod_path, mod] : manager) {
         snapshot->workspace_index_[mod_path] = module_workspace_symbols(*mod);
-        snapshot->diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod));
+        snapshot->diagnostics_.emplace_back(mod_path, to_lsp_diagnostics(*mod, lookup));
     }
     cache.retain([&snapshot](const std::filesystem::path& path) {
         return snapshot->workspace_index_.contains(path);

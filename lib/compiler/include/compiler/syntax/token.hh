@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 #include <string_view>
 
@@ -94,6 +95,19 @@ struct token_t {
 
 template <> struct source_info<syntax::token_t> {
     static auto get(const syntax::token_t& t) -> source_location { return {t.line, t.column}; }
+};
+
+// A token covers its lexeme, which only a multiline string literal spreads over several lines
+template <> struct span_info<syntax::token_t> {
+    static auto get(const syntax::token_t& t) -> source_span {
+        const source_location start{t.line, t.column};
+        const auto            last_newline{t.slice.rfind('\n')};
+        if (last_newline == std::string_view::npos) {
+            return {start, {t.line, t.column + t.slice.size()}};
+        }
+        const auto lines{static_cast<usize>(std::ranges::count(t.slice, '\n'))};
+        return {start, {t.line + lines, t.slice.size() - last_newline - 1}};
+    }
 };
 
 } // namespace ghoti

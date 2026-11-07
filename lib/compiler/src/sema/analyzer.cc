@@ -308,7 +308,9 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     }
 
     auto module{*module_result};
-    if (module->diagnostics.is<syntax::diagnostics>()) { module->print_diagnostics(error_stream_); }
+    if (module->diagnostics.is<syntax::diagnostics>()) {
+        modules_.print_module_diagnostics(*module, error_stream_);
+    }
 
     // A lenient analyzer still runs sema over whatever parsed
     if (module->is_errored() && tolerate_syntax_errors_) {
@@ -427,7 +429,7 @@ auto analyzer::report_entry_errors_at(mod::module_t&   root,
             kept.push_back(diag);
             continue;
         }
-        const auto at{diag.to_formattable().location};
+        const auto at{diag.location()};
         const auto required_by{at ? fmt::format("{}:{}", start.path.generic_string(), *at)
                                   : start.path.generic_string()};
         moved.emplace_back(fmt::format("{} (required by {})",

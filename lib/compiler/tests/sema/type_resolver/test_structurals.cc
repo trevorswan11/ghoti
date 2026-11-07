@@ -446,7 +446,7 @@ TEST_CASE("A type error inside an imported generic body is attributed to the def
     const auto& diags{UNWRAP(dep_module.diagnostics.as_opt<sema::diagnostics>())};
     CHECK(diags.begin() != diags.end());
     for (const auto& d : diags) {
-        const auto loc{UNWRAP(d.to_formattable().location)};
+        const auto loc{UNWRAP(d.location())};
         const auto [line, _]{dep_module.source.get_diagnostic_strings(loc)};
         CHECK(line != "<invalid line>");
     }

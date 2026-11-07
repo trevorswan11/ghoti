@@ -180,6 +180,7 @@ auto parser::setup_run_subcmd() -> gsl::not_null<CLI::App*> {
     cmd::build::add_cpu_options(sub, run_opts_);
     cmd::build::add_mode_option(sub, run_opts_);
     cmd::build::add_deprecated_option(sub, run_opts_);
+    cmd::build::add_error_limit_option(sub, run_opts_);
     cmd::build::add_compiler_rt_option(sub, run_opts_);
     return sub;
 }

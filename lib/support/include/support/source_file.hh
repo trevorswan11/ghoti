@@ -48,6 +48,10 @@ class source_file {
         return get_diagnostic_strings_at(source_info<T>::get(t));
     }
 
+    // The 0-indexed line without its line break, or none past the last line
+    [[nodiscard]] auto line_text(usize line) const noexcept -> stdx::option<std::string_view>;
+    [[nodiscard]] auto line_count() const noexcept -> usize { return offsets_.size(); }
+
     [[nodiscard]] constexpr operator std::string_view() const noexcept { return source_; }
     [[nodiscard]] constexpr operator const std::string&() const noexcept { return source_; }
 

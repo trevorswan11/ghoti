@@ -1056,3 +1056,12 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - `ghoti fmt` can now be locally disabled with `ghoti fmt: off` and re-enabled with `ghoti fmt: on`
 
 ## alpha.3
+
+## Diagnostics
+- Errors print rustc-style: an `error[CODE]: message` header, a `--> file:line:col` line, and the source line with the error underlined
+    - Warnings print as `warning[CODE]`, and `ghoti fmt` prints its parse errors the same way
+    - Tabs are expanded and wide characters take two columns, so the underline lines up; a long line is trimmed around the error with `…`
+- Syntax errors underline the whole token or construct they're about instead of its first character, in the terminal and in the LSP
+- Errors are printed sorted by file, then position, so the order no longer depends on the order modules were analyzed in; the LSP publishes them in the same order
+- `--error-limit N` on `build-*`, `run`, and `test` stops after `N` errors and says how many more weren't shown; there is no limit by default
+- LSP diagnostics can carry related locations (`relatedInformation`) and notes

@@ -9,7 +9,9 @@
 #include <stdx/memory.hh>
 #include <stdx/utility.hh>
 
+#include "compiler/module/module.hh"
 #include "compiler/module/overlay_loader.hh"
+#include "compiler/sema/error.hh"
 #include "driver/cmd/lsp/diagnostics.hh"
 #include "driver/cmd/lsp/session.hh"
 #include "support/test.hh"
@@ -128,6 +130,63 @@ TEST_CASE("a shared session that analyzes two impls of one interface keeps inher
     // `late.gh` then implements the cached interface.
     const auto late{UNWRAP(session->analyze(std::filesystem::path{"late.gh"}))};
     CHECK(lsp::to_lsp_diagnostics(*late).empty());
+}
+
+TEST_CASE("to_lsp_diagnostics spans a parse error's whole token") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_diagnostics_token_span.gh"};
+    CHECK(loader.add(path, "pub const x = else;\n"));
+
+    auto       session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    const auto module{UNWRAP(session->analyze(path))};
+    const auto diagnostics = lsp::to_lsp_diagnostics(*module);
+    REQUIRE_FALSE(diagnostics.empty());
+
+    const auto& range{diagnostics.at(0).at("range")};
+    CHECK(range.at("start").at("character") == 14);
+    CHECK(range.at("end").at("character") == 18);
+}
+
+TEST_CASE("to_lsp_diagnostics sorts and carries labels and notes") {
+    mod::overlay_loader         loader;
+    const std::filesystem::path path{"test_diagnostics_related.gh"};
+    const std::filesystem::path other{"test_diagnostics_related_other.gh"};
+    CHECK(loader.add(path, "const a = 1;\nconst b = 2;\n"));
+
+    auto session{stdx::make_box<lsp::analysis_session>(loader, std::cerr)};
+    auto module{UNWRAP(session->analyze(path))};
+
+    sema::diagnostics list;
+    sema::diagnostic  late{"late", sema::error::TYPE_MISMATCH, source_span{{1, 6}, {1, 7}}};
+    late.with_primary_label("this one")
+        .with_label({other, source_span{{0, 2}, {0, 4}}}, "declared here")
+        .with_note("unlocated context")
+        .with_note("located context", located_span{path, source_span{{0, 0}, {0, 5}}});
+    list.push_back(late);
+    list.emplace_back("early", sema::error::TYPE_MISMATCH, source_location{0, 6});
+    module->diagnostics.emplace<sema::diagnostics>(std::move(list));
+
+    const auto diagnostics = lsp::to_lsp_diagnostics(*module);
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics.at(0).at("message") == "early");
+    CHECK_FALSE(diagnostics.at(0).contains("relatedInformation"));
+
+    const auto& diag{diagnostics.at(1)};
+    CHECK(diag.at("message") == "late\nnote: unlocated context");
+    CHECK(diag.at("range").at("start").at("character") == 6);
+    CHECK(diag.at("range").at("end").at("character") == 7);
+
+    const auto& related{diag.at("relatedInformation")};
+    REQUIRE(related.size() == 3);
+    CHECK(related.at(0).at("message") == "this one");
+    CHECK(related.at(1).at("message") == "declared here");
+    CHECK(related.at(1)
+              .at("location")
+              .at("uri")
+              .get<std::string>()
+              .ends_with("test_diagnostics_related_other.gh"));
+    CHECK(related.at(1).at("location").at("range").at("end").at("character") == 4);
+    CHECK(related.at(2).at("message") == "located context");
 }
 
 } // namespace ghoti::tests

@@ -40,12 +40,18 @@ struct source_location {
     }
 
     auto operator==(const source_location&) const noexcept -> bool = default;
+    auto operator<=>(const source_location&) const noexcept        = default;
 };
 
 // A half-open [start, end) range; `end` is the position just past the last character
 struct source_span {
     source_location start;
     source_location end;
+
+    // The one-column span a bare location stands for
+    [[nodiscard]] static auto point(source_location at) noexcept -> source_span {
+        return {at, {at.line, at.column + 1}};
+    }
 
     auto operator==(const source_span&) const noexcept -> bool = default;
 };
@@ -85,6 +91,45 @@ template <> struct source_info<source_location> {
     static auto get(const source_location& loc) -> source_location { return loc; }
 };
 
+// Types that know their full extent, not only where they start
+template <typename T> struct span_info;
+
+template <typename T>
+concept Spannable = requires(T t) {
+    { span_info<T>::get(t) } -> std::same_as<source_span>;
+};
+
+template <> struct span_info<source_span> {
+    static auto get(const source_span& span) noexcept -> source_span { return span; }
+};
+
+template <typename T>
+concept SourceAnchor = Locateable<T> || Spannable<T>;
+
+template <SourceAnchor T> [[nodiscard]] auto span_of(const T& t) -> source_span {
+    if constexpr (Spannable<T>) {
+        return span_info<T>::get(t);
+    } else {
+        return source_span::point(source_info<T>::get(t));
+    }
+}
+
+// A secondary span with a short label, drawn with `-`
+struct diagnostic_label {
+    located_span at;
+    std::string  text;
+
+    auto operator==(const diagnostic_label&) const noexcept -> bool = default;
+};
+
+// Extra context: unlocated notes print as `= note:` lines, located ones get their own snippet
+struct diagnostic_note {
+    std::string                text;
+    stdx::option<located_span> at;
+
+    auto operator==(const diagnostic_note&) const noexcept -> bool = default;
+};
+
 namespace mod { struct module_t; } // namespace mod
 
 // Mappings not to be changed, tied to LSP diagnostic emission
@@ -107,20 +152,28 @@ namespace detail {
 // Returns the level's style for diagnostic printing
 [[nodiscard]] constexpr auto level_style(diagnostic_level level) noexcept {
     switch (level) {
-    case diagnostic_level::ERROR:   return style::RED;
-    case diagnostic_level::WARNING: return style::LIGHT_YELLOW;
+    case diagnostic_level::ERROR:   return style::RED_BOLD;
+    case diagnostic_level::WARNING: return style::LIGHT_YELLOW_BOLD;
     default:                        return style::BASE;
     }
 }
 
-// A decomposed diagnostic that contains all information for base formatting
+// A borrowed view of a diagnostic with everything the renderers need
 struct formattable_diagnostic {
-    const stdx::option<std::string>&      message;
-    const stdx::option<source_location>&  location;
-    std::string_view                      error_name;
-    const stdx::option<diagnostic_level>& level;
+    std::string_view                  message;
+    stdx::option<source_span>         span;
+    std::string_view                  error_name;
+    stdx::option<diagnostic_level>    level;
+    std::string_view                  primary_label;
+    gsl::span<const diagnostic_label> labels;
+    gsl::span<const diagnostic_note>  notes;
+
+    [[nodiscard]] auto location() const noexcept -> stdx::option<source_location> {
+        return span.transform([](const source_span& s) { return s.start; });
+    }
 };
 
+// The header and location lines alone, for callers without the source text
 auto format_diagnostic(std::ostream&                    os,
                        const formattable_diagnostic&    diag,
                        const stdx::option<std::string>& source_path,
@@ -130,38 +183,51 @@ auto format_diagnostic(std::ostream&                    os,
 
 struct diagnostic_snapshot {
     std::string                   message;
-    stdx::option<source_location> location;
+    stdx::option<source_span>     span;
     std::string                   error_name;
     diagnostic_level              level;
+    std::string                   primary_label;
+    std::vector<diagnostic_label> labels;
+    std::vector<diagnostic_note>  notes;
+
+    [[nodiscard]] auto location() const noexcept -> stdx::option<source_location> {
+        return span.transform([](const source_span& s) { return s.start; });
+    }
+
+    [[nodiscard]] auto to_formattable() const noexcept -> detail::formattable_diagnostic {
+        return {message, span, error_name, level, primary_label, labels, notes};
+    }
 };
 
 template <stdx::ScopedEnum E> class diagnostic {
   public:
     explicit diagnostic(E err) noexcept : error_{err} {}
-    diagnostic(E err, usize line, usize column) noexcept : loc_{{line, column}}, error_{err} {}
+    diagnostic(E err, usize line, usize column) noexcept
+        : span_{source_span::point({line, column})}, error_{err} {}
     diagnostic(stdx::option<std::string> msg, E err, usize line, usize column) noexcept
-        : message_{std::move(msg)}, loc_{{line, column}}, error_{err} {}
+        : message_{std::move(msg)}, span_{source_span::point({line, column})}, error_{err} {}
     diagnostic(stdx::option<std::string> msg, E err, stdx::option<source_location> loc) noexcept
-        : message_{std::move(msg)}, loc_{std::move(loc)}, error_{err} {}
+        : message_{std::move(msg)}, span_{loc.transform(source_span::point)}, error_{err} {}
     diagnostic(stdx::option<std::string> msg, E err) noexcept
         : message_{std::move(msg)}, error_{err} {}
 
-    template <Locateable T>
+    template <SourceAnchor T>
     diagnostic(stdx::option<std::string> msg, E err, const T& t) noexcept
-        : message_{std::move(msg)}, loc_{source_info<T>::get(t)}, error_{err} {}
+        : message_{std::move(msg)}, span_{span_of(t)}, error_{err} {}
 
-    template <Locateable T> diagnostic(E err, T t) : loc_{source_info<T>::get(t)}, error_{err} {}
+    template <SourceAnchor T> diagnostic(E err, const T& t) : span_{span_of(t)}, error_{err} {}
 
     // Moves the passed diagnostic into a new one with an error code
     diagnostic(diagnostic&& other, E err) noexcept
-        : message_{std::move(other.message_)}, loc_{other.loc_}, error_{err},
-          origin_{other.origin_} {}
+        : message_{std::move(other.message_)}, span_{other.span_},
+          primary_label_{std::move(other.primary_label_)}, labels_{std::move(other.labels_)},
+          notes_{std::move(other.notes_)}, error_{err}, origin_{other.origin_} {}
 
-    // Moves the passed diagnostic into a new one with a specified source location
-    template <Locateable T>
+    // Moves the passed diagnostic to another place, dropping the labels that described the old one
+    template <SourceAnchor T>
     diagnostic(diagnostic&& other, const T& t) noexcept
-        : message_{std::move(other.message_)}, loc_{source_info<T>::get(t)}, error_{other.error_},
-          origin_{other.origin_} {}
+        : message_{std::move(other.message_)}, span_{span_of(t)}, notes_{std::move(other.notes_)},
+          error_{other.error_}, origin_{other.origin_} {}
 
     [[nodiscard]] auto to_string(const stdx::option<std::string>& source_path = stdx::none,
                                  stdx::option<bool> in_terminal = stdx::none) const -> std::string {
@@ -170,16 +236,18 @@ template <stdx::ScopedEnum E> class diagnostic {
         return ss.str();
     }
 
+    // Spans, labels, and notes are presentation, so equality only looks at the primary start
     auto operator==(const diagnostic& other) const noexcept -> bool {
-        return message_ == other.message_ && loc_ == other.loc_ && error_ == other.error_ &&
-               level_ == other.level_;
+        return message_ == other.message_ && location() == other.location() &&
+               error_ == other.error_ && level_ == other.level_;
     }
 
     // A key equal for exactly the diagnostics `operator==` considers equal
     [[nodiscard]] auto identity() const -> std::string {
+        const auto at{location()};
         return fmt::format("{}|{}|{}|{}|{}",
                            message_.value_or(""),
-                           loc_ ? fmt::format("{}:{}", loc_->line, loc_->column) : "",
+                           at ? fmt::format("{}:{}", at->line, at->column) : "",
                            magic_enum::enum_integer(error_),
                            level_ ? static_cast<i32>(*level_) : -1,
                            message_.has_value());
@@ -187,16 +255,56 @@ template <stdx::ScopedEnum E> class diagnostic {
 
     MAKE_GETTER(message, const stdx::option<std::string>&)
     MAKE_GETTER(error, E)
+    MAKE_GETTER(span, const stdx::option<source_span>&)
+    MAKE_GETTER(primary_label, const std::string&)
+    MAKE_GETTER(labels, const std::vector<diagnostic_label>&)
+    MAKE_GETTER(notes, const std::vector<diagnostic_note>&)
+
+    [[nodiscard]] auto location() const noexcept -> stdx::option<source_location> {
+        return span_.transform([](const source_span& s) { return s.start; });
+    }
+
     [[nodiscard]] auto to_formattable() const noexcept -> detail::formattable_diagnostic {
-        return {message_, loc_, magic_enum::enum_name(error_), level_};
+        const auto name{magic_enum::enum_name(error_)};
+        return {message_ ? std::string_view{*message_} : name,
+                span_,
+                name,
+                level_,
+                primary_label_,
+                labels_,
+                notes_};
     }
 
     // An owning copy, for callers that need this diagnostic's content to outlive its list
     [[nodiscard]] auto snapshot() const -> diagnostic_snapshot {
-        return {message_.value_or(std::string{magic_enum::enum_name(error_)}),
-                loc_,
-                std::string{magic_enum::enum_name(error_)},
-                level_.value_or(diagnostic_level::ERROR)};
+        const std::string name{magic_enum::enum_name(error_)};
+        return {message_.value_or(name),
+                span_,
+                name,
+                level_.value_or(diagnostic_level::ERROR),
+                primary_label_,
+                labels_,
+                notes_};
+    }
+
+    auto set_span(source_span span) noexcept -> diagnostic& {
+        span_ = span;
+        return *this;
+    }
+
+    auto with_primary_label(std::string text) -> diagnostic& {
+        primary_label_ = std::move(text);
+        return *this;
+    }
+
+    auto with_label(located_span at, std::string text) -> diagnostic& {
+        labels_.push_back({std::move(at), std::move(text)});
+        return *this;
+    }
+
+    auto with_note(std::string text, stdx::option<located_span> at = stdx::none) -> diagnostic& {
+        notes_.push_back({std::move(text), std::move(at)});
+        return *this;
     }
 
     // The module whose source `location` points into, when it isn't the one whose list holds
@@ -212,7 +320,10 @@ template <stdx::ScopedEnum E> class diagnostic {
 
   private:
     stdx::option<std::string>          message_;
-    stdx::option<source_location>      loc_;
+    stdx::option<source_span>          span_;
+    std::string                        primary_label_;
+    std::vector<diagnostic_label>      labels_;
+    std::vector<diagnostic_note>       notes_;
     E                                  error_;
     stdx::option<diagnostic_level>     level_{diagnostic_level::ERROR};
     stdx::option<const mod::module_t&> origin_;

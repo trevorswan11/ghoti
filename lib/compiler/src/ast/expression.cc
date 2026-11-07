@@ -498,7 +498,7 @@ namespace {
     default:
         return make_syntax_err("Members must be declarations or imports",
                                syntax::error::INVALID_MEMBER,
-                               parser.get_location_of(*member));
+                               parser.get_span_of(*member));
     }
 }
 
@@ -586,7 +586,7 @@ parse_aggregate_cfg_group(syntax::parser& parser,
     const auto member{TRY(deconstruct_member(parser, parsed))};
     if (const auto err_msg{validate_member_decl(parser, member)}) {
         return make_syntax_err(
-            std::string{*err_msg}, syntax::error::INVALID_MEMBER, parser.get_location_of(*member));
+            std::string{*err_msg}, syntax::error::INVALID_MEMBER, parser.get_span_of(*member));
     }
 
     // Carry a leading `///` block onto a `const` / `let` / `let mut` member the same way top-level
@@ -1000,7 +1000,7 @@ auto parse_attributed_function_expr(syntax::parser& parser)
     if (fn_node.is_type_expr) {
         return make_syntax_err("Attributes apply to function definitions, not function types",
                                syntax::error::MISPLACED_ATTRIBUTES,
-                               parser.get_location_of(*fn));
+                               parser.get_span_of(*fn));
     }
     fn_node.attributes.emplace(std::move(attributes));
     return fn;
@@ -1134,7 +1134,7 @@ auto parse_function_header(syntax::parser& parser)
                     return make_syntax_err(
                         "A parameter after one with a default value needs a default value too",
                         syntax::error::FN_PARAMETER_DEFAULT_NOT_TRAILING,
-                        parser.get_location_of(*param_type));
+                        parser.get_span_of(*param_type));
                 }
 
                 param_explicit_type = *param_type;
@@ -1144,7 +1144,7 @@ auto parse_function_header(syntax::parser& parser)
                         return make_syntax_err(
                             "Function parameter types may not be marked `noreturn`",
                             syntax::error::FN_PARAMETER_IS_NORETURN,
-                            parser.get_location_of(*param_type));
+                            parser.get_span_of(*param_type));
                     }
                 }
 
@@ -1165,7 +1165,7 @@ auto parse_function_header(syntax::parser& parser)
             if (default_value && is_pack) {
                 return make_syntax_err("A parameter pack cannot have a default value",
                                        syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                       parser.get_location_of(**default_value));
+                                       parser.get_span_of(**default_value));
             }
             if (default_value && !first_default) { first_default.emplace(*default_value); }
             // `comptime T: type` is spelled out for consistency, but a `type` binds through
@@ -1240,13 +1240,13 @@ auto function_expr::parse(syntax::parser& parser, bool is_move, bool is_extern)
                 return make_syntax_err("Only a function with a body or an interface method "
                                        "signature can give a parameter a default value",
                                        syntax::error::FN_PARAMETER_HAS_DEFAULT_VALUE,
-                                       parser.get_location_of(**param.default_value));
+                                       parser.get_span_of(**param.default_value));
             }
             if (param.name.is<ast::discarded>()) {
                 return make_syntax_err("Function type parameter names cannot be discarded; a "
                                        "parameter name is required",
                                        syntax::error::FN_TYPE_PARAMETER_DISCARDED,
-                                       parser.get_location_of(*param.name));
+                                       parser.get_span_of(*param.name));
             }
         }
         const auto signature{parser.add_expr<function_expr>(start_token,
@@ -2245,7 +2245,7 @@ auto parse_comptime_expr(syntax::parser& parser) -> stdx::result<expr_handle, sy
         if (!body.is<block_stmt>()) {
             return make_syntax_err("Comptime labels may only be applied to blocks",
                                    syntax::error::ILLEGAL_LABEL_STATEMENT,
-                                   parser.get_location_of(*raw_stmt));
+                                   parser.get_span_of(*raw_stmt));
         }
 
         parser.get_ast().get_as_mut<block_stmt>(*body).is_comptime = true;
@@ -2314,7 +2314,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
                 return make_syntax_err("`unroll for` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::UNROLLED_LOOP_LABELED,
-                                       parser.get_location_of(*raw_stmt));
+                                       parser.get_span_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::WHILE_LOOP_EXPRESSION:
@@ -2322,7 +2322,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
                 return make_syntax_err("`unroll while` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::UNROLLED_LOOP_LABELED,
-                                       parser.get_location_of(*raw_stmt));
+                                       parser.get_span_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::DO_WHILE_LOOP_EXPRESSION:
@@ -2330,7 +2330,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
                 return make_syntax_err("`unroll do ... while` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::UNROLLED_LOOP_LABELED,
-                                       parser.get_location_of(*raw_stmt));
+                                       parser.get_span_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::INFINITE_LOOP_EXPRESSION:
@@ -2338,7 +2338,7 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
                 return make_syntax_err("`unroll loop` cannot be labeled; it has no `break`/"
                                        "`continue` to target",
                                        syntax::error::UNROLLED_LOOP_LABELED,
-                                       parser.get_location_of(*raw_stmt));
+                                       parser.get_span_of(*raw_stmt));
             }
             return stmt.expression;
         case node_kind::IF_EXPRESSION:
@@ -2346,14 +2346,14 @@ auto label_expr::deconstruct_body(syntax::parser& parser, stmt_handle raw_stmt)
         default:
             return make_syntax_err("Labeled expressions may only be conditionals or loops",
                                    syntax::error::ILLEGAL_LABEL_EXPRESSION,
-                                   parser.get_location_of(*raw_stmt));
+                                   parser.get_span_of(*raw_stmt));
         }
     }
     case node_kind::BLOCK_STATEMENT: return raw_stmt;
     default:
         return make_syntax_err("Labeled statements may only be blocks",
                                syntax::error::ILLEGAL_LABEL_STATEMENT,
-                               parser.get_location_of(*raw_stmt));
+                               parser.get_span_of(*raw_stmt));
     }
 }
 

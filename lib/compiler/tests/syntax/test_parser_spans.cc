@@ -10,7 +10,10 @@
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/syntax/parser.hh"
+#include "compiler/syntax/token.hh"
 #include "helpers/ast.hh"
+#include "support/diagnostic.hh"
+#include "support/test.hh"
 
 namespace ghoti::tests {
 
@@ -173,6 +176,35 @@ TEST_CASE("impl and interface parse errors recover") {
     CHECK(parse_errs("impl Foo;\n") > 0);                  // missing `{ ... }` body
     CHECK(parse_errs("impl for Bar {}\n") > 0);            // missing interface before `for`
     CHECK(parse_errs("const I = interface { x };\n") > 0); // malformed member
+}
+
+namespace {
+
+[[nodiscard]] auto first_error_span(std::string_view source) -> source_span {
+    syntax::parser p{source};
+    ghoti::arena   arena;
+    ast::AST       parsed;
+    const auto     diagnostics{p.consume(parsed, arena)};
+    REQUIRE_FALSE(diagnostics.empty());
+    return UNWRAP(diagnostics[0].get_span());
+}
+
+} // namespace
+
+TEST_CASE("a parse error at a token spans the whole token") {
+    const auto span{first_error_span("const x = else;\n")};
+    CHECK(span == source_span{{0, 10}, {0, 14}});
+}
+
+TEST_CASE("a parse error about a node spans the whole node") {
+    const auto span{first_error_span("const f = fn(x: noreturn): void {};\n")};
+    CHECK(span == source_span{{0, 16}, {0, 24}});
+}
+
+TEST_CASE("a multiline string token's span ends on its last line") {
+    const syntax::token_t token{
+        syntax::token_type_t::MULTILINE_STRING, "\\\\ab\n    \\\\cde", 3, 4};
+    CHECK(span_of(token) == source_span{{3, 4}, {4, 9}});
 }
 
 } // namespace ghoti::tests

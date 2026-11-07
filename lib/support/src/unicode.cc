@@ -160,6 +160,11 @@ auto display_width(std::string_view text) noexcept -> usize {
     return width;
 }
 
+auto code_point_length(std::string_view text) noexcept -> usize {
+    if (text.empty()) { return 1; }
+    return read_code_point(text).length;
+}
+
 auto utf16_length(std::string_view text) noexcept -> usize {
     usize units{0};
     for (usize i{0}; i < text.size();) {

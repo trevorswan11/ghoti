@@ -294,6 +294,8 @@ class parser {
 
     [[nodiscard]] auto get_location_of(ast::node_id id) -> source_location;
     [[nodiscard]] auto get_location_of(ast::explicit_type_id id) -> source_location;
+    [[nodiscard]] auto get_span_of(ast::node_id id) -> source_span;
+    [[nodiscard]] auto get_span_of(ast::explicit_type_id id) -> source_span;
 
     // Adds an expression to the ast and returns its handle
     template <ast::NodeData Data, typename... Args>

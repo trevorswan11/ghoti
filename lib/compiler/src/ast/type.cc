@@ -121,7 +121,7 @@ auto explicit_function_type::parse(syntax::parser& parser, bool allow_trailing_b
                 if (type.get_token_type() == syntax::token_type_t::NORETURN) {
                     return make_syntax_err("Function parameter types may not be marked `noreturn`",
                                            syntax::error::FN_PARAMETER_IS_NORETURN,
-                                           parser.get_location_of(type));
+                                           parser.get_span_of(type));
                 }
             }
 
