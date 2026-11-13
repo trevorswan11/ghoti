@@ -7,22 +7,33 @@
 #include <utility>
 #include <vector>
 
+#include <ankerl/unordered_dense.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/util>
 #include <stdx/assert.hh>
 #include <stdx/fixed/vector.hh>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
+#include <stdx/result.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 
 #include "astgen_internal.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
+#include "compiler/module/module.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/syntax/keywords.hh"
+#include "compiler/syntax/token_type.hh"
 #include "compiler/uir/uir.hh"
+#include "support/diagnostic.hh"
 #include "support/string_utils.hh"
 
 namespace ghoti::uir {
@@ -662,7 +673,7 @@ auto lower_reachable(const mod::module_t& root, const astgen_context& cx)
 }
 
 auto lower(const mod::module_t& mod, const astgen_context& cx)
-    -> stdx::result<module, sema::diagnostics> {
+    -> stdx::result<module_t, sema::diagnostics> {
     auto result{lower_module(mod, cx)};
     if (!result.diagnostics.empty()) { return stdx::err{std::move(result.diagnostics)}; }
     return std::move(result.uir);

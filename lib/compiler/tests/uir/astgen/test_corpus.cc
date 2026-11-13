@@ -1,5 +1,4 @@
 #include <filesystem>
-#include <string>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -48,7 +47,6 @@ class corpus_context {
     }
 
     auto check_file_lowers(const std::filesystem::path& path) -> void {
-        INFO(path_utils::display(path));
         check_lowers(*UNWRAP(manager_.try_get_file_module(path)));
     }
 

@@ -209,7 +209,7 @@ constexpr std::array IMPL_DECL{field{BODY, "params"},
                                field{BODY, "target"},
                                field{LIST, "decls", DECL_ITEMS}};
 
-[[nodiscard]] auto skip_record(const module& mod, gsl::span<const field> schema, u32 at) -> u32 {
+[[nodiscard]] auto skip_record(const module_t& mod, gsl::span<const field> schema, u32 at) -> u32 {
     const auto extra{mod.extra()};
     for (const auto& f : schema) {
         switch (f.kind) {
@@ -322,18 +322,18 @@ auto schema_of(tag t) noexcept -> gsl::span<const field> {
     }
 }
 
-module::module() {
+module_t::module_t() {
     // A shared empty body, so a decl or record with no body points at a zero length
     extra_.push_back(0);
 }
 
-auto module::namespace_of(u32 owner) const -> stdx::option<const namespace_info&> {
+auto module_t::namespace_of(u32 owner) const -> stdx::option<const namespace_info&> {
     if (owner == NO_INDEX) { return root_; }
     if (const auto it{namespaces_.find(owner)}; it != namespaces_.end()) { return it->second; }
     return stdx::none;
 }
 
-auto module::add(tag t, data d, source src) -> u32 {
+auto module_t::add(tag t, data d, source src) -> u32 {
     const auto index{instruction_count()};
     tags_.push_back(t);
     datas_.push_back(d);
@@ -341,14 +341,14 @@ auto module::add(tag t, data d, source src) -> u32 {
     return index;
 }
 
-auto module::reserve(source src) -> u32 { return add(tag::unreachable, data{.int_value = 0}, src); }
+auto module_t::reserve(source src) -> u32 { return add(tag::unreachable, data{.int_value = 0}, src); }
 
-auto module::set(u32 index, tag t, data d) noexcept -> void {
+auto module_t::set(u32 index, tag t, data d) noexcept -> void {
     tags_[index]  = t;
     datas_[index] = d;
 }
 
-auto module::intern(std::string_view text) -> string_ref {
+auto module_t::intern(std::string_view text) -> string_ref {
     if (const auto it{string_lut_.find(text)}; it != string_lut_.end()) { return it->second; }
     const string_ref added{static_cast<u32>(strings_.size()), static_cast<u32>(text.size())};
     strings_.append(text);
@@ -356,13 +356,13 @@ auto module::intern(std::string_view text) -> string_ref {
     return added;
 }
 
-auto module::append_extra(gsl::span<const u32> words) -> u32 {
+auto module_t::append_extra(gsl::span<const u32> words) -> u32 {
     const auto at{static_cast<u32>(extra_.size())};
     extra_.insert(extra_.end(), words.begin(), words.end());
     return at;
 }
 
-auto module::add_body(gsl::span<const u32> instructions) -> body_ref {
+auto module_t::add_body(gsl::span<const u32> instructions) -> body_ref {
     if (instructions.empty()) { return EMPTY_BODY; }
     const auto at{static_cast<u32>(extra_.size())};
     extra_.push_back(static_cast<u32>(instructions.size()));
@@ -370,17 +370,17 @@ auto module::add_body(gsl::span<const u32> instructions) -> body_ref {
     return at;
 }
 
-auto module::add_decl(decl d) -> u32 {
+auto module_t::add_decl(decl d) -> u32 {
     decls_.push_back(d);
     return static_cast<u32>(decls_.size() - 1);
 }
 
-auto module::add_import(import_info info) -> u32 {
+auto module_t::add_import(import_info info) -> u32 {
     imports_.push_back(std::move(info));
     return static_cast<u32>(imports_.size() - 1);
 }
 
-auto module::add_namespace(namespace_info info) -> void {
+auto module_t::add_namespace(namespace_info info) -> void {
     const auto owner{info.owner};
     namespaces_.insert_or_assign(owner, std::move(info));
 }
@@ -428,7 +428,7 @@ auto record_writer::words_field(gsl::span<const u32> words) -> record_writer& {
 
 auto record_writer::finish() -> u32 { return mod_.append_extra(words_); }
 
-auto record_end(const module& mod, tag t, u32 at) -> u32 {
+auto record_end(const module_t& mod, tag t, u32 at) -> u32 {
     return skip_record(mod, schema_of(t), at);
 }
 

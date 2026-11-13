@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
@@ -305,11 +304,11 @@ struct import_info {
     stdx::option<std::filesystem::path> path{}; // where it loaded from, when it did
 };
 
-class module {
+class module_t {
   public:
-    module();
-    ~module() = default;
-    MAKE_MOVE_ONLY(module)
+    module_t();
+    ~module_t() = default;
+    MAKE_MOVE_ONLY(module_t)
 
     [[nodiscard]] auto instruction_count() const noexcept -> u32 {
         return static_cast<u32>(tags_.size());
@@ -365,7 +364,7 @@ class module {
 // Reads an `extra` record field by field, in schema order
 class record_reader {
   public:
-    record_reader(const module& mod, u32 at) noexcept : mod_{mod}, at_{at} {}
+    record_reader(const module_t& mod, u32 at) noexcept : mod_{mod}, at_{at} {}
 
     [[nodiscard]] auto ref_field() noexcept -> ref { return static_cast<ref>(word()); }
     [[nodiscard]] auto u32_field() noexcept -> u32 { return word(); }
@@ -380,14 +379,14 @@ class record_reader {
     [[nodiscard]] auto word() noexcept -> u32 { return mod_.extra()[at_++]; }
 
   private:
-    const module& mod_;
+    const module_t& mod_;
     u32           at_;
 };
 
 // Builds an `extra` record field by field, in schema order, then appends it
 class record_writer {
   public:
-    explicit record_writer(module& mod) noexcept : mod_{mod} {}
+    explicit record_writer(module_t& mod) noexcept : mod_{mod} {}
 
     auto ref_field(ref r) -> record_writer& { return word(static_cast<u32>(r)); }
     auto u32_field(u32 value) -> record_writer& { return word(value); }
@@ -407,11 +406,11 @@ class record_writer {
     }
 
   private:
-    module&          mod_;
+    module_t&          mod_;
     std::vector<u32> words_;
 };
 
 // Walks a record by its schema, returning where it ends; used to check what a writer produced
-[[nodiscard]] auto record_end(const module& mod, tag t, u32 at) -> u32;
+[[nodiscard]] auto record_end(const module_t& mod, tag t, u32 at) -> u32;
 
 } // namespace ghoti::uir

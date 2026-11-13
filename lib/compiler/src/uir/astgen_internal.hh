@@ -1,29 +1,32 @@
 #pragma once
 
-#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <gsl/pointers>
 #include <gsl/util>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/utility.hh>
 #include <stdx/variant.hh>
 
 #include "compiler/ast/ast.hh"
+#include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
-#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/module/module.hh"
 #include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/syntax/builtins.hh"
+#include "compiler/syntax/token_type.hh"
 #include "compiler/uir/astgen.hh"
 #include "compiler/uir/uir.hh"
 #include "support/diagnostic.hh"
@@ -387,7 +390,7 @@ class astgen {
     const mod::module_t&  mod_;
     const ast::AST&       ast_;
     const astgen_context& cx_;
-    module                out_;
+    module_t              out_;
     sema::diagnostics     diags_;
     sema::cfg_evaluator   cfg_;
 

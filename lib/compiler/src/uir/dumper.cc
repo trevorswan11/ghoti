@@ -54,7 +54,7 @@ constexpr std::string_view INDENT{"    "};
 
 class dumper {
   public:
-    dumper(const module& mod, dump_options options) : mod_{mod}, options_{options} {}
+    dumper(const module_t& mod, dump_options options) : mod_{mod}, options_{options} {}
 
     auto run() -> std::string {
         for (u32 i{0}; i < mod_.imports().size(); ++i) {
@@ -278,14 +278,14 @@ class dumper {
     }
 
   private:
-    const module& mod_;
+    const module_t& mod_;
     dump_options  options_;
     std::string   out_;
 };
 
 } // namespace
 
-auto dump(const module& mod, dump_options options) -> std::string {
+auto dump(const module_t& mod, dump_options options) -> std::string {
     return dumper{mod, options}.run();
 }
 

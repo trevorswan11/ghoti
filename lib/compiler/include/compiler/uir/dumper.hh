@@ -16,6 +16,6 @@ struct dump_options {
 
 // The `--emit-uir` text: the imports, then each declaration's bodies, with every record printed
 // by its tag's schema
-[[nodiscard]] auto dump(const module& mod, dump_options options = {}) -> std::string;
+[[nodiscard]] auto dump(const module_t& mod, dump_options options = {}) -> std::string;
 
 } // namespace ghoti::uir

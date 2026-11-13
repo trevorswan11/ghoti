@@ -22,7 +22,7 @@ struct astgen_context {
 // A module's UIR and every diagnostic lowering reported. The UIR is complete even when there are
 // errors: an unresolved name lowers to a placeholder, so later passes and the LSP can still use it
 struct lowered {
-    module            uir;
+    module_t            uir;
     sema::diagnostics diagnostics;
 };
 
@@ -43,6 +43,6 @@ struct lowered_module {
 
 // `lower_module`, failing with the diagnostics when there are any
 [[nodiscard]] auto lower(const mod::module_t& mod, const astgen_context& cx)
-    -> stdx::result<module, sema::diagnostics>;
+    -> stdx::result<module_t, sema::diagnostics>;
 
 } // namespace ghoti::uir
