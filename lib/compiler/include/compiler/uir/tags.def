@@ -1,0 +1,133 @@
+// UIR instruction tag X(name, payload) macros
+
+// Literals
+UIR_TAG(int_value, INT)           // an untyped integer literal that fits in 64 bits
+UIR_TAG(int_lit, PL)              // a suffixed, character, or wider-than-64-bit integer literal
+UIR_TAG(float_lit, PL)            // f128 bits plus the written width
+UIR_TAG(str, STR)                 // a string literal's bytes
+UIR_TAG(implicit_access, STR)     // `.name`, resolved against the result type
+UIR_TAG(unreachable, NONE)
+
+// Arithmetic, bitwise, comparison
+UIR_TAG(add, BIN)
+UIR_TAG(sub, BIN)
+UIR_TAG(mul, BIN)
+UIR_TAG(div, BIN)
+UIR_TAG(mod, BIN)
+UIR_TAG(add_wrap, BIN)
+UIR_TAG(sub_wrap, BIN)
+UIR_TAG(mul_wrap, BIN)
+UIR_TAG(add_sat, BIN)
+UIR_TAG(sub_sat, BIN)
+UIR_TAG(mul_sat, BIN)
+UIR_TAG(shl_sat, BIN)
+UIR_TAG(shl_wrap, BIN)
+UIR_TAG(shl, BIN)
+UIR_TAG(shr, BIN)
+UIR_TAG(bit_and, BIN)
+UIR_TAG(bit_or, BIN)
+UIR_TAG(bit_xor, BIN)
+UIR_TAG(cmp_eq, BIN)
+UIR_TAG(cmp_ne, BIN)
+UIR_TAG(cmp_lt, BIN)
+UIR_TAG(cmp_le, BIN)
+UIR_TAG(cmp_gt, BIN)
+UIR_TAG(cmp_ge, BIN)
+UIR_TAG(merge_enums, BIN)
+UIR_TAG(concat, BIN)
+UIR_TAG(bool_and, PL)
+UIR_TAG(bool_or, PL)
+UIR_TAG(neg, UN)
+UIR_TAG(neg_wrap, UN)
+UIR_TAG(pos, UN)                  // unary `+`
+UIR_TAG(bool_not, UN)
+UIR_TAG(bit_not, UN)
+
+// Type expressions
+UIR_TAG(int_type, PL)             // `iN` / `uN` outside the well-known widths
+UIR_TAG(ptr_type, PL)
+UIR_TAG(ref_type, PL)
+UIR_TAG(slice_type, PL)
+UIR_TAG(array_type, PL)
+UIR_TAG(fn_type, PL)
+UIR_TAG(dyn_type, PL)
+UIR_TAG(struct_decl, PL)
+UIR_TAG(union_decl, PL)
+UIR_TAG(enum_decl, PL)
+UIR_TAG(interface_decl, PL)
+
+// Names and access
+UIR_TAG(decl_val, UN)             // aux: the declaration's index
+UIR_TAG(decl_ref, UN)             // a module or member `let mut`, as a place
+UIR_TAG(import, UN)               // aux: the import's index
+UIR_TAG(capture, UN)              // aux: a capture of the innermost function or aggregate
+UIR_TAG(undeclared, STR)          // a name no scope declares, in an arm only `comptime` may prune
+UIR_TAG(builtin_ref, UN)          // aux: a `builtin_t` named outside a call
+UIR_TAG(field_val, PL)
+UIR_TAG(field_ptr, PL)
+UIR_TAG(elem_val, BIN)
+UIR_TAG(elem_ptr, PL)
+UIR_TAG(slice, PL)
+UIR_TAG(param, PL)
+UIR_TAG(bind, PL)                 // a value a construct hands its body (`|v|`, `else |e|`, ...)
+
+// Locals and memory
+UIR_TAG(alloc_mut, PL)            // `let mut`
+UIR_TAG(alloc_comptime, PL)       // `comptime let mut`
+UIR_TAG(let_value, PL)            // an immutable `let`, comptime-known on demand
+UIR_TAG(const_local, PL)          // a local comptime `const`
+UIR_TAG(store, BIN)               // lhs: a place
+UIR_TAG(load, UN)
+UIR_TAG(ref_of, PL)               // `&x` / `&mut x`
+UIR_TAG(address_of, PL)           // `^x` / `^mut x`
+UIR_TAG(deref, UN)
+UIR_TAG(init_struct, PL)          // `T{ .a = x }`, or `.{ .a = x }` with no type
+UIR_TAG(init_array, PL)           // `T{ a, b }`, or `.{ a, b }` with no type
+UIR_TAG(array_lit, PL)            // `[N]T{ a, b }`
+UIR_TAG(range, PL)
+
+// Calls
+UIR_TAG(call, PL)
+UIR_TAG(field_call, PL)           // `obj.name(args)`: a method or a callable field
+UIR_TAG(builtin, PL)              // `@name(args)`, dispatched on its `builtin_t`
+UIR_TAG(asm_expr, PL)
+
+// Control flow
+UIR_TAG(block, PL)
+UIR_TAG(block_comptime, PL)
+UIR_TAG(loop, PL)
+UIR_TAG(for_iter, PL)
+UIR_TAG(condbr, PL)
+UIR_TAG(condbr_comptime, PL)
+UIR_TAG(eval_branch, PL)          // `if comptime a else b`
+UIR_TAG(unwrap_branch, PL)        // `if (x) |v| a else |e| b`
+UIR_TAG(break_to, BIN)            // lhs: the target block or loop, rhs: the value
+UIR_TAG(repeat, UN)               // `continue`; operand: the target loop
+UIR_TAG(ret, UN)
+UIR_TAG(yield, UN)                // the value of the body it ends
+UIR_TAG(match, PL)
+UIR_TAG(discard, UN)
+
+// Match patterns, which only appear in a match arm's pattern body
+UIR_TAG(pat_wildcard, NONE)
+UIR_TAG(pat_capture, PL)
+UIR_TAG(pat_bound, BIN)           // lhs: the refined pattern, rhs: the capture
+UIR_TAG(pat_value, PL)
+UIR_TAG(pat_range, PL)
+UIR_TAG(pat_init, PL)
+UIR_TAG(pat_call, PL)
+UIR_TAG(pat_deref, UN)
+
+// Unwrapping and failure propagation
+UIR_TAG(unwrap, PL)               // `x?` / `x!`
+UIR_TAG(residual, NONE)           // in a `?` failure body: the residual that propagates
+UIR_TAG(ret_residual, UN)         // returns a residual through the function's `From`
+UIR_TAG(ret_failure, UN)          // whether a returned value fails, for errdefer
+UIR_TAG(failure_is_set, UN)
+UIR_TAG(failure_residual, UN)
+
+// Functions and declarations
+UIR_TAG(func, PL)
+UIR_TAG(closure, PL)
+UIR_TAG(impl_decl, PL)
+UIR_TAG(attribute, PL)            // one `@[name(args)]` entry in an attribute body

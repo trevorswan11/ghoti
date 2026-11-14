@@ -27,6 +27,9 @@
 #include "compiler/module/module.hh"
 #include "compiler/module/stdlib.hh"
 #include "compiler/sema/analyzer.hh"
+#include "compiler/sema/cfg_evaluator.hh"
+#include "compiler/uir/astgen.hh"
+#include "compiler/uir/dumper.hh"
 #include "driver/clap/error.hh"
 #include "ghoti/config.h"
 #include "support/path_utils.hh"
@@ -173,6 +176,8 @@ auto options::process_raw(const raw_options&   raw,
 
     stdx::option<std::filesystem::path> emit_gir_path;
     if (!raw.emit_gir_path.empty()) { emit_gir_path.emplace(raw.emit_gir_path); }
+    stdx::option<std::filesystem::path> emit_uir_path;
+    if (!raw.emit_uir_path.empty()) { emit_uir_path.emplace(raw.emit_uir_path); }
     stdx::option<std::filesystem::path> emit_llvm_ir_path;
     if (!raw.emit_llvm_ir_path.empty()) { emit_llvm_ir_path.emplace(raw.emit_llvm_ir_path); }
     stdx::option<std::filesystem::path> emit_asm_path;
@@ -198,6 +203,8 @@ auto options::process_raw(const raw_options&   raw,
         .emit_gir_path     = std::move(emit_gir_path),
         .emit_llvm_ir_path = std::move(emit_llvm_ir_path),
         .emit_asm_path     = std::move(emit_asm_path),
+        .emit_uir_path     = std::move(emit_uir_path),
+        .sema_uir          = raw.sema == "uir",
     };
 }
 
@@ -228,6 +235,15 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
     TRY(validate_input_path());
     TRY(ensure_output_directory());
     TRY(setup_module_manager());
+    if (opts_.emit_uir_path || opts_.sema_uir) {
+        TRY(run_astgen(for_test_executable));
+        if (opts_.sema_uir) {
+            return clap::fatal_error(error_stream_,
+                                     "--sema=uir lowers through AstGen and stops there: UIR's "
+                                     "Sema is not implemented yet",
+                                     clap::error::COMPILATION_FAILED);
+        }
+    }
 
     auto gir_mod_res{analyzer_.analyze(opts_.input_path, for_test_executable)};
     if (!gir_mod_res) {
@@ -255,6 +271,55 @@ auto compilation::analyze(bool for_test_executable) -> stdx::result<analyzed_mod
         return stdx::err{clap::error::COMPILATION_FAILED};
     }
     return std::make_pair(module, std::move(*gir_mod_res));
+}
+
+auto compilation::run_astgen(bool for_test_executable) -> stdx::result<void, clap::error> {
+    auto root{manager_.try_get_file_module(opts_.input_path)};
+    if (!root) {
+        return clap::fatal_error(error_stream_,
+                                 root.error().get_message().value_or(GHOTI_UNKNOWN_ERROR),
+                                 clap::error::COMPILATION_FAILED);
+    }
+    if ((*root)->is_errored()) {
+        manager_.print_all_diagnostics(error_stream_);
+        return stdx::err{clap::error::COMPILATION_FAILED};
+    }
+
+    auto cfg{sema::cfg_context::from(analyzer_.get_ctx())};
+    cfg.testing = cfg.testing || for_test_executable;
+    auto lowered{uir::lower_reachable(**root, {.cfg = cfg, .modules = manager_})};
+
+    if (opts_.emit_uir_path) {
+        std::string text;
+        for (const auto& item : lowered) {
+            text += fmt::format("module {}\n{}\n",
+                                path_utils::display(item.source->path),
+                                uir::dump(item.result.uir));
+        }
+        std::ofstream out{*opts_.emit_uir_path, std::ios::binary | std::ios::trunc};
+        fmt::print(out, "{}", text);
+        if (!out) {
+            return clap::fatal_error(error_stream_,
+                                     fmt::format("could not write UIR to '{}'",
+                                                 path_utils::display(*opts_.emit_uir_path)),
+                                     clap::error::IO_ERROR);
+        }
+    }
+
+    // AstGen's errors are the module's own, printed like any others
+    bool failed{false};
+    for (auto& item : lowered) {
+        if (item.result.diagnostics.empty()) { continue; }
+        failed = true;
+        if (auto mod{manager_.find_file_module(item.source->path)}) {
+            mod->absorb_sema_diagnostics(std::move(item.result.diagnostics));
+        }
+    }
+    if (failed) {
+        manager_.print_all_diagnostics(error_stream_);
+        return stdx::err{clap::error::COMPILATION_FAILED};
+    }
+    return {};
 }
 
 auto compilation::linker_options() const -> codegen::extra_linker_options {
@@ -418,6 +483,20 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->add_option(
             "--emit-asm", opts.emit_asm_path, "Write the native assembly to the given file path")
         ->type_name("FILE");
+    subcmd
+        ->add_option("--emit-uir",
+                     opts.emit_uir_path,
+                     "Write the UIR every module of the program lowers to, to the given file path")
+        ->type_name("FILE");
+#ifdef GHOTI_UIR
+    subcmd
+        ->add_option("--sema",
+                     opts.sema,
+                     "The semantic analysis pipeline: legacy (default), or uir, which stops after "
+                     "lowering until its Sema exists")
+        ->check(CLI::IsMember({"legacy", "uir"}))
+        ->default_val(opts.sema);
+#endif
 }
 
 auto options::emit_debug_artifacts(sema::analyzer&      analyzer,

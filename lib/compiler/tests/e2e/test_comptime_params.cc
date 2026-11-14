@@ -1,5 +1,6 @@
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -314,17 +315,28 @@ TEST_CASE("a comptime slice parameter accepts a concatenation of comptime string
 }
 
 TEST_CASE("a `comptime T: type` parameter is not replaced by a later module type of that name") {
-    CHECK(helpers::compile_and_run(R"(
+    constexpr std::string_view source{R"(
         const id = fn(comptime T: type, x: T): T { return x; };
         const T = u8;
         pub const main = fn(): i32 {
             return @intCast(i32, id(u64, 300) - 290);
         };
-    )") == 10);
+    )"};
+#ifdef GHOTI_TEST_SEMA_UIR
+    helpers::check_astgen_against(
+        source,
+        {},
+        std::vector<sema::diagnostic>{
+            {"Attempt to shadow identifier 'T'; previous declaration here: 3:15",
+             sema::error::SHADOWING_DECLARATION,
+             std::pair{1UZ, 31UZ}}});
+#else
+    CHECK(helpers::compile_and_run(source) == 10);
+#endif
 }
 
 TEST_CASE("an impl parameter is not replaced by a later module type of that name") {
-    CHECK(helpers::compile_and_run(R"(
+    constexpr std::string_view source{R"(
         const Show = interface { const show = fn(&self): i32; };
         const Wrap = fn(comptime E: type): type { return struct { v: E }; };
         impl(E: type) Show for Wrap(E) {
@@ -338,7 +350,21 @@ TEST_CASE("an impl parameter is not replaced by a later module type of that name
             let w: Wrap(u64) = .{ .v = 300 };
             return w.show();
         };
-    )") == 10);
+    )"};
+#ifdef GHOTI_TEST_SEMA_UIR
+    helpers::check_astgen_against(
+        source,
+        {},
+        std::vector<sema::diagnostic>{
+            {"Attempt to shadow identifier 'E'; previous declaration here: 10:15",
+             sema::error::SHADOWING_DECLARATION,
+             std::pair{2UZ, 33UZ}},
+            {"Attempt to shadow identifier 'E'; previous declaration here: 10:15",
+             sema::error::SHADOWING_DECLARATION,
+             std::pair{3UZ, 13UZ}}});
+#else
+    CHECK(helpers::compile_and_run(source) == 10);
+#endif
 }
 
 } // namespace ghoti::tests

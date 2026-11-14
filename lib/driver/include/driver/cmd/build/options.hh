@@ -9,6 +9,7 @@
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
@@ -54,6 +55,8 @@ struct raw_options {
     std::string emit_gir_path;
     std::string emit_llvm_ir_path;
     std::string emit_asm_path;
+    std::string emit_uir_path;
+    std::string sema{"legacy"};
 };
 
 struct options {
@@ -77,6 +80,8 @@ struct options {
     stdx::option<std::filesystem::path> emit_gir_path{};
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};
     stdx::option<std::filesystem::path> emit_asm_path{};
+    stdx::option<std::filesystem::path> emit_uir_path{};
+    bool                                sema_uir{false};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,
@@ -113,6 +118,7 @@ class compilation {
     [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
 
   private:
+    [[nodiscard]] auto run_astgen(bool for_test_executable) -> stdx::result<void, clap::error>;
     [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto ensure_output_directory() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto setup_module_manager() -> stdx::result<void, clap::error>;

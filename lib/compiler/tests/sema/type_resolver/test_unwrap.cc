@@ -65,10 +65,10 @@ TEST_CASE("Resolving well-formed `?` propagation") {
 
     SECTION("Structurally valid: same family, and the two `ok` payload types need not match") {
         helpers::resolve_and_check(std::string{RESULT_PRELUDE} + R"(
-        const E = Result(i32, i32);
-        const F = Result(bool, i32);
-        const inner = fn(): E { return E{ .ok = 1 }; };
-        const outer = fn(): F { let v = inner()?; _ = v; return F{ .ok = true }; };
+        const In = Result(i32, i32);
+        const Out = Result(bool, i32);
+        const inner = fn(): In { return In{ .ok = 1 }; };
+        const outer = fn(): Out { let v = inner()?; _ = v; return Out{ .ok = true }; };
     )");
     }
 }
@@ -169,7 +169,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
                     .val => |&mut? v| .{ .@"continue" = v },
-                    .fail => |f| .{ .@"break" = f },
+                    .fail => |code| .{ .@"break" = code },
                 };
             };
         }
@@ -196,7 +196,7 @@ TEST_CASE("Nominal Unwrappable and Rewrappable resolution") {
             pub const branch = fn(&mut? self): builtin.Flow(&mut? i32, u8) {
                 return match (self) {
                     .val => |&mut? v| .{ .@"continue" = v },
-                    .fail => |f| .{ .@"break" = f },
+                    .fail => |code| .{ .@"break" = code },
                 };
             };
         }

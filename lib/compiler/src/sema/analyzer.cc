@@ -426,7 +426,7 @@ auto analyzer::report_entry_errors_at(mod::module_t&   root,
     auto kept{start_diags->create_new()};
     for (const auto& diag : *start_diags) {
         if (diag.get_error() != error::COMPILE_ERROR_REACHED || diag.origin()) {
-            kept.push_back(diag);
+            kept.emplace_back(diag);
             continue;
         }
         const auto at{diag.location()};

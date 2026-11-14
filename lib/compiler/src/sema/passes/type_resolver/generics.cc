@@ -866,7 +866,8 @@ auto type_resolver::instantiate_generic(type&                             callee
         inst_resolver.enclosing_locals_depth_.emplace(enclosing_locals_depth);
         inst_resolver.instantiating_fn_node_.emplace(fn_mod.fn_literal_node(fn_info.node_id));
         for (const auto& pack : fn_info.enclosing_packs) {
-            inst_resolver.enclosing_packs_.push_back({pack.name, pack.element_types});
+            inst_resolver.enclosing_packs_.emplace_back<pack_binding>(
+                {pack.name, pack.element_types});
         }
     }
 
