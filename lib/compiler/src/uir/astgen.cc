@@ -120,7 +120,8 @@ auto astgen::declare_module_items(const std::vector<ast::stmt_handle>& items,
     for (const auto item : spliced(items)) { declare_module_item(item, pending); }
 }
 
-auto astgen::add_root_decl(decl d, ast::node_id node, std::vector<pending_decl>& pending) -> u32 {
+auto astgen::add_root_decl(decl d, ast::node_id node, std::vector<pending_decl>& pending)
+    -> decl_id {
     const auto index{out_.add_decl(d)};
     out_.root_namespace_mut().decls.emplace_back(index);
     pending.emplace_back<pending_decl>({index, node});
@@ -134,7 +135,7 @@ auto astgen::declare_module_item(ast::stmt_handle item, std::vector<pending_decl
     case ast::node_kind::DECL_STATEMENT: {
         const auto& decl{ast_.get_as<ast::decl_stmt>(id)};
         check_decl_modifiers(id, decl, false);
-        const auto index{add_value_decl(decl, id, NO_INDEX)};
+        const auto index{add_value_decl(decl, id, stdx::none)};
         out_.root_namespace_mut().decls.emplace_back(index);
         pending.emplace_back<pending_decl>({index, id});
         declare_member(name_of(decl.name),
@@ -148,7 +149,7 @@ auto astgen::declare_module_item(ast::stmt_handle item, std::vector<pending_decl
     }
     case ast::node_kind::IMPORT_STATEMENT: {
         const auto& import{ast_.get_as<ast::import_stmt>(id)};
-        const auto  index{add_import_decl(id, import, NO_INDEX)};
+        const auto  index{add_import_decl(id, import, stdx::none)};
         out_.root_namespace_mut().decls.emplace_back(index);
         if (const auto named{import.get_name(ast_)}) {
             declare_member(named->second,
@@ -224,7 +225,7 @@ auto astgen::lower_pending(const pending_decl& item) -> void {
     case decl_kind::IMPL:     lower_impl(item.decl, ast_.get_as<ast::impl_stmt>(item.node)); break;
     case decl_kind::COMPTIME: {
         functions_.emplace_back();
-        std::vector<u32> instructions;
+        std::vector<inst_id> instructions;
         {
             const body_guard guard{*this, instructions};
             if (const auto block{ast_.get_as_opt<ast::block_stmt>(item.node)}) {
@@ -245,20 +246,20 @@ auto astgen::lower_pending(const pending_decl& item) -> void {
     }
 }
 
-auto astgen::lower_decl_bodies(u32 index, const ast::decl_stmt& decl) -> void {
+auto astgen::lower_decl_bodies(decl_id id, const ast::decl_stmt& decl) -> void {
     functions_.emplace_back();
     const auto pop_state{gsl::finally([this] { functions_.pop_back(); })};
     const bool initializes_fn{decl.value && decl.value->is<ast::function_expr>()};
 
-    std::vector<u32> type_instructions;
+    std::vector<inst_id> type_instructions;
     if (decl.explicit_type) { type_instructions = type_body(*decl.explicit_type); }
 
-    std::vector<u32> attr_instructions;
+    std::vector<inst_id> attr_instructions;
     lower_attributes(decl.attributes,
                      initializes_fn ? stdx::option<bool>{false} : stdx::none,
                      attr_instructions);
 
-    std::vector<u32> value_instructions;
+    std::vector<inst_id> value_instructions;
     if (decl.value) {
         const body_guard guard{*this, value_instructions};
         const auto       value{*decl.value};
@@ -274,7 +275,7 @@ auto astgen::lower_decl_bodies(u32 index, const ast::decl_stmt& decl) -> void {
         yields(result, ast::node_id{value});
     }
 
-    auto& d{out_.decl_at_mut(index)};
+    auto& d{out_.decl_at_mut(id)};
     d.type_body  = out_.add_body(type_instructions);
     d.attrs_body = out_.add_body(attr_instructions);
     d.value_body = out_.add_body(value_instructions);
@@ -301,7 +302,9 @@ auto astgen::decl_flags_of(const ast::decl_stmt& decl) const -> decl_flags {
     return flags;
 }
 
-auto astgen::add_value_decl(const ast::decl_stmt& decl, ast::node_id node, u32 owner) -> u32 {
+auto astgen::add_value_decl(const ast::decl_stmt& decl,
+                            ast::node_id          node,
+                            stdx::option<inst_id> owner) -> decl_id {
     decl_info d{
         .kind  = decl_kind::VALUE,
         .name  = out_.intern(name_of(decl.name)),
@@ -318,20 +321,22 @@ auto astgen::add_value_decl(const ast::decl_stmt& decl, ast::node_id node, u32 o
     return out_.add_decl(d);
 }
 
-auto astgen::add_import_decl(ast::node_id node, const ast::import_stmt& import, u32 owner) -> u32 {
+auto astgen::add_import_decl(ast::node_id            node,
+                             const ast::import_stmt& import,
+                             stdx::option<inst_id>   owner) -> decl_id {
     const auto named{import.get_name(ast_)};
     decl_info  d{
-        .kind         = decl_kind::IMPORT,
-        .name         = out_.intern(named ? named->second : std::string_view{}),
-        .node         = node,
-        .flags        = ast::import_stmt::is_public(node) ? decl_flags::PUBLIC : decl_flags::NONE,
-        .import_index = add_import(node, import),
-        .owner        = owner,
+        .kind   = decl_kind::IMPORT,
+        .name   = out_.intern(named ? named->second : std::string_view{}),
+        .node   = node,
+        .flags  = ast::import_stmt::is_public(node) ? decl_flags::PUBLIC : decl_flags::NONE,
+        .import = add_import(node, import),
+        .owner  = owner,
     };
     return out_.add_decl(d);
 }
 
-auto astgen::add_import(ast::node_id node, const ast::import_stmt& import) -> u32 {
+auto astgen::add_import(ast::node_id node, const ast::import_stmt& import) -> import_id {
     import_info info{.node = node};
     const auto  payload{ast::node_id{import.payload}};
     auto        loaded{[&] {
@@ -352,10 +357,10 @@ auto astgen::add_import(ast::node_id node, const ast::import_stmt& import) -> u3
     return out_.add_import(std::move(info));
 }
 
-auto astgen::lower_test(u32 index, const ast::test_stmt& test) -> void {
+auto astgen::lower_test(decl_id id, const ast::test_stmt& test) -> void {
     functions_.emplace_back<function_state>({.allows_defer = true, .testing = true});
-    const auto       pop_state{gsl::finally([this] { functions_.pop_back(); })};
-    std::vector<u32> instructions;
+    const auto           pop_state{gsl::finally([this] { functions_.pop_back(); })};
+    std::vector<inst_id> instructions;
     {
         const body_guard guard{*this, instructions};
         auto             body{scoped_block(test.block, scope_kind::TEST)};
@@ -363,38 +368,38 @@ auto astgen::lower_test(u32 index, const ast::test_stmt& test) -> void {
             add_pl(tag::block, writer().str_field({}).body_field(body), ast::node_id{test.block}),
             ast::node_id{test.block});
     }
-    out_.decl_at_mut(index).value_body = out_.add_body(instructions);
+    out_.decl_at_mut(id).value_body = out_.add_body(instructions);
 }
 
-auto astgen::lower_impl(u32 index, const ast::impl_stmt& impl) -> void {
+auto astgen::lower_impl(decl_id id, const ast::impl_stmt& impl) -> void {
     functions_.emplace_back();
     const auto pop_state{gsl::finally([this] { functions_.pop_back(); })};
-    const auto node{*out_.decl_at(index).node};
+    const auto node{*out_.decl_at(id).node};
 
-    std::vector<u32> instructions;
-    const body_guard guard{*this, instructions};
-    const auto       inst{reserve(node)};
+    std::vector<inst_id> instructions;
+    const body_guard     guard{*this, instructions};
+    const auto           inst{reserve(node)};
     {
         const scope_guard scoped{*this, scope_kind::NAMESPACE};
         scoped.get().is_aggregate = true;
 
-        std::vector<u32> params;
+        std::vector<inst_id> params;
         {
             const body_guard params_guard{*this, params};
             for (const auto& param : impl.impl_params) { lower_param(param, 0); }
         }
-        std::vector<u32> iface;
+        std::vector<inst_id> iface;
         if (impl.interface_type) { iface = type_body(*impl.interface_type); }
         const auto target{type_body(impl.target_type)};
         const auto decls{namespace_members(inst, impl.members)};
 
         auto record{writer()};
         record.body_field(params).body_field(iface).body_field(target).count(decls.size());
-        for (const auto d : decls) { record.u32_field(d); }
+        for (const auto d : decls) { record.decl_field(d); }
         fill_pl(inst, tag::impl_decl, record);
     }
     yields(inst_ref(inst), node);
-    out_.decl_at_mut(index).value_body = out_.add_body(instructions);
+    out_.decl_at_mut(id).value_body = out_.add_body(instructions);
 }
 
 auto astgen::check_top_level_statement(ast::node_id id) -> bool {
@@ -533,7 +538,7 @@ template auto astgen::spliced_group(const ast::member_list&,
 
 auto astgen::lower_attributes(const stdx::option<ast::attribute_list>& attributes,
                               stdx::option<bool>                       routed,
-                              std::vector<u32>&                        into) -> void {
+                              std::vector<inst_id>&                    into) -> void {
     if (!attributes) { return; }
     const body_guard guard{*this, into};
     for (const auto& item : attributes->items) {
@@ -608,20 +613,20 @@ auto astgen::mutated_within(ast::node_id fn) const
 }
 
 auto astgen::add(tag t, data d, source src) -> ref {
-    const auto index{out_.add(t, d, src)};
-    body_->emplace_back(index);
-    return inst_ref(index);
+    const auto inst{out_.add(t, d, src)};
+    body_->emplace_back(inst);
+    return inst_ref(inst);
 }
 
-auto astgen::add_un(tag t, ref operand, u32 aux, source src) -> ref {
+auto astgen::add_un(tag t, stdx::option<ref> operand, u32 aux, source src) -> ref {
     data d{};
-    d.un = {operand, aux};
+    d.un = {stored(operand), aux};
     return add(t, d, src);
 }
 
-auto astgen::add_bin(tag t, ref lhs, ref rhs, source src) -> ref {
+auto astgen::add_bin(tag t, stdx::option<ref> lhs, stdx::option<ref> rhs, source src) -> ref {
     data d{};
-    d.bin = {lhs, rhs};
+    d.bin = {stored(lhs), stored(rhs)};
     return add(t, d, src);
 }
 
@@ -639,9 +644,9 @@ auto astgen::add_pl(tag t, record_writer& record, source src) -> ref {
     return add(t, d, src);
 }
 
-auto astgen::reserve(source src) -> u32 { return out_.reserve(src); }
+auto astgen::reserve(source src) -> inst_id { return out_.reserve(src); }
 
-auto astgen::fill_pl(u32 inst, tag t, record_writer& record) -> void {
+auto astgen::fill_pl(inst_id inst, tag t, record_writer& record) -> void {
     data d{};
     d.pl = {record.finish(), 0};
     ASSERT(record_end(out_, t, d.pl.extra) == out_.extra().size(),

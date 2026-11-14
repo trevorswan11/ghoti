@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ankerl/unordered_dense.h>
@@ -101,26 +102,64 @@ inline constexpr u32 WELL_KNOWN_COUNT{0 FOREACH_UIR_WELL_KNOWN(UIR_WELL_KNOWN_CO
 
 [[nodiscard]] auto well_known_name(well_known w) noexcept -> std::string_view;
 
-// A well-known constant (operand) below `WELL_KNOWN_COUNT`, else an inst index offset by it
+// An instruction's position in its module
+enum class inst_id : u32 {};
+// A declaration's position in its module
+enum class decl_id : u32 {};
+// An import's position in its module
+enum class import_id : u32 {};
+// Where a body starts in `extra`: its length, then its instruction ids
+enum class body_ref : u32 {};
+
+// A well-known constant (operand) below `WELL_KNOWN_COUNT`, else an inst id offset by it.
+// `well_known::none` is never an operand, so `stdx::option<ref>` stores an absent one in place
 enum class ref : u32 {};
+
+} // namespace ghoti::uir
+
+// `extra[0]` is the zero length every module reserves, so it doubles as the absent body
+template <> struct stdx::nullable<ghoti::uir::body_ref> {
+    [[nodiscard]] static constexpr auto invalid() noexcept -> ghoti::uir::body_ref {
+        return ghoti::uir::body_ref{0};
+    }
+    [[nodiscard]] static constexpr auto is_valid(ghoti::uir::body_ref at) noexcept -> bool {
+        return at != invalid();
+    }
+};
+
+template <> struct stdx::nullable<ghoti::uir::ref> {
+    [[nodiscard]] static constexpr auto invalid() noexcept -> ghoti::uir::ref {
+        return static_cast<ghoti::uir::ref>(ghoti::uir::well_known::none);
+    }
+    [[nodiscard]] static constexpr auto is_valid(ghoti::uir::ref r) noexcept -> bool {
+        return r != invalid();
+    }
+};
+
+static_assert(sizeof(stdx::option<ghoti::uir::ref>) == sizeof(ghoti::uir::ref));
+static_assert(sizeof(stdx::option<ghoti::uir::inst_id>) == sizeof(ghoti::uir::inst_id));
+static_assert(sizeof(stdx::option<ghoti::uir::body_ref>) == sizeof(ghoti::uir::body_ref));
+
+namespace ghoti::uir {
 
 [[nodiscard]] constexpr auto to_ref(well_known w) noexcept -> ref {
     return ref{static_cast<u32>(w)};
 }
-[[nodiscard]] constexpr auto inst_ref(u32 index) noexcept -> ref {
-    return ref{index + WELL_KNOWN_COUNT};
+[[nodiscard]] constexpr auto inst_ref(inst_id inst) noexcept -> ref {
+    return ref{std::to_underlying(inst) + WELL_KNOWN_COUNT};
 }
-[[nodiscard]] constexpr auto is_none(ref r) noexcept -> bool {
-    return r == to_ref(well_known::none);
+[[nodiscard]] constexpr auto as_inst(ref r) noexcept -> stdx::option<inst_id> {
+    if (static_cast<u32>(r) < WELL_KNOWN_COUNT) { return stdx::none; }
+    return inst_id{static_cast<u32>(r) - WELL_KNOWN_COUNT};
 }
-[[nodiscard]] constexpr auto is_inst(ref r) noexcept -> bool {
-    return static_cast<u32>(r) >= WELL_KNOWN_COUNT;
+// An operand slot as stored in `data`, where `well_known::none` marks it empty
+[[nodiscard]] constexpr auto filled(ref r) noexcept -> stdx::option<ref> {
+    return stdx::option<ref>{r};
 }
-[[nodiscard]] constexpr auto inst_index(ref r) noexcept -> u32 {
-    return static_cast<u32>(r) - WELL_KNOWN_COUNT;
-}
+// The operand slot an option is stored as, the inverse of `filled`
+[[nodiscard]] constexpr auto stored(stdx::option<ref> r) noexcept -> ref { return *r.raw(); }
 [[nodiscard]] constexpr auto as_well_known(ref r) noexcept -> stdx::option<well_known> {
-    if (is_inst(r)) { return stdx::none; }
+    if (as_inst(r)) { return stdx::none; }
     return static_cast<well_known>(static_cast<u32>(r));
 }
 
@@ -159,6 +198,7 @@ enum class field_kind : u8 {
     REFS,  // a length, then that many refs
     WORDS, // a length, then that many raw words
     DECL,  // a declaration index
+    INDEX, // an optional position, such as a match's catch-all arm
     LIST,  // a length, then that many records of `items`
 };
 
@@ -243,7 +283,6 @@ enum class union_tag : u32 {
     INFERRED,
     EXPLICIT,
 };
-inline constexpr u32 NO_INDEX{~u32{0}};
 
 enum class decl_kind : u8 {
     VALUE,
@@ -268,22 +307,18 @@ enum class decl_flags : u32 {
 };
 MAKE_ENUM_OPERATORS(decl_flags)
 
-// A body stored in `extra`: its length, then its instruction indices
-using body_ref = u32;
-inline constexpr body_ref EMPTY_BODY{0}; // `extra[0]` is a zero length the module reserves
-
 struct decl {
     decl_kind                  kind{decl_kind::VALUE};
     string_ref                 name{};
     stdx::option<ast::node_id> node{};
     decl_flags                 flags{decl_flags::NONE};
-    body_ref                   type_body{EMPTY_BODY};
-    body_ref                   value_body{EMPTY_BODY};
-    body_ref                   attrs_body{EMPTY_BODY};
+    stdx::option<body_ref>     type_body{};
+    stdx::option<body_ref>     value_body{};
+    stdx::option<body_ref>     attrs_body{};
     string_ref                 extern_target{};
     string_ref                 link_name{};
-    u32                        import_index{NO_INDEX};
-    u32 owner{NO_INDEX}; // the namespace's instruction, NO_INDEX for the module
+    stdx::option<import_id>    import{};
+    stdx::option<inst_id>      owner{}; // the namespace's instruction, none for the module
 
     [[nodiscard]] auto has(decl_flags flag) const noexcept -> bool {
         return static_cast<bool>(flags & flag);
@@ -292,8 +327,8 @@ struct decl {
 
 // An aggregate's, impl's, or the module's own declarations, in source order
 struct namespace_info {
-    u32              owner{NO_INDEX};
-    std::vector<u32> decls;
+    stdx::option<inst_id> owner{}; // none for the module
+    std::vector<decl_id>  decls;
 };
 
 struct import_info {
@@ -312,38 +347,52 @@ class module_t {
     [[nodiscard]] auto instruction_count() const noexcept -> u32 {
         return static_cast<u32>(tags_.size());
     }
-    [[nodiscard]] auto tag_of(u32 index) const noexcept -> tag { return tags_[index]; }
-    [[nodiscard]] auto data_of(u32 index) const noexcept -> const data& { return datas_[index]; }
-    [[nodiscard]] auto src_of(u32 index) const noexcept -> const source& { return srcs_[index]; }
+    [[nodiscard]] auto tag_of(inst_id inst) const noexcept -> tag {
+        return tags_[std::to_underlying(inst)];
+    }
+    [[nodiscard]] auto data_of(inst_id inst) const noexcept -> const data& {
+        return datas_[std::to_underlying(inst)];
+    }
+    [[nodiscard]] auto src_of(inst_id inst) const noexcept -> const source& {
+        return srcs_[std::to_underlying(inst)];
+    }
     [[nodiscard]] auto string(string_ref s) const noexcept -> std::string_view {
         return stdx::string::substr(strings_, s.start, s.len);
     }
     [[nodiscard]] auto extra() const noexcept -> gsl::span<const u32> { return extra_; }
-    [[nodiscard]] auto body(body_ref at) const noexcept -> gsl::span<const u32> {
-        return gsl::span<const u32>{extra_}.subspan(at + 1, extra_[at]);
-    }
+    // An absent body reads as empty
+    [[nodiscard]] auto body(stdx::option<body_ref> at) const noexcept -> gsl::span<const inst_id>;
 
     [[nodiscard]] auto decls() const noexcept -> gsl::span<const decl> { return decls_; }
-    [[nodiscard]] auto decl_at(u32 index) const noexcept -> const decl& { return decls_[index]; }
+    [[nodiscard]] auto decl_at(decl_id id) const noexcept -> const decl& {
+        return decls_[std::to_underlying(id)];
+    }
     [[nodiscard]] auto imports() const noexcept -> gsl::span<const import_info> { return imports_; }
+    [[nodiscard]] auto import_at(import_id id) const noexcept -> const import_info& {
+        return imports_[std::to_underlying(id)];
+    }
     [[nodiscard]] auto root_namespace() const noexcept -> const namespace_info& { return root_; }
-    [[nodiscard]] auto namespace_of(u32 owner) const -> stdx::option<const namespace_info&>;
+    // The module's own namespace when `owner` is none
+    [[nodiscard]] auto namespace_of(stdx::option<inst_id> owner) const
+        -> stdx::option<const namespace_info&>;
 
-    // Appends an instruction and returns its index
-    auto add(tag t, data d, source src) -> u32;
+    auto add(tag t, data d, source src) -> inst_id;
     // Appends a placeholder to fill with `set` once its payload is known, so bodies can refer to it
-    auto reserve(source src) -> u32;
-    auto set(u32 index, tag t, data d) noexcept -> void;
+    auto reserve(source src) -> inst_id;
+    auto set(inst_id inst, tag t, data d) noexcept -> void;
     auto intern(std::string_view text) -> string_ref;
     // Appends `words` to `extra` and returns where they start
     auto append_extra(gsl::span<const u32> words) -> u32;
-    auto add_body(gsl::span<const u32> instructions) -> body_ref;
+    // An empty body is stored as none
+    auto add_body(gsl::span<const inst_id> instructions) -> stdx::option<body_ref>;
 
-    auto               add_decl(decl d) -> u32;
-    [[nodiscard]] auto decl_at_mut(u32 index) noexcept -> decl& { return decls_[index]; }
-    auto               add_import(import_info info) -> u32;
-    auto               add_namespace(namespace_info info) -> void;
-    auto               root_namespace_mut() noexcept -> namespace_info& { return root_; }
+    auto               add_decl(decl d) -> decl_id;
+    [[nodiscard]] auto decl_at_mut(decl_id id) noexcept -> decl& {
+        return decls_[std::to_underlying(id)];
+    }
+    auto add_import(import_info info) -> import_id;
+    auto add_namespace(namespace_info info) -> void;
+    auto root_namespace_mut() noexcept -> namespace_info& { return root_; }
 
   private:
     std::vector<tag>    tags_;
@@ -353,11 +402,11 @@ class module_t {
     std::string         strings_;
     ankerl::unordered_dense::
         map<std::string, string_ref, stdx::string_transparent_hash, stdx::string_transparent_eq>
-                                                      string_lut_;
-    std::vector<decl>                                 decls_;
-    std::vector<import_info>                          imports_;
-    namespace_info                                    root_;
-    ankerl::unordered_dense::map<u32, namespace_info> namespaces_;
+                                                          string_lut_;
+    std::vector<decl>                                     decls_;
+    std::vector<import_info>                              imports_;
+    namespace_info                                        root_;
+    ankerl::unordered_dense::map<inst_id, namespace_info> namespaces_;
 };
 
 // Reads an `extra` record field by field, in schema order
@@ -365,10 +414,15 @@ class record_reader {
   public:
     record_reader(const module_t& mod, u32 at) noexcept : mod_{mod}, at_{at} {}
 
-    [[nodiscard]] auto ref_field() noexcept -> ref { return static_cast<ref>(word()); }
+    // A REF field written from a none option reads back as none
+    [[nodiscard]] auto ref_field() noexcept -> stdx::option<ref> {
+        return stdx::option<ref>{static_cast<ref>(word())};
+    }
     [[nodiscard]] auto u32_field() noexcept -> u32 { return word(); }
+    [[nodiscard]] auto decl_field() noexcept -> decl_id { return decl_id{word()}; }
+    [[nodiscard]] auto index_field() noexcept -> stdx::option<u32>;
     [[nodiscard]] auto str_field() noexcept -> std::string_view;
-    [[nodiscard]] auto body_field() noexcept -> gsl::span<const u32>;
+    [[nodiscard]] auto body_field() noexcept -> gsl::span<const inst_id>;
     [[nodiscard]] auto refs_field() noexcept -> gsl::span<const ref>;
     [[nodiscard]] auto words_field() noexcept -> gsl::span<const u32>;
     [[nodiscard]] auto count() noexcept -> u32 { return word(); }
@@ -387,10 +441,14 @@ class record_writer {
   public:
     explicit record_writer(module_t& mod) noexcept : mod_{mod} {}
 
-    auto ref_field(ref r) -> record_writer& { return word(static_cast<u32>(r)); }
+    auto ref_field(stdx::option<ref> r) -> record_writer& {
+        return word(static_cast<u32>(stored(r)));
+    }
     auto u32_field(u32 value) -> record_writer& { return word(value); }
+    auto decl_field(decl_id id) -> record_writer& { return word(std::to_underlying(id)); }
+    auto index_field(stdx::option<u32> index) -> record_writer&;
     auto str_field(std::string_view text) -> record_writer&;
-    auto body_field(gsl::span<const u32> instructions) -> record_writer&;
+    auto body_field(gsl::span<const inst_id> instructions) -> record_writer&;
     auto refs_field(gsl::span<const ref> refs) -> record_writer&;
     auto words_field(gsl::span<const u32> words) -> record_writer&;
     auto count(usize n) -> record_writer& { return word(static_cast<u32>(n)); }

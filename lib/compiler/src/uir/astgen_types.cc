@@ -47,6 +47,11 @@ auto astgen::type(ast::explicit_type_id id) -> ref {
     return add_pl(t, writer().ref_field(inner).u32_field(pointer_flags(modifier)), id);
 }
 
+auto astgen::optional_type(stdx::option<ast::explicit_type_id> id) -> stdx::option<ref> {
+    if (!id) { return stdx::none; }
+    return type(*id);
+}
+
 auto astgen::type_inner(ast::explicit_type_id id) -> ref {
     using ast::explicit_type_kind;
     switch (id.get_kind()) {
@@ -80,7 +85,7 @@ auto astgen::type_inner(ast::explicit_type_id id) -> ref {
         if (array.mut_elements) { bits |= flags::MUT; }
         if (array.null_terminated) { bits |= flags::SENTINEL; }
         if (array.poly_elements) { bits |= flags::POLY; }
-        const auto len{array.dimension ? expr(*array.dimension) : ref{}};
+        const auto len{optional_expr(array.dimension)};
         const auto elem{type(array.inner_explicit_type)};
         if (!array.dimension) {
             return add_pl(tag::slice_type, writer().ref_field(elem).u32_field(bits), id);
@@ -104,9 +109,9 @@ auto astgen::type_inner(ast::explicit_type_id id) -> ref {
     UNREACHABLE("every explicit type kind has a lowering");
 }
 
-auto astgen::type_body(ast::explicit_type_id id) -> std::vector<u32> {
-    std::vector<u32> body;
-    const body_guard guard{*this, body};
+auto astgen::type_body(ast::explicit_type_id id) -> std::vector<inst_id> {
+    std::vector<inst_id> body;
+    const body_guard     guard{*this, body};
     yields(type(id), id);
     return body;
 }
@@ -129,7 +134,7 @@ auto astgen::fn_type(ast::explicit_type_id id, const ast::explicit_function_type
     return add_pl(tag::fn_type, record, id);
 }
 
-auto astgen::begin_aggregate(source src) -> u32 {
+auto astgen::begin_aggregate(source src) -> inst_id {
     auto& added{push_scope(scope_kind::NAMESPACE)};
     added.is_boundary  = true;
     added.is_aggregate = true;
@@ -139,17 +144,17 @@ auto astgen::begin_aggregate(source src) -> u32 {
 
 auto astgen::write_captures(record_writer&                   record,
                             const std::vector<capture_slot>& captures,
-                            const std::vector<u32>&          outer) -> void {
+                            const std::vector<ref>&          outer) -> void {
     record.count(captures.size());
     for (usize i{0}; i < captures.size(); ++i) {
-        record.ref_field(static_cast<ref>(outer[i]))
+        record.ref_field(outer[i])
             .u32_field(captures[i].by_ref ? 1U : 0U)
             .str_field(captures[i].name);
     }
 }
 
 auto astgen::finish_aggregate(source src)
-    -> std::pair<std::vector<capture_slot>, std::vector<u32>> {
+    -> std::pair<std::vector<capture_slot>, std::vector<ref>> {
     auto captures{scopes_.back()->captures};
     auto copy{std::move(*scopes_.back())};
     pop_scope();
@@ -166,11 +171,11 @@ auto astgen::struct_decl(source src, const ast::struct_expr& node) -> ref {
     }
 
     struct field_record {
-        std::string_view name{};
-        u32              bits{0};
-        std::vector<u32> type{};
-        std::vector<u32> default_value{};
-        std::vector<u32> attrs{};
+        std::string_view     name{};
+        u32                  bits{0};
+        std::vector<inst_id> type{};
+        std::vector<inst_id> default_value{};
+        std::vector<inst_id> attrs{};
     };
     std::vector<field_record> lowered_fields;
     const auto                decls{namespace_members(inst, members)};
@@ -203,14 +208,14 @@ auto astgen::struct_decl(source src, const ast::struct_expr& node) -> ref {
             .body_field(field.attrs);
     }
     record.count(decls.size());
-    for (const auto d : decls) { record.u32_field(d); }
+    for (const auto d : decls) { record.decl_field(d); }
     fill_pl(inst, tag::struct_decl, record);
     return inst_ref(inst);
 }
 
 auto astgen::union_decl(source src, const ast::union_expr& node) -> ref {
     // The tag names a type from the enclosing scope, not one of the union's own members
-    std::vector<u32> tag_type;
+    std::vector<inst_id> tag_type;
     if (node.tag_type) { tag_type = type_body(*node.tag_type); }
 
     const auto inst{begin_aggregate(src)};
@@ -222,9 +227,9 @@ auto astgen::union_decl(source src, const ast::union_expr& node) -> ref {
     }
 
     struct field_record {
-        std::string_view name{};
-        std::vector<u32> type{};
-        std::vector<u32> attrs{};
+        std::string_view     name{};
+        std::vector<inst_id> type{};
+        std::vector<inst_id> attrs{};
     };
     std::vector<field_record> lowered_fields;
     const auto                decls{namespace_members(inst, members)};
@@ -249,13 +254,13 @@ auto astgen::union_decl(source src, const ast::union_expr& node) -> ref {
         record.str_field(field.name).body_field(field.type).body_field(field.attrs);
     }
     record.count(decls.size());
-    for (const auto d : decls) { record.u32_field(d); }
+    for (const auto d : decls) { record.decl_field(d); }
     fill_pl(inst, tag::union_decl, record);
     return inst_ref(inst);
 }
 
 auto astgen::enum_decl(source src, const ast::enum_expr& node) -> ref {
-    std::vector<u32> underlying;
+    std::vector<inst_id> underlying;
     if (node.underlying) { underlying = type_body(*node.underlying); }
 
     const auto inst{begin_aggregate(src)};
@@ -266,12 +271,12 @@ auto astgen::enum_decl(source src, const ast::enum_expr& node) -> ref {
             name_of(value.name), location_of(value.name), {.kind = binding_kind::FIELD}));
     }
 
-    std::vector<std::pair<std::string_view, std::vector<u32>>> lowered_values;
+    std::vector<std::pair<std::string_view, std::vector<inst_id>>> lowered_values;
     const auto decls{namespace_members(inst, members)};
     for (const auto& value : values) {
         functions_.emplace_back();
-        lowered_values.emplace_back(name_of(value.name),
-                                    value.value ? value_body(*value.value) : std::vector<u32>{});
+        lowered_values.emplace_back(
+            name_of(value.name), value.value ? value_body(*value.value) : std::vector<inst_id>{});
         functions_.pop_back();
     }
     const auto [captures, outer]{finish_aggregate(src)};
@@ -282,7 +287,7 @@ auto astgen::enum_decl(source src, const ast::enum_expr& node) -> ref {
     record.count(lowered_values.size());
     for (const auto& [name, body] : lowered_values) { record.str_field(name).body_field(body); }
     record.count(decls.size());
-    for (const auto d : decls) { record.u32_field(d); }
+    for (const auto d : decls) { record.decl_field(d); }
     fill_pl(inst, tag::enum_decl, record);
     return inst_ref(inst);
 }
@@ -293,7 +298,7 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
     const auto pop_state{gsl::finally([this] { functions_.pop_back(); })};
 
     // Associated types and constants are names method signatures and default bodies can read
-    std::vector<u32> header;
+    std::vector<inst_id> header;
     {
         const body_guard guard{*this, header};
         u32              slot{0};
@@ -310,16 +315,16 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
     }
 
     struct assoc_record {
-        std::string_view name{};
-        std::vector<u32> type{};
-        std::vector<u32> default_value{};
+        std::string_view     name{};
+        std::vector<inst_id> type{};
+        std::vector<inst_id> default_value{};
     };
     std::vector<assoc_record> types;
     for (const auto& assoc : node.assoc_types) {
         types.emplace_back<assoc_record>({
             name_of(assoc.name),
             type_body(assoc.annotation),
-            assoc.default_type ? type_body(*assoc.default_type) : std::vector<u32>{},
+            assoc.default_type ? type_body(*assoc.default_type) : std::vector<inst_id>{},
         });
     }
     std::vector<assoc_record> consts;
@@ -327,15 +332,15 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
         consts.emplace_back<assoc_record>({
             name_of(assoc.name),
             type_body(assoc.explicit_type),
-            assoc.default_value ? value_body(*assoc.default_value) : std::vector<u32>{},
+            assoc.default_value ? value_body(*assoc.default_value) : std::vector<inst_id>{},
         });
     }
 
     struct method_record {
-        std::string_view name{};
-        u32              bits{0};
-        std::vector<u32> signature{};
-        std::vector<u32> attrs{};
+        std::string_view     name{};
+        u32                  bits{0};
+        std::vector<inst_id> signature{};
+        std::vector<inst_id> attrs{};
     };
     std::vector<method_record> methods;
     for (const auto& method : node.methods) {
@@ -374,9 +379,10 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
     return inst_ref(inst);
 }
 
-auto astgen::namespace_members(u32 inst, const ast::member_list& members) -> std::vector<u32> {
-    std::vector<u32>                                   decls;
-    std::vector<std::pair<u32, const ast::decl_stmt*>> bodies;
+auto astgen::namespace_members(inst_id inst, const ast::member_list& members)
+    -> std::vector<decl_id> {
+    std::vector<decl_id>                                   decls;
+    std::vector<std::pair<decl_id, const ast::decl_stmt*>> bodies;
     for (const auto member : members) {
         const ast::node_id id{member};
         if (const auto decl{ast_.get_as_opt<ast::decl_stmt>(id)}) {
@@ -411,9 +417,9 @@ auto astgen::lower_param(const ast::function_expr::parameter& param, u32 extra_f
     -> ref {
     // The type comes first, so a parameter can't name itself in it
     const auto type_insts{param.explicit_type ? type_body(*param.explicit_type)
-                                              : std::vector<u32>{}};
+                                              : std::vector<inst_id>{}};
     const auto default_insts{param.default_value ? value_body(*param.default_value)
-                                                 : std::vector<u32>{}};
+                                                 : std::vector<inst_id>{}};
     const auto name{ast_.get_as_opt<ast::identifier_expr>(param.name)};
 
     u32 bits{extra_flags};
@@ -451,7 +457,7 @@ auto astgen::lower_function(ast::node_id                        id,
     // A signature without a body binds its parameter names for dependent types alone
     const bool bodyless{!fn.body};
 
-    std::vector<u32>                              params;
+    std::vector<inst_id>                          params;
     std::vector<std::pair<u32, std::vector<ref>>> impl_bounds;
     {
         const body_guard guard{*this, params};
@@ -478,18 +484,18 @@ auto astgen::lower_function(ast::node_id                        id,
         }
     }
 
-    const auto       ret{type_body(fn.explicit_return_type)};
-    std::vector<u32> attrs;
+    const auto           ret{type_body(fn.explicit_return_type)};
+    std::vector<inst_id> attrs;
     lower_attributes(fn.attributes, stdx::none, attrs);
     if (decl) { lower_attributes(decl->attributes, true, attrs); }
 
-    std::vector<u32> body;
+    std::vector<inst_id> body;
     if (fn.body) {
         const auto& block{ast_.get_as<ast::block_stmt>(*fn.body)};
         const auto  statements{spliced(block.statements)};
         announce_later(statements);
         const body_guard guard{*this, body};
-        if (!block_statements(statements)) { emit_defers(0, false, {}); }
+        if (!block_statements(statements)) { emit_defers(0, stdx::none); }
     }
 
     functions_.pop_back();

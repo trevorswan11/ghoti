@@ -68,15 +68,17 @@ class dumper {
                            info.is_library ? info.spec : quote_text(info.spec),
                            info.path ? "" : " (not loaded)");
         }
-        for (u32 i{0}; i < mod_.decls().size(); ++i) { decl(i); }
+        for (u32 i{0}; i < mod_.decls().size(); ++i) { decl(decl_id{i}); }
         return std::move(out_);
     }
 
   private:
-    auto decl(u32 index) -> void {
-        const auto& d{mod_.decl_at(index)};
-        fmt::format_to(
-            std::back_inserter(out_), "decl#{} {}", index, magic_enum::enum_name(d.kind));
+    auto decl(decl_id id) -> void {
+        const auto& d{mod_.decl_at(id)};
+        fmt::format_to(std::back_inserter(out_),
+                       "decl#{} {}",
+                       std::to_underlying(id),
+                       magic_enum::enum_name(d.kind));
         if (d.name.len > 0) {
             fmt::format_to(std::back_inserter(out_), " {}", mod_.string(d.name));
         }
@@ -85,10 +87,12 @@ class dumper {
                 fmt::format_to(std::back_inserter(out_), " {}", magic_enum::enum_name(flag));
             }
         }
-        if (d.import_index != NO_INDEX) {
-            fmt::format_to(std::back_inserter(out_), " import#{}", d.import_index);
+        if (d.import) {
+            fmt::format_to(std::back_inserter(out_), " import#{}", std::to_underlying(*d.import));
         }
-        if (d.owner != NO_INDEX) { fmt::format_to(std::back_inserter(out_), " in %{}", d.owner); }
+        if (d.owner) {
+            fmt::format_to(std::back_inserter(out_), " in %{}", std::to_underlying(*d.owner));
+        }
         if (d.extern_target.len > 0) {
             fmt::format_to(
                 std::back_inserter(out_), " extern {}", quote_text(mod_.string(d.extern_target)));
@@ -107,7 +111,7 @@ class dumper {
         for (usize i{0}; i < depth; ++i) { out_ += INDENT; }
     }
 
-    auto named_body(std::string_view name, gsl::span<const u32> body, usize depth) -> void {
+    auto named_body(std::string_view name, gsl::span<const inst_id> body, usize depth) -> void {
         if (body.empty()) { return; }
         indent(depth);
         fmt::format_to(std::back_inserter(out_), "{} {{\n", name);
@@ -116,15 +120,13 @@ class dumper {
         out_ += "}\n";
     }
 
-    [[nodiscard]] auto ref_text(ref r) const -> std::string {
-        if (is_none(r)) { return "_"; }
-        if (const auto known{as_well_known(r)}) {
-            return fmt::format("@{}", well_known_name(*known));
-        }
-        return fmt::format("%{}", inst_index(r));
+    [[nodiscard]] static auto ref_text(stdx::option<ref> r) -> std::string {
+        if (!r) { return "_"; }
+        if (const auto inst{as_inst(*r)}) { return fmt::format("%{}", std::to_underlying(*inst)); }
+        return fmt::format("@{}", well_known_name(*as_well_known(*r)));
     }
 
-    [[nodiscard]] auto location_text(u32 inst) const -> std::string {
+    [[nodiscard]] auto location_text(inst_id inst) const -> std::string {
         if (!options_.locations_from) { return {}; }
         const auto& tree{*options_.locations_from};
         const auto  at{mod_.src_of(inst).visit(
@@ -133,15 +135,17 @@ class dumper {
         return fmt::format(" // {}", at);
     }
 
-    auto instruction(u32 inst, usize depth) -> void {
+    auto instruction(inst_id inst, usize depth) -> void {
         const auto  t{mod_.tag_of(inst)};
         const auto& d{mod_.data_of(inst)};
         indent(depth);
-        if (!is_statement(t)) { fmt::format_to(std::back_inserter(out_), "%{} = ", inst); }
+        if (!is_statement(t)) {
+            fmt::format_to(std::back_inserter(out_), "%{} = ", std::to_underlying(inst));
+        }
         out_ += tag_name(t);
 
         // Bodies print after the header line, so they're gathered while the scalars print
-        std::vector<std::pair<std::string, gsl::span<const u32>>> bodies;
+        std::vector<std::pair<std::string, gsl::span<const inst_id>>> bodies;
         switch (payload_of(t)) {
         case payload_kind::NONE: break;
         case payload_kind::INT: fmt::format_to(std::back_inserter(out_), " {}", d.int_value); break;
@@ -149,8 +153,10 @@ class dumper {
             fmt::format_to(std::back_inserter(out_), " {}", quote_text(mod_.string(d.str)));
             break;
         case payload_kind::BIN:
-            fmt::format_to(
-                std::back_inserter(out_), " {}, {}", ref_text(d.bin.lhs), ref_text(d.bin.rhs));
+            fmt::format_to(std::back_inserter(out_),
+                           " {}, {}",
+                           ref_text(filled(d.bin.lhs)),
+                           ref_text(filled(d.bin.rhs)));
             break;
         case payload_kind::UN: unary(t, d); break;
         case payload_kind::PL: {
@@ -180,15 +186,17 @@ class dumper {
                            " {}",
                            syntax::builtin_name(static_cast<syntax::builtin_t>(d.un.aux)));
             return;
-        default: fmt::format_to(std::back_inserter(out_), " {}", ref_text(d.un.operand)); return;
+        default:
+            fmt::format_to(std::back_inserter(out_), " {}", ref_text(filled(d.un.operand)));
+            return;
         }
     }
 
     // Prints scalar fields inline, `name=value`, and queues bodies under a dotted path name
-    auto fields(gsl::span<const field>                                     schema,
-                record_reader&                                             reader,
-                std::vector<std::pair<std::string, gsl::span<const u32>>>& bodies,
-                std::string_view                                           prefix) -> void {
+    auto fields(gsl::span<const field>                                         schema,
+                record_reader&                                                 reader,
+                std::vector<std::pair<std::string, gsl::span<const inst_id>>>& bodies,
+                std::string_view                                               prefix) -> void {
         bool       first{true};
         const auto separate{[&] {
             if (!first) { out_ += ", "; }
@@ -200,7 +208,7 @@ class dumper {
             switch (f.kind) {
             case field_kind::REF: {
                 const auto r{reader.ref_field()};
-                if (is_none(r)) { break; }
+                if (!r) { break; }
                 separate();
                 fmt::format_to(std::back_inserter(out_), "{}={}", f.name, ref_text(r));
                 break;
@@ -214,8 +222,16 @@ class dumper {
             }
             case field_kind::DECL:
                 separate();
-                fmt::format_to(std::back_inserter(out_), "decl#{}", reader.u32_field());
+                fmt::format_to(
+                    std::back_inserter(out_), "decl#{}", std::to_underlying(reader.decl_field()));
                 break;
+            case field_kind::INDEX: {
+                const auto index{reader.index_field()};
+                if (!index) { break; }
+                separate();
+                fmt::format_to(std::back_inserter(out_), "{}={}", f.name, *index);
+                break;
+            }
             case field_kind::STR: {
                 const auto text{reader.str_field()};
                 if (text.empty()) { break; }
@@ -235,7 +251,7 @@ class dumper {
                 fmt::format_to(std::back_inserter(out_), "{}=(", f.name);
                 for (usize i{0}; i < refs.size(); ++i) {
                     if (i > 0) { out_ += ", "; }
-                    out_ += ref_text(refs[i]);
+                    out_ += ref_text(filled(refs[i]));
                 }
                 out_ += ')';
                 break;

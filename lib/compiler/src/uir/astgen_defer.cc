@@ -40,18 +40,18 @@ auto astgen::has_errdefers(usize height) const -> bool {
                                [](const defer_entry& entry) { return entry.is_errdefer; });
 }
 
-auto astgen::emit_defers(usize height, bool on_failure, ref residual) -> void {
+auto astgen::emit_defers(usize height, stdx::option<ref> residual) -> void {
     // Copied first, since a defer body's own defers push onto the same stack
     const auto&                    defers{functions_.back().defers};
     const std::vector<defer_entry> pending(defers.begin() + static_cast<idiff>(height),
                                            defers.end());
     for (const auto& entry : pending | std::views::reverse) {
-        if (entry.is_errdefer && !on_failure) { continue; }
-        emit_defer(entry, on_failure, residual);
+        if (entry.is_errdefer && !residual) { continue; }
+        emit_defer(entry, residual);
     }
 }
 
-auto astgen::emit_defer(const defer_entry& entry, bool on_failure, ref residual) -> void {
+auto astgen::emit_defer(const defer_entry& entry, stdx::option<ref> residual) -> void {
     // The copy sees what was declared when the defer was written, not what came after it
     hidden_.emplace_back(entry.visible_seq, seq_);
     auto&      state{functions_.back()};
@@ -68,38 +68,38 @@ auto astgen::emit_defer(const defer_entry& entry, bool on_failure, ref residual)
         return;
     }
 
+    // Only a failure path copies an errdefer, and every failure path has a residual
     const auto&       errdefer{ast_.get_as<ast::errdefer_stmt>(entry.stmt)};
     const scope_guard scoped{*this, scope_kind::BLOCK};
     if (errdefer.capture && errdefer.capture->is<ast::identifier_expr>()) {
-        DISCARD(on_failure);
         DISCARD(declare(ast_.get_as<ast::identifier_expr>(**errdefer.capture).name,
                         location_of(**errdefer.capture),
-                        {.kind = binding_kind::VALUE, .value = residual}));
+                        {.kind = binding_kind::VALUE, .value = *residual}));
     }
     DISCARD(stmt(errdefer.deferred));
 }
 
 auto astgen::emit_return(ast::node_id id, ref value) -> void {
     if (!has_errdefers(0)) {
-        emit_defers(0, false, {});
+        emit_defers(0, stdx::none);
         DISCARD(add_un(tag::ret, value, 0, id));
         return;
     }
 
     // Whether the value fails is the return type's to say, so both paths are lowered
-    const auto       failure{add_un(tag::ret_failure, value, 0, id)};
-    const auto       failed{add_un(tag::failure_is_set, failure, 0, id)};
-    std::vector<u32> on_failure;
+    const auto           failure{add_un(tag::ret_failure, value, 0, id)};
+    const auto           failed{add_un(tag::failure_is_set, failure, 0, id)};
+    std::vector<inst_id> on_failure;
     {
         const body_guard guard{*this, on_failure};
         const auto       residual{add_un(tag::failure_residual, failure, 0, id)};
-        emit_defers(0, true, residual);
+        emit_defers(0, residual);
         DISCARD(add_un(tag::ret, value, 0, id));
     }
-    std::vector<u32> on_success;
+    std::vector<inst_id> on_success;
     {
         const body_guard guard{*this, on_success};
-        emit_defers(0, false, {});
+        emit_defers(0, stdx::none);
         DISCARD(add_un(tag::ret, value, 0, id));
     }
     DISCARD(add_pl(

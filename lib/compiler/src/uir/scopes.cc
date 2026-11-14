@@ -184,24 +184,24 @@ auto astgen::capture_ref(const lookup_hit& hit, use u, source src) -> ref {
     return captured;
 }
 
-auto astgen::outer_captures(const scope& boundary, source src) -> std::vector<u32> {
-    std::vector<u32> refs;
+auto astgen::outer_captures(const scope& boundary, source src) -> std::vector<ref> {
+    std::vector<ref> refs;
     refs.reserve(boundary.captures.size());
     for (const auto& slot : boundary.captures) {
         const auto found{lookup(slot.name)};
         const auto hit{found.as_opt<lookup_hit>()};
         if (!hit) {
-            refs.emplace_back(static_cast<u32>(to_ref(well_known::undefined)));
+            refs.emplace_back(to_ref(well_known::undefined));
             continue;
         }
         const auto wanted{slot.by_ref ? use::PLACE : use::VALUE};
         if (!hit->crossed.empty()) {
-            refs.emplace_back(static_cast<u32>(capture_ref(*hit, wanted, src)));
+            refs.emplace_back(capture_ref(*hit, wanted, src));
             continue;
         }
         const auto& b{hit->found};
         const bool  load{b.kind == binding_kind::PLACE && !slot.by_ref};
-        refs.emplace_back(static_cast<u32>(load ? add_un(tag::load, b.value, 0, src) : b.value));
+        refs.emplace_back(load ? add_un(tag::load, b.value, 0, src) : b.value);
     }
     return refs;
 }

@@ -199,9 +199,9 @@ auto astgen::identifier(source src, source_location at, std::string_view name, u
         switch (b.kind) {
         case binding_kind::DECL:
             if (u != use::VALUE && b.mutable_decl) {
-                return {add_un(tag::decl_ref, {}, b.decl, src), true};
+                return {add_un(tag::decl_ref, stdx::none, std::to_underlying(*b.decl), src), true};
             }
-            return {add_un(tag::decl_val, {}, b.decl, src), false};
+            return {add_un(tag::decl_val, stdx::none, std::to_underlying(*b.decl), src), false};
         case binding_kind::FIELD:
             report(at,
                    sema::error::UNDECLARED_IDENTIFIER,
@@ -269,7 +269,7 @@ auto astgen::expr(ast::expr_handle h) -> ref {
         return add_str(
             tag::implicit_access, name_of(ast_.get_as<ast::implicit_access_expr>(id).member), id);
     case node_kind::COMPTIME_EXPRESSION: {
-        std::vector<u32> body;
+        std::vector<inst_id> body;
         {
             const body_guard guard{*this, body};
             yields(expr(ast_.get_as<ast::comptime_expr>(id).rhs), id);
@@ -330,6 +330,11 @@ auto astgen::int_literal(ast::node_id id) -> ref {
     const auto limbs{lit.is_big ? limbs_of(lit.exact_value()) : limbs_of(lit.value)};
     return add_pl(
         tag::int_lit, writer().words_field(limbs).u32_field(lit.width).u32_field(bits), id);
+}
+
+auto astgen::optional_expr(stdx::option<ast::expr_handle> h) -> stdx::option<ref> {
+    if (!h) { return stdx::none; }
+    return expr(*h);
 }
 
 auto astgen::place(ast::expr_handle h, use u) -> place_result {
@@ -417,7 +422,7 @@ auto astgen::call(source src, source_location, const ast::call_expr& node) -> re
         return builtin_call(src, callee, *builtin, node);
     }
 
-    const auto modifier{node.modifier ? expr(*node.modifier) : ref{}};
+    const auto modifier{optional_expr(node.modifier)};
     if (const auto dot{ast_.get_as_opt<ast::dot_expr>(callee)}) {
         const auto object{place(dot->object, use::PLACE)};
         auto [args, mask]{call_args(node)};
@@ -481,8 +486,8 @@ auto astgen::lower_node(ast::node_id id, const ast::dot_expr& node) -> ref {
 auto astgen::lower_node(ast::node_id id, const ast::index_expr& node) -> ref {
     if (const auto range{ast_.get_as_opt<ast::range_expr>(node.index)}) {
         const auto object{place(node.array, use::PLACE)};
-        const auto lo{range->lhs ? expr(*range->lhs) : ref{}};
-        const auto hi{range->rhs ? expr(*range->rhs) : ref{}};
+        const auto lo{optional_expr(range->lhs)};
+        const auto hi{optional_expr(range->rhs)};
         u32        bits{object.is_place ? flags::PLACE : 0U};
         if (ast::node_id{node.index}.get_token_type() == token_type_t::DOT_DOT_EQ) {
             bits |= flags::INCLUSIVE;
@@ -504,14 +509,14 @@ auto astgen::lower_node(ast::node_id id, const ast::index_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::range_expr& node) -> ref {
-    const auto lo{node.lhs ? expr(*node.lhs) : ref{}};
-    const auto hi{node.rhs ? expr(*node.rhs) : ref{}};
+    const auto lo{optional_expr(node.lhs)};
+    const auto hi{optional_expr(node.rhs)};
     const u32  bits{id.get_token_type() == token_type_t::DOT_DOT_EQ ? flags::INCLUSIVE : 0U};
     return add_pl(tag::range, writer().ref_field(lo).ref_field(hi).u32_field(bits), id);
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::initializer_expr& node) -> ref {
-    const auto type_ref{node.object_type ? expr(*node.object_type) : ref{}};
+    const auto type_ref{optional_expr(node.object_type)};
     const bool positional{!node.initializers.empty() &&
                           std::ranges::none_of(node.initializers, [](const auto& init) {
                               return init.member.has_value();
@@ -547,7 +552,7 @@ auto astgen::lower_node(ast::node_id id, const ast::array_expr& node) -> ref {
         const auto len{expr(*node.size)};
         return add_pl(tag::array_type, writer().ref_field(len).ref_field(elem).u32_field(bits), id);
     }
-    const auto len{node.size ? expr(*node.size) : ref{}};
+    const auto len{optional_expr(node.size)};
     if (!node.size) { bits |= flags::LEN_ABSENT; }
     const auto       elem{type(node.item_explicit_type)};
     std::vector<ref> items;
@@ -557,17 +562,17 @@ auto astgen::lower_node(ast::node_id id, const ast::array_expr& node) -> ref {
                   id);
 }
 
-auto astgen::value_body(ast::expr_handle h) -> std::vector<u32> {
-    std::vector<u32> body;
-    const body_guard guard{*this, body};
+auto astgen::value_body(ast::expr_handle h) -> std::vector<inst_id> {
+    std::vector<inst_id> body;
+    const body_guard     guard{*this, body};
     yields(expr(h), ast::node_id{h});
     return body;
 }
 
-auto astgen::arm_value(ast::stmt_handle arm) -> std::vector<u32> {
-    std::vector<u32>   body;
-    const body_guard   guard{*this, body};
-    const ast::node_id id{arm};
+auto astgen::arm_value(ast::stmt_handle arm) -> std::vector<inst_id> {
+    std::vector<inst_id> body;
+    const body_guard     guard{*this, body};
+    const ast::node_id   id{arm};
     if (const auto expr_stmt{ast_.get_as_opt<ast::expr_stmt>(id)}) {
         yields(expr(expr_stmt->expression), id);
         return body;
@@ -598,8 +603,8 @@ auto astgen::bind_capture(const ast::capture_t& capture, u32 slot, source src) -
 
 auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
     if (node.is_evaluation_context_branch()) {
-        const auto       comptime_arm{arm_value(node.consequence)};
-        std::vector<u32> runtime_arm;
+        const auto           comptime_arm{arm_value(node.consequence)};
+        std::vector<inst_id> runtime_arm;
         if (node.alternate) {
             runtime_arm = arm_value(*node.alternate);
         } else {
@@ -614,17 +619,17 @@ auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
     const auto captured_arm{
         [&](const stdx::option<ast::capture_t>& capture, ast::stmt_handle arm, u32 slot) {
             if (!capture) { return arm_value(arm); }
-            std::vector<u32>  body;
-            const body_guard  guard{*this, body};
-            const scope_guard scoped{*this, scope_kind::BLOCK};
+            std::vector<inst_id> body;
+            const body_guard     guard{*this, body};
+            const scope_guard    scoped{*this, scope_kind::BLOCK};
             bind_capture(*capture, slot, id);
             auto inner{arm_value(arm)};
             body.insert(body.end(), inner.begin(), inner.end());
             return body;
         }};
     const auto void_arm{[&] {
-        std::vector<u32> body;
-        const body_guard guard{*this, body};
+        std::vector<inst_id> body;
+        const body_guard     guard{*this, body};
         yields(to_ref(well_known::void_value), id);
         return body;
     }};
@@ -647,8 +652,10 @@ auto astgen::lower_node(ast::node_id id, const ast::if_expr& node) -> ref {
 
 auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
     const auto capture_of{[&](const ast::capture_t& capture, ast::node_id at) -> stdx::option<ref> {
-        const auto ident{ast_.get_as_opt<ast::identifier_expr>(capture.payload)};
-        const auto sub{capture.pattern ? pattern(ast::node_id{*capture.pattern}, slots) : ref{}};
+        const auto              ident{ast_.get_as_opt<ast::identifier_expr>(capture.payload)};
+        const stdx::option<ref> sub{
+            capture.pattern ? stdx::option<ref>{pattern(ast::node_id{*capture.pattern}, slots)}
+                            : stdx::none};
         if (!ident) {
             if (!capture.pattern) { return stdx::none; }
             return sub;
@@ -683,17 +690,17 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
     if (const auto bound{ast_.get_as_opt<ast::bound_pattern_expr>(id)}) {
         const auto inner{pattern(ast::node_id{bound->pattern}, slots)};
         const auto cap{capture_of(bound->capture, id)};
-        return add_bin(tag::pat_bound, inner, cap.value_or(ref{}), id);
+        return add_bin(tag::pat_bound, inner, cap, id);
     }
     if (const auto range{ast_.get_as_opt<ast::range_expr>(id)}) {
-        const auto lo{range->lhs ? value_body(*range->lhs) : std::vector<u32>{}};
-        const auto hi{range->rhs ? value_body(*range->rhs) : std::vector<u32>{}};
+        const auto lo{range->lhs ? value_body(*range->lhs) : std::vector<inst_id>{}};
+        const auto hi{range->rhs ? value_body(*range->rhs) : std::vector<inst_id>{}};
         const u32  bits{id.get_token_type() == token_type_t::DOT_DOT_EQ ? flags::INCLUSIVE : 0U};
         return add_pl(tag::pat_range, writer().body_field(lo).body_field(hi).u32_field(bits), id);
     }
     if (const auto init{ast_.get_as_opt<ast::initializer_expr>(id)}) {
         const auto type_body_insts{init->object_type ? value_body(*init->object_type)
-                                                     : std::vector<u32>{}};
+                                                     : std::vector<inst_id>{}};
         std::vector<std::pair<std::string_view, ref>> entries;
         for (const auto& entry : init->initializers) {
             const auto name{
@@ -737,11 +744,11 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
     if (node.is_binding) { bits |= flags::MATCH_BINDING; }
 
     struct arm_record {
-        std::vector<ref> roots;
-        std::vector<u32> pattern_body;
-        ref              capture{};
-        std::vector<u32> guard;
-        std::vector<u32> body;
+        std::vector<ref>     roots;
+        std::vector<inst_id> pattern_body;
+        ref                  capture{};
+        std::vector<inst_id> guard;
+        std::vector<inst_id> body;
     };
     // A match on a type value prunes like `match comptime`, and only Sema knows the operand's type
     std::vector<arm_record> arms;
@@ -790,7 +797,8 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
     auto record{writer()};
     record.ref_field(operand)
         .u32_field(bits)
-        .u32_field(node.catch_all_idx ? static_cast<u32>(*node.catch_all_idx) : NO_INDEX)
+        .index_field(node.catch_all_idx ? stdx::option<u32>{static_cast<u32>(*node.catch_all_idx)}
+                                        : stdx::none)
         .count(arms.size());
     for (const auto& arm : arms) {
         record.refs_field(arm.roots)
@@ -825,7 +833,7 @@ auto astgen::lower_node(ast::node_id id, const ast::label_expr& node) -> ref {
         .is_loop      = false,
         .defer_height = functions_.back().defers.size(),
     });
-    std::vector<u32> instructions;
+    std::vector<inst_id> instructions;
     if (body.is<ast::block_stmt>()) {
         instructions = scoped_block(ast::block_handle{body});
     } else {
@@ -840,7 +848,7 @@ auto astgen::lower_node(ast::node_id id, const ast::label_expr& node) -> ref {
     return inst_ref(inst);
 }
 
-auto astgen::begin_loop(ast::node_id id, bool is_loop) -> u32 {
+auto astgen::begin_loop(ast::node_id id, bool is_loop) -> inst_id {
     const auto inst{reserve(id)};
     functions_.back().targets.emplace_back<jump_target>({
         .inst         = inst,
@@ -856,7 +864,7 @@ auto astgen::loop_label() const -> std::string_view {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::while_loop_expr& node) -> ref {
-    std::vector<u32> cond;
+    std::vector<inst_id> cond;
     {
         const body_guard guard{*this, cond};
         yields(expr(node.condition), id);
@@ -865,8 +873,8 @@ auto astgen::lower_node(ast::node_id id, const ast::while_loop_expr& node) -> re
     const auto label{loop_label()};
 
     // The payload capture is the body's own name, so it shares the body's scope
-    std::vector<u32> body;
-    std::vector<u32> cont;
+    std::vector<inst_id> body;
+    std::vector<inst_id> cont;
     {
         const scope_guard scoped{*this, scope_kind::BLOCK};
         {
@@ -882,7 +890,7 @@ auto astgen::lower_node(ast::node_id id, const ast::while_loop_expr& node) -> re
     }
 
     // The `else` belongs to the loop, so a labeled break in it still lands on the loop
-    std::vector<u32> otherwise;
+    std::vector<inst_id> otherwise;
     if (node.non_break) {
         const scope_guard scoped{*this, scope_kind::BLOCK};
         const body_guard  guard{*this, otherwise};
@@ -912,7 +920,7 @@ auto astgen::lower_node(ast::node_id id, const ast::do_while_loop_expr& node) ->
     const auto label{loop_label()};
     const auto body{scoped_block(node.block)};
     functions_.back().targets.pop_back();
-    std::vector<u32> cond;
+    std::vector<inst_id> cond;
     {
         const body_guard guard{*this, cond};
         yields(expr(node.condition), id);
@@ -955,7 +963,7 @@ auto astgen::lower_node(ast::node_id id, const ast::for_loop_expr& node) -> ref 
     const auto inst{begin_loop(id, true)};
     const auto label{loop_label()};
 
-    std::vector<u32> body;
+    std::vector<inst_id> body;
     {
         const scope_guard scoped{*this, scope_kind::BLOCK};
         {
@@ -967,7 +975,7 @@ auto astgen::lower_node(ast::node_id id, const ast::for_loop_expr& node) -> ref 
         auto statements{block_in_current_scope(node.block)};
         body.insert(body.end(), statements.begin(), statements.end());
     }
-    const auto otherwise{node.non_break ? arm_value(*node.non_break) : std::vector<u32>{}};
+    const auto otherwise{node.non_break ? arm_value(*node.non_break) : std::vector<inst_id>{}};
     functions_.back().targets.pop_back();
     const u32 bits{node.is_unrolled ? flags::UNROLL : 0U};
     fill_pl(
@@ -988,11 +996,11 @@ auto astgen::lower_node(ast::node_id id, const ast::unwrap_expr& node) -> ref {
                           .body_field({}),
                       id);
     }
-    std::vector<u32> failure;
+    std::vector<inst_id> failure;
     {
         const body_guard guard{*this, failure};
         const auto       residual{add(tag::residual, {}, id)};
-        emit_defers(0, true, residual);
+        emit_defers(0, residual);
         DISCARD(add_un(tag::ret_residual, residual, 0, id));
     }
     return add_pl(tag::unwrap,
@@ -1004,17 +1012,18 @@ auto astgen::lower_node(ast::node_id id, const ast::unwrap_expr& node) -> ref {
 }
 
 auto astgen::lower_node(ast::node_id id, const ast::asm_expr& node) -> ref {
-    const auto result_type{node.result_type ? type(*node.result_type) : ref{}};
+    const auto result_type{optional_type(node.result_type)};
     const auto constraint{
         [this](ast::string_handle s) { return ast_.get_as<ast::string_expr>(s).value; }};
-    std::vector<std::pair<std::string_view, ref>> outputs;
+    std::vector<std::pair<std::string_view, stdx::option<ref>>> outputs;
     for (const auto& op : node.outputs) {
         outputs.emplace_back(constraint(op.constraint),
-                             op.value ? place(*op.value, use::MUTATE).value : ref{});
+                             op.value ? stdx::option<ref>{place(*op.value, use::MUTATE).value}
+                                      : stdx::none);
     }
-    std::vector<std::pair<std::string_view, ref>> inputs;
+    std::vector<std::pair<std::string_view, stdx::option<ref>>> inputs;
     for (const auto& op : node.inputs) {
-        inputs.emplace_back(constraint(op.constraint), op.value ? expr(*op.value) : ref{});
+        inputs.emplace_back(constraint(op.constraint), optional_expr(op.value));
     }
     u32 options{0};
     for (const auto opt : node.options) { options |= 1U << static_cast<u32>(opt); }

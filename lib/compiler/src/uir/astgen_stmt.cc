@@ -51,7 +51,7 @@ auto astgen::stmt(ast::stmt_handle h) -> bool {
     case node_kind::IMPORT_STATEMENT: {
         const auto& import{ast_.get_as<ast::import_stmt>(id)};
         const auto  index{add_import(id, import)};
-        const auto  value{add_un(tag::import, {}, index, id)};
+        const auto  value{add_un(tag::import, stdx::none, std::to_underlying(index), id)};
         if (const auto named{import.get_name(ast_)}) {
             DISCARD(declare(named->second,
                             import_location(id, import),
@@ -84,22 +84,22 @@ auto astgen::block_statements(const std::vector<ast::stmt_handle>& statements) -
     return diverged;
 }
 
-auto astgen::scoped_block(ast::block_handle h, scope_kind kind) -> std::vector<u32> {
+auto astgen::scoped_block(ast::block_handle h, scope_kind kind) -> std::vector<inst_id> {
     const scope_guard scoped{*this, kind};
     return block_in_current_scope(h);
 }
 
-auto astgen::block_in_current_scope(ast::block_handle h) -> std::vector<u32> {
+auto astgen::block_in_current_scope(ast::block_handle h) -> std::vector<inst_id> {
     const auto& block{ast_.get_as<ast::block_stmt>(h)};
     const auto  statements{spliced(block.statements)};
     announce_later(statements);
 
-    auto&            state{functions_.back()};
-    const auto       height{state.defers.size()};
-    std::vector<u32> body;
+    auto&                state{functions_.back()};
+    const auto           height{state.defers.size()};
+    std::vector<inst_id> body;
     {
         const body_guard guard{*this, body};
-        if (!block_statements(statements)) { emit_defers(height, false, {}); }
+        if (!block_statements(statements)) { emit_defers(height, stdx::none); }
     }
     auto& defers{functions_.back().defers};
     defers.erase(defers.begin() + static_cast<idiff>(height), defers.end());
@@ -110,7 +110,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
     check_decl_modifiers(id, decl, in_function());
     using ast::decl_modifiers;
     const auto name{name_of(decl.name)};
-    const auto type_ref{decl.explicit_type ? type(*decl.explicit_type) : ref{}};
+    const auto type_ref{optional_type(decl.explicit_type)};
     const bool is_comptime{decl.has_modifier(decl_modifiers::COMPTIME)};
     const bool is_mut{decl.has_modifier(decl_modifiers::MUT)};
 
@@ -129,7 +129,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
                 inst, tag::let_value, writer().str_field(name).ref_field(type_ref).ref_field(init));
             return;
         }
-        std::vector<u32> value;
+        std::vector<inst_id> value;
         {
             const body_guard guard{*this, value};
             yields(lower_function(value_node, *initializes_fn, decl), value_node);
@@ -139,7 +139,7 @@ auto astgen::local_decl(ast::node_id id, const ast::decl_stmt& decl) -> void {
         return;
     }
     if (is_comptime && !is_mut) {
-        std::vector<u32> value;
+        std::vector<inst_id> value;
         if (decl.value) {
             const body_guard guard{*this, value};
             const auto       initializer{*decl.value};
@@ -227,14 +227,14 @@ auto astgen::break_stmt(ast::node_id id, const ast::break_stmt& node) -> void {
     const auto target{find_target(id, node.label, false, "break")};
     const auto value{node.expression ? expr(*node.expression) : to_ref(well_known::void_value)};
     if (!target) { return; }
-    emit_defers(target->defer_height, false, {});
+    emit_defers(target->defer_height, stdx::none);
     DISCARD(add_bin(tag::break_to, inst_ref(target->inst), value, id));
 }
 
 auto astgen::continue_stmt(ast::node_id id, const ast::continue_stmt& node) -> void {
     const auto target{find_target(id, node.label, true, "continue")};
     if (!target) { return; }
-    emit_defers(target->defer_height, false, {});
+    emit_defers(target->defer_height, stdx::none);
     DISCARD(add_un(tag::repeat, inst_ref(target->inst), 0, id));
 }
 

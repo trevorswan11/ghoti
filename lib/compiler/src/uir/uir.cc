@@ -184,7 +184,7 @@ constexpr std::array EVAL_BRANCH{field{BODY, "comptime"}, field{BODY, "runtime"}
 constexpr std::array UNWRAP_BRANCH{field{REF, "operand"}, field{BODY, "then"}, field{BODY, "else"}};
 constexpr std::array MATCH{field{REF, "operand"},
                            field{U32, "flags", {}, MATCH_FLAGS},
-                           field{U32, "catch_all"},
+                           field{INDEX, "catch_all"},
                            field{LIST, "arms", ARM_ITEMS}};
 constexpr std::array PAT_CAPTURE{field{STR, "name"},
                                  field{U32, "slot"},
@@ -211,13 +211,17 @@ constexpr std::array IMPL_DECL{field{BODY, "params"},
                                field{BODY, "target"},
                                field{LIST, "decls", DECL_ITEMS}};
 
+// How an INDEX field stores none
+constexpr u32 ABSENT_INDEX{~u32{0}};
+
 [[nodiscard]] auto skip_record(const module_t& mod, gsl::span<const field> schema, u32 at) -> u32 {
     const auto extra{mod.extra()};
     for (const auto& f : schema) {
         switch (f.kind) {
         case REF:
         case U32:
-        case DECL:  at += 1; break;
+        case DECL:
+        case INDEX: at += 1; break;
         case STR:   at += 2; break;
         case BODY:
         case REFS:
@@ -327,27 +331,34 @@ auto schema_of(tag t) noexcept -> gsl::span<const field> {
 // A shared empty body, so a decl or record with no body points at a zero length
 module_t::module_t() { extra_.emplace_back(0); }
 
-auto module_t::namespace_of(u32 owner) const -> stdx::option<const namespace_info&> {
-    if (owner == NO_INDEX) { return root_; }
-    if (const auto it{namespaces_.find(owner)}; it != namespaces_.end()) { return it->second; }
+auto module_t::body(stdx::option<body_ref> at) const noexcept -> gsl::span<const inst_id> {
+    const auto start{std::to_underlying(*at.raw())};
+    const auto words{gsl::span<const u32>{extra_}.subspan(start + 1, extra_[start])};
+    return {reinterpret_cast<const inst_id*>(words.data()), words.size()};
+}
+
+auto module_t::namespace_of(stdx::option<inst_id> owner) const
+    -> stdx::option<const namespace_info&> {
+    if (!owner) { return root_; }
+    if (const auto it{namespaces_.find(*owner)}; it != namespaces_.end()) { return it->second; }
     return stdx::none;
 }
 
-auto module_t::add(tag t, data d, source src) -> u32 {
-    const auto index{instruction_count()};
+auto module_t::add(tag t, data d, source src) -> inst_id {
+    const inst_id inst{instruction_count()};
     tags_.emplace_back(t);
     datas_.emplace_back(d);
     srcs_.emplace_back(src);
-    return index;
+    return inst;
 }
 
-auto module_t::reserve(source src) -> u32 {
+auto module_t::reserve(source src) -> inst_id {
     return add(tag::unreachable, data{.int_value = 0}, src);
 }
 
-auto module_t::set(u32 index, tag t, data d) noexcept -> void {
-    tags_[index]  = t;
-    datas_[index] = d;
+auto module_t::set(inst_id inst, tag t, data d) noexcept -> void {
+    tags_[std::to_underlying(inst)]  = t;
+    datas_[std::to_underlying(inst)] = d;
 }
 
 auto module_t::intern(std::string_view text) -> string_ref {
@@ -364,26 +375,27 @@ auto module_t::append_extra(gsl::span<const u32> words) -> u32 {
     return at;
 }
 
-auto module_t::add_body(gsl::span<const u32> instructions) -> body_ref {
-    if (instructions.empty()) { return EMPTY_BODY; }
-    const auto at{static_cast<u32>(extra_.size())};
+auto module_t::add_body(gsl::span<const inst_id> instructions) -> stdx::option<body_ref> {
+    if (instructions.empty()) { return stdx::none; }
+    const body_ref at{static_cast<u32>(extra_.size())};
     extra_.emplace_back(static_cast<u32>(instructions.size()));
-    extra_.insert(extra_.end(), instructions.begin(), instructions.end());
+    for (const auto inst : instructions) { extra_.emplace_back(std::to_underlying(inst)); }
     return at;
 }
 
-auto module_t::add_decl(decl d) -> u32 {
+auto module_t::add_decl(decl d) -> decl_id {
     decls_.emplace_back(d);
-    return static_cast<u32>(decls_.size() - 1);
+    return decl_id{static_cast<u32>(decls_.size() - 1)};
 }
 
-auto module_t::add_import(import_info info) -> u32 {
+auto module_t::add_import(import_info info) -> import_id {
     imports_.emplace_back(std::move(info));
-    return static_cast<u32>(imports_.size() - 1);
+    return import_id{static_cast<u32>(imports_.size() - 1)};
 }
 
 auto module_t::add_namespace(namespace_info info) -> void {
-    const auto owner{info.owner};
+    ASSERT(info.owner, "The module's own namespace is root_namespace_mut's");
+    const auto owner{*info.owner};
     namespaces_.insert_or_assign(owner, std::move(info));
 }
 
@@ -392,19 +404,28 @@ auto record_reader::str_field() noexcept -> std::string_view {
     return mod_.string(s);
 }
 
-auto record_reader::body_field() noexcept -> gsl::span<const u32> {
+auto record_reader::index_field() noexcept -> stdx::option<u32> {
+    const auto value{word()};
+    if (value == ABSENT_INDEX) { return stdx::none; }
+    return value;
+}
+
+auto record_reader::body_field() noexcept -> gsl::span<const inst_id> {
+    const auto words{words_field()};
+    return {reinterpret_cast<const inst_id*>(words.data()), words.size()};
+}
+
+auto record_reader::refs_field() noexcept -> gsl::span<const ref> {
+    const auto words{words_field()};
+    return {reinterpret_cast<const ref*>(words.data()), words.size()};
+}
+
+auto record_reader::words_field() noexcept -> gsl::span<const u32> {
     const auto len{word()};
     const auto out{mod_.extra().subspan(at_, len)};
     at_ += len;
     return out;
 }
-
-auto record_reader::refs_field() noexcept -> gsl::span<const ref> {
-    const auto words{body_field()};
-    return {reinterpret_cast<const ref*>(words.data()), words.size()};
-}
-
-auto record_reader::words_field() noexcept -> gsl::span<const u32> { return body_field(); }
 
 auto record_writer::str_field(std::string_view text) -> record_writer& {
     const auto s{mod_.intern(text)};
@@ -412,9 +433,13 @@ auto record_writer::str_field(std::string_view text) -> record_writer& {
     return word(s.len);
 }
 
-auto record_writer::body_field(gsl::span<const u32> instructions) -> record_writer& {
+auto record_writer::index_field(stdx::option<u32> index) -> record_writer& {
+    return word(index.value_or(ABSENT_INDEX));
+}
+
+auto record_writer::body_field(gsl::span<const inst_id> instructions) -> record_writer& {
     word(static_cast<u32>(instructions.size()));
-    words_.insert(words_.end(), instructions.begin(), instructions.end());
+    for (const auto inst : instructions) { word(std::to_underlying(inst)); }
     return *this;
 }
 
@@ -425,7 +450,9 @@ auto record_writer::refs_field(gsl::span<const ref> refs) -> record_writer& {
 }
 
 auto record_writer::words_field(gsl::span<const u32> words) -> record_writer& {
-    return body_field(words);
+    word(static_cast<u32>(words.size()));
+    words_.insert(words_.end(), words.begin(), words.end());
+    return *this;
 }
 
 auto record_writer::finish() -> u32 { return mod_.append_extra(words_); }
