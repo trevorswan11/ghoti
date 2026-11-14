@@ -15,6 +15,7 @@
 
 #include "compiler/ast/id.hh"
 #include "compiler/gir/instruction.hh"
+#include "compiler/ip/index.hh"
 #include "compiler/sema/type.hh"
 #include "support/big_int.hh"
 #include "support/float128.hh"
@@ -23,6 +24,7 @@
 
 namespace ghoti::sema { struct context; } // namespace ghoti::sema
 namespace ghoti::mod { struct module_t; } // namespace ghoti::mod
+namespace ghoti::ip { class pool; }       // namespace ghoti::ip
 
 namespace ghoti::gir {
 
@@ -280,6 +282,13 @@ class const_value {
 
     [[nodiscard]] auto hash() const noexcept -> u64;
     [[nodiscard]] auto mangle() const -> std::string;
+
+    // This value in `pool`, or none for what the pool doesn't hold: a compile-time frame
+    // reference, a closure, or a struct with no struct type to order its fields by. A float's
+    // math origin isn't kept
+    [[nodiscard]] auto intern(ip::pool& pool) const -> stdx::option<ip::index>;
+    // The value `pool` holds at `at`, in the evaluator's own representation
+    [[nodiscard]] static auto from_interned(const ip::pool& pool, ip::index at) -> const_value;
 
   private:
     auto fit_float_payload() -> void {
