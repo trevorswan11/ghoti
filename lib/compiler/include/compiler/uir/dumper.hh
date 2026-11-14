@@ -14,8 +14,6 @@ struct dump_options {
     stdx::option<const ast::AST&> locations_from;
 };
 
-// The `--emit-uir` text: the imports, then each declaration's bodies, with every record printed
-// by its tag's schema
 [[nodiscard]] auto dump(const module_t& mod, dump_options options = {}) -> std::string;
 
 } // namespace ghoti::uir

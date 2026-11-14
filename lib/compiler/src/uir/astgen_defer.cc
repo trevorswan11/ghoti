@@ -9,15 +9,14 @@
 #include <stdx/utility.hh>
 
 #include "astgen_internal.hh"
+#include "compiler/ast/expression.hh"
+#include "compiler/ast/id.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/uir/uir.hh"
 
 namespace ghoti::uir::detail {
 
-// Defers aren't instructions. Each exit gets its own copy of the bodies pending at that point,
-// innermost first, so every path runs exactly the defers its scope owes and a comptime exit runs
-// them through the same handlers as a runtime one
 auto astgen::push_defer(ast::node_id id, bool is_errdefer) -> void {
     auto& state{functions_.back()};
     if (!state.allows_defer) {
@@ -27,7 +26,11 @@ auto astgen::push_defer(ast::node_id id, bool is_errdefer) -> void {
                is_errdefer ? "errdefer" : "defer");
         return;
     }
-    state.defers.push_back({.stmt = id, .is_errdefer = is_errdefer, .visible_seq = seq_});
+    state.defers.emplace_back<defer_entry>({
+        .stmt        = id,
+        .is_errdefer = is_errdefer,
+        .visible_seq = seq_,
+    });
 }
 
 auto astgen::has_errdefers(usize height) const -> bool {

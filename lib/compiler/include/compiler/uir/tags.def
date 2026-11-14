@@ -1,6 +1,4 @@
-// UIR instruction tags: X(name, payload). `payload` is the `data` member the tag uses, and a `PL`
-// tag's `extra` record follows the schema `schema_of` returns for it (uir.cc). Include with
-// `UIR_TAG` defined.
+// UIR instruction tag X(name, payload) macros
 
 // Literals
 UIR_TAG(int_value, INT)           // an untyped integer literal that fits in 64 bits
@@ -35,9 +33,9 @@ UIR_TAG(cmp_lt, BIN)
 UIR_TAG(cmp_le, BIN)
 UIR_TAG(cmp_gt, BIN)
 UIR_TAG(cmp_ge, BIN)
-UIR_TAG(merge_enums, BIN)         // `A || B`
-UIR_TAG(concat, BIN)              // `a ++ b`
-UIR_TAG(bool_and, PL)             // the rhs is a body, evaluated only when needed
+UIR_TAG(merge_enums, BIN)
+UIR_TAG(concat, BIN)
+UIR_TAG(bool_and, PL)
 UIR_TAG(bool_or, PL)
 UIR_TAG(neg, UN)
 UIR_TAG(neg_wrap, UN)
@@ -77,7 +75,7 @@ UIR_TAG(bind, PL)                 // a value a construct hands its body (`|v|`, 
 UIR_TAG(alloc_mut, PL)            // `let mut`
 UIR_TAG(alloc_comptime, PL)       // `comptime let mut`
 UIR_TAG(let_value, PL)            // an immutable `let`, comptime-known on demand
-UIR_TAG(const_local, PL)          // a local `const`, whose body is evaluated at compile time
+UIR_TAG(const_local, PL)          // a local comptime `const`
 UIR_TAG(store, BIN)               // lhs: a place
 UIR_TAG(load, UN)
 UIR_TAG(ref_of, PL)               // `&x` / `&mut x`
@@ -132,4 +130,4 @@ UIR_TAG(failure_residual, UN)
 UIR_TAG(func, PL)
 UIR_TAG(closure, PL)
 UIR_TAG(impl_decl, PL)
-UIR_TAG(attribute, PL)            // one `@[name(args)]` entry, in an attribute body
+UIR_TAG(attribute, PL)            // one `@[name(args)]` entry in an attribute body

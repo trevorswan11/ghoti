@@ -12,7 +12,6 @@
 #include "compiler/ast/expression.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
-#include "compiler/sema/error.hh"
 #include "compiler/uir/uir.hh"
 
 namespace ghoti::uir::detail {
@@ -110,7 +109,7 @@ auto astgen::type_body(ast::explicit_type_id id) -> std::vector<u32> {
 
 auto astgen::fn_type(ast::explicit_type_id id, const ast::explicit_function_type& fn) -> ref {
     std::vector<ref> params;
-    for (const auto param : fn.parameter_types) { params.push_back(type(param)); }
+    for (const auto param : fn.parameter_types) { params.emplace_back(type(param)); }
     const auto ret{type(fn.explicit_return_type)};
     u32        bits{0};
     if (fn.variadic) { bits |= flags::VARIADIC; }
@@ -179,7 +178,7 @@ auto astgen::struct_decl(source src, const ast::struct_expr& node) -> ref {
         if (field.default_value) { record.default_value = value_body(*field.default_value); }
         lower_attributes(field.attributes, stdx::none, record.attrs);
         functions_.pop_back();
-        lowered_fields.push_back(std::move(record));
+        lowered_fields.emplace_back(std::move(record));
     }
     const auto [captures, outer]{finish_aggregate(src)};
 
@@ -229,7 +228,7 @@ auto astgen::union_decl(source src, const ast::union_expr& node) -> ref {
         record.type = type_body(field.explicit_type);
         lower_attributes(field.attributes, stdx::none, record.attrs);
         functions_.pop_back();
-        lowered_fields.push_back(std::move(record));
+        lowered_fields.emplace_back(std::move(record));
     }
     const auto [captures, outer]{finish_aggregate(src)};
 
@@ -311,16 +310,19 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
     };
     std::vector<assoc_record> types;
     for (const auto& assoc : node.assoc_types) {
-        types.push_back({name_of(assoc.name),
-                         type_body(assoc.annotation),
-                         assoc.default_type ? type_body(*assoc.default_type) : std::vector<u32>{}});
+        types.emplace_back<assoc_record>({
+            name_of(assoc.name),
+            type_body(assoc.annotation),
+            assoc.default_type ? type_body(*assoc.default_type) : std::vector<u32>{},
+        });
     }
     std::vector<assoc_record> consts;
     for (const auto& assoc : node.assoc_consts) {
-        consts.push_back(
-            {name_of(assoc.name),
-             type_body(assoc.explicit_type),
-             assoc.default_value ? value_body(*assoc.default_value) : std::vector<u32>{}});
+        consts.emplace_back<assoc_record>({
+            name_of(assoc.name),
+            type_body(assoc.explicit_type),
+            assoc.default_value ? value_body(*assoc.default_value) : std::vector<u32>{},
+        });
     }
 
     struct method_record {
@@ -340,7 +342,7 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
                    ast::node_id{method.signature});
         }
         lower_attributes(method.attributes, stdx::none, record.attrs);
-        methods.push_back(std::move(record));
+        methods.emplace_back(std::move(record));
     }
     const auto [captures, outer]{finish_aggregate(src)};
 
@@ -372,7 +374,7 @@ auto astgen::namespace_members(u32 inst, const ast::member_list& members) -> std
         if (const auto decl{ast_.get_as_opt<ast::decl_stmt>(id)}) {
             check_decl_modifiers(id, *decl, false);
             const auto index{add_value_decl(*decl, id, inst)};
-            decls.push_back(index);
+            decls.emplace_back(index);
             bodies.emplace_back(index, decl.get());
             DISCARD(declare_member(name_of(decl->name),
                                    location_of(decl->name),
@@ -383,7 +385,7 @@ auto astgen::namespace_members(u32 inst, const ast::member_list& members) -> std
         }
         const auto& import{ast_.get_as<ast::import_stmt>(id)};
         const auto  index{add_import_decl(id, import, inst)};
-        decls.push_back(index);
+        decls.emplace_back(index);
         if (const auto named{import.get_name(ast_)}) {
             DISCARD(declare_member(named->second,
                                    import_location(id, import),
@@ -434,7 +436,7 @@ auto astgen::lower_function(ast::node_id                        id,
     auto& boundary{push_scope(scope_kind::FUNCTION)};
     boundary.moves   = fn.is_move;
     boundary.mutated = mutated_within(id);
-    functions_.push_back(
+    functions_.emplace_back<function_state>(
         {.allows_return = true, .allows_defer = true, .testing = is_testing_fn(fn, decl)});
     // A signature without a body binds its parameter names for dependent types alone
     const bool bodyless{!fn.body};
@@ -461,7 +463,7 @@ auto astgen::lower_function(ast::node_id                        id,
         for (const auto& param : fn.parameters) { DISCARD(lower_param(param, 0, bodyless)); }
         for (const auto& bound : fn.impl_bounds) {
             std::vector<ref> interfaces;
-            for (const auto iface : bound.interfaces) { interfaces.push_back(type(iface)); }
+            for (const auto iface : bound.interfaces) { interfaces.emplace_back(type(iface)); }
             impl_bounds.emplace_back(bound.param_index, std::move(interfaces));
         }
     }

@@ -279,8 +279,8 @@ class dumper {
 
   private:
     const module_t& mod_;
-    dump_options  options_;
-    std::string   out_;
+    dump_options    options_;
+    std::string     out_;
 };
 
 } // namespace

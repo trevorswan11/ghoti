@@ -58,25 +58,22 @@ struct cfg_context {
 };
 
 // Evaluates `@cfg` predicates and `@cfgValue` constants over one module's AST without changing it.
-// The old pipeline's `cfg_pass` splices with it, and AstGen selects arms with it.
 class cfg_evaluator {
   public:
     using cfg_value = cfgval::value;
 
-    // `@cfgValue` constants mid-evaluation and `@cfg` arms chosen, shared with the evaluators a
-    // cross-module reference starts
+    // Shared with the evaluators a cross-module reference starts
     struct shared_state {
         struct arm_choice {
             bool           selected{false};
             stdx::opt_size arm;
         };
 
-        ankerl::unordered_dense::set<std::pair<gsl::not_null<const mod::module_t*>, usize>>
-             in_progress;
-        bool hit_cycle{false};
-        ankerl::unordered_dense::map<std::pair<gsl::not_null<const mod::module_t*>, usize>,
-                                     arm_choice>
-            arms;
+        using arm_key = std::pair<gsl::not_null<const mod::module_t*>, usize>;
+
+        ankerl::unordered_dense::set<arm_key> in_progress; // `@cfgValue` constants mid-evaluation
+        bool                                  hit_cycle{false};
+        ankerl::unordered_dense::map<arm_key, arm_choice> arms; // `@cfg` arms chosen
     };
 
   public:

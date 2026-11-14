@@ -52,7 +52,8 @@ auto function_local_illegal_modifiers(const ast::decl_stmt& decl) {
         {decl_modifiers::THREADLOCAL, syntax::keywords::THREADLOCAL.name},
         {decl_modifiers::WEAK, syntax::keywords::WEAK.name},
     }};
-    stdx::fixed::vector<std::string_view, disallowed.size()>                    found;
+
+    stdx::fixed::vector<std::string_view, disallowed.size()> found;
     for (const auto& [flag, spelling] : disallowed) {
         if (decl.has_modifier(flag)) { found.emplace_back(spelling); }
     }
@@ -121,8 +122,8 @@ auto astgen::declare_module_items(const std::vector<ast::stmt_handle>& items,
 
 auto astgen::add_root_decl(decl d, ast::node_id node, std::vector<pending_decl>& pending) -> u32 {
     const auto index{out_.add_decl(d)};
-    out_.root_namespace_mut().decls.push_back(index);
-    pending.push_back({index, node});
+    out_.root_namespace_mut().decls.emplace_back(index);
+    pending.emplace_back<pending_decl>({index, node});
     return index;
 }
 
@@ -134,19 +135,21 @@ auto astgen::declare_module_item(ast::stmt_handle item, std::vector<pending_decl
         const auto& decl{ast_.get_as<ast::decl_stmt>(id)};
         check_decl_modifiers(id, decl, false);
         const auto index{add_value_decl(decl, id, NO_INDEX)};
-        out_.root_namespace_mut().decls.push_back(index);
-        pending.push_back({index, id});
+        out_.root_namespace_mut().decls.emplace_back(index);
+        pending.emplace_back<pending_decl>({index, id});
         declare_member(name_of(decl.name),
                        location_of(decl.name),
-                       {.kind         = binding_kind::DECL,
-                        .decl         = index,
-                        .mutable_decl = decl.has_modifier(ast::decl_modifiers::MUT)});
+                       {
+                           .kind         = binding_kind::DECL,
+                           .decl         = index,
+                           .mutable_decl = decl.has_modifier(ast::decl_modifiers::MUT),
+                       });
         break;
     }
     case ast::node_kind::IMPORT_STATEMENT: {
         const auto& import{ast_.get_as<ast::import_stmt>(id)};
         const auto  index{add_import_decl(id, import, NO_INDEX)};
-        out_.root_namespace_mut().decls.push_back(index);
+        out_.root_namespace_mut().decls.emplace_back(index);
         if (const auto named{import.get_name(ast_)}) {
             declare_member(named->second,
                            import_location(id, import),
@@ -299,11 +302,13 @@ auto astgen::decl_flags_of(const ast::decl_stmt& decl) const -> decl_flags {
 }
 
 auto astgen::add_value_decl(const ast::decl_stmt& decl, ast::node_id node, u32 owner) -> u32 {
-    decl_info d{.kind  = decl_kind::VALUE,
-                .name  = out_.intern(name_of(decl.name)),
-                .node  = node,
-                .flags = decl_flags_of(decl),
-                .owner = owner};
+    decl_info d{
+        .kind  = decl_kind::VALUE,
+        .name  = out_.intern(name_of(decl.name)),
+        .node  = node,
+        .flags = decl_flags_of(decl),
+        .owner = owner,
+    };
     if (decl.extern_target) {
         d.extern_target = out_.intern(ast_.get_as<ast::string_expr>(*decl.extern_target).value);
     }
@@ -315,12 +320,14 @@ auto astgen::add_value_decl(const ast::decl_stmt& decl, ast::node_id node, u32 o
 
 auto astgen::add_import_decl(ast::node_id node, const ast::import_stmt& import, u32 owner) -> u32 {
     const auto named{import.get_name(ast_)};
-    decl_info  d{.kind  = decl_kind::IMPORT,
-                 .name  = out_.intern(named ? named->second : std::string_view{}),
-                 .node  = node,
-                 .flags = ast::import_stmt::is_public(node) ? decl_flags::PUBLIC : decl_flags::NONE,
-                 .import_index = add_import(node, import),
-                 .owner        = owner};
+    decl_info  d{
+        .kind         = decl_kind::IMPORT,
+        .name         = out_.intern(named ? named->second : std::string_view{}),
+        .node         = node,
+        .flags        = ast::import_stmt::is_public(node) ? decl_flags::PUBLIC : decl_flags::NONE,
+        .import_index = add_import(node, import),
+        .owner        = owner,
+    };
     return out_.add_decl(d);
 }
 
@@ -346,7 +353,7 @@ auto astgen::add_import(ast::node_id node, const ast::import_stmt& import) -> u3
 }
 
 auto astgen::lower_test(u32 index, const ast::test_stmt& test) -> void {
-    functions_.push_back({.allows_defer = true, .testing = true});
+    functions_.emplace_back<function_state>({.allows_defer = true, .testing = true});
     const auto       pop_state{gsl::finally([this] { functions_.pop_back(); })};
     std::vector<u32> instructions;
     {
@@ -488,10 +495,10 @@ auto astgen::spliced(const std::vector<ast::stmt_handle>& items) -> std::vector<
     for (const auto item : items) {
         const ast::node_id id{item};
         if (const auto cfg{ast_.get_as_opt<ast::cfg_stmt>(id)}) {
-            for (const auto inner : spliced(selected_items(id, *cfg))) { out.push_back(inner); }
+            for (const auto inner : spliced(selected_items(id, *cfg))) { out.emplace_back(inner); }
             continue;
         }
-        out.push_back(item);
+        out.emplace_back(item);
     }
     return out;
 }
@@ -533,7 +540,7 @@ auto astgen::lower_attributes(const stdx::option<ast::attribute_list>& attribute
         if (routed && ast::routes_to_fn_literal(item.kind) != *routed) { continue; }
         std::vector<ref> args;
         args.reserve(item.args.size());
-        for (const auto arg : item.args) { args.push_back(expr(arg)); }
+        for (const auto arg : item.args) { args.emplace_back(expr(arg)); }
         DISCARD(add_pl(tag::attribute,
                        writer().u32_field(static_cast<u32>(item.kind)).refs_field(args),
                        ast::node_id{item.name}));
@@ -602,7 +609,7 @@ auto astgen::mutated_within(ast::node_id fn) const
 
 auto astgen::add(tag t, data d, source src) -> ref {
     const auto index{out_.add(t, d, src)};
-    body_->push_back(index);
+    body_->emplace_back(index);
     return inst_ref(index);
 }
 
@@ -640,7 +647,7 @@ auto astgen::fill_pl(u32 inst, tag t, record_writer& record) -> void {
     ASSERT(record_end(out_, t, d.pl.extra) == out_.extra().size(),
            "a UIR record doesn't match its tag's schema");
     out_.set(inst, t, d);
-    body_->push_back(inst);
+    body_->emplace_back(inst);
 }
 
 auto astgen::yields(ref value, source src) -> void { DISCARD(add_un(tag::yield, value, 0, src)); }
@@ -665,9 +672,9 @@ auto lower_reachable(const mod::module_t& root, const astgen_context& cx)
         for (const auto& import : lowered.uir.imports()) {
             if (!import.path) { continue; }
             const auto loaded{cx.modules.find_file_module(*import.path)};
-            if (loaded && seen.insert(loaded.get()).second) { pending.push_back(loaded.get()); }
+            if (loaded && seen.insert(loaded.get()).second) { pending.emplace_back(loaded.get()); }
         }
-        out.push_back({next, std::move(lowered)});
+        out.emplace_back<lowered_module>({next, std::move(lowered)});
     }
     return out;
 }

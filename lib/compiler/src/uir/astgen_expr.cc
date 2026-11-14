@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -9,6 +10,9 @@
 
 #include "astgen_internal.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
@@ -17,6 +21,7 @@
 #include "compiler/syntax/token_type.hh"
 #include "compiler/uir/uir.hh"
 #include "support/big_int.hh"
+#include "support/diagnostic.hh"
 #include "support/int128.hh"
 
 namespace ghoti::uir::detail {
@@ -84,7 +89,7 @@ using syntax::token_type_t;
 [[nodiscard]] auto limbs_of(u128 value) -> std::vector<u32> {
     std::vector<u32> limbs;
     for (u32 i{0}; i < 4; ++i) {
-        limbs.push_back(static_cast<u32>((value >> (32U * i)) & u128{0xFFFFFFFFU}));
+        limbs.emplace_back(static_cast<u32>((value >> (32U * i)) & u128{0xFFFFFFFFU}));
     }
     while (limbs.size() > 1 && limbs.back() == 0) { limbs.pop_back(); }
     return limbs;
@@ -94,8 +99,8 @@ using syntax::token_type_t;
     std::vector<u32> limbs;
     const auto       width{value.unsigned_bits().value_or(value.signed_bits())};
     for (const auto word : value.to_words(width)) {
-        limbs.push_back(static_cast<u32>(word & 0xFFFFFFFFU));
-        limbs.push_back(static_cast<u32>(word >> 32U));
+        limbs.emplace_back(static_cast<u32>(word & 0xFFFFFFFFU));
+        limbs.emplace_back(static_cast<u32>(word >> 32U));
     }
     while (limbs.size() > 1 && limbs.back() == 0) { limbs.pop_back(); }
     return limbs;
@@ -152,7 +157,7 @@ using syntax::token_type_t;
     }
 }
 
-// A pattern node that refines rather than compares: anything Sema elaborates structurally
+// A pattern node that refines rather than compares
 [[nodiscard]] auto is_structural_pattern(ast::node_id id) -> bool {
     using ast::node_kind;
     switch (id.get_kind()) {
@@ -396,7 +401,7 @@ auto astgen::call_args(const ast::call_expr& call)
     std::vector<ref> args;
     std::vector<u32> pack_mask((call.arguments.size() + 31) / 32, 0);
     for (usize i{0}; i < call.arguments.size(); ++i) {
-        args.push_back(
+        args.emplace_back(
             call.arguments[i].visit([this](ast::expr_handle e) { return expr(e); },
                                     [this](ast::explicit_type_id t) { return type(t); }));
         if (i < call.pack_expansions.size() && call.pack_expansions[i]) {
@@ -406,12 +411,12 @@ auto astgen::call_args(const ast::call_expr& call)
     return {std::move(args), std::move(pack_mask)};
 }
 
-auto astgen::call(source src, source_location at, const ast::call_expr& node) -> ref {
+auto astgen::call(source src, source_location, const ast::call_expr& node) -> ref {
     const ast::node_id callee{node.function};
     if (const auto builtin{callee.get_builtin()}; builtin && callee.is<ast::identifier_expr>()) {
         return builtin_call(src, callee, *builtin, node);
     }
-    DISCARD(at);
+
     const auto modifier{node.modifier ? expr(*node.modifier) : ref{}};
     if (const auto dot{ast_.get_as_opt<ast::dot_expr>(callee)}) {
         const auto object{place(dot->object, use::PLACE)};
@@ -513,7 +518,7 @@ auto astgen::lower_node(ast::node_id id, const ast::initializer_expr& node) -> r
                           })};
     if (positional) {
         std::vector<ref> values;
-        for (const auto& init : node.initializers) { values.push_back(expr(init.value)); }
+        for (const auto& init : node.initializers) { values.emplace_back(expr(init.value)); }
         return add_pl(tag::init_array, writer().ref_field(type_ref).refs_field(values), id);
     }
     std::vector<std::pair<std::string_view, ref>> fields;
@@ -546,7 +551,7 @@ auto astgen::lower_node(ast::node_id id, const ast::array_expr& node) -> ref {
     if (!node.size) { bits |= flags::LEN_ABSENT; }
     const auto       elem{type(node.item_explicit_type)};
     std::vector<ref> items;
-    for (const auto item : node.items) { items.push_back(expr(item)); }
+    for (const auto item : node.items) { items.emplace_back(expr(item)); }
     return add_pl(tag::array_lit,
                   writer().ref_field(len).ref_field(elem).u32_field(bits).refs_field(items),
                   id);
@@ -656,7 +661,10 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
         }
         const auto [slot, added]{
             slots.by_name.try_emplace(ident->name, static_cast<u32>(slots.by_name.size()))};
-        if (added) { slots.order.push_back({ident->name, capture, location_of(*capture.payload)}); }
+        if (added) {
+            slots.order.emplace_back<named_capture>(
+                {ident->name, capture, location_of(*capture.payload)});
+        }
         return add_pl(tag::pat_capture,
                       writer()
                           .str_field(ident->name)
@@ -711,9 +719,9 @@ auto astgen::pattern(ast::node_id id, pattern_slots& slots) -> ref {
             if (!value) { continue; }
             const ast::node_id arg_id{*value};
             if (is_structural_pattern(arg_id) || arg_id.is<ast::call_expr>()) {
-                args.push_back(pattern(arg_id, slots));
+                args.emplace_back(pattern(arg_id, slots));
             } else {
-                args.push_back(
+                args.emplace_back(
                     add_pl(tag::pat_value, writer().body_field(value_body(*value)), arg_id));
             }
         }
@@ -749,7 +757,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
             const body_guard guard{*this, record.pattern_body};
             for (const auto alternative : arm.patterns) {
                 slots.alternative.clear();
-                record.roots.push_back(pattern(ast::node_id{alternative}, slots));
+                record.roots.emplace_back(pattern(ast::node_id{alternative}, slots));
             }
             // One binding per name, shared by every alternative that binds it
             for (u32 slot{0}; slot < slots.order.size(); ++slot) {
@@ -776,7 +784,7 @@ auto astgen::lower_node(ast::node_id id, const ast::match_expr& node) -> ref {
         }
         if (arm.guard) { record.guard = value_body(*arm.guard); }
         record.body = arm_value(arm.dispatch);
-        arms.push_back(std::move(record));
+        arms.emplace_back(std::move(record));
     }
 
     auto record{writer()};
@@ -811,10 +819,12 @@ auto astgen::lower_node(ast::node_id id, const ast::label_expr& node) -> ref {
     }
 
     const auto inst{reserve(id)};
-    functions_.back().targets.push_back({.inst         = inst,
-                                         .label        = label,
-                                         .is_loop      = false,
-                                         .defer_height = functions_.back().defers.size()});
+    functions_.back().targets.emplace_back<jump_target>({
+        .inst         = inst,
+        .label        = label,
+        .is_loop      = false,
+        .defer_height = functions_.back().defers.size(),
+    });
     std::vector<u32> instructions;
     if (body.is<ast::block_stmt>()) {
         instructions = scoped_block(ast::block_handle{body});
@@ -832,10 +842,12 @@ auto astgen::lower_node(ast::node_id id, const ast::label_expr& node) -> ref {
 
 auto astgen::begin_loop(ast::node_id id, bool is_loop) -> u32 {
     const auto inst{reserve(id)};
-    functions_.back().targets.push_back({.inst         = inst,
-                                         .label        = std::exchange(pending_label_, stdx::none),
-                                         .is_loop      = is_loop,
-                                         .defer_height = functions_.back().defers.size()});
+    functions_.back().targets.emplace_back<jump_target>({
+        .inst         = inst,
+        .label        = std::exchange(pending_label_, stdx::none),
+        .is_loop      = is_loop,
+        .defer_height = functions_.back().defers.size(),
+    });
     return inst;
 }
 
@@ -939,7 +951,7 @@ auto astgen::lower_node(ast::node_id id, const ast::infinite_loop_expr& node) ->
 
 auto astgen::lower_node(ast::node_id id, const ast::for_loop_expr& node) -> ref {
     std::vector<ref> iterables;
-    for (const auto iterable : node.iterables) { iterables.push_back(expr(iterable)); }
+    for (const auto iterable : node.iterables) { iterables.emplace_back(expr(iterable)); }
     const auto inst{begin_loop(id, true)};
     const auto label{loop_label()};
 

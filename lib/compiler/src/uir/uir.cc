@@ -324,7 +324,7 @@ auto schema_of(tag t) noexcept -> gsl::span<const field> {
 
 module_t::module_t() {
     // A shared empty body, so a decl or record with no body points at a zero length
-    extra_.push_back(0);
+    extra_.emplace_back(0);
 }
 
 auto module_t::namespace_of(u32 owner) const -> stdx::option<const namespace_info&> {
@@ -335,13 +335,15 @@ auto module_t::namespace_of(u32 owner) const -> stdx::option<const namespace_inf
 
 auto module_t::add(tag t, data d, source src) -> u32 {
     const auto index{instruction_count()};
-    tags_.push_back(t);
-    datas_.push_back(d);
-    srcs_.push_back(src);
+    tags_.emplace_back(t);
+    datas_.emplace_back(d);
+    srcs_.emplace_back(src);
     return index;
 }
 
-auto module_t::reserve(source src) -> u32 { return add(tag::unreachable, data{.int_value = 0}, src); }
+auto module_t::reserve(source src) -> u32 {
+    return add(tag::unreachable, data{.int_value = 0}, src);
+}
 
 auto module_t::set(u32 index, tag t, data d) noexcept -> void {
     tags_[index]  = t;
@@ -365,18 +367,18 @@ auto module_t::append_extra(gsl::span<const u32> words) -> u32 {
 auto module_t::add_body(gsl::span<const u32> instructions) -> body_ref {
     if (instructions.empty()) { return EMPTY_BODY; }
     const auto at{static_cast<u32>(extra_.size())};
-    extra_.push_back(static_cast<u32>(instructions.size()));
+    extra_.emplace_back(static_cast<u32>(instructions.size()));
     extra_.insert(extra_.end(), instructions.begin(), instructions.end());
     return at;
 }
 
 auto module_t::add_decl(decl d) -> u32 {
-    decls_.push_back(d);
+    decls_.emplace_back(d);
     return static_cast<u32>(decls_.size() - 1);
 }
 
 auto module_t::add_import(import_info info) -> u32 {
-    imports_.push_back(std::move(info));
+    imports_.emplace_back(std::move(info));
     return static_cast<u32>(imports_.size() - 1);
 }
 

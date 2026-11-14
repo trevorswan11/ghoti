@@ -10,6 +10,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/pointers>
 #include <gsl/span>
 #include <stdx/option.hh>
 #include <stdx/profiler.hh>
@@ -28,6 +29,7 @@
 #include "compiler/sema/cfg_atoms.hh"
 #include "compiler/sema/context.hh"
 #include "compiler/sema/error.hh"
+#include "compiler/syntax/builtins.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/string_utils.hh"
 
@@ -219,10 +221,9 @@ auto cfg_evaluator::find_import(std::string_view name, bool public_only)
     return find_import_in(roots, name, public_only);
 }
 
-// A predicate can't use an import its own gate guards, so a statement still being selected is
-// skipped
+// A predicate can't use an import its own gate guards
 auto cfg_evaluator::taken_arm(ast::node_id id, const ast::cfg_stmt& cfg) -> stdx::opt_size {
-    const std::pair key{gsl::not_null<const mod::module_t*>{&module_}, id.get_index()};
+    const shared_state::arm_key key{&module_, id.get_index()};
     if (const auto seen{shared_->arms.find(key)}; seen != shared_->arms.end()) {
         return seen->second.selected ? seen->second.arm : stdx::opt_size{};
     }
@@ -267,8 +268,7 @@ auto cfg_evaluator::find_import_in(const std::vector<ast::stmt_handle>& items,
     return stdx::none;
 }
 
-// `mod.NAME` / `mod.sub.NAME`: a `pub` `@cfgValue` constant of an imported module, through
-// `pub import`s after the first step. Its own errors are reported when its module is collected.
+// A `pub` `@cfgValue` constant of an imported module
 auto cfg_evaluator::resolve_foreign_value(ast::node_id dot) -> stdx::option<cfg_value> {
     PROFILE_FUNCTION();
     std::vector<std::string_view> path;
@@ -404,8 +404,6 @@ auto cfg_evaluator::is_cpu_has(const ast::call_expr& call) const -> bool {
     return object && member && object->name == "cpu" && member->name == "has";
 }
 
-// True for an enabled feature of the target's architecture, false for a disabled one or one of
-// another architecture; a name no architecture has is an error
 auto cfg_evaluator::cpu_has(ast::node_id at, const ast::call_expr& call)
     -> stdx::option<cfg_value> {
     const auto arg{call.arguments.front().as_opt<ast::expr_handle>()};

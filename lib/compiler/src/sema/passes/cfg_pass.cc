@@ -1,10 +1,5 @@
 #include "compiler/sema/passes/cfg_pass.hh"
 
-#include <algorithm>
-#include <array>
-#include <ranges>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,15 +15,10 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/id.hh"
 #include "compiler/ast/kind.hh"
-#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
-#include "compiler/codegen/target.hh"
 #include "compiler/module/module.hh"
-#include "compiler/sema/cfg_atoms.hh"
+#include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
-#include "compiler/sema/error.hh"
-#include "compiler/syntax/token_type.hh"
-#include "support/string_utils.hh"
 
 namespace ghoti::sema {
 

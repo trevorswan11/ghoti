@@ -95,7 +95,7 @@ TEST_CASE("The builtin prelude lowers") {
 TEST_CASE("Every example lowers") {
     std::vector<std::filesystem::path> examples;
     for (const auto& entry : std::filesystem::directory_iterator{repo_root() / "examples"}) {
-        if (entry.path().extension() == ".gh") { examples.push_back(entry.path()); }
+        if (entry.path().extension() == ".gh") { examples.emplace_back(entry.path()); }
     }
     REQUIRE_FALSE(examples.empty());
     for (const auto& example : examples) {

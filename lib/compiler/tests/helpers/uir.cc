@@ -23,7 +23,7 @@ namespace {
 [[nodiscard]] auto sorted_keys(gsl::span<const sema::diagnostic> diags)
     -> std::vector<std::string> {
     std::vector<std::string> keys;
-    for (const auto& d : diags) { keys.push_back(d.identity()); }
+    for (const auto& d : diags) { keys.emplace_back(d.identity()); }
     std::ranges::sort(keys);
     return keys;
 }

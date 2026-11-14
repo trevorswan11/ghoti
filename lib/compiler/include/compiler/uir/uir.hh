@@ -101,8 +101,7 @@ inline constexpr u32 WELL_KNOWN_COUNT{0 FOREACH_UIR_WELL_KNOWN(UIR_WELL_KNOWN_CO
 
 [[nodiscard]] auto well_known_name(well_known w) noexcept -> std::string_view;
 
-// An operand: a well-known constant below `WELL_KNOWN_COUNT`, else an instruction index offset by
-// it
+// A well-known constant (operand) below `WELL_KNOWN_COUNT`, else an inst index offset by it
 enum class ref : u32 {};
 
 [[nodiscard]] constexpr auto to_ref(well_known w) noexcept -> ref {
@@ -301,7 +300,7 @@ struct import_info {
     std::string                         spec{}; // a file path, or a library module's name
     bool                                is_library{false};
     ast::node_id                        node;
-    stdx::option<std::filesystem::path> path{}; // where it loaded from, when it did
+    stdx::option<std::filesystem::path> path{};
 };
 
 class module_t {
@@ -380,7 +379,7 @@ class record_reader {
 
   private:
     const module_t& mod_;
-    u32           at_;
+    u32             at_;
 };
 
 // Builds an `extra` record field by field, in schema order, then appends it
@@ -401,12 +400,12 @@ class record_writer {
 
   private:
     auto word(u32 value) -> record_writer& {
-        words_.push_back(value);
+        words_.emplace_back(value);
         return *this;
     }
 
   private:
-    module_t&          mod_;
+    module_t&        mod_;
     std::vector<u32> words_;
 };
 

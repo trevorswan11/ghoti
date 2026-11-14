@@ -63,7 +63,7 @@ auto astgen::stmt(ast::stmt_handle h) -> bool {
         // An impl is a module-level item wherever it's written; the old pipeline accepts it here
         decl_info  d{.kind = decl_kind::IMPL, .node = id};
         const auto index{out_.add_decl(d)};
-        out_.root_namespace_mut().decls.push_back(index);
+        out_.root_namespace_mut().decls.emplace_back(index);
         lower_impl(index, ast_.get_as<ast::impl_stmt>(id));
         return false;
     }

@@ -1,13 +1,17 @@
+#include <algorithm>
 #include <ranges>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <gsl/pointers>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
+#include <stdx/variant.hh>
 
 #include "astgen_internal.hh"
+#include "compiler/ast/handle.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/uir/uir.hh"
@@ -86,7 +90,7 @@ auto astgen::declare(std::string_view name, source_location at, binding b, bool 
     b.seq  = next_seq();
     current.later.erase(name);
     current.index.emplace(name, static_cast<u32>(current.bindings.size()));
-    current.bindings.push_back(b);
+    current.bindings.emplace_back(b);
     return ok;
 }
 
@@ -116,7 +120,7 @@ auto astgen::declare_member(std::string_view name, source_location at, binding b
     b.at   = at;
     b.seq  = 0;
     current.index.emplace(name, static_cast<u32>(current.bindings.size()));
-    current.bindings.push_back(b);
+    current.bindings.emplace_back(b);
     return true;
 }
 
@@ -159,7 +163,7 @@ auto astgen::capture_slot_of(scope& boundary, std::string_view name, bool by_ref
         return found->second;
     }
     const auto index{static_cast<u32>(boundary.captures.size())};
-    boundary.captures.push_back({name, by_ref});
+    boundary.captures.emplace_back<capture_slot>({name, by_ref});
     boundary.capture_index.emplace(name, index);
     return index;
 }
@@ -190,17 +194,17 @@ auto astgen::outer_captures(const scope& boundary, source src) -> std::vector<u3
         const auto found{lookup(slot.name)};
         const auto hit{found.as_opt<lookup_hit>()};
         if (!hit) {
-            refs.push_back(static_cast<u32>(to_ref(well_known::undefined)));
+            refs.emplace_back(static_cast<u32>(to_ref(well_known::undefined)));
             continue;
         }
         const auto wanted{slot.by_ref ? use::PLACE : use::VALUE};
         if (!hit->crossed.empty()) {
-            refs.push_back(static_cast<u32>(capture_ref(*hit, wanted, src)));
+            refs.emplace_back(static_cast<u32>(capture_ref(*hit, wanted, src)));
             continue;
         }
         const auto& b{hit->found};
         const bool  load{b.kind == binding_kind::PLACE && !slot.by_ref};
-        refs.push_back(static_cast<u32>(load ? add_un(tag::load, b.value, 0, src) : b.value));
+        refs.emplace_back(static_cast<u32>(load ? add_un(tag::load, b.value, 0, src) : b.value));
     }
     return refs;
 }

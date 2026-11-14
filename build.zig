@@ -49,9 +49,6 @@ pub fn build(b: *std.Build) !void {
         .ReleaseFast, .ReleaseSmall => compiler_flags.appendSlice(dist_flags),
     }
 
-    // The UIR pipeline is built beside the old one until it replaces it. Its sources always
-    // compile; `-Duir` adds the `--sema=uir` flag, and `-Dsema=uir` also points the black-box
-    // test helpers at it
     const Sema = enum { legacy, uir };
     const uir = b.option(bool, "uir", "Compile in the `--sema=uir` flag (default: false)") orelse false;
     const test_sema = b.option(Sema, "sema", "The pipeline black-box tests run through (default: legacy)") orelse .legacy;
