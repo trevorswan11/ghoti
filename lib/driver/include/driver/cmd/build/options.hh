@@ -151,6 +151,9 @@ auto add_mode_option(CLI::App* subcmd, raw_options& opts) -> void;
 auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void;
 // `--no-compiler-rt`, shared by every subcommand that links
 auto add_compiler_rt_option(CLI::App* subcmd, raw_options& opts) -> void;
+// The flags that shape analysis: modules, target, mode, diagnostics, and the GIR / UIR dumps
+auto setup_analysis_flags(CLI::App* subcmd, raw_options& opts) -> void;
+// The analysis flags plus output, linking, pass, and LLVM IR / assembly flags
 auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
     -> void;
 

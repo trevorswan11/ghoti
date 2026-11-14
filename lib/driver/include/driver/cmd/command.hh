@@ -19,6 +19,7 @@ enum class command_kind : u8 {
     RUN,
     TEST,
     FORMAT,
+    ANALYZE,
 };
 
 class command {

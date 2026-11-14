@@ -21,6 +21,7 @@
 #include "compiler/codegen/target.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/formatter.hh"
+#include "driver/cmd/build/analyze.hh"
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
@@ -59,6 +60,7 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
     const auto fmt_cmd{setup_fmt_subcmd()};
     const auto test_cmd{setup_test_subcmd()};
     const auto run_cmd{setup_run_subcmd()};
+    const auto analyze_cmd{setup_analyze_subcmd()};
 
     // No arguments should be handled by printing help and exiting
     if (argc_ == 1) {
@@ -112,6 +114,14 @@ auto parser::parse() -> stdx::result<stdx::box<cmd::command>, error> {
         auto opts{TRY(cmd::build::options::process_raw(
             run_opts_, codegen::output_type::EXECUTABLE, error_stream_))};
         return stdx::make_box<cmd::run_cmd>(std::move(opts), error_stream_);
+    }
+
+    if (analyze_cmd->parsed()) {
+        auto opts{TRY(cmd::build::options::process_raw(
+            analyze_opts_, codegen::output_type::OBJECT, error_stream_))};
+        // Nothing is written but the requested dumps
+        opts.output_path.clear();
+        return stdx::make_box<cmd::analyze_cmd>(std::move(opts), analyze_as_test_, error_stream_);
     }
 
     return fatal_error(error_stream_, "expected command argument", error::MISSING_SUBCOMMAND);
@@ -199,6 +209,16 @@ auto parser::setup_fmt_subcmd() -> gsl::not_null<CLI::App*> {
     sub->add_option(
            "-i,--indent-spaces", fmt_opts_.indent_spaces, "Number of spaces to use for indenting")
         ->default_val(fmt_opts_.indent_spaces);
+    return sub;
+}
+
+auto parser::setup_analyze_subcmd() -> gsl::not_null<CLI::App*> {
+    auto* sub{app_.add_subcommand(
+        "analyze", "Check a program through semantic analysis without generating code")};
+    sub->add_option("input_file", analyze_opts_.input, "Root source file (.gh)")->required();
+    sub->add_flag("--test", analyze_as_test_, "Analyze the input as the root of a test build")
+        ->default_val(analyze_as_test_);
+    cmd::build::setup_analysis_flags(sub, analyze_opts_);
     return sub;
 }
 
