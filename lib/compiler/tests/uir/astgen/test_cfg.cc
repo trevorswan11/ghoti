@@ -27,7 +27,7 @@ namespace {
 
 } // namespace
 
-TEST_CASE("A gated-off declaration doesn't exist in UIR") {
+TEST_CASE("A gated-off declaration is never lowered") {
     const auto lowered{helpers::lower_uir(
         "@cfg (ptr_bits == 1) { const gone = 1; } else { const kept = 2; }\nconst user = kept;")};
     CHECK(lowered.diagnostics.empty());

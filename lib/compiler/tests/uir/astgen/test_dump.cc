@@ -18,7 +18,7 @@ auto check_uir(std::string_view source, std::string_view expected) -> void {
 
 } // namespace
 
-TEST_CASE("UIR: locals are values, places, or comptime bodies") {
+TEST_CASE("Locals are values, places, or comptime bodies") {
     check_uir(R"(const f = fn(a: i32): i32 {
     let b = a + 1;
     let mut c: i32 = b;
@@ -62,7 +62,7 @@ TEST_CASE("UIR: locals are values, places, or comptime bodies") {
 )");
 }
 
-TEST_CASE("UIR: a labeled loop is the target of break and continue") {
+TEST_CASE("A labeled loop is the target of break and continue") {
     check_uir(R"(const f = fn(n: i32): i32 {
     let mut i: i32 = 0;
     outer: while (i < n) : (i += 1) {
@@ -124,7 +124,7 @@ TEST_CASE("UIR: a labeled loop is the target of break and continue") {
 )");
 }
 
-TEST_CASE("UIR: every exit runs a copy of the defers it owes") {
+TEST_CASE("Every exit runs a copy of the defers it owes") {
     check_uir(R"(const a = fn(): void {};
 const b = fn(): void {};
 const c = fn(): bool { return true; };
@@ -209,7 +209,7 @@ decl#3 VALUE f CONSTANT
 )");
 }
 
-TEST_CASE("UIR: errdefer runs on a ? propagation and on a failing return") {
+TEST_CASE("An errdefer runs on a ? propagation and on a failing return") {
     check_uir(R"(const log = fn(e: u8): void {};
 const f = fn(x: u8): u8 {
     errdefer |e| log(e);
@@ -272,7 +272,7 @@ decl#1 VALUE f CONSTANT
 )");
 }
 
-TEST_CASE("UIR: a closure captures what it writes by reference, the rest by value") {
+TEST_CASE("A closure captures what it writes by reference, the rest by value") {
     check_uir(R"(const f = fn(): i32 {
     let mut counted: i32 = 0;
     let seen: i32 = 1;
@@ -331,7 +331,7 @@ TEST_CASE("UIR: a closure captures what it writes by reference, the rest by valu
 )");
 }
 
-TEST_CASE("UIR: a type constructor's members capture its comptime parameter") {
+TEST_CASE("A type constructor's members capture its comptime parameter") {
     check_uir(R"(const Box = fn(comptime T: type): type {
     return struct {
         v: T,
@@ -381,7 +381,7 @@ decl#1 VALUE get PUBLIC CONSTANT in %3
 )");
 }
 
-TEST_CASE("UIR: match arms bind their captures once for every alternative") {
+TEST_CASE("Match arms bind their captures once for every alternative") {
     check_uir(R"(const Shape = union(enum) { circle: i32, square: i32 };
 const area = fn(s: Shape): i32 {
     return match (s) {
@@ -453,7 +453,7 @@ decl#1 VALUE area CONSTANT
 )");
 }
 
-TEST_CASE("UIR: an unwrap capture splits into a payload and a residual body") {
+TEST_CASE("An unwrap capture splits into a payload and a residual body") {
     check_uir(R"(const f = fn(x: u8): u8 {
     return if (x) |v| v else |e| 0;
 };)",
@@ -487,7 +487,7 @@ TEST_CASE("UIR: an unwrap capture splits into a payload and a residual body") {
 )");
 }
 
-TEST_CASE("UIR: a bodyless function type is a func flagged type_expr") {
+TEST_CASE("A bodyless function type is a func flagged type_expr") {
     check_uir("const n = @typeName(fn(x: i32): bool);", R"(decl#0 VALUE n CONSTANT
     value {
         %3 = func conv=C, flags=type_expr
