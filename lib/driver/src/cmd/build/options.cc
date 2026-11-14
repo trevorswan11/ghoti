@@ -216,7 +216,7 @@ auto options::use_temp_executable_output(std::string_view tag) -> void {
 }
 
 auto options::make_output_path_absolute() -> void {
-    if (!output_path.is_relative()) { return; }
+    if (output_path.empty() || !output_path.is_relative()) { return; }
     std::error_code ec;
     if (auto abs{std::filesystem::absolute(output_path, ec)}; !ec) { output_path = std::move(abs); }
 }

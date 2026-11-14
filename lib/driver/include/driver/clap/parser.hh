@@ -39,6 +39,7 @@ class parser {
     [[nodiscard]] auto setup_test_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_run_subcmd() -> gsl::not_null<CLI::App*>;
     [[nodiscard]] auto setup_fmt_subcmd() -> gsl::not_null<CLI::App*>;
+    [[nodiscard]] auto setup_analyze_subcmd() -> gsl::not_null<CLI::App*>;
 
   private:
     i32           argc_;
@@ -51,6 +52,8 @@ class parser {
     cmd::build::raw_options  build_lib_opts_;
     cmd::build::raw_options  test_opts_;
     cmd::build::raw_options  run_opts_;
+    cmd::build::raw_options  analyze_opts_;
+    bool                     analyze_as_test_{false};
     cmd::format::raw_options fmt_opts_;
     i32                      lsp_debounce_ms_{150};
     std::vector<std::string> lsp_workspace_excludes_{lsp::DEFAULT_WORKSPACE_EXCLUDES};
