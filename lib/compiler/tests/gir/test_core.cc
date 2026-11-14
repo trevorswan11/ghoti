@@ -62,37 +62,44 @@ TEST_CASE("GIR local_id representation") {
 TEST_CASE("GIR value types and operations") {
     using namespace gir;
 
+    ghoti::arena    arena;
+    sema::type_pool types{arena};
+    auto&           pool{types.intern()};
+
     const auto  loc{local_id::make_temp(42)};
     const value v_loc{loc};
-    CHECK(v_loc.is<local_id>());
-    CHECK(v_loc.as<local_id>() == loc);
-    CHECK_FALSE(v_loc.is<i64>());
+    CHECK(v_loc.is_local());
+    CHECK(v_loc.local() == loc);
+    CHECK_FALSE(v_loc.is_literal<i64>(pool));
 
-    const value v_i64{i64{123}};
-    CHECK(v_i64.is<i64>());
-    CHECK(UNWRAP(v_i64.as_opt<i64>()) == 123);
+    const auto v_i64{value::constant(pool, i64{123})};
+    CHECK(v_i64.is_constant());
+    CHECK(UNWRAP(v_i64.literal_opt<i64>(pool)) == 123);
+    CHECK_FALSE(v_i64.is_literal<u64>(pool));
 
-    const value v_u64{u64{456}};
-    CHECK(v_u64.is<u64>());
-    CHECK(UNWRAP(v_u64.as_opt<u64>()) == 456);
+    const auto v_u64{value::constant(pool, u64{456})};
+    CHECK(UNWRAP(v_u64.literal_opt<u64>(pool)) == 456);
 
-    const value v_f64{f128::from_f64(3.14)};
-    CHECK(v_f64.is<f128>());
-    CHECK(UNWRAP(v_f64.as_opt<f128>()).to_f64() == 3.14);
+    const auto v_f64{value::constant(pool, f128::from_f64(3.14))};
+    CHECK(UNWRAP(v_f64.literal_opt<f128>(pool)).to_f64() == 3.14);
 
-    const value v_bool{true};
-    CHECK(v_bool.is<bool>());
-    CHECK(UNWRAP(v_bool.as_opt<bool>()) == true);
+    const auto v_bool{value::constant(pool, true)};
+    CHECK(UNWRAP(v_bool.literal_opt<bool>(pool)) == true);
 
-    const value v_str{std::string{"hello"}};
-    CHECK(v_str.is<std::string>());
-    CHECK(UNWRAP(v_str.as_opt<std::string>()) == "hello");
+    const auto v_str{value::constant(pool, std::string{"hello"})};
+    CHECK(UNWRAP(v_str.literal_opt<std::string>(pool)) == "hello");
 
-    const value v_void{void_val{}};
-    CHECK(v_void.is<void_val>());
+    CHECK(value::constant(pool, void_val{}).is_literal<void_val>(pool));
+    CHECK(value::constant(pool, undefined_val{}).is_literal<undefined_val>(pool));
 
-    const value v_undef{undefined_val{}};
-    CHECK(v_undef.is<undefined_val>());
+    // Equal constants share a pool entry, so the operands compare equal
+    CHECK(value::constant(pool, i64{123}) == v_i64);
+
+    auto&      i32_type{*types[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
+    const auto as_type{value::type_constant(pool, i32_type)};
+    CHECK(as_type.is_type_constant(pool));
+    CHECK(&UNWRAP(as_type.denoted_type_opt(pool)) == &i32_type);
+    CHECK(value::type_constant(pool, stdx::none).is_type_constant(pool));
 }
 
 TEST_CASE("GIR segment terminator invariants") {
@@ -136,7 +143,7 @@ TEST_CASE("GIR function management and local ID allocation") {
     auto& i32_type{*pool[{sema::type_kind::INT, sema::types::mut::CONSTANT, u16{32}, true}]};
     auto& fn_type{*pool[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 
-    function fn{arena, "compute", fn_type};
+    function fn{arena, pool.intern(), "compute", fn_type};
     CHECK(fn.get_name() == "compute");
     CHECK_FALSE(fn.get_is_test());
     CHECK_FALSE(fn.get_is_comptime());
@@ -168,7 +175,8 @@ TEST_CASE("GIR module container and arena allocation") {
     using namespace gir;
 
     auto [ctx, idx]{helpers::resolve_and_check("const a: i32 = 42;")};
-    gir::module_t gir_mod{ctx->root_mod, ctx->analyzer.get_arena()};
+    gir::module_t gir_mod{
+        ctx->root_mod, ctx->analyzer.get_arena(), ctx->analyzer.get_pool().intern()};
 
     auto& i32_type{
         *ctx->analyzer
@@ -177,7 +185,8 @@ TEST_CASE("GIR module container and arena allocation") {
         *ctx->analyzer.get_pool()[{sema::type_kind::FUNCTION, sema::types::mut::CONSTANT}]};
 
     // Add global
-    gir_mod.add_global("my_global", i32_type, true, value{static_cast<i64>(42), &i32_type});
+    gir_mod.add_global(
+        "my_global", i32_type, true, value::constant(gir_mod.constants(), i64{42}, i32_type));
     CHECK(gir_mod.get_globals().size() == 1);
     CHECK(gir_mod.get_globals()[0]->name == "my_global");
     CHECK(gir_mod.get_globals()[0]->is_constant);

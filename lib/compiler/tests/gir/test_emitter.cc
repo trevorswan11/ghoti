@@ -46,14 +46,12 @@ TEST_CASE("Emitter top-level globals and type declarations") {
     const auto& g_max{gir_mod.get_globals()[0]};
     CHECK(g_max->name == "MAX_COUNT");
     CHECK(g_max->is_constant);
-    CHECK(UNWRAP(g_max->init_value).is<i64>());
-    CHECK(UNWRAP(g_max->init_value).as<i64>() == 100);
+    CHECK(UNWRAP(UNWRAP(g_max->init_value).literal_opt<i64>(gir_mod.constants())) == 100);
 
     const auto& g_curr{gir_mod.get_globals()[1]};
     CHECK(g_curr->name == "current_count");
     CHECK_FALSE(g_curr->is_constant);
-    CHECK(UNWRAP(g_curr->init_value).is<i64>());
-    CHECK(UNWRAP(g_curr->init_value).as<i64>() == 42);
+    CHECK(UNWRAP(UNWRAP(g_curr->init_value).literal_opt<i64>(gir_mod.constants())) == 42);
 }
 
 TEST_CASE("Emitter linear function with binary arithmetic") {
