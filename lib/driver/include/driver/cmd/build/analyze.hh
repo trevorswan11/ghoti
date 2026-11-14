@@ -12,13 +12,11 @@
 
 namespace ghoti::cmd {
 
-// Runs every stage before code generation, writing any requested GIR or UIR dump
 class analyze_cmd final : public command {
   public:
     static constexpr auto KIND{command_kind::ANALYZE};
 
   public:
-    // `as_test` analyzes the input as the root of a test build, as `ghoti test` would
     explicit analyze_cmd(build::options opts,
                          bool           as_test      = false,
                          std::ostream&  error_stream = std::cerr)

@@ -1065,3 +1065,8 @@ This is a heavily rust inspired release, sorry if that's not your thing!
 - Errors are printed sorted by file, then position, so the order no longer depends on the order modules were analyzed in; the LSP publishes them in the same order
 - `--error-limit N` on `build-*`, `run`, and `test` stops after `N` errors and says how many more weren't shown; there is no limit by default
 - LSP diagnostics can carry related locations (`relatedInformation`) and notes
+
+## Tooling
+- `ghoti analyze <file>` checks a program through semantic analysis without generating code, and writes the `--emit-gir` / `--emit-uir` dumps if asked
+    - `--test` analyzes the file as the root of a test build, without running the tests
+    - Takes the analysis options `build-*` does (`-m`, `--target`, `--mode`, `--deprecated`, `--error-limit`), but no output, linking, or LLVM flags
