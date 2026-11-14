@@ -1038,9 +1038,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
 
         u32 active_idx{0};
         for (usize i{0}; i < ud->fields.size(); ++i) {
-            const auto& fname{
-                ud->enclosing.ast.get_as<ast::identifier_expr>(ud->ast_fields[i].name).name};
-            if (fname == un->active_field) {
+            if (ud->field_names[i] == un->active_field) {
                 active_idx = static_cast<u32>(i);
                 break;
             }
@@ -1115,9 +1113,7 @@ auto llvm_lowering::const_to_llvm(const gir::const_value& cv, llvm::Type* ty) ->
         for (usize i{0}; i < sd->fields.size(); ++i) {
             const auto elem_idx{types_.struct_field_index(llvm_st, static_cast<u32>(i))};
             if (elem_idx >= elems.size()) { break; }
-            const auto& fname{
-                sd->enclosing.ast.get_as<ast::identifier_expr>(sd->ast_fields[i].name).name};
-            if (const auto fv{st->get_field_opt(fname)}) {
+            if (const auto fv{st->get_field_opt(sd->field_names[i])}) {
                 elems[elem_idx] = const_to_llvm(*fv, llvm_st->getElementType(elem_idx));
             }
         }

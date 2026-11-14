@@ -311,6 +311,8 @@ struct enum_t {
     mod::module_t&                               enclosing;
     // The enums an `A || B` merge was built from, empty for any other enum
     gsl::span<const gsl::not_null<type*>> merged_from{};
+    // Each variant's declared name, in declaration order
+    gsl::span<const std::string_view> variant_names{};
 
     [[nodiscard]] auto type_at(usize idx, type& object_type) const noexcept -> type& {
         // The index location entirely depends on the number of variants which always come first
@@ -339,6 +341,8 @@ struct union_t {
     bool                                    is_packed{false};
     // The enum a `union(MyEnum)` is tagged by, whose variants its fields name
     stdx::option<type&> tag_enum{};
+    // Each field's declared name, in declaration order
+    gsl::span<const std::string_view> field_names{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
@@ -366,6 +370,8 @@ struct struct_t {
     bool                                     is_c_abi{false};
     bool                                     is_packed{false};
     gsl::span<u64>                           field_alignments;
+    // Each field's declared name, in declaration order
+    gsl::span<const std::string_view> field_names{};
 
     [[nodiscard]] constexpr auto is_bit_packed() const noexcept -> bool {
         return is_packed && !is_c_abi;
@@ -793,6 +799,19 @@ struct field_lookup_result {
 };
 [[nodiscard]] auto find_aggregate_field(type& denoted, std::string_view name) noexcept
     -> stdx::option<field_lookup_result>;
+
+// The declared name of each field or variant in `items`, which a type keeps so that codegen and
+// the intern pool never have to read them from the AST
+template <typename Item>
+[[nodiscard]] auto
+declared_names(ghoti::arena& arena, const mod::module_t& owner, gsl::span<const Item> items)
+    -> gsl::span<const std::string_view> {
+    auto names{arena.make_span<std::string_view>(items.size())};
+    for (usize i{0}; i < items.size(); ++i) {
+        names[i] = owner.ast.get_as<ast::identifier_expr>(items[i].name).name;
+    }
+    return names;
+}
 
 // All associated type lifetimes are tied to the pool, which interns them as `ip` entries
 class type_pool {

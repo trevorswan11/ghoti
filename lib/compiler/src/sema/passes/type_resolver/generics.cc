@@ -214,7 +214,8 @@ auto register_type_ctor_members(context&         ctx,
                                            s.enclosing,
                                            s.is_c_abi,
                                            s.is_packed,
-                                           s.field_alignments);
+                                           s.field_alignments,
+                                           s.field_names);
         },
         [&](const types::union_t& u) {
             fresh.resolve<types::union_t>(rebind(u.fields),
@@ -224,14 +225,17 @@ auto register_type_ctor_members(context&         ctx,
                                           u.is_untagged,
                                           u.is_c_abi,
                                           u.is_packed,
-                                          u.tag_enum);
+                                          u.tag_enum,
+                                          u.field_names);
         },
         [&](const types::enum_t& e) {
             fresh.resolve<types::enum_t>(e.ast_enumerations,
                                          e.non_exhaustive,
                                          e.underlying,
                                          rebind_members(e.members),
-                                         e.enclosing);
+                                         e.enclosing,
+                                         e.merged_from,
+                                         e.variant_names);
         });
     return fresh;
 }
