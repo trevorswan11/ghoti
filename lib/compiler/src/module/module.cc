@@ -37,7 +37,6 @@
 #include "support/diagnostic_renderer.hh"
 #include "support/path_utils.hh"
 #include "support/source_file.hh"
-#include "support/style.hh"
 
 namespace ghoti::mod {
 
@@ -102,7 +101,7 @@ auto module_t::printable_diagnostics() const -> std::vector<printable_diagnostic
                               const auto& owner{diag.origin() ? *diag.origin() : *this};
                               // The module the error points into may already report it itself
                               if (&owner != this && owner.reports(diag)) { continue; }
-                              out.push_back(
+                              out.emplace_back<printable_diagnostic>(
                                   {&owner, diag.to_formattable(), list.get_terminal_status()});
                           }
                       });
@@ -112,7 +111,8 @@ auto module_t::printable_diagnostics() const -> std::vector<printable_diagnostic
 auto module_t::printable_warnings() const -> std::vector<printable_diagnostic> {
     std::vector<printable_diagnostic> out;
     for (const auto& warning : warnings) {
-        out.push_back({this, warning.to_formattable(), warnings.get_terminal_status()});
+        out.emplace_back<printable_diagnostic>(
+            {this, warning.to_formattable(), warnings.get_terminal_status()});
     }
     return out;
 }
@@ -296,7 +296,7 @@ auto module_manager::try_get(const std::filesystem::path& path)
             path, path.parent_path(), source_file{std::string_view{parsed->source}});
         mod->ast    = parsed->ast.borrow(*arena_);
         diagnostics = parsed->diagnostics.create_new();
-        for (const auto& d : parsed->diagnostics) { diagnostics.push_back(d); }
+        for (const auto& d : parsed->diagnostics) { diagnostics.emplace_back(d); }
         mod->parsed_from = std::move(parsed);
     } else {
         mod = stdx::make_box<module_t>(path, path.parent_path(), source_file{std::move(source)});

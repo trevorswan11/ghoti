@@ -59,7 +59,18 @@ sema_test_context::sema_test_context(const std::vector<mock_file>&  imports,
           }
 
           return *UNWRAP(manager.try_get_file_module(root_path));
-      }()} {}
+      }()},
+      root_path{root_path} {
+    for (const auto& mock : imports) {
+        if (mock.name) { libraries.emplace_back(std::string{*mock.name}, mock.path); }
+    }
+}
+
+sema_test_context::~sema_test_context() {
+#ifdef GHOTI_TEST_SEMA_UIR
+    check_lowers_through_astgen(*this);
+#endif
+}
 
 auto sema_test_context::verify_registry_resolved() -> void {
     for (usize i{0}; const auto& table : analyzer.get_registry()) {

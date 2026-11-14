@@ -16,6 +16,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gsl/pointers>
+#include <gsl/span>
 #include <stdx/memory.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
@@ -44,6 +45,17 @@ struct mock_file {
     stdx::option<std::string_view> name{}; // NOLINT
 };
 
+// Checks AstGen's diagnostics for `input` against `expected`, in any order (helpers/uir.cc)
+auto check_astgen_against(std::string_view                  input,
+                          const std::vector<mock_file>&     imports,
+                          gsl::span<const sema::diagnostic> expected) -> void;
+
+struct sema_test_context;
+
+// Lowers the context's program again from a fresh parse when the old pipeline accepted it, and
+// fails on any AstGen diagnostic (helpers/uir.cc)
+auto check_lowers_through_astgen(sema_test_context& ctx) -> void;
+
 // Tests the collected state of a minimal non-public implicit declaration
 auto test_common_decl_collection(const sema::symbol_table_registry& registry,
                                  const mod::module_t&               module,
@@ -58,6 +70,9 @@ struct sema_test_context {
     mod::module_manager           manager;
     sema::analyzer                analyzer;
     mod::module_t&                root_mod;
+    // What a fresh manager needs to load the same program again, for the `-Dsema=uir` check
+    std::filesystem::path                                      root_path;
+    std::vector<std::pair<std::string, std::filesystem::path>> libraries;
 
     // The root is automatically added to the internal loader and can be immediately analyzed
     explicit sema_test_context(const std::vector<mock_file>&  imports,
@@ -65,7 +80,8 @@ struct sema_test_context {
                                std::string_view               input,
                                std::ostream&                  error_stream  = std::cerr,
                                stdx::option<std::string_view> target_triple = stdx::none);
-    ~sema_test_context() = default;
+    // Under `-Dsema=uir`, a program the old pipeline accepted must also lower through AstGen
+    ~sema_test_context();
 
     MAKE_MOVE_CONSTRUCTABLE_ONLY(sema_test_context)
 
@@ -229,6 +245,9 @@ template <std::same_as<sema::diagnostic>... Ds>
 auto test_collector_fail(std::string_view              failing,
                          const std::vector<mock_file>& imports,
                          Ds&&... expected_diagnostics) -> void {
+    // AstGen takes over the collector's diagnostics, so both must report exactly these
+    const std::vector<sema::diagnostic> expected{expected_diagnostics...};
+    check_astgen_against(failing, imports, expected);
     auto [ctx, idx]{collect(failing, imports)};
     check_errors_against<sema::diagnostics>(ctx->root_mod,
                                             std::forward<Ds>(expected_diagnostics)...);

@@ -2174,9 +2174,14 @@ auto type_resolver::is_written_after(ast::node_id lhs, ast::node_id rhs) const -
 }
 
 auto type_resolver::visible_packs() const -> std::vector<generic_function_info::enclosing_pack> {
-    std::vector<generic_function_info::enclosing_pack> packs;
-    for (const auto& pack : enclosing_packs_) { packs.push_back({pack.name, pack.element_types}); }
-    if (current_pack_) { packs.push_back({current_pack_->name, current_pack_->element_types}); }
+    using enclosing_pack = generic_function_info::enclosing_pack;
+    std::vector<enclosing_pack> packs;
+    for (const auto& pack : enclosing_packs_) {
+        packs.emplace_back<enclosing_pack>({pack.name, pack.element_types});
+    }
+    if (current_pack_) {
+        packs.emplace_back<enclosing_pack>({current_pack_->name, current_pack_->element_types});
+    }
     return packs;
 }
 

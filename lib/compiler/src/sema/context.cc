@@ -584,9 +584,8 @@ pub const cpu: Cpu = .{{
 auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
     PROFILE_FUNCTION();
 
-    const auto source{
-        fmt::format("{}{}", BUILTIN_MODULE_SOURCE, cpu_builtin_source(ctx.target_opts))};
-    auto& builtin_mod{ctx.modules.get_or_create_builtin_module(source)};
+    const auto source{builtin_module_source(ctx.target_opts)};
+    auto&      builtin_mod{ctx.modules.get_or_create_builtin_module(source)};
     symbol_collector::collect_symbols(builtin_mod, ctx);
     type_resolver::resolve_types(builtin_mod, ctx);
     VERIFY(!builtin_mod.is_poisoned() && ctx.diags.empty(),
@@ -608,6 +607,10 @@ auto inject_builtin_module(context& ctx, usize prelude_idx) -> void {
 }
 
 } // namespace
+
+auto builtin_module_source(const codegen::target_options& target_opts) -> std::string {
+    return fmt::format("{}{}", BUILTIN_MODULE_SOURCE, cpu_builtin_source(target_opts));
+}
 
 auto context::inject_prelude() -> void {
     PROFILE_FUNCTION();

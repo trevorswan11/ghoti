@@ -75,24 +75,30 @@ namespace {
 } // namespace
 
 TEST_CASE("If expression inner shadowing") {
-    helpers::test_collector_fail("const a = if (b) { let mut a: i32 = undefined; };",
-                                 expected_diag(27));
     helpers::test_collector_fail(
-        "const a = if (b) { let mut c: i32 = undefined; } else { let mut a: i32 = undefined; };",
+        "const a = if (b) { let mut a: i32 = undefined; }; const b = true;", expected_diag(27));
+    helpers::test_collector_fail(
+        "const a = if (b) { let mut c: i32 = undefined; } else { let mut a: i32 = undefined; }; "
+        "const b = true;",
         expected_diag(64));
 }
 
 TEST_CASE("Match shadowing assignee") {
-    helpers::test_collector_fail("const a = match (c) { b => |a| b, };", expected_diag(28));
-    helpers::test_collector_fail("const a = match (c) { b => { let mut a: i32 = undefined; } };",
-                                 expected_diag(37));
+    helpers::test_collector_fail("const a = match (c) { b => |a| b, }; const b = 1; const c = 2;",
+                                 expected_diag(28));
     helpers::test_collector_fail(
-        "const a = match (b) { c => d, _ => { let mut a: i32 = undefined; } };", expected_diag(45));
+        "const a = match (c) { b => { let mut a: i32 = undefined; } }; const b = 1; const c = 2;",
+        expected_diag(37));
+    helpers::test_collector_fail(
+        "const a = match (b) { c => d, _ => { let mut a: i32 = undefined; } }; const b = 1; "
+        "const c = 2; const d = 3;",
+        expected_diag(45));
 }
 
 TEST_CASE("Match dispatch shadowing") {
     helpers::test_collector_fail(
-        "const a = match (c) { b => |c| { let mut c: i32 = undefined; } };",
+        "const a = match (e) { b => |c| { let mut c: i32 = undefined; } }; const b = 1; const e = "
+        "2;",
         sema::diagnostic{"Attempt to shadow identifier 'c'; previous declaration here: 1:29",
                          sema::error::SHADOWING_DECLARATION,
                          std::pair{0UZ, 41UZ}});

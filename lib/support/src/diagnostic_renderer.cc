@@ -91,7 +91,8 @@ class rendered_line {
                 previous.bytes = stdx::string::substr(
                     text, previous.byte_offset, i + length - previous.byte_offset);
             } else {
-                glyphs_.push_back({bytes == "\t" ? TAB_EXPANSION : bytes, i, width_, width});
+                glyphs_.emplace_back<glyph>(
+                    {bytes == "\t" ? TAB_EXPANSION : bytes, i, width_, width});
                 width_ += width;
             }
             i += length;
