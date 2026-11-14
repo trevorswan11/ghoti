@@ -45,19 +45,23 @@ class function {
     };
 
   public:
-    function(ghoti::arena& arena,
-             std::string   name,
-             sema::type&   type,
-             bool          is_test     = false,
-             bool          is_comptime = false,
-             bool          is_variadic = false,
-             gir::linkage  linkage     = linkage::INTERNAL,
-             std::string   abi_name    = "c") noexcept
-        : arena_{arena}, name_{std::move(name)}, type_{type}, is_test_{is_test},
-          is_comptime_{is_comptime}, is_variadic_{is_variadic}, linkage_{linkage},
-          abi_name_{std::move(abi_name)} {}
+    // `constants` is the intern pool the function's constant operands index
+    function(ghoti::arena&   arena,
+             const ip::pool& constants,
+             std::string     name,
+             sema::type&     type,
+             bool            is_test     = false,
+             bool            is_comptime = false,
+             bool            is_variadic = false,
+             gir::linkage    linkage     = linkage::INTERNAL,
+             std::string     abi_name    = "c") noexcept
+        : arena_{arena}, constants_{constants}, name_{std::move(name)}, type_{type},
+          is_test_{is_test}, is_comptime_{is_comptime}, is_variadic_{is_variadic},
+          linkage_{linkage}, abi_name_{std::move(abi_name)} {}
     ~function() = default;
     MAKE_PINNED(function);
+
+    [[nodiscard]] auto constants() const noexcept -> const ip::pool& { return constants_; }
 
     MAKE_GETTER(name, std::string_view);
     MAKE_GETTER(type, sema::type&);
@@ -136,6 +140,7 @@ class function {
 
   private:
     ghoti::arena&                          arena_;
+    const ip::pool&                        constants_;
     std::string                            name_;
     std::string                            source_name_;
     sema::type&                            type_;

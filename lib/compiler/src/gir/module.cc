@@ -52,6 +52,7 @@ auto module_t::add_function(std::string  name,
                             std::string  abi_name) -> function& {
     const auto idx{functions_.size()};
     functions_.emplace_back(arena_.make<function>(arena_,
+                                                  constants_,
                                                   std::move(name),
                                                   type,
                                                   is_test,
@@ -115,7 +116,7 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
         enqueue_fn(name);
     }};
     const auto scan_value{[&](const value& v) {
-        if (const auto s{v.as_opt<std::string>()}) { note_symbol(*s); }
+        if (const auto s{v.literal_opt<std::string>(constants_)}) { note_symbol(*s); }
     }};
     const auto scan_const_value{[&](this auto&& self, const const_value& cv) -> void {
         if (const auto s{cv.as_opt<std::string>()}) { note_symbol(*s); }

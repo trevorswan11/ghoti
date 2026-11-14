@@ -52,8 +52,9 @@ struct extern_import {
 
 class module_t {
   public:
-    explicit module_t(const mod::module_t& ast_mod, ghoti::arena& arena) noexcept
-        : ast_module_{ast_mod}, arena_{arena} {}
+    // `constants` is the compilation's intern pool, which every constant operand indexes
+    module_t(const mod::module_t& ast_mod, ghoti::arena& arena, ip::pool& constants) noexcept
+        : ast_module_{ast_mod}, arena_{arena}, constants_{constants} {}
     ~module_t() = default;
     MAKE_MOVE_CONSTRUCTABLE_ONLY(module_t);
 
@@ -63,6 +64,8 @@ class module_t {
     MAKE_DEDUCING_GETTER(functions);
     MAKE_DEDUCING_GETTER(tests);
     [[nodiscard]] auto arena() noexcept -> auto& { return arena_; }
+    [[nodiscard]] auto constants() noexcept -> ip::pool& { return constants_; }
+    [[nodiscard]] auto constants() const noexcept -> const ip::pool& { return constants_; }
 
     // Resolves the raw `tests` indices into their owning functions, in declaration order.
     [[nodiscard]] auto get_test_functions() const -> std::vector<gsl::not_null<const function*>> {
@@ -116,6 +119,7 @@ class module_t {
   private:
     const mod::module_t&                     ast_module_;
     ghoti::arena&                            arena_;
+    ip::pool&                                constants_;
     std::vector<gsl::not_null<type_decl*>>   types_;
     std::vector<gsl::not_null<global_decl*>> globals_;
     std::vector<gsl::not_null<function*>>    functions_;

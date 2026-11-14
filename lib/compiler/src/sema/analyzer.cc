@@ -318,7 +318,7 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     }
 
     // An errored module's AST is incomplete/inconsistent; it can't proceed past this point.
-    if (module->is_errored()) { return gir::module_t{*module, ctx_.arena}; }
+    if (module->is_errored()) { return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()}; }
 
     collect_symbols(*module);
     // A std module tested as the root resolves in the order std imports it
@@ -328,32 +328,32 @@ auto analyzer::analyze(const std::filesystem::path& entry_path, bool for_test_ex
     }
     resolve_types(*module);
     // A cancelled analysis skipped declarations, so nothing past this point can rely on it
-    if (ctx_.cancelled()) { return gir::module_t{*module, ctx_.arena}; }
+    if (ctx_.cancelled()) { return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()}; }
     modules_.print_all_warnings(error_stream_);
 
     if (module->is_poisoned() || reaches_failed_module(*module)) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module_t{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()};
     }
 
     if (entry_point_ || for_test_executable) {
         TRY(attach_start_module(*module, for_test_executable));
         if (module->is_poisoned()) {
             modules_.print_all_diagnostics(error_stream_);
-            return gir::module_t{*module, ctx_.arena};
+            return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()};
         }
     }
 
     auto gir_mod{emit_gir(*module, for_test_executable)};
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module_t{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()};
     }
 
     check_types(gir_mod, *module);
     if (module->is_poisoned()) {
         modules_.print_all_diagnostics(error_stream_);
-        return gir::module_t{*module, ctx_.arena};
+        return gir::module_t{*module, ctx_.arena, ctx_.pool.intern()};
     }
 
     return gir_mod;
@@ -456,7 +456,7 @@ auto analyzer::emit_gir(mod::module_t& module, bool for_test_executable) -> gir:
         }
         if (module.is_poisoned()) {
             modules_.print_all_diagnostics(error_stream_);
-            return gir::module_t{module, ctx_.arena};
+            return gir::module_t{module, ctx_.arena, ctx_.pool.intern()};
         }
     }
     gir::emitter emitter{ctx_, module};

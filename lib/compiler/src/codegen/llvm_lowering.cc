@@ -246,10 +246,11 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return val && val->getType()->isFPOrFPVectorTy();
 }
 
-[[nodiscard]] auto comptime_operand_is_nonnegative(const gir::value& val) noexcept -> bool {
-    if (const auto v{val.as_opt<i64>()}) { return *v >= 0; }
-    if (const auto v{val.as_opt<i128>()}) { return *v >= 0; }
-    return val.is<u64>() || val.is<u128>();
+[[nodiscard]] auto comptime_operand_is_nonnegative(const ip::pool& constants, const gir::value& val)
+    -> bool {
+    if (const auto v{val.literal_opt<i64>(constants)}) { return *v >= 0; }
+    if (const auto v{val.literal_opt<i128>(constants)}) { return *v >= 0; }
+    return val.is_literal<u64>(constants) || val.is_literal<u128>(constants);
 }
 
 // A mask known to pick every lane
@@ -258,7 +259,7 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
     return constant && constant->isAllOnesValue();
 }
 
-[[nodiscard]] auto is_signed_type(const gir::instruction& inst) noexcept -> bool {
+[[nodiscard]] auto is_signed_type(const ip::pool& constants, const gir::instruction& inst) -> bool {
     if (!inst.operands.empty() && inst.operands[0].type &&
         inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT) {
         // `comptime_int` alone carries no real signedness
@@ -267,8 +268,9 @@ auto apply_fn_attributes(llvm::Function& llvm_fn, const sema::resolved_attribute
                 return sema::is_signed_integer(*op.type);
             }
         }
-        return !std::ranges::all_of(
-            inst.operands, [](const auto& op) { return comptime_operand_is_nonnegative(op); });
+        return !std::ranges::all_of(inst.operands, [&constants](const auto& op) {
+            return comptime_operand_is_nonnegative(constants, op);
+        });
     }
     if (!inst.operands.empty() && inst.operands[0].type) {
         return sema::is_signed_integer(sema::lane_type_of(*inst.operands[0].type));
@@ -431,6 +433,7 @@ auto llvm_lowering::lower_definitions(const gir::module_t& gir_mod) -> void {
 auto llvm_lowering::lower(const gir::module_t& gir_mod) -> stdx::box<llvm::Module> {
     PROFILE_FUNCTION();
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
     finalize_runtime_support();
@@ -489,6 +492,7 @@ auto llvm_lowering::lower_executable(const gir::module_t& gir_mod, std::string_v
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     lower_definitions(gir_mod);
     finalize_runtime_support();
@@ -518,6 +522,7 @@ auto llvm_lowering::lower_test_executable(const gir::module_t& gir_mod,
     is_executable_  = true;
     user_main_name_ = user_main_name;
     gir_module_.emplace(gir_mod);
+    constants_.emplace(gir_mod.constants());
     declare_functions(gir_mod);
     define_test_take_skipped();
     lower_definitions(gir_mod);
@@ -709,7 +714,7 @@ auto llvm_lowering::emit_context_handler_call(const gir::instruction& inst,
     if (msg_idx >= inst.operands.size() || loc_idx + 2 >= inst.operands.size()) { return; }
 
     const auto make_arg{[&](const gir::value& op, llvm::Type* param_ty) -> llvm::Value* {
-        if (const auto str{op.as_opt<std::string>()}) {
+        if (const auto str{op.literal_opt<std::string>(constants())}) {
             // A raw string operand (`file`, `msg`) becomes a `[]u8` slice `{ ptr, len }`.
             auto* gstr{builder_.CreateGlobalString(*str, "ch.str")};
             if (param_ty->isStructTy()) {
@@ -1189,10 +1194,10 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
     llvm::Constant* init{nullptr};
     if (g.const_init) {
         init = const_to_llvm(*g.const_init, g_type);
-    } else if (g.init_value && g.init_value->is<std::string>() &&
+    } else if (g.init_value && g.init_value->is_literal<std::string>(constants()) &&
                g.type.get_kind() == sema::type_kind::SLICE) {
         // The folded value of a comptime str slice is a bare str, but the global's type is a slice
-        const auto& bytes{g.init_value->as<std::string>()};
+        const auto& bytes{*g.init_value->literal_opt<std::string>(constants())};
         const auto  slice_data{g.type.get_data().as_opt<sema::types::slice>()};
         const bool  add_nul{slice_data && slice_data->null_terminated};
         auto*       data{llvm::ConstantDataArray::getString(context_, bytes, add_nul)};
@@ -1206,7 +1211,7 @@ auto llvm_lowering::lower_global(const gir::global_decl& g) -> llvm::GlobalVaria
         auto* len{llvm::ConstantInt::get(types_.get_usize_ty(), bytes.size())};
         init = llvm::ConstantStruct::get(llvm::cast<llvm::StructType>(g_type), {data_gv, len});
     } else if (g.init_value) {
-        if (const auto fn_symbol{g.init_value->as_opt<std::string>()}) {
+        if (const auto fn_symbol{g.init_value->literal_opt<std::string>(constants())}) {
             init = const_callable(*fn_symbol, g.init_value->type, g_type);
         }
         auto* init_v{init ? nullptr : lower_value(*g.init_value, g.type)};
@@ -1246,6 +1251,8 @@ auto llvm_lowering::private_symbol_name(std::string_view name) const -> std::str
 
 auto llvm_lowering::declare_function(const gir::function& fn) -> llvm::Function* {
     PROFILE_FUNCTION();
+    // A function lowered on its own brings the pool its constants live in
+    if (!constants_) { constants_.emplace(fn.constants()); }
     if (const auto it{globals_.find(fn.get_name())}; it != globals_.end()) {
         if (auto* existing{llvm::dyn_cast<llvm::Function>(it->second)}) { return existing; }
     }
@@ -1430,6 +1437,46 @@ auto llvm_lowering::lower_value(const gir::value&               val,
             ASSERT(it != locals_.end(), "Referenced GIR local was never lowered");
             return it->second;
         },
+        [this, &val, expected_type](ip::index at) -> llvm::Value* {
+            return lower_constant(val, at, expected_type);
+        });
+}
+
+auto llvm_lowering::lower_string(const std::string&              str,
+                                 stdx::option<const sema::type&> value_type,
+                                 stdx::option<const sema::type&> expected_type) -> llvm::Value* {
+    auto ty{expected_type};
+    if (!ty && value_type) { ty = value_type; }
+    // A fn-typed string value names a function rather than holding string data, even when
+    // stored into a `^fn(...)` slot (that pointer is the function's own address)
+    if (value_type && value_type->get_kind() == sema::type_kind::FUNCTION) {
+        ty = value_type;
+    } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>() : stdx::none};
+               p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
+        ty = p->underlying;
+    }
+    if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
+        if (auto* fn{resolve_named_function(str)}) { return fn; }
+        // Not yet declared in this translation unit for the linnker to resolve
+        const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
+        ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
+        auto* fn_ty{types_.translate_function_type(*fn_data)};
+        return llvm::Function::Create(
+            fn_ty, llvm::Function::ExternalLinkage, str, llvm_module_.get());
+    }
+    if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
+        return llvm::ConstantDataArray::getString(context_, str, true);
+    }
+    // Give `CreateGlobalString` the module directly
+    return builder_.CreateGlobalString(str, "str", 0, llvm_module_.get());
+}
+
+auto llvm_lowering::lower_constant(const gir::value&               val,
+                                   ip::index                       at,
+                                   stdx::option<const sema::type&> expected_type) -> llvm::Value* {
+    // A type has no runtime form
+    if (constants().is_type(at)) { return nullptr; }
+    return constants().value_at(at).data.visit(
         [this, &val, expected_type](i64 i) -> llvm::Value* {
             auto* ty{expected_type ? types_.translate(*expected_type)
                      : val.type    ? (val.type->get_kind() == sema::type_kind::COMPTIME_INT &&
@@ -1493,31 +1540,7 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         },
         [this](bool b) -> llvm::Value* { return llvm::ConstantInt::getBool(context_, b); },
         [this, &val, expected_type](const std::string& str) -> llvm::Value* {
-            auto ty{expected_type};
-            if (!ty && val.type) { ty = val.type; }
-            // A fn-typed string value names a function rather than holding string data, even when
-            // stored into a `^fn(...)` slot (that pointer is the function's own address)
-            if (val.type && val.type->get_kind() == sema::type_kind::FUNCTION) {
-                ty = val.type;
-            } else if (const auto p{ty ? ty->get_data().as_opt<sema::types::pointer>()
-                                       : stdx::none};
-                       p && p->underlying.get_kind() == sema::type_kind::FUNCTION) {
-                ty = p->underlying;
-            }
-            if (ty && ty->get_kind() == sema::type_kind::FUNCTION) {
-                if (auto* fn{resolve_named_function(str)}) { return fn; }
-                // Not yet declared in this translation unit for the linnker to resolve
-                const auto fn_data{ty->get_data().as_opt<sema::types::function>()};
-                ASSERT(fn_data, "FUNCTION-typed value must carry function type data");
-                auto* fn_ty{types_.translate_function_type(*fn_data)};
-                return llvm::Function::Create(
-                    fn_ty, llvm::Function::ExternalLinkage, str, llvm_module_.get());
-            }
-            if (ty && ty->get_kind() == sema::type_kind::ARRAY) {
-                return llvm::ConstantDataArray::getString(context_, str, true);
-            }
-            // Give `CreateGlobalString` the module directly
-            return builder_.CreateGlobalString(str, "str", 0, llvm_module_.get());
+            return lower_string(str, val.type, expected_type);
         },
         [this, &val, expected_type](gir::undefined_val) -> llvm::Value* {
             // A bare `undefined` may still carry the placeholder UNDEFINED/POISON type; fall back
@@ -1543,7 +1566,11 @@ auto llvm_lowering::lower_value(const gir::value&               val,
         [this](gir::nullptr_val) -> llvm::Value* {
             return llvm::ConstantPointerNull::get(types_.get_ptr_ty());
         },
-        [](stdx::option<sema::type&>) -> llvm::Value* { return nullptr; });
+        [](ip::no_type_value) -> llvm::Value* { return nullptr; },
+        [](const auto&) -> llvm::Value* {
+            UNREACHABLE(
+                "An aggregate, enum, union, address, or poison constant is never an operand");
+        });
 }
 
 auto llvm_lowering::lower_instruction(const gir::instruction& inst) -> void {
@@ -1898,7 +1925,7 @@ auto llvm_lowering::emit_binary(const gir::instruction& inst) -> llvm::Value* {
     ASSERT(lhs && rhs, "Binary operands must lower to non-null LLVM values");
 
     const bool is_flt{is_float_type(inst, lhs)};
-    const bool is_sgn{is_signed_type(inst)};
+    const bool is_sgn{is_signed_type(constants(), inst)};
 
     if (is_shift && !is_flt) {
         rhs = fit_shift_amount(
@@ -2008,7 +2035,7 @@ auto llvm_lowering::emit_comparison(const gir::instruction& inst) -> llvm::Value
     rhs = callable_code(rhs);
 
     const bool is_flt{is_float_type(inst, lhs)};
-    const bool is_sgn{is_signed_type(inst)};
+    const bool is_sgn{is_signed_type(constants(), inst)};
 
     if (!is_flt && lhs->getType() != rhs->getType()) {
         if (auto* lhs_int{llvm::dyn_cast<llvm::IntegerType>(lhs->getType())}) {
@@ -2086,8 +2113,8 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
     case gir::instruction_kind::INT_CAST: {
         const bool is_sgn{inst.operands[0].type &&
                                   inst.operands[0].type->get_kind() == sema::type_kind::COMPTIME_INT
-                              ? !comptime_operand_is_nonnegative(inst.operands[0])
-                              : is_signed_type(inst)};
+                              ? !comptime_operand_is_nonnegative(constants(), inst.operands[0])
+                              : is_signed_type(constants(), inst)};
         return builder_.CreateIntCast(val, target_ty, is_sgn);
     }
     case gir::instruction_kind::TRUNC_CAST: return builder_.CreateTrunc(val, target_ty, "trunc");
@@ -2097,8 +2124,9 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
 
         if (src_is_flt && dst_is_flt) { return builder_.CreateFPCast(val, target_ty, "fpcast"); }
         if (!src_is_flt && dst_is_flt) {
-            return is_signed_type(inst) ? builder_.CreateSIToFP(val, target_ty, "sitofp")
-                                        : builder_.CreateUIToFP(val, target_ty, "uitofp");
+            return is_signed_type(constants(), inst)
+                       ? builder_.CreateSIToFP(val, target_ty, "sitofp")
+                       : builder_.CreateUIToFP(val, target_ty, "uitofp");
         }
         if (src_is_flt && !dst_is_flt) {
             const bool dst_is_sgn{sema::is_signed_integer(sema::lane_type_of(*inst.type))};
@@ -2106,7 +2134,7 @@ auto llvm_lowering::emit_cast(const gir::instruction& inst) -> llvm::Value* {
             return dst_is_sgn ? builder_.CreateFPToSI(val, target_ty, "fptosi")
                               : builder_.CreateFPToUI(val, target_ty, "fptoui");
         }
-        return builder_.CreateIntCast(val, target_ty, is_signed_type(inst));
+        return builder_.CreateIntCast(val, target_ty, is_signed_type(constants(), inst));
     }
     case gir::instruction_kind::BIT_CAST: {
         if (!src_ty->isAggregateType() && !target_ty->isAggregateType()) {
@@ -2530,7 +2558,7 @@ auto llvm_lowering::emit_vector_op(const gir::instruction& inst) -> llvm::Value*
     case gir::instruction_kind::SHUFFLE: {
         llvm::SmallVector<i32, 16> mask;
         for (const auto& entry : inst.operands | std::views::drop(2)) {
-            const auto idx{entry.as_opt<i64>()};
+            const auto idx{entry.literal_opt<i64>(constants())};
             mask.emplace_back(idx ? static_cast<i32>(*idx) : llvm::PoisonMaskElem);
         }
         // Operands of different lengths are padded to the longer one's
@@ -2784,7 +2812,9 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             if (is_verify) {
                 std::string_view msg{"verification failed"};
                 if (inst.operands.size() > 4) {
-                    if (const auto s{inst.operands[4].as_opt<std::string>()}) { msg = *s; }
+                    if (const auto s{inst.operands[4].literal_opt<std::string>(constants())}) {
+                        msg = *s;
+                    }
                 }
                 emit_lowered_panic(msg, inst);
                 builder_.CreateUnreachable();
@@ -2815,7 +2845,7 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
             auto* slice_ty{types_.translate_slice_type()};
 
             llvm::Value* file_slice{llvm::UndefValue::get(slice_ty)};
-            if (const auto path{inst.operands[0].as_opt<std::string>()}) {
+            if (const auto path{inst.operands[0].literal_opt<std::string>(constants())}) {
                 auto* gstr{builder_.CreateGlobalString(*path, "src.file")};
                 file_slice = builder_.CreateInsertValue(
                     file_slice, gstr, {static_cast<u32>(gir::SLICE_PTR_FIELD_INDEX)});
@@ -2836,16 +2866,17 @@ auto llvm_lowering::emit_builtin_call(const gir::instruction& inst) -> llvm::Val
         }
         case syntax::builtin_t::TARGET_OS: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{std::string{triple.getOSName()}, inst.type});
+            return lower_string(std::string{triple.getOSName()}, inst.type, stdx::none);
         }
         case syntax::builtin_t::TARGET_ARCH: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{
-                std::string{llvm::Triple::getArchTypeName(triple.getArch())}, inst.type});
+            return lower_string(std::string{llvm::Triple::getArchTypeName(triple.getArch())},
+                                inst.type,
+                                stdx::none);
         }
         case syntax::builtin_t::TARGET_TRIPLE: {
             const llvm::Triple triple{llvm_module_->getTargetTriple()};
-            return lower_value(gir::value{triple.str(), inst.type});
+            return lower_string(triple.str(), inst.type, stdx::none);
         }
 
         // Memory operations
@@ -3390,7 +3421,7 @@ auto llvm_lowering::emit_ret(const gir::instruction& inst) -> void {
         if (val->getType()->isPointerTy() && !ret_ty->isPointerTy()) {
             val = builder_.CreateLoad(ret_ty, val, "retval");
         } else if (val->getType()->isIntegerTy() && ret_ty->isIntegerTy()) {
-            val = builder_.CreateIntCast(val, ret_ty, is_signed_type(inst));
+            val = builder_.CreateIntCast(val, ret_ty, is_signed_type(constants(), inst));
         }
     }
 

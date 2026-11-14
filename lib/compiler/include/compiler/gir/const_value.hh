@@ -274,7 +274,9 @@ class const_value {
         fit_float_payload();
     }
     MAKE_GETTER(origin, stdx::option<math_origin>);
-    [[nodiscard]] auto to_gir_value() const noexcept -> value;
+    // This value as a GIR operand, its constant interned in `pool`. An aggregate or other value
+    // with no scalar operand form becomes `void`
+    [[nodiscard]] auto to_gir_value(ip::pool& pool) const -> value;
     [[nodiscard]] auto operator==(const const_value& other) const noexcept -> bool;
     // `==`, except floats compare by bit pattern: `-0.0` and `0.0` differ, a NaN matches itself.
     // For keying on a value, where numerically equal floats are still different arguments.

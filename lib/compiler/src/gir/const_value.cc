@@ -201,19 +201,22 @@ auto const_value::make_string(sema::context& ctx, std::string str) -> const_valu
     return const_value{std::string{str}, t_c_str};
 }
 
-auto const_value::to_gir_value() const noexcept -> value {
+auto const_value::to_gir_value(ip::pool& pool) const -> value {
+    const auto make{
+        [&](ip::value_data payload) { return value::constant(pool, std::move(payload), type_); }};
     return data_.visit(
-        [this](const poison_val&) -> value { return value{undefined_val{}, type_}; },
-        [this](const const_array&) -> value { return value{void_val{}, type_}; },
-        [this](const const_struct&) -> value { return value{void_val{}, type_}; },
-        [this](const const_enum& e) -> value { return value{e.value, type_}; },
-        [this](const const_union&) -> value { return value{void_val{}, type_}; },
-        [this](const const_closure&) -> value { return value{void_val{}, type_}; },
-        [this](const const_addr& a) -> value { return value{a.symbol, type_}; },
-        [this](const const_ref&) -> value { return value{void_val{}, type_}; },
-        [this](const const_dyn_fat_ptr&) -> value { return value{void_val{}, type_}; },
-        [this](const f128& f) -> value { return value{f, type_, origin_}; },
-        [this](const auto& v) -> value { return value{v, type_}; });
+        [&](const poison_val&) { return make(undefined_val{}); },
+        [&](const const_array&) { return make(void_val{}); },
+        [&](const const_struct&) { return make(void_val{}); },
+        [&](const const_enum& e) { return make(e.value); },
+        [&](const const_union&) { return make(void_val{}); },
+        [&](const const_closure&) { return make(void_val{}); },
+        [&](const const_addr& a) { return make(a.symbol); },
+        [&](const const_ref&) { return make(void_val{}); },
+        [&](const const_dyn_fat_ptr&) { return make(void_val{}); },
+        [&](const f128& f) { return value::constant(pool, f, type_, origin_); },
+        [&](const stdx::option<sema::type&>& t) { return value::type_constant(pool, t, type_); },
+        [&](const auto& v) { return make(v); });
 }
 
 auto const_value::operator==(const const_value& other) const noexcept -> bool {

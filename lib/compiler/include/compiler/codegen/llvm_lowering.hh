@@ -55,6 +55,10 @@ class llvm_lowering {
     [[nodiscard]] auto builder() noexcept -> llvm::IRBuilder<>& { return builder_; }
     [[nodiscard]] auto types() noexcept -> type_translator& { return types_; }
 
+    // The pool constant operands read from when values are lowered outside a module
+    auto use_constants(const ip::pool& constants) noexcept -> void {
+        constants_.emplace(constants);
+    }
     auto set_local(gir::local_id id, llvm::Value* val) noexcept -> void { locals_[id] = val; }
     [[nodiscard]] auto get_local_opt(gir::local_id id) const noexcept
         -> stdx::option<llvm::Value*> {
@@ -67,6 +71,18 @@ class llvm_lowering {
         segment_blocks_.clear();
     }
 
+    // A string constant: a function's name when typed as one, else the bytes of a global
+    auto lower_string(const std::string&              str,
+                      stdx::option<const sema::type&> value_type,
+                      stdx::option<const sema::type&> expected_type) -> llvm::Value*;
+    auto lower_constant(const gir::value&               val,
+                        ip::index                       at,
+                        stdx::option<const sema::type&> expected_type) -> llvm::Value*;
+    // The pool the module being lowered keeps its constants in
+    [[nodiscard]] auto constants() const -> const ip::pool& {
+        ASSERT(constants_, "Lowering a constant needs the intern pool that holds it");
+        return *constants_;
+    }
     auto lower_value(const gir::value&               val,
                      stdx::option<const sema::type&> expected_type = stdx::none) -> llvm::Value*;
     auto lower_instruction(const gir::instruction& inst) -> void;
@@ -231,6 +247,7 @@ class llvm_lowering {
     bool                               reserved_symbols_built_{false};
     bool                               is_executable_{false};
     stdx::option<const gir::module_t&> gir_module_;
+    stdx::option<const ip::pool&>      constants_;
     std::string                        user_main_name_{"main"};
 };
 

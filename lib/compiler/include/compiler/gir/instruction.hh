@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +20,8 @@
 #include <stdx/variant.hh>
 
 #include "compiler/ast/expression.hh"
+#include "compiler/ip/index.hh"
+#include "compiler/ip/pool.hh"
 #include "compiler/sema/type.hh"
 #include "compiler/syntax/token_type.hh"
 #include "support/big_int.hh"
@@ -196,68 +199,84 @@ class local_id {
     local_kind kind_{local_kind::TEMPORARY};
 };
 
-struct void_val {
-    [[nodiscard]] constexpr auto operator==(const void_val&) const noexcept -> bool = default;
-};
-struct undefined_val {
-    [[nodiscard]] constexpr auto operator==(const undefined_val&) const noexcept -> bool = default;
-};
-
+using void_val      = ip::void_value;
+using undefined_val = ip::undefined_value;
 // A zero-valued placeholder for an arbitrary type, lowered via `llvm::Constant::getNullValue`
-struct zero_val {
-    [[nodiscard]] constexpr auto operator==(const zero_val&) const noexcept -> bool = default;
-};
-struct nullptr_val {
-    [[nodiscard]] constexpr auto operator==(const nullptr_val&) const noexcept -> bool = default;
-};
+using zero_val    = ip::zero_value;
+using nullptr_val = ip::nullptr_value;
 
+// An operand: a local, or a constant the compilation's intern pool holds
 struct value {
-    using data_t = stdx::variant<local_id,
-                                 i64,
-                                 u64,
-                                 i128,
-                                 u128,
-                                 big_int,
-                                 f128,
-                                 bool,
-                                 std::string,
-                                 stdx::option<sema::type&>,
-                                 void_val,
-                                 undefined_val,
-                                 zero_val,
-                                 nullptr_val>;
+    using data_t = stdx::variant<local_id, ip::index>;
 
-    data_t                    data{void_val{}};
+    data_t                    data{local_id{}};
     stdx::option<sema::type&> type{stdx::none};
     // Set on an untyped `@sin(...)`-style result until it takes a concrete float type
     stdx::option<math_origin> origin{stdx::none};
 
     constexpr value() noexcept = default;
-    // A float payload is rounded into its type's format
     constexpr explicit value(data_t                    val,
                              stdx::option<sema::type&> t        = stdx::none,
                              stdx::option<math_origin> computed = stdx::none)
-        : data{std::move(val)}, type{t}, origin{computed} {
-        if !consteval {
-            if (auto f{data.as_opt<f128>()}; f && type) {
-                *f = sema::fit_float(*f, *type, origin);
-                if (sema::is_float(type->get_kind())) { origin.reset(); }
-            }
-        }
-    }
+        : data{val}, type{t}, origin{computed} {}
 
-    template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
+    // `payload` interned as a constant of type `t`. A float is rounded into `t`'s format first
+    [[nodiscard]] static auto constant(ip::pool&                 pool,
+                                       ip::value_data            payload,
+                                       stdx::option<sema::type&> t        = stdx::none,
+                                       stdx::option<math_origin> computed = stdx::none) -> value;
+    // The type `denoted` used as a value, or the `type` operand that names no type
+    [[nodiscard]] static auto type_constant(ip::pool&                 pool,
+                                            stdx::option<sema::type&> denoted,
+                                            stdx::option<sema::type&> t = stdx::none) -> value;
+    // This operand as a `t`: a local is just relabeled, a constant interned again as a `t`
+    [[nodiscard]] auto retyped(ip::pool&                 pool,
+                               stdx::option<sema::type&> t,
+                               stdx::option<math_origin> computed = stdx::none) const -> value;
+
+    // A constant's payload is read through the pool with `literal_opt`, never through these
+    template <typename T>
+        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
+    [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return data.is<T>();
     }
-
-    template <typename T, typename Self>
-    [[nodiscard]] constexpr auto as(this Self&& self) noexcept -> decltype(auto) {
-        return std::forward<Self>(self).data.template as<T>();
+    template <typename T>
+        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
+    [[nodiscard]] constexpr auto as_opt() const noexcept {
+        return data.template as_opt<T>();
+    }
+    template <typename T>
+        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
+    [[nodiscard]] constexpr auto as() const noexcept -> T {
+        return data.template as<T>();
     }
 
+    [[nodiscard]] constexpr auto is_local() const noexcept -> bool { return data.is<local_id>(); }
+    [[nodiscard]] constexpr auto is_constant() const noexcept -> bool {
+        return data.is<ip::index>();
+    }
+    [[nodiscard]] constexpr auto local() const noexcept -> local_id { return data.as<local_id>(); }
+    [[nodiscard]] constexpr auto constant_index() const noexcept -> ip::index {
+        return data.as<ip::index>();
+    }
+
+    // The constant's payload when it is a `T`, none for a local or another kind of constant
     template <typename T>
-    [[nodiscard]] constexpr auto as_opt(this auto& self) noexcept -> decltype(auto) {
-        return self.data.template as_opt<T>();
+    [[nodiscard]] auto literal_opt(const ip::pool& pool) const -> stdx::option<const T&> {
+        if (!is_constant() || pool.is_type(constant_index())) { return stdx::none; }
+        return pool.value_at(constant_index()).data.template as_opt<T>();
+    }
+    template <typename T> [[nodiscard]] auto is_literal(const ip::pool& pool) const -> bool {
+        return literal_opt<T>(pool).has_value();
+    }
+    // The type a `type` constant names, none for anything else
+    [[nodiscard]] auto denoted_type_opt(const ip::pool& pool) const -> stdx::option<sema::type&> {
+        if (!is_constant() || !pool.is_type(constant_index())) { return stdx::none; }
+        return pool.type_at(constant_index());
+    }
+    // Whether this is a `type` constant, including one that names no type
+    [[nodiscard]] auto is_type_constant(const ip::pool& pool) const -> bool {
+        return denoted_type_opt(pool) || is_literal<ip::no_type_value>(pool);
     }
 
     [[nodiscard]] constexpr auto operator==(const value& other) const noexcept -> bool = default;
