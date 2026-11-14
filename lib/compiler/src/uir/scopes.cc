@@ -21,7 +21,6 @@ namespace ghoti::uir::detail {
 
 namespace {
 
-// The prelude's one bindable name; primitive types and builtins can't be spelled as identifiers
 constexpr std::string_view PRELUDE_MODULE{"builtin"};
 
 [[nodiscard]] auto orders_bindings(scope_kind kind) noexcept -> bool {
@@ -45,8 +44,6 @@ auto astgen::visible(const binding& b) const noexcept -> bool {
         hidden_, [&b](const auto& range) { return b.seq > range.first && b.seq <= range.second; });
 }
 
-// Only names already bound count: a block's later locals aren't in scope yet, and module and
-// namespace members are all declared before any body is lowered
 auto astgen::shadowed(std::string_view name) const -> stdx::option<source_location> {
     for (const auto& s : scopes_ | std::views::reverse | std::views::drop(1)) {
         if (const auto found{s->index.find(name)}; found != s->index.end()) {

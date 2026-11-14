@@ -111,8 +111,7 @@ enum class import_id : u32 {};
 // Where a body starts in `extra`: its length, then its instruction ids
 enum class body_ref : u32 {};
 
-// A well-known constant (operand) below `WELL_KNOWN_COUNT`, else an inst id offset by it.
-// `well_known::none` is never an operand, so `stdx::option<ref>` stores an absent one in place
+// A well-known constant (operand) below `WELL_KNOWN_COUNT`, else an inst id offset by it
 enum class ref : u32 {};
 
 } // namespace ghoti::uir
@@ -152,10 +151,12 @@ namespace ghoti::uir {
     if (static_cast<u32>(r) < WELL_KNOWN_COUNT) { return stdx::none; }
     return inst_id{static_cast<u32>(r) - WELL_KNOWN_COUNT};
 }
+
 // An operand slot as stored in `data`, where `well_known::none` marks it empty
 [[nodiscard]] constexpr auto filled(ref r) noexcept -> stdx::option<ref> {
     return stdx::option<ref>{r};
 }
+
 // The operand slot an option is stored as, the inverse of `filled`
 [[nodiscard]] constexpr auto stored(stdx::option<ref> r) noexcept -> ref { return *r.raw(); }
 [[nodiscard]] constexpr auto as_well_known(ref r) noexcept -> stdx::option<well_known> {
