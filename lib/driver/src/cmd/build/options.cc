@@ -451,37 +451,16 @@ auto add_cpu_options(CLI::App* subcmd, raw_options& opts) -> void {
         "--features", opts.features, "Target CPU features to add or remove: `+avx2,-sse4.2`");
 }
 
-auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
-    -> void {
-    if (output_desc) { subcmd->add_option("-o,--output", opts.output, std::string{*output_desc}); }
+auto setup_analysis_flags(CLI::App* subcmd, raw_options& opts) -> void {
     subcmd->add_option(
         "-m,--module", opts.module_raw_args, "Register a library module (format: <name>,<path>)");
-    subcmd->add_option("--object", opts.extra_objects, "Link precompiled object file or library");
-    subcmd->add_option(
-        "-L,--library-path", opts.library_paths, "Add directory to library search paths");
-    subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
     subcmd->add_option("--target", opts.target, "Target triple");
     add_cpu_options(subcmd, opts);
     add_mode_option(subcmd, opts);
-    subcmd
-        ->add_flag("--debug-passes",
-                   opts.debug_passes,
-                   "Enable debug logging and IR printing after passes")
-        ->default_val(opts.debug_passes);
-    subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
-        ->default_val(opts.time_passes);
     add_deprecated_option(subcmd, opts);
     add_error_limit_option(subcmd, opts);
     subcmd
         ->add_option("--emit-gir", opts.emit_gir_path, "Write the GIR dump to the given file path")
-        ->type_name("FILE");
-    subcmd
-        ->add_option(
-            "--emit-llvm-ir", opts.emit_llvm_ir_path, "Write the LLVM IR to the given file path")
-        ->type_name("FILE");
-    subcmd
-        ->add_option(
-            "--emit-asm", opts.emit_asm_path, "Write the native assembly to the given file path")
         ->type_name("FILE");
     subcmd
         ->add_option("--emit-uir",
@@ -497,6 +476,31 @@ auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_v
         ->check(CLI::IsMember({"legacy", "uir"}))
         ->default_val(opts.sema);
 #endif
+}
+
+auto setup_flags(CLI::App* subcmd, raw_options& opts, stdx::option<std::string_view> output_desc)
+    -> void {
+    if (output_desc) { subcmd->add_option("-o,--output", opts.output, std::string{*output_desc}); }
+    setup_analysis_flags(subcmd, opts);
+    subcmd->add_option("--object", opts.extra_objects, "Link precompiled object file or library");
+    subcmd->add_option(
+        "-L,--library-path", opts.library_paths, "Add directory to library search paths");
+    subcmd->add_option("-l,--library", opts.libraries, "Link against library name");
+    subcmd
+        ->add_flag("--debug-passes",
+                   opts.debug_passes,
+                   "Enable debug logging and IR printing after passes")
+        ->default_val(opts.debug_passes);
+    subcmd->add_flag("--time-passes", opts.time_passes, "Enable pass execution timing report")
+        ->default_val(opts.time_passes);
+    subcmd
+        ->add_option(
+            "--emit-llvm-ir", opts.emit_llvm_ir_path, "Write the LLVM IR to the given file path")
+        ->type_name("FILE");
+    subcmd
+        ->add_option(
+            "--emit-asm", opts.emit_asm_path, "Write the native assembly to the given file path")
+        ->type_name("FILE");
 }
 
 auto options::emit_debug_artifacts(sema::analyzer&      analyzer,
