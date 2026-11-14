@@ -93,7 +93,11 @@ class llvm_lowering {
     auto lower_global(const gir::global_decl& g) -> llvm::GlobalVariable*;
     // Emits one private constant `[N x ptr]` global per `(I, T)` `&dyn I` coercion in the module.
     auto lower_dyn_vtables(const gir::module_t& gir_mod) -> void;
-    auto const_to_llvm(const gir::const_value& cv, llvm::Type* ty) -> llvm::Constant*;
+    // A folded initializer the pool holds at `at`, as an LLVM constant of `ty`
+    auto               const_to_llvm(ip::index at, llvm::Type* ty) -> llvm::Constant*;
+    [[nodiscard]] auto int_constant_of(ip::index at) const -> stdx::option<i128>;
+    [[nodiscard]] auto is_aggregate_constant(ip::index at) const -> bool;
+    [[nodiscard]] auto union_payload_bytes(ip::index at, usize size) const -> std::string;
     // `{fn, trampoline}` when a thin function constant initializes an erased `fn(...)` slot
     auto const_callable(std::string_view          fn_symbol,
                         stdx::option<sema::type&> fn_type,

@@ -118,19 +118,21 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     const auto scan_value{[&](const value& v) {
         if (const auto s{v.literal_opt<std::string>(constants_)}) { note_symbol(*s); }
     }};
-    const auto scan_const_value{[&](this auto&& self, const const_value& cv) -> void {
-        if (const auto s{cv.as_opt<std::string>()}) { note_symbol(*s); }
-        if (const auto addr{cv.as_opt<const_addr>()}) { note_symbol(addr->symbol); }
-        if (const auto dyn{cv.as_opt<const_dyn_fat_ptr>()}) {
+    const auto scan_constant{[&](this auto&& self, ip::index at) -> void {
+        if (constants_.is_type(at)) { return; }
+        const auto& data{constants_.value_at(at).data};
+        if (const auto s{data.as_opt<std::string>()}) { note_symbol(*s); }
+        if (const auto addr{data.as_opt<ip::address_value>()}) { note_symbol(addr->symbol); }
+        if (const auto dyn{data.as_opt<ip::dyn_value>()}) {
             if (!dyn->data_symbol.empty()) { note_symbol(dyn->data_symbol); }
             if (!dyn->vtable_symbol.empty()) { note_symbol(dyn->vtable_symbol); }
         }
-        if (const auto st{cv.as_opt<const_struct>()}) {
-            for (const auto& [_, fv] : st->fields) { self(fv); }
-        } else if (const auto arr{cv.as_opt<const_array>()}) {
-            for (const auto& e : arr->elements) { self(e); }
-        } else if (const auto un{cv.as_opt<const_union>()}) {
-            for (const auto& p : un->payload) { self(p); }
+        if (const auto agg{data.as_opt<ip::aggregate_value>()}) {
+            for (const auto e : agg->elements) {
+                if (e) { self(*e); }
+            }
+        } else if (const auto un{data.as_opt<ip::union_value>()}) {
+            for (const auto p : un->payload) { self(p); }
         }
     }};
 
@@ -154,7 +156,7 @@ auto module_t::prune_unreachable(gsl::span<const std::string_view> roots) -> voi
     // Over-approximate: keep anything any global initializer names.
     for (const auto g : globals_) {
         if (g->init_value) { scan_value(*g->init_value); }
-        if (g->const_init) { scan_const_value(*g->const_init); }
+        if (g->const_init) { scan_constant(*g->const_init); }
     }
 
     while (!worklist.empty()) {

@@ -289,6 +289,9 @@ class const_value {
     // reference, a closure, or a struct with no struct type to order its fields by. A float's
     // math origin isn't kept
     [[nodiscard]] auto intern(ip::pool& pool) const -> stdx::option<ip::index>;
+    // As `intern`, but each part the pool can't hold becomes a `zero` of its type, which is how
+    // codegen has always lowered one
+    [[nodiscard]] auto intern_or_zero(ip::pool& pool) const -> ip::index;
     // The value `pool` holds at `at`, in the evaluator's own representation
     [[nodiscard]] static auto from_interned(const ip::pool& pool, ip::index at) -> const_value;
 

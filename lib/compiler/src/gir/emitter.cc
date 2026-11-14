@@ -1631,7 +1631,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         decl.has_modifier(ast::decl_modifiers::COMPTIME)};
 
     stdx::option<value>       init_val;
-    stdx::option<const_value> const_init;
+    stdx::option<ip::index>   const_init;
     if (decl.value && !is_undefined_value(*decl.value)) {
         const gir::const_eval::comptime_context_guard g{const_eval_, true};
         const auto                                    diags_before{ctx_.diags.size()};
@@ -1667,7 +1667,7 @@ auto emitter::emit_top_level_decl(ast::node_id id, const ast::decl_stmt& decl) -
                         *why, sema::error::TYPE_MISMATCH, active_ast().location_of(*decl.value));
                     return;
                 }
-                const_init.emplace(std::move(*cv));
+                const_init.emplace(cv->intern_or_zero(constants()));
             } else {
                 auto v{cv->to_gir_value(constants())};
                 if (decl.explicit_type && v.type &&
@@ -7514,7 +7514,7 @@ auto emitter::materialize_const(const const_value& cv) -> value {
                 const auto global_name{fmt::format(".ref_lit.{}", anon_slice_lit_counter_++)};
                 auto&      g{gir_module_.add_global(
                     global_name, *pointee_type, true, stdx::none, gir::linkage::INTERNAL)};
-                g.const_init.emplace(pointee_cv);
+                g.const_init.emplace(pointee_cv.intern_or_zero(constants()));
                 return value{builder_.emit_global_addr(global_name, *pointee_type, true),
                              *type_opt};
             }
@@ -9953,7 +9953,7 @@ auto emitter::emit_slice_literal_address(const ast::address_of_expr& addr, sema:
         const auto global_name{fmt::format(".slice_lit.{}", anon_slice_lit_counter_++)};
         auto&      g{gir_module_.add_global(
             global_name, arr_type, true, stdx::none, gir::linkage::INTERNAL)};
-        g.const_init.emplace(*cv);
+        g.const_init.emplace(cv->intern_or_zero(constants()));
         const auto addr_id{builder_.emit_global_addr(global_name, arr_type, true)};
         auto       decayed{emit_slice_from_array(value{addr_id, arr_type}, arr_type)};
         decayed.type.emplace(slice_type);

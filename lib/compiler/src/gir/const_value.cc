@@ -151,6 +151,42 @@ auto const_value::intern(ip::pool& pool) const -> stdx::option<ip::index> {
         [&](const auto& scalar) -> result { return pool.intern(scalar, type_); });
 }
 
+auto const_value::intern_or_zero(ip::pool& pool) const -> ip::index {
+    const auto zero{[&] { return pool.intern(ip::zero_value{}, type_); }};
+    const auto all{[&](const std::vector<const_value>& items) {
+        std::vector<ip::index> out;
+        out.reserve(items.size());
+        for (const auto& item : items) { out.emplace_back(item.intern_or_zero(pool)); }
+        return out;
+    }};
+    return data_.visit(
+        [&](const const_array& arr) {
+            const auto elements{all(arr.elements)};
+            return pool.intern(ip::aggregate_value{{elements.begin(), elements.end()}}, type_);
+        },
+        [&](const const_struct& st) {
+            const auto layout{struct_of(type_)};
+            if (!layout) { return zero(); }
+            ip::aggregate_value fields;
+            fields.elements.reserve(layout->field_names.size());
+            for (const auto name : layout->field_names) {
+                const auto field{st.get_field_opt(name)};
+                fields.elements.emplace_back(
+                    field ? stdx::option<ip::index>{field->intern_or_zero(pool)} : stdx::none);
+            }
+            return pool.intern(std::move(fields), type_);
+        },
+        [&](const const_union& un) {
+            return pool.intern(ip::union_value{un.active_field, all(un.payload)}, type_);
+        },
+        [&](const const_addr& addr) {
+            return pool.intern(ip::address_value{addr.symbol, all(addr.pointee)}, type_);
+        },
+        [&](const const_closure&) { return zero(); },
+        [&](const const_ref&) { return zero(); },
+        [&](const auto&) { return *intern(pool); });
+}
+
 auto const_value::from_interned(const ip::pool& pool, ip::index at) -> const_value {
     if (pool.is_type(at)) { return const_value{pool.type_at(at)}; }
     const auto& v{pool.value_at(at)};

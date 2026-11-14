@@ -27,7 +27,8 @@ struct global_decl {
     std::string                          name;
     sema::type&                          type;
     stdx::option<value>                  init_value;
-    stdx::option<const_value>            const_init;
+    // An aggregate or other folded initializer, which has no operand form
+    stdx::option<ip::index>              const_init;
     gir::linkage                         linkage{linkage::INTERNAL};
     std::string                          abi_name{"c"};
     std::string                          link_name;
