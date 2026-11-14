@@ -46,6 +46,7 @@
 #include "compiler/runtime/compiler_rt.hh"
 #include "compiler/sema/analyzer.hh"
 #include "ghoti/config.h"
+#include "helpers/gir.hh"
 #include "helpers/sema.hh"
 #include "support/string_utils.hh"
 #include "support/subprocess.hh"
@@ -75,6 +76,7 @@ namespace {
         return codegen::make_codegen_err("Module is poisoned during GIR emission",
                                          codegen::error::MODULE_LOAD_ERROR);
     }
+    record_gir(test_ctx, gir_mod, for_test_executable);
     return gir_mod;
 }
 
