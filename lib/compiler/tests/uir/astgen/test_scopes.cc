@@ -32,19 +32,20 @@ TEST_CASE("A local may not take a name a later module declaration takes") {
                      std::pair{0UZ, 26UZ}}});
 }
 
-TEST_CASE("An inner local may not take a name its enclosing block declares further on") {
-    check_lowering("const f = fn(): i32 { { let x = 1; } let x = 2; return x; };",
-                   {{"Attempt to shadow identifier 'x'; previous declaration here: 1:42",
-                     error::SHADOWING_DECLARATION,
-                     std::pair{0UZ, 28UZ}}});
+TEST_CASE("An inner local may reuse a name its enclosing block declares further on") {
+    check_lowers("const f = fn(): i32 { { let x = 1; _ = x; } let x = 2; return x; };");
 }
 
-TEST_CASE("A loop capture may not take a name its function declares further on") {
-    check_lowering(
-        "const f = fn(n: usize): usize { for (0..n) |i| { _ = i; } let mut i = n; return i; };",
-        {{"Attempt to shadow identifier 'i'; previous declaration here: 1:67",
-          error::SHADOWING_DECLARATION,
-          std::pair{0UZ, 44UZ}}});
+TEST_CASE("A loop capture may reuse a name its function declares further on") {
+    check_lowers(
+        "const f = fn(n: usize): usize { for (0..n) |i| { _ = i; } let mut i = n; return i; };");
+}
+
+TEST_CASE("An inner local may not take a name its enclosing block already declares") {
+    check_lowering("const f = fn(): i32 { let x = 2; { let x = 1; _ = x; } return x; };",
+                   {{"Attempt to shadow identifier 'x'; previous declaration here: 1:27",
+                     error::SHADOWING_DECLARATION,
+                     std::pair{0UZ, 39UZ}}});
 }
 
 TEST_CASE("A member declared after a local of the same name is still shadowed") {
