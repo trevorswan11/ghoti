@@ -12,6 +12,7 @@
 #include "compiler/ast/handle.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/gir/const_eval.hh"
+#include "compiler/gir/layout.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/sema/passes/type_resolver.hh"
 #include "compiler/sema/symbol.hh"
@@ -333,9 +334,8 @@ auto type_resolver::check_array_dimension(ast::expr_handle dimension, const type
 
     // Past 2^48 bytes no target can address the array, and sizes start overflowing
     constexpr i128 max_array_bytes{i128{1} << 48};
-    const auto     elem_size{has_fixed_bit_layout(item_type)
-                                 ? gir::const_eval::type_size_of(item_type, target_layout())
-                                 : usize{1}};
+    const auto elem_size{has_fixed_bit_layout(item_type) ? gir::size_of(item_type, target_layout())
+                                                         : usize{1}};
     if (*len > max_array_bytes || *len * static_cast<i128>(elem_size) > max_array_bytes) {
         return diagnostic{
             "Array type is too large", error::TYPE_MISMATCH, resolving_.ast.location_of(dimension)};

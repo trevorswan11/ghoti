@@ -949,7 +949,7 @@ auto emitter::widen_untyped_bit_cast_operand(value v, sema::type& target, ast::n
     // A literal has no width of its own, so it takes all of the target's bits or the rest
     // of the reinterpreted bytes are garbage
     if (!v.type || v.type->get_kind() != sema::type_kind::COMPTIME_INT) { return v; }
-    const auto bits{const_eval::type_size_of(target, target_layout_) * 8};
+    const auto bits{gir::size_of(target, target_layout_) * 8};
     if (bits == 0 || bits > std::numeric_limits<u16>::max()) { return v; }
     const auto folded{folded_int(v)};
     const bool is_negative{folded && *folded < 0};
@@ -9116,7 +9116,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
 
         return elem
             .transform([this](const sema::type& e) {
-                return static_cast<u64>(const_eval::type_size_of(e, target_layout_));
+                return static_cast<u64>(gir::size_of(e, target_layout_));
             })
             .value_or(1UZ);
     }};
