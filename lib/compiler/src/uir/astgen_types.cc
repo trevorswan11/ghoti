@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <gsl/util>
+#include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
@@ -10,6 +11,9 @@
 #include "astgen_internal.hh"
 #include "compiler/ast/attributes.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/ast/type.hh"
 #include "compiler/uir/uir.hh"
@@ -171,8 +175,10 @@ auto astgen::struct_decl(source src, const ast::struct_expr& node) -> ref {
     std::vector<field_record> lowered_fields;
     const auto                decls{namespace_members(inst, members)};
     for (const auto& field : fields) {
-        field_record record{.name = name_of(field.name),
-                            .bits = field.is_public() ? flags::PUBLIC : 0U};
+        field_record record{
+            .name = name_of(field.name),
+            .bits = field.is_public() ? flags::PUBLIC : 0U,
+        };
         functions_.emplace_back();
         record.type = type_body(field.explicit_type);
         if (field.default_value) { record.default_value = value_body(*field.default_value); }
@@ -333,8 +339,10 @@ auto astgen::interface_decl(source src, const ast::interface_expr& node) -> ref 
     };
     std::vector<method_record> methods;
     for (const auto& method : node.methods) {
-        method_record record{.name = name_of(method.name),
-                             .bits = method.is_public() ? flags::PUBLIC : 0U};
+        method_record record{
+            .name = name_of(method.name),
+            .bits = method.is_public() ? flags::PUBLIC : 0U,
+        };
         {
             const body_guard guard{*this, record.signature};
             yields(lower_function(ast::node_id{method.signature},
@@ -378,9 +386,11 @@ auto astgen::namespace_members(u32 inst, const ast::member_list& members) -> std
             bodies.emplace_back(index, decl.get());
             DISCARD(declare_member(name_of(decl->name),
                                    location_of(decl->name),
-                                   {.kind         = binding_kind::DECL,
-                                    .decl         = index,
-                                    .mutable_decl = decl->has_modifier(ast::decl_modifiers::MUT)}));
+                                   {
+                                       .kind         = binding_kind::DECL,
+                                       .decl         = index,
+                                       .mutable_decl = decl->has_modifier(ast::decl_modifiers::MUT),
+                                   }));
             continue;
         }
         const auto& import{ast_.get_as<ast::import_stmt>(id)};

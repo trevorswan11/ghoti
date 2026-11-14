@@ -1,19 +1,30 @@
 #include "helpers/uir.hh"
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <gsl/span>
 #include <stdx/memory.hh>
+#include <stdx/option.hh>
 
 #include "compiler/codegen/target.hh"
+#include "compiler/module/memory_loader.hh"
+#include "compiler/module/module.hh"
+#include "compiler/sema/cfg_evaluator.hh"
 #include "compiler/sema/context.hh"
+#include "compiler/sema/error.hh"
+#include "compiler/syntax/error.hh"
+#include "compiler/uir/astgen.hh"
 #include "compiler/uir/dumper.hh"
 #include "helpers/common.hh"
+#include "helpers/sema.hh"
 #include "support/test.hh"
 
 namespace ghoti::tests::helpers {

@@ -70,8 +70,6 @@ TEST_CASE("The standard library lowers, for a build and for a test") {
     ctx.check_file_lowers(UNWRAP(mod::find_stdlib()));
 }
 
-// The old pipeline needed a resolve-order hack for this (sema/test_analyzer.cc); AstGen lowers
-// each module on its own, so a std module is a root like any other
 TEST_CASE("A std module lowers as the root of a test build") {
     corpus_context ctx{true};
     ctx.check_file_lowers(UNWRAP(mod::find_stdlib()).parent_path() / "fmt" / "fmt.gh");

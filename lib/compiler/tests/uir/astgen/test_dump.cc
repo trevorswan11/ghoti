@@ -1,7 +1,7 @@
-#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
+#include <fmt/base.h>
 #include <fmt/format.h>
 
 #include "helpers/uir.hh"
@@ -10,7 +10,6 @@ namespace ghoti::tests {
 
 namespace {
 
-// Golden UIR: the dump of `source`, which must lower cleanly
 auto check_uir(std::string_view source, std::string_view expected) -> void {
     const auto actual{helpers::dump_uir(source)};
     if (actual != expected) { fmt::println("actual UIR:\n{}", actual); }

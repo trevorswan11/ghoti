@@ -17,7 +17,6 @@ namespace {
 using helpers::mock_file;
 using sema::error;
 
-// AstGen reports exactly `expected`, in any order
 auto check_lowering(std::string_view input, std::vector<sema::diagnostic> expected) -> void {
     helpers::check_astgen_against(input, {}, expected);
 }

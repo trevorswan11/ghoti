@@ -19,8 +19,7 @@
 
 namespace ghoti::tests::helpers {
 
-// A fresh module manager with the root and its mock imports loaded, ready to lower. AstGen gets
-// its own context because the old pipeline's `@cfg` pass rewrites the AST it shares
+// A fresh module manager with the root and its mock imports loaded, ready to lower
 struct uir_test_context {
     stdx::box<mod::memory_loader> loader;
     mod::module_manager           manager;
@@ -32,7 +31,7 @@ struct uir_test_context {
                      std::string_view              input,
                      bool                          testing = false);
     ~uir_test_context() = default;
-    MAKE_PINNED(uir_test_context)
+    MAKE_PINNED(uir_test_context);
 
     [[nodiscard]] auto lower(const mod::module_t& mod) -> uir::lowered;
 };

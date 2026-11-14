@@ -169,9 +169,7 @@ auto astgen::capture_slot_of(scope& boundary, std::string_view name, bool by_ref
 }
 
 auto astgen::capture_ref(const lookup_hit& hit, use u, source src) -> ref {
-    // Every boundary between the use and the binding passes the name inward through a slot. A
-    // function that writes a mutable binding gets a pointer to it, and so does every boundary
-    // outside it, which is why the mutation scan covers nested function bodies
+    // Every boundary between the use and the binding passes the name inward through a slot
     const bool place{hit.found.kind == binding_kind::PLACE};
     u32        innermost{0};
     bool       innermost_by_ref{false};

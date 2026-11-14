@@ -71,7 +71,8 @@ struct scope {
     scope_kind       kind{scope_kind::BLOCK};
     bool             is_boundary{false};  // a function, or an aggregate's namespace
     bool             is_aggregate{false}; // members reached through a type, exempt from shadowing
-    std::string_view type_name{};         // the aggregate's declared name, which members can't take
+    bool             moves{false};
+    std::string_view type_name{}; // the aggregate's declared name, which members can't take
 
     std::vector<binding>                                            bindings;
     ankerl::unordered_dense::map<std::string_view, u32>             index;
@@ -79,7 +80,6 @@ struct scope {
 
     std::vector<capture_slot>                           captures;
     ankerl::unordered_dense::map<std::string_view, u32> capture_index;
-    bool                                                moves{false};
     ankerl::unordered_dense::set<std::string_view>      mutated; // assigned or `&mut`-ed inside
 };
 
@@ -165,7 +165,7 @@ class astgen {
         body_guard(astgen& gen, std::vector<u32>& body) noexcept
             : gen_{gen}, previous_{std::exchange(gen.body_, &body)} {}
         ~body_guard() noexcept { gen_.body_ = previous_; }
-        MAKE_PINNED(body_guard)
+        MAKE_PINNED(body_guard);
 
       private:
         astgen&                          gen_;
@@ -181,7 +181,7 @@ class astgen {
         ~prunable_guard() noexcept {
             if (active_) { --gen_.prunable_depth_; }
         }
-        MAKE_PINNED(prunable_guard)
+        MAKE_PINNED(prunable_guard);
 
       private:
         astgen& gen_;
@@ -193,7 +193,7 @@ class astgen {
       public:
         scope_guard(astgen& gen, scope_kind kind) : gen_{gen} { gen.push_scope(kind); }
         ~scope_guard() noexcept { gen_.pop_scope(); }
-        MAKE_PINNED(scope_guard)
+        MAKE_PINNED(scope_guard);
 
         [[nodiscard]] auto get() const noexcept -> scope& { return *gen_.scopes_.back(); }
 
@@ -364,8 +364,7 @@ class astgen {
     auto add_str(tag t, std::string_view text, source src) -> ref;
     auto add_pl(tag t, record_writer& record, source src) -> ref;
     auto add_pl(tag t, record_writer&& record, source src) -> ref { return add_pl(t, record, src); }
-    // A placeholder bodies can refer to before its record is known; `fill_pl` adds it to the
-    // current body, after the operands it was waiting on
+    // A placeholder bodies can refer to before its record is known
     [[nodiscard]] auto reserve(source src) -> u32;
     auto               fill_pl(u32 inst, tag t, record_writer& record) -> void;
     auto fill_pl(u32 inst, tag t, record_writer&& record) -> void { fill_pl(inst, t, record); }

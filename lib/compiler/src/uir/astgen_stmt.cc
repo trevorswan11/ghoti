@@ -1,12 +1,17 @@
 #include <string_view>
 #include <vector>
 
+#include <stdx/assert.hh>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "astgen_internal.hh"
 #include "compiler/ast/expression.hh"
+#include "compiler/ast/handle.hh"
+#include "compiler/ast/id.hh"
+#include "compiler/ast/kind.hh"
+#include "compiler/ast/primitive.hh"
 #include "compiler/ast/statement.hh"
 #include "compiler/sema/error.hh"
 #include "compiler/uir/uir.hh"

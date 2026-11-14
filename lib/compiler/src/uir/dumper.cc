@@ -4,14 +4,17 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include <fmt/base.h>
 #include <fmt/format.h>
 #include <gsl/span>
 #include <magic_enum/magic_enum.hpp>
 #include <stdx/option.hh>
 #include <stdx/types.hh>
 
+#include "compiler/ast/id.hh"
 #include "compiler/syntax/builtins.hh"
 #include "compiler/uir/uir.hh"
 #include "support/diagnostic.hh"

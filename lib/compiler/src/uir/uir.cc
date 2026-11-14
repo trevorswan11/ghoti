@@ -1,6 +1,7 @@
 #include "compiler/uir/uir.hh"
 
 #include <array>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -45,22 +46,23 @@ using enum field_kind;
 }
 
 // Bit names, indexed by bit position
-constexpr std::array<std::string_view, 4> INT_FLAGS{"signed", "size", "char", "big"};
-constexpr std::array<std::string_view, 6> PTR_FLAGS{
-    "mut", "volatile", "poly", "sentinel", "place", "len_absent"};
-constexpr std::array<std::string_view, 8> FN_FLAGS{
-    "variadic", "extern", "dyn_fn", "impl_fn", "explicit_conv", "move", "type_expr", "testing"};
-constexpr std::array<std::string_view, 2> AGG_FLAGS{"extern", "packed"};
-constexpr std::array<std::string_view, 1> ENUM_FLAGS{"non_exhaustive"};
-constexpr std::array<std::string_view, 6> PARAM_FLAGS{
-    "comptime", "comptime_written", "pack", "self", "discarded", "written"};
-constexpr std::array<std::string_view, 5> RANGE_FLAGS{"inclusive", "", "", "", "place"};
-constexpr std::array<std::string_view, 4> LOOP_FLAGS{"unroll", "do_while", "unwraps", "has_cond"};
-constexpr std::array<std::string_view, 2> MATCH_FLAGS{"comptime", "binding"};
-constexpr std::array<std::string_view, 1> PUBLIC_FLAGS{"pub"};
-constexpr std::array<std::string_view, 1> SIGNED_FLAGS{"signed"};
-constexpr std::array<std::string_view, 5> ASM_OPTIONS{
-    "volatile", "noreturn", "intel", "att", "align_stack"};
+constexpr auto INT_FLAGS{std::to_array<std::string_view>({"signed", "size", "char", "big"})};
+constexpr auto PTR_FLAGS{std::to_array<std::string_view>(
+    {"mut", "volatile", "poly", "sentinel", "place", "len_absent"})};
+constexpr auto FN_FLAGS{std::to_array<std::string_view>(
+    {"variadic", "extern", "dyn_fn", "impl_fn", "explicit_conv", "move", "type_expr", "testing"})};
+constexpr auto AGG_FLAGS{std::to_array<std::string_view>({"extern", "packed"})};
+constexpr auto ENUM_FLAGS{std::to_array<std::string_view>({"non_exhaustive"})};
+constexpr auto PARAM_FLAGS{std::to_array<std::string_view>(
+    {"comptime", "comptime_written", "pack", "self", "discarded", "written"})};
+constexpr auto RANGE_FLAGS{std::to_array<std::string_view>({"inclusive", "", "", "", "place"})};
+constexpr auto LOOP_FLAGS{
+    std::to_array<std::string_view>({"unroll", "do_while", "unwraps", "has_cond"})};
+constexpr auto MATCH_FLAGS{std::to_array<std::string_view>({"comptime", "binding"})};
+constexpr auto PUBLIC_FLAGS{std::to_array<std::string_view>({"pub"})};
+constexpr auto SIGNED_FLAGS{std::to_array<std::string_view>({"signed"})};
+constexpr auto ASM_OPTIONS{
+    std::to_array<std::string_view>({"volatile", "noreturn", "intel", "att", "align_stack"})};
 
 constexpr std::array CAPTURE_ITEMS{field{REF, "value"}, field{U32, "by_ref"}, field{STR, "name"}};
 constexpr std::array DECL_ITEMS{field{DECL, "decl"}};
@@ -322,10 +324,8 @@ auto schema_of(tag t) noexcept -> gsl::span<const field> {
     }
 }
 
-module_t::module_t() {
-    // A shared empty body, so a decl or record with no body points at a zero length
-    extra_.emplace_back(0);
-}
+// A shared empty body, so a decl or record with no body points at a zero length
+module_t::module_t() { extra_.emplace_back(0); }
 
 auto module_t::namespace_of(u32 owner) const -> stdx::option<const namespace_info&> {
     if (owner == NO_INDEX) { return root_; }

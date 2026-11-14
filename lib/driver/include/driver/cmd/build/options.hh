@@ -9,6 +9,7 @@
 #include <gsl/pointers>
 #include <stdx/option.hh>
 #include <stdx/result.hh>
+#include <stdx/types.hh>
 #include <stdx/utility.hh>
 
 #include "compiler/codegen/error.hh"
@@ -80,8 +81,7 @@ struct options {
     stdx::option<std::filesystem::path> emit_llvm_ir_path{};
     stdx::option<std::filesystem::path> emit_asm_path{};
     stdx::option<std::filesystem::path> emit_uir_path{};
-    // `--sema=uir`: lower through AstGen, then stop, since UIR's Sema doesn't exist yet
-    bool sema_uir{false};
+    bool                                sema_uir{false};
 
     static auto process_raw(const raw_options&   raw,
                             codegen::output_type type,
@@ -118,7 +118,6 @@ class compilation {
     [[nodiscard]] auto linker_options() const -> codegen::extra_linker_options;
 
   private:
-    // Lowers the program to UIR for `--emit-uir` and `--sema=uir`, reporting AstGen's errors
     [[nodiscard]] auto run_astgen(bool for_test_executable) -> stdx::result<void, clap::error>;
     [[nodiscard]] auto validate_input_path() -> stdx::result<void, clap::error>;
     [[nodiscard]] auto ensure_output_directory() -> stdx::result<void, clap::error>;

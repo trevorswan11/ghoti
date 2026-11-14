@@ -314,8 +314,6 @@ TEST_CASE("a comptime slice parameter accepts a concatenation of comptime string
     )") == 49);
 }
 
-// Under UIR a parameter may not reuse a module name in either order, so these two programs are
-// shadowing errors there instead of a test that the parameter wins
 TEST_CASE("a `comptime T: type` parameter is not replaced by a later module type of that name") {
     constexpr std::string_view source{R"(
         const id = fn(comptime T: type, x: T): T { return x; };
