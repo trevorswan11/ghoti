@@ -128,8 +128,8 @@ const significant = fn(x: ^Limb, len: usize): usize {
 /// Writes `u / v`, or `u % v` when `want_rem`, for unsigned `len`-limb operands. Knuth's
 /// Algorithm D (TAOCP 4.3.1) as Hacker's Delight's `divmnu` spells it. Division by zero leaves 0.
 const divide = fn(out: ^mut Limb, u: ^Limb, v: ^Limb, len: usize, comptime want_rem: bool): void {
-    for (0..len) |limb| {
-        out[limb] = 0;
+    for (0..len) |i| {
+        out[i] = 0;
     }
     let m = significant(u, len);
     let n = significant(v, len);
@@ -138,8 +138,8 @@ const divide = fn(out: ^mut Limb, u: ^Limb, v: ^Limb, len: usize, comptime want_
     }
     if (m < n) {
         if (want_rem) {
-            for (0..len) |limb| {
-                out[limb] = u[limb];
+            for (0..len) |i| {
+                out[i] = u[i];
             }
         }
         return;
@@ -149,12 +149,12 @@ const divide = fn(out: ^mut Limb, u: ^Limb, v: ^Limb, len: usize, comptime want_
     if (n == 1) {
         let d: u64 = v[index(len, 0)];
         let mut k: u64 = 0;
-        let mut digit = m;
-        while (digit > 0) {
-            digit -= 1;
-            let cur = (k << limb_bits) | u[index(len, digit)];
+        let mut j = m;
+        while (j > 0) {
+            j -= 1;
+            let cur = (k << limb_bits) | u[index(len, j)];
             if (!want_rem) {
-                out[index(len, digit)] = @truncate(Limb, cur / d);
+                out[index(len, j)] = @truncate(Limb, cur / d);
             }
             k = cur % d;
         }
@@ -205,9 +205,9 @@ const divide = fn(out: ^mut Limb, u: ^Limb, v: ^Limb, len: usize, comptime want_
         let mut borrow: i64 = 0;
         for (0..n) |k| {
             let p = qhat * vn[k];
-            let diff = @as(i64, un[k + j]) - borrow - @intCast(i64, p & all_ones);
-            un[k + j] = @truncate(Limb, @bitCast(u64, diff));
-            borrow = @intCast(i64, p >> limb_bits) - (diff >> limb_bits);
+            let t = @as(i64, un[k + j]) - borrow - @intCast(i64, p & all_ones);
+            un[k + j] = @truncate(Limb, @bitCast(u64, t));
+            borrow = @intCast(i64, p >> limb_bits) - (t >> limb_bits);
         }
         let t = @as(i64, un[j + n]) - borrow;
         un[j + n] = @truncate(Limb, @bitCast(u64, t));
