@@ -15,6 +15,7 @@
 #include "compiler/sema/context.hh"
 #include "driver/clap/error.hh"
 #include "driver/clap/parser.hh"
+#include "driver/cmd/build/analyze.hh"
 #include "driver/cmd/build/executable.hh"
 #include "driver/cmd/build/library.hh"
 #include "driver/cmd/build/object.hh"
@@ -353,6 +354,54 @@ TEST_CASE("test subcommand parser") {
         const auto&  opts{UNWRAP(cmd->as_opt<cmd::test_cmd>()).get_opts()};
         CHECK(opts.output_path == "built_test.exe");
         CHECK(opts.output_explicit);
+    }
+}
+
+TEST_CASE("analyze subcommand parser") {
+    SECTION("ghoti analyze input.gh writes nothing and isn't a test build by default") {
+        mock_argv    args{"ghoti", "analyze", "src/main.gh"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  analyze{UNWRAP(cmd->as_opt<cmd::analyze_cmd>())};
+        CHECK(analyze.get_opts().input_path == "src/main.gh");
+        CHECK(analyze.get_opts().output_path.empty());
+        CHECK_FALSE(analyze.get_opts().emit_gir_path);
+        CHECK_FALSE(analyze.get_opts().emit_uir_path);
+        CHECK_FALSE(analyze.is_test());
+    }
+
+    SECTION("--test, the dumps, and the analysis options are accepted") {
+        mock_argv    args{"ghoti",
+                          "analyze",
+                          "--test",
+                          "--emit-gir",
+                          "a.gir",
+                          "--emit-uir",
+                          "a.uir",
+                          "-M",
+                          "release_fast",
+                          "-m",
+                          "lib,lib/lib.gh",
+                          "main.gh"};
+        clap::parser p{args.argc(), args.argv(), std::cerr, false};
+        auto         cmd{UNWRAP(p.parse())};
+        const auto&  analyze{UNWRAP(cmd->as_opt<cmd::analyze_cmd>())};
+        const auto&  opts{analyze.get_opts()};
+        CHECK(analyze.is_test());
+        CHECK(UNWRAP(opts.emit_gir_path) == "a.gir");
+        CHECK(UNWRAP(opts.emit_uir_path) == "a.uir");
+        CHECK(opts.mode == sema::optimize_mode::RELEASE_FAST);
+        REQUIRE(opts.modules.size() == 1);
+        CHECK(opts.modules[0].name == "lib");
+    }
+
+    SECTION("Code generation and linking flags are rejected") {
+        for (const auto* flag : {"-o", "--emit-llvm-ir", "--emit-asm", "--object", "-l"}) {
+            mock_argv          args{"ghoti", "analyze", "main.gh", flag, "x"};
+            std::ostringstream error_ss;
+            clap::parser       parser{args.argc(), args.argv(), error_ss, false};
+            CHECK_FALSE(parser.parse());
+        }
     }
 }
 
