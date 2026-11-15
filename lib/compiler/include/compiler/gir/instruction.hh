@@ -235,19 +235,13 @@ struct value {
                                stdx::option<math_origin> computed = stdx::none) const -> value;
 
     // A constant's payload is read through the pool with `literal_opt`, never through these
-    template <typename T>
-        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
-    [[nodiscard]] constexpr auto is() const noexcept -> bool {
+    template <typename T> [[nodiscard]] constexpr auto is() const noexcept -> bool {
         return data.is<T>();
     }
-    template <typename T>
-        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
-    [[nodiscard]] constexpr auto as_opt() const noexcept {
+    template <typename T> [[nodiscard]] constexpr auto as_opt() const noexcept {
         return data.template as_opt<T>();
     }
-    template <typename T>
-        requires std::same_as<T, local_id> || std::same_as<T, ip::index>
-    [[nodiscard]] constexpr auto as() const noexcept -> T {
+    template <typename T> [[nodiscard]] constexpr auto as() const noexcept -> T {
         return data.template as<T>();
     }
 
