@@ -34,7 +34,7 @@ namespace {
 
 // The argument a parameter takes as the call was written, 1-based, else its slot's
 [[nodiscard]] auto argument_position(const gir::function::parameter& param, usize slot) -> usize {
-    return param.source_position ? *param.source_position : slot + 1;
+    return param.source_position.value_or(slot + 1);
 }
 
 // A cast between vectors of as many lanes is checked lane by lane

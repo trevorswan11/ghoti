@@ -34,7 +34,7 @@ auto find_assoc_type_alias(context& ctx, const impl_record& rec, std::string_vie
     -> stdx::option<type&> {
     if (const auto bsym{ctx.registry.get_from_opt(rec.body_scope_idx, name)}) {
         if (const auto bnode{bsym->get_data().as_opt<symbols::node_t>()}) {
-            auto&               mod{rec.enclosing ? *rec.enclosing : ctx.modules.builtin_module()};
+            auto&               mod{rec.enclosing.value_or(ctx.modules.builtin_module())};
             stdx::option<type&> result;
             if (const auto bd{mod.ast.get_as_opt<ast::decl_stmt>(*bnode)}; bd && bd->value) {
                 if (const auto t{mod.get_sema_type_opt(*bd->value)}) {

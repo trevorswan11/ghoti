@@ -98,7 +98,7 @@ auto module_t::printable_diagnostics() const -> std::vector<printable_diagnostic
     diagnostics.visit([](const stdx::monostate&) -> void {},
                       [this, &out](const auto& list) -> void {
                           for (const auto& diag : list) {
-                              const auto& owner{diag.origin() ? *diag.origin() : *this};
+                              const auto& owner{diag.origin().value_or(*this)};
                               // The module the error points into may already report it itself
                               if (&owner != this && owner.reports(diag)) { continue; }
                               out.emplace_back<printable_diagnostic>(

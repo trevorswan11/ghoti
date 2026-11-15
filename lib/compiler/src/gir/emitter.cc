@@ -528,7 +528,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 const auto cxit{cx_by_name.find(p_name)};
                 if (cxit == cx_by_name.end()) { continue; }
                 const auto& val{*cxit->second};
-                auto&       btype{val.get_type() ? *val.get_type() : fn_type};
+                auto&       btype{val.get_type().value_or(fn_type)};
                 value       bound{constant(void_val{}, btype)};
                 if (val.is<const_closure>()) {
                     bound = constant(emit_comptime_closure(val.as<const_closure>()), btype);
@@ -541,7 +541,7 @@ auto emitter::emit_generic_instantiation(std::string_view mangled_name) -> void 
                 } else {
                     bound = materialize_const(val);
                 }
-                auto& bound_type{bound.type ? *bound.type : btype};
+                auto& bound_type{bound.type.value_or(btype)};
                 scopes_.back().bindings.emplace(p_name,
                                                 local_binding{
                                                     .id        = {0, local_kind::TEMPORARY},
@@ -2487,7 +2487,7 @@ auto emitter::emit_comptime_closure(const const_closure& cl) -> std::string {
     const std::string fn_name{fmt::format("closureconst.{}", key.mangle())};
     if (gir_module_.has_function(fn_name)) { return fn_name; }
 
-    auto&       def_mod{cl.module ? *cl.module : ast_module_};
+    auto&       def_mod{cl.module.value_or(ast_module_)};
     const auto& fn_expr{def_mod.ast.get_as<ast::function_expr>(cl.fn_node)};
     auto&       node_type{def_mod.get_sema_type(cl.fn_node)};
     // A capture-less closure value may wrap a plain function; use its public call signature.
@@ -3310,7 +3310,7 @@ auto emitter::emit_expression_id_raw(ast::node_id id) -> value {
         },
         [&](const ast::float_literal_expr& data) -> value {
             const auto sema_type{active_mod().get_sema_type_opt(id)};
-            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            auto&      t{sema_type.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::F64))};
             return constant(data.value_in(sema::float_format_of(t).value_or(float_format::QUAD)),
                             t);
         },
@@ -4710,7 +4710,7 @@ auto emitter::emit_asm(ast::node_id id, const ast::asm_expr& node) -> value {
         }
     }
 
-    auto&      asm_result_type{result_type ? *result_type : void_type};
+    auto&      asm_result_type{result_type.value_or(void_type)};
     const auto dest{builder_.emit_inline_asm(std::move(info), std::move(inputs), asm_result_type)};
 
     if (node.has_option(ast::asm_expr::option::NORETURN)) {
@@ -5733,7 +5733,7 @@ auto emitter::emit_unmodified_call(ast::node_id id, const ast::call_expr& call) 
             const auto vtable{builder_.emit_load(value{v_ptr, ptr_ty}, ptr_ty)};
             const auto slot_ptr{builder_.emit_get_element_ptr(
                 value{vtable, ptr_to_ptr_ty}, {constant(slot_idx, usize_ty)}, ptr_ty)};
-            auto&      callee_ty{fn_ty ? *fn_ty : ptr_ty};
+            auto&      callee_ty{fn_ty.value_or(ptr_ty)};
             indirect_callee.emplace(
                 value{builder_.emit_load(value{slot_ptr, ptr_ty}, callee_ty), callee_ty});
         } else if (fn_d && !fn_d->has_self) {
@@ -7614,7 +7614,7 @@ auto emitter::lvalue_of_expr(ast::node_id id, sema::type& sema_type) -> value {
     }
     // Spill using the type the emitted value actually carries
     auto  val{emit_expression_id_raw(id)};
-    auto& spill_type{val.type ? *val.type : sema_type};
+    auto& spill_type{val.type.value_or(sema_type)};
     return spill_to_temporary(std::move(val), spill_type);
 }
 
@@ -9114,7 +9114,7 @@ auto emitter::emit_mem_intrinsic(ast::node_id      id,
 
         // A slice: spill to its address, then load `.ptr` / `.len`.
         const auto val{emit_expression(h)};
-        const auto addr{spill_to_temporary(val, s ? *s : void_type)};
+        const auto addr{spill_to_temporary(val, s.value_or(void_type))};
         const auto pf{builder_.emit_get_element_ptr(
             addr, {constant(SLICE_PTR_FIELD_INDEX, usize_type)}, byte_ptr_ty)};
         const auto lf{builder_.emit_get_element_ptr(
@@ -9703,18 +9703,17 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const auto  n{sema::packed_backing_bits(*st, target_ptr_bits_).value_or(1)};
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
-        auto&       field_type{sema_type ? *sema_type : *obj_type};
+        auto&       field_type{sema_type.value_or(*obj_type)};
         return emit_packed_field_extract(backing, *st, proxy->index, field_type);
     }
     if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
         ut && ut->is_bit_packed()) {
         const auto n{sema::packed_union_backing_bits(*ut, target_ptr_bits_).value_or(1)};
         const auto fbits{
-            sema::packed_field_bits(sema_type ? *sema_type : *obj_type, target_ptr_bits_)
-                .value_or(n)};
+            sema::packed_field_bits(sema_type.value_or(*obj_type), target_ptr_bits_).value_or(n)};
         auto&       backing_ty{ctx_.get_int(static_cast<u16>(n), false)};
         const value backing{emit_expression(dot.object).data, backing_ty};
-        auto&       field_type{sema_type ? *sema_type : *obj_type};
+        auto&       field_type{sema_type.value_or(*obj_type)};
         return emit_packed_bits_extract(backing, n, 0, fbits, field_type);
     }
 
@@ -9743,7 +9742,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         const u64  member_idx{member_ident.name == "ptr" ? SLICE_PTR_FIELD_INDEX
                                                          : SLICE_LEN_FIELD_INDEX};
         auto&      usize_type{ctx_.get_builtin_resolved_type(sema::type_kind::USIZE)};
-        auto&      field_type{sema_type ? *sema_type : *obj_type};
+        auto&      field_type{sema_type.value_or(*obj_type)};
         const auto field_ptr{builder_.emit_get_element_ptr(
             base_lval, {constant(member_idx, usize_type)}, field_type)};
         const auto loaded{builder_.emit_load(value{field_ptr, field_type}, field_type)};
@@ -9758,7 +9757,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         }
 
         if (member_ident.name == "ptr") {
-            auto&      field_type{sema_type ? *sema_type : arr_data->underlying};
+            auto&      field_type{sema_type.value_or(arr_data->underlying)};
             const auto field_ptr{builder_.emit_get_element_ptr(
                 base_lval, {constant(ARRAY_PTR_FIELD_INDEX, usize_type)}, field_type)};
             return value{field_ptr, field_type};
@@ -9773,7 +9772,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
         // Fields come first in the symbol table; anything past them is a member declaration
         if (const auto st{obj_type->get_data().as_opt<sema::types::struct_t>()};
             st && member_idx < st->fields.size()) {
-            auto& raw_ft{sema_type ? *sema_type : *obj_type};
+            auto& raw_ft{sema_type.value_or(*obj_type)};
             auto& field_type{*ctx_.pool.with_volatile(raw_ft, obj_type->is_volatile())};
             if (st->is_bit_packed()) {
                 return emit_packed_field_read(base_lval, *st, member_idx, field_type);
@@ -9786,7 +9785,7 @@ auto emitter::emit_dot(ast::node_id id, const ast::dot_expr& dot) -> value {
 
         if (const auto ut{obj_type->get_data().as_opt<sema::types::union_t>()};
             ut && member_idx < ut->fields.size()) {
-            auto& field_type{sema_type ? *sema_type : *obj_type};
+            auto& field_type{sema_type.value_or(*obj_type)};
             if (ut->is_bit_packed()) { return emit_packed_field_read(base_lval, *ut, field_type); }
             if (ut->is_untagged) {
                 const auto loaded{builder_.emit_load(retyped(base_lval, field_type), field_type)};

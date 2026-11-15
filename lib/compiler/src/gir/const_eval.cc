@@ -1589,7 +1589,7 @@ auto const_eval::eval_node(ast::node_id id) -> stdx::option<const_value> {
         },
         [&](const ast::float_literal_expr& data) -> stdx::option<const_value> {
             const auto sema_type{module_->get_sema_type_opt(id)};
-            auto& t{sema_type ? *sema_type : ctx_.get_builtin_resolved_type(sema::type_kind::F64)};
+            auto&      t{sema_type.value_or(ctx_.get_builtin_resolved_type(sema::type_kind::F64))};
             const auto format{sema::float_format_of(t).value_or(float_format::QUAD)};
             return const_value{data.value_in(format), t};
         },
@@ -1905,7 +1905,7 @@ auto const_eval::coerce_dyn(const const_value& val, sema::type& dest_type)
     if (!rec) { return stdx::none; }
 
     const auto vtable_sym{symbol_scoping::vtable_name(*rec)};
-    auto&      vtable_owner{vtable_root_ ? *vtable_root_ : *module_};
+    auto&      vtable_owner{vtable_root_.value_or(*module_)};
     if (std::ranges::none_of(vtable_owner.dyn_vtables,
                              [&](const auto& v) { return v.symbol == vtable_sym; })) {
         mod::dyn_vtable v{.symbol = vtable_sym, .slots = {}};
@@ -6209,7 +6209,7 @@ auto const_eval::lookup_bound_callable(std::string_view name) -> stdx::option<bo
     if (!v) { return stdx::none; }
 
     if (const auto cl{v->as_opt<const_closure>()}) {
-        auto& m{cl->module ? *cl->module : *module_};
+        auto& m{cl->module.value_or(*module_)};
         if (const auto fe{m.ast.get_as_opt<ast::function_expr>(cl->fn_node)}) {
             return bound_callable{.module   = &m,
                                   .fn_expr  = fe.get(),
